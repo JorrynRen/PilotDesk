@@ -1,9 +1,15 @@
-mod config;
+mod commands;
 mod db;
-mod sidecar_manager;
+mod utils;
 
+use db::init::init_db;
 use std::sync::Mutex;
+use rusqlite::Connection;
 use tauri::Manager;
+
+pub struct DbState {
+    pub conn: Mutex<Connection>,
+}
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -12,21 +18,17 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let conn = init_db().expect("Failed to initialize database");
+    
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(DbState { conn: Mutex::new(conn) })
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            commands::env::detect_env,
+        ])
         .setup(|app| {
-            // Initialize database
-            let app_dir = app.path().app_data_dir().expect("Failed to get app data dir");
-            std::fs::create_dir_all(&app_dir).expect("Failed to create app data dir");
-            
-            let db_path = app_dir.join("pilotdesk.db");
-            let conn = db::init_db(&db_path).expect("Failed to initialize database");
-            app.manage(db::AppState { conn: Mutex::new(conn) });
-            
             println!("PilotDesk initialized successfully.");
-            println!("App data directory: {}", app_dir.display());
-            
             Ok(())
         })
         .run(tauri::generate_context!())
