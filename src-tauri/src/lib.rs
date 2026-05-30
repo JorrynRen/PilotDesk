@@ -26,8 +26,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::env::detect_env,
+            commands::env::install_claude_code,
+            commands::env::install_hermes,
         ])
-        .setup(|app| {
+        .setup(|_app| {
             println!("PilotDesk initialized successfully.");
             Ok(())
         })
