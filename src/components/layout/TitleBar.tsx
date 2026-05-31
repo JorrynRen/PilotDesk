@@ -25,7 +25,6 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
   }, []);
 
   const handleDragStart = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    // Only start drag on left-click on the drag region itself
     if (e.target === e.currentTarget || (e.target as HTMLElement).hasAttribute('data-tauri-drag-region')) {
       e.preventDefault();
       getCurrentWindow().startDragging();
@@ -56,8 +55,8 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
         <span className="text-xs font-semibold pointer-events-none">PilotDesk</span>
       </div>
 
-      {/* Center: functional buttons */}
-      <div className="flex items-center gap-1">
+      {/* Right: settings + panel toggle | window controls */}
+      <div className="flex items-center h-full">
         {onOpenSettings && (
           <button
             onClick={onOpenSettings}
@@ -81,14 +80,14 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
             <PanelIcon size={13} />
           </button>
         )}
-      </div>
 
-      {/* Right: separator + window controls */}
-      <div className="flex items-center h-full">
+        {/* Separator */}
         <div
-          className="w-px h-4 mx-1"
+          className="w-px h-4 mx-1.5"
           style={{ backgroundColor: 'var(--border)' }}
         />
+
+        {/* Window controls */}
         <button
           onClick={handleMinimize}
           className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
