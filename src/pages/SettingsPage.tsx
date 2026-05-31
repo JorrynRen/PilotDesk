@@ -684,13 +684,10 @@ function AboutSection() {
         style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
       >
         <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-          版权所有 @PilotDesk
+          Copyright (c) 2026 PilotDesk by 简意工作室 (jorryn)
         </p>
         <p className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-          作者：简意工作室（jorryn）
-        </p>
-        <p className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-          协议：MIT License
+          本项目代码基于 MIT 协议开源
         </p>
       </section>
     </div>
