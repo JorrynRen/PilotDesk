@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::collections::HashMap;
 
 use crate::utils::errors::AppError;
 use crate::utils::paths::hermes_config_dir;

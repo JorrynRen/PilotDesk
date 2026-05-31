@@ -1,4 +1,4 @@
-use crate::agent_config::{self, claude, hermes};
+use crate::agent_config::{claude, hermes};
 use crate::utils::errors::AppError;
 use tauri::command;
 

@@ -1,7 +1,6 @@
-use rusqlite::{params, Connection};
+use rusqlite::params;
 use crate::db::models::{Session, Message};
 use crate::utils::errors::AppError;
-use std::sync::Mutex;
 use tauri::State;
 
 use crate::DbState;

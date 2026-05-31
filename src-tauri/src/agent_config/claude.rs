@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
 
 use crate::utils::errors::AppError;
 use crate::utils::paths::claude_config_dir;
