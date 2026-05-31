@@ -111,6 +111,7 @@ pub fn run() {
             commands::session::rename_session,
             commands::session::archive_session,
             commands::session::delete_session,
+            commands::session::save_message,
             commands::config::get_config,
             commands::config::save_claude_config,
             commands::config::save_hermes_config,

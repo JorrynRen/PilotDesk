@@ -114,6 +114,26 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
 
   addMessage: (msg: Message) => {
+    // Persist to database (fire-and-forget, don't block UI)
+    invoke<Message>('save_message', {
+      sessionId: msg.sessionId,
+      role: msg.role,
+      content: msg.content,
+      mode: msg.mode,
+    }).then((saved) => {
+      // Update session list with latest preview
+      set((state) => ({
+        sessions: state.sessions.map((s) =>
+          s.id === msg.sessionId
+            ? { ...s, lastMessagePreview: saved.content.slice(0, 100), messageCount: s.messageCount + 1, updatedAt: saved.timestamp }
+            : s
+        ),
+      }));
+    }).catch((err) => {
+      console.error('Failed to persist message:', err);
+    });
+
+    // Add to in-memory state immediately for UI responsiveness
     set((state) => ({
       messages: [...state.messages, msg],
     }));

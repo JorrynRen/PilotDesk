@@ -1,11 +1,20 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Archive, Key } from 'lucide-react';
+import { Plus, Search, Archive, Key, ChevronDown, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { SessionListItem } from './SessionListItem';
 import { showToast } from '../../utils/toast';
 import { API_PROVIDERS } from '../../types';
 
 type NewSessionType = 'claude' | 'hermes' | 'api';
+
+interface ApiProviderConfig {
+  id: string;
+  name: string;
+  api_endpoint: string;
+  api_key_masked: string | null;
+  api_key_set: boolean;
+  models: string[];
+}
 
 export function SessionList() {
   const {
@@ -25,9 +34,14 @@ export function SessionList() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newSessionType, setNewSessionType] = useState<NewSessionType>('claude');
-  const [selectedApiProvider, setSelectedApiProvider] = useState(API_PROVIDERS[0].id);
-  const [selectedApiModel, setSelectedApiModel] = useState(API_PROVIDERS[0].models[0]);
+  const [selectedApiProvider, setSelectedApiProvider] = useState('');
+  const [selectedApiModel, setSelectedApiModel] = useState('');
+  const [customModel, setCustomModel] = useState('');
+  const [useCustomModel, setUseCustomModel] = useState(false);
   const [creating, setCreating] = useState(false);
+
+  // Load API providers from localStorage
+  const [apiProviders, setApiProviders] = useState<ApiProviderConfig[]>([]);
 
   useEffect(() => {
     fetchSessions().catch((err) => {
@@ -35,13 +49,35 @@ export function SessionList() {
     });
   }, [fetchSessions]);
 
+  // Reload providers when dialog opens
+  useEffect(() => {
+    if (showNewDialog) {
+      const saved = localStorage.getItem('pd-api-providers');
+      if (saved) {
+        try {
+          const list: ApiProviderConfig[] = JSON.parse(saved);
+          setApiProviders(list);
+          if (list.length > 0 && !selectedApiProvider) {
+            setSelectedApiProvider(list[0].id);
+            setSelectedApiModel(list[0].models[0] || '');
+          }
+        } catch { /* ignore */ }
+      }
+      // Reset state
+      setUseCustomModel(false);
+      setCustomModel('');
+    }
+  }, [showNewDialog]);
+
   // Update model when provider changes
   useEffect(() => {
-    const provider = API_PROVIDERS.find((p) => p.id === selectedApiProvider);
+    const provider = apiProviders.find((p) => p.id === selectedApiProvider);
     if (provider) {
-      setSelectedApiModel(provider.models[0]);
+      setSelectedApiModel(provider.models[0] || '');
+      setUseCustomModel(false);
+      setCustomModel('');
     }
-  }, [selectedApiProvider]);
+  }, [selectedApiProvider, apiProviders]);
 
   const displayList = showArchived ? archivedSessions : sessions;
   const filteredList = displayList.filter((s) =>
@@ -70,14 +106,20 @@ export function SessionList() {
           setCreating(false);
           return;
         }
+        const model = useCustomModel ? customModel.trim() : selectedApiModel;
+        if (!model) {
+          showToast('请选择或输入模型名称', 'error');
+          setCreating(false);
+          return;
+        }
         // Create API direct session
-        const provider = API_PROVIDERS.find((p) => p.id === selectedApiProvider)!;
+        const provider = apiProviders.find((p) => p.id === selectedApiProvider)!;
         const session = await createSession(
           'api' as 'claude',
           undefined,
-          `API: ${provider.name} - ${selectedApiModel}`,
+          `API: ${provider.name} - ${model}`,
           selectedApiProvider,
-          selectedApiModel,
+          model,
         );
         setShowNewDialog(false);
         selectSession(session.id);
@@ -130,8 +172,7 @@ export function SessionList() {
     );
   };
 
-  // Current API provider's models
-  const currentApiProvider = API_PROVIDERS.find((p) => p.id === selectedApiProvider)!;
+  const currentApiProvider = apiProviders.find((p) => p.id === selectedApiProvider);
 
   return (
     <aside
@@ -218,7 +259,7 @@ export function SessionList() {
           onClick={(e) => { if (e.target === e.currentTarget) setShowNewDialog(false); }}
         >
           <div
-            className="w-[400px] rounded-xl p-4"
+            className="w-[420px] rounded-xl p-4"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
           >
             <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>新建会话</h3>
@@ -253,40 +294,91 @@ export function SessionList() {
                   <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
                     API 提供商
                   </label>
-                  <select
-                    value={selectedApiProvider}
-                    onChange={(e) => setSelectedApiProvider(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{
-                      backgroundColor: 'var(--bg-tertiary)',
-                      color: 'var(--text-primary)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    {API_PROVIDERS.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                  {apiProviders.length === 0 ? (
+                    <div
+                      className="px-3 py-2 rounded-lg text-xs"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
+                    >
+                      暂无配置的 API 提供商，请先在 设置 > API 配置 中添加
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedApiProvider}
+                      onChange={(e) => setSelectedApiProvider(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                      style={{
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      {apiProviders.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}{p.api_key_set ? ' (已配置)' : ' (未配置Key)'}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-                    模型
-                  </label>
-                  <select
-                    value={selectedApiModel}
-                    onChange={(e) => setSelectedApiModel(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{
-                      backgroundColor: 'var(--bg-tertiary)',
-                      color: 'var(--text-primary)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    {currentApiProvider.models.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </div>
+
+                {currentApiProvider && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                        模型
+                      </label>
+                      <button
+                        onClick={() => setUseCustomModel((v) => !v)}
+                        className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded transition-colors"
+                        style={{
+                          color: useCustomModel ? 'var(--accent)' : 'var(--text-tertiary)',
+                          backgroundColor: useCustomModel ? 'var(--bg-tertiary)' : 'transparent',
+                        }}
+                      >
+                        {useCustomModel ? <X size={10} /> : null}
+                        自定义
+                      </button>
+                    </div>
+                    {useCustomModel ? (
+                      <input
+                        type="text"
+                        value={customModel}
+                        onChange={(e) => setCustomModel(e.target.value)}
+                        placeholder="输入模型名称，如: gpt-4o-2024-08-06"
+                        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                        style={{
+                          backgroundColor: 'var(--bg-tertiary)',
+                          color: 'var(--text-primary)',
+                          border: '1px solid var(--border)',
+                        }}
+                        autoFocus
+                      />
+                    ) : currentApiProvider.models.length > 0 ? (
+                      <select
+                        value={selectedApiModel}
+                        onChange={(e) => setSelectedApiModel(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                        style={{
+                          backgroundColor: 'var(--bg-tertiary)',
+                          color: 'var(--text-primary)',
+                          border: '1px solid var(--border)',
+                        }}
+                      >
+                        {currentApiProvider.models.map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div
+                        className="px-3 py-2 rounded-lg text-xs"
+                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
+                      >
+                        该提供商暂无预定义模型，请使用"自定义"输入模型名称
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div
                   className="px-3 py-2 rounded-lg text-xs"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
@@ -306,7 +398,7 @@ export function SessionList() {
               </button>
               <button
                 onClick={handleCreate}
-                disabled={creating}
+                disabled={creating || (newSessionType === 'api' && apiProviders.length === 0)}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50"
                 style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
               >

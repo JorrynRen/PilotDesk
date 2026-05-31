@@ -163,6 +163,51 @@ pub fn get_session_messages(
     Ok(messages)
 }
 
+/// Save a message to the database and update the session's last_message_preview and message_count.
+#[tauri::command]
+pub fn save_message(
+    state: State<'_, DbState>,
+    session_id: String,
+    role: String,
+    content: String,
+    mode: String,
+) -> Result<Message, AppError> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp();
+    
+    let conn = state.conn.lock().map_err(|e| AppError {
+        code: "ERR_LOCK".into(),
+        message: "获取数据库锁失败".into(),
+        details: Some(e.to_string()),
+    })?;
+    
+    conn.execute(
+        "INSERT INTO messages (id, session_id, role, content, mode, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, session_id, role, content, mode, now],
+    )?;
+    
+    // Update session preview and count
+    let preview = if content.len() > 100 {
+        format!("{}...", &content[..100])
+    } else {
+        content.clone()
+    };
+    
+    conn.execute(
+        "UPDATE sessions SET last_message_preview = ?1, message_count = message_count + 1, updated_at = ?2 WHERE id = ?3",
+        params![preview, now, session_id],
+    )?;
+    
+    Ok(Message {
+        id,
+        session_id,
+        role,
+        content,
+        mode,
+        timestamp: now,
+    })
+}
+
 #[tauri::command]
 pub fn rename_session(
     state: State<'_, DbState>,
