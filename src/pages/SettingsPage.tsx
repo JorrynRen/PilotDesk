@@ -690,7 +690,7 @@ function AboutSection() {
           作者：简意工作室（jorryn）
         </p>
         <p className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-          协议：
+          协议：MIT License
         </p>
       </section>
     </div>

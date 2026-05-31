@@ -1,4 +1,5 @@
 [package]
+license = "MIT"
 name = "pilotdesk"
 version = "0.1.0"
 description = "PilotDesk - Unified Desktop Client for Claude Code & Hermes Agent"
