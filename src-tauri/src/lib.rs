@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod sidecar;
 mod utils;
 
 use db::init::init_db;
