@@ -4,10 +4,12 @@ mod db;
 mod sidecar;
 mod utils;
 
+use tauri::Manager;
 use db::init::init_db;
 use std::sync::Mutex;
 use rusqlite::Connection;
 use commands::bot as bot_cmds;
+use sidecar::manager::SidecarManager;
 
 pub struct DbState {
     pub conn: Mutex<Connection>,
@@ -129,7 +131,17 @@ pub fn run() {
             get_theme,
             set_theme_cmd,
         ])
-        .setup(|_app| {
+        .setup(|app| {
+            // Start sidecar WebSocket server
+            let app_handle = app.handle().clone();
+            let mut sidecar = SidecarManager::new(19830);
+            match sidecar.start(app_handle) {
+                Ok(port) => println!("[Sidecar] WebSocket server started on port {}", port),
+                Err(e) => println!("[Sidecar] Failed to start: {} — WebSocket features will be unavailable", e),
+            }
+            // Store sidecar as managed state so it gets dropped on app exit
+            app.manage(std::sync::Mutex::new(sidecar));
+
             println!("PilotDesk initialized successfully.");
             Ok(())
         })
