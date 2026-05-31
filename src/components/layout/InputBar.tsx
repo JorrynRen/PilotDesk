@@ -108,6 +108,8 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
     ? '选择会话开始对话...'
     : session.agentType === 'claude'
     ? '向 Claude Code 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
+    : session.agentType === 'api'
+    ? '向 API 模型发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
     : '向 Hermes Agent 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)';
 
   return (

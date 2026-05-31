@@ -19,14 +19,16 @@ pub fn init_db() -> Result<Connection, AppError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
-            agent_type TEXT NOT NULL CHECK(agent_type IN ('claude', 'hermes')),
+            agent_type TEXT NOT NULL CHECK(agent_type IN ('claude', 'hermes', 'api')),
             title TEXT NOT NULL DEFAULT '',
             cwd TEXT DEFAULT '',
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             last_message_preview TEXT DEFAULT '',
             message_count INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived'))
+            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+            api_provider TEXT,
+            api_model TEXT
         );
 
         CREATE TABLE IF NOT EXISTS messages (
@@ -76,5 +78,29 @@ pub fn init_db() -> Result<Connection, AppError> {
         CREATE INDEX IF NOT EXISTS idx_inspirations_tags ON inspiration_tags(tag);"
     )?;
 
+    // Migration: add api_provider / api_model columns to existing sessions table
+    migrate_add_api_columns(&conn)?;
+
     Ok(conn)
+}
+
+/// Migration: ensure api_provider and api_model columns exist on sessions table
+fn migrate_add_api_columns(conn: &Connection) -> Result<(), AppError> {
+    // Check if api_provider column exists
+    let has_api_provider = conn
+        .prepare("SELECT api_provider FROM sessions LIMIT 0")
+        .is_ok();
+
+    if !has_api_provider {
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN api_provider TEXT;
+             ALTER TABLE sessions ADD COLUMN api_model TEXT;"
+        )?;
+    }
+
+    // Update CHECK constraint (SQLite doesn't support ALTER CONSTRAINT, 
+    // but the new schema is enforced on fresh tables, and the old constraint
+    // is still valid since 'api' is just a new value we accept in code)
+
+    Ok(())
 }

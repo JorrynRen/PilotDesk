@@ -13,7 +13,13 @@ interface SessionState {
 
   fetchSessions: () => Promise<void>;
   selectSession: (id: string) => Promise<void>;
-  createSession: (agentType: 'claude' | 'hermes', cwd?: string) => Promise<Session>;
+  createSession: (
+    agentType: 'claude' | 'hermes' | 'api',
+    cwd?: string,
+    title?: string | null,
+    apiProvider?: string,
+    apiModel?: string,
+  ) => Promise<Session>;
   renameSession: (id: string, newTitle: string) => Promise<void>;
   archiveSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
@@ -57,11 +63,13 @@ export const useSessionStore = create<SessionState>((set) => ({
     }
   },
 
-  createSession: async (agentType, cwd) => {
+  createSession: async (agentType, cwd, title, apiProvider, apiModel) => {
     const session = await invoke<Session>('create_session', {
       agentType,
       cwd: cwd || null,
-      title: null,
+      title: title || null,
+      apiProvider: apiProvider || null,
+      apiModel: apiModel || null,
     });
     set((state) => ({
       sessions: [session, ...state.sessions],

@@ -1,41 +1,69 @@
+import { useCallback } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X } from 'lucide-react';
 
 interface TitleBarProps {
-  onOpenEnv?: () => void;
+  onOpenSettings?: () => void;
   onToggleRightPanel?: () => void;
   rightPanelOpen?: boolean;
 }
 
-export function TitleBar({ onOpenEnv, onToggleRightPanel, rightPanelOpen }: TitleBarProps) {
-  const appWindow = getCurrentWindow();
+export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
+
+  const handleMinimize = useCallback(async () => {
+    await getCurrentWindow().minimize();
+  }, []);
+
+  const handleToggleMaximize = useCallback(async () => {
+    const win = getCurrentWindow();
+    await win.toggleMaximize();
+  }, []);
+
+  const handleClose = useCallback(async () => {
+    await getCurrentWindow().close();
+  }, []);
+
+  const handleDragStart = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Only start drag on left-click on the drag region itself
+    if (e.target === e.currentTarget || (e.target as HTMLElement).hasAttribute('data-tauri-drag-region')) {
+      e.preventDefault();
+      getCurrentWindow().startDragging();
+    }
+  }, []);
+
+  const handleDoubleClick = useCallback(() => {
+    getCurrentWindow().toggleMaximize();
+  }, []);
 
   return (
     <header
       className="flex items-center justify-between px-3 h-9 shrink-0 select-none"
       style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
-      data-tauri-drag-region
+      onDoubleClick={handleDoubleClick}
     >
-      {/* Left: logo + title */}
-      <div className="flex items-center gap-2" data-tauri-drag-region>
+      {/* Left: logo + title (drag region) */}
+      <div
+        className="flex items-center gap-2 h-full"
+        onMouseDown={handleDragStart}
+      >
         <img
           src="/logo.png"
           alt=""
-          className="w-5 h-5 rounded"
+          className="w-5 h-5 rounded pointer-events-none"
           draggable={false}
         />
-        <span className="text-xs font-semibold" data-tauri-drag-region>PilotDesk</span>
+        <span className="text-xs font-semibold pointer-events-none">PilotDesk</span>
       </div>
 
       {/* Center: functional buttons */}
-      <div className="flex items-center gap-1" data-tauri-drag-region>
-        {onOpenEnv && (
+      <div className="flex items-center gap-1">
+        {onOpenSettings && (
           <button
-            onClick={onOpenEnv}
+            onClick={onOpenSettings}
             className="p-1 rounded transition-colors hover:opacity-80"
             style={{ color: 'var(--text-secondary)', background: 'transparent' }}
-            title="环境管理"
+            title="设置"
           >
             <Settings size={13} />
           </button>
@@ -55,28 +83,29 @@ export function TitleBar({ onOpenEnv, onToggleRightPanel, rightPanelOpen }: Titl
         )}
       </div>
 
-      {/* Right: window controls */}
-      <div className="flex items-center" data-tauri-drag-region>
+      {/* Right: separator + window controls */}
+      <div className="flex items-center h-full">
+        <div
+          className="w-px h-4 mx-1"
+          style={{ backgroundColor: 'var(--border)' }}
+        />
         <button
-          onClick={() => appWindow.minimize()}
-          className="w-8 h-8 flex items-center justify-center transition-colors hover:bg-black/5"
-          data-tauri-drag-region
+          onClick={handleMinimize}
+          className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
           title="最小化"
         >
           <Minus size={13} style={{ color: 'var(--text-secondary)' }} />
         </button>
         <button
-          onClick={() => appWindow.toggleMaximize()}
-          className="w-8 h-8 flex items-center justify-center transition-colors hover:bg-black/5"
-          data-tauri-drag-region
+          onClick={handleToggleMaximize}
+          className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
           title="最大化"
         >
           <Square size={11} style={{ color: 'var(--text-secondary)' }} />
         </button>
         <button
-          onClick={() => appWindow.close()}
-          className="w-8 h-8 flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
-          data-tauri-drag-region
+          onClick={handleClose}
+          className="w-8 h-full flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
           title="关闭"
         >
           <X size={13} style={{ color: 'var(--text-secondary)' }} />

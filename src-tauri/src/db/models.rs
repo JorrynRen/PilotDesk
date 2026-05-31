@@ -11,6 +11,10 @@ pub struct Session {
     pub last_message_preview: String,
     pub message_count: i64,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

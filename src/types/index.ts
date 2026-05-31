@@ -1,6 +1,6 @@
 export interface Session {
   id: string;
-  agentType: 'claude' | 'hermes';
+  agentType: 'claude' | 'hermes' | 'api';
   title: string;
   cwd: string;
   createdAt: number;
@@ -8,6 +8,10 @@ export interface Session {
   lastMessagePreview: string;
   messageCount: number;
   status: 'active' | 'archived';
+  /** For API direct sessions: which provider (e.g. "anthropic", "openai") */
+  apiProvider?: string;
+  /** For API direct sessions: which model (e.g. "claude-sonnet-4-20250514") */
+  apiModel?: string;
 }
 
 export interface Message {
@@ -82,3 +86,17 @@ export const MODE_COLORS: Record<ChatMode, string> = {
   think: 'var(--accent)',
   expert: 'var(--hermes-tag)',
 };
+
+/** Available API providers for direct API sessions */
+export const API_PROVIDERS = [
+  {
+    id: 'anthropic',
+    name: 'Anthropic Claude',
+    models: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-haiku-20241022'],
+  },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    models: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o1-mini'],
+  },
+] as const;

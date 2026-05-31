@@ -3,10 +3,10 @@ import { useSessionStore } from './stores/sessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
 import { MarketPage } from './components/inspiration/MarketPage';
-import { EnvPage } from './pages/EnvPage';
+import { SettingsPage } from './pages/SettingsPage';
 import './styles/ui.css';
 
-type PageView = 'main' | 'market' | 'env';
+type PageView = 'main' | 'market' | 'settings';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<PageView>('main');
@@ -24,8 +24,8 @@ function App() {
     const base = 'PilotDesk';
     if (currentPage === 'market') {
       document.title = `${base} - 灵感市集`;
-    } else if (currentPage === 'env') {
-      document.title = `${base} - 环境管理`;
+    } else if (currentPage === 'settings') {
+      document.title = `${base} - 设置`;
     } else if (currentSession) {
       document.title = `${base} - ${currentSession.title}`;
     } else {
@@ -44,14 +44,14 @@ function App() {
       style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
     >
       <TitleBar
-        onOpenEnv={() => setCurrentPage("env")}
+        onOpenSettings={() => setCurrentPage("settings")}
         onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
         rightPanelOpen={rightPanelOpen}
       />
       {currentPage === 'market' ? (
         <MarketPage onBack={() => setCurrentPage('main')} onSendToSession={handleSendToSession} />
-      ) : currentPage === 'env' ? (
-        <EnvPage onBack={() => setCurrentPage('main')} />
+      ) : currentPage === 'settings' ? (
+        <SettingsPage onBack={() => setCurrentPage('main')} />
       ) : (
         <div className="flex-1 flex overflow-hidden relative">
           <SessionList />
@@ -59,7 +59,7 @@ function App() {
           <RightPanel isOpen={rightPanelOpen} />
         </div>
       )}
-      <StatusBar onOpenEnv={() => setCurrentPage('env')} wsConnected={wsConnected} />
+      <StatusBar onOpenSettings={() => setCurrentPage('settings')} wsConnected={wsConnected} />
     </div>
   );
 }

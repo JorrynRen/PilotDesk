@@ -3,11 +3,11 @@ import { invoke } from '@tauri-apps/api/core';
 import type { EnvInfo } from '../../types';
 
 interface StatusBarProps {
-  onOpenEnv?: () => void;
+  onOpenSettings?: () => void;
   wsConnected?: boolean;
 }
 
-export function StatusBar({ onOpenEnv, wsConnected }: StatusBarProps) {
+export function StatusBar({ onOpenSettings, wsConnected }: StatusBarProps) {
   const [envInfo, setEnvInfo] = useState<EnvInfo | null>(null);
 
   const fetchEnv = useCallback(async () => {
@@ -49,17 +49,17 @@ export function StatusBar({ onOpenEnv, wsConnected }: StatusBarProps) {
           Sidecar: {wsLabel}
         </span>
         <button
-          onClick={onOpenEnv}
+          onClick={onOpenSettings}
           className="flex items-center gap-1 transition-colors hover:opacity-80"
-          title="点击打开环境管理"
+          title="点击打开设置"
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: claudeStatus.color }} />
           Claude: {claudeStatus.label}
         </button>
         <button
-          onClick={onOpenEnv}
+          onClick={onOpenSettings}
           className="flex items-center gap-1 transition-colors hover:opacity-80"
-          title="点击打开环境管理"
+          title="点击打开设置"
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: hermesStatus.color }} />
           Hermes: {hermesStatus.label}

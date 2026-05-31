@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { Lightbulb, Settings, Cpu, Bot } from 'lucide-react';
-import { ConfigEditor } from '../panels/ConfigEditor';
+import { Lightbulb, Cpu, Bot } from 'lucide-react';
 import { SkillBrowser } from '../panels/SkillBrowser';
 import { MemoryBrowser } from '../panels/MemoryBrowser';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -22,13 +21,10 @@ export function RightPanel({ isOpen }: RightPanelProps) {
     { id: 'inspiration', icon: Lightbulb, label: '灵感' },
     { id: 'skills', icon: Cpu, label: '技能' },
     { id: 'memory', icon: Bot, label: '记忆' },
-    { id: 'config', icon: Settings, label: '配置' },
   ];
 
   const renderContent = () => {
     switch (activeTab) {
-      case 'config':
-        return <ConfigEditor agent={currentSession?.agentType ?? ''} />;
       case 'skills':
         return (
           <SkillBrowser

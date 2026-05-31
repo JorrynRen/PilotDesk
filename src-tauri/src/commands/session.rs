@@ -17,6 +17,8 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
         last_message_preview: row.get(6)?,
         message_count: row.get(7)?,
         status: row.get(8)?,
+        api_provider: row.get(9).ok(),
+        api_model: row.get(10).ok(),
     })
 }
 
@@ -40,7 +42,7 @@ pub fn list_sessions(state: State<'_, DbState>) -> Result<Vec<Session>, AppError
     })?;
     
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status 
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
          FROM sessions WHERE status = 'active' ORDER BY updated_at DESC"
     )?;
     
@@ -59,7 +61,7 @@ pub fn list_archived_sessions(state: State<'_, DbState>) -> Result<Vec<Session>,
     })?;
     
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status 
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
          FROM sessions WHERE status = 'archived' ORDER BY updated_at DESC"
     )?;
     
@@ -75,6 +77,8 @@ pub fn create_session(
     agent_type: String,
     cwd: Option<String>,
     title: Option<String>,
+    api_provider: Option<String>,
+    api_model: Option<String>,
 ) -> Result<Session, AppError> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().timestamp();
@@ -82,6 +86,7 @@ pub fn create_session(
         match agent_type.as_str() {
             "claude" => "Claude Code 新会话".into(),
             "hermes" => "Hermes Agent 新会话".into(),
+            "api" => "API 直连会话".into(),
             _ => "新会话".into(),
         }
     });
@@ -94,8 +99,8 @@ pub fn create_session(
     })?;
     
     conn.execute(
-        "INSERT INTO sessions (id, agent_type, title, cwd, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, agent_type, title, cwd, now, now],
+        "INSERT INTO sessions (id, agent_type, title, cwd, created_at, updated_at, api_provider, api_model) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![id, agent_type, title, cwd, now, now, api_provider, api_model],
     )?;
     
     Ok(Session {
@@ -108,6 +113,8 @@ pub fn create_session(
         last_message_preview: String::new(),
         message_count: 0,
         status: "active".into(),
+        api_provider,
+        api_model,
     })
 }
 
@@ -120,7 +127,7 @@ pub fn get_session(state: State<'_, DbState>, session_id: String) -> Result<Sess
     })?;
     
     let session = conn.query_row(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status 
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
          FROM sessions WHERE id = ?1",
         params![session_id],
         row_to_session,

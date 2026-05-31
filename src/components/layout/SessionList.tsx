@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Archive } from 'lucide-react';
+import { Plus, Search, Archive, Key } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { SessionListItem } from './SessionListItem';
 import { showToast } from '../../utils/toast';
+import { API_PROVIDERS } from '../../types';
+
+type NewSessionType = 'claude' | 'hermes' | 'api';
 
 export function SessionList() {
   const {
@@ -21,7 +24,9 @@ export function SessionList() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewDialog, setShowNewDialog] = useState(false);
-  const [newAgentType, setNewAgentType] = useState<'claude' | 'hermes'>('claude');
+  const [newSessionType, setNewSessionType] = useState<NewSessionType>('claude');
+  const [selectedApiProvider, setSelectedApiProvider] = useState(API_PROVIDERS[0].id);
+  const [selectedApiModel, setSelectedApiModel] = useState(API_PROVIDERS[0].models[0]);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -29,6 +34,14 @@ export function SessionList() {
       showToast(`加载会话失败: ${err}`, 'error');
     });
   }, [fetchSessions]);
+
+  // Update model when provider changes
+  useEffect(() => {
+    const provider = API_PROVIDERS.find((p) => p.id === selectedApiProvider);
+    if (provider) {
+      setSelectedApiModel(provider.models[0]);
+    }
+  }, [selectedApiProvider]);
 
   const displayList = showArchived ? archivedSessions : sessions;
   const filteredList = displayList.filter((s) =>
@@ -49,9 +62,30 @@ export function SessionList() {
   const handleCreate = async () => {
     setCreating(true);
     try {
-      const session = await createSession(newAgentType);
-      setShowNewDialog(false);
-      selectSession(session.id);
+      if (newSessionType === 'api') {
+        // Check if API key is configured
+        const maskedKey = localStorage.getItem(`pd-api-${selectedApiProvider}-masked`);
+        if (!maskedKey) {
+          showToast('请先在设置 > API 配置中添加 API Key', 'error');
+          setCreating(false);
+          return;
+        }
+        // Create API direct session
+        const provider = API_PROVIDERS.find((p) => p.id === selectedApiProvider)!;
+        const session = await createSession(
+          'api' as 'claude',
+          undefined,
+          `API: ${provider.name} - ${selectedApiModel}`,
+          selectedApiProvider,
+          selectedApiModel,
+        );
+        setShowNewDialog(false);
+        selectSession(session.id);
+      } else {
+        const session = await createSession(newSessionType);
+        setShowNewDialog(false);
+        selectSession(session.id);
+      }
     } catch (err) {
       showToast(`创建会话失败: ${err}`, 'error');
     } finally {
@@ -95,6 +129,9 @@ export function SessionList() {
       </div>
     );
   };
+
+  // Current API provider's models
+  const currentApiProvider = API_PROVIDERS.find((p) => p.id === selectedApiProvider)!;
 
   return (
     <aside
@@ -181,30 +218,84 @@ export function SessionList() {
           onClick={(e) => { if (e.target === e.currentTarget) setShowNewDialog(false); }}
         >
           <div
-            className="w-[320px] rounded-xl p-4"
+            className="w-[400px] rounded-xl p-4"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
           >
             <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>新建会话</h3>
+
+            {/* Session type selector */}
             <div className="flex gap-2 mb-4">
-              {(['claude', 'hermes'] as const).map((type) => (
+              {([
+                { type: 'claude' as const, label: 'Claude Code', color: '#3B82F6' },
+                { type: 'hermes' as const, label: 'Hermes Agent', color: '#8B5CF6' },
+                { type: 'api' as const, label: 'API 直连', color: '#10B981' },
+              ]).map(({ type, label, color }) => (
                 <button
                   key={type}
-                  onClick={() => setNewAgentType(type)}
-                  className="flex-1 py-2 rounded-lg text-xs font-medium transition-colors"
+                  onClick={() => setNewSessionType(type)}
+                  className="flex-1 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1"
                   style={{
-                    backgroundColor: newAgentType === type
-                      ? (type === 'claude' ? 'rgba(59,130,246,0.15)' : 'rgba(139,92,246,0.15)')
-                      : 'var(--bg-secondary)',
-                    color: newAgentType === type
-                      ? (type === 'claude' ? '#3B82F6' : '#8B5CF6')
-                      : 'var(--text-secondary)',
-                    border: `1px solid ${newAgentType === type ? (type === 'claude' ? '#3B82F6' : '#8B5CF6') : 'var(--border)'}`,
+                    backgroundColor: newSessionType === type ? `${color}15` : 'var(--bg-secondary)',
+                    color: newSessionType === type ? color : 'var(--text-secondary)',
+                    border: `1px solid ${newSessionType === type ? color : 'var(--border)'}`,
                   }}
                 >
-                  {type === 'claude' ? 'Claude Code' : 'Hermes Agent'}
+                  {type === 'api' && <Key size={12} />}
+                  {label}
                 </button>
               ))}
             </div>
+
+            {/* API direct: provider & model selection */}
+            {newSessionType === 'api' && (
+              <div className="space-y-3 mb-4">
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    API 提供商
+                  </label>
+                  <select
+                    value={selectedApiProvider}
+                    onChange={(e) => setSelectedApiProvider(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {API_PROVIDERS.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    模型
+                  </label>
+                  <select
+                    value={selectedApiModel}
+                    onChange={(e) => setSelectedApiModel(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {currentApiProvider.models.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+                <div
+                  className="px-3 py-2 rounded-lg text-xs"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                >
+                  通过 API 直接与模型对话，无需 Agent 中转。请确保已在设置中配置对应 API Key。
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setShowNewDialog(false)}
