@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { X, Lightbulb, Settings, Cpu, Bot } from 'lucide-react';
 import { ConfigEditor } from '../panels/ConfigEditor';
+import { SkillBrowser } from '../panels/SkillBrowser';
+import { MemoryBrowser } from '../panels/MemoryBrowser';
 import { useSessionStore } from '../../stores/sessionStore';
 
 export function RightPanel() {
@@ -35,15 +37,32 @@ export function RightPanel() {
     switch (activeTab) {
       case 'config':
         return <ConfigEditor agent={currentSession?.agentType ?? ''} />;
-      case 'inspiration':
       case 'skills':
+        return (
+          <SkillBrowser
+            agentType={currentSession?.agentType ?? 'claude'}
+            onSkillSelect={(name) => {
+              console.log('Skill selected:', name);
+            }}
+          />
+        );
       case 'memory':
+        return (
+          <MemoryBrowser
+            agentType={currentSession?.agentType}
+            onSelect={(content) => {
+              console.log('Memory selected:', content.slice(0, 50));
+            }}
+          />
+        );
+      case 'inspiration':
       default:
         return (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-              {tabs.find(t => t.id === activeTab)?.label}面板 - 待实现
-            </p>
+          <div className="flex flex-col items-center justify-center h-24 gap-2">
+            <Lightbulb size={24} style={{ color: 'var(--text-tertiary)' }} />
+            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+              灵感面板 - 使用顶部菜单打开灵感市集
+            </span>
           </div>
         );
     }
