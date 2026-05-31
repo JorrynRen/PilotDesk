@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { MessageList } from '../message/MessageList';
 import { InputBar } from './InputBar';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -26,16 +26,16 @@ export function MainPanel() {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [pendingInput, setPendingInput] = useState<string | null>(null);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
-  const pendingInputRef = useRef<string | null>(null);
 
   // Consume pending input from sessionStorage (bridging from inspiration picker etc.)
   useEffect(() => {
     const pending = sessionStorage.getItem('pilotdesk_pending_input');
     if (pending) {
       sessionStorage.removeItem('pilotdesk_pending_input');
-      pendingInputRef.current = pending;
+      setPendingInput(pending);
     }
   }, [currentSessionId]);
 
@@ -180,7 +180,7 @@ export function MainPanel() {
           session={currentSession}
           onEditMessage={(content) => {
             // Pre-fill input bar with edited content for re-send
-            pendingInputRef.current = content;
+            setPendingInput(content);
             showToast('消息已填入输入框，可修改后重新发送', 'info');
           }}
           onSaveInspiration={(content) => {
@@ -197,8 +197,8 @@ export function MainPanel() {
         onSend={handleSend}
         onStop={handleStop}
         isGenerating={isGenerating}
-        pendingInput={pendingInputRef.current}
-        onPendingConsumed={() => { pendingInputRef.current = null; }}
+        pendingInput={pendingInput}
+        onPendingConsumed={() => setPendingInput(null)}
       />
     </div>
   );

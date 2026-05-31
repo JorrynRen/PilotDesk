@@ -53,9 +53,10 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
       className="group flex gap-3 px-4 py-3"
       style={{
         backgroundColor: isUser ? 'transparent' : 'var(--bg-secondary)',
+        flexDirection: isUser ? 'row-reverse' : 'row',
       }}
     >
-      {/* Agent indicator */}
+      {/* Avatar indicator */}
       <div className="shrink-0 pt-0.5">
         {isUser ? (
           <div
@@ -80,9 +81,12 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
       </div>
 
       {/* Message content */}
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0" style={{ maxWidth: '80%' }}>
         {/* Header with timestamp */}
-        <div className="flex items-center gap-2 mb-1">
+        <div
+          className="flex items-center gap-2 mb-1"
+          style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
+        >
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
             {isUser ? '你' : agentType === 'claude' ? 'Claude Code' : 'Hermes Agent'}
           </span>
@@ -99,9 +103,17 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
           </span>
         </div>
 
-        {/* Message body */}
+        {/* Message body — user messages right-aligned */}
         {isUser ? (
-          <div className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--text-primary)' }}>
+          <div
+            className="text-sm leading-relaxed whitespace-pre-wrap inline-block rounded-xl px-3 py-2"
+            style={{
+              color: 'var(--text-primary)',
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: '12px 4px 12px 12px',
+              textAlign: 'left',
+            }}
+          >
             {message.content}
           </div>
         ) : (
@@ -109,7 +121,10 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
         )}
 
         {/* Action buttons */}
-        <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div
+          className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
+        >
           <button
             onClick={handleCopy}
             className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
@@ -130,17 +145,15 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
               编辑
             </button>
           )}
-          {!isUser && onSaveInspiration && (
-            <button
-              onClick={() => onSaveInspiration(message.content)}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
-              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
-              title="保存到灵感"
-            >
-              <Bookmark size={11} />
-              收藏灵感
-            </button>
-          )}
+          <button
+            onClick={() => onSaveInspiration?.(message.content)}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+            style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
+            title="保存到灵感"
+          >
+            <Bookmark size={11} />
+            收藏灵感
+          </button>
         </div>
       </div>
     </div>
