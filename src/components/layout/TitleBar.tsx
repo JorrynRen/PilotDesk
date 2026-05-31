@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy } from 'lucide-react';
 
@@ -21,6 +21,7 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
       const maximized = await win.isMaximized();
       setIsMaximized(maximized);
     }).then(fn => { unlisten = fn; });
+
 
     return () => { unlisten?.(); };
   }, []);
@@ -53,10 +54,19 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
       return;
     }
     e.preventDefault();
-    getCurrentWindow().startDragging();
+    if (dragTimer.current) clearTimeout(dragTimer.current);
+    dragTimer.current = window.setTimeout(() => {
+      getCurrentWindow().startDragging();
+    }, 200);
   }, []);
 
+  const dragTimer = useRef<number | null>(null);
+
   const handleDoubleClick = useCallback(() => {
+    if (dragTimer.current) {
+      clearTimeout(dragTimer.current);
+      dragTimer.current = null;
+    }
     getCurrentWindow().toggleMaximize();
   }, []);
 

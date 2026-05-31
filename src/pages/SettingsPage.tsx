@@ -175,7 +175,7 @@ function AgentConfigPanel() {
   const [activeSubTab, setActiveSubTab] = useState<AgentSubTab>('claude');
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col overflow-hidden min-h-0">
       {/* Sub-tab selector */}
       <div className="flex gap-2 mb-4">
         {AGENT_SUB_TABS.map(({ id, label, desc }) => (
@@ -1048,7 +1048,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
       {/* Tab navigation */}
       <div
-        className="shrink-0 px-4 flex gap-0.5 overflow-x-auto"
+        className="shrink-0 px-4 flex gap-0.5 overflow-x-clip"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         {SETTINGS_TABS.map(({ id, icon: Icon, label }) => (

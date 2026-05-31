@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useSessionStore } from './stores/sessionStore';
+import { useSkillStore } from './stores/skillStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
 import { MarketPage } from './components/inspiration/MarketPage';
@@ -17,7 +18,20 @@ function App() {
   });
 
   // WebSocket status monitoring (shared with StatusBar)
-  const { isConnected: wsConnected } = useWebSocket(19830);
+  const { isConnected: wsConnected, requestAllSkills } = useWebSocket(19830, {
+    onSkills: (agentType, skills) => {
+      useSkillStore.getState().setAgentSkills(agentType, skills);
+    },
+  });
+
+  // Fetch all agent skills when WebSocket connects
+  const { setLoading: setSkillsLoading } = useSkillStore();
+  useEffect(() => {
+    if (wsConnected) {
+      setSkillsLoading(true);
+      requestAllSkills();
+    }
+  }, [wsConnected, requestAllSkills, setSkillsLoading]);
 
   // Update window title based on current session
   useEffect(() => {
@@ -41,7 +55,7 @@ function App() {
       style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
     >
       <TitleBar
-        onOpenSettings={() => setCurrentPage("settings")}
+        onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")}
         onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
         rightPanelOpen={rightPanelOpen}
       />
@@ -56,7 +70,7 @@ function App() {
           <RightPanel isOpen={rightPanelOpen} />
         </div>
       )}
-      <StatusBar onOpenSettings={() => setCurrentPage('settings')} wsConnected={wsConnected} />
+      <StatusBar onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")} wsConnected={wsConnected} />
     </div>
   );
 }

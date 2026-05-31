@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import { AgentAdapter, buildPrompt } from './base';
-import type { ChatRequest } from '../types';
+import type { ChatRequest, SkillInfo } from '../types';
 
 export class HermesAdapter implements AgentAdapter {
   agentType = 'hermes' as const;
@@ -112,5 +112,55 @@ export class HermesAdapter implements AgentAdapter {
     }
     this.processes.delete(sessionId);
     console.log(`[Hermes] Generation stopped: ${sessionId}`);
+  }
+
+  async listSkills(): Promise<SkillInfo[]> {
+    // Hermes skills are stored in ~/.hermes/skills/
+    const skills: SkillInfo[] = [];
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      const skillsDir = path.join(os.homedir(), '.hermes', 'skills');
+      const entries = await fs.readdir(skillsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          // Read skill manifest if exists
+          try {
+            const manifestPath = path.join(skillsDir, entry.name, 'manifest.json');
+            const raw = await fs.readFile(manifestPath, 'utf-8');
+            const manifest = JSON.parse(raw);
+            skills.push({
+              name: entry.name,
+              description: manifest.description || entry.name,
+              category: manifest.category || '自定义',
+            });
+          } catch {
+            skills.push({
+              name: entry.name,
+              description: entry.name,
+              category: '自定义',
+            });
+          }
+        }
+      }
+    } catch {
+      // Skills dir not found, return empty
+    }
+
+    // Fallback built-in skills if no skills found
+    if (skills.length === 0) {
+      skills.push(
+        { name: 'code-review', description: '代码审查与优化建议', category: '内置' },
+        { name: 'translate', description: '多语言翻译', category: '内置' },
+        { name: 'summarize', description: '文本摘要与总结', category: '内置' },
+        { name: 'debug', description: '代码调试与错误诊断', category: '内置' },
+        { name: 'refactor', description: '代码重构', category: '内置' },
+        { name: 'test-gen', description: '单元测试生成', category: '内置' },
+        { name: 'doc-gen', description: '文档生成', category: '内置' },
+      );
+    }
+
+    return skills;
   }
 }

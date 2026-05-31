@@ -124,6 +124,47 @@ wss.on('connection', (ws) => {
         break;
       }
 
+
+      case 'skills:list': {
+        try {
+          const agentType = msg.agentType || 'claude';
+          const adapter = getAdapter(agentType);
+          const skills = await adapter.listSkills();
+          send(ws, {
+            type: 'skills' as const,
+            sessionId: '',
+            agentType,
+            skills,
+          } as any);
+        } catch (err: any) {
+          send(ws, { type: 'error', sessionId: '', error: err.message });
+        }
+        break;
+      }
+
+      case 'skills:list-all': {
+        try {
+          const results: Array<{ agentType: string; skills: any[] }> = [];
+          for (const [agentType, adapter] of Object.entries(adapters)) {
+            const skills = await adapter.listSkills();
+            results.push({ agentType, skills });
+          }
+          // Send results for each agent
+          for (const result of results) {
+            send(ws, {
+              type: 'skills' as const,
+              sessionId: '',
+              agentType: result.agentType,
+              skills: result.skills,
+            } as any);
+          }
+          send(ws, { type: 'status', sessionId: '', status: 'skills:list-all:done' });
+        } catch (err: any) {
+          send(ws, { type: 'error', sessionId: '', error: err.message });
+        }
+        break;
+      }
+
       default:
         send(ws, { type: 'error', sessionId: msg.sessionId, error: `Unknown message type: ${msg.type}` });
     }

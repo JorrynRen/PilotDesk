@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ChatMode } from '../types';
 
 interface WsMessage {
-  type: 'chat' | 'stop' | 'session:create' | 'session:close' | 'ping';
+  type: 'chat' | 'stop' | 'session:create' | 'session:close' | 'ping' | 'skills:list' | 'skills:list-all';
   sessionId: string;
   agentType?: 'claude' | 'hermes';
   message?: string;
@@ -10,11 +10,18 @@ interface WsMessage {
   cwd?: string;
 }
 
+interface SkillInfo {
+  name: string;
+  description: string;
+  category?: string;
+}
+
 interface WsHandlers {
   onChunk?: (sessionId: string, content: string) => void;
   onDone?: (sessionId: string) => void;
   onError?: (sessionId: string, error: string) => void;
   onStatus?: (sessionId: string, status: string) => void;
+  onSkills?: (agentType: string, skills: SkillInfo[]) => void;
 }
 
 export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
@@ -62,6 +69,9 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
               break;
             case 'status':
               h?.onStatus?.(msg.sessionId, msg.status || '');
+              break;
+            case 'skills':
+              h?.onSkills?.(msg.agentType || '', msg.skills || []);
               break;
           }
         } catch (err) {
@@ -336,6 +346,21 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     abortRef.current = null;
   }, []);
 
+  /**
+   * Request skills list for a specific agent type.
+   */
+  const requestSkills = useCallback((agentType: 'claude' | 'hermes') => {
+    sendMessage({ type: 'skills:list', sessionId: '', agentType });
+  }, [sendMessage]);
+
+  /**
+   * Request skills list for ALL agent types.
+   * Triggers multiple 'skills' responses, one per agent.
+   */
+  const requestAllSkills = useCallback(() => {
+    sendMessage({ type: 'skills:list-all', sessionId: '' });
+  }, [sendMessage]);
+
   // Auto-connect on mount, disconnect on unmount
   useEffect(() => {
     connect();
@@ -352,6 +377,8 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     sendApiChat,
     stopGeneration,
     stopApiChat,
+    requestSkills,
+    requestAllSkills,
     disconnect,
   };
 }

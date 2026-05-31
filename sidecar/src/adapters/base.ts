@@ -1,11 +1,14 @@
 import type { ChatRequest, ChatMode } from '../types';
 
+import type { SkillInfo } from '../types';
+
 export interface AgentAdapter {
   agentType: 'claude' | 'hermes';
   createSession(sessionId: string, cwd?: string): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   sendMessage(request: ChatRequest): AsyncGenerator<string, void, unknown>;
   stopGeneration(sessionId: string): void;
+  listSkills(): Promise<SkillInfo[]>;
 }
 
 export function buildPrompt(message: string, mode: ChatMode): string {
