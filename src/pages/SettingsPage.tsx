@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import {
   ArrowLeft, Settings, Globe, Cpu, Key, Info,
   Sun, Moon, Monitor, FolderOpen, ChevronDown,
   Plus, Trash2, Edit3, Check, X, Pencil,
+  Loader2, Zap,
 } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { EnvManager } from '../components/env/EnvManager';
@@ -183,7 +184,7 @@ function AgentConfigPanel() {
 }
 
 // ============================================================
-// 4. API Configuration (list-based with edit/delete)
+// 4. API Configuration (list-based with edit/delete + test connection)
 // ============================================================
 interface ApiProvider {
   id: string;
@@ -200,6 +201,117 @@ interface EditingProvider {
   api_endpoint: string;
   api_key: string;
   models: string;
+}
+
+type TestStatus = 'idle' | 'testing' | 'success' | 'error';
+interface TestResult {
+  providerId: string;
+  status: TestStatus;
+  message: string;
+  latency?: number;
+}
+
+/** Determine API format from provider id or endpoint pattern */
+function inferApiFormat(providerId: string, endpoint: string): 'anthropic' | 'openai' {
+  if (providerId === 'anthropic' || endpoint.includes('anthropic.com')) {
+    return 'anthropic';
+  }
+  return 'openai';
+}
+
+async function testApiConnection(
+  providerId: string,
+  endpoint: string,
+  apiKey: string,
+  models: string[],
+): Promise<{ ok: boolean; message: string; latency: number }> {
+  const ep = endpoint.replace(/\/+$/, '');
+  const fmt = inferApiFormat(providerId, endpoint);
+  // Pick the first model for the test request
+  const model = models[0] || (fmt === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
+  const start = performance.now();
+
+  try {
+    if (fmt === 'anthropic') {
+      const res = await fetch(`${ep}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 1,
+          stream: false,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      const latency = Math.round(performance.now() - start);
+
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, message: `认证失败 (HTTP ${res.status})`, latency };
+      }
+      if (res.status === 404) {
+        return { ok: false, message: `端点不存在 (HTTP 404)，请检查 API 地址`, latency };
+      }
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        return { ok: false, message: `请求失败 (HTTP ${res.status}): ${errText.slice(0, 200)}`, latency };
+      }
+
+      // Parse the response to confirm it's a valid API response
+      const data = await res.json();
+      if (data.type === 'error') {
+        return { ok: false, message: `API 返回错误: ${data.error?.message || JSON.stringify(data.error)}`, latency };
+      }
+
+      return { ok: true, message: `连接成功 - 模型: ${model}`, latency };
+    } else {
+      const res = await fetch(`${ep}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 1,
+          stream: false,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      const latency = Math.round(performance.now() - start);
+
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, message: `认证失败 (HTTP ${res.status})`, latency };
+      }
+      if (res.status === 404) {
+        return { ok: false, message: `端点不存在 (HTTP 404)，请检查 API 地址`, latency };
+      }
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        return { ok: false, message: `请求失败 (HTTP ${res.status}): ${errText.slice(0, 200)}`, latency };
+      }
+
+      const data = await res.json();
+      if (data.error) {
+        return { ok: false, message: `API 返回错误: ${data.error.message || JSON.stringify(data.error)}`, latency };
+      }
+
+      return { ok: true, message: `连接成功 - 模型: ${model}`, latency };
+    }
+  } catch (err) {
+    const latency = Math.round(performance.now() - start);
+    const msg = err instanceof DOMException && err.name === 'TimeoutError'
+      ? '连接超时 (15s)，请检查网络或端点地址'
+      : `网络错误: ${err instanceof Error ? err.message : String(err)}`;
+    return { ok: false, message: msg, latency };
+  }
 }
 
 function ApiConfig() {
@@ -230,6 +342,8 @@ function ApiConfig() {
 
   const [editingProvider, setEditingProvider] = useState<EditingProvider | null>(null);
   const [newModelInput, setNewModelInput] = useState('');
+  const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map());
+  const abortRef = useRef<Map<string, AbortController>>(new Map());
 
   // Persist providers
   const persist = (list: ApiProvider[]) => {
@@ -266,6 +380,8 @@ function ApiConfig() {
     localStorage.removeItem(`pd-api-${id}-masked`);
     persist(providers.filter((p) => p.id !== id));
     if (editingProvider?.id === id) setEditingProvider(null);
+    // Clean up test result
+    setTestResults((prev) => { const m = new Map(prev); m.delete(id); return m; });
   };
 
   // Start editing
@@ -348,6 +464,43 @@ function ApiConfig() {
     );
   };
 
+  // Test connection for a provider
+  const handleTestConnection = useCallback(async (providerId: string) => {
+    // Cancel any existing test for this provider
+    const existing = abortRef.current.get(providerId);
+    existing?.abort();
+
+    const provider = providers.find((p) => p.id === providerId);
+    if (!provider) return;
+
+    const apiKey = localStorage.getItem(`pd-api-${providerId}-key`);
+    if (!apiKey) {
+      setTestResults((prev) => new Map(prev).set(providerId, {
+        providerId,
+        status: 'error',
+        message: '未配置 API Key，请先编辑并填入 API Key',
+      }));
+      return;
+    }
+
+    setTestResults((prev) => new Map(prev).set(providerId, {
+      providerId,
+      status: 'testing',
+      message: '正在测试连接...',
+    }));
+
+    const result = await testApiConnection(providerId, provider.api_endpoint, apiKey, provider.models);
+
+    setTestResults((prev) => new Map(prev).set(providerId, {
+      providerId,
+      status: result.ok ? 'success' : 'error',
+      message: result.ok
+        ? `${result.message} (${result.latency}ms)`
+        : result.message,
+      latency: result.latency,
+    }));
+  }, [providers]);
+
   return (
     <div className="space-y-4">
       {/* Header with add button */}
@@ -386,6 +539,7 @@ function ApiConfig() {
         {providers.map((p) => {
           const isEditing = editingProvider?.id === p.id;
           const ep = editingProvider || p;
+          const testResult = testResults.get(p.id);
 
           return (
             <div
@@ -435,6 +589,32 @@ function ApiConfig() {
                 </div>
 
                 <div className="flex items-center gap-1">
+                  {/* Test connection button — visible only when not editing */}
+                  {!isEditing && (
+                    <button
+                      onClick={() => handleTestConnection(p.id)}
+                      disabled={testResult?.status === 'testing' || !p.api_key_set}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors disabled:opacity-30"
+                      style={{
+                        backgroundColor: testResult?.status === 'testing'
+                          ? 'var(--bg-tertiary)'
+                          : 'var(--bg-tertiary)',
+                        color: testResult?.status === 'testing'
+                          ? 'var(--text-tertiary)'
+                          : 'var(--accent)',
+                        border: '1px solid var(--border)',
+                      }}
+                      title="测试连接"
+                    >
+                      {testResult?.status === 'testing' ? (
+                        <Loader2 size={11} className="animate-spin" />
+                      ) : (
+                        <Zap size={11} />
+                      )}
+                      {testResult?.status === 'testing' ? '测试中' : '测试'}
+                    </button>
+                  )}
+
                   {isEditing ? (
                     <>
                       <button
@@ -476,6 +656,26 @@ function ApiConfig() {
                   )}
                 </div>
               </div>
+
+              {/* Test result banner */}
+              {testResult && testResult.status !== 'idle' && testResult.status !== 'testing' && (
+                <div
+                  className="px-3 py-1.5 text-[10px] flex items-center gap-1.5"
+                  style={{
+                    backgroundColor: testResult.status === 'success'
+                      ? 'rgba(52, 211, 153, 0.08)'
+                      : 'rgba(239, 68, 68, 0.08)',
+                    color: testResult.status === 'success'
+                      ? 'var(--success)'
+                      : 'var(--danger)',
+                  }}
+                >
+                  <span className="font-medium">
+                    {testResult.status === 'success' ? '✓' : '✗'}
+                  </span>
+                  {testResult.message}
+                </div>
+              )}
 
               {/* Card body */}
               <div className="px-3 py-2 space-y-2">
