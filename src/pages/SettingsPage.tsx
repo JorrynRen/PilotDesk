@@ -3,8 +3,26 @@ import {
   ArrowLeft, Settings, Globe, Cpu, Key, Info,
   Sun, Moon, Monitor, FolderOpen, ChevronDown,
   Plus, Trash2, Edit3, Check, X, Pencil,
-  Loader2, Zap,
+  Loader2, Zap, GripVertical,
 } from 'lucide-react';
+import { open } from '@tauri-apps/plugin-dialog';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useTheme } from '../hooks/useTheme';
 import { EnvManager } from '../components/env/EnvManager';
 import { ConfigEditor } from '../components/panels/ConfigEditor';
@@ -39,11 +57,15 @@ function GeneralSettings() {
     { value: 'system' as const, icon: Monitor, label: '跟随系统' },
   ];
 
-  const handlePickWorkspace = () => {
-    const val = prompt('请输入工作区目录路径:', workspace);
-    if (val) {
-      setWorkspace(val);
-      localStorage.setItem('pilotdesk-workspace', val);
+  const handlePickWorkspace = async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (selected && typeof selected === 'string') {
+        setWorkspace(selected);
+        localStorage.setItem('pilotdesk-workspace', selected);
+      }
+    } catch {
+      // User cancelled or dialog error — ignore
     }
   };
 
@@ -102,14 +124,14 @@ function GeneralSettings() {
               color: 'var(--text-secondary)',
               border: '1px solid var(--border)',
             }}
-            title="选择目录"
+            title="浏览选择目录"
           >
             <FolderOpen size={12} />
             浏览
           </button>
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          Claude Code / Hermes Agent 会话的默认工作目录
+          Claude Code / Hermes Agent 会话的默认工作目录。可直接输入路径或点击浏览选择。
         </p>
       </section>
 
@@ -184,7 +206,7 @@ function AgentConfigPanel() {
 }
 
 // ============================================================
-// 4. API Configuration (list-based with edit/delete + test connection)
+// 4. API Configuration (list-based with edit/delete + test + drag-sort)
 // ============================================================
 interface ApiProvider {
   id: string;
@@ -227,7 +249,6 @@ async function testApiConnection(
 ): Promise<{ ok: boolean; message: string; latency: number }> {
   const ep = endpoint.replace(/\/+$/, '');
   const fmt = inferApiFormat(providerId, endpoint);
-  // Pick the first model for the test request
   const model = models[0] || (fmt === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
   const start = performance.now();
 
@@ -250,7 +271,6 @@ async function testApiConnection(
       });
 
       const latency = Math.round(performance.now() - start);
-
       if (res.status === 401 || res.status === 403) {
         return { ok: false, message: `认证失败 (HTTP ${res.status})`, latency };
       }
@@ -261,13 +281,10 @@ async function testApiConnection(
         const errText = await res.text().catch(() => '');
         return { ok: false, message: `请求失败 (HTTP ${res.status}): ${errText.slice(0, 200)}`, latency };
       }
-
-      // Parse the response to confirm it's a valid API response
       const data = await res.json();
       if (data.type === 'error') {
         return { ok: false, message: `API 返回错误: ${data.error?.message || JSON.stringify(data.error)}`, latency };
       }
-
       return { ok: true, message: `连接成功 - 模型: ${model}`, latency };
     } else {
       const res = await fetch(`${ep}/chat/completions`, {
@@ -286,7 +303,6 @@ async function testApiConnection(
       });
 
       const latency = Math.round(performance.now() - start);
-
       if (res.status === 401 || res.status === 403) {
         return { ok: false, message: `认证失败 (HTTP ${res.status})`, latency };
       }
@@ -297,12 +313,10 @@ async function testApiConnection(
         const errText = await res.text().catch(() => '');
         return { ok: false, message: `请求失败 (HTTP ${res.status}): ${errText.slice(0, 200)}`, latency };
       }
-
       const data = await res.json();
       if (data.error) {
         return { ok: false, message: `API 返回错误: ${data.error.message || JSON.stringify(data.error)}`, latency };
       }
-
       return { ok: true, message: `连接成功 - 模型: ${model}`, latency };
     }
   } catch (err) {
@@ -312,6 +326,350 @@ async function testApiConnection(
       : `网络错误: ${err instanceof Error ? err.message : String(err)}`;
     return { ok: false, message: msg, latency };
   }
+}
+
+// ============================================================
+// Sortable Provider Card
+// ============================================================
+function SortableProviderCard({
+  provider,
+  isEditing,
+  testResult,
+  editingProvider,
+  newModelInput,
+  onTestConnection,
+  onStartEdit,
+  onDeleteProvider,
+  onSetEditingProvider,
+  onSaveEdit,
+  onCancelEdit,
+  onAddModelInline,
+  onRemoveModel,
+  onNewModelInputChange,
+}: {
+  provider: ApiProvider;
+  isEditing: boolean;
+  testResult: TestResult | undefined;
+  editingProvider: EditingProvider | null;
+  newModelInput: string;
+  onTestConnection: (id: string) => void;
+  onStartEdit: (p: ApiProvider) => void;
+  onDeleteProvider: (id: string) => void;
+  onSetEditingProvider: (ep: EditingProvider) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onAddModelInline: (id: string) => void;
+  onRemoveModel: (id: string, model: string) => void;
+  onNewModelInputChange: (val: string) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: provider.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  const p = provider;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="rounded-lg overflow-hidden"
+      data-provider-id={p.id}
+    >
+      <div
+        className="flex"
+        style={{
+          border: isEditing ? '1px solid var(--accent)' : '1px solid var(--border)',
+          backgroundColor: 'var(--bg-secondary)',
+          borderRadius: '0.5rem',
+        }}
+      >
+        {/* Drag handle */}
+        <div
+          className="flex items-center justify-center px-1.5 shrink-0 cursor-grab active:cursor-grabbing"
+          style={{ borderRight: '1px solid var(--border)' }}
+          {...attributes}
+          {...listeners}
+          title="拖拽排序"
+        >
+          <GripVertical size={12} style={{ color: 'var(--text-tertiary)' }} />
+        </div>
+
+        {/* Card content */}
+        <div className="flex-1 min-w-0">
+          {/* Card header */}
+          <div
+            className="flex items-center justify-between px-3 py-2"
+            style={{ borderBottom: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                {isEditing ? (
+                  <input
+                    type="text"
+                    value={editingProvider!.name}
+                    onChange={(e) =>
+                      onSetEditingProvider({ ...editingProvider!, name: e.target.value })
+                    }
+                    className="px-2 py-0.5 rounded text-xs outline-none"
+                    style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border)',
+                      width: 180,
+                    }}
+                    placeholder="提供商名称"
+                    autoFocus
+                  />
+                ) : (
+                  p.name
+                )}
+              </span>
+              {p.api_key_set && !isEditing && (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--success)' }}
+                >
+                  已配置
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1">
+              {!isEditing && (
+                <button
+                  onClick={() => onTestConnection(p.id)}
+                  disabled={testResult?.status === 'testing' || !p.api_key_set}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors disabled:opacity-30"
+                  style={{
+                    backgroundColor: 'var(--bg-tertiary)',
+                    color: testResult?.status === 'testing'
+                      ? 'var(--text-tertiary)'
+                      : 'var(--accent)',
+                    border: '1px solid var(--border)',
+                  }}
+                  title="测试连接"
+                >
+                  {testResult?.status === 'testing' ? (
+                    <Loader2 size={11} className="animate-spin" />
+                  ) : (
+                    <Zap size={11} />
+                  )}
+                  {testResult?.status === 'testing' ? '测试中' : '测试'}
+                </button>
+              )}
+
+              {isEditing ? (
+                <>
+                  <button
+                    onClick={onSaveEdit}
+                    className="p-1 rounded transition-colors"
+                    style={{ color: 'var(--success)' }}
+                    title="保存"
+                  >
+                    <Check size={13} />
+                  </button>
+                  <button
+                    onClick={onCancelEdit}
+                    className="p-1 rounded transition-colors"
+                    style={{ color: 'var(--text-secondary)' }}
+                    title="取消"
+                  >
+                    <X size={13} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => onStartEdit(p)}
+                    className="p-1 rounded transition-colors"
+                    style={{ color: 'var(--text-secondary)' }}
+                    title="编辑"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    onClick={() => onDeleteProvider(p.id)}
+                    className="p-1 rounded transition-colors"
+                    style={{ color: 'var(--danger)' }}
+                    title="删除"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Test result banner */}
+          {testResult && testResult.status !== 'idle' && testResult.status !== 'testing' && (
+            <div
+              className="px-3 py-1.5 text-[10px] flex items-center gap-1.5"
+              style={{
+                backgroundColor: testResult.status === 'success'
+                  ? 'rgba(52, 211, 153, 0.08)'
+                  : 'rgba(239, 68, 68, 0.08)',
+                color: testResult.status === 'success'
+                  ? 'var(--success)'
+                  : 'var(--danger)',
+              }}
+            >
+              <span className="font-medium">
+                {testResult.status === 'success' ? '✓' : '✗'}
+              </span>
+              {testResult.message}
+            </div>
+          )}
+
+          {/* Card body */}
+          <div className="px-3 py-2 space-y-2">
+            {/* API Endpoint */}
+            <div>
+              <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                API 端点
+              </label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editingProvider!.api_endpoint}
+                  onChange={(e) =>
+                    onSetEditingProvider({ ...editingProvider!, api_endpoint: e.target.value })
+                  }
+                  className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
+                  style={{
+                    backgroundColor: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border)',
+                  }}
+                />
+              ) : (
+                <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>
+                  {p.api_endpoint}
+                </p>
+              )}
+            </div>
+
+            {/* API Key */}
+            {isEditing && (
+              <div>
+                <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                  API Key {p.api_key_set && '（留空保持不变）'}
+                </label>
+                <input
+                  type="password"
+                  value={editingProvider!.api_key}
+                  onChange={(e) =>
+                    onSetEditingProvider({ ...editingProvider!, api_key: e.target.value })
+                  }
+                  placeholder={p.api_key_set ? '输入新 Key 覆盖' : '输入 API Key'}
+                  className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
+                  style={{
+                    backgroundColor: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border)',
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Models */}
+            <div>
+              <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                可用模型
+              </label>
+              {isEditing ? (
+                <div className="mt-0.5 space-y-1">
+                  <input
+                    type="text"
+                    value={editingProvider!.models}
+                    onChange={(e) =>
+                      onSetEditingProvider({ ...editingProvider!, models: e.target.value })
+                    }
+                    placeholder="用逗号分隔模型名称，如: gpt-4o, gpt-4o-mini"
+                    className="w-full px-2 py-1 rounded text-xs outline-none"
+                    style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border)',
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="mt-1">
+                  {p.models.length === 0 ? (
+                    <p className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      暂无模型，点击编辑添加
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {p.models.map((model) => (
+                        <span
+                          key={model}
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] group"
+                          style={{
+                            backgroundColor: 'var(--bg-tertiary)',
+                            color: 'var(--text-secondary)',
+                            border: '1px solid var(--border)',
+                          }}
+                        >
+                          {model}
+                          <button
+                            onClick={() => onRemoveModel(p.id, model)}
+                            className="opacity-0 group-hover:opacity-60 transition-opacity"
+                            style={{ color: 'var(--danger)' }}
+                            title="移除"
+                          >
+                            <X size={9} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Quick add model input */}
+                  <div className="flex items-center gap-1 mt-1.5">
+                    <input
+                      type="text"
+                      value={newModelInput}
+                      onChange={(e) => onNewModelInputChange(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') onAddModelInline(p.id);
+                      }}
+                      placeholder="添加模型名称..."
+                      className="flex-1 px-2 py-0.5 rounded text-[10px] outline-none"
+                      style={{
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border)',
+                      }}
+                    />
+                    <button
+                      onClick={() => onAddModelInline(p.id)}
+                      disabled={!newModelInput.trim()}
+                      className="px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-30"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    >
+                      添加
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ApiConfig() {
@@ -345,11 +703,32 @@ function ApiConfig() {
   const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map());
   const abortRef = useRef<Map<string, AbortController>>(new Map());
 
+  // DnD sensors — use pointer sensor for drag, keyboard for accessibility
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
   // Persist providers
   const persist = (list: ApiProvider[]) => {
     setProviders(list);
     localStorage.setItem('pd-api-providers', JSON.stringify(list));
   };
+
+  // Handle drag end — reorder and persist
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    setProviders((prev) => {
+      const oldIndex = prev.findIndex((p) => p.id === active.id);
+      const newIndex = prev.findIndex((p) => p.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return prev;
+      const reordered = arrayMove(prev, oldIndex, newIndex);
+      localStorage.setItem('pd-api-providers', JSON.stringify(reordered));
+      return reordered;
+    });
+  }, []);
 
   // Add provider
   const handleAddProvider = () => {
@@ -380,7 +759,6 @@ function ApiConfig() {
     localStorage.removeItem(`pd-api-${id}-masked`);
     persist(providers.filter((p) => p.id !== id));
     if (editingProvider?.id === id) setEditingProvider(null);
-    // Clean up test result
     setTestResults((prev) => { const m = new Map(prev); m.delete(id); return m; });
   };
 
@@ -413,7 +791,6 @@ function ApiConfig() {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    // Save key if entered
     if (editingProvider.api_key.trim()) {
       const key = editingProvider.api_key.trim();
       const masked = key.slice(0, 4) + '****' + key.slice(-4);
@@ -466,7 +843,6 @@ function ApiConfig() {
 
   // Test connection for a provider
   const handleTestConnection = useCallback(async (providerId: string) => {
-    // Cancel any existing test for this provider
     const existing = abortRef.current.get(providerId);
     existing?.abort();
 
@@ -510,7 +886,7 @@ function ApiConfig() {
             API 提供商列表
           </h3>
           <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-            配置 API 后，可以在新建会话时选择直接使用 API 模型对话
+            拖拽左侧手柄调整排序 · 配置完成后可在新建会话时选择 API 直连模式
           </p>
         </div>
         <button
@@ -526,299 +902,50 @@ function ApiConfig() {
         </button>
       </div>
 
-      {/* Provider list */}
-      <div className="space-y-2">
-        {providers.length === 0 && (
-          <div className="text-center py-8">
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-              暂无 API 提供商，点击上方按钮添加
-            </p>
+      {/* Sortable provider list */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={providers.map((p) => p.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className="space-y-2">
+            {providers.length === 0 && (
+              <div className="text-center py-8">
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  暂无 API 提供商，点击上方按钮添加
+                </p>
+              </div>
+            )}
+
+            {providers.map((p) => (
+              <SortableProviderCard
+                key={p.id}
+                provider={p}
+                isEditing={editingProvider?.id === p.id}
+                testResult={testResults.get(p.id)}
+                editingProvider={editingProvider}
+                newModelInput={newModelInput}
+                onTestConnection={handleTestConnection}
+                onStartEdit={handleStartEdit}
+                onDeleteProvider={handleDeleteProvider}
+                onSetEditingProvider={setEditingProvider}
+                onSaveEdit={handleSaveEdit}
+                onCancelEdit={handleCancelEdit}
+                onAddModelInline={handleAddModelInline}
+                onRemoveModel={handleRemoveModel}
+                onNewModelInputChange={setNewModelInput}
+              />
+            ))}
           </div>
-        )}
-
-        {providers.map((p) => {
-          const isEditing = editingProvider?.id === p.id;
-          const ep = editingProvider || p;
-          const testResult = testResults.get(p.id);
-
-          return (
-            <div
-              key={p.id}
-              className="rounded-lg overflow-hidden"
-              style={{
-                border: isEditing ? '1px solid var(--accent)' : '1px solid var(--border)',
-                backgroundColor: 'var(--bg-secondary)',
-              }}
-            >
-              {/* Card header */}
-              <div
-                className="flex items-center justify-between px-3 py-2"
-                style={{ borderBottom: '1px solid var(--border)' }}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                    {isEditing ? (
-                      <input
-                        type="text"
-                        value={editingProvider!.name}
-                        onChange={(e) =>
-                          setEditingProvider({ ...editingProvider!, name: e.target.value })
-                        }
-                        className="px-2 py-0.5 rounded text-xs outline-none"
-                        style={{
-                          backgroundColor: 'var(--bg-tertiary)',
-                          color: 'var(--text-primary)',
-                          border: '1px solid var(--border)',
-                          width: 180,
-                        }}
-                        placeholder="提供商名称"
-                        autoFocus
-                      />
-                    ) : (
-                      p.name
-                    )}
-                  </span>
-                  {p.api_key_set && !isEditing && (
-                    <span
-                      className="text-[10px] px-1.5 py-0.5 rounded"
-                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--success)' }}
-                    >
-                      已配置
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1">
-                  {/* Test connection button — visible only when not editing */}
-                  {!isEditing && (
-                    <button
-                      onClick={() => handleTestConnection(p.id)}
-                      disabled={testResult?.status === 'testing' || !p.api_key_set}
-                      className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors disabled:opacity-30"
-                      style={{
-                        backgroundColor: testResult?.status === 'testing'
-                          ? 'var(--bg-tertiary)'
-                          : 'var(--bg-tertiary)',
-                        color: testResult?.status === 'testing'
-                          ? 'var(--text-tertiary)'
-                          : 'var(--accent)',
-                        border: '1px solid var(--border)',
-                      }}
-                      title="测试连接"
-                    >
-                      {testResult?.status === 'testing' ? (
-                        <Loader2 size={11} className="animate-spin" />
-                      ) : (
-                        <Zap size={11} />
-                      )}
-                      {testResult?.status === 'testing' ? '测试中' : '测试'}
-                    </button>
-                  )}
-
-                  {isEditing ? (
-                    <>
-                      <button
-                        onClick={handleSaveEdit}
-                        className="p-1 rounded transition-colors"
-                        style={{ color: 'var(--success)' }}
-                        title="保存"
-                      >
-                        <Check size={13} />
-                      </button>
-                      <button
-                        onClick={handleCancelEdit}
-                        className="p-1 rounded transition-colors"
-                        style={{ color: 'var(--text-secondary)' }}
-                        title="取消"
-                      >
-                        <X size={13} />
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => handleStartEdit(p)}
-                        className="p-1 rounded transition-colors"
-                        style={{ color: 'var(--text-secondary)' }}
-                        title="编辑"
-                      >
-                        <Pencil size={13} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteProvider(p.id)}
-                        className="p-1 rounded transition-colors"
-                        style={{ color: 'var(--danger)' }}
-                        title="删除"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Test result banner */}
-              {testResult && testResult.status !== 'idle' && testResult.status !== 'testing' && (
-                <div
-                  className="px-3 py-1.5 text-[10px] flex items-center gap-1.5"
-                  style={{
-                    backgroundColor: testResult.status === 'success'
-                      ? 'rgba(52, 211, 153, 0.08)'
-                      : 'rgba(239, 68, 68, 0.08)',
-                    color: testResult.status === 'success'
-                      ? 'var(--success)'
-                      : 'var(--danger)',
-                  }}
-                >
-                  <span className="font-medium">
-                    {testResult.status === 'success' ? '✓' : '✗'}
-                  </span>
-                  {testResult.message}
-                </div>
-              )}
-
-              {/* Card body */}
-              <div className="px-3 py-2 space-y-2">
-                {/* API Endpoint */}
-                <div>
-                  <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                    API 端点
-                  </label>
-                  {isEditing ? (
-                    <input
-                      type="text"
-                      value={editingProvider!.api_endpoint}
-                      onChange={(e) =>
-                        setEditingProvider({ ...editingProvider!, api_endpoint: e.target.value })
-                      }
-                      className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
-                      style={{
-                        backgroundColor: 'var(--bg-tertiary)',
-                        color: 'var(--text-primary)',
-                        border: '1px solid var(--border)',
-                      }}
-                    />
-                  ) : (
-                    <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>
-                      {p.api_endpoint}
-                    </p>
-                  )}
-                </div>
-
-                {/* API Key */}
-                {isEditing && (
-                  <div>
-                    <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                      API Key {p.api_key_set && '（留空保持不变）'}
-                    </label>
-                    <input
-                      type="password"
-                      value={editingProvider!.api_key}
-                      onChange={(e) =>
-                        setEditingProvider({ ...editingProvider!, api_key: e.target.value })
-                      }
-                      placeholder={p.api_key_set ? '输入新 Key 覆盖' : '输入 API Key'}
-                      className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
-                      style={{
-                        backgroundColor: 'var(--bg-tertiary)',
-                        color: 'var(--text-primary)',
-                        border: '1px solid var(--border)',
-                      }}
-                    />
-                  </div>
-                )}
-
-                {/* Models */}
-                <div>
-                  <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                    可用模型
-                  </label>
-                  {isEditing ? (
-                    <div className="mt-0.5 space-y-1">
-                      <input
-                        type="text"
-                        value={editingProvider!.models}
-                        onChange={(e) =>
-                          setEditingProvider({ ...editingProvider!, models: e.target.value })
-                        }
-                        placeholder="用逗号分隔模型名称，如: gpt-4o, gpt-4o-mini"
-                        className="w-full px-2 py-1 rounded text-xs outline-none"
-                        style={{
-                          backgroundColor: 'var(--bg-tertiary)',
-                          color: 'var(--text-primary)',
-                          border: '1px solid var(--border)',
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div className="mt-1">
-                      {p.models.length === 0 ? (
-                        <p className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                          暂无模型，点击编辑添加
-                        </p>
-                      ) : (
-                        <div className="flex flex-wrap gap-1">
-                          {p.models.map((model) => (
-                            <span
-                              key={model}
-                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] group"
-                              style={{
-                                backgroundColor: 'var(--bg-tertiary)',
-                                color: 'var(--text-secondary)',
-                                border: '1px solid var(--border)',
-                              }}
-                            >
-                              {model}
-                              <button
-                                onClick={() => handleRemoveModel(p.id, model)}
-                                className="opacity-0 group-hover:opacity-60 transition-opacity"
-                                style={{ color: 'var(--danger)' }}
-                                title="移除"
-                              >
-                                <X size={9} />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Quick add model input */}
-                      <div className="flex items-center gap-1 mt-1.5">
-                        <input
-                          type="text"
-                          value={newModelInput === p.id ? '' : newModelInput}
-                          onChange={(e) => setNewModelInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleAddModelInline(p.id);
-                          }}
-                          placeholder="添加模型名称..."
-                          className="flex-1 px-2 py-0.5 rounded text-[10px] outline-none"
-                          style={{
-                            backgroundColor: 'var(--bg-tertiary)',
-                            color: 'var(--text-primary)',
-                            border: '1px solid var(--border)',
-                          }}
-                        />
-                        <button
-                          onClick={() => handleAddModelInline(p.id)}
-                          disabled={!newModelInput.trim()}
-                          className="px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-30"
-                          style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                        >
-                          添加
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+        </SortableContext>
+      </DndContext>
 
       <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-        API Key 保存在本地，不会上传。配置完成后可在新建会话时选择 API 直连模式。
+        API Key 保存在本地，不会上传。排序结果自动保存。
       </p>
     </div>
   );
