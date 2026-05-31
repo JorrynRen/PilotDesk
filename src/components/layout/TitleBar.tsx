@@ -1,6 +1,6 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X } from 'lucide-react';
+import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy } from 'lucide-react';
 
 interface TitleBarProps {
   onOpenSettings?: () => void;
@@ -10,6 +10,22 @@ interface TitleBarProps {
 
 export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    const win = getCurrentWindow();
+    // Initial state
+    win.isMaximized().then(setIsMaximized);
+
+    // Listen for maximize state changes
+    let unlisten: (() => void) | undefined;
+    win.onResized(async () => {
+      const maximized = await win.isMaximized();
+      setIsMaximized(maximized);
+    }).then(fn => { unlisten = fn; });
+
+    return () => { unlisten?.(); };
+  }, []);
 
   const handleMinimize = useCallback(async () => {
     await getCurrentWindow().minimize();
@@ -98,9 +114,13 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
         <button
           onClick={handleToggleMaximize}
           className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
-          title="最大化"
+          title={isMaximized ? '还原' : '最大化'}
         >
-          <Square size={11} style={{ color: 'var(--text-secondary)' }} />
+          {isMaximized ? (
+            <Copy size={11} style={{ color: 'var(--text-secondary)' }} />
+          ) : (
+            <Square size={11} style={{ color: 'var(--text-secondary)' }} />
+          )}
         </button>
         <button
           onClick={handleClose}
