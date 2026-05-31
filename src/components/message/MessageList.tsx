@@ -20,12 +20,11 @@ export function MessageList({ messages, session, onEditMessage, onSaveInspiratio
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center px-8">
-          <div
-            className="w-14 h-14 mx-auto mb-4 rounded-2xl flex items-center justify-center"
-            style={{ background: 'linear-gradient(135deg, #5B7FFF, #8B5CF6)' }}
-          >
-            <span className="text-2xl text-white font-bold">PD</span>
-          </div>
+          <img
+            src="/favicon.png"
+            alt="PilotDesk"
+            className="w-16 h-16 mx-auto mb-4 rounded-2xl"
+          />
           <h2 className="text-lg font-semibold mb-1">PilotDesk</h2>
           <p className="text-sm mb-1" style={{ color: 'var(--text-secondary)' }}>
             Claude Code & Hermes Agent 统一桌面客户端
