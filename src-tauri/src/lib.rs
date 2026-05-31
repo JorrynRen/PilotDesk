@@ -28,6 +28,14 @@ pub fn run() {
             commands::env::detect_env,
             commands::env::install_claude_code,
             commands::env::install_hermes,
+            commands::session::list_sessions,
+            commands::session::list_archived_sessions,
+            commands::session::create_session,
+            commands::session::get_session,
+            commands::session::get_session_messages,
+            commands::session::rename_session,
+            commands::session::archive_session,
+            commands::session::delete_session,
         ])
         .setup(|_app| {
             println!("PilotDesk initialized successfully.");
