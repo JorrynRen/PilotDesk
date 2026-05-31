@@ -3,7 +3,7 @@ import { Plus, Star, Search, Send, Trash2, Edit3, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 
-const EMOJI_OPTIONS = ['💡', '🔥', '🎯', '⚡', '🚀', '🌟', '📝', '🔧', '🎨', '🧠', '📊', '🛠️', '💻', '📱', '🌐'];
+const EMOJI_OPTIONS = ['💡', '🔥', '🎯', '⚡', '🚀', '🌟', '📝', '🔧', '🎨', '🧠', '📊', '🛠️', '💻', '📱', '🌐', '🔬', '🎭', '🎵', '🏆', '💎', '🌈', '🔑', '📖', '🧩'];
 
 export function InspirationPanel() {
   const currentSession = useSessionStore((s) => {
@@ -300,18 +300,25 @@ function InspirationInlineForm({ initialData, sourceAgent, onSave, onCancel }: I
   return (
     <div className="shrink-0 px-3 py-2 space-y-2" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)' }}>
       {/* Icon picker */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>图标:</span>
-        {EMOJI_OPTIONS.slice(0, 10).map((emoji) => (
-          <button
-            key={emoji}
-            onClick={() => setIcon(emoji)}
-            className="text-sm p-0.5 rounded transition-colors"
-            style={{ backgroundColor: icon === emoji ? 'var(--border)' : 'transparent' }}
-          >
-            {emoji}
-          </button>
-        ))}
+      <div>
+        <span className="text-[10px] mb-1 block" style={{ color: 'var(--text-tertiary)' }}>图标:</span>
+        <div className="grid grid-cols-12 gap-0.5">
+          {EMOJI_OPTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              onClick={() => setIcon(emoji)}
+              className="text-sm p-0.5 rounded transition-colors text-center"
+              style={{
+                backgroundColor: icon === emoji ? 'var(--border)' : 'transparent',
+                outline: icon === emoji ? '1.5px solid var(--accent)' : 'none',
+                outlineOffset: '-1px',
+              }}
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
       </div>
       {/* Title */}
       <input

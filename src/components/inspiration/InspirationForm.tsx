@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Plus } from 'lucide-react';
 import type { InspirationItem } from '../../stores/inspirationStore';
 
-const EMOJI_OPTIONS = ['💡', '🔥', '🎯', '⚡', '🚀', '🌟', '📝', '🔧', '💡', '🎨', '🧠', '📊', '🛠️', '💻', '📱', '🌐'];
+const EMOJI_OPTIONS = ['💡', '🔥', '🎯', '⚡', '🚀', '🌟', '📝', '🔧', '🎨', '🧠', '📊', '🛠️', '💻', '📱', '🌐', '🔬', '🎭', '🎵', '🏆', '💎', '🌈', '🔑', '📖', '🧩'];
 
 interface InspirationFormProps {
   initialData?: InspirationItem | null;
@@ -117,17 +117,22 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
               </button>
               {showEmojiPicker && (
                 <div
-                  className="absolute top-12 left-0 z-10 grid grid-cols-4 gap-1 p-2 rounded-lg shadow-lg"
-                  style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                  className="absolute top-12 left-0 z-10 grid grid-cols-12 gap-0.5 p-2 rounded-lg shadow-lg"
+                  style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', minWidth: '360px' }}
                 >
                   {EMOJI_OPTIONS.map((e) => (
                     <button
+                      type="button"
                       key={e}
                       onClick={() => {
                         setIcon(e);
                         setShowEmojiPicker(false);
                       }}
-                      className="w-8 h-8 flex items-center justify-center rounded hover:bg-[var(--bg-tertiary)]"
+                      className="w-7 h-7 flex items-center justify-center rounded transition-colors hover:bg-[var(--bg-tertiary)]"
+                      style={{
+                        outline: icon === e ? '1.5px solid var(--accent)' : 'none',
+                        outlineOffset: '-1px',
+                      }}
                     >
                       {e}
                     </button>
