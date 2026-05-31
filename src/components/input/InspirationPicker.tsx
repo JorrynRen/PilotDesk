@@ -8,43 +8,46 @@ interface InspirationPickerProps {
 }
 
 export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps) {
-  const { inspirations, fetchInspirations, searchInspirations, loading } = useInspirationStore();
+  // Only read inspirations, never mutate the global store from this component
+  const inspirations = useInspirationStore((s) => s.inspirations);
+  const loading = useInspirationStore((s) => s.loading);
   const [query, setQuery] = useState('');
-  const [filtered, setFiltered] = useState<InspirationItem[]>(inspirations);
+  const [filtered, setFiltered] = useState<InspirationItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Focus input on mount
   useEffect(() => {
-    fetchInspirations();
     inputRef.current?.focus();
-  }, [fetchInspirations]);
+  }, []);
+
+  // Local filtering only — never calls searchInspirations/fetchInspirations
+  // so the right panel's global state is never polluted
+  useEffect(() => {
+    setSelectedIndex(0);
+    if (!query.trim()) {
+      setFiltered(inspirations);
+    } else {
+      const q = query.toLowerCase();
+      setFiltered(
+        inspirations.filter(
+          (insp) =>
+            insp.title.toLowerCase().includes(q) ||
+            insp.content.toLowerCase().includes(q) ||
+            insp.icon.includes(q)
+        )
+      );
+    }
+  }, [query, inspirations]);
 
   const handleSearch = useCallback(
     (q: string) => {
       setQuery(q);
-      setSelectedIndex(0);
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        if (q.trim()) {
-          searchInspirations(q).then(() => {
-            setFiltered(useInspirationStore.getState().inspirations);
-          });
-        } else {
-          fetchInspirations().then(() => {
-            setFiltered(useInspirationStore.getState().inspirations);
-          });
-        }
-      }, 200);
     },
-    [searchInspirations, fetchInspirations]
+    []
   );
-
-  // Sync filtered list when inspirations change
-  useEffect(() => {
-    setFiltered(inspirations);
-  }, [inspirations]);
 
   const handleSelect = useCallback(
     (content: string) => {

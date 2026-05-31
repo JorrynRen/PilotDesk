@@ -12,10 +12,36 @@ interface SkillPickerProps {
   onClose: () => void;
 }
 
+// Built-in skill definitions — works for all agent types without Tauri invoke
+const BUILTIN_SKILLS: SkillItem[] = [
+  { name: 'code-review', description: '代码审查与优化建议' },
+  { name: 'translate', description: '多语言翻译' },
+  { name: 'summarize', description: '文本摘要与总结' },
+  { name: 'debug', description: '代码调试与错误诊断' },
+  { name: 'refactor', description: '代码重构' },
+  { name: 'test-gen', description: '单元测试生成' },
+  { name: 'doc-gen', description: '文档生成' },
+  { name: 'data-analysis', description: '数据分析与可视化' },
+  { name: 'sql-helper', description: 'SQL 查询编写与优化' },
+  { name: 'git-assist', description: 'Git 操作与版本管理辅助' },
+  { name: 'api-design', description: 'API 接口设计与文档' },
+  { name: 'perf-tune', description: '性能分析与调优建议' },
+];
+
+// Key used to persist user-added skills in localStorage
+const CUSTOM_SKILLS_KEY = 'pd-custom-skills';
+
+function loadCustomSkills(): SkillItem[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_SKILLS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) {
-  const [skills, setSkills] = useState<SkillItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [skills, setSkills] = useState<SkillItem[]>([...BUILTIN_SKILLS, ...loadCustomSkills()]);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -31,41 +57,7 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
 
   useEffect(() => {
     inputRef.current?.focus();
-    loadSkills();
   }, []);
-
-  const loadSkills = async () => {
-    if (agentType !== 'hermes') return;
-    setLoading(true);
-    setError(null);
-    try {
-      // Read skills from Hermes skills directory
-      const skillsDir = await invoke<string>('get_hermes_skills_dir');
-      const entries = await invoke<Array<{ name: string; description: string }>>('list_hermes_skills', {
-        dir: skillsDir,
-      });
-      setSkills(entries);
-    } catch {
-      // Fallback: use hardcoded common skills for demo
-      setSkills([
-        { name: 'code-review', description: '代码审查与优化建议' },
-        { name: 'translate', description: '多语言翻译' },
-        { name: 'summarize', description: '文本摘要与总结' },
-        { name: 'debug', description: '代码调试与错误诊断' },
-        { name: 'refactor', description: '代码重构' },
-        { name: 'test-gen', description: '单元测试生成' },
-        { name: 'doc-gen', description: '文档生成' },
-        { name: 'data-analysis', description: '数据分析与可视化' },
-      ]);
-    }
-    setLoading(false);
-  };
-
-  // Stub invoke for type safety - actual commands would come from Tauri
-  // These will be added in Task 12 (环境管理)
-  async function invoke<T>(_cmd: string, _args?: Record<string, unknown>): Promise<T> {
-    throw new Error('Command not yet implemented');
-  }
 
   const handleSelect = useCallback(
     (name: string, description: string) => {
@@ -134,18 +126,10 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
 
       {/* List */}
       <div className="max-h-64 overflow-y-auto">
-        {loading ? (
-          <div className="px-3 py-4 text-center">
-            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>加载技能列表中...</span>
-          </div>
-        ) : error ? (
-          <div className="px-3 py-4 text-center">
-            <span className="text-xs" style={{ color: 'var(--danger)' }}>{error}</span>
-          </div>
-        ) : filteredSkills.length === 0 ? (
+        {filteredSkills.length === 0 ? (
           <div className="px-3 py-4 text-center">
             <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-              {agentType !== 'hermes' ? '技能列表仅支持 Hermes Agent' : query ? '未找到匹配技能' : '暂无已安装技能'}
+              {query ? '未找到匹配技能' : '暂无可用技能'}
             </span>
           </div>
         ) : (
