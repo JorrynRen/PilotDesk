@@ -21,9 +21,10 @@ export function MessageList({ messages, session, onEditMessage, onSaveInspiratio
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center px-8">
           <img
-            src="/favicon.png"
+            src="/logo-lg.png"
             alt="PilotDesk"
-            className="w-16 h-16 mx-auto mb-4 rounded-2xl"
+            className="w-20 h-20 mx-auto mb-4 rounded-[18px]"
+            draggable={false}
           />
           <h2 className="text-lg font-semibold mb-1">PilotDesk</h2>
           <p className="text-sm mb-1" style={{ color: 'var(--text-secondary)' }}>

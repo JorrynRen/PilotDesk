@@ -24,9 +24,11 @@ export function TitleBar({ onOpenEnv, onOpenMarket }: TitleBarProps) {
       data-tauri-drag-region
     >
       <div className="flex items-center gap-2" data-tauri-drag-region>
-        <div
-          className="w-5 h-5 rounded"
-          style={{ background: 'linear-gradient(135deg, #5B7FFF, #8B5CF6)' }}
+        <img
+          src="/logo.png"
+          alt=""
+          className="w-7 h-7 rounded-md"
+          draggable={false}
         />
         <span className="text-sm font-semibold" data-tauri-drag-region>PilotDesk</span>
       </div>
