@@ -1,9 +1,15 @@
 import { useState } from 'react';
 import { X, Lightbulb, Settings, Cpu, Bot } from 'lucide-react';
+import { ConfigEditor } from '../panels/ConfigEditor';
+import { useSessionStore } from '../../stores/sessionStore';
 
 export function RightPanel() {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('inspiration');
+  const currentSession = useSessionStore((s) => {
+    const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
+    return cs;
+  });
 
   if (!isOpen) {
     return (
@@ -24,6 +30,24 @@ export function RightPanel() {
     { id: 'memory', icon: Bot, label: '记忆' },
     { id: 'config', icon: Settings, label: '配置' },
   ];
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'config':
+        return <ConfigEditor agent={currentSession?.agentType ?? ''} />;
+      case 'inspiration':
+      case 'skills':
+      case 'memory':
+      default:
+        return (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+              {tabs.find(t => t.id === activeTab)?.label}面板 - 待实现
+            </p>
+          </div>
+        );
+    }
+  };
 
   return (
     <aside
@@ -53,11 +77,9 @@ export function RightPanel() {
         </button>
       </div>
 
-      {/* Content Placeholder */}
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-          {tabs.find(t => t.id === activeTab)?.label}面板 - 待实现
-        </p>
+      {/* Content */}
+      <div className="flex-1 overflow-hidden">
+        {renderContent()}
       </div>
     </aside>
   );

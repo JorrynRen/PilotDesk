@@ -1,3 +1,4 @@
+mod agent_config;
 mod commands;
 mod db;
 mod sidecar;
@@ -37,6 +38,10 @@ pub fn run() {
             commands::session::rename_session,
             commands::session::archive_session,
             commands::session::delete_session,
+            commands::config::get_config,
+            commands::config::save_claude_config,
+            commands::config::save_hermes_config,
+            commands::config::test_api_connection,
         ])
         .setup(|_app| {
             println!("PilotDesk initialized successfully.");
