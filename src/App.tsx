@@ -1,16 +1,17 @@
 import { useState, useCallback } from 'react';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
 import { MarketPage } from './components/inspiration/MarketPage';
+import { EnvPage } from './pages/EnvPage';
+
+type PageView = 'main' | 'market' | 'env';
 
 function App() {
-  const [showMarket, setShowMarket] = useState(false);
+  const [currentPage, setCurrentPage] = useState<PageView>('main');
   const [, setPendingInputContent] = useState('');
 
   const handleSendToSession = useCallback((content: string) => {
     setPendingInputContent(content);
-    setShowMarket(false);
-    // The InputBar/MainPanel will need to pick this up via store or ref
-    // For now, we set it in sessionStorage as a bridge
+    setCurrentPage('main');
     sessionStorage.setItem('pilotdesk_pending_input', content);
   }, []);
 
@@ -19,9 +20,11 @@ function App() {
       className="h-screen flex flex-col overflow-hidden"
       style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
     >
-      <TitleBar />
-      {showMarket ? (
-        <MarketPage onBack={() => setShowMarket(false)} onSendToSession={handleSendToSession} />
+      <TitleBar onOpenEnv={() => setCurrentPage('env')} onOpenMarket={() => setCurrentPage('market')} />
+      {currentPage === 'market' ? (
+        <MarketPage onBack={() => setCurrentPage('main')} onSendToSession={handleSendToSession} />
+      ) : currentPage === 'env' ? (
+        <EnvPage onBack={() => setCurrentPage('main')} />
       ) : (
         <div className="flex-1 flex overflow-hidden relative">
           <SessionList />

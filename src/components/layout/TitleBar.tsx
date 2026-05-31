@@ -1,9 +1,14 @@
-import { Moon, Sun, Monitor } from 'lucide-react';
+import { Moon, Sun, Monitor, Settings, Lightbulb } from 'lucide-react';
 import { useTheme } from '../../hooks/useTheme';
 
 type Theme = 'light' | 'dark' | 'system';
 
-export function TitleBar() {
+interface TitleBarProps {
+  onOpenEnv?: () => void;
+  onOpenMarket?: () => void;
+}
+
+export function TitleBar({ onOpenEnv, onOpenMarket }: TitleBarProps) {
   const { theme, setTheme } = useTheme();
 
   const themeOptions: { value: Theme; icon: typeof Moon; label: string }[] = [
@@ -27,6 +32,26 @@ export function TitleBar() {
       </div>
 
       <div className="flex items-center gap-1">
+        {onOpenMarket && (
+          <button
+            onClick={onOpenMarket}
+            className="p-1.5 rounded transition-colors"
+            style={{ color: 'var(--text-secondary)', background: 'transparent' }}
+            title="灵感市集"
+          >
+            <Lightbulb size={14} />
+          </button>
+        )}
+        {onOpenEnv && (
+          <button
+            onClick={onOpenEnv}
+            className="p-1.5 rounded transition-colors"
+            style={{ color: 'var(--text-secondary)', background: 'transparent' }}
+            title="环境管理"
+          >
+            <Settings size={14} />
+          </button>
+        )}
         {themeOptions.map(({ value, icon: Icon, label }) => (
           <button
             key={value}
