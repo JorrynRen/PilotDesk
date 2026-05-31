@@ -11,6 +11,8 @@ use crate::utils::paths::claude_config_dir;
 pub struct ClaudeConfig {
     /// Selected model (e.g., "claude-sonnet-4-20250514")
     pub model: Option<String>,
+    /// API endpoint / base URL (e.g., "https://api.anthropic.com")
+    pub api_endpoint: Option<String>,
     /// API key (masked before sending to frontend)
     #[serde(skip_serializing)]
     pub api_key: Option<String>,
@@ -30,6 +32,7 @@ impl Default for ClaudeConfig {
     fn default() -> Self {
         Self {
             model: None,
+            api_endpoint: None,
             api_key: None,
             mcp_servers: None,
             custom_instructions: None,
@@ -44,6 +47,7 @@ impl Default for ClaudeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeConfigPublic {
     pub model: Option<String>,
+    pub api_endpoint: Option<String>,
     pub api_key_masked: Option<String>,
     pub api_key_set: bool,
     pub mcp_servers: Option<serde_json::Value>,
@@ -86,6 +90,7 @@ impl ClaudeConfig {
     pub fn to_public(&self) -> ClaudeConfigPublic {
         ClaudeConfigPublic {
             model: self.model.clone(),
+            api_endpoint: self.api_endpoint.clone(),
             api_key_masked: self.api_key.as_ref().map(|k| {
                 if k.is_empty() {
                     String::new()
@@ -107,6 +112,9 @@ impl ClaudeConfig {
     pub fn apply_update(&mut self, update: ClaudeConfigUpdate) {
         if let Some(model) = update.model {
             self.model = Some(model);
+        }
+        if let Some(api_endpoint) = update.api_endpoint {
+            self.api_endpoint = Some(api_endpoint);
         }
         if let Some(api_key) = update.api_key {
             if api_key != "UNCHANGED" {
@@ -135,6 +143,7 @@ impl ClaudeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeConfigUpdate {
     pub model: Option<String>,
+    pub api_endpoint: Option<String>,
     pub api_key: Option<String>,
     pub mcp_servers: Option<serde_json::Value>,
     pub custom_instructions: Option<String>,

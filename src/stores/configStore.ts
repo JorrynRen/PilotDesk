@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 
 export interface ClaudeConfigPublic {
   model: string | null;
+  api_endpoint: string | null;
   api_key_masked: string | null;
   api_key_set: boolean;
   mcp_servers: Record<string, unknown> | null;
@@ -47,7 +48,7 @@ interface ConfigState {
   testResult: TestResult | null;
 
   fetchConfig: () => Promise<void>;
-  saveClaudeConfig: (update: Partial<ClaudeConfigPublic> & { api_key?: string }) => Promise<void>;
+  saveClaudeConfig: (update: Partial<ClaudeConfigPublic> & { api_key?: string; api_endpoint?: string | null }) => Promise<void>;
   saveHermesConfig: (update: Partial<HermesConfigPublic> & { api_key?: string }) => Promise<void>;
   testConnection: (agentType: string) => Promise<TestResult>;
   clearError: () => void;

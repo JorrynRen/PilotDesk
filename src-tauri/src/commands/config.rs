@@ -13,6 +13,7 @@ pub struct ConfigResult {
 #[derive(serde::Deserialize)]
 pub struct ClaudeUpdatePayload {
     pub model: Option<String>,
+    pub api_endpoint: Option<String>,
     pub api_key: Option<String>,
     pub mcp_servers: Option<serde_json::Value>,
     pub custom_instructions: Option<String>,
@@ -68,6 +69,7 @@ pub fn save_claude_config(update: ClaudeUpdatePayload) -> Result<claude::ClaudeC
     let mut config = claude::ClaudeConfig::load()?;
     config.apply_update(claude::ClaudeConfigUpdate {
         model: update.model,
+        api_endpoint: update.api_endpoint,
         api_key: update.api_key,
         mcp_servers: update.mcp_servers,
         custom_instructions: update.custom_instructions,

@@ -9,6 +9,7 @@ interface ConfigEditorProps {
 function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
   const { saveClaudeConfig, saving, testConnection, testResult } = useConfigStore();
   const [model, setModel] = useState(config.model ?? '');
+  const [apiEndpoint, setApiEndpoint] = useState(config.api_endpoint ?? '');
   const [apiKey, setApiKey] = useState('');
   const [customInstructions, setCustomInstructions] = useState(config.custom_instructions ?? '');
   const [maxTokens, setMaxTokens] = useState(config.max_tokens?.toString() ?? '');
@@ -17,11 +18,12 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
   const hasChanges = useCallback(() => {
     return (
       (model !== (config.model ?? '')) ||
+      (apiEndpoint !== (config.api_endpoint ?? '')) ||
       (apiKey !== '') ||
       (customInstructions !== (config.custom_instructions ?? '')) ||
       (maxTokens !== (config.max_tokens?.toString() ?? ''))
     );
-  }, [model, apiKey, customInstructions, maxTokens, config]);
+  }, [model, apiEndpoint, apiKey, customInstructions, maxTokens, config]);
 
   useEffect(() => {
     setModified(hasChanges());
@@ -30,6 +32,7 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
   const handleSave = async () => {
     const update: Record<string, unknown> = {};
     if (model !== (config.model ?? '')) update.model = model || null;
+    if (apiEndpoint !== (config.api_endpoint ?? '')) update.api_endpoint = apiEndpoint || null;
     if (apiKey !== '') update.api_key = apiKey;
     if (customInstructions !== (config.custom_instructions ?? '')) update.custom_instructions = customInstructions || null;
     if (maxTokens !== (config.max_tokens?.toString() ?? '')) update.max_tokens = maxTokens ? parseInt(maxTokens) : null;
@@ -49,6 +52,24 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
           value={model}
           onChange={(e) => setModel(e.target.value)}
           placeholder="claude-sonnet-4-20250514"
+          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+          style={{
+            backgroundColor: 'var(--bg-tertiary)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border)',
+          }}
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+          API 端点
+        </label>
+        <input
+          type="text"
+          value={apiEndpoint}
+          onChange={(e) => setApiEndpoint(e.target.value)}
+          placeholder="https://api.anthropic.com"
           className="w-full px-3 py-2 rounded-lg text-sm outline-none"
           style={{
             backgroundColor: 'var(--bg-tertiary)',
