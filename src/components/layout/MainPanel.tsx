@@ -49,10 +49,7 @@ export function MainPanel() {
   const onDone = useCallback((sessionId: string) => {
     if (sessionId === currentSessionId) {
       setIsGenerating(false);
-      // Save the complete streamed message to store
-      const finalContent = streamingContent;
       setStreamingContent((prev) => {
-        // Use the latest content at the moment of callback
         if (prev && currentSessionId) {
           const msg: Message = {
             id: `msg-${Date.now()}`,
@@ -66,38 +63,27 @@ export function MainPanel() {
         }
         return '';
       });
-      if (finalContent && currentSessionId) {
-        const msg: Message = {
-          id: `msg-${Date.now()}`,
-          sessionId: currentSessionId,
-          role: 'assistant',
-          content: finalContent,
-          mode: 'native',
-          timestamp: Math.floor(Date.now() / 1000),
-        };
-        addMessage(msg);
-      }
     }
-  }, [currentSessionId, streamingContent, addMessage]);
+  }, [currentSessionId, addMessage]);
 
-  const useWebSocketProps = {
+  const wsHandlers = {
     onChunk,
     onDone,
     onError: (sessionId: string, error: string) => {
       if (sessionId === currentSessionId) {
-        showToast(`连接错误: ${error}`, 'error');
+        showToast(`错误: ${error}`, 'error');
         setIsGenerating(false);
         setStreamingContent('');
       }
     },
     onStatus: (sessionId: string, status: string) => {
       if (sessionId === currentSessionId) {
-        console.log(`[WS Status] ${sessionId}: ${status}`);
+        console.log(`[Status] ${sessionId}: ${status}`);
       }
     },
   };
 
-  const { isConnected, sendChat, stopGeneration } = useWebSocket(19830, useWebSocketProps);
+  const { isConnected, sendChat, sendApiChat, stopGeneration, stopApiChat } = useWebSocket(19830, wsHandlers);
 
   const handleSend = useCallback(
     (message: string, mode: ChatMode) => {
@@ -116,14 +102,29 @@ export function MainPanel() {
       };
       addMessage(userMsg);
 
-      sendChat(currentSession.id, message, mode, currentSession.agentType);
+      if (currentSession.agentType === 'api') {
+        // API direct call
+        if (!currentSession.apiProvider || !currentSession.apiModel) {
+          showToast('API 会话缺少提供商或模型配置', 'error');
+          setIsGenerating(false);
+          return;
+        }
+        sendApiChat(currentSession.id, message, currentSession.apiProvider, currentSession.apiModel);
+      } else {
+        // Sidecar WebSocket (claude / hermes)
+        sendChat(currentSession.id, message, mode, currentSession.agentType as 'claude' | 'hermes');
+      }
     },
-    [currentSession, sendChat, addMessage]
+    [currentSession, sendChat, sendApiChat, addMessage]
   );
 
   const handleStop = useCallback(() => {
     if (currentSession) {
-      stopGeneration(currentSession.id, currentSession.agentType);
+      if (currentSession.agentType === 'api') {
+        stopApiChat();
+      } else {
+        stopGeneration(currentSession.id, currentSession.agentType as 'claude' | 'hermes');
+      }
       setIsGenerating(false);
       // Save partial streaming content
       if (streamingContent) {
@@ -139,7 +140,7 @@ export function MainPanel() {
         setStreamingContent('');
       }
     }
-  }, [currentSession, stopGeneration, streamingContent, addMessage]);
+  }, [currentSession, stopGeneration, stopApiChat, streamingContent, addMessage]);
 
   // Build display messages
   const streamingMsg: StreamingMessage | null =
@@ -156,10 +157,13 @@ export function MainPanel() {
 
   const displayMessages = streamingMsg ? [...messages, streamingMsg] : messages;
 
+  // For API sessions, don't show WS disconnected warning
+  const showWsWarning = !isConnected && currentSession?.agentType !== 'api';
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Connection status indicator */}
-      {!isConnected && (
+      {showWsWarning && (
         <div
           className="px-4 py-1 text-[10px] text-center shrink-0"
           style={{ backgroundColor: 'var(--bg-tertiary)', color: '#F59E0B' }}
@@ -179,12 +183,10 @@ export function MainPanel() {
           messages={displayMessages}
           session={currentSession}
           onEditMessage={(content) => {
-            // Pre-fill input bar with edited content for re-send
             setPendingInput(content);
             showToast('消息已填入输入框，可修改后重新发送', 'info');
           }}
           onSaveInspiration={(content) => {
-            // Navigate to market with prefill
             sessionStorage.setItem('pilotdesk_pending_input', content);
             showToast('灵感内容已准备好，前往灵感市集保存', 'success');
           }}
