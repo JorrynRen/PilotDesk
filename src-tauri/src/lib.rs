@@ -80,6 +80,17 @@ fn delete_bot_channel(conn: tauri::State<'_, DbState>, id: String) -> Result<(),
     bot_cmds::delete_bot_channel(&conn, id)
 }
 
+// --- Theme commands ---
+#[tauri::command]
+fn get_theme() -> String {
+    commands::theme::get_theme()
+}
+
+#[tauri::command]
+fn set_theme_cmd(theme: String) -> Result<String, crate::utils::errors::AppError> {
+    commands::theme::set_theme(theme)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let conn = init_db().expect("Failed to initialize database");
@@ -114,6 +125,8 @@ pub fn run() {
             list_bot_channels,
             save_bot_channel,
             delete_bot_channel,
+            get_theme,
+            set_theme_cmd,
         ])
         .setup(|_app| {
             println!("PilotDesk initialized successfully.");

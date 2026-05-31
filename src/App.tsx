@@ -32,7 +32,7 @@ function App() {
           <RightPanel />
         </div>
       )}
-      <StatusBar />
+      <StatusBar onOpenEnv={() => setCurrentPage('env')} />
     </div>
   );
 }
