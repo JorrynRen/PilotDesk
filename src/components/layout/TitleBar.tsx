@@ -14,10 +14,8 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
 
   useEffect(() => {
     const win = getCurrentWindow();
-    // Initial state
     win.isMaximized().then(setIsMaximized);
 
-    // Listen for maximize state changes
     let unlisten: (() => void) | undefined;
     win.onResized(async () => {
       const maximized = await win.isMaximized();
@@ -32,19 +30,30 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
   }, []);
 
   const handleToggleMaximize = useCallback(async () => {
-    const win = getCurrentWindow();
-    await win.toggleMaximize();
+    await getCurrentWindow().toggleMaximize();
   }, []);
 
   const handleClose = useCallback(async () => {
     await getCurrentWindow().close();
   }, []);
 
-  const handleDragStart = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget || (e.target as HTMLElement).hasAttribute('data-tauri-drag-region')) {
-      e.preventDefault();
-      getCurrentWindow().startDragging();
+  // Allow drag on any non-interactive area of the header
+  const handleHeaderMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    // Exclude buttons, links, inputs, and elements with onClick
+    if (
+      target.closest('button') ||
+      target.closest('a') ||
+      target.closest('input') ||
+      target.closest('select') ||
+      target.tagName === 'BUTTON' ||
+      target.tagName === 'INPUT' ||
+      target.tagName === 'SELECT'
+    ) {
+      return;
     }
+    e.preventDefault();
+    getCurrentWindow().startDragging();
   }, []);
 
   const handleDoubleClick = useCallback(() => {
@@ -55,13 +64,11 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
     <header
       className="flex items-center justify-between px-3 h-9 shrink-0 select-none"
       style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+      onMouseDown={handleHeaderMouseDown}
       onDoubleClick={handleDoubleClick}
     >
-      {/* Left: logo + title (drag region) */}
-      <div
-        className="flex items-center gap-2 h-full"
-        onMouseDown={handleDragStart}
-      >
+      {/* Left: logo + title */}
+      <div className="flex items-center gap-2 h-full">
         <img
           src="/logo.png"
           alt=""
