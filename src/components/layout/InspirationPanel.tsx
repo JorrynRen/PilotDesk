@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Star, Search, Send, Trash2, Edit3, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
+import { usePendingInputStore } from '../../stores/pendingInputStore';
 
 const EMOJI_OPTIONS = ['💡', '🔥', '🎯', '⚡', '🚀', '🌟', '📝', '🔧', '🎨', '🧠', '📊', '🛠️', '💻', '📱', '🌐', '🔬', '🎭', '🎵', '🏆', '💎', '🌈', '🔑', '📖', '🧩'];
 
@@ -59,9 +60,7 @@ export function InspirationPanel() {
   };
 
   const handleSendToSession = (content: string) => {
-    sessionStorage.setItem('pilotdesk_pending_input', content);
-    const textarea = document.querySelector<HTMLTextAreaElement>('textarea');
-    textarea?.focus();
+    usePendingInputStore.getState().set(content);
   };
 
   const handleSave = async (data: {

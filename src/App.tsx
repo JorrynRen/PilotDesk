@@ -33,10 +33,7 @@ function App() {
     }
   }, [currentPage, currentSession]);
 
-  const handleSendToSession = useCallback((content: string) => {
-    setCurrentPage('main');
-    sessionStorage.setItem('pilotdesk_pending_input', content);
-  }, []);
+
 
   return (
     <div
@@ -49,7 +46,7 @@ function App() {
         rightPanelOpen={rightPanelOpen}
       />
       {currentPage === 'market' ? (
-        <MarketPage onBack={() => setCurrentPage('main')} onSendToSession={handleSendToSession} />
+        <MarketPage onBack={() => setCurrentPage('main')} />
       ) : currentPage === 'settings' ? (
         <SettingsPage onBack={() => setCurrentPage('main')} />
       ) : (

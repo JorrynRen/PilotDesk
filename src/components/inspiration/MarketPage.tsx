@@ -2,16 +2,16 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Plus, Star, ArrowLeft } from 'lucide-react';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { InspirationCard } from './InspirationCard';
 import { InspirationForm } from './InspirationForm';
 import { TagFilter } from './TagFilter';
 
 interface MarketPageProps {
   onBack: () => void;
-  onSendToSession: (content: string) => void;
 }
 
-export function MarketPage({ onBack, onSendToSession }: MarketPageProps) {
+export function MarketPage({ onBack }: MarketPageProps) {
   const {
     inspirations,
     loading,
@@ -61,11 +61,9 @@ export function MarketPage({ onBack, onSendToSession }: MarketPageProps) {
 
   const handleSendToSession = useCallback(
     (content: string) => {
-      if (currentSession) {
-        onSendToSession(content);
-      }
+      usePendingInputStore.getState().set(content);
     },
-    [currentSession, onSendToSession]
+    []
   );
 
   const handleEdit = (insp: InspirationItem) => {

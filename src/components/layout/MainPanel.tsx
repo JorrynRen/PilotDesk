@@ -3,6 +3,7 @@ import { MessageList } from '../message/MessageList';
 import { InputBar } from './InputBar';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { showToast } from '../../utils/toast';
 import type { ChatMode, Message } from '../../types';
 
@@ -30,14 +31,14 @@ export function MainPanel() {
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
 
-  // Consume pending input from sessionStorage (bridging from inspiration picker etc.)
+  // Consume pending input from shared store
+  const pendingFromStore = usePendingInputStore((s) => s.value);
   useEffect(() => {
-    const pending = sessionStorage.getItem('pilotdesk_pending_input');
-    if (pending) {
-      sessionStorage.removeItem('pilotdesk_pending_input');
-      setPendingInput(pending);
+    if (pendingFromStore) {
+      setPendingInput(pendingFromStore);
+      usePendingInputStore.getState().set(null);
     }
-  }, [currentSessionId]);
+  }, [pendingFromStore]);
 
   // WebSocket handlers
   const onChunk = useCallback((sessionId: string, content: string) => {
@@ -187,7 +188,7 @@ export function MainPanel() {
             showToast('消息已填入输入框，可修改后重新发送', 'info');
           }}
           onSaveInspiration={(content) => {
-            sessionStorage.setItem('pilotdesk_pending_input', content);
+            usePendingInputStore.getState().set(content);
             showToast('灵感内容已准备好，前往灵感市集保存', 'success');
           }}
         />
