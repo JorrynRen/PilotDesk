@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu, ChevronDown } from 'lucide-react';
+import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu, ChevronUp } from 'lucide-react';
 import type { ChatMode, Session } from '../../types';
 import { MODE_LABELS, MODE_COLORS } from '../../types';
 import { InspirationPicker } from '../input/InspirationPicker';
@@ -132,11 +132,11 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
               return <Icon size={11} />;
             })()}
             {MODE_LABELS[mode]}
-            <ChevronDown size={11} style={{ color: 'var(--text-secondary)' }} />
+            <ChevronUp size={11} style={{ color: 'var(--text-secondary)' }} />
           </button>
           {showModeDropdown && (
             <div
-              className="absolute left-0 top-full mt-1 py-1 rounded-lg shadow-lg z-50"
+              className="absolute left-0 bottom-full mb-1 py-1 rounded-lg shadow-lg z-50"
               style={{
                 backgroundColor: 'var(--bg-panel)',
                 border: '1px solid var(--border)',
