@@ -8,6 +8,7 @@ use db::init::init_db;
 use std::sync::Mutex;
 use rusqlite::Connection;
 use tauri::Manager;
+use commands::inspiration;
 
 pub struct DbState {
     pub conn: Mutex<Connection>,
@@ -16,6 +17,76 @@ pub struct DbState {
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! Welcome to PilotDesk.", name)
+}
+
+#[tauri::command]
+fn list_inspirations(conn: tauri::State<'_, DbState>, tag: Option<String>, favorite_only: Option<bool>) -> Result<Vec<inspiration::Inspiration>, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError {
+        code: "ERR_LOCK".to_string(),
+        message: "数据库锁获取失败".to_string(),
+        details: Some(e.to_string()),
+    })?;
+    inspiration::list_inspirations(&conn, tag, favorite_only.unwrap_or(false))
+}
+
+#[tauri::command]
+fn get_inspiration(conn: tauri::State<'_, DbState>, id: String) -> Result<inspiration::Inspiration, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError {
+        code: "ERR_LOCK".to_string(),
+        message: "数据库锁获取失败".to_string(),
+        details: Some(e.to_string()),
+    })?;
+    inspiration::get_inspiration(&conn, id)
+}
+
+#[tauri::command]
+fn create_inspiration(conn: tauri::State<'_, DbState>, payload: inspiration::CreateInspirationPayload) -> Result<inspiration::Inspiration, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError {
+        code: "ERR_LOCK".to_string(),
+        message: "数据库锁获取失败".to_string(),
+        details: Some(e.to_string()),
+    })?;
+    inspiration::create_inspiration(&conn, payload)
+}
+
+#[tauri::command]
+fn update_inspiration(conn: tauri::State<'_, DbState>, payload: inspiration::UpdateInspirationPayload) -> Result<inspiration::Inspiration, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError {
+        code: "ERR_LOCK".to_string(),
+        message: "数据库锁获取失败".to_string(),
+        details: Some(e.to_string()),
+    })?;
+    inspiration::update_inspiration(&conn, payload)
+}
+
+#[tauri::command]
+fn delete_inspiration(conn: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError {
+        code: "ERR_LOCK".to_string(),
+        message: "数据库锁获取失败".to_string(),
+        details: Some(e.to_string()),
+    })?;
+    inspiration::delete_inspiration(&conn, id)
+}
+
+#[tauri::command]
+fn search_inspirations(conn: tauri::State<'_, DbState>, query: String, limit: Option<u32>) -> Result<Vec<inspiration::Inspiration>, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError {
+        code: "ERR_LOCK".to_string(),
+        message: "数据库锁获取失败".to_string(),
+        details: Some(e.to_string()),
+    })?;
+    inspiration::search_inspirations(&conn, query, limit.unwrap_or(50))
+}
+
+#[tauri::command]
+fn list_tags(conn: tauri::State<'_, DbState>) -> Result<Vec<String>, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError {
+        code: "ERR_LOCK".to_string(),
+        message: "数据库锁获取失败".to_string(),
+        details: Some(e.to_string()),
+    })?;
+    inspiration::list_tags(&conn)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -42,6 +113,13 @@ pub fn run() {
             commands::config::save_claude_config,
             commands::config::save_hermes_config,
             commands::config::test_api_connection,
+            list_inspirations,
+            get_inspiration,
+            create_inspiration,
+            update_inspiration,
+            delete_inspiration,
+            search_inspirations,
+            list_tags,
         ])
         .setup(|_app| {
             println!("PilotDesk initialized successfully.");
