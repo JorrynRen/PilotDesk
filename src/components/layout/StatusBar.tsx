@@ -4,9 +4,10 @@ import type { EnvInfo } from '../../types';
 
 interface StatusBarProps {
   onOpenEnv?: () => void;
+  wsConnected?: boolean;
 }
 
-export function StatusBar({ onOpenEnv }: StatusBarProps) {
+export function StatusBar({ onOpenEnv, wsConnected }: StatusBarProps) {
   const [envInfo, setEnvInfo] = useState<EnvInfo | null>(null);
 
   const fetchEnv = useCallback(async () => {
@@ -20,15 +21,21 @@ export function StatusBar({ onOpenEnv }: StatusBarProps) {
 
   useEffect(() => {
     fetchEnv();
+    // Refresh every 60 seconds
+    const timer = setInterval(fetchEnv, 60000);
+    return () => clearInterval(timer);
   }, [fetchEnv]);
 
   const claudeStatus = envInfo?.claudeCodeVersion
-    ? { color: '#10B981', label: envInfo.claudeCodeVersion, connected: true }
-    : { color: '#6B7280', label: '未安装', connected: false };
+    ? { color: '#10B981', label: envInfo.claudeCodeVersion }
+    : { color: '#6B7280', label: '未安装' };
 
   const hermesStatus = envInfo?.hermesVersion
-    ? { color: '#10B981', label: envInfo.hermesVersion, connected: true }
-    : { color: '#6B7280', label: '未安装', connected: false };
+    ? { color: '#10B981', label: envInfo.hermesVersion }
+    : { color: '#6B7280', label: '未安装' };
+
+  const wsColor = wsConnected ? '#10B981' : '#F59E0B';
+  const wsLabel = wsConnected ? '已连接' : '未连接';
 
   return (
     <footer
@@ -36,9 +43,10 @@ export function StatusBar({ onOpenEnv }: StatusBarProps) {
       style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}
     >
       <div className="flex items-center gap-3">
+        {/* WebSocket status */}
         <span className="flex items-center gap-1">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: '#10B981' }} />
-          就绪
+          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: wsColor }} />
+          Sidecar: {wsLabel}
         </span>
         <button
           onClick={onOpenEnv}
@@ -57,10 +65,8 @@ export function StatusBar({ onOpenEnv }: StatusBarProps) {
           Hermes: {hermesStatus.label}
         </button>
       </div>
-      <div className="flex items-center gap-3">
-        {envInfo?.nodeVersion && <span>Node {envInfo.nodeVersion}</span>}
-        {envInfo?.gitVersion && <span>Git {envInfo.gitVersion}</span>}
-        <span style={{ color: 'var(--text-tertiary)' }}>v0.1.0</span>
+      <div className="flex items-center gap-2">
+        <span style={{ color: 'var(--text-tertiary)' }}>PilotDesk v0.1.0</span>
       </div>
     </footer>
   );

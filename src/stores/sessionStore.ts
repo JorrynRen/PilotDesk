@@ -18,6 +18,7 @@ interface SessionState {
   archiveSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   toggleArchived: () => void;
+  addMessage: (msg: Message) => void;
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -35,6 +36,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       const sessions = await invoke<Session[]>('list_sessions');
       const archivedSessions = await invoke<Session[]>('list_archived_sessions');
       set({ sessions, archivedSessions });
+    } catch (err) {
+      console.error('Failed to fetch sessions:', err);
     } finally {
       set({ isLoadingSessions: false });
     }
@@ -47,6 +50,8 @@ export const useSessionStore = create<SessionState>((set) => ({
         sessionId: id,
       });
       set({ messages });
+    } catch (err) {
+      console.error('Failed to load messages:', err);
     } finally {
       set({ isLoadingMessages: false });
     }
@@ -98,5 +103,11 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   toggleArchived: () => {
     set((state) => ({ showArchived: !state.showArchived }));
+  },
+
+  addMessage: (msg: Message) => {
+    set((state) => ({
+      messages: [...state.messages, msg],
+    }));
   },
 }));

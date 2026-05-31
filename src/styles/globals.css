@@ -3,25 +3,37 @@
 :root {
   --bg-primary: #FFFFFF;
   --bg-secondary: #F5F5F5;
+  --bg-tertiary: #ECECED;
   --bg-panel: #FFFFFF;
   --text-primary: #1F2937;
   --text-secondary: #6B7280;
+  --text-tertiary: #9CA3AF;
   --border: #E5E7EB;
   --accent: #2563EB;
   --claude-tag: #3B82F6;
   --hermes-tag: #8B5CF6;
+  --success: #10B981;
+  --danger: #EF4444;
+  --danger-bg: #FEE2E2;
+  --success-bg: #D1FAE5;
 }
 
 [data-theme="dark"] {
   --bg-primary: #0F1117;
   --bg-secondary: #1A1D27;
+  --bg-tertiary: #242837;
   --bg-panel: #1A1D27;
   --text-primary: #E5E7EB;
   --text-secondary: #9CA3AF;
+  --text-tertiary: #6B7280;
   --border: #2D3348;
   --accent: #3B82F6;
   --claude-tag: #3B82F6;
   --hermes-tag: #8B5CF6;
+  --success: #10B981;
+  --danger: #F87171;
+  --danger-bg: #450A0A;
+  --success-bg: #022C22;
 }
 
 body {
@@ -32,9 +44,16 @@ body {
   font-family: 'Segoe UI', -apple-system, sans-serif;
 }
 
+/* Selection */
+::selection {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: inherit;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -48,4 +67,36 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Disable outline for mouse users */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Prose overrides for dark mode */
+[data-theme="dark"] .prose {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .prose a {
+  color: var(--accent);
+}
+
+[data-theme="dark"] .prose code {
+  color: var(--accent);
+}
+
+[data-theme="dark"] .prose pre {
+  background-color: var(--bg-tertiary);
+}
+
+[data-theme="dark"] .prose pre code {
+  background-color: transparent;
 }

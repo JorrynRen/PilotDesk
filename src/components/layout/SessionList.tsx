@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Search, Archive } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { SessionListItem } from './SessionListItem';
+import { showToast } from '../../utils/toast';
 
 export function SessionList() {
   const {
@@ -20,9 +21,13 @@ export function SessionList() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewDialog, setShowNewDialog] = useState(false);
+  const [newAgentType, setNewAgentType] = useState<'claude' | 'hermes'>('claude');
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-    fetchSessions();
+    fetchSessions().catch((err) => {
+      showToast(`加载会话失败: ${err}`, 'error');
+    });
   }, [fetchSessions]);
 
   const displayList = showArchived ? archivedSessions : sessions;
@@ -41,6 +46,35 @@ export function SessionList() {
   );
   const earlier = filteredList.filter((s) => s.updatedAt < yesterdayStart);
 
+  const handleCreate = async () => {
+    setCreating(true);
+    try {
+      const session = await createSession(newAgentType);
+      setShowNewDialog(false);
+      selectSession(session.id);
+    } catch (err) {
+      showToast(`创建会话失败: ${err}`, 'error');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleArchive = async (id: string) => {
+    try {
+      await archiveSession(id);
+    } catch (err) {
+      showToast(`归档失败: ${err}`, 'error');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteSession(id);
+    } catch (err) {
+      showToast(`删除失败: ${err}`, 'error');
+    }
+  };
+
   const renderGroup = (label: string, items: typeof sessions) => {
     if (items.length === 0) return null;
     return (
@@ -54,8 +88,8 @@ export function SessionList() {
             session={session}
             isActive={session.id === currentSessionId}
             onSelect={() => selectSession(session.id)}
-            onArchive={showArchived ? undefined : () => archiveSession(session.id)}
-            onDelete={() => deleteSession(session.id)}
+            onArchive={showArchived ? undefined : () => handleArchive(session.id)}
+            onDelete={() => handleDelete(session.id)}
           />
         ))}
       </div>
@@ -64,137 +98,128 @@ export function SessionList() {
 
   return (
     <aside
-      className="w-[260px] flex flex-col shrink-0"
-      style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+      className="w-[260px] shrink-0 flex flex-col overflow-hidden"
+      style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-panel)' }}
     >
       {/* Header */}
-      <div className="p-3 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
-        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>
-          会话列表
-        </span>
-        <button
-          className="p-1 rounded transition-colors hover:opacity-80"
-          style={{ color: 'var(--accent)' }}
-          title="新建会话"
-          onClick={() => setShowNewDialog(true)}
-        >
-          <Plus size={16} />
-        </button>
+      <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
+        <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>会话</span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={toggleArchived}
+            className="p-1 rounded transition-colors"
+            style={{ color: showArchived ? 'var(--accent)' : 'var(--text-secondary)' }}
+            title="归档"
+          >
+            <Archive size={14} />
+          </button>
+          <button
+            onClick={() => setShowNewDialog(true)}
+            className="p-1 rounded transition-colors"
+            style={{ color: 'var(--accent)' }}
+            title="新建会话"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
       </div>
 
       {/* Search */}
-      <div className="px-3 py-2">
-        <div
-          className="flex items-center gap-2 px-2 py-1.5 rounded-md text-xs"
-          style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
-        >
+      <div className="px-3 py-1.5">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs" style={{ backgroundColor: 'var(--bg-secondary)' }}>
           <Search size={12} style={{ color: 'var(--text-secondary)' }} />
           <input
             type="text"
-            placeholder="搜索会话..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-transparent outline-none flex-1 text-xs"
+            placeholder="搜索会话..."
+            className="flex-1 bg-transparent outline-none text-xs"
             style={{ color: 'var(--text-primary)' }}
           />
         </div>
       </div>
 
-      {/* Filter */}
-      <div className="px-3 pb-2 flex gap-1">
-        <button
-          onClick={() => { if (showArchived) toggleArchived(); }}
-          className="px-2 py-0.5 rounded text-xs transition-colors"
-          style={{
-            backgroundColor: !showArchived ? 'var(--accent)' : 'transparent',
-            color: !showArchived ? '#fff' : 'var(--text-secondary)',
-          }}
-        >
-          活跃
-        </button>
-        <button
-          onClick={() => { if (!showArchived) toggleArchived(); }}
-          className="px-2 py-0.5 rounded text-xs transition-colors flex items-center gap-1"
-          style={{
-            backgroundColor: showArchived ? 'var(--accent)' : 'transparent',
-            color: showArchived ? '#fff' : 'var(--text-secondary)',
-          }}
-        >
-          <Archive size={10} />
-          归档
-        </button>
-      </div>
+      {/* Loading */}
+      {isLoadingSessions ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="pilotdesk-spinner" />
+        </div>
+      ) : (
+        /* Session list */
+        <div className="flex-1 overflow-y-auto">
+          {filteredList.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full gap-2 px-4">
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                {showArchived ? '暂无归档会话' : '暂无会话'}
+              </p>
+              {!showArchived && (
+                <button
+                  onClick={() => setShowNewDialog(true)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors"
+                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                >
+                  <Plus size={12} />
+                  新建会话
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              {renderGroup('今天', today)}
+              {renderGroup('昨天', yesterday)}
+              {renderGroup('更早', earlier)}
+            </>
+          )}
+        </div>
+      )}
 
-      {/* Session List */}
-      <div className="flex-1 overflow-y-auto">
-        {isLoadingSessions ? (
-          <div className="flex items-center justify-center py-8">
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>加载中...</p>
-          </div>
-        ) : filteredList.length === 0 ? (
-          <div className="flex items-center justify-center py-8">
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-              {searchQuery ? '无匹配结果' : '暂无会话'}
-            </p>
-          </div>
-        ) : (
-          <>
-            {showArchived ? (
-              renderGroup('已归档', filteredList)
-            ) : (
-              <>
-                {renderGroup('今天', today)}
-                {renderGroup('昨天', yesterday)}
-                {renderGroup('更早', earlier)}
-              </>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* New Session Dialog */}
+      {/* New session dialog */}
       {showNewDialog && (
         <div
-          className="absolute inset-0 flex items-center justify-center z-10"
+          className="fixed inset-0 z-50 flex items-center justify-center"
           style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => setShowNewDialog(false)}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowNewDialog(false); }}
         >
           <div
-            className="rounded-lg p-4 w-48"
-            style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
+            className="w-[320px] rounded-xl p-4"
+            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
           >
-            <p className="text-xs font-medium mb-3">选择 Agent 类型</p>
-            <div className="flex flex-col gap-2">
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>新建会话</h3>
+            <div className="flex gap-2 mb-4">
+              {(['claude', 'hermes'] as const).map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setNewAgentType(type)}
+                  className="flex-1 py-2 rounded-lg text-xs font-medium transition-colors"
+                  style={{
+                    backgroundColor: newAgentType === type
+                      ? (type === 'claude' ? 'rgba(59,130,246,0.15)' : 'rgba(139,92,246,0.15)')
+                      : 'var(--bg-secondary)',
+                    color: newAgentType === type
+                      ? (type === 'claude' ? '#3B82F6' : '#8B5CF6')
+                      : 'var(--text-secondary)',
+                    border: `1px solid ${newAgentType === type ? (type === 'claude' ? '#3B82F6' : '#8B5CF6') : 'var(--border)'}`,
+                  }}
+                >
+                  {type === 'claude' ? 'Claude Code' : 'Hermes Agent'}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2">
               <button
-                onClick={async () => {
-                  await createSession('claude');
-                  setShowNewDialog(false);
-                }}
-                className="flex items-center gap-2 px-3 py-2 rounded text-xs transition-colors"
-                style={{
-                  backgroundColor: 'rgba(59,130,246,0.1)',
-                  color: '#3B82F6',
-                  border: '1px solid rgba(59,130,246,0.3)',
-                }}
+                onClick={() => setShowNewDialog(false)}
+                className="px-3 py-1.5 rounded-lg text-xs"
+                style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}
               >
-                <span className="w-5 h-5 rounded bg-blue-500/20 text-blue-400 flex items-center justify-center text-[10px] font-bold">C</span>
-                Claude Code
+                取消
               </button>
               <button
-                onClick={async () => {
-                  await createSession('hermes');
-                  setShowNewDialog(false);
-                }}
-                className="flex items-center gap-2 px-3 py-2 rounded text-xs transition-colors"
-                style={{
-                  backgroundColor: 'rgba(139,92,246,0.1)',
-                  color: '#8B5CF6',
-                  border: '1px solid rgba(139,92,246,0.3)',
-                }}
+                onClick={handleCreate}
+                disabled={creating}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
               >
-                <span className="w-5 h-5 rounded bg-purple-500/20 text-purple-400 flex items-center justify-center text-[10px] font-bold">H</span>
-                Hermes Agent
+                {creating ? '创建中...' : '创建'}
               </button>
             </div>
           </div>
