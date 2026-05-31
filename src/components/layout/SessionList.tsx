@@ -102,7 +102,7 @@ export function SessionList() {
         // Check if API key is configured
         const maskedKey = localStorage.getItem(`pd-api-${selectedApiProvider}-masked`);
         if (!maskedKey) {
-          showToast('请先在设置 > API 配置中添加 API Key', 'error');
+          showToast('请先在「设置 - API 配置」中添加 API Key', 'error');
           setCreating(false);
           return;
         }
@@ -299,7 +299,7 @@ export function SessionList() {
                       className="px-3 py-2 rounded-lg text-xs"
                       style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
                     >
-                      暂无配置的 API 提供商，请先在 设置 > API 配置 中添加
+                      暂无配置的 API 提供商，请先在「设置 - API 配置」中添加
                     </div>
                   ) : (
                     <select
