@@ -1,21 +1,13 @@
-import { Moon, Sun, Monitor, Settings, Lightbulb } from 'lucide-react';
-import { useTheme } from '../../hooks/useTheme';
-
-type Theme = 'light' | 'dark' | 'system';
+import { Settings, PanelRightOpen, PanelRightClose } from 'lucide-react';
 
 interface TitleBarProps {
   onOpenEnv?: () => void;
-  onOpenMarket?: () => void;
+  onToggleRightPanel?: () => void;
+  rightPanelOpen?: boolean;
 }
 
-export function TitleBar({ onOpenEnv, onOpenMarket }: TitleBarProps) {
-  const { theme, setTheme } = useTheme();
-
-  const themeOptions: { value: Theme; icon: typeof Moon; label: string }[] = [
-    { value: 'light', icon: Sun, label: '浅色' },
-    { value: 'dark', icon: Moon, label: '深色' },
-    { value: 'system', icon: Monitor, label: '跟随系统' },
-  ];
+export function TitleBar({ onOpenEnv, onToggleRightPanel, rightPanelOpen }: TitleBarProps) {
+  const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
 
   return (
     <header
@@ -34,16 +26,6 @@ export function TitleBar({ onOpenEnv, onOpenMarket }: TitleBarProps) {
       </div>
 
       <div className="flex items-center gap-1">
-        {onOpenMarket && (
-          <button
-            onClick={onOpenMarket}
-            className="p-1.5 rounded transition-colors"
-            style={{ color: 'var(--text-secondary)', background: 'transparent' }}
-            title="灵感市集"
-          >
-            <Lightbulb size={14} />
-          </button>
-        )}
         {onOpenEnv && (
           <button
             onClick={onOpenEnv}
@@ -54,20 +36,19 @@ export function TitleBar({ onOpenEnv, onOpenMarket }: TitleBarProps) {
             <Settings size={14} />
           </button>
         )}
-        {themeOptions.map(({ value, icon: Icon, label }) => (
+        {onToggleRightPanel && (
           <button
-            key={value}
-            onClick={() => setTheme(value)}
+            onClick={onToggleRightPanel}
             className="p-1.5 rounded transition-colors"
             style={{
-              color: theme === value ? 'var(--accent)' : 'var(--text-secondary)',
-              background: theme === value ? 'var(--border)' : 'transparent',
+              color: rightPanelOpen ? 'var(--accent)' : 'var(--text-secondary)',
+              background: rightPanelOpen ? 'var(--border)' : 'transparent',
             }}
-            title={label}
+            title={rightPanelOpen ? '关闭侧边栏' : '打开侧边栏'}
           >
-            <Icon size={14} />
+            <PanelIcon size={14} />
           </button>
-        ))}
+        )}
       </div>
     </header>
   );

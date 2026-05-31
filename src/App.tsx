@@ -10,6 +10,7 @@ type PageView = 'main' | 'market' | 'env';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<PageView>('main');
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const currentSession = useSessionStore((s) => {
     const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
     return cs;
@@ -42,7 +43,11 @@ function App() {
       className="h-screen flex flex-col overflow-hidden"
       style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
     >
-      <TitleBar onOpenEnv={() => setCurrentPage('env')} onOpenMarket={() => setCurrentPage('market')} />
+      <TitleBar
+        onOpenEnv={() => setCurrentPage("env")}
+        onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
+        rightPanelOpen={rightPanelOpen}
+      />
       {currentPage === 'market' ? (
         <MarketPage onBack={() => setCurrentPage('main')} onSendToSession={handleSendToSession} />
       ) : currentPage === 'env' ? (
@@ -51,7 +56,7 @@ function App() {
         <div className="flex-1 flex overflow-hidden relative">
           <SessionList />
           <MainPanel />
-          <RightPanel />
+          <RightPanel isOpen={rightPanelOpen} />
         </div>
       )}
       <StatusBar onOpenEnv={() => setCurrentPage('env')} wsConnected={wsConnected} />

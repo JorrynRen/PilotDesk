@@ -33,3 +33,6 @@ src-tauri/Cargo.lock
 # Environment
 .env
 .env.*
+
+# Screenshots
+screenshot_*.png

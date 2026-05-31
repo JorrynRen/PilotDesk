@@ -1,30 +1,22 @@
 import { useState } from 'react';
-import { X, Lightbulb, Settings, Cpu, Bot } from 'lucide-react';
+import { Lightbulb, Settings, Cpu, Bot } from 'lucide-react';
 import { ConfigEditor } from '../panels/ConfigEditor';
 import { SkillBrowser } from '../panels/SkillBrowser';
 import { MemoryBrowser } from '../panels/MemoryBrowser';
 import { useSessionStore } from '../../stores/sessionStore';
 
-export function RightPanel() {
-  const [isOpen, setIsOpen] = useState(false);
+interface RightPanelProps {
+  isOpen: boolean;
+}
+
+export function RightPanel({ isOpen }: RightPanelProps) {
   const [activeTab, setActiveTab] = useState<string>('inspiration');
   const currentSession = useSessionStore((s) => {
     const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
     return cs;
   });
 
-  if (!isOpen) {
-    return (
-      <button
-        onClick={() => setIsOpen(true)}
-        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded transition-colors"
-        style={{ color: 'var(--text-secondary)' }}
-        title="打开右侧面板"
-      >
-        <Lightbulb size={16} />
-      </button>
-    );
-  }
+  if (!isOpen) return null;
 
   const tabs = [
     { id: 'inspiration', icon: Lightbulb, label: '灵感' },
@@ -74,7 +66,7 @@ export function RightPanel() {
       style={{ borderLeft: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 h-9" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="flex items-center px-3 h-9" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex gap-0.5">
           {tabs.map(({ id, icon: Icon, label }) => (
             <button
@@ -91,9 +83,6 @@ export function RightPanel() {
             </button>
           ))}
         </div>
-        <button onClick={() => setIsOpen(false)} className="p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
-          <X size={14} />
-        </button>
       </div>
 
       {/* Content */}
