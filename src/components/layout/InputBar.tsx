@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu } from 'lucide-react';
+import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu, ChevronDown } from 'lucide-react';
 import type { ChatMode, Session } from '../../types';
 import { MODE_LABELS, MODE_COLORS } from '../../types';
 import { InspirationPicker } from '../input/InspirationPicker';
 import { SkillPicker } from '../input/SkillPicker';
 import { showToast } from '../../utils/toast';
+
+
+const MODE_ICONS: Record<ChatMode, typeof Send> = {
+  native: Send,
+  fast: Zap,
+  think: Brain,
+  expert: GraduationCap,
+};
 
 interface InputBarProps {
   session: Session | null;
@@ -15,20 +23,15 @@ interface InputBarProps {
   onPendingConsumed?: () => void;
 }
 
-const MODE_ICONS: Record<ChatMode, typeof Zap> = {
-  native: Send,
-  fast: Zap,
-  think: Brain,
-  expert: GraduationCap,
-};
-
 export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, onPendingConsumed }: InputBarProps) {
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<ChatMode>('native');
   const [showInspirationPicker, setShowInspirationPicker] = useState(false);
   const [showSkillPicker, setShowSkillPicker] = useState(false);
+  const [showModeDropdown, setShowModeDropdown] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pickerAnchorRef = useRef<HTMLDivElement>(null);
+  const modeDropdownRef = useRef<HTMLDivElement>(null);
 
   // Consume pending input
   useEffect(() => {
@@ -38,6 +41,19 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
       textareaRef.current?.focus();
     }
   }, [pendingInput, onPendingConsumed]);
+
+  // Close mode dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (modeDropdownRef.current && !modeDropdownRef.current.contains(e.target as Node)) {
+        setShowModeDropdown(false);
+      }
+    };
+    if (showModeDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showModeDropdown]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -94,40 +110,116 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
     ? '向 Claude Code 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
     : '向 Hermes Agent 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)';
 
-  const getModeBorderColor = (m: ChatMode, isActive: boolean) => {
-    if (!isActive) return '1px solid transparent';
-    const color = MODE_COLORS[m];
-    return `1px solid ${color}44`;
-  };
-
   return (
     <div className="shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
-      {/* Mode selector */}
+      {/* Toolbar: mode selector + inspiration + skill + send */}
       <div className="flex items-center gap-1 px-4 pt-2">
-        {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
-          const Icon = MODE_ICONS[m];
-          const isActive = mode === m;
-          return (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] transition-all"
+        {/* Mode dropdown */}
+        <div className="relative" ref={modeDropdownRef}>
+          <button
+            onClick={() => setShowModeDropdown((v) => !v)}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              color: MODE_COLORS[mode],
+              border: '1px solid var(--border)',
+            }}
+          >
+            {(() => {
+              const Icon = MODE_ICONS[mode];
+              return <Icon size={11} />;
+            })()}
+            {MODE_LABELS[mode]}
+            <ChevronDown size={11} style={{ color: 'var(--text-secondary)' }} />
+          </button>
+          {showModeDropdown && (
+            <div
+              className="absolute left-0 top-full mt-1 py-1 rounded-lg shadow-lg z-50"
               style={{
-                backgroundColor: isActive ? `${MODE_COLORS[m]}22` : 'transparent',
-                color: isActive ? MODE_COLORS[m] : 'var(--text-secondary)',
-                border: getModeBorderColor(m, isActive),
+                backgroundColor: 'var(--bg-panel)',
+                border: '1px solid var(--border)',
+                minWidth: '120px',
               }}
-              title={MODE_LABELS[m]}
             >
-              <Icon size={11} />
-              {MODE_LABELS[m]}
-            </button>
-          );
-        })}
+              {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
+                const Icon = MODE_ICONS[m];
+                const isActive = mode === m;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => { setMode(m); setShowModeDropdown(false); }}
+                    className="flex items-center gap-2 w-full px-3 py-1.5 text-xs transition-colors text-left"
+                    style={{
+                      color: isActive ? MODE_COLORS[m] : 'var(--text-primary)',
+                      backgroundColor: isActive ? `${MODE_COLORS[m]}11` : 'transparent',
+                    }}
+                  >
+                    <Icon size={12} />
+                    {MODE_LABELS[m]}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Inspiration & Skill buttons */}
+        <button
+          onClick={() => { setShowInspirationPicker((v) => !v); setShowSkillPicker(false); }}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
+          style={{
+            color: showInspirationPicker ? 'var(--accent)' : 'var(--text-secondary)',
+            backgroundColor: showInspirationPicker ? 'var(--border)' : 'transparent',
+          }}
+          title="灵感搜索 (Ctrl+I)"
+        >
+          <Lightbulb size={12} />
+          灵感
+        </button>
+        <button
+          onClick={() => { setShowSkillPicker((v) => !v); setShowInspirationPicker(false); }}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
+          style={{
+            color: showSkillPicker ? 'var(--hermes-tag)' : 'var(--text-secondary)',
+            backgroundColor: showSkillPicker ? 'var(--border)' : 'transparent',
+          }}
+          title="技能列表 (Ctrl+K)"
+        >
+          <Cpu size={12} />
+          技能
+        </button>
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Stop / Send button */}
+        {isGenerating ? (
+          <button
+            onClick={onStop}
+            className="p-1.5 rounded-lg transition-colors"
+            style={{ backgroundColor: '#EF444422', color: '#EF4444' }}
+            title="停止生成"
+          >
+            <Square size={14} />
+          </button>
+        ) : (
+          <button
+            onClick={handleSendInternal}
+            disabled={!input.trim() || !session}
+            className="p-1.5 rounded-lg transition-colors disabled:opacity-30"
+            style={{
+              backgroundColor: input.trim() && session ? 'var(--accent)' : 'var(--bg-tertiary)',
+              color: input.trim() && session ? '#fff' : 'var(--text-secondary)',
+            }}
+            title="发送"
+          >
+            <Send size={14} />
+          </button>
+        )}
       </div>
 
       {/* Input area */}
-      <div className="flex items-end gap-2 px-4 py-2" ref={pickerAnchorRef}>
+      <div className="flex items-end px-4 py-2" ref={pickerAnchorRef}>
         <div className="flex-1 relative">
           <textarea
             ref={textareaRef}
@@ -164,55 +256,6 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
               }}
               onClose={() => setShowSkillPicker(false)}
             />
-          )}
-        </div>
-
-        {/* Action buttons */}
-        <div className="flex items-center gap-1 shrink-0 pb-0.5">
-          <button
-            onClick={() => setShowInspirationPicker((v) => !v)}
-            className="p-2 rounded-lg transition-colors"
-            style={{
-              color: showInspirationPicker ? 'var(--accent)' : 'var(--text-secondary)',
-              backgroundColor: showInspirationPicker ? 'var(--border)' : 'transparent',
-            }}
-            title="灵感搜索 (Ctrl+I)"
-          >
-            <Lightbulb size={16} />
-          </button>
-          <button
-            onClick={() => setShowSkillPicker((v) => !v)}
-            className="p-2 rounded-lg transition-colors"
-            style={{
-              color: showSkillPicker ? 'var(--hermes-tag)' : 'var(--text-secondary)',
-              backgroundColor: showSkillPicker ? 'var(--border)' : 'transparent',
-            }}
-            title="技能列表 (Ctrl+K)"
-          >
-            <Cpu size={16} />
-          </button>
-          {isGenerating ? (
-            <button
-              onClick={onStop}
-              className="p-2 rounded-lg transition-colors"
-              style={{ backgroundColor: '#EF444422', color: '#EF4444' }}
-              title="停止生成"
-            >
-              <Square size={16} />
-            </button>
-          ) : (
-            <button
-              onClick={handleSendInternal}
-              disabled={!input.trim() || !session}
-              className="p-2 rounded-lg transition-colors disabled:opacity-30"
-              style={{
-                backgroundColor: input.trim() && session ? 'var(--accent)' : 'var(--border)',
-                color: input.trim() && session ? '#fff' : 'var(--text-secondary)',
-              }}
-              title="发送"
-            >
-              <Send size={16} />
-            </button>
           )}
         </div>
       </div>
