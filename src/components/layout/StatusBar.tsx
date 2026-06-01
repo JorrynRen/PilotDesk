@@ -39,7 +39,7 @@ export function StatusBar({ onOpenSettings, wsConnected }: StatusBarProps) {
 
   return (
     <footer
-      className="flex items-center justify-between px-4 h-6 text-[10px] shrink-0 select-none"
+      className="flex items-center justify-between px-4 h-8 text-[10px] shrink-0 select-none"
       style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}
     >
       <div className="flex items-center gap-3">

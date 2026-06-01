@@ -17,10 +17,46 @@ export interface Session {
 export interface Message {
   id: string;
   sessionId: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   mode: 'native' | 'fast' | 'think' | 'expert';
   timestamp: number;
+  /** Reasoning/thinking content (e.g. DeepSeek reasoning_content) */
+  reasoningContent?: string;
+  /** Tool calls requested by the model (JSON array string) */
+  toolCalls?: string;
+  /** Tool call ID for role='tool' messages */
+  toolCallId?: string;
+  /** Tool name for role='tool' messages */
+  toolName?: string;
+}
+
+/** Tool definition following OpenAI function calling format */
+export interface ToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+/** Tool call returned by the model */
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+/** Tool execution result */
+export interface ToolResult {
+  toolCallId: string;
+  toolName: string;
+  content: string;
+  isError?: boolean;
 }
 
 export interface Inspiration {
@@ -88,6 +124,13 @@ export const MODE_COLORS: Record<ChatMode, string> = {
 };
 
 /** Available API providers for direct API sessions */
+/** Search engine result item */
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
 export const API_PROVIDERS = [
   {
     id: 'anthropic',

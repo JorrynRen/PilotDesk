@@ -115,7 +115,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
   return (
     <div className="shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
       {/* Toolbar: mode selector + inspiration + skill + send */}
-      <div className="flex items-center gap-1 px-4 pt-2">
+      <div className="flex items-center gap-1 px-4 pt-3">
         {/* Mode dropdown */}
         <div className="relative" ref={modeDropdownRef}>
           <button
@@ -221,7 +221,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
       </div>
 
       {/* Input area */}
-      <div className="flex items-end px-4 py-2" ref={pickerAnchorRef}>
+      <div className="flex items-end px-4 py-3" ref={pickerAnchorRef}>
         <div className="flex-1 relative">
           <textarea
             ref={textareaRef}

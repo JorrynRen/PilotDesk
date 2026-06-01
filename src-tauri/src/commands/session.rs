@@ -185,9 +185,9 @@ pub fn save_message(
         params![id, session_id, role, content, mode, now],
     )?;
     
-    // Update session preview and count
-    let preview = if content.len() > 100 {
-        format!("{}...", &content[..100])
+    // Update session preview and count (UTF-8 safe truncation)
+    let preview = if content.chars().count() > 100 {
+        format!("{}...", content.chars().take(100).collect::<String>())
     } else {
         content.clone()
     };

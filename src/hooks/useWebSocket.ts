@@ -28,6 +28,8 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
 
   // AbortController ref for API direct calls
   const abortRef = useRef<AbortController | null>(null);
+  // Per-session done guard to prevent double onDone calls
+  const apiDoneFiredRef = useRef<string | null>(null);
 
   // Keep handlers ref updated
   useEffect(() => {
@@ -161,6 +163,13 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
       providerName?: string,
     ) => {
       const h = handlersRef.current;
+      // Reset done guard for this session
+      apiDoneFiredRef.current = null;
+      const safeOnDone = (sid: string) => {
+        if (apiDoneFiredRef.current === sid) return;
+        apiDoneFiredRef.current = sid;
+        h?.onDone?.(sid);
+      };
 
       // Retrieve the actual API key from SQLite
       const key = await getApiKey(providerId);
@@ -226,7 +235,7 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
                 if (event.type === 'content_block_delta' && event.delta?.text) {
                   h?.onChunk?.(sessionId, event.delta.text);
                 } else if (event.type === 'message_stop') {
-                  h?.onDone?.(sessionId);
+                  safeOnDone(sessionId);
                   return;
                 } else if (event.type === 'error') {
                   h?.onError?.(sessionId, event.error?.message || 'Unknown API error');
@@ -239,7 +248,7 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
           }
 
           // Stream ended without explicit message_stop
-          h?.onDone?.(sessionId);
+          safeOnDone(sessionId);
         } else {
           const res = await fetch(chatUrl, {
             method: 'POST',
@@ -276,7 +285,7 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
               if (!line.startsWith('data: ')) continue;
               const data = line.slice(6).trim();
               if (data === '[DONE]') {
-                h?.onDone?.(sessionId);
+                safeOnDone(sessionId);
                 return;
               }
 
@@ -292,11 +301,11 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
             }
           }
 
-          h?.onDone?.(sessionId);
+          safeOnDone(sessionId);
         }
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
-          h?.onDone?.(sessionId);
+          safeOnDone(sessionId);
         } else {
           const msg = err instanceof Error ? err.message : String(err);
           h?.onError?.(sessionId, `请求失败: ${msg}`);

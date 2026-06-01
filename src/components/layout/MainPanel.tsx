@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MessageList } from '../message/MessageList';
 import { InputBar } from './InputBar';
@@ -28,7 +28,9 @@ export function MainPanel() {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [streamingStatus, setStreamingStatus] = useState('');
   const [pendingInput, setPendingInput] = useState<string | null>(null);
+  const doneCalledRef = useRef(false);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
 
@@ -49,8 +51,11 @@ export function MainPanel() {
   }, [currentSessionId]);
 
   const onDone = useCallback((sessionId: string) => {
+    if (doneCalledRef.current) return;
+    doneCalledRef.current = true;
     if (sessionId === currentSessionId) {
       setIsGenerating(false);
+      setStreamingStatus('');
       setStreamingContent((prev) => {
         if (prev && currentSessionId) {
           const msg: Message = {
@@ -76,11 +81,12 @@ export function MainPanel() {
         showToast(`错误: ${error}`, 'error');
         setIsGenerating(false);
         setStreamingContent('');
+        setStreamingStatus('');
       }
     },
     onStatus: (sessionId: string, status: string) => {
       if (sessionId === currentSessionId) {
-        console.log(`[Status] ${sessionId}: ${status}`);
+        setStreamingStatus(status);
       }
     },
   };
@@ -90,8 +96,10 @@ export function MainPanel() {
   const handleSend = useCallback(
     async (message: string, mode: ChatMode) => {
       if (!currentSession) return;
+      doneCalledRef.current = false;
       setIsGenerating(true);
       setStreamingContent('');
+      setStreamingStatus('发送中...');
 
       // Save user message to store
       const userMsg: Message = {
@@ -188,6 +196,8 @@ export function MainPanel() {
         <MessageList
           messages={displayMessages}
           session={currentSession}
+          isGenerating={isGenerating}
+          streamingStatus={streamingStatus}
           onEditMessage={(content) => {
             setPendingInput(content);
             showToast('消息已填入输入框，可修改后重新发送', 'info');

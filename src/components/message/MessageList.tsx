@@ -11,11 +11,13 @@ const AGENT_LABELS: Record<string, string> = {
 interface MessageListProps {
   messages: Message[];
   session: Session | null;
+  isGenerating?: boolean;
+  streamingStatus?: string;
   onEditMessage?: (content: string) => void;
   onSaveInspiration?: (content: string) => void;
 }
 
-export function MessageList({ messages, session, onEditMessage, onSaveInspiration }: MessageListProps) {
+export function MessageList({ messages, session, isGenerating, streamingStatus, onEditMessage, onSaveInspiration }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -93,10 +95,33 @@ export function MessageList({ messages, session, onEditMessage, onSaveInspiratio
           key={msg.id}
           message={msg}
           agentType={session.agentType}
+          apiProviderId={session.apiProvider}
+          apiModel={session.apiModel}
           onEdit={onEditMessage}
           onSaveInspiration={onSaveInspiration}
         />
       ))}
+      {/* Typing indicator when generating but no streaming content yet */}
+      {isGenerating && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+        <div className="flex gap-3 px-4 py-[3px]" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+          <div className="shrink-0 pt-0.5">
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+              style={{ backgroundColor: 'rgba(59,130,246,0.15)', color: '#3B82F6' }}
+            >
+              {session?.agentType === 'claude' ? 'C' : session?.agentType === 'api' ? 'A' : 'H'}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 py-2">
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '0ms' }} />
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '150ms' }} />
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '300ms' }} />
+            <span className="text-xs ml-2" style={{ color: 'var(--text-tertiary)' }}>
+              {streamingStatus || '思考中...'}
+            </span>
+          </div>
+        </div>
+      )}
       <div ref={bottomRef} />
     </div>
   );

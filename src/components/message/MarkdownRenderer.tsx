@@ -17,7 +17,6 @@ function CopyButton({ code }: { code: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback for non-secure contexts
       const textarea = document.createElement('textarea');
       textarea.value = code;
       document.body.appendChild(textarea);
@@ -49,7 +48,7 @@ function CopyButton({ code }: { code: string }) {
 
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
-    <div className="prose prose-sm max-w-none" style={{ color: 'var(--text-primary)' }}>
+    <div className="pilotdesk-markdown" style={{ color: 'var(--text-primary)' }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
@@ -59,10 +58,12 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
             if (isInline) {
               return (
                 <code
-                  className="px-1 py-0.5 rounded text-xs"
+                  className="px-1 py-0.5 rounded"
                   style={{
                     backgroundColor: 'var(--bg-secondary)',
                     color: 'var(--accent)',
+                    fontSize: 'inherit',
+                    fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
                   }}
                   {...props}
                 >
@@ -72,15 +73,14 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
             }
             return (
               <code
-                className={`${className || ''} text-xs`}
-                style={{ backgroundColor: 'var(--bg-secondary)' }}
+                className={`${className || ''}`}
+                style={{ backgroundColor: 'transparent', fontSize: '12px' }}
               >
                 {children}
               </code>
             );
           },
           pre({ children, ...props }) {
-            // Extract code text for copy button
             let codeText = '';
             const child = Array.isArray(children) ? children[0] : children;
             if (child && typeof child === 'object' && 'props' in child) {
@@ -93,13 +93,92 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
               <div className="group relative">
                 <CopyButton code={codeText} />
                 <pre
-                  className="rounded-md p-3 text-xs overflow-x-auto"
-                  style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                  className="rounded-lg p-3 overflow-x-auto"
+                  style={{
+                    backgroundColor: 'var(--bg-secondary)',
+                    border: '1px solid var(--border)',
+                    fontSize: '12px',
+                    lineHeight: '1.6',
+                    fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
+                  }}
                   {...props}
                 >
                   {children}
                 </pre>
               </div>
+            );
+          },
+          table({ children, ...props }) {
+            return (
+              <div style={{ overflowX: 'auto', margin: '8px 0' }}>
+                <table
+                  style={{
+                    borderCollapse: 'collapse',
+                    width: '100%',
+                    fontSize: '13px',
+                    lineHeight: '1.6',
+                    border: '1px solid var(--border)',
+                  }}
+                  {...props}
+                >
+                  {children}
+                </table>
+              </div>
+            );
+          },
+          thead({ children, ...props }) {
+            return (
+              <thead
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  borderBottom: '2px solid var(--border)',
+                }}
+                {...props}
+              >
+                {children}
+              </thead>
+            );
+          },
+          th({ children, ...props }) {
+            return (
+              <th
+                style={{
+                  padding: '6px 12px',
+                  textAlign: 'left',
+                  fontWeight: 600,
+                  fontSize: '12px',
+                  borderRight: '1px solid var(--border)',
+                  color: 'var(--text-primary)',
+                }}
+                {...props}
+              >
+                {children}
+              </th>
+            );
+          },
+          td({ children, ...props }) {
+            return (
+              <td
+                style={{
+                  padding: '6px 12px',
+                  borderRight: '1px solid var(--border)',
+                  borderBottom: '1px solid var(--border)',
+                  fontSize: '13px',
+                }}
+                {...props}
+              >
+                {children}
+              </td>
+            );
+          },
+          tr({ children, ...props }) {
+            return (
+              <tr
+                style={{ borderBottom: '1px solid var(--border)' }}
+                {...props}
+              >
+                {children}
+              </tr>
             );
           },
           a({ href, children, ...props }) {
@@ -114,6 +193,63 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
                 {children}
               </a>
             );
+          },
+          p({ children, ...props }) {
+            return (
+              <p style={{ margin: '4px 0', lineHeight: '1.7' }} {...props}>
+                {children}
+              </p>
+            );
+          },
+          ul({ children, ...props }) {
+            return (
+              <ul style={{ margin: '4px 0', paddingLeft: '20px', lineHeight: '1.7' }} {...props}>
+                {children}
+              </ul>
+            );
+          },
+          ol({ children, ...props }) {
+            return (
+              <ol style={{ margin: '4px 0', paddingLeft: '20px', lineHeight: '1.7' }} {...props}>
+                {children}
+              </ol>
+            );
+          },
+          li({ children, ...props }) {
+            return (
+              <li style={{ margin: '2px 0' }} {...props}>
+                {children}
+              </li>
+            );
+          },
+          h1({ children, ...props }) {
+            return <h1 style={{ fontSize: '18px', fontWeight: 700, margin: '12px 0 6px' }} {...props}>{children}</h1>;
+          },
+          h2({ children, ...props }) {
+            return <h2 style={{ fontSize: '16px', fontWeight: 700, margin: '10px 0 4px' }} {...props}>{children}</h2>;
+          },
+          h3({ children, ...props }) {
+            return <h3 style={{ fontSize: '14px', fontWeight: 600, margin: '8px 0 4px' }} {...props}>{children}</h3>;
+          },
+          blockquote({ children, ...props }) {
+            return (
+              <blockquote
+                style={{
+                  margin: '6px 0',
+                  padding: '6px 12px',
+                  borderLeft: '3px solid var(--accent)',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  borderRadius: '0 6px 6px 0',
+                  color: 'var(--text-secondary)',
+                }}
+                {...props}
+              >
+                {children}
+              </blockquote>
+            );
+          },
+          hr({ ...props }) {
+            return <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '12px 0' }} {...props} />;
           },
         }}
       >

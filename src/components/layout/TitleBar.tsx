@@ -48,6 +48,13 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
     try { await getCurrentWindow().close(); } catch { /* ignore */ }
   }, []);
 
+  // Drag + double-click: only startDragging on mousemove beyond threshold,
+  // so rapid double-clicks never trigger drag (mouse doesn't move).
+  const clickCountRef = useRef(0);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
+  const draggingRef = useRef(false);
+
   const handleHeaderMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     if (
@@ -62,19 +69,67 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
       return;
     }
     e.preventDefault();
-    try { getCurrentWindow().startDragging(); } catch { /* ignore */ }
+    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+    draggingRef.current = false;
   }, []);
 
-  const handleDoubleClick = useCallback(() => {
-    try { getCurrentWindow().toggleMaximize(); } catch { /* ignore */ }
+  const handleHeaderMouseUp = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const pos = mouseDownPosRef.current;
+    mouseDownPosRef.current = null;
+    if (draggingRef.current) {
+      draggingRef.current = false;
+      return;
+    }
+    if (!pos) return;
+    // Count as click only if mouse didn't move much (< 5px)
+    const dx = Math.abs(e.clientX - pos.x);
+    const dy = Math.abs(e.clientY - pos.y);
+    if (dx < 5 && dy < 5) {
+      clickCountRef.current += 1;
+      if (clickCountRef.current >= 2) {
+        clickCountRef.current = 0;
+        if (clickTimerRef.current) {
+          clearTimeout(clickTimerRef.current);
+          clickTimerRef.current = null;
+        }
+        try { getCurrentWindow().toggleMaximize(); } catch { /* ignore */ }
+        return;
+      }
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = setTimeout(() => {
+        clickCountRef.current = 0;
+        clickTimerRef.current = null;
+      }, 400);
+    }
+  }, []);
+
+  const handleHeaderMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const pos = mouseDownPosRef.current;
+    if (pos && !draggingRef.current) {
+      const dx = Math.abs(e.clientX - pos.x);
+      const dy = Math.abs(e.clientY - pos.y);
+      if (dx > 5 || dy > 5) {
+        // Mouse moved beyond threshold — start OS-level drag
+        draggingRef.current = true;
+        mouseDownPosRef.current = null;
+        try { getCurrentWindow().startDragging(); } catch { /* ignore */ }
+      }
+    }
+  }, []);
+
+  const handleHeaderMouseLeave = useCallback(() => {
+    mouseDownPosRef.current = null;
+    draggingRef.current = false;
   }, []);
 
   return (
     <header
-      className="flex items-center justify-between px-3 h-9 shrink-0 select-none"
+      className="flex items-center justify-between px-3 h-12 shrink-0 select-none"
       style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
       onMouseDown={handleHeaderMouseDown}
-      onDoubleClick={handleDoubleClick}
+      onMouseUp={handleHeaderMouseUp}
+      onMouseMove={handleHeaderMouseMove}
+      onMouseLeave={handleHeaderMouseLeave}
     >
       {/* Left: logo + title */}
       <div className="flex items-center gap-2 h-full">

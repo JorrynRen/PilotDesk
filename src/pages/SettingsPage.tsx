@@ -883,6 +883,69 @@ function ApiConfig() {
 }
 
 
+// ============================================================
+// 5. About
+// ============================================================
+function AboutSection() {
+  const { theme, setTheme } = useTheme();
+
+  return (
+    <div className="flex flex-col items-center gap-6 py-8">
+      {/* Logo */}
+      <img
+        src="/logo-lg.png"
+        alt="PilotDesk"
+        className="w-20 h-20 rounded-2xl"
+        draggable={false}
+      />
+
+      {/* App name + version */}
+      <div className="text-center">
+        <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+          PilotDesk
+        </h3>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          v0.1.0
+        </p>
+      </div>
+
+      {/* Description */}
+      <p className="text-xs text-center leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+        Claude Code &amp; Hermes Agent 统一桌面客户端。
+        集成多 Agent 管理、流式对话、灵感市集、API 直连等功能。
+      </p>
+
+      {/* Tech stack */}
+      <div
+        className="grid grid-cols-2 gap-2 w-full"
+        style={{ fontSize: '11px' }}
+      >
+        {[
+          ['前端', 'React 19 + TypeScript + TailwindCSS v4'],
+          ['桌面', 'Tauri 2.0'],
+          ['后端', 'Rust + SQLite'],
+          ['Agent', 'Node.js Sidecar + WebSocket'],
+        ].map(([label, value]) => (
+          <div
+            key={label}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          >
+            <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
+            <span>{value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Copyright */}
+      <div className="text-center text-xs leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+        <p>Copyright &copy; @简意工作室（jorryn）</p>
+        <p className="mt-1">本项目基于 MIT License 开源</p>
+      </div>
+    </div>
+  );
+}
+
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 

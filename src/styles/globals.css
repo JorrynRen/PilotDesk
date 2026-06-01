@@ -170,3 +170,17 @@ textarea::-webkit-scrollbar {
 textarea {
   scrollbar-width: none;
 }
+
+/* Markdown renderer */
+.pilotdesk-markdown {
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.pilotdesk-markdown > *:first-child {
+  margin-top: 0;
+}
+
+.pilotdesk-markdown > *:last-child {
+  margin-bottom: 0;
+}
