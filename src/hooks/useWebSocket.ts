@@ -3,10 +3,10 @@ import { getApiKey } from '../stores/apiProviderStore';
 import { inferApiFormat, resolveChatUrl, buildHeaders, buildBody } from '../utils/apiClient';
 
 type WsMessage =
-  | { type: 'chat'; sessionId: string; message: string }
-  | { type: 'stop'; sessionId: string }
+  | { type: 'chat'; sessionId: string; message: string; mode?: string; agentType?: string; cwd?: string }
+  | { type: 'stop'; sessionId: string; agentType?: string }
   | { type: 'session:create'; sessionId: string; agentType: string; cwd?: string }
-  | { type: 'session:close'; sessionId: string }
+  | { type: 'session:close'; sessionId: string; agentType?: string }
   | { type: 'ping' }
   | { type: 'skills:list'; agentType: string }
   | { type: 'skills:list-all' };
@@ -118,15 +118,15 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
   }, []);
 
   const sendChat = useCallback(
-    (sessionId: string, message: string) => {
-      sendMessage({ type: 'chat', sessionId, message });
+    (sessionId: string, message: string, mode?: string, agentType?: string, cwd?: string) => {
+      sendMessage({ type: 'chat', sessionId, message, mode, agentType, cwd });
     },
     [sendMessage]
   );
 
   const stopGeneration = useCallback(
-    (sessionId: string) => {
-      sendMessage({ type: 'stop', sessionId });
+    (sessionId: string, agentType?: string) => {
+      sendMessage({ type: 'stop', sessionId, agentType });
     },
     [sendMessage]
   );
