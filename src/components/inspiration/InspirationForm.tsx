@@ -12,7 +12,7 @@ interface InspirationFormProps {
     icon?: string;
     title: string;
     content: string;
-    source_agent?: string;
+    sourceAgent?: string;
     tags?: string[];
   }) => Promise<void>;
   onUpdate?: (data: {
@@ -20,7 +20,7 @@ interface InspirationFormProps {
     icon?: string;
     title?: string;
     content?: string;
-    source_agent?: string;
+    sourceAgent?: string;
     tags?: string[];
   }) => Promise<void>;
   onCancel: () => void;
@@ -71,7 +71,7 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
           icon,
           title,
           content,
-          source_agent: sourceAgent || initialData?.source_agent,
+          sourceAgent: sourceAgent || initialData?.sourceAgent,
           tags,
         });
       }

@@ -81,6 +81,9 @@ pub fn init_db() -> Result<Connection, AppError> {
     // Migration: add api_provider / api_model columns to existing sessions table
     migrate_add_api_columns(&conn)?;
 
+    // Migration: rebuild sessions table to support 'api' agent_type
+    migrate_add_api_agent_type(&conn)?;
+
     Ok(conn)
 }
 
@@ -98,9 +101,48 @@ fn migrate_add_api_columns(conn: &Connection) -> Result<(), AppError> {
         )?;
     }
 
-    // Update CHECK constraint (SQLite doesn't support ALTER CONSTRAINT, 
-    // but the new schema is enforced on fresh tables, and the old constraint
-    // is still valid since 'api' is just a new value we accept in code)
+    Ok(())
+}
+
+/// Migration: rebuild sessions table to support 'api' agent_type
+/// (old CHECK constraint only allowed 'claude'/'hermes')
+fn migrate_add_api_agent_type(conn: &Connection) -> Result<(), AppError> {
+    // Check if 'api' is accepted by trying a dry run
+    let accepts_api = conn
+        .execute("INSERT INTO sessions (id, agent_type, title, cwd, created_at, updated_at) VALUES ('__migration_test_api', 'api', '', '', 0, 0)", [])
+        .is_ok();
+
+    if accepts_api {
+        // Clean up test row
+        conn.execute("DELETE FROM sessions WHERE id = '__migration_test_api'", [])?;
+        return Ok(());
+    }
+
+    // Need to rebuild table with updated CHECK constraint
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS sessions_new (
+            id TEXT PRIMARY KEY,
+            agent_type TEXT NOT NULL CHECK(agent_type IN ('claude', 'hermes', 'api')),
+            title TEXT NOT NULL DEFAULT '',
+            cwd TEXT DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_message_preview TEXT DEFAULT '',
+            message_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+            api_provider TEXT,
+            api_model TEXT
+        );
+
+        INSERT OR IGNORE INTO sessions_new (id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model)
+        SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model FROM sessions;
+
+        DROP TABLE sessions;
+        ALTER TABLE sessions_new RENAME TO sessions;
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);"
+    )?;
 
     Ok(())
 }

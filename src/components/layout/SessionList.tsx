@@ -38,6 +38,8 @@ export function SessionList() {
   const [selectedApiModel, setSelectedApiModel] = useState('');
   const [customModel, setCustomModel] = useState('');
   const [useCustomModel, setUseCustomModel] = useState(false);
+  const [customTitle, setCustomTitle] = useState('');
+  const [customCwd, setCustomCwd] = useState('');
   const [creating, setCreating] = useState(false);
 
   // Load API providers from localStorage
@@ -66,6 +68,8 @@ export function SessionList() {
       // Reset state
       setUseCustomModel(false);
       setCustomModel('');
+      setCustomTitle('');
+      setCustomCwd('');
     }
   }, [showNewDialog]);
 
@@ -115,16 +119,20 @@ export function SessionList() {
         // Create API direct session
         const provider = apiProviders.find((p) => p.id === selectedApiProvider)!;
         const session = await createSession(
-          'api' as 'claude',
+          'api' as const,
           undefined,
-          `API: ${provider.name} - ${model}`,
+          customTitle.trim() || `API: ${provider.name} - ${model}`,
           selectedApiProvider,
           model,
         );
         setShowNewDialog(false);
         selectSession(session.id);
       } else {
-        const session = await createSession(newSessionType);
+        const session = await createSession(
+          newSessionType,
+          customCwd.trim() || undefined,
+          customTitle.trim() || undefined,
+        );
         setShowNewDialog(false);
         selectSession(session.id);
       }
@@ -287,6 +295,38 @@ export function SessionList() {
               ))}
             </div>
 
+            {/* Claude / Hermes: optional title & cwd */}
+            {newSessionType !== 'api' && (
+              <div className="space-y-3 mb-4">
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    会话标题（可选）
+                  </label>
+                  <input
+                    type="text"
+                    value={customTitle}
+                    onChange={(e) => setCustomTitle(e.target.value)}
+                    placeholder={newSessionType === 'claude' ? 'Claude Code 新会话' : 'Hermes Agent 新会话'}
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    工作目录（可选）
+                  </label>
+                  <input
+                    type="text"
+                    value={customCwd}
+                    onChange={(e) => setCustomCwd(e.target.value)}
+                    placeholder="留空使用默认目录"
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                  />
+                </div>
+              </div>
+            )}
+
             {/* API direct: provider & model selection */}
             {newSessionType === 'api' && (
               <div className="space-y-3 mb-4">
@@ -314,7 +354,7 @@ export function SessionList() {
                     >
                       {apiProviders.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name}{p.api_key_set ? ' (已配置)' : ' (未配置Key)'}
+                          {p.name}{p.apiKeySet ? ' (已配置)' : ' (未配置Key)'}
                         </option>
                       ))}
                     </select>
@@ -379,6 +419,19 @@ export function SessionList() {
                   </div>
                 )}
 
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    会话标题（可选）
+                  </label>
+                  <input
+                    type="text"
+                    value={customTitle}
+                    onChange={(e) => setCustomTitle(e.target.value)}
+                    placeholder={`API: ${currentApiProvider?.name || ''} - ${useCustomModel ? customModel || '自定义模型' : selectedApiModel || '模型'}`}
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                  />
+                </div>
                 <div
                   className="px-3 py-2 rounded-lg text-xs"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}

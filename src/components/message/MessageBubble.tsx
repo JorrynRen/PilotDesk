@@ -50,7 +50,7 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
 
   return (
     <div
-      className="group flex gap-3 px-4 py-3"
+      className={isUser ? "group flex gap-3 px-4 py-3 self-end" : "group flex gap-3 px-4 py-3"}
       style={{
         backgroundColor: isUser ? 'transparent' : 'var(--bg-secondary)',
         flexDirection: isUser ? 'row-reverse' : 'row',

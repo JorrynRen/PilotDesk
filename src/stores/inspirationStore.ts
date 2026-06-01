@@ -6,12 +6,13 @@ export interface InspirationItem {
   icon: string;
   title: string;
   content: string;
-  source_agent: string;
-  is_favorite: boolean;
+  sourceAgent: string;
+  isFavorite: boolean;
   tags: string[];
-  created_at: number;
-  updated_at: number;
+  createdAt: number;
+  updatedAt: number;
 }
+
 
 interface InspirationState {
   inspirations: InspirationItem[];
@@ -28,7 +29,7 @@ interface InspirationState {
     icon?: string;
     title: string;
     content: string;
-    source_agent?: string;
+    sourceAgent?: string;
     tags?: string[];
   }) => Promise<InspirationItem | null>;
   updateInspiration: (data: {
@@ -36,8 +37,8 @@ interface InspirationState {
     icon?: string;
     title?: string;
     content?: string;
-    source_agent?: string;
-    is_favorite?: boolean;
+    sourceAgent?: string;
+    isFavorite?: boolean;
     tags?: string[];
   }) => Promise<void>;
   deleteInspiration: (id: string) => Promise<void>;
@@ -131,7 +132,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
   toggleFavorite: async (id) => {
     const insp = get().inspirations.find((i) => i.id === id);
     if (!insp) return;
-    await get().updateInspiration({ id, is_favorite: !insp.is_favorite });
+    await get().updateInspiration({ id, isFavorite: !insp.isFavorite });
   },
 
   setActiveTag: (tag) => {

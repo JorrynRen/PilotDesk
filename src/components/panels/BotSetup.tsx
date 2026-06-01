@@ -5,16 +5,18 @@ import { useSessionStore } from '../../stores/sessionStore';
 
 interface BotChannel {
   id: string;
-  agent_type: string;
+  agentType: string;
   platform: string;
   method: string;
   status: string;
-  trigger_prefix: string;
-  response_format: string;
+  triggerPrefix: string;
+  responseFormat: string;
   config: Record<string, unknown>;
-  created_at: number;
-  updated_at: number;
+  createdAt: number;
+  updatedAt: number;
 }
+
+
 
 export function BotSetup() {
   const [channels, setChannels] = useState<BotChannel[]>([]);
@@ -47,12 +49,12 @@ export function BotSetup() {
     try {
       const payload = {
         id: isNew ? undefined : editing.id,
-        agent_type: editing.agent_type ?? currentSession?.agentType ?? 'claude',
+        agentType: editing.agentType ?? currentSession?.agentType ?? 'claude',
         platform: editing.platform ?? 'wechat',
         method: editing.method ?? 'clawbot',
         status: editing.status ?? 'disconnected',
-        trigger_prefix: editing.trigger_prefix ?? '',
-        response_format: editing.response_format ?? 'markdown',
+        triggerPrefix: editing.triggerPrefix ?? '',
+        responseFormat: editing.responseFormat ?? 'markdown',
         config: editing.config ?? {},
       };
       await invoke<BotChannel>('save_bot_channel', { payload });
@@ -76,12 +78,12 @@ export function BotSetup() {
 
   const startNew = () => {
     setEditing({
-      agent_type: currentSession?.agentType ?? 'claude',
+      agentType: currentSession?.agentType ?? 'claude',
       platform: 'wechat',
       method: 'clawbot',
       status: 'disconnected',
-      trigger_prefix: '',
-      response_format: 'markdown',
+      triggerPrefix: '',
+      responseFormat: 'markdown',
     });
     setIsNew(true);
   };
@@ -111,8 +113,8 @@ export function BotSetup() {
               <div>
                 <label className="block text-[10px] font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Agent</label>
                 <select
-                  value={editing.agent_type ?? 'claude'}
-                  onChange={(e) => setEditing({ ...editing, agent_type: e.target.value })}
+                  value={editing.agentType ?? 'claude'}
+                  onChange={(e) => setEditing({ ...editing, agentType: e.target.value })}
                   className="w-full px-2 py-1.5 rounded text-xs outline-none"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                 >
@@ -139,8 +141,8 @@ export function BotSetup() {
                 <label className="block text-[10px] font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>触发前缀</label>
                 <input
                   type="text"
-                  value={editing.trigger_prefix ?? ''}
-                  onChange={(e) => setEditing({ ...editing, trigger_prefix: e.target.value })}
+                  value={editing.triggerPrefix ?? ''}
+                  onChange={(e) => setEditing({ ...editing, triggerPrefix: e.target.value })}
                   placeholder="如: /"
                   className="w-full px-2 py-1.5 rounded text-xs outline-none"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
@@ -149,8 +151,8 @@ export function BotSetup() {
               <div>
                 <label className="block text-[10px] font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>响应格式</label>
                 <select
-                  value={editing.response_format ?? 'markdown'}
-                  onChange={(e) => setEditing({ ...editing, response_format: e.target.value })}
+                  value={editing.responseFormat ?? 'markdown'}
+                  onChange={(e) => setEditing({ ...editing, responseFormat: e.target.value })}
                   className="w-full px-2 py-1.5 rounded text-xs outline-none"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                 >
@@ -208,9 +210,9 @@ export function BotSetup() {
                   <div key={channel.id} className="px-4 py-3">
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
-                        <Bot size={14} style={{ color: channel.agent_type === 'claude' ? 'var(--claude-tag)' : 'var(--hermes-tag)' }} />
+                        <Bot size={14} style={{ color: channel.agentType === 'claude' ? 'var(--claude-tag)' : 'var(--hermes-tag)' }} />
                         <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                          {channel.agent_type === 'claude' ? 'Claude Code' : 'Hermes'}
+                          {channel.agentType === 'claude' ? 'Claude Code' : 'Hermes'}
                         </span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                           {channel.platform}
@@ -238,7 +240,7 @@ export function BotSetup() {
                       </div>
                     </div>
                     <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                      前缀: {channel.trigger_prefix || '(无)'} | 格式: {channel.response_format}
+                      前缀: {channel.triggerPrefix || '(无)'} | 格式: {channel.responseFormat}
                     </div>
                   </div>
                 ))}

@@ -33,7 +33,7 @@ export function MemoryBrowser({ agentType, onSelect }: MemoryBrowserProps) {
       const { invoke } = await import('@tauri-apps/api/core');
       // Use existing get_session_messages for current sessions
       // In a full implementation, this would query a dedicated memories table
-      const sessions = await invoke<Array<{ id: string; title: string; agent_type: string }>>('list_sessions');
+      const sessions = await invoke<Array<{ id: string; title: string; agentType: string }>>('list_sessions');
       const recentMemories: MemoryItem[] = [];
 
       for (const session of sessions.slice(0, 5)) {
@@ -47,7 +47,7 @@ export function MemoryBrowser({ agentType, onSelect }: MemoryBrowserProps) {
                 role: msg.role,
                 timestamp: msg.timestamp,
                 sessionTitle: session.title,
-                agentType: session.agent_type,
+                agentType: session.agentType,
                 mode: msg.mode,
               });
             }

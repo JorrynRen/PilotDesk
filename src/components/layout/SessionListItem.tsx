@@ -47,7 +47,7 @@ export function SessionListItem({
       onClick={onSelect}
     >
       <div className="flex items-start gap-2">
-        <AgentBadge agentType={session.agentType as 'claude' | 'hermes'} />
+        <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium truncate">{session.title}</span>

@@ -3,26 +3,26 @@ import { invoke } from '@tauri-apps/api/core';
 
 export interface ClaudeConfigPublic {
   model: string | null;
-  api_endpoint: string | null;
-  api_key_masked: string | null;
-  api_key_set: boolean;
-  mcp_servers: Record<string, unknown> | null;
-  custom_instructions: string | null;
+  apiEndpoint: string | null;
+  apiKeyMasked: string | null;
+  apiKeySet: boolean;
+  mcpServers: Record<string, unknown> | null;
+  customInstructions: string | null;
   theme: string | null;
-  max_tokens: number | null;
+  maxTokens: number | null;
   extra: Record<string, string> | null;
 }
 
 export interface HermesConfigPublic {
   model: string | null;
-  api_endpoint: string | null;
-  api_key_masked: string | null;
-  api_key_set: boolean;
+  apiEndpoint: string | null;
+  apiKeyMasked: string | null;
+  apiKeySet: boolean;
   temperature: number | null;
-  max_tokens: number | null;
-  system_prompt: string | null;
-  mcp_servers: Record<string, unknown> | null;
-  skills_dir: string | null;
+  maxTokens: number | null;
+  systemPrompt: string | null;
+  mcpServers: Record<string, unknown> | null;
+  skillsDir: string | null;
   extra: Record<string, string> | null;
 }
 
@@ -34,10 +34,10 @@ export interface ConfigResult {
 }
 
 export interface TestResult {
-  agent_type: string;
+  agentType: string;
   success: boolean;
   message: string;
-  latency_ms: number | null;
+  latencyMs: number | null;
 }
 
 interface ConfigState {
@@ -117,7 +117,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       return result;
     } catch (err) {
       set({ error: String(err) });
-      return { agent_type: agentType, success: false, message: String(err), latency_ms: null };
+      return { agentType, success: false, message: String(err), latencyMs: null };
     }
   },
 

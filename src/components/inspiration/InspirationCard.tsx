@@ -14,15 +14,15 @@ export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession
     claude: 'Claude',
     hermes: 'Hermes',
     manual: '手动',
-  }[inspiration.source_agent] ?? inspiration.source_agent;
+  }[inspiration.sourceAgent] ?? inspiration.sourceAgent;
 
   const sourceColor = {
     claude: 'var(--claude-tag)',
     hermes: 'var(--hermes-tag)',
     manual: 'var(--text-tertiary)',
-  }[inspiration.source_agent] ?? 'var(--text-tertiary)';
+  }[inspiration.sourceAgent] ?? 'var(--text-tertiary)';
 
-  const timeStr = new Date(inspiration.updated_at * 1000).toLocaleDateString('zh-CN', {
+  const timeStr = new Date(inspiration.updatedAt * 1000).toLocaleDateString('zh-CN', {
     month: 'short',
     day: 'numeric',
   });
@@ -51,9 +51,9 @@ export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession
               onToggleFavorite(inspiration.id);
             }}
             className="p-1 rounded transition-colors"
-            style={{ color: inspiration.is_favorite ? '#FBBF24' : 'var(--text-tertiary)' }}
+            style={{ color: inspiration.isFavorite ? '#FBBF24' : 'var(--text-tertiary)' }}
           >
-            <Star size={14} fill={inspiration.is_favorite ? '#FBBF24' : 'none'} />
+            <Star size={14} fill={inspiration.isFavorite ? '#FBBF24' : 'none'} />
           </button>
           <button
             onClick={(e) => {

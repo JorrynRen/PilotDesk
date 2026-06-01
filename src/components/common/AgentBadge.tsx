@@ -1,12 +1,18 @@
 import clsx from 'clsx';
 
 interface AgentBadgeProps {
-  agentType: 'claude' | 'hermes';
+  agentType: 'claude' | 'hermes' | 'api';
   size?: 'sm' | 'md';
 }
 
+const AGENT_STYLES: Record<string, { bg: string; color: string; label: string }> = {
+  claude: { bg: 'rgba(59,130,246,0.15)', color: '#3B82F6', label: 'C' },
+  hermes: { bg: 'rgba(139,92,246,0.15)', color: '#8B5CF6', label: 'H' },
+  api:    { bg: 'rgba(16,185,129,0.15)', color: '#10B981', label: 'A' },
+};
+
 export function AgentBadge({ agentType, size = 'sm' }: AgentBadgeProps) {
-  const isClaude = agentType === 'claude';
+  const style = AGENT_STYLES[agentType] || AGENT_STYLES.claude;
   return (
     <span
       className={clsx(
@@ -14,11 +20,11 @@ export function AgentBadge({ agentType, size = 'sm' }: AgentBadgeProps) {
         size === 'sm' ? 'w-5 h-5 text-[10px]' : 'w-6 h-6 text-xs'
       )}
       style={{
-        backgroundColor: isClaude ? 'rgba(59,130,246,0.15)' : 'rgba(139,92,246,0.15)',
-        color: isClaude ? '#3B82F6' : '#8B5CF6',
+        backgroundColor: style.bg,
+        color: style.color,
       }}
     >
-      {isClaude ? 'C' : 'H'}
+      {style.label}
     </span>
   );
 }

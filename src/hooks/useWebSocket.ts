@@ -158,6 +158,8 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
       message: string,
       providerId: string,
       model: string,
+      history?: Array<{ role: string; content: string }>,
+      providerName?: string,
     ) => {
       const h = handlersRef.current;
 
@@ -183,25 +185,26 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
 
       const provider = providers.find((p) => p.id === providerId);
       if (!provider) {
-        h?.onError?.(sessionId, `未找到提供商: ${providerId}`);
+        h?.onError?.(sessionId, `未找到提供商: ${providerName || providerId}`);
         return;
       }
 
       // Retrieve the actual API key (stored separately)
       const key = localStorage.getItem(`pd-api-${providerId}-key`);
       if (!key) {
-        h?.onError?.(sessionId, `未配置 API Key: ${provider.name}`);
+        h?.onError?.(sessionId, `未配置 API Key: ${providerName || provider.name}`);
         return;
       }
 
-      const endpoint = provider.api_endpoint.replace(/\/+$/, '');
+      const endpoint = provider.apiEndpoint.replace(/\/+$/, '');
       const abort = new AbortController();
       abortRef.current = abort;
 
       h?.onStatus?.(sessionId, `调用 ${model}...`);
 
       try {
-        if (providerId === 'anthropic') {
+        const isAnthropic = endpoint.includes('anthropic.com') || providerId === 'anthropic';
+        if (isAnthropic) {
           // Anthropic Messages API format
           const res = await fetch(`${endpoint}/v1/messages`, {
             method: 'POST',
@@ -214,7 +217,10 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
               model,
               max_tokens: 4096,
               stream: true,
-              messages: [{ role: 'user', content: message }],
+              messages: [
+                ...(history || []).map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+                { role: 'user', content: message },
+              ],
             }),
             signal: abort.signal,
           });
@@ -278,7 +284,10 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
             body: JSON.stringify({
               model,
               stream: true,
-              messages: [{ role: 'user', content: message }],
+              messages: [
+                ...(history || []).map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+                { role: 'user', content: message },
+              ],
             }),
             signal: abort.signal,
           });

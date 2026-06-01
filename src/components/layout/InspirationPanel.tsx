@@ -34,7 +34,7 @@ export function InspirationPanel() {
 
   // Filter inspirations locally
   const filteredInspirations = inspirations.filter((insp) => {
-    if (favoriteOnly && !insp.is_favorite) return false;
+    if (favoriteOnly && !insp.isFavorite) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return (
@@ -67,7 +67,7 @@ export function InspirationPanel() {
     icon?: string;
     title: string;
     content: string;
-    source_agent?: string;
+    sourceAgent?: string;
     tags?: string[];
   }) => {
     if (editingInspiration) {
@@ -217,9 +217,9 @@ function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDele
             </span>
             <span
               className="text-[9px] px-1 rounded shrink-0"
-              style={{ backgroundColor: `${sourceColor[inspiration.source_agent ?? '']}15`, color: sourceColor[inspiration.source_agent ?? ''] }}
+              style={{ backgroundColor: `${sourceColor[inspiration.sourceAgent ?? '']}15`, color: sourceColor[inspiration.sourceAgent ?? ''] }}
             >
-              {sourceLabel[inspiration.source_agent ?? ''] ?? inspiration.source_agent}
+              {sourceLabel[inspiration.sourceAgent ?? ''] ?? inspiration.sourceAgent}
             </span>
           </div>
         </div>
@@ -230,7 +230,7 @@ function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDele
             className="p-0.5 rounded transition-colors hover:bg-black/5"
             title="收藏"
           >
-            <Star size={11} fill={inspiration.is_favorite ? '#FBBF24' : 'none'} style={{ color: inspiration.is_favorite ? '#FBBF24' : 'var(--text-tertiary)' }} />
+            <Star size={11} fill={inspiration.isFavorite ? '#FBBF24' : 'none'} style={{ color: inspiration.isFavorite ? '#FBBF24' : 'var(--text-tertiary)' }} />
           </button>
           <button
             onClick={() => onEdit(inspiration)}
@@ -270,7 +270,7 @@ function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDele
 interface InspirationInlineFormProps {
   initialData?: InspirationItem | null;
   sourceAgent?: string;
-  onSave: (data: { icon?: string; title: string; content: string; source_agent?: string; tags?: string[] }) => Promise<void>;
+  onSave: (data: { icon?: string; title: string; content: string; sourceAgent?: string; tags?: string[] }) => Promise<void>;
   onCancel: () => void;
 }
 
@@ -288,7 +288,7 @@ function InspirationInlineForm({ initialData, sourceAgent, onSave, onCancel }: I
         icon,
         title: title.trim(),
         content: content.trim(),
-        source_agent: sourceAgent || 'manual',
+        sourceAgent: sourceAgent || 'manual',
         tags: initialData?.tags,
       });
     } finally {

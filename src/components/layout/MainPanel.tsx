@@ -110,7 +110,11 @@ export function MainPanel() {
           setIsGenerating(false);
           return;
         }
-        sendApiChat(currentSession.id, message, currentSession.apiProvider, currentSession.apiModel);
+        // Build message history for multi-turn API chat (exclude current user message, it's added below)
+        const history = messages
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => ({ role: m.role, content: m.content }));
+        sendApiChat(currentSession.id, message, currentSession.apiProvider, currentSession.apiModel, history);
       } else {
         // Sidecar WebSocket (claude / hermes)
         sendChat(currentSession.id, message, mode, currentSession.agentType as 'claude' | 'hermes');

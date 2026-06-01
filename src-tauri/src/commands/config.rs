@@ -3,6 +3,7 @@ use crate::utils::errors::AppError;
 use tauri::command;
 
 #[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ConfigResult {
     pub claude: Option<claude::ClaudeConfigPublic>,
     pub hermes: Option<hermes::HermesConfigPublic>,
@@ -11,6 +12,7 @@ pub struct ConfigResult {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaudeUpdatePayload {
     pub model: Option<String>,
     pub api_endpoint: Option<String>,
@@ -23,6 +25,7 @@ pub struct ClaudeUpdatePayload {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HermesUpdatePayload {
     pub model: Option<String>,
     pub api_key: Option<String>,
@@ -141,6 +144,7 @@ pub fn test_api_connection(agent_type: String) -> Result<TestConnectionResult, A
 }
 
 #[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct TestConnectionResult {
     pub agent_type: String,
     pub success: bool,

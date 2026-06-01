@@ -9,19 +9,19 @@ interface ConfigEditorProps {
 function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
   const { saveClaudeConfig, saving, testConnection, testResult } = useConfigStore();
   const [model, setModel] = useState(config.model ?? '');
-  const [apiEndpoint, setApiEndpoint] = useState(config.api_endpoint ?? '');
+  const [apiEndpoint, setApiEndpoint] = useState(config.apiEndpoint ?? '');
   const [apiKey, setApiKey] = useState('');
-  const [customInstructions, setCustomInstructions] = useState(config.custom_instructions ?? '');
-  const [maxTokens, setMaxTokens] = useState(config.max_tokens?.toString() ?? '');
+  const [customInstructions, setCustomInstructions] = useState(config.customInstructions ?? '');
+  const [maxTokens, setMaxTokens] = useState(config.maxTokens?.toString() ?? '');
   const [modified, setModified] = useState(false);
 
   const hasChanges = useCallback(() => {
     return (
       (model !== (config.model ?? '')) ||
-      (apiEndpoint !== (config.api_endpoint ?? '')) ||
+      (apiEndpoint !== (config.apiEndpoint ?? '')) ||
       (apiKey !== '') ||
-      (customInstructions !== (config.custom_instructions ?? '')) ||
-      (maxTokens !== (config.max_tokens?.toString() ?? ''))
+      (customInstructions !== (config.customInstructions ?? '')) ||
+      (maxTokens !== (config.maxTokens?.toString() ?? ''))
     );
   }, [model, apiEndpoint, apiKey, customInstructions, maxTokens, config]);
 
@@ -32,10 +32,10 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
   const handleSave = async () => {
     const update: Record<string, unknown> = {};
     if (model !== (config.model ?? '')) update.model = model || null;
-    if (apiEndpoint !== (config.api_endpoint ?? '')) update.api_endpoint = apiEndpoint || null;
-    if (apiKey !== '') update.api_key = apiKey;
-    if (customInstructions !== (config.custom_instructions ?? '')) update.custom_instructions = customInstructions || null;
-    if (maxTokens !== (config.max_tokens?.toString() ?? '')) update.max_tokens = maxTokens ? parseInt(maxTokens) : null;
+    if (apiEndpoint !== (config.apiEndpoint ?? '')) update.apiEndpoint = apiEndpoint || null;
+    if (apiKey !== '') update.apiKey = apiKey;
+    if (customInstructions !== (config.customInstructions ?? '')) update.customInstructions = customInstructions || null;
+    if (maxTokens !== (config.maxTokens?.toString() ?? '')) update.maxTokens = maxTokens ? parseInt(maxTokens) : null;
     await saveClaudeConfig(update as Parameters<typeof saveClaudeConfig>[0]);
     setApiKey('');
     setModified(false);
@@ -88,7 +88,7 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={config.api_key_masked ?? '未设置'}
+            placeholder={config.apiKeyMasked ?? '未设置'}
             className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
             style={{
               backgroundColor: 'var(--bg-tertiary)',
@@ -162,7 +162,7 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
         >
           测试连接
         </button>
-        {testResult?.agent_type === 'claude' && (
+        {testResult?.agentType === 'claude' && (
           <span className="text-xs" style={{ color: testResult.success ? 'var(--success)' : 'var(--danger)' }}>
             {testResult.message}
           </span>
@@ -175,21 +175,21 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
 function HermesConfigForm({ config }: { config: HermesConfigPublic }) {
   const { saveHermesConfig, saving, testConnection, testResult } = useConfigStore();
   const [model, setModel] = useState(config.model ?? '');
-  const [apiEndpoint, setApiEndpoint] = useState(config.api_endpoint ?? '');
+  const [apiEndpoint, setApiEndpoint] = useState(config.apiEndpoint ?? '');
   const [apiKey, setApiKey] = useState('');
   const [temperature, setTemperature] = useState(config.temperature?.toString() ?? '');
-  const [maxTokens, setMaxTokens] = useState(config.max_tokens?.toString() ?? '');
-  const [systemPrompt, setSystemPrompt] = useState(config.system_prompt ?? '');
+  const [maxTokens, setMaxTokens] = useState(config.maxTokens?.toString() ?? '');
+  const [systemPrompt, setSystemPrompt] = useState(config.systemPrompt ?? '');
   const [modified, setModified] = useState(false);
 
   const hasChanges = useCallback(() => {
     return (
       (model !== (config.model ?? '')) ||
-      (apiEndpoint !== (config.api_endpoint ?? '')) ||
+      (apiEndpoint !== (config.apiEndpoint ?? '')) ||
       (apiKey !== '') ||
       (temperature !== (config.temperature?.toString() ?? '')) ||
-      (maxTokens !== (config.max_tokens?.toString() ?? '')) ||
-      (systemPrompt !== (config.system_prompt ?? ''))
+      (maxTokens !== (config.maxTokens?.toString() ?? '')) ||
+      (systemPrompt !== (config.systemPrompt ?? ''))
     );
   }, [model, apiEndpoint, apiKey, temperature, maxTokens, systemPrompt, config]);
 
@@ -200,11 +200,11 @@ function HermesConfigForm({ config }: { config: HermesConfigPublic }) {
   const handleSave = async () => {
     const update: Record<string, unknown> = {};
     if (model !== (config.model ?? '')) update.model = model || null;
-    if (apiEndpoint !== (config.api_endpoint ?? '')) update.api_endpoint = apiEndpoint || null;
-    if (apiKey !== '') update.api_key = apiKey;
+    if (apiEndpoint !== (config.apiEndpoint ?? '')) update.apiEndpoint = apiEndpoint || null;
+    if (apiKey !== '') update.apiKey = apiKey;
     if (temperature !== (config.temperature?.toString() ?? '')) update.temperature = temperature ? parseFloat(temperature) : null;
-    if (maxTokens !== (config.max_tokens?.toString() ?? '')) update.max_tokens = maxTokens ? parseInt(maxTokens) : null;
-    if (systemPrompt !== (config.system_prompt ?? '')) update.system_prompt = systemPrompt || null;
+    if (maxTokens !== (config.maxTokens?.toString() ?? '')) update.maxTokens = maxTokens ? parseInt(maxTokens) : null;
+    if (systemPrompt !== (config.systemPrompt ?? '')) update.systemPrompt = systemPrompt || null;
     await saveHermesConfig(update as Parameters<typeof saveHermesConfig>[0]);
     setApiKey('');
     setModified(false);
@@ -257,7 +257,7 @@ function HermesConfigForm({ config }: { config: HermesConfigPublic }) {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={config.api_key_masked ?? '未设置'}
+            placeholder={config.apiKeyMasked ?? '未设置'}
             className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
             style={{
               backgroundColor: 'var(--bg-tertiary)',
@@ -352,7 +352,7 @@ function HermesConfigForm({ config }: { config: HermesConfigPublic }) {
         >
           测试连接
         </button>
-        {testResult?.agent_type === 'hermes' && (
+        {testResult?.agentType === 'hermes' && (
           <span className="text-xs" style={{ color: testResult.success ? 'var(--success)' : 'var(--danger)' }}>
             {testResult.message}
           </span>

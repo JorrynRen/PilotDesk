@@ -211,17 +211,17 @@ function AgentConfigPanel() {
 interface ApiProvider {
   id: string;
   name: string;
-  api_endpoint: string;
-  api_key_masked: string | null;
-  api_key_set: boolean;
+  apiEndpoint: string;
+  apiKeyMasked: string | null;
+  apiKeySet: boolean;
   models: string[];
 }
 
 interface EditingProvider {
   id: string;
   name: string;
-  api_endpoint: string;
-  api_key: string;
+  apiEndpoint: string;
+  apiKey: string;
   models: string;
 }
 
@@ -435,7 +435,7 @@ function SortableProviderCard({
                   p.name
                 )}
               </span>
-              {p.api_key_set && !isEditing && (
+              {p.apiKeySet && !isEditing && (
                 <span
                   className="text-[10px] px-1.5 py-0.5 rounded"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--success)' }}
@@ -449,7 +449,7 @@ function SortableProviderCard({
               {!isEditing && (
                 <button
                   onClick={() => onTestConnection(p.id)}
-                  disabled={testResult?.status === 'testing' || !p.api_key_set}
+                  disabled={testResult?.status === 'testing' || !p.apiKeySet}
                   className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors disabled:opacity-30"
                   style={{
                     backgroundColor: 'var(--bg-tertiary)',
@@ -541,9 +541,9 @@ function SortableProviderCard({
               {isEditing ? (
                 <input
                   type="text"
-                  value={editingProvider!.api_endpoint}
+                  value={editingProvider!.apiEndpoint}
                   onChange={(e) =>
-                    onSetEditingProvider({ ...editingProvider!, api_endpoint: e.target.value })
+                    onSetEditingProvider({ ...editingProvider!, apiEndpoint: e.target.value })
                   }
                   className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
                   style={{
@@ -554,7 +554,7 @@ function SortableProviderCard({
                 />
               ) : (
                 <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>
-                  {p.api_endpoint}
+                  {p.apiEndpoint}
                 </p>
               )}
             </div>
@@ -563,15 +563,15 @@ function SortableProviderCard({
             {isEditing && (
               <div>
                 <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                  API Key {p.api_key_set && '（留空保持不变）'}
+                  API Key {p.apiKeySet && '（留空保持不变）'}
                 </label>
                 <input
                   type="password"
-                  value={editingProvider!.api_key}
+                  value={editingProvider!.apiKey}
                   onChange={(e) =>
-                    onSetEditingProvider({ ...editingProvider!, api_key: e.target.value })
+                    onSetEditingProvider({ ...editingProvider!, apiKey: e.target.value })
                   }
-                  placeholder={p.api_key_set ? '输入新 Key 覆盖' : '输入 API Key'}
+                  placeholder={p.apiKeySet ? '输入新 Key 覆盖' : '输入 API Key'}
                   className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
                   style={{
                     backgroundColor: 'var(--bg-tertiary)',
@@ -676,23 +676,39 @@ function ApiConfig() {
   const [providers, setProviders] = useState<ApiProvider[]>(() => {
     const saved = localStorage.getItem('pd-api-providers');
     if (saved) {
-      try { return JSON.parse(saved); } catch { /* ignore */ }
+      try {
+        const parsed = JSON.parse(saved);
+        // Migrate snake_case to camelCase if needed
+        if (parsed && Array.isArray(parsed)) {
+          const migrated = parsed.map((p: Record<string, unknown>) => ({
+            id: p.id,
+            name: p.name,
+            apiEndpoint: p.api_endpoint ?? p.apiEndpoint ?? '',
+            apiKeyMasked: p.api_key_masked ?? p.apiKeyMasked ?? null,
+            apiKeySet: p.api_key_set ?? p.apiKeySet ?? false,
+            models: p.models ?? [],
+          }));
+          localStorage.setItem('pd-api-providers', JSON.stringify(migrated));
+          return migrated;
+        }
+        return parsed;
+      } catch { /* ignore */ }
     }
     return [
       {
         id: 'anthropic',
         name: 'Anthropic Claude',
-        api_endpoint: 'https://api.anthropic.com',
-        api_key_masked: localStorage.getItem('pd-api-anthropic-masked'),
-        api_key_set: !!localStorage.getItem('pd-api-anthropic-masked'),
+        apiEndpoint: 'https://api.anthropic.com',
+        apiKeyMasked: localStorage.getItem('pd-api-anthropic-masked'),
+        apiKeySet: !!localStorage.getItem('pd-api-anthropic-masked'),
         models: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514'],
       },
       {
         id: 'openai',
         name: 'OpenAI',
-        api_endpoint: 'https://api.openai.com/v1',
-        api_key_masked: localStorage.getItem('pd-api-openai-masked'),
-        api_key_set: !!localStorage.getItem('pd-api-openai-masked'),
+        apiEndpoint: 'https://api.openai.com/v1',
+        apiKeyMasked: localStorage.getItem('pd-api-openai-masked'),
+        apiKeySet: !!localStorage.getItem('pd-api-openai-masked'),
         models: ['gpt-4o', 'gpt-4o-mini'],
       },
     ];
@@ -736,9 +752,9 @@ function ApiConfig() {
     const newP: ApiProvider = {
       id,
       name: '',
-      api_endpoint: 'https://',
-      api_key_masked: null,
-      api_key_set: false,
+      apiEndpoint: 'https://',
+      apiKeyMasked: null,
+      apiKeySet: false,
       models: [],
     };
     const list = [...providers, newP];
@@ -746,8 +762,8 @@ function ApiConfig() {
     setEditingProvider({
       id,
       name: '',
-      api_endpoint: 'https://',
-      api_key: '',
+      apiEndpoint: 'https://',
+      apiKey: '',
       models: '',
     });
   };
@@ -768,8 +784,8 @@ function ApiConfig() {
     setEditingProvider({
       id: p.id,
       name: p.name,
-      api_endpoint: p.api_endpoint,
-      api_key: '',
+      apiEndpoint: p.apiEndpoint,
+      apiKey: '',
       models: p.models.join(', '),
     });
     setNewModelInput('');
@@ -785,21 +801,21 @@ function ApiConfig() {
   const handleSaveEdit = () => {
     if (!editingProvider) return;
     const name = editingProvider.name.trim() || '未命名提供商';
-    const endpoint = editingProvider.api_endpoint.trim() || 'https://';
+    const endpoint = editingProvider.apiEndpoint.trim() || 'https://';
     const models = editingProvider.models
       .split(/[,，]/)
       .map((s) => s.trim())
       .filter(Boolean);
 
-    if (editingProvider.api_key.trim()) {
-      const key = editingProvider.api_key.trim();
+    if (editingProvider.apiKey.trim()) {
+      const key = editingProvider.apiKey.trim();
       const masked = key.slice(0, 4) + '****' + key.slice(-4);
       localStorage.setItem(`pd-api-${editingProvider.id}-key`, key);
       localStorage.setItem(`pd-api-${editingProvider.id}-masked`, masked);
       persist(
         providers.map((p) =>
           p.id === editingProvider.id
-            ? { ...p, name, api_endpoint: endpoint, api_key_masked: masked, api_key_set: true, models }
+            ? { ...p, name, apiEndpoint: endpoint, apiKeyMasked: masked, apiKeySet: true, models }
             : p
         )
       );
@@ -807,7 +823,7 @@ function ApiConfig() {
       persist(
         providers.map((p) =>
           p.id === editingProvider.id
-            ? { ...p, name, api_endpoint: endpoint, models }
+            ? { ...p, name, apiEndpoint: endpoint, models }
             : p
         )
       );
@@ -865,7 +881,7 @@ function ApiConfig() {
       message: '正在测试连接...',
     }));
 
-    const result = await testApiConnection(providerId, provider.api_endpoint, apiKey, provider.models);
+    const result = await testApiConnection(providerId, provider.apiEndpoint, apiKey, provider.models);
 
     setTestResults((prev) => new Map(prev).set(providerId, {
       providerId,
