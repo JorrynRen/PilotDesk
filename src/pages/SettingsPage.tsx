@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   ArrowLeft, Settings, Globe, Cpu, Key, Info,
   Sun, Moon, Monitor, FolderOpen, ChevronDown,
@@ -6,6 +6,7 @@ import {
   Loader2, Zap, GripVertical,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import {
   DndContext,
   closestCenter,
@@ -26,6 +27,9 @@ import { CSS } from '@dnd-kit/utilities';
 import { useTheme } from '../hooks/useTheme';
 import { EnvManager } from '../components/env/EnvManager';
 import { ConfigEditor } from '../components/panels/ConfigEditor';
+import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
+import { sendApiRequest } from '../utils/apiClient';
+import type { ApiProvider as StoreApiProvider } from '../stores/apiProviderStore';
 
 type SettingsTab = 'general' | 'environment' | 'agent' | 'api' | 'about';
 
@@ -41,15 +45,27 @@ const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[]
   { id: 'about', icon: Info, label: '关于' },
 ];
 
+
+
 // ============================================================
 // 1. General Settings
 // ============================================================
 function GeneralSettings() {
   const { theme, setTheme } = useTheme();
   const [language] = useState('zh-CN');
-  const [workspace, setWorkspace] = useState(() =>
-    localStorage.getItem('pilotdesk-workspace') || ''
-  );
+  const [workspace, setWorkspace] = useState('');
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+
+  // Load workspace from SQLite on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const val = await invoke<string | null>('get_app_setting', { key: 'pilotdesk-workspace' });
+        if (val) setWorkspace(val);
+      } catch { /* ignore */ }
+      setWorkspaceLoaded(true);
+    })();
+  }, []);
 
   const themeOptions = [
     { value: 'dark' as const, icon: Moon, label: '深色' },
@@ -62,11 +78,20 @@ function GeneralSettings() {
       const selected = await open({ directory: true, multiple: false });
       if (selected && typeof selected === 'string') {
         setWorkspace(selected);
-        localStorage.setItem('pilotdesk-workspace', selected);
+        await invoke('set_app_setting', { key: 'pilotdesk-workspace', value: selected });
       }
     } catch {
       // User cancelled or dialog error — ignore
     }
+  };
+
+  const handleWorkspaceChange = (val: string) => {
+    setWorkspace(val);
+    // Debounce save to SQLite
+    clearTimeout((handleWorkspaceChange as any)._timer);
+    (handleWorkspaceChange as any)._timer = setTimeout(async () => {
+      try { await invoke('set_app_setting', { key: 'pilotdesk-workspace', value: val }); } catch { /* ignore */ }
+    }, 500);
   };
 
   return (
@@ -104,10 +129,7 @@ function GeneralSettings() {
           <input
             type="text"
             value={workspace}
-            onChange={(e) => {
-              setWorkspace(e.target.value);
-              localStorage.setItem('pilotdesk-workspace', e.target.value);
-            }}
+            onChange={(e) => handleWorkspaceChange(e.target.value)}
             placeholder="设置默认工作区路径..."
             className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
             style={{
@@ -160,6 +182,7 @@ function GeneralSettings() {
     </div>
   );
 }
+
 
 // ============================================================
 // 3. Agent Configuration (with Claude + Hermes sub-tabs)
@@ -247,86 +270,25 @@ async function testApiConnection(
   apiKey: string,
   models: string[],
 ): Promise<{ ok: boolean; message: string; latency: number }> {
-  const ep = endpoint.replace(/\/+$/, '');
-  const fmt = inferApiFormat(providerId, endpoint);
+  const fmt = endpoint.includes('anthropic.com') || providerId === 'anthropic' ? 'anthropic' : 'openai';
   const model = models[0] || (fmt === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
-  const start = performance.now();
 
-  try {
-    if (fmt === 'anthropic') {
-      const res = await fetch(`${ep}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 1,
-          stream: false,
-          messages: [{ role: 'user', content: 'hi' }],
-        }),
-        signal: AbortSignal.timeout(15000),
-      });
+  const result = await sendApiRequest({
+    endpoint,
+    providerId,
+    apiKey,
+    model,
+    messages: [{ role: 'user', content: 'hi' }],
+    maxTokens: 1,
+    timeout: 15000,
+  });
 
-      const latency = Math.round(performance.now() - start);
-      if (res.status === 401 || res.status === 403) {
-        return { ok: false, message: `认证失败 (HTTP ${res.status})`, latency };
-      }
-      if (res.status === 404) {
-        return { ok: false, message: `端点不存在 (HTTP 404)，请检查 API 地址`, latency };
-      }
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        return { ok: false, message: `请求失败 (HTTP ${res.status}): ${errText.slice(0, 200)}`, latency };
-      }
-      const data = await res.json();
-      if (data.type === 'error') {
-        return { ok: false, message: `API 返回错误: ${data.error?.message || JSON.stringify(data.error)}`, latency };
-      }
-      return { ok: true, message: `连接成功 - 模型: ${model}`, latency };
-    } else {
-      const res = await fetch(`${ep}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 1,
-          stream: false,
-          messages: [{ role: 'user', content: 'hi' }],
-        }),
-        signal: AbortSignal.timeout(15000),
-      });
-
-      const latency = Math.round(performance.now() - start);
-      if (res.status === 401 || res.status === 403) {
-        return { ok: false, message: `认证失败 (HTTP ${res.status})`, latency };
-      }
-      if (res.status === 404) {
-        return { ok: false, message: `端点不存在 (HTTP 404)，请检查 API 地址`, latency };
-      }
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        return { ok: false, message: `请求失败 (HTTP ${res.status}): ${errText.slice(0, 200)}`, latency };
-      }
-      const data = await res.json();
-      if (data.error) {
-        return { ok: false, message: `API 返回错误: ${data.error.message || JSON.stringify(data.error)}`, latency };
-      }
-      return { ok: true, message: `连接成功 - 模型: ${model}`, latency };
-    }
-  } catch (err) {
-    const latency = Math.round(performance.now() - start);
-    const msg = err instanceof DOMException && err.name === 'TimeoutError'
-      ? '连接超时 (15s)，请检查网络或端点地址'
-      : `网络错误: ${err instanceof Error ? err.message : String(err)}`;
-    return { ok: false, message: msg, latency };
+  if (result.ok) {
+    return { ok: true, message: `连接成功 - 模型: ${model}`, latency: result.latency };
   }
+  return { ok: false, message: result.message, latency: result.latency };
 }
+
 
 // ============================================================
 // Sortable Provider Card
@@ -536,7 +498,7 @@ function SortableProviderCard({
             {/* API Endpoint */}
             <div>
               <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                API 端点
+                API URL
               </label>
               {isEditing ? (
                 <input
@@ -546,6 +508,7 @@ function SortableProviderCard({
                     onSetEditingProvider({ ...editingProvider!, apiEndpoint: e.target.value })
                   }
                   className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
+                  placeholder="完整URL，如 https://api.siliconflow.cn/v1/chat/completions"
                   style={{
                     backgroundColor: 'var(--bg-tertiary)',
                     color: 'var(--text-primary)',
@@ -672,52 +635,19 @@ function SortableProviderCard({
   );
 }
 
-function ApiConfig() {
-  const [providers, setProviders] = useState<ApiProvider[]>(() => {
-    const saved = localStorage.getItem('pd-api-providers');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        // Migrate snake_case to camelCase if needed
-        if (parsed && Array.isArray(parsed)) {
-          const migrated = parsed.map((p: Record<string, unknown>) => ({
-            id: p.id,
-            name: p.name,
-            apiEndpoint: p.api_endpoint ?? p.apiEndpoint ?? '',
-            apiKeyMasked: p.api_key_masked ?? p.apiKeyMasked ?? null,
-            apiKeySet: p.api_key_set ?? p.apiKeySet ?? false,
-            models: p.models ?? [],
-          }));
-          localStorage.setItem('pd-api-providers', JSON.stringify(migrated));
-          return migrated;
-        }
-        return parsed;
-      } catch { /* ignore */ }
-    }
-    return [
-      {
-        id: 'anthropic',
-        name: 'Anthropic Claude',
-        apiEndpoint: 'https://api.anthropic.com',
-        apiKeyMasked: localStorage.getItem('pd-api-anthropic-masked'),
-        apiKeySet: !!localStorage.getItem('pd-api-anthropic-masked'),
-        models: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514'],
-      },
-      {
-        id: 'openai',
-        name: 'OpenAI',
-        apiEndpoint: 'https://api.openai.com/v1',
-        apiKeyMasked: localStorage.getItem('pd-api-openai-masked'),
-        apiKeySet: !!localStorage.getItem('pd-api-openai-masked'),
-        models: ['gpt-4o', 'gpt-4o-mini'],
-      },
-    ];
-  });
 
+
+function ApiConfig() {
+  const { providers, loading, fetchProviders, saveProvider, deleteProvider, reorderProviders } = useApiProviderStore();
   const [editingProvider, setEditingProvider] = useState<EditingProvider | null>(null);
   const [newModelInput, setNewModelInput] = useState('');
   const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map());
   const abortRef = useRef<Map<string, AbortController>>(new Map());
+
+  // Load providers from SQLite on mount
+  useEffect(() => {
+    fetchProviders();
+  }, []);
 
   // DnD sensors — use pointer sensor for drag, keyboard for accessibility
   const sensors = useSensors(
@@ -725,62 +655,47 @@ function ApiConfig() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Persist providers
-  const persist = (list: ApiProvider[]) => {
-    setProviders(list);
-    localStorage.setItem('pd-api-providers', JSON.stringify(list));
-  };
-
-  // Handle drag end — reorder and persist
-  const handleDragEnd = useCallback((event: DragEndEvent) => {
+  // Handle drag end — reorder via store
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
-    setProviders((prev) => {
-      const oldIndex = prev.findIndex((p) => p.id === active.id);
-      const newIndex = prev.findIndex((p) => p.id === over.id);
-      if (oldIndex === -1 || newIndex === -1) return prev;
-      const reordered = arrayMove(prev, oldIndex, newIndex);
-      localStorage.setItem('pd-api-providers', JSON.stringify(reordered));
-      return reordered;
-    });
-  }, []);
+    const ids = providers.map(p => p.id);
+    const oldIndex = ids.indexOf(active.id as string);
+    const newIndex = ids.indexOf(over.id as string);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const reordered = arrayMove(ids, oldIndex, newIndex);
+    await reorderProviders(reordered);
+  }, [providers, reorderProviders]);
 
   // Add provider
-  const handleAddProvider = () => {
+  const handleAddProvider = async () => {
     const id = 'custom_' + Date.now();
-    const newP: ApiProvider = {
+    await saveProvider({
       id,
-      name: '',
-      apiEndpoint: 'https://',
-      apiKeyMasked: null,
-      apiKeySet: false,
+      name: '未命名提供商',
+      apiEndpoint: '',
       models: [],
-    };
-    const list = [...providers, newP];
-    persist(list);
+    });
     setEditingProvider({
       id,
-      name: '',
-      apiEndpoint: 'https://',
+      name: '未命名提供商',
+      apiEndpoint: '',
       apiKey: '',
       models: '',
     });
   };
 
   // Delete provider
-  const handleDeleteProvider = (id: string) => {
+  const handleDeleteProvider = async (id: string) => {
     if (!confirm('确定删除该 API 提供商配置吗？')) return;
-    localStorage.removeItem(`pd-api-${id}-key`);
-    localStorage.removeItem(`pd-api-${id}-masked`);
-    persist(providers.filter((p) => p.id !== id));
+    await deleteProvider(id);
     if (editingProvider?.id === id) setEditingProvider(null);
     setTestResults((prev) => { const m = new Map(prev); m.delete(id); return m; });
   };
 
   // Start editing
   const handleStartEdit = (p: ApiProvider) => {
-    const key = localStorage.getItem(`pd-api-${p.id}-key`) || '';
     setEditingProvider({
       id: p.id,
       name: p.name,
@@ -798,7 +713,7 @@ function ApiConfig() {
   };
 
   // Save editing
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingProvider) return;
     const name = editingProvider.name.trim() || '未命名提供商';
     const endpoint = editingProvider.apiEndpoint.trim() || 'https://';
@@ -807,54 +722,42 @@ function ApiConfig() {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    if (editingProvider.apiKey.trim()) {
-      const key = editingProvider.apiKey.trim();
-      const masked = key.slice(0, 4) + '****' + key.slice(-4);
-      localStorage.setItem(`pd-api-${editingProvider.id}-key`, key);
-      localStorage.setItem(`pd-api-${editingProvider.id}-masked`, masked);
-      persist(
-        providers.map((p) =>
-          p.id === editingProvider.id
-            ? { ...p, name, apiEndpoint: endpoint, apiKeyMasked: masked, apiKeySet: true, models }
-            : p
-        )
-      );
-    } else {
-      persist(
-        providers.map((p) =>
-          p.id === editingProvider.id
-            ? { ...p, name, apiEndpoint: endpoint, models }
-            : p
-        )
-      );
-    }
+    await saveProvider({
+      id: editingProvider.id,
+      name,
+      apiEndpoint: endpoint,
+      apiKey: editingProvider.apiKey.trim() || undefined,
+      models,
+    });
 
     setEditingProvider(null);
     setNewModelInput('');
   };
 
   // Add model to existing provider (non-editing mode)
-  const handleAddModelInline = (providerId: string) => {
+  const handleAddModelInline = async (providerId: string) => {
     if (!newModelInput.trim()) return;
-    persist(
-      providers.map((p) =>
-        p.id === providerId
-          ? { ...p, models: [...p.models, newModelInput.trim()] }
-          : p
-      )
-    );
+    const p = providers.find(x => x.id === providerId);
+    if (!p) return;
+    await saveProvider({
+      id: providerId,
+      name: p.name,
+      apiEndpoint: p.apiEndpoint,
+      models: [...p.models, newModelInput.trim()],
+    });
     setNewModelInput('');
   };
 
   // Remove model from provider
-  const handleRemoveModel = (providerId: string, model: string) => {
-    persist(
-      providers.map((p) =>
-        p.id === providerId
-          ? { ...p, models: p.models.filter((m) => m !== model) }
-          : p
-      )
-    );
+  const handleRemoveModel = async (providerId: string, model: string) => {
+    const p = providers.find(x => x.id === providerId);
+    if (!p) return;
+    await saveProvider({
+      id: providerId,
+      name: p.name,
+      apiEndpoint: p.apiEndpoint,
+      models: p.models.filter((m) => m !== model),
+    });
   };
 
   // Test connection for a provider
@@ -865,7 +768,17 @@ function ApiConfig() {
     const provider = providers.find((p) => p.id === providerId);
     if (!provider) return;
 
-    const apiKey = localStorage.getItem(`pd-api-${providerId}-key`);
+    setTestResults((prev) => new Map(prev).set(providerId, {
+      providerId,
+      status: 'testing',
+      message: '正在测试连接...',
+    }));
+
+    let apiKey: string | null = null;
+    try {
+      apiKey = await getApiKey(providerId);
+    } catch { /* ignore */ }
+
     if (!apiKey) {
       setTestResults((prev) => new Map(prev).set(providerId, {
         providerId,
@@ -874,12 +787,6 @@ function ApiConfig() {
       }));
       return;
     }
-
-    setTestResults((prev) => new Map(prev).set(providerId, {
-      providerId,
-      status: 'testing',
-      message: '正在测试连接...',
-    }));
 
     const result = await testApiConnection(providerId, provider.apiEndpoint, apiKey, provider.models);
 
@@ -892,6 +799,14 @@ function ApiConfig() {
       latency: result.latency,
     }));
   }, [providers]);
+
+  if (loading && providers.length === 0) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 size={20} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -961,85 +876,13 @@ function ApiConfig() {
       </DndContext>
 
       <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-        API Key 保存在本地，不会上传。排序结果自动保存。
+        API Key 保存在本地 SQLite 数据库，不会上传。排序结果自动保存。
       </p>
     </div>
   );
 }
 
-// ============================================================
-// 5. About
-// ============================================================
-function AboutSection() {
-  return (
-    <div className="space-y-6">
-      {/* App icon + name */}
-      <div className="flex flex-col items-center gap-3 py-4">
-        <img
-          src="/logo-lg.png"
-          alt="PilotDesk"
-          className="w-16 h-16 rounded-2xl"
-          draggable={false}
-        />
-        <div className="text-center">
-          <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
-            PilotDesk
-          </h3>
-          <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-            v0.1.0
-          </p>
-        </div>
-      </div>
 
-      {/* Description */}
-      <div className="rounded-lg p-3" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          PilotDesk 是 Claude Code 与 Hermes Agent 的统一桌面客户端。支持多会话管理、
-          API 直连对话、灵感收集、技能浏览器等能力，为日常 AI 协作提供一站式体验。
-        </p>
-      </div>
-
-      {/* Tech stack */}
-      <section>
-        <h3 className="text-xs font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-          技术栈
-        </h3>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            { label: '前端框架', value: 'React 19 + TypeScript' },
-            { label: 'UI 样式', value: 'TailwindCSS v4' },
-            { label: '状态管理', value: 'Zustand' },
-            { label: '桌面框架', value: 'Tauri 2.0' },
-            { label: '后端语言', value: 'Rust' },
-            { label: '本地存储', value: 'SQLite (rusqlite)' },
-          ].map(({ label, value }) => (
-            <div key={label} className="rounded-lg px-3 py-2" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-              <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{label}</div>
-              <div className="text-xs font-medium mt-0.5" style={{ color: 'var(--text-primary)' }}>{value}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Copyright */}
-      <section
-        className="rounded-lg px-3 py-3 text-center"
-        style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
-      >
-        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-          Copyright (c) 2026 PilotDesk by 简意工作室 (jorryn)
-        </p>
-        <p className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-          本项目代码基于 MIT 协议开源
-        </p>
-      </section>
-    </div>
-  );
-}
-
-// ============================================================
-// Main SettingsPage
-// ============================================================
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 

@@ -1,20 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Plus, Search, Archive, Key, ChevronDown, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
 import { SessionListItem } from './SessionListItem';
 import { showToast } from '../../utils/toast';
 import { API_PROVIDERS } from '../../types';
 
 type NewSessionType = 'claude' | 'hermes' | 'api';
-
-interface ApiProviderConfig {
-  id: string;
-  name: string;
-  api_endpoint: string;
-  api_key_masked: string | null;
-  api_key_set: boolean;
-  models: string[];
-}
 
 export function SessionList() {
   const {
@@ -28,6 +20,7 @@ export function SessionList() {
     createSession,
     archiveSession,
     deleteSession,
+    renameSession,
     toggleArchived,
   } = useSessionStore();
 
@@ -42,8 +35,8 @@ export function SessionList() {
   const [customCwd, setCustomCwd] = useState('');
   const [creating, setCreating] = useState(false);
 
-  // Load API providers from localStorage
-  const [apiProviders, setApiProviders] = useState<ApiProviderConfig[]>([]);
+  // API providers from SQLite via store
+  const { providers: apiProviders, fetchProviders } = useApiProviderStore();
 
   useEffect(() => {
     fetchSessions().catch((err) => {
@@ -54,17 +47,9 @@ export function SessionList() {
   // Reload providers when dialog opens
   useEffect(() => {
     if (showNewDialog) {
-      const saved = localStorage.getItem('pd-api-providers');
-      if (saved) {
-        try {
-          const list: ApiProviderConfig[] = JSON.parse(saved);
-          setApiProviders(list);
-          if (list.length > 0 && !selectedApiProvider) {
-            setSelectedApiProvider(list[0].id);
-            setSelectedApiModel(list[0].models[0] || '');
-          }
-        } catch { /* ignore */ }
-      }
+      fetchProviders().then(() => {
+        // After fetch, auto-select first provider via the updated store state
+      }).catch(() => {});
       // Reset state
       setUseCustomModel(false);
       setCustomModel('');
@@ -73,8 +58,11 @@ export function SessionList() {
     }
   }, [showNewDialog]);
 
-  // Update model when provider changes
+  // Update model when provider changes; auto-select first if none
   useEffect(() => {
+    if (apiProviders.length > 0 && !selectedApiProvider) {
+      setSelectedApiProvider(apiProviders[0].id);
+    }
     const provider = apiProviders.find((p) => p.id === selectedApiProvider);
     if (provider) {
       setSelectedApiModel(provider.models[0] || '');
@@ -104,8 +92,8 @@ export function SessionList() {
     try {
       if (newSessionType === 'api') {
         // Check if API key is configured
-        const maskedKey = localStorage.getItem(`pd-api-${selectedApiProvider}-masked`);
-        if (!maskedKey) {
+        const apiKey = await getApiKey(selectedApiProvider);
+        if (!apiKey) {
           showToast('请先在「设置 - API 配置」中添加 API Key', 'error');
           setCreating(false);
           return;
@@ -151,6 +139,14 @@ export function SessionList() {
     }
   };
 
+  const handleRename = async (id: string, newTitle: string) => {
+    try {
+      await renameSession(id, newTitle);
+    } catch (err) {
+      showToast(`重命名失败: ${err}`, 'error');
+    }
+  };
+
   const handleDelete = async (id: string) => {
     try {
       await deleteSession(id);
@@ -173,6 +169,7 @@ export function SessionList() {
             isActive={session.id === currentSessionId}
             onSelect={() => selectSession(session.id)}
             onArchive={showArchived ? undefined : () => handleArchive(session.id)}
+            onRename={handleRename}
             onDelete={() => handleDelete(session.id)}
           />
         ))}

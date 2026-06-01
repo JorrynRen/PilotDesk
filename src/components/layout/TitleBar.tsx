@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy } from 'lucide-react';
 
@@ -11,37 +11,45 @@ interface TitleBarProps {
 export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const [isMaximized, setIsMaximized] = useState(false);
+  const [tauriReady, setTauriReady] = useState(true);
 
   useEffect(() => {
-    const win = getCurrentWindow();
-    win.isMaximized().then(setIsMaximized);
-
     let unlisten: (() => void) | undefined;
-    win.onResized(async () => {
-      const maximized = await win.isMaximized();
-      setIsMaximized(maximized);
-    }).then(fn => { unlisten = fn; });
+    (async () => {
+      try {
+        const win = getCurrentWindow();
+        setIsMaximized(await win.isMaximized());
 
+        const fn = await win.onResized(async () => {
+          try {
+            const maximized = await win.isMaximized();
+            setIsMaximized(maximized);
+          } catch { /* window closed */ }
+        });
+        unlisten = fn;
+      } catch (err) {
+        console.warn('[TitleBar] Tauri window API not available:', err);
+        setTauriReady(false);
+      }
+    })();
 
     return () => { unlisten?.(); };
   }, []);
 
   const handleMinimize = useCallback(async () => {
-    await getCurrentWindow().minimize();
+    try { await getCurrentWindow().minimize(); } catch { /* ignore */ }
   }, []);
 
   const handleToggleMaximize = useCallback(async () => {
-    await getCurrentWindow().toggleMaximize();
+    try { await getCurrentWindow().toggleMaximize(); } catch { /* ignore */ }
   }, []);
 
   const handleClose = useCallback(async () => {
-    await getCurrentWindow().close();
+    try { await getCurrentWindow().close(); } catch { /* ignore */ }
   }, []);
 
-  // Allow drag on any non-interactive area of the header
   const handleHeaderMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    // Exclude buttons, links, inputs, and elements with onClick
     if (
       target.closest('button') ||
       target.closest('a') ||
@@ -54,20 +62,11 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
       return;
     }
     e.preventDefault();
-    if (dragTimer.current) clearTimeout(dragTimer.current);
-    dragTimer.current = window.setTimeout(() => {
-      getCurrentWindow().startDragging();
-    }, 200);
+    try { getCurrentWindow().startDragging(); } catch { /* ignore */ }
   }, []);
 
-  const dragTimer = useRef<number | null>(null);
-
   const handleDoubleClick = useCallback(() => {
-    if (dragTimer.current) {
-      clearTimeout(dragTimer.current);
-      dragTimer.current = null;
-    }
-    getCurrentWindow().toggleMaximize();
+    try { getCurrentWindow().toggleMaximize(); } catch { /* ignore */ }
   }, []);
 
   return (
@@ -84,6 +83,7 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
           alt=""
           className="w-5 h-5 rounded pointer-events-none"
           draggable={false}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
         />
         <span className="text-xs font-semibold pointer-events-none">PilotDesk</span>
       </div>
@@ -121,31 +121,35 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
         />
 
         {/* Window controls */}
-        <button
-          onClick={handleMinimize}
-          className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
-          title="最小化"
-        >
-          <Minus size={13} style={{ color: 'var(--text-secondary)' }} />
-        </button>
-        <button
-          onClick={handleToggleMaximize}
-          className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
-          title={isMaximized ? '还原' : '最大化'}
-        >
-          {isMaximized ? (
-            <Copy size={11} style={{ color: 'var(--text-secondary)' }} />
-          ) : (
-            <Square size={11} style={{ color: 'var(--text-secondary)' }} />
-          )}
-        </button>
-        <button
-          onClick={handleClose}
-          className="w-8 h-full flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
-          title="关闭"
-        >
-          <X size={13} style={{ color: 'var(--text-secondary)' }} />
-        </button>
+        {tauriReady && (
+          <>
+            <button
+              onClick={handleMinimize}
+              className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
+              title="最小化"
+            >
+              <Minus size={13} style={{ color: 'var(--text-secondary)' }} />
+            </button>
+            <button
+              onClick={handleToggleMaximize}
+              className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
+              title={isMaximized ? '还原' : '最大化'}
+            >
+              {isMaximized ? (
+                <Copy size={11} style={{ color: 'var(--text-secondary)' }} />
+              ) : (
+                <Square size={11} style={{ color: 'var(--text-secondary)' }} />
+              )}
+            </button>
+            <button
+              onClick={handleClose}
+              className="w-8 h-full flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
+              title="关闭"
+            >
+              <X size={13} style={{ color: 'var(--text-secondary)' }} />
+            </button>
+          </>
+        )}
       </div>
     </header>
   );

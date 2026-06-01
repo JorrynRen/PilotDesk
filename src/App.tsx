@@ -47,30 +47,29 @@ function App() {
     }
   }, [currentPage, currentSession]);
 
-
-
   return (
-    <div
-      className="h-screen flex flex-col overflow-hidden"
-      style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-    >
-      <TitleBar
-        onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")}
-        onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
-        rightPanelOpen={rightPanelOpen}
-      />
-      {currentPage === 'market' ? (
-        <MarketPage onBack={() => setCurrentPage('main')} />
-      ) : currentPage === 'settings' ? (
-        <SettingsPage onBack={() => setCurrentPage('main')} />
-      ) : (
-        <div className="flex-1 flex overflow-hidden relative">
-          <SessionList />
-          <MainPanel />
-          <RightPanel isOpen={rightPanelOpen} />
+    <div className="pilotdesk-glow">
+      <div className="pilotdesk-window-shell">
+        <div className="pilotdesk-window-content flex flex-col h-full">
+          <TitleBar
+            onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")}
+            onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
+            rightPanelOpen={rightPanelOpen}
+          />
+          {currentPage === 'market' ? (
+            <MarketPage onBack={() => setCurrentPage('main')} />
+          ) : currentPage === 'settings' ? (
+            <SettingsPage onBack={() => setCurrentPage('main')} />
+          ) : (
+            <div className="flex-1 flex overflow-hidden relative">
+              <SessionList />
+              <MainPanel />
+              <RightPanel isOpen={rightPanelOpen} />
+            </div>
+          )}
+          <StatusBar onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")} wsConnected={wsConnected} />
         </div>
-      )}
-      <StatusBar onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")} wsConnected={wsConnected} />
+      </div>
     </div>
   );
 }

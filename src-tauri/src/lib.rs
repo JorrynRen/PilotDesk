@@ -9,6 +9,7 @@ use db::init::init_db;
 use std::sync::Mutex;
 use rusqlite::Connection;
 use commands::bot as bot_cmds;
+use commands::api_provider as api_cmds;
 use sidecar::manager::SidecarManager;
 
 pub struct DbState {
@@ -82,6 +83,56 @@ fn delete_bot_channel(conn: tauri::State<'_, DbState>, id: String) -> Result<(),
     bot_cmds::delete_bot_channel(&conn, id)
 }
 
+// --- API Provider commands ---
+#[tauri::command]
+fn list_api_providers(conn: tauri::State<'_, DbState>) -> Result<Vec<api_cmds::ApiProvider>, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+    api_cmds::list_api_providers(&conn)
+}
+
+#[tauri::command]
+fn get_api_provider(conn: tauri::State<'_, DbState>, id: String) -> Result<Option<api_cmds::ApiProvider>, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+    api_cmds::get_api_provider(&conn, &id)
+}
+
+#[tauri::command]
+fn upsert_api_provider(conn: tauri::State<'_, DbState>, payload: api_cmds::CreateOrUpdateProvider) -> Result<api_cmds::ApiProvider, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+    api_cmds::upsert_api_provider(&conn, &payload)
+}
+
+#[tauri::command]
+fn delete_api_provider(conn: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+    api_cmds::delete_api_provider(&conn, &id)
+}
+
+#[tauri::command]
+fn get_api_key(conn: tauri::State<'_, DbState>, id: String) -> Result<Option<String>, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+    api_cmds::get_api_key(&conn, &id)
+}
+
+#[tauri::command]
+fn reorder_api_providers(conn: tauri::State<'_, DbState>, ids: Vec<String>) -> Result<(), crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+    api_cmds::reorder_api_providers(&conn, &ids)
+}
+
+// --- App Settings commands ---
+#[tauri::command]
+fn get_app_setting(conn: tauri::State<'_, DbState>, key: String) -> Result<Option<String>, crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+    commands::app_settings::get_setting(&conn, &key)
+}
+
+#[tauri::command]
+fn set_app_setting(conn: tauri::State<'_, DbState>, key: String, value: String) -> Result<(), crate::utils::errors::AppError> {
+    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+    commands::app_settings::set_setting(&conn, &key, &value)
+}
+
 // --- Theme commands ---
 #[tauri::command]
 fn get_theme() -> String {
@@ -129,6 +180,14 @@ pub fn run() {
             list_bot_channels,
             save_bot_channel,
             delete_bot_channel,
+            list_api_providers,
+            get_api_provider,
+            upsert_api_provider,
+            delete_api_provider,
+            get_api_key,
+            reorder_api_providers,
+            get_app_setting,
+            set_app_setting,
             get_theme,
             set_theme_cmd,
         ])

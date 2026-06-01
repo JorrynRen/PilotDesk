@@ -36,12 +36,73 @@
   --success-bg: #022C22;
 }
 
-body {
+html, body, #root {
   margin: 0;
   padding: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  font-family: 'Segoe UI', -apple-system, sans-serif;
+}
+
+/* Layer 1: Glow background — fills viewport, radial-gradient glow centered */
+.pilotdesk-glow {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 0.45) 0%,
+    rgba(0, 0, 0, 0.35) 12%,
+    rgba(0, 0, 0, 0.25) 25%,
+    rgba(0, 0, 0, 0.16) 38%,
+    rgba(0, 0, 0, 0.09) 52%,
+    rgba(0, 0, 0, 0.04) 68%,
+    rgba(0, 0, 0, 0.01) 82%,
+    transparent 95%
+  );
+  pointer-events: none;
+}
+
+[data-theme="dark"] .pilotdesk-glow {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(59, 130, 246, 0.32) 0%,
+    rgba(139, 92, 246, 0.24) 12%,
+    rgba(59, 130, 246, 0.17) 25%,
+    rgba(139, 92, 246, 0.10) 38%,
+    rgba(59, 130, 246, 0.05) 52%,
+    rgba(139, 92, 246, 0.02) 68%,
+    rgba(59, 130, 246, 0.01) 82%,
+    transparent 95%
+  );
+}
+
+/* Layer 2: Window shell — rounded rectangle window */
+.pilotdesk-window-shell {
+  position: fixed;
+  top: 6px;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  border-radius: 20px;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'Segoe UI', -apple-system, sans-serif;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+/* Layer 3: Inner content — overflow containment */
+.pilotdesk-window-content {
+  width: 100%;
+  height: 100%;
+  border-radius: 20px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Selection */
@@ -75,7 +136,6 @@ body {
   outline-offset: 1px;
 }
 
-/* Disable outline for mouse users */
 :focus:not(:focus-visible) {
   outline: none;
 }

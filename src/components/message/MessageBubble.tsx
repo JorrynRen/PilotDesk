@@ -2,11 +2,13 @@ import { useState, useCallback } from 'react';
 import { Copy, Edit3, Bookmark, Check } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { MODE_LABELS, MODE_COLORS } from '../../types';
+import { useInspirationStore } from '../../stores/inspirationStore';
+import { showToast } from '../../utils/toast';
 import type { Message } from '../../types';
 
 interface MessageBubbleProps {
   message: Message;
-  agentType: 'claude' | 'hermes';
+  agentType: 'claude' | 'hermes' | 'api';
   onEdit?: (content: string) => void;
   onSaveInspiration?: (content: string) => void;
 }
@@ -44,51 +46,102 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
     setTimeout(() => setCopied(false), 2000);
   }, [message.content]);
 
+  const handleSaveInspiration = useCallback(async () => {
+    const createInspiration = useInspirationStore.getState().createInspiration;
+    const preview = message.content.slice(0, 30).replace(/\n/g, ' ');
+    const result = await createInspiration({
+      title: preview.length >= 30 ? preview + '...' : preview,
+      content: message.content,
+      sourceAgent: agentType,
+    });
+    if (result) {
+      showToast('已添加到灵感市集', 'success');
+    }
+  }, [message.content, agentType]);
+
   const messageMode = message.mode as keyof typeof MODE_LABELS;
   const modeColor = MODE_COLORS[messageMode];
   const modeLabel = MODE_LABELS[messageMode];
 
-  return (
-    <div
-      className={isUser ? "group flex gap-3 px-4 py-3 self-end" : "group flex gap-3 px-4 py-3"}
-      style={{
-        backgroundColor: isUser ? 'transparent' : 'var(--bg-secondary)',
-        flexDirection: isUser ? 'row-reverse' : 'row',
-      }}
-    >
-      {/* Avatar indicator */}
-      <div className="shrink-0 pt-0.5">
-        {isUser ? (
-          <div
-            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium"
-            style={{ backgroundColor: 'var(--border)', color: 'var(--text-secondary)' }}
-          >
-            U
+  if (isUser) {
+    return (
+      <div className="group flex justify-end px-4 py-3">
+        <div style={{ maxWidth: '80%' }}>
+          <div className="flex items-center gap-2 mb-1 justify-end">
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              {formatTimestamp(message.timestamp)}
+            </span>
+            <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+              你
+            </span>
           </div>
-        ) : (
           <div
-            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+            className="text-sm leading-relaxed whitespace-pre-wrap rounded-xl px-3 py-2"
             style={{
-              backgroundColor: agentType === 'claude'
-                ? 'rgba(59,130,246,0.15)'
-                : 'rgba(139,92,246,0.15)',
-              color: agentType === 'claude' ? '#3B82F6' : '#8B5CF6',
+              color: 'var(--text-primary)',
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: '12px 4px 12px 12px',
             }}
           >
-            {agentType === 'claude' ? 'C' : 'H'}
+            {message.content}
           </div>
-        )}
+          <div className="flex items-center gap-1 mt-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
+              title="复制"
+            >
+              {copied ? <Check size={11} /> : <Copy size={11} />}
+              {copied ? '已复制' : '复制'}
+            </button>
+            {onEdit && (
+              <button
+                onClick={() => onEdit(message.content)}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+                style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
+                title="编辑"
+              >
+                <Edit3 size={11} />
+                编辑
+              </button>
+            )}
+            <button
+              onClick={handleSaveInspiration}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
+              title="收藏灵感"
+            >
+              <Bookmark size={11} />
+              收藏灵感
+            </button>
+          </div>
+        </div>
       </div>
+    );
+  }
 
-      {/* Message content */}
-      <div className="flex-1 min-w-0" style={{ maxWidth: '80%' }}>
-        {/* Header with timestamp */}
+  return (
+    <div className="group flex gap-3 px-4 py-3" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+      <div className="shrink-0 pt-0.5">
         <div
-          className="flex items-center gap-2 mb-1"
-          style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
+          className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+          style={{
+            backgroundColor: agentType === 'claude'
+              ? 'rgba(59,130,246,0.15)'
+              : agentType === 'api'
+              ? 'rgba(16,185,129,0.15)'
+              : 'rgba(139,92,246,0.15)',
+            color: agentType === 'claude' ? '#3B82F6' : agentType === 'api' ? '#10B981' : '#8B5CF6',
+          }}
         >
+          {agentType === 'claude' ? 'C' : agentType === 'api' ? 'A' : 'H'}
+        </div>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-            {isUser ? '你' : agentType === 'claude' ? 'Claude Code' : 'Hermes Agent'}
+            {agentType === 'claude' ? 'Claude Code' : agentType === 'api' ? 'API 模型' : 'Hermes Agent'}
           </span>
           {message.mode !== 'native' && (
             <span
@@ -102,29 +155,8 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
             {formatTimestamp(message.timestamp)}
           </span>
         </div>
-
-        {/* Message body — user messages right-aligned */}
-        {isUser ? (
-          <div
-            className="text-sm leading-relaxed whitespace-pre-wrap inline-block rounded-xl px-3 py-2"
-            style={{
-              color: 'var(--text-primary)',
-              backgroundColor: 'var(--bg-tertiary)',
-              borderRadius: '12px 4px 12px 12px',
-              textAlign: 'left',
-            }}
-          >
-            {message.content}
-          </div>
-        ) : (
-          <MarkdownRenderer content={message.content} />
-        )}
-
-        {/* Action buttons */}
-        <div
-          className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
-          style={{ justifyContent: isUser ? 'flex-end' : 'flex-start' }}
-        >
+        <MarkdownRenderer content={message.content} />
+        <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={handleCopy}
             className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
@@ -134,22 +166,11 @@ export function MessageBubble({ message, agentType, onEdit, onSaveInspiration }:
             {copied ? <Check size={11} /> : <Copy size={11} />}
             {copied ? '已复制' : '复制'}
           </button>
-          {isUser && onEdit && (
-            <button
-              onClick={() => onEdit(message.content)}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
-              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
-              title="编辑"
-            >
-              <Edit3 size={11} />
-              编辑
-            </button>
-          )}
           <button
-            onClick={() => onSaveInspiration?.(message.content)}
+            onClick={handleSaveInspiration}
             className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
             style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
-            title="保存到灵感"
+            title="收藏灵感"
           >
             <Bookmark size={11} />
             收藏灵感

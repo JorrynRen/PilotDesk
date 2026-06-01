@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { MessageList } from '../message/MessageList';
 import { InputBar } from './InputBar';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -87,7 +88,7 @@ export function MainPanel() {
   const { isConnected, sendChat, sendApiChat, stopGeneration, stopApiChat } = useWebSocket(19830, wsHandlers);
 
   const handleSend = useCallback(
-    (message: string, mode: ChatMode) => {
+    async (message: string, mode: ChatMode) => {
       if (!currentSession) return;
       setIsGenerating(true);
       setStreamingContent('');
@@ -110,11 +111,24 @@ export function MainPanel() {
           setIsGenerating(false);
           return;
         }
+        // Look up full API URL from SQLite
+        let apiEndpoint = '';
+        try {
+          const provider = await invoke<{ apiEndpoint: string } | null>('get_api_provider', { id: currentSession.apiProvider });
+          if (provider) {
+            apiEndpoint = provider.apiEndpoint;
+          }
+        } catch { /* ignore */ }
+        if (!apiEndpoint) {
+          showToast('未找到 API URL，请在设置中配置', 'error');
+          setIsGenerating(false);
+          return;
+        }
         // Build message history for multi-turn API chat (exclude current user message, it's added below)
         const history = messages
           .filter((m) => m.role === 'user' || m.role === 'assistant')
           .map((m) => ({ role: m.role, content: m.content }));
-        sendApiChat(currentSession.id, message, currentSession.apiProvider, currentSession.apiModel, history);
+        sendApiChat(currentSession.id, message, apiEndpoint, currentSession.apiProvider, currentSession.apiModel, history);
       } else {
         // Sidecar WebSocket (claude / hermes)
         sendChat(currentSession.id, message, mode, currentSession.agentType as 'claude' | 'hermes');

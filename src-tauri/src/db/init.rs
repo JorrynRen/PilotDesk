@@ -84,7 +84,42 @@ pub fn init_db() -> Result<Connection, AppError> {
     // Migration: rebuild sessions table to support 'api' agent_type
     migrate_add_api_agent_type(&conn)?;
 
+    // Create api_providers table (migrated from localStorage)
+    migrate_add_api_providers(&conn)?;
+
+    // Create app_settings table (key-value settings storage)
+    migrate_add_app_settings(&conn)?;
+
     Ok(conn)
+}
+
+fn migrate_add_api_providers(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS api_providers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            api_endpoint TEXT NOT NULL DEFAULT '',
+            api_key TEXT DEFAULT '',
+            api_key_masked TEXT DEFAULT '',
+            api_key_set INTEGER DEFAULT 0,
+            models TEXT NOT NULL DEFAULT '[]',
+            sort_order INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )"
+    )?;
+    Ok(())
+}
+
+fn migrate_add_app_settings(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL
+        )"
+    )?;
+    Ok(())
 }
 
 /// Migration: ensure api_provider and api_model columns exist on sessions table

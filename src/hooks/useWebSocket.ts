@@ -1,30 +1,25 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import type { ChatMode } from '../types';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { getApiKey } from '../stores/apiProviderStore';
+import { inferApiFormat, resolveChatUrl, buildHeaders, buildBody } from '../utils/apiClient';
 
-interface WsMessage {
-  type: 'chat' | 'stop' | 'session:create' | 'session:close' | 'ping' | 'skills:list' | 'skills:list-all';
-  sessionId: string;
-  agentType?: 'claude' | 'hermes';
-  message?: string;
-  mode?: ChatMode;
-  cwd?: string;
-}
-
-interface SkillInfo {
-  name: string;
-  description: string;
-  category?: string;
-}
+type WsMessage =
+  | { type: 'chat'; sessionId: string; message: string }
+  | { type: 'stop'; sessionId: string }
+  | { type: 'session:create'; sessionId: string; agentType: string; cwd?: string }
+  | { type: 'session:close'; sessionId: string }
+  | { type: 'ping' }
+  | { type: 'skills:list'; agentType: string }
+  | { type: 'skills:list-all' };
 
 interface WsHandlers {
   onChunk?: (sessionId: string, content: string) => void;
   onDone?: (sessionId: string) => void;
   onError?: (sessionId: string, error: string) => void;
   onStatus?: (sessionId: string, status: string) => void;
-  onSkills?: (agentType: string, skills: SkillInfo[]) => void;
+  onSkills?: (agentType: string, skills: string[]) => void;
 }
 
-export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
+function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
   const wsRef = useRef<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,41 +116,45 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
   }, []);
 
   const sendChat = useCallback(
-    (sessionId: string, message: string, mode: ChatMode = 'native', agentType: 'claude' | 'hermes' = 'claude', cwd?: string) => {
-      sendMessage({
-        type: 'chat',
-        sessionId,
-        message,
-        mode,
-        agentType,
-        cwd,
-      });
+    (sessionId: string, message: string) => {
+      sendMessage({ type: 'chat', sessionId, message });
     },
     [sendMessage]
   );
 
   const stopGeneration = useCallback(
-    (sessionId: string, agentType: 'claude' | 'hermes' = 'claude') => {
-      sendMessage({
-        type: 'stop',
-        sessionId,
-        agentType,
-      });
+    (sessionId: string) => {
+      sendMessage({ type: 'stop', sessionId });
     },
     [sendMessage]
   );
 
+  const requestSkills = useCallback(
+    (agentType: string) => {
+      sendMessage({ type: 'skills:list', agentType });
+    },
+    [sendMessage]
+  );
+
+  const requestAllSkills = useCallback(() => {
+    sendMessage({ type: 'skills:list-all' });
+  }, [sendMessage]);
+
   /**
-   * Send message via direct API call (OpenAI-compatible or Anthropic Messages API).
-   * @param sessionId - Session ID for callback routing
+   * Send API chat directly to LLM provider (no sidecar)
+   * @param sessionId - Session ID
    * @param message - User message text
-   * @param providerId - Provider ID (e.g. "anthropic", "openai")
-   * @param model - Model name (e.g. "claude-sonnet-4-20250514")
+   * @param apiEndpoint - Full API URL (e.g. https://api.siliconflow.cn/v1/chat/completions)
+   * @param providerId - Provider ID for API key lookup
+   * @param model - Model name
+   * @param history - Previous messages
+   * @param providerName - Display name for error messages
    */
   const sendApiChat = useCallback(
     async (
       sessionId: string,
       message: string,
+      apiEndpoint: string,
       providerId: string,
       model: string,
       history?: Array<{ role: string; content: string }>,
@@ -163,65 +162,33 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     ) => {
       const h = handlersRef.current;
 
-      // Load provider config from localStorage
-      const providersRaw = localStorage.getItem('pd-api-providers');
-      if (!providersRaw) {
-        h?.onError?.(sessionId, '未找到 API 提供商配置');
-        return;
-      }
-
-      let providers: Array<{
-        id: string;
-        api_endpoint: string;
-        api_key_masked: string | null;
-        models: string[];
-      }>;
-      try {
-        providers = JSON.parse(providersRaw);
-      } catch {
-        h?.onError?.(sessionId, 'API 提供商配置格式错误');
-        return;
-      }
-
-      const provider = providers.find((p) => p.id === providerId);
-      if (!provider) {
-        h?.onError?.(sessionId, `未找到提供商: ${providerName || providerId}`);
-        return;
-      }
-
-      // Retrieve the actual API key (stored separately)
-      const key = localStorage.getItem(`pd-api-${providerId}-key`);
+      // Retrieve the actual API key from SQLite
+      const key = await getApiKey(providerId);
       if (!key) {
-        h?.onError?.(sessionId, `未配置 API Key: ${providerName || provider.name}`);
+        h?.onError?.(sessionId, `未配置 API Key: ${providerName || providerId}`);
         return;
       }
 
-      const endpoint = provider.apiEndpoint.replace(/\/+$/, '');
+      const fmt = inferApiFormat(providerId, apiEndpoint);
+      const chatUrl = resolveChatUrl(apiEndpoint, fmt);
+      console.log('[API] Sending to:', chatUrl, 'model:', model);
+
       const abort = new AbortController();
       abortRef.current = abort;
 
       h?.onStatus?.(sessionId, `调用 ${model}...`);
 
+      const allMessages = [
+        ...(history || []).map((m) => ({ role: m.role, content: m.content })),
+        { role: 'user', content: message },
+      ];
+
       try {
-        const isAnthropic = endpoint.includes('anthropic.com') || providerId === 'anthropic';
-        if (isAnthropic) {
-          // Anthropic Messages API format
-          const res = await fetch(`${endpoint}/v1/messages`, {
+        if (fmt === 'anthropic') {
+          const res = await fetch(chatUrl, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-api-key': key,
-              'anthropic-version': '2023-06-01',
-            },
-            body: JSON.stringify({
-              model,
-              max_tokens: 4096,
-              stream: true,
-              messages: [
-                ...(history || []).map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-                { role: 'user', content: message },
-              ],
-            }),
+            headers: buildHeaders(fmt, key),
+            body: JSON.stringify(buildBody(fmt, { model, messages: allMessages, stream: true, maxTokens: 4096 })),
             signal: abort.signal,
           });
 
@@ -274,21 +241,10 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
           // Stream ended without explicit message_stop
           h?.onDone?.(sessionId);
         } else {
-          // OpenAI-compatible Chat Completions API format
-          const res = await fetch(`${endpoint}/v1/chat/completions`, {
+          const res = await fetch(chatUrl, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${key}`,
-            },
-            body: JSON.stringify({
-              model,
-              stream: true,
-              messages: [
-                ...(history || []).map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-                { role: 'user', content: message },
-              ],
-            }),
+            headers: buildHeaders(fmt, key),
+            body: JSON.stringify(buildBody(fmt, { model, messages: allMessages, stream: true })),
             signal: abort.signal,
           });
 
@@ -355,27 +311,11 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     abortRef.current = null;
   }, []);
 
-  /**
-   * Request skills list for a specific agent type.
-   */
-  const requestSkills = useCallback((agentType: 'claude' | 'hermes') => {
-    sendMessage({ type: 'skills:list', sessionId: '', agentType });
-  }, [sendMessage]);
-
-  /**
-   * Request skills list for ALL agent types.
-   * Triggers multiple 'skills' responses, one per agent.
-   */
-  const requestAllSkills = useCallback(() => {
-    sendMessage({ type: 'skills:list-all', sessionId: '' });
-  }, [sendMessage]);
-
-  // Auto-connect on mount, disconnect on unmount
+  // Auto-connect on mount
   useEffect(() => {
     connect();
     return () => {
       disconnect();
-      abortRef.current?.abort();
     };
   }, [connect, disconnect]);
 
@@ -391,3 +331,8 @@ export function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     disconnect,
   };
 }
+
+export default useWebSocket;
+// ... (文件末尾)
+// 添加命名导出
+export { useWebSocket };

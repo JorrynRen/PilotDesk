@@ -160,7 +160,7 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
             <textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              placeholder="灵感内容（支持 Markdown）..."
+              placeholder="灵感prompt（支持 Markdown）..."
               rows={6}
               className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
               style={{

@@ -337,7 +337,7 @@ function InspirationInlineForm({ initialData, sourceAgent, onSave, onCancel }: I
       <textarea
         value={content}
         onChange={(e) => setContent(e.target.value)}
-        placeholder="灵感内容..."
+        placeholder="灵感prompt..."
         rows={3}
         className="w-full px-2 py-1 rounded-md text-[11px] outline-none resize-none"
         style={{

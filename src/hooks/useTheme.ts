@@ -4,12 +4,18 @@ type Theme = 'light' | 'dark' | 'system';
 
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => {
-    return localStorage.getItem('pilotdesk-theme') as Theme || 'system';
+    try {
+      return localStorage.getItem('pilotdesk-theme') as Theme || 'system';
+    } catch {
+      return 'system';
+    }
   });
 
   const setTheme = (t: Theme) => {
     setThemeState(t);
-    localStorage.setItem('pilotdesk-theme', t);
+    try {
+      localStorage.setItem('pilotdesk-theme', t);
+    } catch { /* ignore */ }
   };
 
   useEffect(() => {
