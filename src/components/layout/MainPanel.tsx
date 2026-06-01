@@ -158,21 +158,8 @@ export function MainPanel() {
 
   const displayMessages = streamingMsg ? [...messages, streamingMsg] : messages;
 
-  // For API sessions, don't show WS disconnected warning
-  const showWsWarning = !isConnected && currentSession?.agentType !== 'api';
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Connection status indicator */}
-      {showWsWarning && (
-        <div
-          className="px-4 py-1 text-[10px] text-center shrink-0"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: '#F59E0B' }}
-        >
-          Sidecar 未连接 — 消息无法发送，请检查环境
-        </div>
-      )}
-
       {/* Message list */}
       {isLoadingMessages ? (
         <div className="flex-1 flex items-center justify-center">

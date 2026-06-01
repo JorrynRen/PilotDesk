@@ -96,11 +96,7 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
               border: '1px solid var(--border)',
             }}
           />
-          {config.api_key_set && (
-            <span className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--claude-tag)' }}>
-              {config.api_key_masked}
-            </span>
-          )}
+
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           留空保持不变，输入新值将覆盖现有 Key
@@ -269,11 +265,7 @@ function HermesConfigForm({ config }: { config: HermesConfigPublic }) {
               border: '1px solid var(--border)',
             }}
           />
-          {config.api_key_set && (
-            <span className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--hermes-tag)' }}>
-              {config.api_key_masked}
-            </span>
-          )}
+
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           留空保持不变，输入新值将覆盖现有 Key

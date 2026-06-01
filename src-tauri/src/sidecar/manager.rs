@@ -33,7 +33,7 @@ impl SidecarManager {
         let sidecar_path_str = if sidecar_path.exists() {
             sidecar_path.to_string_lossy().to_string()
         } else {
-            "sidecar/dist/index.js".to_string()
+            "../sidecar/dist/index.js".to_string()
         };
 
         let child = Command::new("node")

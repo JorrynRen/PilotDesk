@@ -1032,7 +1032,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       {/* Header */}
       <div
         className="shrink-0 px-4 py-3 flex items-center gap-3"
-        style={{ borderBottom: '1px solid var(--border)' }}
       >
         <button
           onClick={onBack}
