@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Terminal, Trash2 } from 'lucide-react';
 
 interface LogEntry {
+  id: number;
   timestamp: number;
   message: string;
   level: 'info' | 'warn' | 'error' | 'success';
@@ -10,12 +12,27 @@ interface LogEntry {
 interface InstallLogProps {
   logs?: LogEntry[];
   isActive?: boolean;
+  onClear?: () => void;
 }
 
-export function InstallLog({ logs: externalLogs, isActive }: InstallLogProps) {
+export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLogProps) {
   const [internalLogs, setInternalLogs] = useState<LogEntry[]>([]);
   const logs = externalLogs ?? internalLogs;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const initialized = useRef(false);
+
+  // Load persisted logs from Rust on mount (only for internal mode)
+  useEffect(() => {
+    if (externalLogs || initialized.current) return;
+    initialized.current = true;
+    invoke<LogEntry[]>('list_logs', { limit: 200 })
+      .then((entries) => {
+        setInternalLogs(entries || []);
+      })
+      .catch(() => {
+        // Table may not exist yet on first run, ignore
+      });
+  }, [externalLogs]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -29,6 +46,17 @@ export function InstallLog({ logs: externalLogs, isActive }: InstallLogProps) {
     warn: '#F59E0B',
     error: '#EF4444',
     success: '#10B981',
+  };
+
+  const handleClear = () => {
+    if (onClear) {
+      onClear();
+    } else {
+      // Internal mode: clear via Rust command
+      invoke('clear_logs').then(() => {
+        setInternalLogs([]);
+      }).catch(() => {});
+    }
   };
 
   return (
@@ -53,8 +81,8 @@ export function InstallLog({ logs: externalLogs, isActive }: InstallLogProps) {
           )}
         </div>
         <button
-          onClick={() => setInternalLogs([])}
-          className="p-0.5 rounded"
+          onClick={handleClear}
+          className="p-0.5 rounded transition-colors"
           style={{ color: 'var(--text-tertiary)' }}
           title="清空日志"
         >
@@ -74,7 +102,7 @@ export function InstallLog({ logs: externalLogs, isActive }: InstallLogProps) {
               second: '2-digit',
             });
             return (
-              <div key={idx} className="flex gap-2">
+              <div key={entry.id || idx} className="flex gap-2">
                 <span style={{ color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>{time}</span>
                 <span style={{ color: levelColor[entry.level] ?? 'var(--text-secondary)' }}>
                   {entry.message}

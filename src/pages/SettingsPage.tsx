@@ -27,6 +27,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useTheme } from '../hooks/useTheme';
 import { EnvManager } from '../components/env/EnvManager';
 import { ConfigEditor } from '../components/panels/ConfigEditor';
+import { UpdateChecker } from '../components/panels/UpdateChecker';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
 import { sendApiRequest } from '../utils/apiClient';
 import type { ApiProvider as StoreApiProvider } from '../stores/apiProviderStore';
@@ -914,6 +915,11 @@ function AboutSection() {
         Claude Code &amp; Hermes Agent 统一桌面客户端。
         集成多 Agent 管理、流式对话、灵感市集、API 直连等功能。
       </p>
+
+      {/* Update Checker */}
+      <div className="w-full">
+        <UpdateChecker />
+      </div>
 
       {/* Tech stack */}
       <div

@@ -1,17 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CheckCircle, XCircle, Download, RefreshCw, Loader2 } from 'lucide-react';
+import { CheckCircle, XCircle, Download, RefreshCw, Loader2, ArrowUpCircle, ExternalLink } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open as openUrl } from '@tauri-apps/plugin-shell';
 import type { EnvInfo } from '../../types';
 import { InstallLog } from './InstallLog';
 
 interface DependencyStatus {
   name: string;
+  key: string;
   version: string | null;
   installed: boolean;
   action?: string;
   installing?: boolean;
-}
+  /** Update check state */
+  latestVersion: string | null;
+  latestReleaseTime: string | null;
+  hasUpdate: boolean;
+  updateChecking: boolean;
+
 
 interface EnvManagerProps {
   onComplete?: () => void;
@@ -24,9 +31,16 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const [loading, setLoading] = useState(true);
   const [installing, setInstalling] = useState<string | null>(null);
   const [logs, setLogs] = useState<Array<{ timestamp: number; message: string; level: 'info' | 'warn' | 'error' | 'success' }>>([]);
+  /** Latest versions from remote registries */
+  const [latestVersions, setLatestVersions] = useState<Record<string, { version: string; releaseTime: string | null } | null>>({});
+  const [updateChecking, setUpdateChecking] = useState<Record<string, boolean>>({});
+
 
   const addLog = useCallback((message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') => {
-    setLogs((prev) => [...prev, { timestamp: Date.now(), message, level }]);
+    const entry = { timestamp: Date.now(), message, level };
+    setLogs((prev) => [...prev, entry]);
+    // Persist to SQLite (fire-and-forget)
+    invoke('insert_log', { message, level }).catch(() => {});
   }, []);
 
   const fetchEnv = useCallback(async () => {
@@ -35,10 +49,40 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       const info = await invoke<EnvInfo>('detect_env');
       setEnvInfo(info);
       addLog('环境检测完成', 'success');
-    } catch (err) {
-      addLog(`环境检测失败: ${err}`, 'error');
+    } catch (err: any) {
+      const msg = err?.message || err?.code || (typeof err === 'string' ? err : JSON.stringify(err));
+      addLog(`环境检测失败: ${msg}`, 'error');
     }
     setLoading(false);
+  }, [addLog]);
+
+  interface VersionTimeInfo {
+    version: string;
+    releaseTime: string | null;
+  }
+
+  /** Query latest version for a single agent from registry */
+  const checkAgentUpdate = useCallback(async (key: string, packageName: string, registry: 'npm' | 'pypi') => {
+    setUpdateChecking((prev) => ({ ...prev, [key]: true }));
+    try {
+      let info: VersionTimeInfo | null = null;
+      if (registry === 'npm') {
+        const resp = await invoke<VersionTimeInfo>('check_single_npm', { packageName });
+        info = resp && resp.version ? resp : null;
+      } else {
+        const resp = await invoke<VersionTimeInfo>('check_single_pypi', { packageName });
+        info = resp && resp.version ? resp : null;
+      }
+      setLatestVersions((prev) => ({ ...prev, [key]: info }));
+      if (info) {
+        addLog(`${key} 最新版本: ${info.version}${info.releaseTime ? ` (${info.releaseTime})` : ''}`, 'info');
+      }
+    } catch (err: any) {
+      const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
+      addLog(`检查 ${key} 更新失败: ${msg}`, 'warn');
+    } finally {
+      setUpdateChecking((prev) => ({ ...prev, [key]: false }));
+    }
   }, [addLog]);
 
   useEffect(() => {
@@ -54,52 +98,110 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     };
   }, [fetchEnv, addLog]);
 
+  /** After env detection completes, auto-check updates for installed agents */
+  useEffect(() => {
+    if (envInfo) {
+      if (envInfo.claudeCodeVersion) {
+        checkAgentUpdate('claude', '@anthropic-ai/claude-code', 'npm');
+      }
+      if (envInfo.hermesVersion) {
+        checkAgentUpdate('hermes', 'hermes-agent', 'pypi');
+      }
+    }
+  }, [envInfo, checkAgentUpdate]);
+
+  /** Simple semver older check */
+  const isOlder = (current: string, latest: string) => {
+    const parse = (v: string) => v.replace(/^v/, '').split('.').map(Number);
+    const a = parse(current);
+    const b = parse(latest);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const av = a[i] ?? 0;
+      const bv = b[i] ?? 0;
+      if (av < bv) return true;
+      if (av > bv) return false;
+    }
+    return false;
+  };
+
   const dependencies: DependencyStatus[] = [
     {
       name: 'Node.js',
+      key: 'node',
       version: envInfo?.nodeVersion ?? null,
       installed: !!envInfo?.nodeVersion,
+      latestVersion: null,
+      hasUpdate: false,
+      updateChecking: false,
     },
     {
       name: 'Git',
+      key: 'git',
       version: envInfo?.gitVersion ?? null,
       installed: !!envInfo?.gitVersion,
+      latestVersion: null,
+      hasUpdate: false,
+      updateChecking: false,
     },
     {
       name: 'Python',
+      key: 'python',
       version: envInfo?.pythonVersion ?? null,
       installed: !!envInfo?.pythonVersion,
+      latestVersion: null,
+      hasUpdate: false,
+      updateChecking: false,
     },
     {
       name: 'Claude Code',
+      key: 'claude',
       version: envInfo?.claudeCodeVersion ?? null,
       installed: !!envInfo?.claudeCodeVersion,
       action: envInfo?.claudeCodeVersion ? 'update' : 'install',
       installing: installing === 'claude',
+      latestVersion: latestVersions['claude']?.version ?? null,
+      latestReleaseTime: latestVersions['claude']?.releaseTime ?? null,
+      hasUpdate: envInfo?.claudeCodeVersion && latestVersions['claude']
+        ? isOlder(envInfo.claudeCodeVersion, latestVersions['claude'].version)
+        : false,
+      updateChecking: updateChecking['claude'] ?? false,
+      currentReleaseTime: currentReleaseTimes['claude'] ?? null,
+      currentTimeChecking: currentTimeChecking['claude'] ?? false,
     },
     {
       name: 'Hermes Agent',
+      key: 'hermes',
       version: envInfo?.hermesVersion ?? null,
       installed: !!envInfo?.hermesVersion,
       action: envInfo?.hermesVersion ? 'update' : 'install',
       installing: installing === 'hermes',
+      latestVersion: latestVersions['hermes']?.version ?? null,
+      latestReleaseTime: latestVersions['hermes']?.releaseTime ?? null,
+      hasUpdate: envInfo?.hermesVersion && latestVersions['hermes']
+        ? isOlder(envInfo.hermesVersion, latestVersions['hermes'].version)
+        : false,
+      updateChecking: updateChecking['hermes'] ?? false,
+      currentReleaseTime: currentReleaseTimes['hermes'] ?? null,
+      currentTimeChecking: currentTimeChecking['hermes'] ?? false,
     },
   ];
 
-  const handleInstall = async (name: string) => {
-    setInstalling(name);
+  const handleInstall = async (key: string) => {
+    const name = key === 'claude' ? 'Claude Code' : 'Hermes Agent';
+    setInstalling(key);
     addLog(`开始安装 ${name}...`, 'info');
     try {
-      if (name === 'Claude Code') {
+      if (key === 'claude') {
         await invoke('install_claude_code');
         addLog('Claude Code 安装成功', 'success');
-      } else if (name === 'Hermes Agent') {
+      } else if (key === 'hermes') {
         await invoke('install_hermes');
         addLog('Hermes Agent 安装成功', 'success');
       }
       await fetchEnv();
-    } catch (err) {
-      addLog(`${name} 安装失败: ${err}`, 'error');
+    } catch (err: any) {
+      const msg = err?.message || err?.details || (typeof err === 'string' ? err : JSON.stringify(err));
+      addLog(`${name} 安装失败: ${msg}`, 'error');
     }
     setInstalling(null);
   };
@@ -136,7 +238,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         </div>
       </section>
 
-      {/* Agent Detection */}
+      {/* Agent Detection with Update Check */}
       <section>
         <h3 className="text-xs font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
           Agent 检测
@@ -145,51 +247,105 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
           {dependencies.slice(3).map((dep) => (
             <div
               key={dep.name}
-              className="flex items-center justify-between px-3 py-2 rounded-lg"
-              style={{ backgroundColor: 'var(--bg-tertiary)' }}
+              className="flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors"
+              style={{
+                backgroundColor: dep.hasUpdate ? 'rgba(245, 158, 11, 0.06)' : 'var(--bg-tertiary)',
+                border: dep.hasUpdate ? '1px solid rgba(245, 158, 11, 0.2)' : '1px solid transparent',
+              }}
             >
-              <div className="flex items-center gap-2">
+              {/* Left: status icon + name + version */}
+              <div className="flex items-center gap-2 min-w-0">
                 {dep.installed ? (
-                  <CheckCircle size={14} style={{ color: '#10B981' }} />
+                  <CheckCircle size={14} style={{ color: '#10B981', flexShrink: 0 }} />
                 ) : (
-                  <XCircle size={14} style={{ color: '#EF4444' }} />
+                  <XCircle size={14} style={{ color: '#EF4444', flexShrink: 0 }} />
                 )}
-                <div>
-                  <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                    {dep.name}
-                  </span>
-                  <span className="text-[10px] ml-2" style={{ color: 'var(--text-secondary)' }}>
-                    {dep.version ?? '未安装'}
-                  </span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                      {dep.name}
+                    </span>
+                    {dep.hasUpdate && (
+                      <ArrowUpCircle size={13} style={{ color: '#F59E0B' }} />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                      {dep.installed ? `v${dep.version}` : '未安装'}
+                    </span>
+                    {dep.installed && dep.currentReleaseTime && (
+                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        ({dep.currentReleaseTime})
+                      </span>
+                    )}
+                    {(dep.updateChecking || dep.currentTimeChecking) && (
+                      <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
+                    )}
+                    {dep.latestVersion && !dep.updateChecking && (
+                      <span className="text-[10px]" style={{ color: dep.hasUpdate ? '#F59E0B' : 'var(--text-tertiary)' }}>
+                        最新 v{dep.latestVersion}
+                      </span>
+                    )}
+                    {dep.latestVersion && dep.latestReleaseTime && !dep.updateChecking && (
+                      <span className="text-[10px]" style={{ color: dep.hasUpdate ? '#F59E0B' : 'var(--text-tertiary)' }}>
+                        ({dep.latestReleaseTime})
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
-              <button
-                onClick={() => handleInstall(dep.name)}
-                disabled={!!dep.installing}
-                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-colors disabled:opacity-50"
-                style={{
-                  backgroundColor: dep.installed ? 'var(--bg-secondary)' : 'var(--accent)',
-                  color: dep.installed ? 'var(--text-secondary)' : '#fff',
-                  border: `1px solid ${dep.installed ? 'var(--border)' : 'transparent'}`,
-                }}
-              >
-                {dep.installing ? (
-                  <>
-                    <Loader2 size={12} className="animate-spin" />
-                    安装中
-                  </>
-                ) : dep.installed ? (
-                  <>
-                    <RefreshCw size={12} />
-                    重新安装
-                  </>
-                ) : (
-                  <>
-                    <Download size={12} />
-                    安装
-                  </>
+
+              {/* Right: action buttons */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {!dep.installed && (
+                  <button
+                    onClick={() => handleInstall(dep.key)}
+                    disabled={!!dep.installing}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium transition-colors disabled:opacity-50"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  >
+                    {dep.installing ? (
+                      <><Loader2 size={11} className="animate-spin" /> 安装中</>
+                    ) : (
+                      <><Download size={11} /> 安装</>
+                    )}
+                  </button>
                 )}
-              </button>
+                {dep.hasUpdate && dep.installed && (
+                  <button
+                    onClick={() => handleInstall(dep.key)}
+                    disabled={!!dep.installing}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium transition-colors disabled:opacity-50"
+                    style={{ backgroundColor: '#F59E0B', color: '#fff' }}
+                  >
+                    {dep.installing ? (
+                      <><Loader2 size={11} className="animate-spin" /> 更新中</>
+                    ) : (
+                      <><ArrowUpCircle size={11} /> 更新</>
+                    )}
+                  </button>
+                )}
+                {dep.installed && !dep.hasUpdate && dep.latestVersion && (
+                  <span className="text-[10px]" style={{ color: '#10B981' }}>
+                    已是最新
+                  </span>
+                )}
+                {dep.installed && !dep.hasUpdate && !dep.latestVersion && !dep.updateChecking && (
+                  <button
+                    onClick={() => handleInstall(dep.key)}
+                    disabled={!!dep.installing}
+                    className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors disabled:opacity-50"
+                    style={{
+                      backgroundColor: 'var(--bg-secondary)',
+                      color: 'var(--text-secondary)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <RefreshCw size={11} />
+                    重装
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -211,7 +367,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       </button>
 
       {/* Install Log */}
-      <InstallLog logs={logs} isActive={!!installing} />
+      <InstallLog logs={logs} isActive={!!installing} onClear={() => { setLogs([]); invoke('clear_logs').catch(() => {}); }} />
     </div>
   );
 }

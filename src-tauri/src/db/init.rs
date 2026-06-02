@@ -90,6 +90,9 @@ pub fn init_db() -> Result<Connection, AppError> {
     // Create app_settings table (key-value settings storage)
     migrate_add_app_settings(&conn)?;
 
+    // Create install_logs table (env detection & agent install logs)
+    migrate_add_install_logs(&conn)?;
+
     Ok(conn)
 }
 
@@ -179,5 +182,19 @@ fn migrate_add_api_agent_type(conn: &Connection) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);"
     )?;
 
+    Ok(())
+}
+
+fn migrate_add_install_logs(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS install_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('info', 'warn', 'error', 'success'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_install_logs_time ON install_logs(timestamp);"
+    )?;
     Ok(())
 }

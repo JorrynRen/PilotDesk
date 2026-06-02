@@ -82,6 +82,20 @@ fn probe_version(paths: &[&str], arg: &str) -> Option<String> {
     get_version(paths.last().unwrap_or(&""), arg)
 }
 
+/// Clean version string: keep only the semver part (e.g. "2.1.157 (Claude Code)" → "2.1.157")
+/// Also strips leading 'v'.
+fn clean_version_string(raw: &str) -> String {
+    let trimmed = raw.trim();
+    // Take only up to first space or '('
+    trimmed
+        .trim_start_matches('v')
+        .split(|c: char| c == ' ' || c == '(')
+        .next()
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string()
+}
+
 fn detect_env_inner() -> Result<EnvInfo, AppError> {
     let home = std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\Administrator".into());
     let appdata = std::env::var("APPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Roaming", home));
@@ -101,13 +115,15 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
         "hermes",
     ];
 
-    let claude_code_version = probe_version(&claude_paths, "--version");
+    let claude_code_version = probe_version(&claude_paths, "--version")
+        .as_deref()
+        .map(clean_version_string);
     println!("[env] claude: {:?}", claude_code_version);
 
     let hermes_version = probe_version(&hermes_paths, "version")
         .map(|v| {
             let first_line = v.lines().next().unwrap_or(&v);
-            first_line.trim_start_matches("Hermes Agent ").to_string()
+            clean_version_string(first_line.trim_start_matches("Hermes Agent "))
         });
     println!("[env] hermes: {:?}", hermes_version);
 

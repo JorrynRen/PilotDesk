@@ -30,7 +30,7 @@ export function MainPanel() {
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingStatus, setStreamingStatus] = useState('');
   const [pendingInput, setPendingInput] = useState<string | null>(null);
-  const doneCalledRef = useRef(false);
+  const doneCalledRef = useRef<string | null>(null);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
 
@@ -39,7 +39,7 @@ export function MainPanel() {
     if (currentSession && currentSession.agentType !== 'api' && isConnected) {
       createAgentSession(currentSession.id, currentSession.agentType);
     }
-  }, [currentSessionId]); // Only re-run when session ID changes
+  }, [currentSessionId, isConnected, currentSession, createAgentSession]);
 
   // Consume pending input from shared store
   const pendingFromStore = usePendingInputStore((s) => s.value);
@@ -58,8 +58,8 @@ export function MainPanel() {
   }, [currentSessionId]);
 
   const onDone = useCallback((sessionId: string) => {
-    if (doneCalledRef.current) return;
-    doneCalledRef.current = true;
+    if (doneCalledRef.current === sessionId) return;
+    doneCalledRef.current = sessionId;
     if (sessionId === currentSessionId) {
       setIsGenerating(false);
       setStreamingStatus('');
@@ -103,7 +103,7 @@ export function MainPanel() {
   const handleSend = useCallback(
     async (message: string, mode: ChatMode) => {
       if (!currentSession) return;
-      doneCalledRef.current = false;
+      doneCalledRef.current = null;
       setIsGenerating(true);
       setStreamingContent('');
       setStreamingStatus('发送中...');
