@@ -1,77 +1,162 @@
+import { spawn, ChildProcess } from 'child_process';
 import { AgentAdapter, buildPrompt } from './base';
 import type { ChatRequest, SkillInfo } from '../types';
 
 export class ClaudeCodeAdapter implements AgentAdapter {
   agentType = 'claude' as const;
-  private abortControllers = new Map<string, AbortController>();
+  private processes = new Map<string, ChildProcess>();
+  private aborted = new Set<string>();
 
   async createSession(sessionId: string, cwd?: string): Promise<void> {
     console.log(`[Claude] Session created: ${sessionId}, cwd: ${cwd || 'default'}`);
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    const controller = this.abortControllers.get(sessionId);
-    if (controller) {
-      controller.abort();
-      this.abortControllers.delete(sessionId);
-    }
+    this.stopGeneration(sessionId);
     console.log(`[Claude] Session closed: ${sessionId}`);
   }
 
   async *sendMessage(request: ChatRequest): AsyncGenerator<string, void, unknown> {
     const { sessionId, message, mode, cwd } = request;
     const fullMessage = buildPrompt(message, mode);
-    const controller = new AbortController();
-    this.abortControllers.set(sessionId, controller);
+    this.aborted.delete(sessionId);
+
+    // Use Claude Code CLI with stream-json output format
+    // -p: print mode (non-interactive), --verbose required for stream-json
+    const escapedMsg = fullMessage.replace(/"/g, '\\"');
+    const cmd = `claude -p --verbose --output-format stream-json --dangerously-skip-permissions "${escapedMsg}"`;
+
+    const child = spawn(cmd, [], {
+      cwd: cwd || process.cwd(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: true,
+    });
+
+    this.processes.set(sessionId, child);
+    child.stdin?.end();
 
     try {
-      const sdk = await import('@anthropic-ai/claude-code/sdk');
+      const queue: string[] = [];
+      let resolveWait: (() => void) | null = null;
+      let finished = false;
 
-      const response = await sdk.query({
-        prompt: fullMessage,
-        options: {
-          cwd: cwd || process.cwd(),
-          abortController: controller,
-        },
+      child.stdout?.on('data', (raw: Buffer) => {
+        if (this.aborted.has(sessionId)) return;
+        const text = raw.toString();
+        queue.push(text);
+        if (resolveWait) {
+          resolveWait();
+          resolveWait = null;
+        }
       });
 
-      // Process response stream
-      for await (const event of response) {
-        if (event.type === 'assistant') {
-          // SDKAssistantMessage has a .message property (APIAssistantMessage/BetaMessage)
-          const apiMsg = (event as any).message;
-          if (apiMsg?.content && Array.isArray(apiMsg.content)) {
-            for (const block of apiMsg.content) {
-              if (block.type === 'text' && block.text) {
-                yield block.text;
+      child.stderr?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        // Claude Code outputs startup warnings to stderr, log only if substantive
+        if (text.trim() && !text.includes('Claude Code')) {
+          console.error(`[Claude stderr] ${text}`);
+        }
+      });
+
+      const closePromise = new Promise<number>((resolve) => {
+        child.on('close', (code) => {
+          finished = true;
+          if (resolveWait) {
+            resolveWait();
+            resolveWait = null;
+          }
+          this.processes.delete(sessionId);
+          resolve(code ?? 0);
+        });
+        child.on('error', () => {
+          finished = true;
+          if (resolveWait) {
+            resolveWait();
+            resolveWait = null;
+          }
+          this.processes.delete(sessionId);
+          resolve(1);
+        });
+      });
+
+      // Process stream-json events line by line
+      let buffer = '';
+      while (!finished || queue.length > 0) {
+        if (queue.length > 0) {
+          buffer += queue.shift()!;
+          while (buffer.includes('\n')) {
+            const idx = buffer.indexOf('\n');
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+
+            if (!line) continue;
+
+            try {
+              const event = JSON.parse(line);
+
+              if (event.type === 'assistant') {
+                const content = event.message?.content;
+                if (Array.isArray(content)) {
+                  for (const block of content) {
+                    if (block.type === 'text' && block.text) {
+                      yield block.text + '\n';
+                    }
+                  }
+                }
+              }
+              // Ignore other event types (system, init, result, etc.)
+            } catch {
+              // Not JSON, skip
+            }
+          }
+        } else if (!finished) {
+          await new Promise<void>((resolve) => {
+            resolveWait = resolve;
+          });
+        }
+      }
+
+      // Process remaining buffer
+      if (buffer.trim()) {
+        try {
+          const event = JSON.parse(buffer.trim());
+          if (event.type === 'assistant') {
+            const content = event.message?.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.type === 'text' && block.text) {
+                  yield block.text + '\n';
+                }
               }
             }
           }
+        } catch {
+          // Not JSON, skip
         }
       }
+
+      const exitCode = await closePromise;
+      if (exitCode !== 0 && !this.aborted.has(sessionId)) {
+        throw new Error(`Claude Code process exited with code ${exitCode}`);
+      }
     } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        console.error(`[Claude] Error in session ${sessionId}:`, error.message);
+      if (!this.aborted.has(sessionId)) {
         throw error;
       }
-    } finally {
-      this.abortControllers.delete(sessionId);
     }
   }
 
   stopGeneration(sessionId: string): void {
-    const controller = this.abortControllers.get(sessionId);
-    if (controller) {
-      controller.abort();
-      this.abortControllers.delete(sessionId);
+    this.aborted.add(sessionId);
+    const proc = this.processes.get(sessionId);
+    if (proc && !proc.killed) {
+      proc.kill('SIGTERM');
     }
+    this.processes.delete(sessionId);
     console.log(`[Claude] Generation stopped: ${sessionId}`);
   }
 
   async listSkills(): Promise<SkillInfo[]> {
-    // Claude Code skills come from:
-    // 1. Built-in slash commands
-    // 2. MCP servers configured in ~/.claude/claude_desktop_config.json
     const skills: SkillInfo[] = [
       { name: 'code-review', description: '代码审查与优化建议', category: '内置' },
       { name: 'translate', description: '多语言翻译', category: '内置' },
