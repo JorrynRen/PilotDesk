@@ -14,12 +14,13 @@ fn get_version(cmd: &str, arg: &str) -> Option<String> {
     }
 }
 
-/// On Windows, .cmd/.bat scripts cannot be invoked directly via Command::new.
-/// Use `cmd /C` to shell-execute them.
-#[cfg(target_os = "windows")]
-fn get_version_cmd(cmd: &str, arg: &str) -> Option<String> {
-    let shell_cmd = format!("{} {}", cmd, arg);
-    let output = Command::new("cmd").args(["/C", &shell_cmd]).output().ok()?;
+/// Run a .cmd/.bat script with full absolute path, avoiding PATH lookup issues
+/// in Tauri's limited environment on Windows.
+fn get_version_absolute(exe_path: &str, arg: &str) -> Option<String> {
+    let output = Command::new("cmd")
+        .args(["/C", &format!("\"{}\" {}", exe_path, arg)])
+        .output()
+        .ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first_line = stdout.lines().next()?;
     if output.status.success() {
@@ -29,28 +30,59 @@ fn get_version_cmd(cmd: &str, arg: &str) -> Option<String> {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-fn get_version_cmd(cmd: &str, arg: &str) -> Option<String> {
-    get_version(cmd, arg)
+/// Try multiple paths to find and run a CLI tool, returning its version.
+fn probe_version(paths: &[&str], arg: &str) -> Option<String> {
+    for p in paths {
+        if let Some(v) = get_version_absolute(p, arg) {
+            return Some(v);
+        }
+    }
+    // Fallback: try bare command name via shell
+    let shell_cmd = format!("{} {}", paths[0], arg);
+    if let Some(v) = get_version(&paths[0].split('\\').last().unwrap_or(paths[0]), arg) {
+        return Some(v);
+    }
+    None
 }
 
 #[tauri::command]
 pub fn detect_env() -> Result<EnvInfo, AppError> {
+    // Known install locations on Windows
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\Administrator".into());
+    let appdata = std::env::var("APPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Roaming", home));
+    let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Local", home));
+
+    // Claude Code: installed via npm -g, lives in %APPDATA%\npm\claude.cmd
+    let claude_paths = [
+        &format!(r"{}\npm\claude.cmd", appdata),
+        "claude",
+    ];
+
+    // Hermes: installed via pip, lives in Python313\Scripts\hermes.bat
+    let hermes_paths = [
+        &format!(r"{}\Programs\Python\Python313\Scripts\hermes.bat", localappdata),
+        &format!(r"{}\Programs\Python\Python312\Scripts\hermes.bat", localappdata),
+        &format!(r"{}\Programs\Python\Python311\Scripts\hermes.bat", localappdata),
+        "hermes",
+    ];
+
+    let claude_code_version = probe_version(&claude_paths, "--version");
+
+    let hermes_version = probe_version(&hermes_paths, "--version")
+        .map(|v| {
+            // Trim prefix "Hermes Agent " -> "v0.15.1 (2026.5.29)"
+            v.trim_start_matches("Hermes Agent ").to_string()
+        });
+
     Ok(EnvInfo {
         node_version: get_version("node", "--version"),
         git_version: get_version("git", "--version"),
         python_version: get_version("python", "--version")
             .or_else(|| get_version("python3", "--version")),
-        claude_code_version: get_version_cmd("claude", "--version")
-            .or_else(|| get_version("claude", "--version")),
-        hermes_version: get_version_cmd("hermes", "--version")
-            .map(|v| {
-                // Trim prefix "Hermes Agent " -> "v0.15.1 (2026.5.29)"
-                v.trim_start_matches("Hermes Agent ").to_string()
-            }),
+        claude_code_version,
+        hermes_version,
     })
 }
-
 
 #[tauri::command]
 pub async fn install_claude_code(app: tauri::AppHandle) -> Result<(), AppError> {
