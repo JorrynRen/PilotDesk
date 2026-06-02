@@ -19,6 +19,65 @@ pub struct SidecarManager {
 }
 
 impl SidecarManager {
+    /// Resolve sidecar dist/index.js path using multi-strategy probing.
+    /// Priority:
+    ///   1. CARGO_MANIFEST_DIR/sidecar/dist/index.js (dev: target inside src-tauri)
+    ///   2. exe's 2nd parent (target/debug or target/release) → project root → sidecar/
+    ///   3. Tauri resource_dir (production bundle)
+    fn resolve_sidecar_path(app_handle: &tauri::AppHandle) -> String {
+        // Strategy 1: CARGO_MANIFEST_DIR (compile-time, always correct in dev)
+        if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+            let p = std::path::Path::new(&manifest)
+                .join("..")  // src-tauri → project root
+                .join("sidecar")
+                .join("dist")
+                .join("index.js");
+            if p.exists() {
+                return p.to_string_lossy().to_string();
+            }
+        }
+
+        // Strategy 2: exe directory → navigate to project root → sidecar/
+        // exe is in src-tauri/target/debug/ → need 3 parents to reach project root
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                // Try going up 3 levels: target/debug/ → target/ → src-tauri/ → project_root
+                let mut dir = exe_dir;
+                for _ in 0..4 {
+                    if let Some(parent) = dir.parent() {
+                        dir = parent;
+                        let p = dir.join("sidecar").join("dist").join("index.js");
+                        if p.exists() {
+                            println!("[Sidecar] Found via exe traversal: {}", p.display());
+                            return p.to_string_lossy().to_string();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Strategy 3: CWD-based (works when launched from project root)
+        if let Ok(cwd) = std::env::current_dir() {
+            let p = cwd.join("sidecar").join("dist").join("index.js");
+            if p.exists() {
+                println!("[Sidecar] Found via CWD: {}", p.display());
+                return p.to_string_lossy().to_string();
+            }
+        }
+
+        // Strategy 4: Tauri resource_dir (production bundle)
+        if let Ok(resource_dir) = app_handle.path().resource_dir() {
+            let p = resource_dir.join("sidecar").join("dist").join("index.js");
+            if p.exists() {
+                println!("[Sidecar] Found via resource_dir: {}", p.display());
+                return p.to_string_lossy().to_string();
+            }
+        }
+
+        // Fallback
+        "../sidecar/dist/index.js".to_string()
+    }
+
     pub fn new(port: u16) -> Self {
         Self {
             process: None,
@@ -30,16 +89,19 @@ impl SidecarManager {
     }
 
     pub fn start(&mut self, app_handle: tauri::AppHandle) -> Result<u16, String> {
-        let resource_dir = app_handle.path().resource_dir()
-            .map_err(|e| format!("Failed to get resource dir: {}", e))?;
-        
-        let sidecar_path = resource_dir.join("sidecar").join("dist").join("index.js");
-        
-        let sidecar_path_str = if sidecar_path.exists() {
-            sidecar_path.to_string_lossy().to_string()
-        } else {
-            "../sidecar/dist/index.js".to_string()
-        };
+        let sidecar_path_str = Self::resolve_sidecar_path(&app_handle);
+        println!("[Sidecar] Resolved sidecar path: {}", sidecar_path_str);
+        let sidecar_file = std::path::Path::new(&sidecar_path_str);
+        println!("[Sidecar] File exists: {}", sidecar_file.exists());
+        if !sidecar_file.exists() {
+            let err_msg = format!("[Sidecar] FATAL: sidecar not found at '{}'\n  CWD: {:?}\n  EXE: {:?}",
+                sidecar_path_str,
+                std::env::current_dir().ok(),
+                std::env::current_exe().ok());
+            println!("{}", err_msg);
+            eprintln!("{}", err_msg);
+            return Err(err_msg);
+        }
 
         #[cfg(target_os = "windows")]
         use std::os::windows::process::CommandExt;
@@ -58,7 +120,12 @@ impl SidecarManager {
             .stderr(Stdio::piped())
             .creation_flags(0x00000200)
             .spawn()
-            .map_err(|e| format!("Failed to start sidecar: {}", e))?;
+            .map_err(|e| {
+                let msg = format!("Failed to start sidecar (cmd={}, path={}): {}", node_cmd, sidecar_path_str, e);
+                println!("[Sidecar] {}", msg);
+                eprintln!("[Sidecar] {}", msg);
+                msg
+            })?;
 
         #[cfg(not(target_os = "windows"))]
         let child = Command::new(node_cmd)

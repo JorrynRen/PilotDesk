@@ -59,6 +59,7 @@ pub struct BotChannel {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvInfo {
     pub node_version: Option<String>,
     pub git_version: Option<String>,
