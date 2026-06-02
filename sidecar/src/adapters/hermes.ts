@@ -2,11 +2,32 @@ import { spawn, ChildProcess } from 'child_process';
 import { AgentAdapter, buildPrompt } from './base';
 import type { ChatRequest, SkillInfo } from '../types';
 
+// Strip ANSI escape sequences from text
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+// Filter out decorative/UI lines from Hermes output
+function isContentLine(line: string): boolean {
+  const trimmed = line.trim();
+  // Filter empty lines, box-drawing chars, session info, resume info
+  if (!trimmed) return false;
+  if (/^[\─┄┈│┌┐└┘├┤┬┴┼━┃╋╭╮╰╯─│┄┈]+$/.test(trimmed)) return false;
+  if (trimmed === 'Initializing agent...') return false;
+  if (trimmed.startsWith('Resume this session')) return false;
+  if (trimmed.startsWith('hermes --resume')) return false;
+  if (trimmed.startsWith('Session:')) return false;
+  if (trimmed.startsWith('Duration:')) return false;
+  if (trimmed.startsWith('Messages:')) return false;
+  if (trimmed.startsWith('Query:')) return false;
+  return true;
+}
+
 export class HermesAdapter implements AgentAdapter {
   agentType = 'hermes' as const;
   private processes = new Map<string, ChildProcess>();
   private aborted = new Set<string>();
-  private pendingResolve: (() => void) | null = null;
 
   async createSession(sessionId: string, cwd?: string): Promise<void> {
     console.log(`[Hermes] Session created: ${sessionId}, cwd: ${cwd || 'default'}`);
@@ -22,81 +43,107 @@ export class HermesAdapter implements AgentAdapter {
     const fullMessage = buildPrompt(message, mode);
     this.aborted.delete(sessionId);
 
-    const child = spawn('hermes', ['chat', '--stream'], {
+    // Build the command string for shell execution
+    // Use -q for single query + -Q for quiet mode (suppress banner/spinner/tool previews)
+    // Escape the message for shell: wrap in double quotes, escape internal double quotes
+    const escapedMsg = fullMessage.replace(/"/g, '\\"');
+    const isWin = process.platform === 'win32';
+    const cmd = isWin
+      ? `hermes.bat chat -q "${escapedMsg}" -Q`
+      : `hermes chat -q "${escapedMsg}" -Q`;
+
+    // Set PYTHONHOME='' on Windows to bypass WPS .pth conflicts with hermes_cli
+    const hermesEnv = isWin
+      ? { ...process.env, PYTHONHOME: '' }
+      : { ...process.env };
+
+    const child = spawn(cmd, [], {
       cwd: cwd || process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: true,
+      env: hermesEnv,
     });
 
     this.processes.set(sessionId, child);
 
-    let buffer = '';
-    let done = false;
-
-    // Send message via stdin
-    child.stdin?.write(fullMessage + '\n');
+    // No stdin needed - message passed via -q flag
     child.stdin?.end();
 
-    const queue: string[] = [];
-    let resolveWait: (() => void) | null = null;
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (this.aborted.has(sessionId)) return;
-      buffer += chunk.toString();
-      while (buffer.includes('\n')) {
-        const idx = buffer.indexOf('\n');
-        const line = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 1);
-        if (line.trim()) {
-          queue.push(line + '\n');
-          if (resolveWait) {
-            resolveWait();
-            resolveWait = null;
-          }
-        }
-      }
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      console.error(`[Hermes stderr] ${chunk.toString()}`);
-    });
-
-    const closePromise = new Promise<void>((resolve, reject) => {
-      child.on('close', (code) => {
-        done = true;
-        if (buffer.trim() && !this.aborted.has(sessionId)) {
-          queue.push(buffer);
-          if (resolveWait) {
-            resolveWait();
-            resolveWait = null;
-          }
-        }
-        if (code !== 0 && !this.aborted.has(sessionId)) {
-          reject(new Error(`Hermes process exited with code ${code}`));
-        } else {
-          resolve();
-        }
-        this.processes.delete(sessionId);
-      });
-
-      child.on('error', (err) => {
-        done = true;
-        reject(err);
-        this.processes.delete(sessionId);
-      });
-    });
-
+    // Stream stdout chunks
     try {
-      // Yield queued chunks as they arrive
-      while (!done || queue.length > 0) {
+      const queue: string[] = [];
+      let resolveWait: (() => void) | null = null;
+      let finished = false;
+
+      child.stdout?.on('data', (raw: Buffer) => {
+        if (this.aborted.has(sessionId)) return;
+        const text = raw.toString();
+        queue.push(text);
+        if (resolveWait) {
+          resolveWait();
+          resolveWait = null;
+        }
+      });
+
+      child.stderr?.on('data', (chunk: Buffer) => {
+        console.error(`[Hermes stderr] ${chunk.toString()}`);
+      });
+
+      const closePromise = new Promise<number>((resolve) => {
+        child.on('close', (code) => {
+          finished = true;
+          if (resolveWait) {
+            resolveWait();
+            resolveWait = null;
+          }
+          this.processes.delete(sessionId);
+          resolve(code ?? 0);
+        });
+
+        child.on('error', () => {
+          finished = true;
+          if (resolveWait) {
+            resolveWait();
+            resolveWait = null;
+          }
+          this.processes.delete(sessionId);
+          resolve(1);
+        });
+      });
+
+      // Process stream line by line
+      let buffer = '';
+      while (!finished || queue.length > 0) {
         if (queue.length > 0) {
-          yield queue.shift()!;
-        } else if (!done) {
+          buffer += queue.shift()!;
+          while (buffer.includes('\n')) {
+            const idx = buffer.indexOf('\n');
+            const line = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 1);
+            const clean = stripAnsi(line);
+            if (isContentLine(clean)) {
+              yield clean + '\n';
+            }
+          }
+        } else if (!finished) {
           await new Promise<void>((resolve) => {
             resolveWait = resolve;
           });
         }
       }
-      await closePromise;
+
+      // Process remaining buffer
+      if (buffer.trim()) {
+        const clean = stripAnsi(buffer.trim());
+        if (isContentLine(clean)) {
+          yield clean + '\n';
+        }
+      }
+
+      const exitCode = await closePromise;
+      if (exitCode !== 0 && !this.aborted.has(sessionId)) {
+        throw new Error(`Hermes process exited with code ${exitCode}`);
+      }
     } catch (error: any) {
       if (!this.aborted.has(sessionId)) {
         throw error;
