@@ -116,8 +116,8 @@ impl SidecarManager {
         let child = Command::new(node_cmd)
             .args([&sidecar_path_str])
             .env("PORT", self.port.to_string())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .creation_flags(0x00000200)
             .spawn()
             .map_err(|e| {
@@ -140,22 +140,7 @@ impl SidecarManager {
         self.is_running.store(true, Ordering::Relaxed);
         println!("[Sidecar] Spawned {}, waiting for port {}...", node_cmd, self.port);
 
-        // Capture stderr in background
-        let stderr_buf = self.stderr_buf.clone();
-        if let Some(ref mut proc) = self.process {
-            if let Some(se) = proc.stderr.take() {
-                std::thread::spawn(move || {
-                    use std::io::BufRead;
-                    let reader = std::io::BufReader::new(se);
-                    for line in reader.lines().flatten() {
-                        stderr_buf.lock().unwrap().push_str(&line);
-                        stderr_buf.lock().unwrap().push('\n');
-                    }
-                });
-            }
-        }
-
-        // Wait for port with short timeout (2s)
+        // Wait for port
         let port_ready = self.wait_for_port(10);
         if !port_ready {
             let port = self.port;
@@ -183,7 +168,109 @@ impl SidecarManager {
             println!("[Sidecar] Port {} ready", self.port);
         }
 
+        // Start background watchdog to detect unexpected exits and auto-restart
+        // Spawn BEFORE spawning watchdog (watchdog will own the child handle)
+        self.spawn_watchdog(app_handle);
+
         Ok(self.port)
+    }
+
+    /// Static version of resolve_sidecar_path for use in watchdog thread.
+    fn resolve_sidecar_path_static(app_handle: &tauri::AppHandle) -> String {
+        if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+            let p = std::path::Path::new(&manifest)
+                .join("..").join("sidecar").join("dist").join("index.js");
+            if p.exists() { return p.to_string_lossy().to_string(); }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                let mut dir = exe_dir;
+                for _ in 0..4 {
+                    if let Some(parent) = dir.parent() {
+                        dir = parent;
+                        let p = dir.join("sidecar").join("dist").join("index.js");
+                        if p.exists() { return p.to_string_lossy().to_string(); }
+                    }
+                }
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            let p = cwd.join("sidecar").join("dist").join("index.js");
+            if p.exists() { return p.to_string_lossy().to_string(); }
+        }
+        if let Ok(resource_dir) = app_handle.path().resource_dir() {
+            let p = resource_dir.join("sidecar").join("dist").join("index.js");
+            if p.exists() { return p.to_string_lossy().to_string(); }
+        }
+        "../sidecar/dist/index.js".to_string()
+    }
+
+    /// Background thread that monitors the sidecar process.
+    /// If it exits unexpectedly, attempts auto-restart (up to 5 times).
+    fn spawn_watchdog(&mut self, app_handle: tauri::AppHandle) {
+        let is_running = self.is_running.clone();
+        let port = self.port;
+        let restart_count = self.restart_count.clone();
+
+        // Take the process out — the watchdog owns the child handle.
+        // This must happen AFTER wait_for_port and stderr capture are done.
+        let mut child = match self.process.take() {
+            Some(c) => c,
+            None => return,
+        };
+
+        std::thread::spawn(move || {
+            // Wait for the process to exit
+            let status = child.wait();
+            match &status {
+                Ok(s) => println!("[Sidecar] Process exited with code: {:?}", s.code()),
+                Err(e) => println!("[Sidecar] Process wait error: {}", e),
+            }
+            is_running.store(false, Ordering::Relaxed);
+
+            let count = restart_count.fetch_add(1, Ordering::Relaxed);
+            if count >= 5 {
+                println!("[Sidecar] Max restart attempts (5) reached, giving up");
+                return;
+            }
+
+            println!("[Sidecar] Auto-restarting (attempt {})...", count + 1);
+            std::thread::sleep(Duration::from_secs(2));
+
+            #[cfg(target_os = "windows")]
+            use std::os::windows::process::CommandExt;
+
+            let sidecar_path = Self::resolve_sidecar_path_static(&app_handle);
+            let mut child = match Command::new("F:\\soft\\nodejs\\node.exe")
+                .args([&sidecar_path])
+                .env("PORT", port.to_string())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x00000200)
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    println!("[Sidecar] Restart spawn failed: {}", e);
+                    return;
+                }
+            };
+
+            // Wait for port
+            for i in 0..20u32 {
+                std::thread::sleep(Duration::from_millis(500));
+                if TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
+                    is_running.store(true, Ordering::Relaxed);
+                    println!("[Sidecar] Restarted on port {} (+{}ms)", port, (i + 1) * 500);
+                    // Detach: let the restarted process run independently
+                    // (Child dropped here would kill it, so we leak it)
+                    std::mem::forget(child);
+                    return;
+                }
+            }
+            println!("[Sidecar] Restart failed: port {} not ready after 10s", port);
+            let _ = child.kill();
+        });
     }
 
     fn wait_for_port(&mut self, max_retries: u32) -> bool {

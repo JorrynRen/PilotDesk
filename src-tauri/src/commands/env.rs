@@ -1,10 +1,28 @@
 use tauri::Emitter;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use crate::db::models::EnvInfo;
 use crate::utils::errors::AppError;
+
+/// Cached env detection result with TTL
+struct EnvCache {
+    value: Option<EnvInfo>,
+    fetched_at: Option<Instant>,
+    in_progress: bool,
+}
+
+static ENV_CACHE: std::sync::LazyLock<Mutex<EnvCache>> = std::sync::LazyLock::new(|| {
+    Mutex::new(EnvCache {
+        value: None,
+        fetched_at: None,
+        in_progress: false,
+    })
+});
+
+const ENV_CACHE_TTL: Duration = Duration::from_secs(30);
 
 fn get_version(cmd: &str, arg: &str) -> Option<String> {
     let output = Command::new(cmd).arg(arg)
@@ -113,11 +131,70 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
 
 #[tauri::command]
 pub async fn detect_env() -> Result<EnvInfo, AppError> {
-    tokio::task::spawn_blocking(detect_env_inner).await.map_err(|e| AppError {
-        code: "ENV_DETECT_FAILED".into(),
-        message: format!("环境检测任务失败: {}", e),
-        details: None,
-    })?
+    // Return cached result if fresh (within TTL)
+    {
+        let cache = ENV_CACHE.lock().unwrap();
+        if let (Some(ref info), Some(fetched)) = (&cache.value, &cache.fetched_at) {
+            if fetched.elapsed() < ENV_CACHE_TTL {
+                println!("[env] Returning cached result ({}ms old)", fetched.elapsed().as_millis());
+                return Ok(info.clone());
+            }
+        }
+    }
+
+    // Prevent concurrent detections — wait or return cached
+    let need_detect = {
+        let mut cache = ENV_CACHE.lock().unwrap();
+        if cache.in_progress {
+            if cache.value.is_some() {
+                return Ok(cache.value.clone().unwrap());
+            }
+            drop(cache);
+            println!("[env] Waiting for in-progress detection...");
+            for _ in 0..300 {
+                std::thread::sleep(Duration::from_millis(100));
+                let cache = ENV_CACHE.lock().unwrap();
+                if let Some(ref info) = cache.value {
+                    if let Some(fetched) = &cache.fetched_at {
+                        if fetched.elapsed() < Duration::from_secs(5) {
+                            return Ok(info.clone());
+                        }
+                    }
+                }
+                drop(cache);
+            }
+            false // give up
+        } else {
+            cache.in_progress = true;
+            true
+        }
+    };
+    if !need_detect {
+        { let mut c = ENV_CACHE.lock().unwrap(); c.in_progress = false; }
+        return Err(AppError {
+            code: "ENV_DETECT_BUSY".into(),
+            message: "环境检测繁忙，请稍后重试".into(),
+            details: None,
+        });
+    }
+
+    let result = tokio::task::spawn_blocking(detect_env_inner).await;
+
+    let mut cache = ENV_CACHE.lock().unwrap();
+    cache.in_progress = false;
+    match result {
+        Ok(Ok(info)) => {
+            cache.value = Some(info.clone());
+            cache.fetched_at = Some(Instant::now());
+            Ok(info)
+        }
+        Ok(Err(e)) => Err(e),
+        Err(e) => Err(AppError {
+            code: "ENV_DETECT_FAILED".into(),
+            message: format!("环境检测任务失败: {}", e),
+            details: None,
+        }),
+    }
 }
 
 #[tauri::command]
@@ -148,6 +225,9 @@ pub async fn install_claude_code(app: tauri::AppHandle) -> Result<(), AppError> 
         "message": "Claude Code 安装完成",
         "progress": 100
     }));
+
+    // Clear cache so next detect_env picks up the new installation
+    { let mut c = ENV_CACHE.lock().unwrap(); c.value = None; c.fetched_at = None; }
 
     Ok(())
 }
@@ -180,6 +260,8 @@ pub async fn install_hermes(app: tauri::AppHandle) -> Result<(), AppError> {
         "message": "Hermes Agent 安装完成",
         "progress": 100
     }));
+
+    { let mut c = ENV_CACHE.lock().unwrap(); c.value = None; c.fetched_at = None; }
 
     Ok(())
 }

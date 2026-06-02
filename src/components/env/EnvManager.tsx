@@ -26,7 +26,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const [logs, setLogs] = useState<Array<{ timestamp: number; message: string; level: 'info' | 'warn' | 'error' | 'success' }>>([]);
 
   const addLog = useCallback((message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') => {
-    setLogs((prev) => [...prev, { timestamp: Date.now() / 1000, message, level }]);
+    setLogs((prev) => [...prev, { timestamp: Date.now(), message, level }]);
   }, []);
 
   const fetchEnv = useCallback(async () => {
