@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Search, Archive, Key, ChevronDown, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
+import { useWebSocket } from '../../hooks/useWebSocket';
 import { SessionListItem } from './SessionListItem';
 import { showToast } from '../../utils/toast';
 import { API_PROVIDERS } from '../../types';
@@ -34,6 +35,9 @@ export function SessionList() {
   const [customTitle, setCustomTitle] = useState('');
   const [customCwd, setCustomCwd] = useState('');
   const [creating, setCreating] = useState(false);
+
+  // WebSocket for Agent session lifecycle
+  const { createAgentSession: wsCreateSession, closeAgentSession: wsCloseSession } = useWebSocket(19830);
 
   // API providers from SQLite via store
   const { providers: apiProviders, fetchProviders } = useApiProviderStore();
@@ -121,6 +125,8 @@ export function SessionList() {
           customCwd.trim() || undefined,
           customTitle.trim() || undefined,
         );
+        // Notify Sidecar to create the Agent session
+        wsCreateSession(session.id, newSessionType, customCwd.trim() || undefined);
         setShowNewDialog(false);
         selectSession(session.id);
       }
@@ -133,6 +139,11 @@ export function SessionList() {
 
   const handleArchive = async (id: string) => {
     try {
+      // Notify Sidecar to close the Agent session
+      const session = sessions.find(s => s.id === id);
+      if (session && session.agentType !== 'api') {
+        wsCloseSession(id, session.agentType);
+      }
       await archiveSession(id);
     } catch (err) {
       showToast(`归档失败: ${err}`, 'error');
@@ -149,6 +160,11 @@ export function SessionList() {
 
   const handleDelete = async (id: string) => {
     try {
+      // Notify Sidecar to close the Agent session
+      const session = sessions.find(s => s.id === id) || archivedSessions.find(s => s.id === id);
+      if (session && session.agentType !== 'api') {
+        wsCloseSession(id, session.agentType);
+      }
       await deleteSession(id);
     } catch (err) {
       showToast(`删除失败: ${err}`, 'error');

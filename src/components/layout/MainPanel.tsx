@@ -34,6 +34,13 @@ export function MainPanel() {
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
 
+  // When switching to an Agent session, ensure Sidecar has the session created
+  useEffect(() => {
+    if (currentSession && currentSession.agentType !== 'api' && isConnected) {
+      createAgentSession(currentSession.id, currentSession.agentType);
+    }
+  }, [currentSessionId]); // Only re-run when session ID changes
+
   // Consume pending input from shared store
   const pendingFromStore = usePendingInputStore((s) => s.value);
   useEffect(() => {
@@ -91,7 +98,7 @@ export function MainPanel() {
     },
   };
 
-  const { isConnected, sendChat, sendApiChat, stopGeneration, stopApiChat } = useWebSocket(19830, wsHandlers);
+  const { isConnected, sendChat, sendApiChat, stopGeneration, stopApiChat, createAgentSession } = useWebSocket(19830, wsHandlers);
 
   const handleSend = useCallback(
     async (message: string, mode: ChatMode) => {

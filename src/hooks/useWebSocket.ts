@@ -142,6 +142,20 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     sendMessage({ type: 'skills:list-all' });
   }, [sendMessage]);
 
+  const createAgentSession = useCallback(
+    (sessionId: string, agentType: string, cwd?: string) => {
+      sendMessage({ type: 'session:create', sessionId, agentType, cwd });
+    },
+    [sendMessage]
+  );
+
+  const closeAgentSession = useCallback(
+    (sessionId: string, agentType?: string) => {
+      sendMessage({ type: 'session:close', sessionId, agentType });
+    },
+    [sendMessage]
+  );
+
   /**
    * Send API chat directly to LLM provider (no sidecar)
    * @param sessionId - Session ID
@@ -337,6 +351,8 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     stopApiChat,
     requestSkills,
     requestAllSkills,
+    createAgentSession,
+    closeAgentSession,
     disconnect,
   };
 }
