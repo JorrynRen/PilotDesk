@@ -82,7 +82,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </pre>
           )}
           <button
-            onClick={handleReset}
+            onClick={this.handleReset}
             style={{
               marginTop: '8px',
               padding: '6px 16px',

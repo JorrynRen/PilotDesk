@@ -31,35 +31,44 @@ export function MainPanel() {
   const [streamingStatus, setStreamingStatus] = useState('');
   const [pendingInput, setPendingInput] = useState<string | null>(null);
   const doneCalledRef = useRef<string | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Map raw status strings to friendly display text
+  const statusToFriendly = useCallback((status: string): string => {
+    const STATUS_MAP: Record<string, string> = {
+      'session_created:claude': '向 Claude Code 发送消息中，请等待回复…',
+      'session_created:hermes': '向 Hermes Agent 发送消息中，请等待回复…',
+      'session_closed': '会话已关闭',
+      'generation_stopped': '已停止生成',
+      'pong': '',
+    };
+    return STATUS_MAP[status] || status;
+  }, []);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId) || null;
+  // Stable refs for session create effect (avoid object reference changes on every render)
+  const currentAgentTypeRef = useRef<string | null>(null);
+  currentAgentTypeRef.current = currentSession?.agentType ?? null;
+  const createdSessionsRef = useRef<Set<string>>(new Set());
 
-  // When switching to an Agent session, ensure Sidecar has the session created
-  useEffect(() => {
-    if (currentSession && currentSession.agentType !== 'api' && isConnected) {
-      createAgentSession(currentSession.id, currentSession.agentType);
-    }
-  }, [currentSessionId, isConnected, currentSession, createAgentSession]);
-
-  // Consume pending input from shared store
-  const pendingFromStore = usePendingInputStore((s) => s.value);
-  useEffect(() => {
-    if (pendingFromStore) {
-      setPendingInput(pendingFromStore);
-      usePendingInputStore.getState().set(null);
-    }
-  }, [pendingFromStore]);
-
-  // WebSocket handlers
+  // WebSocket handlers (must be defined before useWebSocket call)
   const onChunk = useCallback((sessionId: string, content: string) => {
     if (sessionId === currentSessionId) {
       setStreamingContent((prev) => prev + content);
     }
   }, [currentSessionId]);
 
+  const clearTimeoutSafe = useCallback(() => {
+    if (timeoutRef.current !== null) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
+
   const onDone = useCallback((sessionId: string) => {
     if (doneCalledRef.current === sessionId) return;
     doneCalledRef.current = sessionId;
+    clearTimeoutSafe();
     if (sessionId === currentSessionId) {
       setIsGenerating(false);
       setStreamingStatus('');
@@ -78,13 +87,14 @@ export function MainPanel() {
         return '';
       });
     }
-  }, [currentSessionId, addMessage]);
+  }, [currentSessionId, addMessage, clearTimeoutSafe]);
 
   const wsHandlers = {
     onChunk,
     onDone,
     onError: (sessionId: string, error: string) => {
       if (sessionId === currentSessionId) {
+        clearTimeoutSafe();
         showToast(`错误: ${error}`, 'error');
         setIsGenerating(false);
         setStreamingContent('');
@@ -93,17 +103,40 @@ export function MainPanel() {
     },
     onStatus: (sessionId: string, status: string) => {
       if (sessionId === currentSessionId) {
-        setStreamingStatus(status);
+        setStreamingStatus(statusToFriendly(status));
       }
     },
   };
 
   const { isConnected, sendChat, sendApiChat, stopGeneration, stopApiChat, createAgentSession } = useWebSocket(19830, wsHandlers);
 
+  // When switching to an Agent session, ensure Sidecar has the session created
+  // Only fires when currentSessionId changes (not on every render)
+  useEffect(() => {
+    const agentType = currentAgentTypeRef.current;
+    if (currentSessionId && agentType && agentType !== 'api' && isConnected) {
+      // Only create once per session
+      if (!createdSessionsRef.current.has(currentSessionId)) {
+        createdSessionsRef.current.add(currentSessionId);
+        createAgentSession(currentSessionId, agentType);
+      }
+    }
+  }, [currentSessionId, isConnected, createAgentSession]);
+
+  // Consume pending input from shared store
+  const pendingFromStore = usePendingInputStore((s) => s.value);
+  useEffect(() => {
+    if (pendingFromStore) {
+      setPendingInput(pendingFromStore);
+      usePendingInputStore.getState().set(null);
+    }
+  }, [pendingFromStore]);
+
   const handleSend = useCallback(
     async (message: string, mode: ChatMode) => {
       if (!currentSession) return;
       doneCalledRef.current = null;
+      clearTimeoutSafe();
       setIsGenerating(true);
       setStreamingContent('');
       setStreamingStatus('发送中...');
@@ -119,11 +152,35 @@ export function MainPanel() {
       };
       addMessage(userMsg);
 
+      // Start 60s frontend timeout
+      timeoutRef.current = setTimeout(() => {
+        if (currentSession) {
+          setIsGenerating(false);
+          setStreamingStatus('');
+          setStreamingContent((prev) => {
+            if (prev && currentSession.id) {
+              const msg: Message = {
+                id: `msg-${Date.now()}`,
+                sessionId: currentSession.id,
+                role: 'assistant',
+                content: prev + '\n\n*(请求超时：智能体未在 60 秒内响应，请检查智能体状态后重试)*',
+                mode: 'native',
+                timestamp: Math.floor(Date.now() / 1000),
+              };
+              addMessage(msg);
+            }
+            return '';
+          });
+          showToast('请求超时：智能体未在 60 秒内响应', 'error');
+        }
+      }, 60000);
+
       if (currentSession.agentType === 'api') {
         // API direct call
         if (!currentSession.apiProvider || !currentSession.apiModel) {
           showToast('API 会话缺少提供商或模型配置', 'error');
           setIsGenerating(false);
+          clearTimeoutSafe();
           return;
         }
         // Look up full API URL from SQLite
@@ -137,6 +194,7 @@ export function MainPanel() {
         if (!apiEndpoint) {
           showToast('未找到 API URL，请在设置中配置', 'error');
           setIsGenerating(false);
+          clearTimeoutSafe();
           return;
         }
         // Build message history for multi-turn API chat (exclude current user message, it's added below)
@@ -149,10 +207,11 @@ export function MainPanel() {
         sendChat(currentSession.id, message, mode, currentSession.agentType as 'claude' | 'hermes');
       }
     },
-    [currentSession, sendChat, sendApiChat, addMessage]
+    [currentSession, sendChat, sendApiChat, addMessage, clearTimeoutSafe]
   );
 
   const handleStop = useCallback(() => {
+    clearTimeoutSafe();
     if (currentSession) {
       if (currentSession.agentType === 'api') {
         stopApiChat();
@@ -174,7 +233,7 @@ export function MainPanel() {
         setStreamingContent('');
       }
     }
-  }, [currentSession, stopGeneration, stopApiChat, streamingContent, addMessage]);
+  }, [currentSession, stopGeneration, stopApiChat, streamingContent, addMessage, clearTimeoutSafe]);
 
   // Build display messages
   const streamingMsg: StreamingMessage | null =

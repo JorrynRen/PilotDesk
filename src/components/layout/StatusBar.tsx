@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { AGENT_THEMES } from '../../types';
 import type { EnvInfo } from '../../types';
 
 interface StatusBarProps {
@@ -27,11 +28,11 @@ export function StatusBar({ onOpenSettings, wsConnected }: StatusBarProps) {
   }, [fetchEnv]);
 
   const claudeStatus = envInfo?.claudeCodeVersion
-    ? { color: '#10B981', label: envInfo.claudeCodeVersion }
+    ? { color: AGENT_THEMES.claude.color, label: envInfo.claudeCodeVersion }
     : { color: '#6B7280', label: '未安装' };
 
   const hermesStatus = envInfo?.hermesVersion
-    ? { color: '#10B981', label: envInfo.hermesVersion }
+    ? { color: AGENT_THEMES.hermes.color, label: envInfo.hermesVersion }
     : { color: '#6B7280', label: '未安装' };
 
   const wsColor = wsConnected ? '#10B981' : '#F59E0B';

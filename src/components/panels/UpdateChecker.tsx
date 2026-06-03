@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Download, Check, RefreshCw, Loader2, ExternalLink, Rocket } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -19,10 +19,6 @@ export function UpdateChecker() {
   const [updateResult, setUpdateResult] = useState<UpdateCheckResponse | null>(null);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetchUpdates();
-  }, []);
 
   const fetchUpdates = async () => {
     setChecking(true);

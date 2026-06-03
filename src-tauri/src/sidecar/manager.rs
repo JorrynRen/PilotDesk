@@ -112,10 +112,17 @@ impl SidecarManager {
         #[cfg(not(target_os = "windows"))]
         let node_cmd = "node";
 
+        // Build PATH with npm global bin + Python Scripts so `claude`/`hermes` are found
+        let npm_global_bin = "C:\\Users\\Administrator\\AppData\\Roaming\\npm";
+        let python_scripts = "C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python313\\Scripts";
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let sidecar_path = format!("{};{};{}", npm_global_bin, python_scripts, current_path);
+
         #[cfg(target_os = "windows")]
         let child = Command::new(node_cmd)
             .args([&sidecar_path_str])
             .env("PORT", self.port.to_string())
+            .env("PATH", &sidecar_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .creation_flags(0x00000200)
@@ -241,9 +248,16 @@ impl SidecarManager {
             use std::os::windows::process::CommandExt;
 
             let sidecar_path = Self::resolve_sidecar_path_static(&app_handle);
+            // Rebuild PATH with npm global bin + Python Scripts for restarted sidecar
+            let npm_global_bin = "C:\\Users\\Administrator\\AppData\\Roaming\\npm";
+            let python_scripts = "C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python313\\Scripts";
+            let current_path = std::env::var("PATH").unwrap_or_default();
+            let sidecar_path_env = format!("{};{};{}", npm_global_bin, python_scripts, current_path);
+
             let mut child = match Command::new("F:\\soft\\nodejs\\node.exe")
                 .args([&sidecar_path])
                 .env("PORT", port.to_string())
+                .env("PATH", &sidecar_path_env)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .creation_flags(0x00000200)

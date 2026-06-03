@@ -12,6 +12,7 @@
   --accent: #2563EB;
   --claude-tag: #3B82F6;
   --hermes-tag: #8B5CF6;
+  --api-tag: #10B981;
   --success: #10B981;
   --danger: #EF4444;
   --danger-bg: #FEE2E2;
@@ -30,6 +31,7 @@
   --accent: #3B82F6;
   --claude-tag: #3B82F6;
   --hermes-tag: #8B5CF6;
+  --api-tag: #10B981;
   --success: #10B981;
   --danger: #F87171;
   --danger-bg: #450A0A;
@@ -41,7 +43,7 @@ html, body, #root {
   padding: 0;
   width: 100%;
   height: 100%;
-  background-color: transparent;
+  background-color: var(--bg-primary);
   font-family: 'Segoe UI', -apple-system, sans-serif;
 }
 
@@ -158,7 +160,7 @@ html, body, #root {
 }
 
 [data-theme="dark"] .prose pre code {
-  background-color: transparent;
+  background-color: var(--bg-primary);
 }
 
 /* Hide scrollbar on textarea input */

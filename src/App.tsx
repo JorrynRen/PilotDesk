@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useSessionStore } from './stores/sessionStore';
 import { useSkillStore } from './stores/skillStore';
+import { useConfigStore } from './stores/configStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
 import { MarketPage } from './components/inspiration/MarketPage';
@@ -20,9 +21,17 @@ function App() {
   // WebSocket status monitoring (shared with StatusBar)
   const { isConnected: wsConnected, requestAllSkills } = useWebSocket(19830, {
     onSkills: (agentType, skills) => {
-      useSkillStore.getState().setAgentSkills(agentType, skills);
+      // Convert string[] to SkillInfo[]
+      const skillInfos = (skills as string[]).map((name: string) => ({ name, description: '' }));
+      useSkillStore.getState().setAgentSkills(agentType, skillInfos);
     },
   });
+
+  // Load config on app startup
+  const { fetchConfig } = useConfigStore();
+  useEffect(() => {
+    fetchConfig();
+  }, [fetchConfig]);
 
   // Fetch all agent skills when WebSocket connects
   const { setLoading: setSkillsLoading } = useSkillStore();
@@ -70,6 +79,29 @@ function App() {
           <StatusBar onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")} wsConnected={wsConnected} />
         </div>
       </div>
+      {/* WS Debug Panel */}
+      <div
+        id="ws-debug-panel"
+        style={{
+          position: 'fixed',
+          bottom: '32px',
+          right: '8px',
+          width: '320px',
+          maxHeight: '200px',
+          overflow: 'auto',
+          fontSize: '9px',
+          fontFamily: 'monospace',
+          background: 'rgba(0,0,0,0.85)',
+          color: '#0f0',
+          padding: '6px',
+          borderRadius: '6px',
+          zIndex: 99999,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          display: 'block',
+          pointerEvents: 'none',
+        }}
+      />
     </div>
   );
 }

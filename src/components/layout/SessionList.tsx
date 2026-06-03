@@ -3,9 +3,9 @@ import { Plus, Search, Archive, Key, ChevronDown, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { AGENT_THEMES } from '../../types';
 import { SessionListItem } from './SessionListItem';
 import { showToast } from '../../utils/toast';
-import { API_PROVIDERS } from '../../types';
 
 type NewSessionType = 'claude' | 'hermes' | 'api';
 
@@ -46,7 +46,8 @@ export function SessionList() {
     fetchSessions().catch((err) => {
       showToast(`加载会话失败: ${err}`, 'error');
     });
-  }, [fetchSessions]);
+    fetchProviders().catch(() => {});
+  }, [fetchSessions, fetchProviders]);
 
   // Reload providers when dialog opens
   useEffect(() => {
@@ -288,10 +289,10 @@ export function SessionList() {
             {/* Session type selector */}
             <div className="flex gap-2 mb-4">
               {([
-                { type: 'claude' as const, label: 'Claude Code', color: '#3B82F6' },
-                { type: 'hermes' as const, label: 'Hermes Agent', color: '#8B5CF6' },
-                { type: 'api' as const, label: 'API 直连', color: '#10B981' },
-              ]).map(({ type, label, color }) => (
+                { type: 'claude' as const, ...AGENT_THEMES.claude },
+                { type: 'hermes' as const, ...AGENT_THEMES.hermes },
+                { type: 'api' as const, ...AGENT_THEMES.api },
+              ]).map(({ type, color, label }) => (
                 <button
                   key={type}
                   onClick={() => setNewSessionType(type)}

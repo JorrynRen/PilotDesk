@@ -5,6 +5,7 @@ import { MODE_LABELS, MODE_COLORS } from '../../types';
 import { InspirationPicker } from '../input/InspirationPicker';
 import { SkillPicker } from '../input/SkillPicker';
 import { showToast } from '../../utils/toast';
+import { AGENT_THEMES } from '../../types';
 
 
 const MODE_ICONS: Record<ChatMode, typeof Send> = {
@@ -182,7 +183,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
           onClick={() => { setShowSkillPicker((v) => !v); setShowInspirationPicker(false); }}
           className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
           style={{
-            color: showSkillPicker ? 'var(--hermes-tag)' : 'var(--text-secondary)',
+            color: showSkillPicker ? AGENT_THEMES.hermes.cssVar : 'var(--text-secondary)',
             backgroundColor: showSkillPicker ? 'var(--border)' : 'transparent',
           }}
           title="技能列表 (Ctrl+K)"

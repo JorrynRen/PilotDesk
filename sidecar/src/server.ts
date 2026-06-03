@@ -29,6 +29,30 @@ function send(ws: WebSocket, msg: ChatChunk) {
   }
 }
 
+/**
+ * Wrap an AsyncGenerator with a timeout.
+ * If no item is yielded within the timeout, throws an error.
+ */
+async function* withTimeout<T>(
+  iterable: AsyncGenerator<T>,
+  timeoutMs: number,
+): AsyncGenerator<T> {
+  const iterator = iterable[Symbol.asyncIterator]();
+  while (true) {
+    const result = await Promise.race([
+      iterator.next(),
+      new Promise<IteratorResult<T>>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`请求超时：智能体未在 ${timeoutMs / 1000} 秒内响应，请检查智能体状态后重试`)),
+          timeoutMs,
+        ),
+      ),
+    ]);
+    if (result.done) break;
+    yield result.value;
+  }
+}
+
 wss.on('connection', (ws) => {
   console.log('[WS] Client connected');
 
@@ -85,7 +109,8 @@ wss.on('connection', (ws) => {
             cwd: msg.cwd,
           };
 
-          for await (const chunk of adapter.sendMessage(request)) {
+          // 120s timeout for the entire generation process
+          for await (const chunk of withTimeout(adapter.sendMessage(request), 120000)) {
             send(ws, {
               type: 'chunk',
               sessionId: msg.sessionId,
@@ -123,7 +148,6 @@ wss.on('connection', (ws) => {
         }
         break;
       }
-
 
       case 'skills:list': {
         try {

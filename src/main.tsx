@@ -16,6 +16,7 @@ import "./styles/globals.css";
   } catch { /* ignore */ }
 })();
 
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <ErrorBoundary>

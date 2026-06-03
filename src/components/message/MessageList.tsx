@@ -1,12 +1,8 @@
 import { useRef, useEffect } from 'react';
 import { MessageBubble } from './MessageBubble';
+import { useApiProviderStore } from '../../stores/apiProviderStore';
+import { AGENT_THEMES } from '../../types';
 import type { Message, Session } from '../../types';
-
-const AGENT_LABELS: Record<string, string> = {
-  claude: 'Claude Code',
-  hermes: 'Hermes Agent',
-  api: 'API 直连',
-};
 
 interface MessageListProps {
   messages: Message[];
@@ -19,10 +15,16 @@ interface MessageListProps {
 
 export function MessageList({ messages, session, isGenerating, streamingStatus, onEditMessage, onSaveInspiration }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { fetchProviders } = useApiProviderStore();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length]);
+
+  // Load API providers for session label display
+  useEffect(() => {
+    fetchProviders().catch(() => {});
+  }, [fetchProviders]);
 
   if (!session) {
     return (
@@ -53,17 +55,13 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
   }
 
   if (messages.length === 0) {
-    const agentLabel = AGENT_LABELS[session.agentType] || session.agentType;
+    const agentTheme = AGENT_THEMES[session.agentType] || AGENT_THEMES.claude;
+    const agentLabel = agentTheme.label;
     const modelInfo = session.agentType === 'api' && session.apiModel
       ? ` · ${session.apiModel}`
       : '';
 
-    const agentColors: Record<string, string> = {
-      claude: 'var(--claude-tag)',
-      hermes: 'var(--hermes-tag)',
-      api: 'var(--accent)',
-    };
-    const dotColor = agentColors[session.agentType] || 'var(--accent)';
+    const dotColor = agentTheme.cssVar;
 
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -107,9 +105,12 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
           <div className="shrink-0 pt-0.5">
             <div
               className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-              style={{ backgroundColor: 'rgba(59,130,246,0.15)', color: '#3B82F6' }}
+              style={{
+                backgroundColor: (AGENT_THEMES[session?.agentType ?? ''] ?? AGENT_THEMES.claude).bg,
+                color: (AGENT_THEMES[session?.agentType ?? ''] ?? AGENT_THEMES.claude).color,
+              }}
             >
-              {session?.agentType === 'claude' ? 'C' : session?.agentType === 'api' ? 'A' : 'H'}
+              {(AGENT_THEMES[session?.agentType ?? ''] ?? AGENT_THEMES.claude).initial}
             </div>
           </div>
           <div className="flex items-center gap-1.5 py-2">

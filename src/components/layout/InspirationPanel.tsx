@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Star, Search, Send, Trash2, Edit3, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
+import { AGENT_THEMES } from '../../types';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 
 const EMOJI_OPTIONS = ['💡', '🔥', '🎯', '⚡', '🚀', '🌟', '📝', '🔧', '🎨', '🧠', '📊', '🛠️', '💻', '📱', '🌐', '🔬', '🎭', '🎵', '🏆', '💎', '🌈', '🔑', '📖', '🧩'];
@@ -188,19 +189,9 @@ interface InspirationRowProps {
 }
 
 function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDelete, onEdit }: InspirationRowProps) {
-  const sourceLabel: Record<string, string> = {
-    claude: 'Claude',
-    hermes: 'Hermes',
-    manual: '手动',
-    api: 'API',
-  };
-
-  const sourceColor: Record<string, string> = {
-    claude: 'var(--claude-tag)',
-    hermes: 'var(--hermes-tag)',
-    manual: 'var(--text-tertiary)',
-    api: 'var(--text-tertiary)',
-  };
+  const sourceTheme = AGENT_THEMES[inspiration.sourceAgent ?? ''];
+  const sourceLabel = sourceTheme?.label ?? inspiration.sourceAgent;
+  const sourceColor = sourceTheme?.cssVar ?? 'var(--text-tertiary)';
 
   return (
     <div
@@ -217,9 +208,9 @@ function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDele
             </span>
             <span
               className="text-[9px] px-1 rounded shrink-0"
-              style={{ backgroundColor: `${sourceColor[inspiration.sourceAgent ?? '']}15`, color: sourceColor[inspiration.sourceAgent ?? ''] }}
+              style={{ backgroundColor: `${sourceColor}15`, color: sourceColor }}
             >
-              {sourceLabel[inspiration.sourceAgent ?? ''] ?? inspiration.sourceAgent}
+              {sourceLabel ?? inspiration.sourceAgent}
             </span>
           </div>
         </div>

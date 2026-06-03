@@ -123,23 +123,50 @@ export const MODE_COLORS: Record<ChatMode, string> = {
   expert: 'var(--hermes-tag)',
 };
 
-/** Available API providers for direct API sessions */
+/** Agent type theme configuration — centralized color, label, and initial for all agent types */
+export interface AgentTheme {
+  color: string;    // Primary hex color
+  bg: string;       // Background with alpha (rgba)
+  label: string;    // Display name
+  initial: string;  // Single letter initial
+  cssVar: string;   // CSS variable reference
+}
+
+export const AGENT_THEMES: Record<string, AgentTheme> = {
+  claude: {
+    color: '#3B82F6',
+    bg: 'rgba(59,130,246,0.15)',
+    label: 'Claude Code',
+    initial: 'C',
+    cssVar: 'var(--claude-tag)',
+  },
+  hermes: {
+    color: '#8B5CF6',
+    bg: 'rgba(139,92,246,0.15)',
+    label: 'Hermes Agent',
+    initial: 'H',
+    cssVar: 'var(--hermes-tag)',
+  },
+  api: {
+    color: '#10B981',
+    bg: 'rgba(16,185,129,0.15)',
+    label: 'API 直连',
+    initial: 'A',
+    cssVar: 'var(--api-tag)',
+  },
+  manual: {
+    color: '#6B7280',
+    bg: 'rgba(107,114,128,0.15)',
+    label: '手动',
+    initial: 'M',
+    cssVar: 'var(--text-tertiary)',
+  },
+};
+
+
 /** Search engine result item */
 export interface SearchResult {
   title: string;
   url: string;
   snippet: string;
 }
-
-export const API_PROVIDERS = [
-  {
-    id: 'anthropic',
-    name: 'Anthropic Claude',
-    models: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-haiku-20241022'],
-  },
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    models: ['gpt-4o', 'gpt-4o-mini', 'o1', 'o1-mini'],
-  },
-] as const;

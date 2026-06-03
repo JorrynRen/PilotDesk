@@ -114,14 +114,16 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
 
   addMessage: (msg: Message) => {
-    // Dedup guard: check if this message is identical to the last one
-    set((state) => {
-      const last = state.messages[state.messages.length - 1];
-      if (last && last.role === msg.role && last.content === msg.content && Math.abs(last.timestamp - msg.timestamp) <= 1) {
-        return state; // skip duplicate
-      }
-      return state; // no-op here, actual append is below
-    });
+    // Dedup: check against last message before adding
+    const skip = useSessionStore.getState().messages.slice(-1)[0];
+    if (skip && skip.role === msg.role && skip.content === msg.content && Math.abs(skip.timestamp - msg.timestamp) <= 2) {
+      return; // skip duplicate entirely
+    }
+
+    // Add to in-memory state immediately for UI responsiveness
+    set((state) => ({
+      messages: [...state.messages, msg],
+    }));
 
     // Persist to database (fire-and-forget, don't block UI)
     invoke<Message>('save_message', {
@@ -140,15 +142,6 @@ export const useSessionStore = create<SessionState>((set) => ({
       }));
     }).catch((err) => {
       console.error('Failed to persist message:', err);
-    });
-
-    // Add to in-memory state immediately for UI responsiveness (with dedup)
-    set((state) => {
-      const last = state.messages[state.messages.length - 1];
-      if (last && last.role === msg.role && last.content === msg.content && Math.abs(last.timestamp - msg.timestamp) <= 1) {
-        return state; // skip duplicate
-      }
-      return { messages: [...state.messages, msg] };
     });
   },
 }));

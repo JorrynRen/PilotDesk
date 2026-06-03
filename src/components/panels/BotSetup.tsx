@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Bot, Plus, Trash2, Wifi, WifiOff, Settings } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { AGENT_THEMES } from '../../types';
 import { useSessionStore } from '../../stores/sessionStore';
 
 interface BotChannel {
@@ -210,7 +211,7 @@ export function BotSetup() {
                   <div key={channel.id} className="px-4 py-3">
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
-                        <Bot size={14} style={{ color: channel.agentType === 'claude' ? 'var(--claude-tag)' : 'var(--hermes-tag)' }} />
+                        <Bot size={14} style={{ color: (AGENT_THEMES[channel.agentType] ?? AGENT_THEMES.claude).cssVar }} />
                         <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                           {channel.agentType === 'claude' ? 'Claude Code' : 'Hermes'}
                         </span>

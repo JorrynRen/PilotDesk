@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, X, Cpu, Loader2 } from 'lucide-react';
 import { useSkillStore, type SkillInfo } from '../../stores/skillStore';
+import { AGENT_THEMES } from '../../types';
 
 interface SkillPickerProps {
   agentType: string;
@@ -116,7 +117,7 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
                 backgroundColor: idx === selectedIndex ? 'var(--bg-tertiary)' : 'transparent',
               }}
             >
-              <Cpu size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--hermes-tag)' }} />
+              <Cpu size={14} className="mt-0.5 shrink-0" style={{ color: AGENT_THEMES.hermes.cssVar }} />
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                   {skill.name}

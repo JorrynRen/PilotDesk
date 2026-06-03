@@ -1,121 +1,58 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { getApiKey } from '../stores/apiProviderStore';
 import { inferApiFormat, resolveChatUrl, buildHeaders, buildBody } from '../utils/apiClient';
+import { useWsStore, type WsMessage, type WsHandlers } from '../stores/wsStore';
 
-type WsMessage =
-  | { type: 'chat'; sessionId: string; message: string; mode?: string; agentType?: string; cwd?: string }
-  | { type: 'stop'; sessionId: string; agentType?: string }
-  | { type: 'session:create'; sessionId: string; agentType: string; cwd?: string }
-  | { type: 'session:close'; sessionId: string; agentType?: string }
-  | { type: 'ping' }
-  | { type: 'skills:list'; agentType: string }
-  | { type: 'skills:list-all' };
+let listenerIdCounter = 0;
 
-interface WsHandlers {
-  onChunk?: (sessionId: string, content: string) => void;
-  onDone?: (sessionId: string) => void;
-  onError?: (sessionId: string, error: string) => void;
-  onStatus?: (sessionId: string, status: string) => void;
-  onSkills?: (agentType: string, skills: string[]) => void;
-}
-
+/**
+ * useWebSocket - thin wrapper around the singleton wsStore.
+ * All components sharing the same port will use the same WS connection.
+ * React StrictMode double-mount won't create duplicate connections because
+ * the store manages a single WebSocket instance at module level.
+ */
 function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
-  const wsRef = useRef<WebSocket | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectCountRef = useRef(0);
+  const storeInit = useWsStore((s) => s.init);
+  const storeIsConnected = useWsStore((s) => s.isConnected);
+  const storeSend = useWsStore((s) => s.send);
+  const storeAddListener = useWsStore((s) => s.addListener);
+  const storeRemoveListener = useWsStore((s) => s.removeListener);
+
+  // Unique listener id for this hook instance
+  const listenerIdRef = useRef<string>(`ws-listener-${++listenerIdCounter}`);
+
+  // Keep handlers ref updated without re-registering
   const handlersRef = useRef(handlers);
-
-  // AbortController ref for API direct calls
-  const abortRef = useRef<AbortController | null>(null);
-  // Per-session done guard to prevent double onDone calls
-  const apiDoneFiredRef = useRef<string | null>(null);
-
-  // Keep handlers ref updated
   useEffect(() => {
     handlersRef.current = handlers;
   }, [handlers]);
 
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+  // Register listener on mount, unregister on unmount
+  useEffect(() => {
+    const id = listenerIdRef.current;
+    storeAddListener(id, {
+      onChunk: (...args) => handlersRef.current?.onChunk?.(...args as [string, string]),
+      onDone: (...args) => handlersRef.current?.onDone?.(...args as [string, string]),
+      onError: (...args) => handlersRef.current?.onError?.(...args as [string, string]),
+      onStatus: (...args) => handlersRef.current?.onStatus?.(...args as [string, string]),
+      onSkills: (...args) => handlersRef.current?.onSkills?.(...args as [string, string[]]),
+    });
+    return () => {
+      storeRemoveListener(id);
+    };
+  }, [storeAddListener, storeRemoveListener]);
 
-    try {
-      const ws = new WebSocket(`ws://localhost:${port}`);
-      wsRef.current = ws;
+  // Initialize the singleton connection (only the first call actually connects)
+  useEffect(() => {
+    storeInit(port);
+  }, [storeInit, port]);
 
-      ws.onopen = () => {
-        setIsConnected(true);
-        reconnectCountRef.current = 0;
-        console.log(`[WS] Connected to sidecar on port ${port}`);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          const h = handlersRef.current;
-
-          switch (msg.type) {
-            case 'chunk':
-              h?.onChunk?.(msg.sessionId, msg.content || '');
-              break;
-            case 'done':
-              h?.onDone?.(msg.sessionId);
-              break;
-            case 'error':
-              h?.onError?.(msg.sessionId, msg.error || 'Unknown error');
-              break;
-            case 'status':
-              h?.onStatus?.(msg.sessionId, msg.status || '');
-              break;
-            case 'skills':
-              h?.onSkills?.(msg.agentType || '', msg.skills || []);
-              break;
-          }
-        } catch (err) {
-          console.error('[WS] Failed to parse message:', err);
-        }
-      };
-
-      ws.onclose = () => {
-        setIsConnected(false);
-        wsRef.current = null;
-
-        // Exponential backoff reconnect (max 5 attempts)
-        if (reconnectCountRef.current < 5) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectCountRef.current), 30000);
-          reconnectCountRef.current += 1;
-          console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectCountRef.current})`);
-          reconnectTimerRef.current = setTimeout(connect, delay);
-        }
-      };
-
-      ws.onerror = () => {
-        ws.close();
-      };
-    } catch (err) {
-      console.error('[WS] Connection error:', err);
-    }
-  }, [port]);
-
-  const disconnect = useCallback(() => {
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-    reconnectCountRef.current = 5; // Prevent auto-reconnect
-    wsRef.current?.close();
-    wsRef.current = null;
-    setIsConnected(false);
-  }, []);
-
-  const sendMessage = useCallback((msg: WsMessage) => {
-    const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(msg));
-    } else {
-      console.warn('[WS] Cannot send: not connected');
-    }
-  }, []);
+  const sendMessage = useCallback(
+    (msg: WsMessage) => {
+      storeSend(msg);
+    },
+    [storeSend]
+  );
 
   const sendChat = useCallback(
     (sessionId: string, message: string, mode?: string, agentType?: string, cwd?: string) => {
@@ -156,16 +93,10 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     [sendMessage]
   );
 
-  /**
-   * Send API chat directly to LLM provider (no sidecar)
-   * @param sessionId - Session ID
-   * @param message - User message text
-   * @param apiEndpoint - Full API URL (e.g. https://api.siliconflow.cn/v1/chat/completions)
-   * @param providerId - Provider ID for API key lookup
-   * @param model - Model name
-   * @param history - Previous messages
-   * @param providerName - Display name for error messages
-   */
+  // --- Direct API chat (no sidecar, uses fetch) ---
+  const abortRef = useRef<AbortController | null>(null);
+  const apiDoneFiredRef = useRef<string | null>(null);
+
   const sendApiChat = useCallback(
     async (
       sessionId: string,
@@ -177,7 +108,6 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
       providerName?: string,
     ) => {
       const h = handlersRef.current;
-      // Reset done guard for this session
       apiDoneFiredRef.current = null;
       const safeOnDone = (sid: string) => {
         if (apiDoneFiredRef.current === sid) return;
@@ -185,7 +115,6 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
         h?.onDone?.(sid);
       };
 
-      // Retrieve the actual API key from SQLite
       const key = await getApiKey(providerId);
       if (!key) {
         h?.onError?.(sessionId, `未配置 API Key: ${providerName || providerId}`);
@@ -221,7 +150,6 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
             return;
           }
 
-          // Parse SSE stream
           const reader = res.body?.getReader();
           if (!reader) {
             h?.onError?.(sessionId, '无法读取响应流');
@@ -261,7 +189,6 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
             }
           }
 
-          // Stream ended without explicit message_stop
           safeOnDone(sessionId);
         } else {
           const res = await fetch(chatUrl, {
@@ -277,7 +204,6 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
             return;
           }
 
-          // Parse SSE stream
           const reader = res.body?.getReader();
           if (!reader) {
             h?.onError?.(sessionId, '无法读取响应流');
@@ -334,16 +260,8 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     abortRef.current = null;
   }, []);
 
-  // Auto-connect on mount
-  useEffect(() => {
-    connect();
-    return () => {
-      disconnect();
-    };
-  }, [connect, disconnect]);
-
   return {
-    isConnected,
+    isConnected: storeIsConnected,
     sendMessage,
     sendChat,
     sendApiChat,
@@ -353,11 +271,8 @@ function useWebSocket(port: number = 19830, handlers?: WsHandlers) {
     requestAllSkills,
     createAgentSession,
     closeAgentSession,
-    disconnect,
   };
 }
 
 export default useWebSocket;
-// ... (文件末尾)
-// 添加命名导出
 export { useWebSocket };

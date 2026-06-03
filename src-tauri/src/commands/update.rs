@@ -42,54 +42,46 @@ fn is_version_older(a: &str, b: &str) -> bool {
     false
 }
 
-/// Query npm registry for latest version via PowerShell
+/// Query npm registry for latest version via HTTP
 async fn query_npm_latest(package_name: &str) -> Result<Option<String>, String> {
     let url = format!("https://registry.npmjs.org/{}/latest", package_name);
-    let output = tokio::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            &format!(
-                "(Invoke-RestMethod -Uri '{}' -TimeoutSec 10).version",
-                url
-            ),
-        ])
-        .output()
-        .await
-        .map_err(|e| format!("PowerShell fetch failed: {}", e))?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client build failed: {}", e))?;
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let version = stdout.trim().to_string();
-        if !version.is_empty() {
-            return Ok(Some(version));
-        }
+    let resp = client.get(&url)
+        .header("User-Agent", "PilotDesk")
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.map_err(|e| format!("JSON parse failed: {}", e))?;
+        let version = body.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
+        return Ok(version);
     }
     Ok(None)
 }
 
-/// Query PyPI for latest version via PowerShell
+/// Query PyPI for latest version via HTTP
 async fn query_pypi_latest(package_name: &str) -> Result<Option<String>, String> {
     let url = format!("https://pypi.org/pypi/{}/json", package_name);
-    let output = tokio::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            &format!(
-                "(Invoke-RestMethod -Uri '{}' -TimeoutSec 10).info.version",
-                url
-            ),
-        ])
-        .output()
-        .await
-        .map_err(|e| format!("PowerShell fetch failed: {}", e))?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client build failed: {}", e))?;
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let version = stdout.trim().to_string();
-        if !version.is_empty() {
-            return Ok(Some(version));
-        }
+    let resp = client.get(&url)
+        .header("User-Agent", "PilotDesk")
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.map_err(|e| format!("JSON parse failed: {}", e))?;
+        let version = body.get("info").and_then(|i| i.get("version")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        return Ok(version);
     }
     Ok(None)
 }
@@ -104,27 +96,35 @@ pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppErro
 
     let latest = {
         let url = "https://api.github.com/repos/jorryn/pilotdesk/releases/latest";
-        let output = tokio::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "try {{ (Invoke-RestMethod -Uri '{}' -TimeoutSec 10 -Headers @{{'User-Agent'='PilotDesk'}}).tag_name }} catch {{ }}",
-                    url
-                ),
-            ])
-            .output()
-            .await
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
             .map_err(|e| AppError {
                 code: "UPDATE_CHECK_FAILED".into(),
-                message: format!("PowerShell fetch failed: {}", e),
+                message: format!("HTTP client build failed: {}", e),
                 details: None,
             })?;
 
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let tag = stdout.trim().trim_start_matches('v').to_string();
-            if !tag.is_empty() { Some(tag) } else { None }
+        let resp = client.get(url)
+            .header("User-Agent", "PilotDesk")
+            .send()
+            .await
+            .map_err(|e| AppError {
+                code: "UPDATE_CHECK_FAILED".into(),
+                message: format!("GitHub API request failed: {}", e),
+                details: None,
+            })?;
+
+        if resp.status().is_success() {
+            let body: serde_json::Value = resp.json().await.map_err(|e| AppError {
+                code: "UPDATE_CHECK_FAILED".into(),
+                message: format!("JSON parse failed: {}", e),
+                details: None,
+            })?;
+            let tag = body.get("tag_name").and_then(|t| t.as_str())
+                .map(|t| t.trim_start_matches('v').to_string())
+                .filter(|t| !t.is_empty());
+            tag
         } else {
             None
         }
@@ -152,18 +152,19 @@ pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppErro
 /// Returns both version string and release time.
 #[tauri::command]
 pub async fn check_single_npm(package_name: String) -> Result<VersionTimeInfo, AppError> {
-    // Use full package endpoint to get dist-tags.latest + time[latest]
     let url = format!("https://registry.npmjs.org/{}", package_name);
-    let output = tokio::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            &format!(
-                "$r = Invoke-RestMethod -Uri '{}' -TimeoutSec 10; $latest = $r.\"dist-tags\".latest; $time = $r.time.$latest; \"$latest|$time\"",
-                url
-            ),
-        ])
-        .output()
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError {
+            code: "NPM_QUERY_FAILED".into(),
+            message: format!("查询 npm 失败: {}", e),
+            details: None,
+        })?;
+
+    let resp = client.get(&url)
+        .header("User-Agent", "PilotDesk")
+        .send()
         .await
         .map_err(|e| AppError {
             code: "NPM_QUERY_FAILED".into(),
@@ -171,16 +172,27 @@ pub async fn check_single_npm(package_name: String) -> Result<VersionTimeInfo, A
             details: None,
         })?;
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let parts: Vec<&str> = stdout.trim().splitn(2, '|').collect();
-        let version = parts.get(0).map_or("", |v| v).trim().to_string();
-        let release_time = parts.get(1).filter(|s| !s.trim().is_empty()).map(|s| {
-            // npm returns ISO 8601 like "2025-05-20T18:30:00.000Z", extract date only
-            s.trim().split('T').next().unwrap_or(s.trim()).to_string()
-        });
+    if resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.map_err(|e| AppError {
+            code: "NPM_QUERY_FAILED".into(),
+            message: format!("查询 npm 失败: {}", e),
+            details: None,
+        })?;
+
+        let version = body.get("dist-tags")
+            .and_then(|d| d.get("latest"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let release_time = body.get("time")
+            .and_then(|t| t.get(&version))
+            .and_then(|v| v.as_str())
+            .map(|s| s.split('T').next().unwrap_or(s).to_string());
+
         return Ok(VersionTimeInfo { version, release_time });
     }
+
     Ok(VersionTimeInfo { version: String::new(), release_time: None })
 }
 
@@ -189,16 +201,18 @@ pub async fn check_single_npm(package_name: String) -> Result<VersionTimeInfo, A
 #[tauri::command]
 pub async fn check_single_pypi(package_name: String) -> Result<VersionTimeInfo, AppError> {
     let url = format!("https://pypi.org/pypi/{}/json", package_name);
-    let output = tokio::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            &format!(
-                "$r = Invoke-RestMethod -Uri '{}' -TimeoutSec 10; $ver = $r.info.version; $upload = $r.releases.$ver[0].upload_time; \"$ver|$upload\"",
-                url
-            ),
-        ])
-        .output()
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError {
+            code: "PYPI_QUERY_FAILED".into(),
+            message: format!("查询 PyPI 失败: {}", e),
+            details: None,
+        })?;
+
+    let resp = client.get(&url)
+        .header("User-Agent", "PilotDesk")
+        .send()
         .await
         .map_err(|e| AppError {
             code: "PYPI_QUERY_FAILED".into(),
@@ -206,17 +220,29 @@ pub async fn check_single_pypi(package_name: String) -> Result<VersionTimeInfo, 
             details: None,
         })?;
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let parts: Vec<&str> = stdout.trim().splitn(2, '|').collect();
-        let version = parts.get(0).map_or("", |v| v).trim().to_string();
-        let release_time = parts.get(1).map(|s| {
-            // PyPI returns ISO 8601 like "2025-05-29T12:00:00", extract date only
-            s.trim().split('T').next().unwrap_or(s.trim()).to_string()
-        });
+    if resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.map_err(|e| AppError {
+            code: "PYPI_QUERY_FAILED".into(),
+            message: format!("查询 PyPI 失败: {}", e),
+            details: None,
+        })?;
+
+        let version = body.get("info")
+            .and_then(|i| i.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let release_time = body.get("releases")
+            .and_then(|r| r.get(&version))
+            .and_then(|arr| arr.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|r| r.get("upload_time"))
+            .and_then(|t| t.as_str())
+            .map(|s| s.split('T').next().unwrap_or(s).to_string());
+
         return Ok(VersionTimeInfo { version, release_time });
     }
+
     Ok(VersionTimeInfo { version: String::new(), release_time: None })
 }
-
-

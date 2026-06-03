@@ -130,9 +130,27 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
     // Try known node paths (Tauri process may not inherit full PATH)
     let node_version = get_version_bat(r"F:\soft\nodejs\node.exe", "--version")
         .or_else(|| get_version("node", "--version"));
-    let git_version = get_version("git", "--version");
-    let python_version = get_version("python", "--version")
-        .or_else(|| get_version("python3", "--version"));
+
+    // Git: try common install paths first, fall back to PATH
+    let git_paths = [
+        &format!(r"{}\Program Files\Git\bin\git.exe", std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into())),
+        &format!(r"{}\Program Files\Git\cmd\git.exe", std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into())),
+        &format!(r"{}\Program Files (x86)\Git\bin\git.exe", std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into())),
+        "git",
+    ];
+    let git_version = probe_version(&git_paths, "--version");
+
+    // Python: try common install paths first, fall back to PATH
+    let python_paths = [
+        &format!(r"{}\Programs\Python\Python313\python.exe", localappdata),
+        &format!(r"{}\Programs\Python\Python312\python.exe", localappdata),
+        &format!(r"{}\Programs\Python\Python311\python.exe", localappdata),
+        &format!(r"C:\Python313\python.exe"),
+        &format!(r"C:\Python312\python.exe"),
+        "python",
+        "python3",
+    ];
+    let python_version = probe_version(&python_paths, "--version");
 
     println!("[env] node={:?} git={:?} python={:?}", node_version, git_version, python_version);
 

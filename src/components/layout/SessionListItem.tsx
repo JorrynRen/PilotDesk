@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { MessageSquare, Archive, Trash2, Pencil, Check, X } from 'lucide-react';
+import { AGENT_THEMES } from '../../types';
 import { AgentBadge } from '../common/AgentBadge';
 import type { Session } from '../../types';
 
@@ -103,7 +104,7 @@ export function SessionListItem({
                 <button
                   onClick={handleConfirmEdit}
                   className="p-0.5 rounded"
-                  style={{ color: '#10B981' }}
+                  style={{ color: AGENT_THEMES.api.color }}
                   title="确认"
                 >
                   <Check size={11} />

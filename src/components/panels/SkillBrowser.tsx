@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Cpu, Search, ChevronRight, FolderOpen, Bot } from 'lucide-react';
 import { useSkillStore } from '../../stores/skillStore';
+import { AGENT_THEMES } from '../../types';
 
 interface SkillBrowserProps {
   agentType: string;
@@ -82,7 +83,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
                   className="flex items-center gap-2 px-4 py-2"
                   style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
                 >
-                  <Bot size={12} style={{ color: agt === 'claude' ? 'var(--claude-tag)' : 'var(--hermes-tag)' }} />
+                  <Bot size={12} style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
                   <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
                     {AGENT_LABELS[agt] || agt}
                   </span>
@@ -108,7 +109,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
                     }}
                   >
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-                      <Cpu size={16} style={{ color: agt === 'claude' ? 'var(--claude-tag)' : 'var(--hermes-tag)' }} />
+                      <Cpu size={16} style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>

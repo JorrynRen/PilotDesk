@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Brain, Search, Clock, Tag } from 'lucide-react';
+import { AGENT_THEMES } from '../../types';
 
 interface MemoryItem {
   id: string;
@@ -131,11 +132,11 @@ export function MemoryBrowser({ agentType, onSelect }: MemoryBrowserProps) {
                   <span
                     className="text-[10px] px-1.5 py-0.5 rounded"
                     style={{
-                      backgroundColor: memory.agentType === 'claude' ? 'var(--claude-tag)' : 'var(--hermes-tag)',
+                      backgroundColor: (AGENT_THEMES[memory.agentType] ?? AGENT_THEMES.claude).cssVar,
                       color: '#fff',
                     }}
                   >
-                    {memory.agentType === 'claude' ? 'Claude' : 'Hermes'}
+                    {(AGENT_THEMES[memory.agentType] ?? AGENT_THEMES.claude).label}
                   </span>
                   <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                     {memory.sessionTitle}

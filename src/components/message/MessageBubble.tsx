@@ -1,11 +1,12 @@
-import { useState, useCallback } from 'react';
-import { Copy, Edit3, Bookmark, Check } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Copy, Edit3, Bookmark, Check, User } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { MODE_LABELS, MODE_COLORS } from '../../types';
+import { AGENT_THEMES, MODE_LABELS, MODE_COLORS } from '../../types';
 import { useInspirationStore } from '../../stores/inspirationStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
+import { useConfigStore } from '../../stores/configStore';
 import { showToast } from '../../utils/toast';
-import type { Message } from '../../types';
+import { type Message } from '../../types';
 
 interface MessageBubbleProps {
   message: Message;
@@ -18,28 +19,61 @@ interface MessageBubbleProps {
 
 function formatTimestamp(ts: number): string {
   const date = new Date(ts * 1000);
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const time = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}/${m}/${d} ${time}`;
 }
 
-const AGENT_TYPE_LABELS: Record<string, string> = {
-  claude: 'Claude Code',
-  hermes: 'Hermes Agent',
-  api: 'API',
-};
-
-const AGENT_TYPE_COLORS: Record<string, string> = {
-  claude: '#3B82F6',
-  hermes: '#8B5CF6',
-  api: '#10B981',
-};
+/** Derive a friendly provider/manufacturer name from an API endpoint URL */
+function deriveProviderName(endpoint: string | null | undefined): string | null {
+  if (!endpoint) return null;
+  const url = endpoint.toLowerCase();
+  if (url.includes('zhipu') || url.includes('bigmodel')) return '智谱AI';
+  if (url.includes('openai')) return 'OpenAI';
+  if (url.includes('anthropic')) return 'Anthropic';
+  if (url.includes('deepseek')) return 'DeepSeek';
+  if (url.includes('moonshot') || url.includes('kimi')) return 'Moonshot';
+  if (url.includes('siliconflow')) return '硅基流动';
+  if (url.includes('volcengine') || url.includes('ark')) return '火山引擎';
+  if (url.includes('baidu') || url.includes('qianfan')) return '百度千帆';
+  if (url.includes('aliyun') || url.includes('dashscope')) return '阿里云';
+  if (url.includes('tencent') || url.includes('hunyuan')) return '腾讯混元';
+  // Fallback: extract hostname
+  try {
+    const hostname = new URL(endpoint).hostname;
+    return hostname;
+  } catch {
+    return null;
+  }
+}
 
 export function MessageBubble({ message, agentType, apiProviderId, apiModel, onEdit, onSaveInspiration }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === 'user';
 
-  // Resolve provider name for API sessions
+  // Resolve provider name for API sessions (only from user-configured providers list)
   const providers = useApiProviderStore((s) => s.providers);
-  const providerName = apiProviderId ? providers.find(p => p.id === apiProviderId)?.name : undefined;
+  const { fetchProviders } = useApiProviderStore();
+  const providerName = apiProviderId
+    ? providers.find(p => p.id === apiProviderId)?.name
+    : undefined;
+
+  // Auto-fetch providers if not loaded yet
+  useEffect(() => {
+    if (apiProviderId && providers.length === 0) {
+      fetchProviders().catch(() => {});
+    }
+  }, [apiProviderId, providers.length, fetchProviders]);
+
+  // Get model name from configStore for claude/hermes
+  const config = useConfigStore((s) => s.config);
+  const agentModel = agentType === 'claude'
+    ? config?.claude?.model
+    : agentType === 'hermes'
+      ? config?.hermes?.model
+      : undefined;
 
   const handleCopy = useCallback(async () => {
     try {
@@ -73,14 +107,21 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
   const modeColor = MODE_COLORS[messageMode];
   const modeLabel = MODE_LABELS[messageMode];
 
-  // Build agent label: "AgentType | Provider | Model HH:MM"
+  // Build agent label: "AgentType | Provider | Model Time"
   const buildAgentLabel = () => {
-    const typeLabel = AGENT_TYPE_LABELS[agentType] || agentType;
+    const typeLabel = AGENT_THEMES[agentType]?.label || agentType;
     const time = formatTimestamp(message.timestamp);
     const parts = [typeLabel];
     if (agentType === 'api') {
+      // API type: provider name comes from user-configured providers list
       if (providerName) parts.push(providerName);
       if (apiModel) parts.push(apiModel);
+    } else {
+      // Claude/Hermes: derive provider name from apiEndpoint base URL
+      const endpoint = agentType === 'claude' ? config?.claude?.apiEndpoint : config?.hermes?.apiEndpoint;
+      const provider = deriveProviderName(endpoint);
+      if (provider) parts.push(provider);
+      if (agentModel) parts.push(agentModel);
     }
     return parts.join(' | ') + ' ' + time;
   };
@@ -153,7 +194,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
               color: '#3B82F6',
             }}
           >
-            U
+            <User size={14} />
           </div>
         </div>
       </div>
@@ -161,8 +202,9 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
   }
 
   // Assistant message
-  const agentColor = AGENT_TYPE_COLORS[agentType] || '#3B82F6';
-  const agentInitial = agentType === 'claude' ? 'C' : agentType === 'api' ? 'A' : 'H';
+  const agentTheme = AGENT_THEMES[agentType] || AGENT_THEMES.claude;
+  const agentColor = agentTheme.color;
+  const agentInitial = agentTheme.initial;
 
   return (
     <div className="group flex gap-2.5 px-4 py-[3px]">

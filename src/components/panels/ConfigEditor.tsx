@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useConfigStore, type ClaudeConfigPublic, type HermesConfigPublic } from '../../stores/configStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { AGENT_THEMES } from '../../types';
 
 interface ConfigEditorProps {
   agent: string;
@@ -145,7 +146,7 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
           disabled={!modified || saving}
           className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
           style={{
-            backgroundColor: modified ? 'var(--claude-tag)' : 'var(--bg-tertiary)',
+            backgroundColor: modified ? AGENT_THEMES.claude.cssVar : 'var(--bg-tertiary)',
             color: modified ? '#fff' : 'var(--text-secondary)',
           }}
         >
@@ -335,7 +336,7 @@ function HermesConfigForm({ config }: { config: HermesConfigPublic }) {
           disabled={!modified || saving}
           className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
           style={{
-            backgroundColor: modified ? 'var(--hermes-tag)' : 'var(--bg-tertiary)',
+            backgroundColor: modified ? AGENT_THEMES.hermes.cssVar : 'var(--bg-tertiary)',
             color: modified ? '#fff' : 'var(--text-secondary)',
           }}
         >

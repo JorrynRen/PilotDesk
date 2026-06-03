@@ -18,7 +18,7 @@ interface DependencyStatus {
   latestReleaseTime: string | null;
   hasUpdate: boolean;
   updateChecking: boolean;
-
+}
 
 interface EnvManagerProps {
   onComplete?: () => void;
@@ -165,8 +165,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         ? isOlder(envInfo.claudeCodeVersion, latestVersions['claude'].version)
         : false,
       updateChecking: updateChecking['claude'] ?? false,
-      currentReleaseTime: currentReleaseTimes['claude'] ?? null,
-      currentTimeChecking: currentTimeChecking['claude'] ?? false,
+
     },
     {
       name: 'Hermes Agent',
@@ -181,8 +180,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         ? isOlder(envInfo.hermesVersion, latestVersions['hermes'].version)
         : false,
       updateChecking: updateChecking['hermes'] ?? false,
-      currentReleaseTime: currentReleaseTimes['hermes'] ?? null,
-      currentTimeChecking: currentTimeChecking['hermes'] ?? false,
+
     },
   ];
 
@@ -273,12 +271,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                       {dep.installed ? `v${dep.version}` : '未安装'}
                     </span>
-                    {dep.installed && dep.currentReleaseTime && (
-                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                        ({dep.currentReleaseTime})
-                      </span>
-                    )}
-                    {(dep.updateChecking || dep.currentTimeChecking) && (
+
+                    {dep.updateChecking && (
                       <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
                     )}
                     {dep.latestVersion && !dep.updateChecking && (
