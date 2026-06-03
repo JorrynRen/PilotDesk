@@ -46,6 +46,7 @@ impl Default for HermesConfig {
 
 /// Public representation (api_key masked)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HermesConfigPublic {
     pub model: Option<String>,
     pub api_endpoint: Option<String>,
@@ -60,15 +61,22 @@ pub struct HermesConfigPublic {
 }
 
 impl HermesConfig {
-    /// Read Hermes config from ~/.hermes/config.json
-    /// (We use JSON format internally for simplicity; YAML can be added later)
+    /// Read Hermes config from ~/.hermes/
+    /// Priority: config.yaml (new version) > config.json (old version) > .env
     pub fn load() -> Result<Self, AppError> {
         let dir = hermes_config_dir();
         if !dir.exists() {
             return Ok(Self::default());
         }
-        
-        // Try JSON config first, then YAML
+
+        // Try YAML config first (new Hermes version)
+        let yaml_path = dir.join("config.yaml");
+        if yaml_path.exists() {
+            let content = fs::read_to_string(&yaml_path)?;
+            return Self::parse_yaml(&content);
+        }
+
+        // Try JSON config (old Hermes version)
         let json_path = dir.join("config.json");
         if json_path.exists() {
             let content = fs::read_to_string(&json_path)?;
@@ -77,13 +85,6 @@ impl HermesConfig {
                 message: "解析 Hermes 配置文件失败".to_string(),
                 details: Some(e.to_string()),
             });
-        }
-
-        // Try YAML config
-        let yaml_path = dir.join("config.yaml");
-        if yaml_path.exists() {
-            let content = fs::read_to_string(&yaml_path)?;
-            return Self::parse_yaml(&content);
         }
 
         // Try env file for API key at least
@@ -122,17 +123,79 @@ impl HermesConfig {
         Ok(config)
     }
 
-    /// Save Hermes config to ~/.hermes/config.json
+    /// Save Hermes config — writes to config.yaml (new version) or config.json (old version)
+    /// Priority: if config.yaml exists → update YAML; otherwise → write JSON
     pub fn save(&self) -> Result<(), AppError> {
         let dir = hermes_config_dir();
         fs::create_dir_all(&dir)?;
-        let config_path = dir.join("config.json");
-        let content = serde_json::to_string_pretty(self).map_err(|e| AppError {
-            code: "ERR_SERIALIZE_HERMES_CONFIG".to_string(),
-            message: "序列化 Hermes 配置失败".to_string(),
-            details: Some(e.to_string()),
-        })?;
-        fs::write(&config_path, content)?;
+
+        let yaml_path = dir.join("config.yaml");
+        let json_path = dir.join("config.json");
+
+        if yaml_path.exists() {
+            // New Hermes version: update config.yaml in-place
+            let yaml_content = fs::read_to_string(&yaml_path)?;
+            let mut yaml_value: serde_json::Value = serde_yaml::from_str(&yaml_content).map_err(|e| AppError {
+                code: "ERR_PARSE_HERMES_YAML".to_string(),
+                message: "解析 Hermes YAML 配置失败".to_string(),
+                details: Some(e.to_string()),
+            })?;
+
+            // Update model section
+            if let Some(model_obj) = yaml_value.get_mut("model") {
+                if let Some(model) = &self.model {
+                    model_obj["default"] = serde_json::Value::String(model.clone());
+                }
+                if let Some(api_endpoint) = &self.api_endpoint {
+                    model_obj["base_url"] = serde_json::Value::String(api_endpoint.clone());
+                }
+                if let Some(api_key) = &self.api_key {
+                    model_obj["api_key"] = serde_json::Value::String(api_key.clone());
+                }
+            }
+
+            // Update agent section
+            if let Some(agent_obj) = yaml_value.get_mut("agent") {
+                if let Some(temperature) = self.temperature {
+                    agent_obj["temperature"] = serde_json::Value::Number(
+                        serde_json::Number::from_f64(temperature).unwrap_or(serde_json::Number::from(0))
+                    );
+                }
+                if let Some(max_tokens) = self.max_tokens {
+                    agent_obj["max_turns"] = serde_json::Value::Number(
+                        serde_json::Number::from(max_tokens)
+                    );
+                }
+            }
+
+            // Update display section
+            if let Some(system_prompt) = &self.system_prompt {
+                if let Some(display_obj) = yaml_value.get_mut("display") {
+                    display_obj["personality"] = serde_json::Value::String(system_prompt.clone());
+                } else {
+                    let mut display = serde_json::Map::new();
+                    display.insert("personality".to_string(), serde_json::Value::String(system_prompt.clone()));
+                    yaml_value["display"] = serde_json::Value::Object(display);
+                }
+            }
+
+            // Write back YAML
+            let updated_yaml = serde_yaml::to_string(&yaml_value).map_err(|e| AppError {
+                code: "ERR_SERIALIZE_HERMES_YAML".to_string(),
+                message: "序列化 Hermes YAML 配置失败".to_string(),
+                details: Some(e.to_string()),
+            })?;
+            fs::write(&yaml_path, updated_yaml)?;
+        } else {
+            // Old Hermes version or no YAML yet: write JSON
+            let json_content = serde_json::to_string_pretty(self).map_err(|e| AppError {
+                code: "ERR_SERIALIZE_HERMES_CONFIG".to_string(),
+                message: "序列化 Hermes 配置失败".to_string(),
+                details: Some(e.to_string()),
+            })?;
+            fs::write(&json_path, json_content)?;
+        }
+
         Ok(())
     }
 

@@ -38,11 +38,10 @@ const AGENT_FORM_CONFIGS: Record<AgentType, AgentFormConfig> = {
     defaultModel: 'claude-sonnet-4-20250514',
     providerId: 'anthropic',
     fields: [
-      { key: 'model', label: '模型', type: 'text', placeholder: 'claude-sonnet-4-20250514' },
-      { key: 'apiEndpoint', label: 'API 端点', type: 'text', placeholder: 'https://api.anthropic.com' },
+      { key: 'apiEndpoint', label: 'Base URL', type: 'text', placeholder: 'https://api.anthropic.com' },
       { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '未设置', hint: '留空保持不变，输入新值将覆盖现有 Key' },
-      { key: 'customInstructions', label: '自定义指令', type: 'textarea', placeholder: 'Claude Code 自定义系统指令...', rows: 3 },
-      { key: 'maxTokens', label: '最大 Tokens', type: 'number', placeholder: '8192' },
+      { key: 'model', label: '模型', type: 'text', placeholder: 'claude-sonnet-4-20250514' },
+      { key: 'systemPrompt', label: '自定义系统提示词', type: 'textarea', placeholder: 'Claude Code 自定义系统提示词...', rows: 3 },
     ],
   },
   hermes: {
@@ -52,12 +51,10 @@ const AGENT_FORM_CONFIGS: Record<AgentType, AgentFormConfig> = {
     defaultModel: 'deepseek-ai/DeepSeek-V3',
     providerId: 'openai',
     fields: [
-      { key: 'model', label: '模型', type: 'text', placeholder: 'hermes-default' },
-      { key: 'apiEndpoint', label: 'API 端点', type: 'text', placeholder: 'https://api.example.com/v1' },
+      { key: 'apiEndpoint', label: 'Base URL', type: 'text', placeholder: 'https://api.example.com/v1' },
       { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '未设置', hint: '留空保持不变，输入新值将覆盖现有 Key' },
-      { key: 'temperature', label: 'Temperature', type: 'number', placeholder: '0.7', min: 0, max: 1, step: 0.1 },
-      { key: 'systemPrompt', label: '系统提示词', type: 'textarea', placeholder: 'Hermes Agent 系统提示词...', rows: 3 },
-      { key: 'maxTokens', label: '最大 Tokens', type: 'number', placeholder: '8192' },
+      { key: 'model', label: '模型', type: 'text', placeholder: 'hermes-default' },
+      { key: 'systemPrompt', label: '自定义系统提示词', type: 'textarea', placeholder: 'Hermes Agent 自定义系统提示词...', rows: 3 },
     ],
   },
 };
@@ -72,39 +69,32 @@ function AgentConfigForm({ config, agentType }: { config: ClaudeConfigPublic | H
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState('');
   const [testOk, setTestOk] = useState(false);
+  const [savedMsg, setSavedMsg] = useState('');
 
   // Form state — initialize from config
   const [model, setModel] = useState((config as any).model ?? '');
   const [apiEndpoint, setApiEndpoint] = useState((config as any).apiEndpoint ?? '');
   const [apiKey, setApiKey] = useState('');
-  const [customInstructions, setCustomInstructions] = useState((config as any).customInstructions ?? '');
-  const [temperature, setTemperature] = useState((config as any).temperature?.toString() ?? '');
-  const [systemPrompt, setSystemPrompt] = useState((config as any).systemPrompt ?? '');
-  const [maxTokens, setMaxTokens] = useState((config as any).maxTokens?.toString() ?? '');
+  const [systemPrompt, setSystemPrompt] = useState((config as any).customInstructions ?? (config as any).systemPrompt ?? '');
   const [modified, setModified] = useState(false);
 
   // Sync form fields when config prop changes
   useEffect(() => {
     setModel((config as any).model ?? '');
     setApiEndpoint((config as any).apiEndpoint ?? '');
-    setCustomInstructions((config as any).customInstructions ?? '');
-    setTemperature((config as any).temperature?.toString() ?? '');
-    setMaxTokens((config as any).maxTokens?.toString() ?? '');
-    setSystemPrompt((config as any).systemPrompt ?? '');
-  }, [(config as any).model, (config as any).apiEndpoint, (config as any).customInstructions, (config as any).temperature, (config as any).maxTokens, (config as any).systemPrompt]);
+    setSystemPrompt((config as any).customInstructions ?? (config as any).systemPrompt ?? '');
+  }, [(config as any).model, (config as any).apiEndpoint, (config as any).customInstructions, (config as any).systemPrompt]);
 
   const hasChanges = useCallback(() => {
     const c = config as any;
+    const currentPrompt = c.customInstructions ?? c.systemPrompt ?? '';
     return (
       (model !== (c.model ?? '')) ||
       (apiEndpoint !== (c.apiEndpoint ?? '')) ||
       (apiKey !== '') ||
-      (customInstructions !== (c.customInstructions ?? '')) ||
-      (temperature !== (c.temperature?.toString() ?? '')) ||
-      (maxTokens !== (c.maxTokens?.toString() ?? '')) ||
-      (systemPrompt !== (c.systemPrompt ?? ''))
+      (systemPrompt !== currentPrompt)
     );
-  }, [model, apiEndpoint, apiKey, customInstructions, temperature, maxTokens, systemPrompt, config]);
+  }, [model, apiEndpoint, apiKey, systemPrompt, config]);
 
   useEffect(() => {
     setModified(hasChanges());
@@ -116,13 +106,20 @@ function AgentConfigForm({ config, agentType }: { config: ClaudeConfigPublic | H
     if (model !== (c.model ?? '')) update.model = model || null;
     if (apiEndpoint !== (c.apiEndpoint ?? '')) update.apiEndpoint = apiEndpoint || null;
     if (apiKey !== '') update.apiKey = apiKey;
-    if (customInstructions !== (c.customInstructions ?? '')) update.customInstructions = customInstructions || null;
-    if (temperature !== (c.temperature?.toString() ?? '')) update.temperature = temperature ? parseFloat(temperature) : null;
-    if (maxTokens !== (c.maxTokens?.toString() ?? '')) update.maxTokens = maxTokens ? parseInt(maxTokens) : null;
-    if (systemPrompt !== (c.systemPrompt ?? '')) update.systemPrompt = systemPrompt || null;
+    // systemPrompt: allow empty string (user explicitly cleared it)
+    const currentPrompt = c.customInstructions ?? c.systemPrompt ?? '';
+    if (systemPrompt !== currentPrompt) {
+      if (agentType === 'claude') {
+        update.customInstructions = systemPrompt;
+      } else {
+        update.systemPrompt = systemPrompt;
+      }
+    }
     await (saveFn as any)(update);
     setApiKey('');
     setModified(false);
+    setSavedMsg('配置已保存');
+    setTimeout(() => setSavedMsg(''), 3000);
   };
 
   const handleTestConnection = async () => {
@@ -158,10 +155,7 @@ function AgentConfigForm({ config, agentType }: { config: ClaudeConfigPublic | H
         case 'model': return model;
         case 'apiEndpoint': return apiEndpoint;
         case 'apiKey': return apiKey;
-        case 'customInstructions': return customInstructions;
-        case 'temperature': return temperature;
         case 'systemPrompt': return systemPrompt;
-        case 'maxTokens': return maxTokens;
         default: return '';
       }
     };
@@ -171,10 +165,7 @@ function AgentConfigForm({ config, agentType }: { config: ClaudeConfigPublic | H
         case 'model': setModel(v); break;
         case 'apiEndpoint': setApiEndpoint(v); break;
         case 'apiKey': setApiKey(v); break;
-        case 'customInstructions': setCustomInstructions(v); break;
-        case 'temperature': setTemperature(v); break;
         case 'systemPrompt': setSystemPrompt(v); break;
-        case 'maxTokens': setMaxTokens(v); break;
       }
     };
 
@@ -281,12 +272,25 @@ function AgentConfigForm({ config, agentType }: { config: ClaudeConfigPublic | H
           {testMsg}
         </div>
       )}
+      {savedMsg && (
+        <div
+          className="mt-2 px-3 py-2 rounded-lg text-xs leading-relaxed"
+          style={{
+            backgroundColor: 'rgba(52, 211, 153, 0.08)',
+            color: 'var(--success)',
+            border: '1px solid rgba(52, 211, 153, 0.2)',
+          }}
+        >
+          {savedMsg}
+        </div>
+      )}
     </div>
   );
 }
 
 export function ConfigEditor({ agent }: ConfigEditorProps) {
   const { config, loading, error, fetchConfig, clearError } = useConfigStore();
+  const [refreshKey, setRefreshKey] = useState(0);
   const currentSession = useSessionStore((s) => {
     const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
     return cs;
@@ -318,7 +322,7 @@ if (loading && !config) {
           {agentLabel} 配置
         </h3>
         <button
-          onClick={fetchConfig}
+          onClick={() => { fetchConfig(); setRefreshKey(k => k + 1); }}
           className="text-xs px-2 py-1 rounded"
           style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
         >
@@ -335,7 +339,7 @@ if (loading && !config) {
         )}
 
         {agentConfig ? (
-          <AgentConfigForm config={agentConfig} agentType={activeAgent} />
+          <AgentConfigForm key={`${activeAgent}-${refreshKey}`} config={agentConfig} agentType={activeAgent} />
         ) : (
           <div className="text-center py-8">
             <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
