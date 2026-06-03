@@ -95,152 +95,19 @@ pub fn save_hermes_config(update: HermesUpdatePayload) -> Result<hermes::HermesC
     Ok(config.to_public())
 }
 
-/// Test API connection by actually sending a minimal request to the configured endpoint
+/// Get the raw API key for an agent (for frontend to use with sendApiRequest)
 #[command]
-pub async fn test_api_connection(agent_type: String) -> Result<TestConnectionResult, AppError> {
-    let start = std::time::Instant::now();
-
+pub fn get_agent_api_key(agent_type: String) -> Result<Option<String>, AppError> {
     match agent_type.as_str() {
         "claude" => {
             let config = claude::ClaudeConfig::load()?;
-            let api_key = config.env.as_ref().and_then(|e| e.anthropic_api_key.as_ref())
-                .filter(|k| !k.is_empty())
-                .ok_or_else(|| AppError {
-                    code: "ERR_NO_API_KEY".to_string(),
-                    message: "未配置 API Key，请先在表单中填写 API Key 并保存".to_string(),
-                    details: None,
-                })?;
-            let base_url = config.env.as_ref().and_then(|e| e.anthropic_base_url.as_ref())
-                .filter(|u| !u.is_empty())
-                .map(|u| u.trim_end_matches('/').to_string())
-                .unwrap_or_else(|| "https://api.anthropic.com".to_string());
-            let model = config.env.as_ref().and_then(|e| e.anthropic_model.as_ref())
-                .filter(|m| !m.is_empty())
-                .map(|m| m.clone())
-                .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
-
-            let endpoint = format!("{}/v1/messages", base_url);
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .map_err(|e| AppError {
-                    code: "ERR_HTTP_CLIENT".to_string(),
-                    message: format!("HTTP 客户端创建失败: {}", e),
-                    details: None,
-                })?;
-
-            let body = serde_json::json!({
-                "model": model,
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}]
-            });
-
-            let resp = client.post(&endpoint)
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| AppError {
-                    code: "ERR_CONNECTION_FAILED".to_string(),
-                    message: format!("连接失败: {}", e),
-                    details: None,
-                })?;
-
-            let latency = start.elapsed().as_millis() as u64;
-            let status = resp.status();
-
-            if status.is_success() {
-                Ok(TestConnectionResult {
-                    agent_type: agent_type.clone(),
-                    success: true,
-                    message: format!("连接成功 ({}ms)", latency),
-                    latency_ms: Some(latency),
-                })
-            } else {
-                let body_text = resp.text().await.unwrap_or_default();
-                let preview = body_text.chars().take(300).collect::<String>();
-                Ok(TestConnectionResult {
-                    agent_type: agent_type.clone(),
-                    success: false,
-                    message: format!("API 错误 (HTTP {}): {}", status.as_u16(), preview),
-                    latency_ms: Some(latency),
-                })
-            }
+            Ok(config.env.as_ref()
+                .and_then(|e| e.anthropic_api_key.clone())
+                .filter(|k| !k.is_empty()))
         }
         "hermes" => {
             let config = hermes::HermesConfig::load()?;
-            let api_key = config.api_key.as_ref()
-                .filter(|k| !k.is_empty())
-                .ok_or_else(|| AppError {
-                    code: "ERR_NO_API_KEY".to_string(),
-                    message: "未配置 API Key，请先在表单中填写 API Key 并保存".to_string(),
-                    details: None,
-                })?;
-            let base_url = config.api_endpoint.as_ref()
-                .filter(|u| !u.is_empty())
-                .map(|u| u.trim_end_matches('/').to_string())
-                .unwrap_or_else(|| "https://api.siliconflow.cn/v1".to_string());
-            let model = config.model.as_ref()
-                .filter(|m| !m.is_empty())
-                .cloned()
-                .unwrap_or_else(|| "deepseek-ai/DeepSeek-V3".to_string());
-
-            // Determine if endpoint already includes /chat/completions
-            let endpoint = if base_url.ends_with("chat/completions") {
-                base_url
-            } else {
-                format!("{}/chat/completions", base_url.trim_end_matches('/'))
-            };
-
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .map_err(|e| AppError {
-                    code: "ERR_HTTP_CLIENT".to_string(),
-                    message: format!("HTTP 客户端创建失败: {}", e),
-                    details: None,
-                })?;
-
-            let body = serde_json::json!({
-                "model": model,
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "hi"}]
-            });
-
-            let resp = client.post(&endpoint)
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| AppError {
-                    code: "ERR_CONNECTION_FAILED".to_string(),
-                    message: format!("连接失败: {}", e),
-                    details: None,
-                })?;
-
-            let latency = start.elapsed().as_millis() as u64;
-            let status = resp.status();
-
-            if status.is_success() {
-                Ok(TestConnectionResult {
-                    agent_type: agent_type.clone(),
-                    success: true,
-                    message: format!("连接成功 ({}ms)", latency),
-                    latency_ms: Some(latency),
-                })
-            } else {
-                let body_text = resp.text().await.unwrap_or_default();
-                let preview = body_text.chars().take(300).collect::<String>();
-                Ok(TestConnectionResult {
-                    agent_type: agent_type.clone(),
-                    success: false,
-                    message: format!("API 错误 (HTTP {}): {}", status.as_u16(), preview),
-                    latency_ms: Some(latency),
-                })
-            }
+            Ok(config.api_key.filter(|k| !k.is_empty()))
         }
         _ => Err(AppError {
             code: "ERR_INVALID_AGENT".to_string(),
@@ -250,11 +117,4 @@ pub async fn test_api_connection(agent_type: String) -> Result<TestConnectionRes
     }
 }
 
-#[derive(serde::Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct TestConnectionResult {
-    pub agent_type: String,
-    pub success: bool,
-    pub message: String,
-    pub latency_ms: Option<u64>,
-}
+

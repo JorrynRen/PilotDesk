@@ -1,383 +1,286 @@
 import { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useConfigStore, type ClaudeConfigPublic, type HermesConfigPublic } from '../../stores/configStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { sendApiRequest } from '../../utils/apiClient';
 import { AGENT_THEMES } from '../../types';
 
 interface ConfigEditorProps {
   agent: string;
 }
 
-function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
-  const { saveClaudeConfig, saving, testConnection, testResult } = useConfigStore();
-  const [model, setModel] = useState(config.model ?? '');
-  const [apiEndpoint, setApiEndpoint] = useState(config.apiEndpoint ?? '');
-  const [apiKey, setApiKey] = useState('');
-  const [customInstructions, setCustomInstructions] = useState(config.customInstructions ?? '');
-  const [maxTokens, setMaxTokens] = useState(config.maxTokens?.toString() ?? '');
-  const [modified, setModified] = useState(false);
+type AgentType = 'claude' | 'hermes';
 
-  // Sync form fields when config prop changes (e.g. after refresh)
-  useEffect(() => {
-    setModel(config.model ?? '');
-    setApiEndpoint(config.apiEndpoint ?? '');
-    setCustomInstructions(config.customInstructions ?? '');
-    setMaxTokens(config.maxTokens?.toString() ?? '');
-    // Don't reset apiKey — user may be typing a new key
-  }, [config.model, config.apiEndpoint, config.customInstructions, config.maxTokens]);
-
-  const hasChanges = useCallback(() => {
-    return (
-      (model !== (config.model ?? '')) ||
-      (apiEndpoint !== (config.apiEndpoint ?? '')) ||
-      (apiKey !== '') ||
-      (customInstructions !== (config.customInstructions ?? '')) ||
-      (maxTokens !== (config.maxTokens?.toString() ?? ''))
-    );
-  }, [model, apiEndpoint, apiKey, customInstructions, maxTokens, config]);
-
-  useEffect(() => {
-    setModified(hasChanges());
-  }, [hasChanges]);
-
-  const handleSave = async () => {
-    const update: Record<string, unknown> = {};
-    if (model !== (config.model ?? '')) update.model = model || null;
-    if (apiEndpoint !== (config.apiEndpoint ?? '')) update.apiEndpoint = apiEndpoint || null;
-    if (apiKey !== '') update.apiKey = apiKey;
-    if (customInstructions !== (config.customInstructions ?? '')) update.customInstructions = customInstructions || null;
-    if (maxTokens !== (config.maxTokens?.toString() ?? '')) update.maxTokens = maxTokens ? parseInt(maxTokens) : null;
-    await saveClaudeConfig(update as Parameters<typeof saveClaudeConfig>[0]);
-    setApiKey('');
-    setModified(false);
-  };
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          模型
-        </label>
-        <input
-          type="text"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="claude-sonnet-4-20250514"
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          API 端点
-        </label>
-        <input
-          type="text"
-          value={apiEndpoint}
-          onChange={(e) => setApiEndpoint(e.target.value)}
-          placeholder="https://api.anthropic.com"
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          API Key
-        </label>
-        <div className="flex items-center gap-2">
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={config.apiKeyMasked ?? '未设置'}
-            className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
-          />
-
-        </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          留空保持不变，输入新值将覆盖现有 Key
-        </p>
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          自定义指令
-        </label>
-        <textarea
-          value={customInstructions}
-          onChange={(e) => setCustomInstructions(e.target.value)}
-          placeholder="Claude Code 自定义系统指令..."
-          rows={3}
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          最大 Tokens
-        </label>
-        <input
-          type="number"
-          value={maxTokens}
-          onChange={(e) => setMaxTokens(e.target.value)}
-          placeholder="8192"
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
-
-      <div className="flex items-center gap-2 pt-2">
-        <button
-          onClick={handleSave}
-          disabled={!modified || saving}
-          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-          style={{
-            backgroundColor: modified ? AGENT_THEMES.claude.cssVar : 'var(--bg-tertiary)',
-            color: modified ? '#fff' : 'var(--text-secondary)',
-          }}
-        >
-          {saving ? '保存中...' : '保存配置'}
-        </button>
-        <button
-          onClick={() => testConnection('claude')}
-          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        >
-          测试连接
-        </button>
-        {testResult?.agentType === 'claude' && (
-          <span className="text-xs" style={{ color: testResult.success ? 'var(--success)' : 'var(--danger)' }}>
-            {testResult.message}
-          </span>
-        )}
-      </div>
-    </div>
-  );
+interface AgentFormConfig {
+  type: AgentType;
+  themeVar: string;
+  defaultEndpoint: string;
+  defaultModel: string;
+  providerId: string;
+  fields: Array<{
+    key: string;
+    label: string;
+    type: 'text' | 'password' | 'number' | 'textarea';
+    placeholder: string;
+    hint?: string;
+    min?: number;
+    max?: number;
+    step?: number;
+    rows?: number;
+  }>;
 }
 
-function HermesConfigForm({ config }: { config: HermesConfigPublic }) {
-  const { saveHermesConfig, saving, testConnection, testResult } = useConfigStore();
-  const [model, setModel] = useState(config.model ?? '');
-  const [apiEndpoint, setApiEndpoint] = useState(config.apiEndpoint ?? '');
+const AGENT_FORM_CONFIGS: Record<AgentType, AgentFormConfig> = {
+  claude: {
+    type: 'claude',
+    themeVar: AGENT_THEMES.claude.cssVar,
+    defaultEndpoint: 'https://api.anthropic.com',
+    defaultModel: 'claude-sonnet-4-20250514',
+    providerId: 'anthropic',
+    fields: [
+      { key: 'model', label: '模型', type: 'text', placeholder: 'claude-sonnet-4-20250514' },
+      { key: 'apiEndpoint', label: 'API 端点', type: 'text', placeholder: 'https://api.anthropic.com' },
+      { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '未设置', hint: '留空保持不变，输入新值将覆盖现有 Key' },
+      { key: 'customInstructions', label: '自定义指令', type: 'textarea', placeholder: 'Claude Code 自定义系统指令...', rows: 3 },
+      { key: 'maxTokens', label: '最大 Tokens', type: 'number', placeholder: '8192' },
+    ],
+  },
+  hermes: {
+    type: 'hermes',
+    themeVar: AGENT_THEMES.hermes.cssVar,
+    defaultEndpoint: 'https://api.siliconflow.cn/v1',
+    defaultModel: 'deepseek-ai/DeepSeek-V3',
+    providerId: 'openai',
+    fields: [
+      { key: 'model', label: '模型', type: 'text', placeholder: 'hermes-default' },
+      { key: 'apiEndpoint', label: 'API 端点', type: 'text', placeholder: 'https://api.example.com/v1' },
+      { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '未设置', hint: '留空保持不变，输入新值将覆盖现有 Key' },
+      { key: 'temperature', label: 'Temperature', type: 'number', placeholder: '0.7', min: 0, max: 1, step: 0.1 },
+      { key: 'systemPrompt', label: '系统提示词', type: 'textarea', placeholder: 'Hermes Agent 系统提示词...', rows: 3 },
+      { key: 'maxTokens', label: '最大 Tokens', type: 'number', placeholder: '8192' },
+    ],
+  },
+};
+
+function AgentConfigForm({ config, agentType }: { config: ClaudeConfigPublic | HermesConfigPublic; agentType: AgentType }) {
+  const cfg = AGENT_FORM_CONFIGS[agentType];
+  const saveFn = agentType === 'claude'
+    ? useConfigStore((s) => s.saveClaudeConfig)
+    : useConfigStore((s) => s.saveHermesConfig);
+  const saving = useConfigStore((s) => s.saving);
+
+  const [testing, setTesting] = useState(false);
+  const [testMsg, setTestMsg] = useState('');
+  const [testOk, setTestOk] = useState(false);
+
+  // Form state — initialize from config
+  const [model, setModel] = useState((config as any).model ?? '');
+  const [apiEndpoint, setApiEndpoint] = useState((config as any).apiEndpoint ?? '');
   const [apiKey, setApiKey] = useState('');
-  const [temperature, setTemperature] = useState(config.temperature?.toString() ?? '');
-  const [maxTokens, setMaxTokens] = useState(config.maxTokens?.toString() ?? '');
-  const [systemPrompt, setSystemPrompt] = useState(config.systemPrompt ?? '');
+  const [customInstructions, setCustomInstructions] = useState((config as any).customInstructions ?? '');
+  const [temperature, setTemperature] = useState((config as any).temperature?.toString() ?? '');
+  const [systemPrompt, setSystemPrompt] = useState((config as any).systemPrompt ?? '');
+  const [maxTokens, setMaxTokens] = useState((config as any).maxTokens?.toString() ?? '');
   const [modified, setModified] = useState(false);
 
-  // Sync form fields when config prop changes (e.g. after refresh)
+  // Sync form fields when config prop changes
   useEffect(() => {
-    setModel(config.model ?? '');
-    setApiEndpoint(config.apiEndpoint ?? '');
-    setTemperature(config.temperature?.toString() ?? '');
-    setMaxTokens(config.maxTokens?.toString() ?? '');
-    setSystemPrompt(config.systemPrompt ?? '');
-    // Don't reset apiKey — user may be typing a new key
-  }, [config.model, config.apiEndpoint, config.temperature, config.maxTokens, config.systemPrompt]);
+    setModel((config as any).model ?? '');
+    setApiEndpoint((config as any).apiEndpoint ?? '');
+    setCustomInstructions((config as any).customInstructions ?? '');
+    setTemperature((config as any).temperature?.toString() ?? '');
+    setMaxTokens((config as any).maxTokens?.toString() ?? '');
+    setSystemPrompt((config as any).systemPrompt ?? '');
+  }, [(config as any).model, (config as any).apiEndpoint, (config as any).customInstructions, (config as any).temperature, (config as any).maxTokens, (config as any).systemPrompt]);
 
   const hasChanges = useCallback(() => {
+    const c = config as any;
     return (
-      (model !== (config.model ?? '')) ||
-      (apiEndpoint !== (config.apiEndpoint ?? '')) ||
+      (model !== (c.model ?? '')) ||
+      (apiEndpoint !== (c.apiEndpoint ?? '')) ||
       (apiKey !== '') ||
-      (temperature !== (config.temperature?.toString() ?? '')) ||
-      (maxTokens !== (config.maxTokens?.toString() ?? '')) ||
-      (systemPrompt !== (config.systemPrompt ?? ''))
+      (customInstructions !== (c.customInstructions ?? '')) ||
+      (temperature !== (c.temperature?.toString() ?? '')) ||
+      (maxTokens !== (c.maxTokens?.toString() ?? '')) ||
+      (systemPrompt !== (c.systemPrompt ?? ''))
     );
-  }, [model, apiEndpoint, apiKey, temperature, maxTokens, systemPrompt, config]);
+  }, [model, apiEndpoint, apiKey, customInstructions, temperature, maxTokens, systemPrompt, config]);
 
   useEffect(() => {
     setModified(hasChanges());
   }, [hasChanges]);
 
   const handleSave = async () => {
+    const c = config as any;
     const update: Record<string, unknown> = {};
-    if (model !== (config.model ?? '')) update.model = model || null;
-    if (apiEndpoint !== (config.apiEndpoint ?? '')) update.apiEndpoint = apiEndpoint || null;
+    if (model !== (c.model ?? '')) update.model = model || null;
+    if (apiEndpoint !== (c.apiEndpoint ?? '')) update.apiEndpoint = apiEndpoint || null;
     if (apiKey !== '') update.apiKey = apiKey;
-    if (temperature !== (config.temperature?.toString() ?? '')) update.temperature = temperature ? parseFloat(temperature) : null;
-    if (maxTokens !== (config.maxTokens?.toString() ?? '')) update.maxTokens = maxTokens ? parseInt(maxTokens) : null;
-    if (systemPrompt !== (config.systemPrompt ?? '')) update.systemPrompt = systemPrompt || null;
-    await saveHermesConfig(update as Parameters<typeof saveHermesConfig>[0]);
+    if (customInstructions !== (c.customInstructions ?? '')) update.customInstructions = customInstructions || null;
+    if (temperature !== (c.temperature?.toString() ?? '')) update.temperature = temperature ? parseFloat(temperature) : null;
+    if (maxTokens !== (c.maxTokens?.toString() ?? '')) update.maxTokens = maxTokens ? parseInt(maxTokens) : null;
+    if (systemPrompt !== (c.systemPrompt ?? '')) update.systemPrompt = systemPrompt || null;
+    await (saveFn as any)(update);
     setApiKey('');
     setModified(false);
   };
 
+  const handleTestConnection = async () => {
+    const key = apiKey || (await invoke<string | null>('get_agent_api_key', { agentType }).catch(() => null));
+    if (!key) {
+      setTestMsg('未配置 API Key，请先在表单中填写 API Key 并保存');
+      setTestOk(false);
+      return;
+    }
+    const ep = apiEndpoint || cfg.defaultEndpoint;
+    const mdl = model || cfg.defaultModel;
+    setTesting(true);
+    setTestMsg('');
+    const result = await sendApiRequest({
+      endpoint: ep,
+      providerId: cfg.providerId,
+      apiKey: key,
+      model: mdl,
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 1,
+      timeout: 15000,
+    });
+    setTesting(false);
+    setTestOk(result.ok);
+    setTestMsg(result.ok
+      ? `连接成功 - 模型: ${mdl} (${result.latency}ms)`
+      : result.message);
+  };
+
+  const renderField = (field: AgentFormConfig['fields'][0]) => {
+    const getValue = () => {
+      switch (field.key) {
+        case 'model': return model;
+        case 'apiEndpoint': return apiEndpoint;
+        case 'apiKey': return apiKey;
+        case 'customInstructions': return customInstructions;
+        case 'temperature': return temperature;
+        case 'systemPrompt': return systemPrompt;
+        case 'maxTokens': return maxTokens;
+        default: return '';
+      }
+    };
+
+    const setValue = (v: string) => {
+      switch (field.key) {
+        case 'model': setModel(v); break;
+        case 'apiEndpoint': setApiEndpoint(v); break;
+        case 'apiKey': setApiKey(v); break;
+        case 'customInstructions': setCustomInstructions(v); break;
+        case 'temperature': setTemperature(v); break;
+        case 'systemPrompt': setSystemPrompt(v); break;
+        case 'maxTokens': setMaxTokens(v); break;
+      }
+    };
+
+    const inputStyle = {
+      backgroundColor: 'var(--bg-tertiary)',
+      color: 'var(--text-primary)',
+      border: '1px solid var(--border)',
+    };
+
+    if (field.type === 'textarea') {
+      return (
+        <textarea
+          value={getValue()}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={field.placeholder}
+          rows={field.rows ?? 3}
+          className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
+          style={inputStyle}
+        />
+      );
+    }
+
+    if (field.type === 'password') {
+      return (
+        <div>
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              value={getValue()}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder={(config as any).apiKeyMasked ?? field.placeholder}
+              className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+              style={inputStyle}
+            />
+          </div>
+          {field.hint && (
+            <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{field.hint}</p>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <input
+        type={field.type}
+        value={getValue()}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={field.placeholder}
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+        style={inputStyle}
+      />
+    );
+  };
+
   return (
     <div className="space-y-4">
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          模型
-        </label>
-        <input
-          type="text"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="hermes-default"
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          API 端点
-        </label>
-        <input
-          type="text"
-          value={apiEndpoint}
-          onChange={(e) => setApiEndpoint(e.target.value)}
-          placeholder="https://api.example.com/v1"
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          API Key
-        </label>
-        <div className="flex items-center gap-2">
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={config.apiKeyMasked ?? '未设置'}
-            className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
-          />
-
+      {cfg.fields.map((field) => (
+        <div key={field.key}>
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+            {field.label}
+          </label>
+          {renderField(field)}
         </div>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          留空保持不变，输入新值将覆盖现有 Key
-        </p>
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          Temperature
-        </label>
-        <input
-          type="number"
-          min="0"
-          max="1"
-          step="0.1"
-          value={temperature}
-          onChange={(e) => setTemperature(e.target.value)}
-          placeholder="0.7"
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          系统提示词
-        </label>
-        <textarea
-          value={systemPrompt}
-          onChange={(e) => setSystemPrompt(e.target.value)}
-          placeholder="Hermes Agent 系统提示词..."
-          rows={3}
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-          最大 Tokens
-        </label>
-        <input
-          type="number"
-          value={maxTokens}
-          onChange={(e) => setMaxTokens(e.target.value)}
-          placeholder="8192"
-          className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        />
-      </div>
+      ))}
 
       <div className="flex items-center gap-2 pt-2">
         <button
           onClick={handleSave}
           disabled={!modified || saving}
-          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50"
           style={{
-            backgroundColor: modified ? AGENT_THEMES.hermes.cssVar : 'var(--bg-tertiary)',
+            backgroundColor: modified ? cfg.themeVar : 'var(--bg-tertiary)',
             color: modified ? '#fff' : 'var(--text-secondary)',
           }}
         >
           {saving ? '保存中...' : '保存配置'}
         </button>
         <button
-          onClick={() => testConnection('hermes')}
-          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          onClick={handleTestConnection}
+          disabled={testing}
+          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap disabled:opacity-50"
           style={{
             backgroundColor: 'var(--bg-tertiary)',
             color: 'var(--text-primary)',
             border: '1px solid var(--border)',
           }}
         >
-          测试连接
+          {testing ? '测试中...' : '测试连接'}
         </button>
-        {testResult?.agentType === 'hermes' && (
-          <span className="text-xs" style={{ color: testResult.success ? 'var(--success)' : 'var(--danger)' }}>
-            {testResult.message}
-          </span>
-        )}
       </div>
+      {testMsg && (
+        <div
+          className="mt-2 px-3 py-2 rounded-lg text-xs leading-relaxed"
+          style={{
+            backgroundColor: testOk ? 'rgba(52, 211, 153, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+            color: testOk ? 'var(--success)' : 'var(--danger)',
+            border: '1px solid',
+            borderColor: testOk ? 'rgba(52, 211, 153, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+          }}
+        >
+          {testMsg}
+        </div>
+      )}
     </div>
   );
 }
@@ -389,15 +292,14 @@ export function ConfigEditor({ agent }: ConfigEditorProps) {
     return cs;
   });
   // Resolve agent: use prop if provided, otherwise use current session
-  const activeAgent = agent || currentSession?.agentType || 'claude';
+  const activeAgent = (agent || currentSession?.agentType || 'claude') as AgentType;
 
   useEffect(() => {
     fetchConfig();
     return () => clearError();
   }, [activeAgent, fetchConfig, clearError]);
 
-
-  if (loading && !config) {
+if (loading && !config) {
     return (
       <div className="flex items-center justify-center h-full">
         <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>加载配置中...</span>
@@ -405,12 +307,15 @@ export function ConfigEditor({ agent }: ConfigEditorProps) {
     );
   }
 
+  const agentConfig = activeAgent === 'claude' ? config?.claude : config?.hermes;
+  const agentLabel = activeAgent === 'claude' ? 'Claude Code' : 'Hermes Agent';
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-          {activeAgent === 'claude' ? 'Claude Code 配置' : 'Hermes Agent 配置'}
+          {agentLabel} 配置
         </h3>
         <button
           onClick={fetchConfig}
@@ -429,32 +334,17 @@ export function ConfigEditor({ agent }: ConfigEditorProps) {
           </div>
         )}
 
-        {activeAgent === 'claude' ? (
-          config?.claude ? (
-            <ClaudeConfigForm config={config.claude} />
-          ) : (
-            <div className="text-center py-8">
-              <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
-                Claude Code 未安装或配置目录不存在
-              </p>
-              <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                请先在环境管理中安装 Claude Code
-              </p>
-            </div>
-          )
+        {agentConfig ? (
+          <AgentConfigForm config={agentConfig} agentType={activeAgent} />
         ) : (
-          config?.hermes ? (
-            <HermesConfigForm config={config.hermes} />
-          ) : (
-            <div className="text-center py-8">
-              <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
-                Hermes Agent 未安装或配置目录不存在
-              </p>
-              <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                请先在环境管理中安装 Hermes Agent
-              </p>
-            </div>
-          )
+          <div className="text-center py-8">
+            <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
+              {agentLabel} 未安装或配置目录不存在
+            </p>
+            <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+              请先在环境管理中安装 {agentLabel}
+            </p>
+          </div>
         )}
       </div>
     </div>

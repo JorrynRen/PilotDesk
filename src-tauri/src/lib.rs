@@ -175,7 +175,7 @@ pub fn run() {
             commands::config::get_config,
             commands::config::save_claude_config,
             commands::config::save_hermes_config,
-            commands::config::test_api_connection,
+            commands::config::get_agent_api_key,
             list_inspirations,
             get_inspiration,
             create_inspiration,

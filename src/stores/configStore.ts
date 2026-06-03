@@ -33,24 +33,14 @@ export interface ConfigResult {
   hermes_installed: boolean;
 }
 
-export interface TestResult {
-  agentType: string;
-  success: boolean;
-  message: string;
-  latencyMs: number | null;
-}
-
 interface ConfigState {
   config: ConfigResult | null;
   loading: boolean;
   error: string | null;
   saving: boolean;
-  testResult: TestResult | null;
-
   fetchConfig: () => Promise<void>;
   saveClaudeConfig: (update: Partial<ClaudeConfigPublic> & { api_key?: string; api_endpoint?: string | null }) => Promise<void>;
   saveHermesConfig: (update: Partial<HermesConfigPublic> & { api_key?: string }) => Promise<void>;
-  testConnection: (agentType: string) => Promise<TestResult>;
   clearError: () => void;
 }
 
@@ -59,8 +49,6 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   loading: false,
   error: null,
   saving: false,
-  testResult: null,
-
   fetchConfig: async () => {
     set({ loading: true, error: null });
     try {
@@ -107,17 +95,6 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       }
     } catch (err) {
       set({ error: String(err), saving: false });
-    }
-  },
-
-  testConnection: async (agentType: string) => {
-    try {
-      const result = await invoke<TestResult>('test_api_connection', { agentType });
-      set({ testResult: result });
-      return result;
-    } catch (err) {
-      set({ error: String(err) });
-      return { agentType, success: false, message: String(err), latencyMs: null };
     }
   },
 
