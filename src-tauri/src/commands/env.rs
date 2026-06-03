@@ -6,6 +6,16 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use crate::db::models::EnvInfo;
 use crate::utils::errors::AppError;
+/// Safe logging macro that silently ignores stderr write errors
+/// (avoids panic when stderr pipe is closed by the OS).
+macro_rules! log_env {
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
+
 
 /// Cached env detection result with TTL
 struct EnvCache {
@@ -55,11 +65,11 @@ fn get_version_bat(exe_path: &str, arg: &str) -> Option<String> {
     let output = match rx.recv_timeout(Duration::from_secs(15)) {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            eprintln!("[env] Spawn failed for {}: {}", exe_path, e);
+            log_env!("[env] Spawn failed for {}: {}", exe_path, e);
             return None;
         }
         Err(_) => {
-            eprintln!("[env] Timeout (15s) for: {} {}", exe_path, arg);
+            log_env!("[env] Timeout (15s) for: {} {}", exe_path, arg);
             return None;
         }
     };
@@ -101,7 +111,7 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
     let appdata = std::env::var("APPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Roaming", home));
     let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Local", home));
 
-    eprintln!("[env] Detecting environment...");
+    log_env!("[env] Detecting environment...");
 
     let claude_paths = [
         &format!(r"{}\npm\claude.cmd", appdata),
@@ -118,14 +128,14 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
     let claude_code_version = probe_version(&claude_paths, "--version")
         .as_deref()
         .map(clean_version_string);
-    eprintln!("[env] claude: {:?}", claude_code_version);
+    log_env!("[env] claude: {:?}", claude_code_version);
 
     let hermes_version = probe_version(&hermes_paths, "version")
         .map(|v| {
             let first_line = v.lines().next().unwrap_or(&v);
             clean_version_string(first_line.trim_start_matches("Hermes Agent "))
         });
-    eprintln!("[env] hermes: {:?}", hermes_version);
+    log_env!("[env] hermes: {:?}", hermes_version);
 
     // Try known node paths (Tauri process may not inherit full PATH)
     let node_version = get_version_bat(r"F:\soft\nodejs\node.exe", "--version")
@@ -152,7 +162,7 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
     ];
     let python_version = probe_version(&python_paths, "--version");
 
-    eprintln!("[env] node={:?} git={:?} python={:?}", node_version, git_version, python_version);
+    log_env!("[env] node={:?} git={:?} python={:?}", node_version, git_version, python_version);
 
     Ok(EnvInfo {
         node_version,
@@ -170,7 +180,7 @@ pub async fn detect_env() -> Result<EnvInfo, AppError> {
         let cache = ENV_CACHE.lock().unwrap();
         if let (Some(ref info), Some(fetched)) = (&cache.value, &cache.fetched_at) {
             if fetched.elapsed() < ENV_CACHE_TTL {
-                eprintln!("[env] Returning cached result ({}ms old)", fetched.elapsed().as_millis());
+                log_env!("[env] Returning cached result ({}ms old)", fetched.elapsed().as_millis());
                 return Ok(info.clone());
             }
         }
@@ -184,7 +194,7 @@ pub async fn detect_env() -> Result<EnvInfo, AppError> {
                 return Ok(cache.value.clone().unwrap());
             }
             drop(cache);
-            eprintln!("[env] Waiting for in-progress detection...");
+            log_env!("[env] Waiting for in-progress detection...");
             for _ in 0..300 {
                 std::thread::sleep(Duration::from_millis(100));
                 let cache = ENV_CACHE.lock().unwrap();
