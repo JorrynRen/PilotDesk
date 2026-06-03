@@ -172,12 +172,25 @@ pub async fn check_single_npm(package_name: String) -> Result<VersionTimeInfo, A
             details: None,
         })?;
 
-    if resp.status().is_success() {
-        let body: serde_json::Value = resp.json().await.map_err(|e| AppError {
-            code: "NPM_QUERY_FAILED".into(),
-            message: format!("查询 npm 失败: {}", e),
-            details: None,
-        })?;
+    let status = resp.status();
+    let body_text = resp.text().await.map_err(|e| AppError {
+        code: "NPM_QUERY_FAILED".into(),
+        message: format!("查询 npm 失败: 读取响应失败: {}", e),
+        details: None,
+    })?;
+
+    if status.is_success() {
+        let body: serde_json::Value = match serde_json::from_str(&body_text) {
+            Ok(v) => v,
+            Err(e) => {
+                let preview = body_text.chars().take(200).collect::<String>();
+                return Err(AppError {
+                    code: "NPM_QUERY_FAILED".into(),
+                    message: format!("查询 npm 失败: JSON 解析错误: {} (响应预览: {})", e, preview),
+                    details: None,
+                });
+            }
+        };
 
         let version = body.get("dist-tags")
             .and_then(|d| d.get("latest"))
@@ -193,7 +206,12 @@ pub async fn check_single_npm(package_name: String) -> Result<VersionTimeInfo, A
         return Ok(VersionTimeInfo { version, release_time });
     }
 
-    Ok(VersionTimeInfo { version: String::new(), release_time: None })
+    let preview = body_text.chars().take(200).collect::<String>();
+    Err(AppError {
+        code: "NPM_QUERY_FAILED".into(),
+        message: format!("查询 npm 失败: HTTP {} (响应: {})", status.as_u16(), preview),
+        details: None,
+    })
 }
 
 /// Check latest version for a single PyPI package (used by EnvManager for per-agent checking)
@@ -220,12 +238,25 @@ pub async fn check_single_pypi(package_name: String) -> Result<VersionTimeInfo, 
             details: None,
         })?;
 
-    if resp.status().is_success() {
-        let body: serde_json::Value = resp.json().await.map_err(|e| AppError {
-            code: "PYPI_QUERY_FAILED".into(),
-            message: format!("查询 PyPI 失败: {}", e),
-            details: None,
-        })?;
+    let status = resp.status();
+    let body_text = resp.text().await.map_err(|e| AppError {
+        code: "PYPI_QUERY_FAILED".into(),
+        message: format!("查询 PyPI 失败: 读取响应失败: {}", e),
+        details: None,
+    })?;
+
+    if status.is_success() {
+        let body: serde_json::Value = match serde_json::from_str(&body_text) {
+            Ok(v) => v,
+            Err(e) => {
+                let preview = body_text.chars().take(200).collect::<String>();
+                return Err(AppError {
+                    code: "PYPI_QUERY_FAILED".into(),
+                    message: format!("查询 PyPI 失败: JSON 解析错误: {} (响应预览: {})", e, preview),
+                    details: None,
+                });
+            }
+        };
 
         let version = body.get("info")
             .and_then(|i| i.get("version"))
@@ -244,5 +275,10 @@ pub async fn check_single_pypi(package_name: String) -> Result<VersionTimeInfo, 
         return Ok(VersionTimeInfo { version, release_time });
     }
 
-    Ok(VersionTimeInfo { version: String::new(), release_time: None })
+    let preview = body_text.chars().take(200).collect::<String>();
+    Err(AppError {
+        code: "PYPI_QUERY_FAILED".into(),
+        message: format!("查询 PyPI 失败: HTTP {} (响应: {})", status.as_u16(), preview),
+        details: None,
+    })
 }

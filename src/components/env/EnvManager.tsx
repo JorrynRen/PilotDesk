@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { CheckCircle, XCircle, Download, RefreshCw, Loader2, ArrowUpCircle, ExternalLink } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -85,7 +85,13 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     }
   }, [addLog]);
 
+  const fetchedRef = useRef(false);
+
   useEffect(() => {
+    // Prevent duplicate fetch in React StrictMode (dev mode double-invocation)
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
+
     fetchEnv();
 
     // Listen for install progress events
