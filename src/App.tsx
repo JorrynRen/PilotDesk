@@ -79,29 +79,7 @@ function App() {
           <StatusBar onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")} wsConnected={wsConnected} />
         </div>
       </div>
-      {/* WS Debug Panel */}
-      <div
-        id="ws-debug-panel"
-        style={{
-          position: 'fixed',
-          bottom: '32px',
-          right: '8px',
-          width: '320px',
-          maxHeight: '200px',
-          overflow: 'auto',
-          fontSize: '9px',
-          fontFamily: 'monospace',
-          background: 'rgba(0,0,0,0.85)',
-          color: '#0f0',
-          padding: '6px',
-          borderRadius: '6px',
-          zIndex: 99999,
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
-          display: 'block',
-          pointerEvents: 'none',
-        }}
-      />
+
     </div>
   );
 }

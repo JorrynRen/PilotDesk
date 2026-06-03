@@ -55,11 +55,6 @@ let initCalled = false;
 const listeners = new Map<string, ListenerEntry>();
 
 function wsDebug(tag: string, ...args: unknown[]) {
-  const el = document.getElementById('ws-debug-panel');
-  if (el) {
-    const text = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-    el.textContent = `[${new Date().toLocaleTimeString()}] ${tag}: ${text}\n` + el.textContent;
-  }
   console.log('[WS]', tag, ...args);
 }
 
