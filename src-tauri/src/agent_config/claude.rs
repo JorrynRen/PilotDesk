@@ -20,6 +20,7 @@ use crate::utils::paths::claude_config_dir;
 /// }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaudeConfig {
     /// Environment variables (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL)
     pub env: Option<ClaudeEnv>,
@@ -49,11 +50,11 @@ pub struct ClaudeConfig {
 /// Environment variables section in Claude config
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeEnv {
-    #[serde(alias = "ANTHROPIC_API_KEY")]
+    #[serde(rename = "ANTHROPIC_API_KEY")]
     pub anthropic_api_key: Option<String>,
-    #[serde(alias = "ANTHROPIC_BASE_URL")]
+    #[serde(rename = "ANTHROPIC_BASE_URL")]
     pub anthropic_base_url: Option<String>,
-    #[serde(alias = "ANTHROPIC_MODEL")]
+    #[serde(rename = "ANTHROPIC_MODEL")]
     pub anthropic_model: Option<String>,
 }
 
@@ -74,6 +75,7 @@ impl Default for ClaudeConfig {
 
 /// Public representation (api_key masked)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaudeConfigPublic {
     pub model: Option<String>,
     pub api_endpoint: Option<String>,

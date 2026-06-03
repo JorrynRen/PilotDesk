@@ -136,31 +136,67 @@ impl HermesConfig {
         Ok(())
     }
 
-    /// Parse YAML content manually (simple key-value + nested)
+    /// Parse YAML content using serde_yaml to handle nested structures
     fn parse_yaml(content: &str) -> Result<Self, AppError> {
+        // First try to parse the full YAML structure
+        let yaml_value: serde_json::Value = serde_yaml::from_str(content).map_err(|e| AppError {
+            code: "ERR_PARSE_HERMES_YAML".to_string(),
+            message: "解析 Hermes YAML 配置失败".to_string(),
+            details: Some(e.to_string()),
+        })?;
+
         let mut config = Self::default();
-        // Simple YAML parser for flat and nested structures
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            // Handle simple key: value
-            if let Some((key, value)) = line.split_once(':') {
-                let key = key.trim().to_string();
-                let value = value.trim().trim_start_matches('"').trim_end_matches('"').to_string();
-                match key.as_str() {
-                    "model" => config.model = if value.is_empty() { None } else { Some(value) },
-                    "api_endpoint" => config.api_endpoint = if value.is_empty() { None } else { Some(value) },
-                    "api_key" => config.api_key = if value.is_empty() { None } else { Some(value) },
-                    "temperature" => config.temperature = value.parse::<f64>().ok(),
-                    "max_tokens" => config.max_tokens = value.parse::<u32>().ok(),
-                    "system_prompt" => config.system_prompt = if value.is_empty() { None } else { Some(value) },
-                    "skills_dir" => config.skills_dir = if value.is_empty() { None } else { Some(value) },
-                    _ => {}
+
+        // Extract model info from nested model.default
+        if let Some(model_obj) = yaml_value.get("model") {
+            config.model = model_obj.get("default")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            // Use model.base_url as api_endpoint
+            config.api_endpoint = model_obj.get("base_url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            // Use model.api_key
+            config.api_key = model_obj.get("api_key")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
+
+        // Extract temperature from agent config
+        if let Some(agent_obj) = yaml_value.get("agent") {
+            config.max_tokens = agent_obj.get("max_turns")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            config.temperature = agent_obj.get("temperature")
+                .and_then(|v| v.as_f64());
+        }
+
+        // Extract display settings
+        if let Some(display_obj) = yaml_value.get("display") {
+            config.system_prompt = display_obj.get("personality")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
+
+        // Extract custom_providers for additional endpoint info
+        if let Some(providers) = yaml_value.get("custom_providers").and_then(|v| v.as_array()) {
+            if let Some(first) = providers.first() {
+                // If no api_endpoint from model, try custom_providers
+                if config.api_endpoint.is_none() {
+                    config.api_endpoint = first.get("base_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                }
+                if config.api_key.is_none() {
+                    config.api_key = first.get("api_key")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                 }
             }
         }
+
         Ok(config)
     }
 

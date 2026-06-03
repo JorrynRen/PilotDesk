@@ -16,6 +16,15 @@ function ClaudeConfigForm({ config }: { config: ClaudeConfigPublic }) {
   const [maxTokens, setMaxTokens] = useState(config.maxTokens?.toString() ?? '');
   const [modified, setModified] = useState(false);
 
+  // Sync form fields when config prop changes (e.g. after refresh)
+  useEffect(() => {
+    setModel(config.model ?? '');
+    setApiEndpoint(config.apiEndpoint ?? '');
+    setCustomInstructions(config.customInstructions ?? '');
+    setMaxTokens(config.maxTokens?.toString() ?? '');
+    // Don't reset apiKey — user may be typing a new key
+  }, [config.model, config.apiEndpoint, config.customInstructions, config.maxTokens]);
+
   const hasChanges = useCallback(() => {
     return (
       (model !== (config.model ?? '')) ||
@@ -182,6 +191,16 @@ function HermesConfigForm({ config }: { config: HermesConfigPublic }) {
   const [maxTokens, setMaxTokens] = useState(config.maxTokens?.toString() ?? '');
   const [systemPrompt, setSystemPrompt] = useState(config.systemPrompt ?? '');
   const [modified, setModified] = useState(false);
+
+  // Sync form fields when config prop changes (e.g. after refresh)
+  useEffect(() => {
+    setModel(config.model ?? '');
+    setApiEndpoint(config.apiEndpoint ?? '');
+    setTemperature(config.temperature?.toString() ?? '');
+    setMaxTokens(config.maxTokens?.toString() ?? '');
+    setSystemPrompt(config.systemPrompt ?? '');
+    // Don't reset apiKey — user may be typing a new key
+  }, [config.model, config.apiEndpoint, config.temperature, config.maxTokens, config.systemPrompt]);
 
   const hasChanges = useCallback(() => {
     return (
