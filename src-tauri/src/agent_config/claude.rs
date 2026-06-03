@@ -6,33 +6,63 @@ use crate::utils::paths::claude_config_dir;
 
 /// Claude Code configuration file structure
 /// Reflects ~/.claude/settings.json (user-level)
+///
+/// Actual file format:
+/// ```json
+/// {
+///   "env": {
+///     "ANTHROPIC_API_KEY": "sk-...",
+///     "ANTHROPIC_BASE_URL": "https://api.siliconflow.cn",
+///     "ANTHROPIC_MODEL": "deepseek-ai/DeepSeek-V3"
+///   },
+///   "availableModels": ["deepseek-ai/DeepSeek-V3"],
+///   "enabledPlugins": { ... }
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeConfig {
-    /// Selected model (e.g., "claude-sonnet-4-20250514")
-    pub model: Option<String>,
-    /// API endpoint / base URL (e.g., "https://api.anthropic.com")
-    pub api_endpoint: Option<String>,
-    /// API key (masked before sending to frontend)
-    #[serde(skip_serializing)]
-    pub api_key: Option<String>,
+    /// Environment variables (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL)
+    pub env: Option<ClaudeEnv>,
+    /// Available models list
+    #[serde(default)]
+    pub available_models: Option<Vec<String>>,
+    /// Enabled plugins
+    #[serde(default)]
+    pub enabled_plugins: Option<serde_json::Value>,
     /// MCP servers configuration
+    #[serde(default)]
     pub mcp_servers: Option<serde_json::Value>,
     /// Custom instructions / system prompt
+    #[serde(default)]
     pub custom_instructions: Option<String>,
     /// Theme preference
+    #[serde(default)]
     pub theme: Option<String>,
     /// Max tokens for responses
+    #[serde(default)]
     pub max_tokens: Option<u32>,
     /// Additional settings stored as key-value
+    #[serde(default)]
     pub extra: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// Environment variables section in Claude config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeEnv {
+    #[serde(alias = "ANTHROPIC_API_KEY")]
+    pub anthropic_api_key: Option<String>,
+    #[serde(alias = "ANTHROPIC_BASE_URL")]
+    pub anthropic_base_url: Option<String>,
+    #[serde(alias = "ANTHROPIC_MODEL")]
+    pub anthropic_model: Option<String>,
 }
 
 impl Default for ClaudeConfig {
     fn default() -> Self {
         Self {
-            model: None,
-            api_endpoint: None,
-            api_key: None,
+            env: None,
+            available_models: None,
+            enabled_plugins: None,
             mcp_servers: None,
             custom_instructions: None,
             theme: None,
@@ -49,6 +79,7 @@ pub struct ClaudeConfigPublic {
     pub api_endpoint: Option<String>,
     pub api_key_masked: Option<String>,
     pub api_key_set: bool,
+    pub available_models: Option<Vec<String>>,
     pub mcp_servers: Option<serde_json::Value>,
     pub custom_instructions: Option<String>,
     pub theme: Option<String>,
@@ -87,17 +118,22 @@ impl ClaudeConfig {
 
     /// Convert to public representation with masked API key
     pub fn to_public(&self) -> ClaudeConfigPublic {
+        let model = self.env.as_ref().and_then(|e| e.anthropic_model.clone());
+        let api_endpoint = self.env.as_ref().and_then(|e| e.anthropic_base_url.clone());
+        let api_key = self.env.as_ref().and_then(|e| e.anthropic_api_key.clone());
+
         ClaudeConfigPublic {
-            model: self.model.clone(),
-            api_endpoint: self.api_endpoint.clone(),
-            api_key_masked: self.api_key.as_ref().map(|k| {
+            model,
+            api_endpoint,
+            api_key_masked: api_key.as_ref().map(|k| {
                 if k.is_empty() {
                     String::new()
                 } else {
                     super::mask_api_key(k)
                 }
             }),
-            api_key_set: self.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false),
+            api_key_set: api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false),
+            available_models: self.available_models.clone(),
             mcp_servers: self.mcp_servers.clone(),
             custom_instructions: self.custom_instructions.clone(),
             theme: self.theme.clone(),
@@ -109,17 +145,25 @@ impl ClaudeConfig {
     /// Apply changes from frontend (only update provided fields)
     /// `api_key` field: if "UNCHANGED" or empty, keep existing; otherwise update
     pub fn apply_update(&mut self, update: ClaudeConfigUpdate) {
+        let mut env = self.env.clone().unwrap_or(ClaudeEnv {
+            anthropic_api_key: None,
+            anthropic_base_url: None,
+            anthropic_model: None,
+        });
+
         if let Some(model) = update.model {
-            self.model = Some(model);
+            env.anthropic_model = Some(model);
         }
         if let Some(api_endpoint) = update.api_endpoint {
-            self.api_endpoint = Some(api_endpoint);
+            env.anthropic_base_url = Some(api_endpoint);
         }
         if let Some(api_key) = update.api_key {
             if api_key != "UNCHANGED" {
-                self.api_key = Some(api_key);
+                env.anthropic_api_key = Some(api_key);
             }
         }
+        self.env = Some(env);
+
         if let Some(mcp_servers) = update.mcp_servers {
             self.mcp_servers = Some(mcp_servers);
         }

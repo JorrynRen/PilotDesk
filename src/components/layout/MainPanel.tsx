@@ -96,6 +96,18 @@ export function MainPanel() {
       if (sessionId === currentSessionId) {
         clearTimeoutSafe();
         showToast(`错误: ${error}`, 'error');
+        // Save error as a persistent message in the session
+        if (currentSessionId) {
+          const errorMsg: Message = {
+            id: `msg-err-${Date.now()}`,
+            sessionId: currentSessionId,
+            role: 'system',
+            content: `❗ 请求失败: ${error}`,
+            mode: 'native',
+            timestamp: Math.floor(Date.now() / 1000),
+          };
+          addMessage(errorMsg);
+        }
         setIsGenerating(false);
         setStreamingContent('');
         setStreamingStatus('');
@@ -157,20 +169,29 @@ export function MainPanel() {
         if (currentSession) {
           setIsGenerating(false);
           setStreamingStatus('');
+          // Always save a timeout message, even when streamingContent is empty
           setStreamingContent((prev) => {
-            if (prev && currentSession.id) {
-              const msg: Message = {
-                id: `msg-${Date.now()}`,
-                sessionId: currentSession.id,
-                role: 'assistant',
-                content: prev + '\n\n*(请求超时：智能体未在 60 秒内响应，请检查智能体状态后重试)*',
-                mode: 'native',
-                timestamp: Math.floor(Date.now() / 1000),
-              };
-              addMessage(msg);
-            }
+            const sid = currentSession.id;
+            const content = prev
+              ? prev + '\n\n*(请求超时：智能体未在 60 秒内响应，请检查智能体状态后重试)*'
+              : '*(请求超时：智能体未在 60 秒内响应，请检查智能体状态后重试)*';
+            const msg: Message = {
+              id: `msg-${Date.now()}`,
+              sessionId: sid,
+              role: 'assistant',
+              content,
+              mode: 'native',
+              timestamp: Math.floor(Date.now() / 1000),
+            };
+            addMessage(msg);
             return '';
           });
+          // Send stop signal to Sidecar
+          if (currentSession.agentType === 'api') {
+            stopApiChat();
+          } else {
+            stopGeneration(currentSession.id, currentSession.agentType as 'claude' | 'hermes');
+          }
           showToast('请求超时：智能体未在 60 秒内响应', 'error');
         }
       }, 60000);

@@ -39,28 +39,20 @@ pub struct HermesUpdatePayload {
 }
 
 /// Get all agent configurations (masked for security)
+/// Always returns config data — even when agent is not "installed" (no config dir),
+/// returns default config with null fields so the frontend can display what's available.
 #[command]
 pub fn get_config() -> Result<ConfigResult, AppError> {
     let claude_installed = claude::is_installed();
     let hermes_installed = hermes::is_installed();
 
-    let claude = if claude_installed {
-        let config = claude::ClaudeConfig::load()?;
-        Some(config.to_public())
-    } else {
-        None
-    };
-
-    let hermes = if hermes_installed {
-        let config = hermes::HermesConfig::load()?;
-        Some(config.to_public())
-    } else {
-        None
-    };
+    // Always load config — ClaudeConfig::load() returns default when file/dir doesn't exist
+    let claude = claude::ClaudeConfig::load()?;
+    let hermes = hermes::HermesConfig::load()?;
 
     Ok(ConfigResult {
-        claude,
-        hermes,
+        claude: Some(claude.to_public()),
+        hermes: Some(hermes.to_public()),
         claude_installed,
         hermes_installed,
     })
@@ -109,7 +101,7 @@ pub fn test_api_connection(agent_type: String) -> Result<TestConnectionResult, A
     match agent_type.as_str() {
         "claude" => {
             let config = claude::ClaudeConfig::load()?;
-            let has_key = config.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false);
+            let has_key = config.env.as_ref().and_then(|e| e.anthropic_api_key.as_ref()).map(|k| !k.is_empty()).unwrap_or(false);
             Ok(TestConnectionResult {
                 agent_type: agent_type.clone(),
                 success: has_key,

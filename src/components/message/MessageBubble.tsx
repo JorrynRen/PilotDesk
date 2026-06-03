@@ -19,7 +19,7 @@ interface MessageBubbleProps {
 
 function formatTimestamp(ts: number): string {
   const date = new Date(ts * 1000);
-  const time = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const time = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
@@ -69,11 +69,6 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
 
   // Get model name from configStore for claude/hermes
   const config = useConfigStore((s) => s.config);
-  const agentModel = agentType === 'claude'
-    ? config?.claude?.model
-    : agentType === 'hermes'
-      ? config?.hermes?.model
-      : undefined;
 
   const handleCopy = useCallback(async () => {
     try {
@@ -107,6 +102,27 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
   const modeColor = MODE_COLORS[messageMode];
   const modeLabel = MODE_LABELS[messageMode];
 
+  /** Infer provider name from model name when endpoint is not available */
+  function inferProviderFromModel(model: string | null | undefined): string | null {
+    if (!model) return null;
+    const m = model.toLowerCase();
+    if (m.includes('claude') || m.includes('anthropic')) return 'Anthropic';
+    if (m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('openai')) return 'OpenAI';
+    if (m.includes('glm') || m.includes('zhipu') || m.includes('chatglm')) return '智谱AI';
+    if (m.includes('deepseek')) return 'DeepSeek';
+    if (m.includes('moonshot') || m.includes('kimi')) return 'Moonshot';
+    if (m.includes('qwen') || m.includes('dashscope') || m.includes('aliyun')) return '阿里云';
+    if (m.includes('ernie') || m.includes('baidu') || m.includes('qianfan')) return '百度千帆';
+    if (m.includes('hunyuan') || m.includes('tencent')) return '腾讯混元';
+    if (m.includes('gemini') || m.includes('google')) return 'Google';
+    if (m.includes('minimax')) return 'MiniMax';
+    if (m.includes('zeroone') || m.includes('yi-')) return '零一万物';
+    if (m.includes('spark') || m.includes('xunfei')) return '讯飞星火';
+    if (m.includes('silicon') || m.includes('siliconflow')) return '硅基流动';
+    if (m.includes('volc') || m.includes('ark') || m.includes('doubao')) return '火山引擎';
+    return null;
+  }
+
   // Build agent label: "AgentType | Provider | Model Time"
   const buildAgentLabel = () => {
     const typeLabel = AGENT_THEMES[agentType]?.label || agentType;
@@ -119,9 +135,11 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
     } else {
       // Claude/Hermes: derive provider name from apiEndpoint base URL
       const endpoint = agentType === 'claude' ? config?.claude?.apiEndpoint : config?.hermes?.apiEndpoint;
-      const provider = deriveProviderName(endpoint);
+      const model = agentType === 'claude' ? config?.claude?.model : config?.hermes?.model;
+      // Try endpoint-based derivation first, then fall back to model-based inference
+      const provider = deriveProviderName(endpoint) || inferProviderFromModel(model);
       if (provider) parts.push(provider);
-      if (agentModel) parts.push(agentModel);
+      if (model) parts.push(model);
     }
     return parts.join(' | ') + ' ' + time;
   };

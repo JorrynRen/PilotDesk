@@ -20,7 +20,7 @@ function formatTime(timestamp: number): string {
 
   const yesterday = new Date(now);
   yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.getDate();
+  const isYesterday = date.toDateString() === yesterday.toDateString();
 
   const timeStr = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 

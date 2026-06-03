@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Terminal, Trash2 } from 'lucide-react';
 
 interface LogEntry {
-  id: number;
+  id?: number;
   timestamp: number;
   message: string;
   level: 'info' | 'warn' | 'error' | 'success';

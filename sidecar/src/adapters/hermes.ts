@@ -85,8 +85,11 @@ export class HermesAdapter implements AgentAdapter {
         }
       });
 
+      const stderrChunks: string[] = [];
       child.stderr?.on('data', (chunk: Buffer) => {
-        console.error(`[Hermes stderr] ${chunk.toString()}`);
+        const text = chunk.toString();
+        console.error(`[Hermes stderr] ${text}`);
+        stderrChunks.push(text);
       });
 
       const closePromise = new Promise<number>((resolve) => {
@@ -142,7 +145,26 @@ export class HermesAdapter implements AgentAdapter {
 
       const exitCode = await closePromise;
       if (exitCode !== 0 && !this.aborted.has(sessionId)) {
-        throw new Error(`Hermes process exited with code ${exitCode}`);
+        const stderrText = stderrChunks.join('').trim();
+        let detail = stderrText ? stderrText.slice(0, 300) : '';
+        // Try to extract meaningful error from stderr
+        let friendlyMsg = `Hermes 进程异常退出 (exit code ${exitCode})`;
+        if (detail) {
+          // Check for common API errors in stderr
+          const d = detail.toLowerCase();
+          if (d.includes('insufficient') && (d.includes('balance') || d.includes('quota'))) {
+            friendlyMsg = '请求失败：API 账户余额不足。请前往 API 提供商后台充值后重试。';
+          } else if (d.includes('403')) {
+            friendlyMsg = `请求被拒 (HTTP 403)：${detail.slice(0, 200)}。请检查 API Key 权限、账户余额或模型可用性。`;
+          } else if (d.includes('401')) {
+            friendlyMsg = '认证失败 (HTTP 401)：API Key 无效或已过期。请检查 API Key 是否正确。';
+          } else if (d.includes('model') && (d.includes('not found') || d.includes('not support'))) {
+            friendlyMsg = `模型不可用：${detail.slice(0, 200)}。请检查模型名称是否正确，或更换模型后重试。`;
+          } else {
+            friendlyMsg += `：${detail}`;
+          }
+        }
+        throw new Error(friendlyMsg);
       }
     } catch (error: any) {
       if (!this.aborted.has(sessionId)) {
