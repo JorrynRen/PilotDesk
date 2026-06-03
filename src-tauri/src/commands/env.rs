@@ -101,7 +101,7 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
     let appdata = std::env::var("APPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Roaming", home));
     let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Local", home));
 
-    println!("[env] Detecting environment...");
+    eprintln!("[env] Detecting environment...");
 
     let claude_paths = [
         &format!(r"{}\npm\claude.cmd", appdata),
@@ -118,14 +118,14 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
     let claude_code_version = probe_version(&claude_paths, "--version")
         .as_deref()
         .map(clean_version_string);
-    println!("[env] claude: {:?}", claude_code_version);
+    eprintln!("[env] claude: {:?}", claude_code_version);
 
     let hermes_version = probe_version(&hermes_paths, "version")
         .map(|v| {
             let first_line = v.lines().next().unwrap_or(&v);
             clean_version_string(first_line.trim_start_matches("Hermes Agent "))
         });
-    println!("[env] hermes: {:?}", hermes_version);
+    eprintln!("[env] hermes: {:?}", hermes_version);
 
     // Try known node paths (Tauri process may not inherit full PATH)
     let node_version = get_version_bat(r"F:\soft\nodejs\node.exe", "--version")
@@ -152,7 +152,7 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
     ];
     let python_version = probe_version(&python_paths, "--version");
 
-    println!("[env] node={:?} git={:?} python={:?}", node_version, git_version, python_version);
+    eprintln!("[env] node={:?} git={:?} python={:?}", node_version, git_version, python_version);
 
     Ok(EnvInfo {
         node_version,
@@ -170,7 +170,7 @@ pub async fn detect_env() -> Result<EnvInfo, AppError> {
         let cache = ENV_CACHE.lock().unwrap();
         if let (Some(ref info), Some(fetched)) = (&cache.value, &cache.fetched_at) {
             if fetched.elapsed() < ENV_CACHE_TTL {
-                println!("[env] Returning cached result ({}ms old)", fetched.elapsed().as_millis());
+                eprintln!("[env] Returning cached result ({}ms old)", fetched.elapsed().as_millis());
                 return Ok(info.clone());
             }
         }
@@ -184,7 +184,7 @@ pub async fn detect_env() -> Result<EnvInfo, AppError> {
                 return Ok(cache.value.clone().unwrap());
             }
             drop(cache);
-            println!("[env] Waiting for in-progress detection...");
+            eprintln!("[env] Waiting for in-progress detection...");
             for _ in 0..300 {
                 std::thread::sleep(Duration::from_millis(100));
                 let cache = ENV_CACHE.lock().unwrap();
