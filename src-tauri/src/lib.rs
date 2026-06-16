@@ -267,6 +267,8 @@ pub fn run() {
             plugin::plugin_enable,
             plugin::plugin_disable,
             plugin::plugin_get_sandbox_info,
+            plugin::plugin_install_zip,
+            plugin::plugin_uninstall,
         ])
         .setup(|app| {
             log::info!("PilotDesk initialized successfully (AgentManager mode, r2d2 pool).");

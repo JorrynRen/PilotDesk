@@ -1427,11 +1427,93 @@ hello-world/
 - 沙箱规则
 - Plugin API 参考（ui / data / events / storage）
 
-### 10.11 待实施
+### 10.11 前端插件入口（PluginRegistry）
+
+**文件：** `src/plugin/PluginRegistry.ts`
+
+全局贡献点注册表，管理插件注册的面板、命令、事件钩子等前端组件。
+
+```typescript
+class PluginRegistry {
+  // 面板管理
+  registerPanel(plugin, contribution): void
+  unregisterPluginPanels(pluginId): void
+  getPanels(): RegisteredPanel[]
+
+  // 命令管理
+  registerCommand(plugin, contribution): void
+  executeCommand(pluginId, commandId, ...args): void
+
+  // 事件钩子
+  registerHook(plugin, contribution): void
+  emitEvent(event, ...args): void
+  getHooks(event): RegisteredHook[]
+
+  // 插件生命周期
+  loadPlugin(plugin): void       // 注册所有贡献点
+  unloadPlugin(pluginId): void   // 注销所有贡献点
+  loadAllPlugins(plugins): void  // 批量加载
+}
+```
+
+**生命周期：**
+```
+插件启用 → PluginRegistry.loadPlugin()
+  → 注册面板到 panels Map
+  → 注册命令到 commands Map
+  → 注册钩子到 hooks Map
+  → RightPanel 订阅变更 → 动态添加标签页
+
+插件禁用/卸载 → PluginRegistry.unloadPlugin()
+  → 注销所有面板
+  → 注销所有命令
+  → 注销所有钩子
+  → RightPanel 自动移除标签页
+```
+
+**文件：** `src/components/plugin/PluginPanelRenderer.tsx`
+
+渲染已注册的插件面板，支持标签页导航和组件占位。
+
+### 10.12 本地上传安装
+
+**Rust 命令：** `plugin_install_zip` / `plugin_uninstall`
+
+```rust
+#[tauri::command]
+pub fn plugin_install_zip(host: ..., zip_path: String) -> Result<PluginInstance, String>
+#[tauri::command]
+pub fn plugin_uninstall(host: ..., id: String) -> Result<(), String>
+```
+
+**安装流程：**
+```
+用户点击「+ 安装」按钮
+  → Tauri dialog 选择 .zip 文件
+  → Rust: 扫描 zip 中 manifest.json
+  → Rust: 解析并验证清单
+  → Rust: 解压到 ~/.pilotdesk/plugins/<plugin-id>/
+  → Rust: 沙箱验证（路径遍历/权限/清单）
+  → Rust: 注册到 PluginHost
+  → 前端: 刷新插件列表
+  → 前端: PluginRegistry.loadPlugin() 注册贡献点
+```
+
+**卸载流程：**
+```
+用户点击 🗑 按钮
+  → Rust: 从 HashMap 移除
+  → Rust: 删除插件目录
+  → 前端: PluginRegistry.unloadPlugin() 注销贡献点
+  → 前端: 刷新插件列表
+```
+
+**依赖：** `zip = "2.2"`（Cargo.toml 新增）
+
+### 10.13 待实施
 
 | 项目 | 状态 | 说明 |
 |------|------|------|
-| 前端插件入口 | 待实施 | 插件可注册前端组件到主界面 |
 | 插件市场 | 待实施 | 在线插件浏览和安装 |
 
 ---
@@ -1645,7 +1727,7 @@ function useI18n() {
 | `src-tauri/src/main.rs` | ~20 | Tauri 入口 |
 | `src-tauri/src/lib.rs` | ~200 | 模块注册 + 命令注册 + setup |
 | `src-tauri/src/agent/mod.rs` | ~300 | AgentManager（统一进程管理） |
-| `src-tauri/src/plugin/mod.rs` | ~200 | PluginHost（插件发现/管理） |
+| `src-tauri/src/plugin/mod.rs` | ~550 | PluginHost（插件发现/管理/沙箱/zip安装/卸载） |
 | `src-tauri/src/db/init.rs` | ~230 | 数据库初始化 + 7 个迁移函数 |
 | `src-tauri/src/db/models.rs` | ~80 | 统一数据模型 |
 | `src-tauri/src/commands/env.rs` | ~270 | 环境检测 + Agent 安装 |
@@ -1680,7 +1762,7 @@ function useI18n() {
 | `src/stores/sessionStore.ts` | ~220 | 会话/消息状态 |
 | `src/stores/apiProviderStore.ts` | ~80 | API 提供商状态 |
 | `src/stores/inspirationStore.ts` | ~80 | 灵感状态 |
-| `src/stores/pluginStore.ts` | ~60 | 插件状态 |
+| `src/stores/pluginStore.ts` | ~80 | 插件状态（含 installZip/uninstall） |
 | `src/stores/themeStore.ts` | ~50 | 自定义主题色状态 |
 | `src/stores/skillStore.ts` | ~40 | 技能列表状态 |
 | `src/stores/pendingInputStore.ts` | ~30 | 待发送输入状态 |
@@ -1700,12 +1782,14 @@ function useI18n() {
 | `src/components/layout/InspirationPanel.tsx` | ~150 | 灵感面板 |
 | `src/components/message/MessageBubble.tsx` | ~350 | 消息气泡（内联编辑 + 重发） |
 | `src/components/message/MarkdownRenderer.tsx` | ~100 | Markdown 渲染 |
-| `src/components/plugin/PluginManager.tsx` | ~120 | 插件管理 UI |
+| `src/components/plugin/PluginManager.tsx` | ~300 | 插件管理 UI（含 zip 安装/卸载/注册表集成） |
 | `src/components/settings/ThemeCustomizer.tsx` | ~80 | 自定义主题色 UI |
 | `src/components/env/EnvManager.tsx` | ~260 | 环境管理 |
 | `src/pages/SettingsPage.tsx` | ~300 | 设置页 |
 | `src/pages/EnvPage.tsx` | ~100 | 环境检测页 |
 | `src/styles/globals.css` | ~250 | 全局样式 + 42 CSS 设计令牌 |
+| `src/plugin/PluginRegistry.ts` | ~200 | 插件贡献点全局注册表 |
+| `src/components/plugin/PluginPanelRenderer.tsx` | ~80 | 插件面板渲染器 |
 
 ### 14.4 文档
 
@@ -1749,6 +1833,8 @@ function useI18n() {
 5. 更新文件清单反映当前代码状态
 6. **插件安全沙箱**：权限系统（9 种权限 + 3 级风险）、清单验证（7 项检查）、路径遍历防护、入口验证、未知权限拒绝、高风险权限标记
 7. **示例插件**：hello-world 示例插件（含完整开发文档）+ malicious-sample 恶意插件示例（沙箱验证）
+8. **前端插件入口**：PluginRegistry 全局注册表（面板/命令/钩子管理）、PluginPanelRenderer 面板渲染器、RightPanel 动态标签页集成
+9. **本地上传安装**：plugin_install_zip / plugin_uninstall Rust 命令、zip 解压安装、沙箱验证、卸载时目录清理
 
 ### 15.2 v4.3
 

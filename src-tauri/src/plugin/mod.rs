@@ -446,6 +446,160 @@ impl PluginHost {
     pub fn get_plugin(&self, id: &str) -> Option<&PluginInstance> {
         self.plugins.get(id)
     }
+
+    // ── 安装与卸载 ──
+
+    /// 从 zip 文件安装插件
+    pub fn install_from_zip(&mut self, zip_path: &str) -> Result<PluginInstance, String> {
+        let zip_path = PathBuf::from(zip_path);
+        if !zip_path.exists() {
+            return Err(format!("文件不存在: {}", zip_path));
+        }
+
+        // 确保插件目录存在
+        fs::create_dir_all(&self.plugins_dir)
+            .map_err(|e| format!("创建插件目录失败: {}", e))?;
+
+        // 打开 zip 文件
+        let file = fs::File::open(&zip_path)
+            .map_err(|e| format!("打开文件失败: {}", e))?;
+
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| format!("读取压缩包失败: {}", e))?;
+
+        // 查找 manifest.json 确定插件 ID
+        let mut manifest_content: Option<String> = None;
+        let mut plugin_dir_name: Option<String> = None;
+
+        // 第一遍扫描：找到 manifest.json
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i)
+                .map_err(|e| format!("读取压缩包条目失败: {}", e))?;
+
+            let entry_name = entry.name().to_string();
+
+            // 支持两种结构: manifest.json (根目录) 或 plugin-name/manifest.json (有父目录)
+            if entry_name == "manifest.json" || entry_name.ends_with("/manifest.json") {
+                let mut content = String::new();
+                use std::io::Read;
+                entry.read_to_string(&mut content)
+                    .map_err(|e| format!("读取 manifest.json 失败: {}", e))?;
+                manifest_content = Some(content);
+
+                if entry_name == "manifest.json" {
+                    plugin_dir_name = Some(".".to_string());
+                } else {
+                    plugin_dir_name = Some(entry_name.trim_end_matches("/manifest.json").to_string());
+                }
+                break;
+            }
+        }
+
+        let manifest_content = manifest_content.ok_or_else(|| "压缩包中未找到 manifest.json".to_string())?;
+        let manifest: PluginManifest = serde_json::from_str(&manifest_content)
+            .map_err(|e| format!("解析 manifest.json 失败: {}", e))?;
+
+        // 验证插件 ID
+        if manifest.id.contains("..") || manifest.id.contains('/') || manifest.id.contains('\\') {
+            return Err("插件 ID 包含非法字符".to_string());
+        }
+
+        // 检查是否已存在
+        if self.plugins.contains_key(&manifest.id) {
+            return Err(format!("插件 '{}' 已安装", manifest.id));
+        }
+
+        // 目标目录: plugins/<plugin-id>/
+        let target_dir = self.plugins_dir.join(&manifest.id);
+
+        // 如果目标目录已存在，先删除
+        if target_dir.exists() {
+            fs::remove_dir_all(&target_dir)
+                .map_err(|e| format!("清理旧目录失败: {}", e))?;
+        }
+
+        // 第二遍：解压文件
+        let mut archive = zip::ZipArchive::new(fs::File::open(&zip_path)
+            .map_err(|e| format!("重新打开文件失败: {}", e))?)
+            .map_err(|e| format!("读取压缩包失败: {}", e))?;
+
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i)
+                .map_err(|e| format!("读取条目失败: {}", e))?;
+
+            let entry_name = entry.name().to_string();
+
+            // 跳过目录条目
+            if entry_name.ends_with('/') {
+                continue;
+            }
+
+            // 计算相对路径（去除插件目录前缀）
+            let relative_path = if let Some(ref dir_name) = plugin_dir_name {
+                if dir_name == "." {
+                    entry_name.clone()
+                } else if entry_name.starts_with(dir_name) {
+                    entry_name[dir_name.len() + 1..].to_string()
+                } else {
+                    entry_name.clone()
+                }
+            } else {
+                entry_name.clone()
+            };
+
+            // 路径遍历检查
+            if relative_path.contains("..") {
+                log::warn!("[PluginInstall] 跳过路径遍历: {}", relative_path);
+                continue;
+            }
+
+            let target_path = target_dir.join(&relative_path);
+
+            // 创建父目录
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建目录失败: {}", e))?;
+            }
+
+            // 写入文件
+            let mut output = fs::File::create(&target_path)
+                .map_err(|e| format!("创建文件失败: {}", e))?;
+            use std::io::copy;
+            copy(&mut entry, &mut output)
+                .map_err(|e| format!("写入文件失败: {}", e))?;
+        }
+
+        // 加载并验证安装的插件
+        let manifest_path = target_dir.join("manifest.json");
+        let instance = self.load_and_validate_plugin(&target_dir, &manifest_path)?;
+
+        let id = instance.manifest.id.clone();
+        self.plugins.insert(id.clone(), instance.clone());
+
+        log::info!("[PluginInstall] 插件 '{}' 安装成功", manifest.name);
+
+        Ok(instance)
+    }
+
+    /// 卸载插件
+    pub fn uninstall_plugin(&mut self, id: &str) -> Result<(), String> {
+        let plugin = self.plugins.get(id)
+            .ok_or_else(|| format!("插件 '{}' 未找到", id))?;
+
+        let plugin_path = PathBuf::from(&plugin.path);
+
+        // 从 HashMap 移除
+        self.plugins.remove(id);
+
+        // 删除目录
+        if plugin_path.exists() {
+            fs::remove_dir_all(&plugin_path)
+                .map_err(|e| format!("删除插件目录失败: {}", e))?;
+        }
+
+        log::info!("[PluginUninstall] 插件 '{}' 已卸载", id);
+        Ok(())
+    }
 }
 
 // ── Tauri Commands ──
@@ -478,4 +632,24 @@ pub fn plugin_disable(host: tauri::State<'_, std::sync::Mutex<PluginHost>>, id: 
 pub fn plugin_get_sandbox_info(host: tauri::State<'_, std::sync::Mutex<PluginHost>>) -> Result<SandboxInfo, String> {
     let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
     Ok(host.get_sandbox_info())
+}
+
+/// 从 zip 文件安装插件
+#[tauri::command]
+pub fn plugin_install_zip(
+    host: tauri::State<'_, std::sync::Mutex<PluginHost>>,
+    zip_path: String,
+) -> Result<PluginInstance, String> {
+    let mut host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+    host.install_from_zip(&zip_path)
+}
+
+/// 删除插件
+#[tauri::command]
+pub fn plugin_uninstall(
+    host: tauri::State<'_, std::sync::Mutex<PluginHost>>,
+    id: String,
+) -> Result<(), String> {
+    let mut host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+    host.uninstall_plugin(&id)
 }

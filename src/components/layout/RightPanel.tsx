@@ -6,6 +6,8 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { InspirationPanel } from './InspirationPanel';
 import { PluginManager } from '../plugin/PluginManager';
+import { PluginPanelRenderer } from '../plugin/PluginPanelRenderer';
+import { pluginRegistry } from '../../plugin/PluginRegistry';
 
 interface RightPanelProps {
   isOpen: boolean;
@@ -13,10 +15,28 @@ interface RightPanelProps {
 
 export function RightPanel({ isOpen }: RightPanelProps) {
   const [activeTab, setActiveTab] = useState<string>('inspiration');
+  const [pluginPanels, setPluginPanels] = useState<{ id: string; title: string; pluginId: string }[]>([]);
   const currentSession = useSessionStore((s) => {
     const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
     return cs;
   });
+
+  // 同步插件面板
+  useEffect(() => {
+    const updatePanels = () => {
+      const panels = pluginRegistry.getPanels();
+      setPluginPanels(
+        panels.map((p) => ({
+          id: p.contribution.id,
+          title: p.contribution.title,
+          pluginId: p.pluginId,
+        }))
+      );
+    };
+    updatePanels();
+    const unsub = pluginRegistry.subscribe(updatePanels);
+    return unsub;
+  }, []);
 
   if (!isOpen) return null;
 
@@ -25,6 +45,12 @@ export function RightPanel({ isOpen }: RightPanelProps) {
     { id: 'skills', icon: Cpu, label: '技能' },
     { id: 'memory', icon: Bot, label: '记忆' },
     { id: 'plugins', icon: Cpu, label: '插件' },
+    // 动态添加插件面板标签
+    ...pluginPanels.map((p) => ({
+      id: `plugin:${p.id}`,
+      icon: () => <span style={{ fontSize: 12 }}>📦</span>,
+      label: p.title,
+    })),
   ];
 
   const renderContent = () => {
@@ -49,6 +75,12 @@ export function RightPanel({ isOpen }: RightPanelProps) {
         );
       case 'plugins':
         return <PluginManager />;
+      default:
+        // 检查是否为插件面板
+        if (activeTab.startsWith('plugin:')) {
+          const panelId = activeTab.slice(7);
+          return <PluginPanelRenderer activePanelId={panelId} onPanelChange={(id) => setActiveTab(`plugin:${id}`)} />;
+        }
       case 'inspiration':
       default:
         return <InspirationPanel />;

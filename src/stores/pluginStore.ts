@@ -11,6 +11,8 @@ interface PluginStoreState {
   list: () => Promise<void>;
   enable: (id: string) => Promise<void>;
   disable: (id: string) => Promise<void>;
+  installZip: (zipPath: string) => Promise<PluginInstance>;
+  uninstall: (id: string) => Promise<void>;
   fetchSandboxInfo: () => Promise<void>;
 }
 
@@ -56,6 +58,15 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
     } catch (err) {
       set({ error: String(err) });
     }
+  },
+
+  installZip: async (zipPath: string) => {
+    const instance = await invoke<PluginInstance>('plugin_install_zip', { zipPath });
+    return instance;
+  },
+
+  uninstall: async (id: string) => {
+    await invoke('plugin_uninstall', { id });
   },
 
   fetchSandboxInfo: async () => {
