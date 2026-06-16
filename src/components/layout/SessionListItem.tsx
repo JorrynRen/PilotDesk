@@ -11,6 +11,9 @@ interface SessionListItemProps {
   onArchive?: () => void;
   onRename?: (id: string, newTitle: string) => void;
   onDelete?: () => void;
+  batchMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }
 
 function formatTime(timestamp: number): string {
@@ -36,6 +39,9 @@ export function SessionListItem({
   onArchive,
   onRename,
   onDelete,
+  batchMode,
+  selected,
+  onToggleSelect,
 }: SessionListItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title);
@@ -77,9 +83,25 @@ export function SessionListItem({
       style={{
         backgroundColor: isActive ? 'var(--border)' : 'transparent',
       }}
-      onClick={isEditing ? undefined : onSelect}
+      onClick={isEditing ? undefined : batchMode ? () => onToggleSelect?.(session.id) : onSelect}
+      style={{
+        backgroundColor: selected ? 'var(--accent-light)' : isActive ? 'var(--border)' : 'transparent',
+      }}
     >
       <div className="flex items-start gap-2">
+        {batchMode && (
+          <div className="shrink-0 pt-1" onClick={(e) => { e.stopPropagation(); onToggleSelect?.(session.id); }}>
+            <div
+              className="w-4 h-4 rounded border flex items-center justify-center transition-colors cursor-pointer"
+              style={{
+                borderColor: selected ? 'var(--accent)' : 'var(--border)',
+                backgroundColor: selected ? 'var(--accent)' : 'transparent',
+              }}
+            >
+              {selected && <Check size={10} color="#fff" />}
+            </div>
+          </div>
+        )}
         <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">
@@ -148,7 +170,7 @@ export function SessionListItem({
             {onRename && (
               <button
                 onClick={handleStartEdit}
-                className="p-0.5 rounded hover:opacity-80"
+                className="p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
                 style={{ color: 'var(--accent)' }}
                 title="重命名"
               >
@@ -158,7 +180,7 @@ export function SessionListItem({
             {onArchive && (
               <button
                 onClick={(e) => { e.stopPropagation(); onArchive(); }}
-                className="p-0.5 rounded hover:opacity-80"
+                className="p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
                 style={{ color: 'var(--text-secondary)' }}
                 title="归档"
               >
@@ -168,7 +190,7 @@ export function SessionListItem({
             {onDelete && (
               <button
                 onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                className="p-0.5 rounded hover:opacity-80"
+                className="p-0.5 rounded transition-all hover:bg-red-500/20 active:scale-90"
                 style={{ color: '#EF4444' }}
                 title="删除"
               >

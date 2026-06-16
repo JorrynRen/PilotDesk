@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Plus } from 'lucide-react';
 import type { InspirationItem } from '../../stores/inspirationStore';
 
-const EMOJI_OPTIONS = ['💡', '🔥', '🎯', '⚡', '🚀', '🌟', '📝', '🔧', '🎨', '🧠', '📊', '🛠️', '💻', '📱', '🌐', '🔬', '🎭', '🎵', '🏆', '💎', '🌈', '🔑', '📖', '🧩'];
+import { EMOJI_OPTIONS } from '../../constants';
 
 interface InspirationFormProps {
   initialData?: InspirationItem | null;

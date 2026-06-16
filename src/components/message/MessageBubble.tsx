@@ -1,20 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Copy, Edit3, Bookmark, Check, User } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { AGENT_THEMES, MODE_LABELS, MODE_COLORS } from '../../types';
 import { useInspirationStore } from '../../stores/inspirationStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
-import { useConfigStore } from '../../stores/configStore';
 import { showToast } from '../../utils/toast';
+import { useSessionStore } from '../../stores/sessionStore';
 import { type Message } from '../../types';
 
 interface MessageBubbleProps {
   message: Message;
-  agentType: 'claude' | 'hermes' | 'api';
+  agentType: 'claude' | 'hermes' | 'codex' | 'api';
   apiProviderId?: string;
   apiModel?: string;
   onEdit?: (content: string) => void;
   onSaveInspiration?: (content: string) => void;
+  onResend?: (content: string) => void;
 }
 
 function formatTimestamp(ts: number): string {
@@ -26,31 +27,14 @@ function formatTimestamp(ts: number): string {
   return `${y}/${m}/${d} ${time}`;
 }
 
-/** Derive a friendly provider/manufacturer name from an API endpoint URL */
-function deriveProviderName(endpoint: string | null | undefined): string | null {
-  if (!endpoint) return null;
-  const url = endpoint.toLowerCase();
-  if (url.includes('zhipu') || url.includes('bigmodel')) return '智谱AI';
-  if (url.includes('openai')) return 'OpenAI';
-  if (url.includes('anthropic')) return 'Anthropic';
-  if (url.includes('deepseek')) return 'DeepSeek';
-  if (url.includes('moonshot') || url.includes('kimi')) return 'Moonshot';
-  if (url.includes('siliconflow')) return '硅基流动';
-  if (url.includes('volcengine') || url.includes('ark')) return '火山引擎';
-  if (url.includes('baidu') || url.includes('qianfan')) return '百度千帆';
-  if (url.includes('aliyun') || url.includes('dashscope')) return '阿里云';
-  if (url.includes('tencent') || url.includes('hunyuan')) return '腾讯混元';
-  // Fallback: extract hostname
-  try {
-    const hostname = new URL(endpoint).hostname;
-    return hostname;
-  } catch {
-    return null;
-  }
-}
 
-export function MessageBubble({ message, agentType, apiProviderId, apiModel, onEdit, onSaveInspiration }: MessageBubbleProps) {
+
+export function MessageBubble({ message, agentType, apiProviderId, apiModel, onEdit, onSaveInspiration, onResend }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const editRef = useRef<HTMLTextAreaElement>(null);
+  const { updateMessage } = useSessionStore();
   const isUser = message.role === 'user';
 
   // Resolve provider name for API sessions (only from user-configured providers list)
@@ -67,8 +51,20 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
     }
   }, [apiProviderId, providers.length, fetchProviders]);
 
-  // Get model name from configStore for claude/hermes
-  const config = useConfigStore((s) => s.config);
+  // Build agent label: "AgentType | Provider | Model Time"
+  const buildAgentLabel = () => {
+    const typeLabel = AGENT_THEMES[agentType]?.label || agentType;
+    const time = formatTimestamp(message.timestamp);
+    const parts = [typeLabel];
+    if (agentType === 'api') {
+      // API type: provider name comes from user-configured providers list
+      if (providerName) parts.push(providerName);
+      if (apiModel) parts.push(apiModel);
+    } else {
+      // Claude/Hermes: no config store anymore, just show type + time
+    }
+    return parts.join(' | ') + ' ' + time;
+  };
 
   const handleCopy = useCallback(async () => {
     try {
@@ -88,61 +84,53 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
   const handleSaveInspiration = useCallback(async () => {
     const createInspiration = useInspirationStore.getState().createInspiration;
     const preview = message.content.slice(0, 30).replace(/\n/g, ' ');
-    const result = await createInspiration({
+    await createInspiration({
       title: preview.length >= 30 ? preview + '...' : preview,
       content: message.content,
       sourceAgent: agentType,
     });
-    if (result) {
-      showToast('已添加到灵感市集', 'success');
-    }
+    showToast('已添加到灵感市集', 'success');
   }, [message.content, agentType]);
+
+  const handleStartEdit = useCallback(() => {
+    setEditContent(message.content);
+    setIsEditing(true);
+    setTimeout(() => editRef.current?.focus(), 0);
+  }, [message.content]);
+
+  const handleSaveEdit = useCallback(async () => {
+    if (!editContent.trim()) return;
+    await updateMessage(message.id, editContent);
+    setIsEditing(false);
+    showToast('消息已更新', 'success');
+  }, [message.id, editContent, updateMessage]);
+
+  const handleCancelEdit = useCallback(() => {
+    setIsEditing(false);
+    setEditContent('');
+  }, []);
+
+  const handleResend = useCallback(() => {
+    onResend?.(message.content);
+  }, [message.content, onResend]);
+
+  const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSaveEdit();
+    }
+    if (e.key === 'Escape') {
+      handleCancelEdit();
+    }
+  }, [handleSaveEdit, handleCancelEdit]);
 
   const messageMode = message.mode as keyof typeof MODE_LABELS;
   const modeColor = MODE_COLORS[messageMode];
   const modeLabel = MODE_LABELS[messageMode];
 
-  /** Infer provider name from model name when endpoint is not available */
-  function inferProviderFromModel(model: string | null | undefined): string | null {
-    if (!model) return null;
-    const m = model.toLowerCase();
-    if (m.includes('claude') || m.includes('anthropic')) return 'Anthropic';
-    if (m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('openai')) return 'OpenAI';
-    if (m.includes('glm') || m.includes('zhipu') || m.includes('chatglm')) return '智谱AI';
-    if (m.includes('deepseek')) return 'DeepSeek';
-    if (m.includes('moonshot') || m.includes('kimi')) return 'Moonshot';
-    if (m.includes('qwen') || m.includes('dashscope') || m.includes('aliyun')) return '阿里云';
-    if (m.includes('ernie') || m.includes('baidu') || m.includes('qianfan')) return '百度千帆';
-    if (m.includes('hunyuan') || m.includes('tencent')) return '腾讯混元';
-    if (m.includes('gemini') || m.includes('google')) return 'Google';
-    if (m.includes('minimax')) return 'MiniMax';
-    if (m.includes('zeroone') || m.includes('yi-')) return '零一万物';
-    if (m.includes('spark') || m.includes('xunfei')) return '讯飞星火';
-    if (m.includes('silicon') || m.includes('siliconflow')) return '硅基流动';
-    if (m.includes('volc') || m.includes('ark') || m.includes('doubao')) return '火山引擎';
-    return null;
-  }
+
 
   // Build agent label: "AgentType | Provider | Model Time"
-  const buildAgentLabel = () => {
-    const typeLabel = AGENT_THEMES[agentType]?.label || agentType;
-    const time = formatTimestamp(message.timestamp);
-    const parts = [typeLabel];
-    if (agentType === 'api') {
-      // API type: provider name comes from user-configured providers list
-      if (providerName) parts.push(providerName);
-      if (apiModel) parts.push(apiModel);
-    } else {
-      // Claude/Hermes: derive provider name from apiEndpoint base URL
-      const endpoint = agentType === 'claude' ? config?.claude?.apiEndpoint : config?.hermes?.apiEndpoint;
-      const model = agentType === 'claude' ? config?.claude?.model : config?.hermes?.model;
-      // Try endpoint-based derivation first, then fall back to model-based inference
-      const provider = deriveProviderName(endpoint) || inferProviderFromModel(model);
-      if (provider) parts.push(provider);
-      if (model) parts.push(model);
-    }
-    return parts.join(' | ') + ' ' + time;
-  };
 
   if (isUser) {
     return (
@@ -166,41 +154,101 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
               borderRadius: '16px 4px 16px 16px',
             }}
           >
+            {isEditing ? (
+            <textarea
+              ref={editRef}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              onKeyDown={handleEditKeyDown}
+              className="w-full text-[13px] leading-relaxed outline-none resize-none"
+              style={{
+                color: '#fff',
+                backgroundColor: 'transparent',
+                minHeight: '60px',
+              }}
+            />
+          ) : (
             <p className="text-[13px] leading-relaxed whitespace-pre-wrap m-0">
               {message.content}
             </p>
+          )}
           </div>
           {/* Actions */}
           <div className="flex items-center gap-1 mt-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
             <button
               onClick={handleCopy}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
               style={{ color: 'var(--text-secondary)' }}
               title="复制"
             >
               {copied ? <Check size={11} /> : <Copy size={11} />}
               {copied ? '已复制' : '复制'}
             </button>
-            {onEdit && (
-              <button
-                onClick={() => onEdit(message.content)}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
-                style={{ color: 'var(--text-secondary)' }}
-                title="编辑"
-              >
-                <Edit3 size={11} />
-                编辑
-              </button>
+            {isEditing ? (
+              <>
+                <button
+                  onClick={handleSaveEdit}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                  style={{ color: '#22c55e' }}
+                  title="保存"
+                >
+                  <Check size={11} />
+                  保存
+                </button>
+                <button
+                  onClick={handleCancelEdit}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                  style={{ color: 'var(--text-secondary)' }}
+                  title="取消"
+                >
+                  <Edit3 size={11} />
+                  取消
+                </button>
+              </>
+            ) : (
+              <>
+                {onEdit && (
+                  <button
+                    onClick={() => onEdit(message.content)}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                    style={{ color: 'var(--text-secondary)' }}
+                    title="编辑"
+                  >
+                    <Edit3 size={11} />
+                    编辑
+                  </button>
+                )}
+                <button
+                  onClick={handleStartEdit}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                  style={{ color: 'var(--text-secondary)' }}
+                  title="修改消息"
+                >
+                  <Edit3 size={11} />
+                  修改
+                </button>
+              </>
             )}
             <button
               onClick={handleSaveInspiration}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
               style={{ color: 'var(--text-secondary)' }}
               title="收藏灵感"
             >
               <Bookmark size={11} />
               收藏灵感
             </button>
+            {onResend && (
+              <button
+                onClick={handleResend}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                style={{ color: 'var(--accent)' }}
+                title="重发"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                重发
+              </button>
+            )}
           </div>
         </div>
         {/* User avatar */}
@@ -271,7 +319,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
         <div className="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
             style={{ color: 'var(--text-secondary)' }}
             title="复制"
           >
@@ -280,7 +328,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
           </button>
           <button
             onClick={handleSaveInspiration}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors"
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
             style={{ color: 'var(--text-secondary)' }}
             title="收藏灵感"
           >

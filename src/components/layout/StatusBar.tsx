@@ -1,42 +1,27 @@
-import { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { AGENT_THEMES } from '../../types';
-import type { EnvInfo } from '../../types';
+import { useEnvInfo } from '../../hooks/useEnvInfo';
 
 interface StatusBarProps {
   onOpenSettings?: () => void;
-  wsConnected?: boolean;
 }
 
-export function StatusBar({ onOpenSettings, wsConnected }: StatusBarProps) {
-  const [envInfo, setEnvInfo] = useState<EnvInfo | null>(null);
+export function StatusBar({ onOpenSettings }: StatusBarProps) {
+  const { envInfo, loading } = useEnvInfo();
 
-  const fetchEnv = useCallback(async () => {
-    try {
-      const info = await invoke<EnvInfo>('detect_env');
-      setEnvInfo(info);
-    } catch {
-      // Silent fail for status bar
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchEnv();
-    // Refresh every 60 seconds
-    const timer = setInterval(fetchEnv, 60000);
-    return () => clearInterval(timer);
-  }, [fetchEnv]);
+  const pendingLabel = loading && !envInfo ? '查询中…' : '未安装';
+  const pendingColor = loading && !envInfo ? '#9CA3AF' : '#6B7280';
 
   const claudeStatus = envInfo?.claudeCodeVersion
     ? { color: AGENT_THEMES.claude.color, label: envInfo.claudeCodeVersion }
-    : { color: '#6B7280', label: '未安装' };
+    : { color: pendingColor, label: pendingLabel };
 
   const hermesStatus = envInfo?.hermesVersion
     ? { color: AGENT_THEMES.hermes.color, label: envInfo.hermesVersion }
-    : { color: '#6B7280', label: '未安装' };
+    : { color: pendingColor, label: pendingLabel };
 
-  const wsColor = wsConnected ? '#10B981' : '#F59E0B';
-  const wsLabel = wsConnected ? '已连接' : '未连接';
+  const codexStatus = envInfo?.codexVersion
+    ? { color: AGENT_THEMES.codex.color, label: envInfo.codexVersion }
+    : { color: pendingColor, label: pendingLabel };
 
   return (
     <footer
@@ -44,10 +29,10 @@ export function StatusBar({ onOpenSettings, wsConnected }: StatusBarProps) {
       style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}
     >
       <div className="flex items-center gap-3">
-        {/* WebSocket status */}
+        {/* Agent status — no longer needs Sidecar/WS indicator */}
         <span className="flex items-center gap-1">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: wsColor }} />
-          Sidecar: {wsLabel}
+          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: '#10B981' }} />
+          Agent: 就绪
         </span>
         <button
           onClick={onOpenSettings}
@@ -64,6 +49,14 @@ export function StatusBar({ onOpenSettings, wsConnected }: StatusBarProps) {
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: hermesStatus.color }} />
           Hermes: {hermesStatus.label}
+        </button>
+        <button
+          onClick={onOpenSettings}
+          className="flex items-center gap-1 transition-colors hover:opacity-80"
+          title="点击打开设置"
+        >
+          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: codexStatus.color }} />
+          codeX: {codexStatus.label}
         </button>
       </div>
       <div className="flex items-center gap-2">

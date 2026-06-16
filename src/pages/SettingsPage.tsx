@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
-  ArrowLeft, Settings, Globe, Cpu, Key, Info,
+  ArrowLeft, Settings, Globe, Key, Info,
   Sun, Moon, Monitor, FolderOpen, ChevronDown,
   Plus, Trash2, Edit3, Check, X, Pencil,
   Loader2, Zap, GripVertical,
@@ -25,24 +25,25 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useTheme } from '../hooks/useTheme';
+import { ThemeCustomizer } from '../components/settings/ThemeCustomizer';
 import { EnvManager } from '../components/env/EnvManager';
-import { ConfigEditor } from '../components/panels/ConfigEditor';
 import { UpdateChecker } from '../components/panels/UpdateChecker';
+import { ModePromptSettings } from '../components/panels/ModePromptSettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
 import { sendApiRequest } from '../utils/apiClient';
 import type { ApiProvider as StoreApiProvider } from '../stores/apiProviderStore';
-
-type SettingsTab = 'general' | 'environment' | 'agent' | 'api' | 'about';
 
 interface SettingsPageProps {
   onBack: () => void;
 }
 
+type SettingsTab = 'general' | 'environment' | 'api' | 'mode' | 'about';
+
 const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[] = [
   { id: 'general', icon: Settings, label: '通用设置' },
-  { id: 'environment', icon: Globe, label: '环境配置' },
-  { id: 'agent', icon: Cpu, label: 'Agent 参数配置' },
+  { id: 'environment', icon: Globe, label: '环境检测' },
   { id: 'api', icon: Key, label: 'API 配置' },
+  { id: 'mode', icon: Zap, label: '对话模式' },
   { id: 'about', icon: Info, label: '关于' },
 ];
 
@@ -119,6 +120,9 @@ function GeneralSettings() {
             </button>
           ))}
         </div>
+        <div className="mt-3">
+          <ThemeCustomizer />
+        </div>
       </section>
 
       {/* Workspace directory */}
@@ -154,7 +158,7 @@ function GeneralSettings() {
           </button>
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          Claude Code / Hermes Agent 会话的默认工作目录。可直接输入路径或点击浏览选择。
+          Agent 会话的默认工作目录。可直接输入路径或点击浏览选择。
         </p>
       </section>
 
@@ -184,53 +188,8 @@ function GeneralSettings() {
   );
 }
 
-
 // ============================================================
-// 3. Agent Configuration (with Claude + Hermes sub-tabs)
-// ============================================================
-type AgentSubTab = 'claude' | 'hermes';
-
-const AGENT_SUB_TABS: { id: AgentSubTab; label: string; desc: string }[] = [
-  { id: 'claude', label: 'Claude Code', desc: 'Anthropic Claude Code Agent 配置' },
-  { id: 'hermes', label: 'Hermes Agent', desc: 'Hermes Agent 配置' },
-];
-
-function AgentConfigPanel() {
-  const [activeSubTab, setActiveSubTab] = useState<AgentSubTab>('claude');
-
-  return (
-    <div className="h-full flex flex-col overflow-hidden min-h-0">
-      {/* Sub-tab selector */}
-      <div className="flex gap-2 mb-4">
-        {AGENT_SUB_TABS.map(({ id, label, desc }) => (
-          <button
-            key={id}
-            onClick={() => setActiveSubTab(id)}
-            className="flex-1 px-3 py-2 rounded-lg text-xs transition-colors text-left"
-            style={{
-              backgroundColor: activeSubTab === id ? 'var(--bg-tertiary)' : 'transparent',
-              border: activeSubTab === id
-                ? '1px solid var(--accent)'
-                : '1px solid var(--border)',
-              color: activeSubTab === id ? 'var(--accent)' : 'var(--text-secondary)',
-            }}
-          >
-            <div className="font-medium">{label}</div>
-            <div className="text-[10px] mt-0.5 opacity-60">{desc}</div>
-          </button>
-        ))}
-      </div>
-
-      {/* Config editor */}
-      <div className="flex-1 overflow-hidden" style={{ border: '1px solid var(--border)', borderRadius: '0.5rem' }}>
-        <ConfigEditor agent={activeSubTab} />
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// 4. API Configuration (list-based with edit/delete + test + drag-sort)
+// 4. API Configuration
 // ============================================================
 interface ApiProvider {
   id: string;
@@ -912,7 +871,7 @@ function AboutSection() {
 
       {/* Description */}
       <p className="text-xs text-center leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-        Claude Code &amp; Hermes Agent 统一桌面客户端。
+        Agent 统一桌面客户端。
         集成多 Agent 管理、流式对话、灵感市集、API 直连等功能。
       </p>
 
@@ -930,7 +889,7 @@ function AboutSection() {
           ['前端', 'React 19 + TypeScript + TailwindCSS v4'],
           ['桌面', 'Tauri 2.0'],
           ['后端', 'Rust + SQLite'],
-          ['Agent', 'Node.js Sidecar + WebSocket'],
+          ['Agent', 'Rust AgentManager + Tauri Event'],
         ].map(([label, value]) => (
           <div
             key={label}
@@ -1001,8 +960,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <div className="p-4 max-w-2xl mx-auto w-full">
           {activeTab === 'general' && <GeneralSettings />}
           {activeTab === 'environment' && <EnvManager />}
-          {activeTab === 'agent' && <AgentConfigPanel />}
           {activeTab === 'api' && <ApiConfig />}
+          {activeTab === 'mode' && <ModePromptSettings />}
           {activeTab === 'about' && <AboutSection />}
         </div>
       </div>

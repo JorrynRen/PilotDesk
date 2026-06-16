@@ -1,6 +1,6 @@
 /**
  * Unified API client for LLM providers (OpenAI-compatible & Anthropic).
- * Used by: API connection test (SettingsPage), API chat (useWebSocket), Agent config (future).
+ * Used by: API connection test (SettingsPage), API chat (useAgentEvent), Agent config (future).
  *
  * All callers share the same:
  * - Endpoint resolution (auto-append /chat/completions or /v1/messages)

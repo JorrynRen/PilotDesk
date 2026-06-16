@@ -3,8 +3,8 @@ import { CheckCircle, XCircle, Download, RefreshCw, Loader2, ArrowUpCircle, Exte
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
-import type { EnvInfo } from '../../types';
 import { InstallLog } from './InstallLog';
+import { useEnvInfo } from '../../hooks/useEnvInfo';
 
 interface DependencyStatus {
   name: string;
@@ -27,8 +27,7 @@ interface EnvManagerProps {
 export type { EnvManagerProps };
 
 export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
-  const [envInfo, setEnvInfo] = useState<EnvInfo | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { envInfo, loading, refresh: fetchEnv } = useEnvInfo();
   const [installing, setInstalling] = useState<string | null>(null);
   const [logs, setLogs] = useState<Array<{ timestamp: number; message: string; level: 'info' | 'warn' | 'error' | 'success' }>>([]);
   /** Latest versions from remote registries */
@@ -43,18 +42,10 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     invoke('insert_log', { message, level }).catch(() => {});
   }, []);
 
-  const fetchEnv = useCallback(async () => {
-    setLoading(true);
-    try {
-      const info = await invoke<EnvInfo>('detect_env');
-      setEnvInfo(info);
-      addLog('环境检测完成', 'success');
-    } catch (err: any) {
-      const msg = err?.message || err?.code || (typeof err === 'string' ? err : JSON.stringify(err));
-      addLog(`环境检测失败: ${msg}`, 'error');
-    }
-    setLoading(false);
-  }, [addLog]);
+  const fetchEnvWithLog = useCallback(async () => {
+    await fetchEnv();
+    addLog('环境检测完成', 'success');
+  }, [fetchEnv, addLog]);
 
   interface VersionTimeInfo {
     version: string;
@@ -103,7 +94,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       unlisten.then((fn) => fn());
     };
   }, [fetchEnv, addLog]);
-
+  
   /** After env detection completes, auto-check updates for installed agents */
   useEffect(() => {
     if (envInfo) {
@@ -112,6 +103,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       }
       if (envInfo.hermesVersion) {
         checkAgentUpdate('hermes', 'hermes-agent', 'pypi');
+      }
+      if (envInfo.codexVersion) {
+        checkAgentUpdate('codex', '@openai/codex', 'npm');
       }
     }
   }, [envInfo, checkAgentUpdate]);
@@ -191,10 +185,24 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       updateChecking: updateChecking['hermes'] ?? false,
 
     },
+    {
+      name: 'codeX',
+      key: 'codex',
+      version: envInfo?.codexVersion ?? null,
+      installed: !!envInfo?.codexVersion,
+      action: envInfo?.codexVersion ? 'update' : 'install',
+      installing: installing === 'codex',
+      latestVersion: latestVersions['codex']?.version ?? null,
+      latestReleaseTime: latestVersions['codex']?.releaseTime ?? null,
+      hasUpdate: envInfo?.codexVersion && latestVersions['codex']
+        ? isOlder(envInfo.codexVersion, latestVersions['codex'].version)
+        : false,
+      updateChecking: updateChecking['codex'] ?? false,
+    },
   ];
 
   const handleInstall = async (key: string) => {
-    const name = key === 'claude' ? 'Claude Code' : 'Hermes Agent';
+    const name = key === 'claude' ? 'Claude Code' : key === 'hermes' ? 'Hermes Agent' : 'codeX';
     setInstalling(key);
     addLog(`开始安装 ${name}...`, 'info');
     try {
@@ -204,6 +212,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       } else if (key === 'hermes') {
         await invoke('install_hermes');
         addLog('Hermes Agent 安装成功', 'success');
+      } else if (key === 'codex') {
+        await invoke('install_codex');
+        addLog('codeX 安装成功', 'success');
       }
       await fetchEnv();
     } catch (err: any) {
@@ -356,7 +367,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
 
       {/* Refresh button */}
       <button
-        onClick={fetchEnv}
+        onClick={fetchEnvWithLog}
         disabled={loading}
         className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors disabled:opacity-50"
         style={{

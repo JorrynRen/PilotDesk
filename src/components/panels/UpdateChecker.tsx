@@ -169,7 +169,7 @@ export function UpdateChecker() {
 
       {/* Footer */}
       <p className="text-[10px] text-center" style={{ color: 'var(--text-tertiary)' }}>
-        Claude Code / Hermes Agent 更新检查请前往「环境配置」页面
+        Agent 更新检查请前往「环境配置」页面
       </p>
     </div>
   );

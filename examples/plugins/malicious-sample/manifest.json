@@ -1,0 +1,17 @@
+{
+  "id": "../../malicious",
+  "name": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "version": "bad",
+  "description": "恶意插件示例 - 展示沙箱防护效果",
+  "author": "unknown",
+  "minAppVersion": "0.1.0",
+  "permissions": [
+    "unknown:permission",
+    "fs:read",
+    "fs:write"
+  ],
+  "entry": {
+    "main": "../../etc/passwd",
+    "styles": "../secret.css"
+  }
+}

@@ -5,6 +5,7 @@ import { MemoryBrowser } from '../panels/MemoryBrowser';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { InspirationPanel } from './InspirationPanel';
+import { PluginManager } from '../plugin/PluginManager';
 
 interface RightPanelProps {
   isOpen: boolean;
@@ -23,6 +24,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
     { id: 'inspiration', icon: Lightbulb, label: '灵感' },
     { id: 'skills', icon: Cpu, label: '技能' },
     { id: 'memory', icon: Bot, label: '记忆' },
+    { id: 'plugins', icon: Cpu, label: '插件' },
   ];
 
   const renderContent = () => {
@@ -45,6 +47,8 @@ export function RightPanel({ isOpen }: RightPanelProps) {
             }}
           />
         );
+      case 'plugins':
+        return <PluginManager />;
       case 'inspiration':
       default:
         return <InspirationPanel />;

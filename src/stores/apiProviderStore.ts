@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { listItems, saveItem, deleteItem, invokeAction, getItem } from '../utils/invokeHelper';
 
 export interface ApiProvider {
   id: string;
@@ -38,7 +38,7 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
   fetchProviders: async () => {
     set({ loading: true, error: null });
     try {
-      const providers = await invoke<ApiProvider[]>('list_api_providers');
+      const providers = await listItems<ApiProvider>('list_api_providers');
       set({ providers, loading: false });
     } catch (err) {
       set({ error: String(err), loading: false });
@@ -48,8 +48,7 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
   saveProvider: async (data) => {
     set({ error: null });
     try {
-      const result = await invoke<ApiProvider>('upsert_api_provider', { payload: data });
-      // Refresh list after save
+      const result = await saveItem<ApiProvider>('upsert_api_provider', data);
       await get().fetchProviders();
       return result;
     } catch (err) {
@@ -61,7 +60,7 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
   deleteProvider: async (id) => {
     set({ error: null });
     try {
-      await invoke('delete_api_provider', { id });
+      await deleteItem('delete_api_provider', id);
       await get().fetchProviders();
     } catch (err) {
       set({ error: String(err) });
@@ -71,7 +70,7 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
 
   reorderProviders: async (ids) => {
     try {
-      await invoke('reorder_api_providers', { ids });
+      await invokeAction('reorder_api_providers', { ids });
       await get().fetchProviders();
     } catch (err) {
       set({ error: String(err) });
@@ -79,23 +78,15 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
   },
 }));
 
-/**
- * Get raw API key for a provider (from SQLite, not exposed in provider list)
- */
+/** Get raw API key for a provider */
 export async function getApiKey(providerId: string): Promise<string | null> {
-  try {
-    return await invoke<string | null>('get_api_key', { id: providerId });
-  } catch {
-    return null;
-  }
+  return getItem<string>('get_api_key', { id: providerId });
 }
 
-/**
- * Get API endpoint for a provider by ID
- */
+/** Get API endpoint for a provider by ID */
 export async function getApiEndpoint(providerId: string): Promise<string | null> {
   try {
-    const provider = await invoke<ApiProvider | null>('get_api_provider', { id: providerId });
+    const provider = await getItem<ApiProvider>('get_api_provider', { id: providerId });
     return provider?.apiEndpoint ?? null;
   } catch {
     return null;

@@ -13,7 +13,7 @@ pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Result<Option<Stri
 
 /// Set a setting value (insert or update)
 pub fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<(), AppError> {
-    let now = chrono::Utc::now().timestamp();
+    let now = crate::utils::now();
     conn.execute(
         "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3",
@@ -23,6 +23,7 @@ pub fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Resul
 }
 
 /// Delete a setting by key
+#[allow(dead_code)]
 pub fn delete_setting(conn: &rusqlite::Connection, key: &str) -> Result<(), AppError> {
     conn.execute("DELETE FROM app_settings WHERE key = ?", params![key])?;
     Ok(())

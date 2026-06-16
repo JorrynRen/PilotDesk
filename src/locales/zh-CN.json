@@ -1,0 +1,67 @@
+{
+  "app.name": "PilotDesk",
+  "app.tagline": "Agent 统一桌面客户端",
+
+  "session.new": "新建会话",
+  "session.search": "搜索会话...",
+  "session.batch": "批量操作",
+  "session.batch.exit": "退出批量",
+  "session.selectAll": "全选",
+  "session.deselectAll": "取消全选",
+  "session.archive": "归档",
+  "session.delete": "删除",
+  "session.rename": "重命名",
+  "session.empty": "从左侧创建或选择会话开始对话",
+  "session.empty.new": "开始新的对话",
+  "session.empty.hint.agent": "输入消息或使用技能与 Agent 交互",
+  "session.empty.hint.api": "消息将通过 API 直连发送",
+
+  "message.search": "搜索消息...",
+  "message.search.results": "找到 {count} 条结果",
+  "message.copy": "复制",
+  "message.copied": "已复制",
+  "message.edit": "编辑",
+  "message.modify": "修改",
+  "message.save": "保存",
+  "message.cancel": "取消",
+  "message.resend": "重发",
+  "message.saveInspiration": "收藏灵感",
+  "message.updated": "消息已更新",
+  "message.archived": "已归档 {count} 个会话",
+  "message.deleted": "已删除 {count} 个会话",
+
+  "inspiration.added": "已添加到灵感市集",
+  "inspiration.ready": "灵感内容已准备好，前往灵感市集保存",
+
+  "input.placeholder": "输入消息...",
+  "input.filled": "消息已填入输入框，可修改后重新发送",
+
+  "status.ready": "Agent: 就绪",
+  "status.thinking": "思考中...",
+  "status.sending": "发送中...",
+  "status.timeout": "请求超时：智能体未在 60 秒内响应",
+  "status.error": "错误: {error}",
+  "status.requestFailed": "请求失败: {error}",
+
+  "mode.native": "原生",
+  "mode.fast": "快速",
+  "mode.think": "深度思考",
+  "mode.expert": "专家模式",
+
+  "agent.claude": "Claude Code",
+  "agent.hermes": "Hermes Agent",
+  "agent.codex": "Codex",
+  "agent.api": "API",
+
+  "settings.title": "设置",
+  "settings.theme": "主题",
+  "settings.theme.light": "浅色",
+  "settings.theme.dark": "深色",
+  "settings.theme.system": "跟随系统",
+
+  "common.loading": "加载中...",
+  "common.error": "错误",
+  "common.success": "成功",
+  "common.confirm": "确认",
+  "common.cancel": "取消"
+}

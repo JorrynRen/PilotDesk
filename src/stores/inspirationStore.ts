@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { listItems, saveItem, deleteItem, invokeAction } from '../utils/invokeHelper';
 
 export interface InspirationItem {
   id: string;
@@ -12,7 +12,6 @@ export interface InspirationItem {
   createdAt: number;
   updatedAt: number;
 }
-
 
 interface InspirationState {
   inspirations: InspirationItem[];
@@ -62,7 +61,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const { activeTag, favoriteOnly } = get();
-      const inspirations = await invoke<InspirationItem[]>('list_inspirations', {
+      const inspirations = await listItems<InspirationItem>('list_inspirations', {
         tag: activeTag,
         favoriteOnly,
       });
@@ -74,16 +73,14 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
 
   fetchTags: async () => {
     try {
-      const tags = await invoke<string[]>('list_tags');
+      const tags = await listItems<string>('list_tags');
       set({ tags });
-    } catch {
-      // Silent fail for tags
-    }
+    } catch { /* silent */ }
   },
 
   createInspiration: async (data) => {
     try {
-      const result = await invoke<InspirationItem>('create_inspiration', { payload: data });
+      const result = await saveItem<InspirationItem>('create_inspiration', data);
       await get().fetchInspirations();
       await get().fetchTags();
       return result;
@@ -95,7 +92,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
 
   updateInspiration: async (data) => {
     try {
-      await invoke('update_inspiration', { payload: data });
+      await invokeAction('update_inspiration', { payload: data });
       await get().fetchInspirations();
       await get().fetchTags();
     } catch (err) {
@@ -105,7 +102,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
 
   deleteInspiration: async (id) => {
     try {
-      await invoke('delete_inspiration', { id });
+      await deleteItem('delete_inspiration', id);
       await get().fetchInspirations();
     } catch (err) {
       set({ error: String(err) });
@@ -119,7 +116,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
         await get().fetchInspirations();
         return;
       }
-      const results = await invoke<InspirationItem[]>('search_inspirations', {
+      const results = await listItems<InspirationItem>('search_inspirations', {
         query: query.trim(),
         limit: 50,
       });

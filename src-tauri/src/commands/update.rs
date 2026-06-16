@@ -30,111 +30,52 @@ pub struct PilotdeskUpdateResponse {
 
 /// Compare two semver strings: returns true if `a` is older than `b`
 fn is_version_older(a: &str, b: &str) -> bool {
-    let a_parts: Vec<u32> = a.split('.').filter_map(|p| p.parse::<u32>().ok()).collect();
-    let b_parts: Vec<u32> = b.split('.').filter_map(|p| p.parse::<u32>().ok()).collect();
-    let max_len = a_parts.len().max(b_parts.len());
-    for i in 0..max_len {
-        let av = a_parts.get(i).unwrap_or(&0);
-        let bv = b_parts.get(i).unwrap_or(&0);
-        if av < bv { return true; }
-        if av > bv { return false; }
-    }
-    false
+    let a_ver = semver::Version::parse(a).unwrap_or_else(|_| semver::Version::new(0, 0, 0));
+    let b_ver = semver::Version::parse(b).unwrap_or_else(|_| semver::Version::new(0, 0, 0));
+    a_ver < b_ver
 }
 
-/// Query npm registry for latest version via HTTP
-async fn query_npm_latest(package_name: &str) -> Result<Option<String>, String> {
-    let url = format!("https://registry.npmjs.org/{}/latest", package_name);
-    let client = reqwest::Client::builder()
+/// Build a shared HTTP client with 10s timeout.
+fn http_client() -> Result<reqwest::Client, AppError> {
+    reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("HTTP client build failed: {}", e))?;
+        .map_err(|e| AppError::Network(format!("HTTP client build failed: {}", e)))
+}
 
-    let resp = client.get(&url)
+/// Fetch JSON from a URL with User-Agent header.
+async fn http_get_json(url: &str) -> Result<serde_json::Value, AppError> {
+    let client = http_client()?;
+    let resp = client.get(url)
         .header("User-Agent", "PilotDesk")
         .send()
         .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
-
-    if resp.status().is_success() {
-        let body: serde_json::Value = resp.json().await.map_err(|e| format!("JSON parse failed: {}", e))?;
-        let version = body.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
-        return Ok(version);
-    }
-    Ok(None)
-}
-
-/// Query PyPI for latest version via HTTP
-async fn query_pypi_latest(package_name: &str) -> Result<Option<String>, String> {
-    let url = format!("https://pypi.org/pypi/{}/json", package_name);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client build failed: {}", e))?;
-
-    let resp = client.get(&url)
-        .header("User-Agent", "PilotDesk")
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
-
-    if resp.status().is_success() {
-        let body: serde_json::Value = resp.json().await.map_err(|e| format!("JSON parse failed: {}", e))?;
-        let version = body.get("info").and_then(|i| i.get("version")).and_then(|v| v.as_str()).map(|s| s.to_string());
-        return Ok(version);
-    }
-    Ok(None)
+        .map_err(|e| AppError::Network(format!("HTTP request failed: {}", e)))?;
+    resp.json().await.map_err(|e| AppError::Network(format!("JSON parse failed: {}", e)))
 }
 
 /// Check for PilotDesk updates only (GitHub releases).
 /// Claude Code / Hermes update checks are handled in the EnvManager via check_single_npm/pypi.
 #[tauri::command]
 pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppError> {
-    println!("[update] Checking PilotDesk update...");
+    log::info!("[update] Checking PilotDesk update...");
 
     let current = env!("CARGO_PKG_VERSION").to_string();
 
     let latest = {
         let url = "https://api.github.com/repos/jorryn/pilotdesk/releases/latest";
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| AppError {
-                code: "UPDATE_CHECK_FAILED".into(),
-                message: format!("HTTP client build failed: {}", e),
-                details: None,
-            })?;
-
-        let resp = client.get(url)
-            .header("User-Agent", "PilotDesk")
-            .send()
-            .await
-            .map_err(|e| AppError {
-                code: "UPDATE_CHECK_FAILED".into(),
-                message: format!("GitHub API request failed: {}", e),
-                details: None,
-            })?;
-
-        if resp.status().is_success() {
-            let body: serde_json::Value = resp.json().await.map_err(|e| AppError {
-                code: "UPDATE_CHECK_FAILED".into(),
-                message: format!("JSON parse failed: {}", e),
-                details: None,
-            })?;
-            let tag = body.get("tag_name").and_then(|t| t.as_str())
-                .map(|t| t.trim_start_matches('v').to_string())
-                .filter(|t| !t.is_empty());
-            tag
-        } else {
-            None
-        }
+        let body = http_get_json(url).await?;
+        let tag = body.get("tag_name").and_then(|t| t.as_str())
+            .map(|t| t.trim_start_matches('v').to_string())
+            .filter(|t| !t.is_empty());
+        tag
     };
 
     let has_update = latest.as_deref().map(|lat| is_version_older(&current, lat)).unwrap_or(false);
     let now = chrono::Local::now();
     let checked_at = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
-    println!("[update] PilotDesk: current={}, latest={:?}, has_update={}", current, latest, has_update);
+    log::info!("[update] PilotDesk: current={}, latest={:?}, has_update={}", current, latest, has_update);
 
     Ok(PilotdeskUpdateResponse {
         pilotdesk: VersionCheckResult {
@@ -148,137 +89,79 @@ pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppErro
     })
 }
 
-/// Check latest version for a single npm package (used by EnvManager for per-agent checking)
-/// Returns both version string and release time.
-#[tauri::command]
-pub async fn check_single_npm(package_name: String) -> Result<VersionTimeInfo, AppError> {
-    let url = format!("https://registry.npmjs.org/{}", package_name);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| AppError {
-            code: "NPM_QUERY_FAILED".into(),
-            message: format!("查询 npm 失败: {}", e),
-            details: None,
-        })?;
+/// Registry type for version queries
+enum Registry {
+    Npm,
+    Pypi,
+}
 
-    let resp = client.get(&url)
-        .header("User-Agent", "PilotDesk")
-        .send()
-        .await
-        .map_err(|e| AppError {
-            code: "NPM_QUERY_FAILED".into(),
-            message: format!("查询 npm 失败: {}", e),
-            details: None,
-        })?;
-
-    let status = resp.status();
-    let body_text = resp.text().await.map_err(|e| AppError {
-        code: "NPM_QUERY_FAILED".into(),
-        message: format!("查询 npm 失败: 读取响应失败: {}", e),
-        details: None,
-    })?;
-
-    if status.is_success() {
-        let body: serde_json::Value = match serde_json::from_str(&body_text) {
-            Ok(v) => v,
-            Err(e) => {
-                let preview = body_text.chars().take(200).collect::<String>();
-                return Err(AppError {
-                    code: "NPM_QUERY_FAILED".into(),
-                    message: format!("查询 npm 失败: JSON 解析错误: {} (响应预览: {})", e, preview),
-                    details: None,
-                });
-            }
-        };
-
-        let version = body.get("dist-tags")
-            .and_then(|d| d.get("latest"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let release_time = body.get("time")
-            .and_then(|t| t.get(&version))
-            .and_then(|v| v.as_str())
-            .map(|s| s.split('T').next().unwrap_or(s).to_string());
-
-        return Ok(VersionTimeInfo { version, release_time });
+impl Registry {
+    fn url(&self, package: &str) -> String {
+        match self {
+            Registry::Npm => format!("https://registry.npmjs.org/{}", package),
+            Registry::Pypi => format!("https://pypi.org/pypi/{}/json", package),
+        }
     }
 
-    let preview = body_text.chars().take(200).collect::<String>();
-    Err(AppError {
-        code: "NPM_QUERY_FAILED".into(),
-        message: format!("查询 npm 失败: HTTP {} (响应: {})", status.as_u16(), preview),
-        details: None,
-    })
+    fn extract_version(&self, body: &serde_json::Value) -> String {
+        match self {
+            Registry::Npm => body.get("dist-tags")
+                .and_then(|d| d.get("latest"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            Registry::Pypi => body.get("info")
+                .and_then(|i| i.get("version"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        }
+    }
+
+    fn extract_release_time(&self, body: &serde_json::Value, version: &str) -> Option<String> {
+        match self {
+            Registry::Npm => body.get("time")
+                .and_then(|t| t.get(version))
+                .and_then(|v| v.as_str())
+                .map(|s| s.split('T').next().unwrap_or(s).to_string()),
+            Registry::Pypi => body.get("releases")
+                .and_then(|r| r.get(version))
+                .and_then(|arr| arr.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|r| r.get("upload_time"))
+                .and_then(|t| t.as_str())
+                .map(|s| s.split('T').next().unwrap_or(s).to_string()),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Registry::Npm => "npm",
+            Registry::Pypi => "PyPI",
+        }
+    }
+}
+
+/// Query a package registry for latest version and release time.
+async fn query_registry(registry: Registry, package_name: &str) -> Result<VersionTimeInfo, AppError> {
+    let url = registry.url(package_name);
+    let body = http_get_json(&url).await
+        .map_err(|e| AppError::Network(format!("查询 {} 失败: {}", registry.label(), e)))?;
+
+    let version = registry.extract_version(&body);
+    let release_time = registry.extract_release_time(&body, &version);
+
+    Ok(VersionTimeInfo { version, release_time })
+}
+
+/// Check latest version for a single npm package (used by EnvManager for per-agent checking)
+#[tauri::command]
+pub async fn check_single_npm(package_name: String) -> Result<VersionTimeInfo, AppError> {
+    query_registry(Registry::Npm, &package_name).await
 }
 
 /// Check latest version for a single PyPI package (used by EnvManager for per-agent checking)
-/// Returns both version string and release time.
 #[tauri::command]
 pub async fn check_single_pypi(package_name: String) -> Result<VersionTimeInfo, AppError> {
-    let url = format!("https://pypi.org/pypi/{}/json", package_name);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| AppError {
-            code: "PYPI_QUERY_FAILED".into(),
-            message: format!("查询 PyPI 失败: {}", e),
-            details: None,
-        })?;
-
-    let resp = client.get(&url)
-        .header("User-Agent", "PilotDesk")
-        .send()
-        .await
-        .map_err(|e| AppError {
-            code: "PYPI_QUERY_FAILED".into(),
-            message: format!("查询 PyPI 失败: {}", e),
-            details: None,
-        })?;
-
-    let status = resp.status();
-    let body_text = resp.text().await.map_err(|e| AppError {
-        code: "PYPI_QUERY_FAILED".into(),
-        message: format!("查询 PyPI 失败: 读取响应失败: {}", e),
-        details: None,
-    })?;
-
-    if status.is_success() {
-        let body: serde_json::Value = match serde_json::from_str(&body_text) {
-            Ok(v) => v,
-            Err(e) => {
-                let preview = body_text.chars().take(200).collect::<String>();
-                return Err(AppError {
-                    code: "PYPI_QUERY_FAILED".into(),
-                    message: format!("查询 PyPI 失败: JSON 解析错误: {} (响应预览: {})", e, preview),
-                    details: None,
-                });
-            }
-        };
-
-        let version = body.get("info")
-            .and_then(|i| i.get("version"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let release_time = body.get("releases")
-            .and_then(|r| r.get(&version))
-            .and_then(|arr| arr.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|r| r.get("upload_time"))
-            .and_then(|t| t.as_str())
-            .map(|s| s.split('T').next().unwrap_or(s).to_string());
-
-        return Ok(VersionTimeInfo { version, release_time });
-    }
-
-    let preview = body_text.chars().take(200).collect::<String>();
-    Err(AppError {
-        code: "PYPI_QUERY_FAILED".into(),
-        message: format!("查询 PyPI 失败: HTTP {} (响应: {})", status.as_u16(), preview),
-        details: None,
-    })
+    query_registry(Registry::Pypi, &package_name).await
 }

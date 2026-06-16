@@ -1,75 +1,95 @@
 use tauri::Emitter;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::thread;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use crate::db::models::EnvInfo;
 use crate::utils::errors::AppError;
-/// Safe logging macro that silently ignores stderr write errors
-/// (avoids panic when stderr pipe is closed by the OS).
+
+/// Debug logging for env detection
 macro_rules! log_env {
     ($($arg:tt)*) => {{
-        use std::io::Write;
-        let _ = writeln!(std::io::stderr(), $($arg)*);
+        log::debug!($($arg)*);
     }};
 }
 
+// ──────────────────────────────────────────────
+//  Agent 集中配置表
+// ──────────────────────────────────────────────
 
-
-/// Cached env detection result with TTL
-struct EnvCache {
-    value: Option<EnvInfo>,
-    fetched_at: Option<Instant>,
-    in_progress: bool,
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct AgentConfig {
+    /// Agent 类型标识（claude / hermes / codex）
+    pub agent_type: &'static str,
+    /// npm 包名（None 表示非 npm 安装）
+    pub npm_package: Option<&'static str>,
+    /// pip 包名（None 表示非 pip 安装）
+    pub pip_package: Option<&'static str>,
+    /// CLI 命令名
+    pub cli_command: &'static str,
+    /// 版本检测参数
+    pub version_flag: &'static str,
 }
 
-static ENV_CACHE: std::sync::LazyLock<Mutex<EnvCache>> = std::sync::LazyLock::new(|| {
-    Mutex::new(EnvCache {
-        value: None,
-        fetched_at: None,
-        in_progress: false,
-    })
-});
+pub const AGENTS: &[AgentConfig] = &[
+    AgentConfig {
+        agent_type: "claude",
+        npm_package: Some("@anthropic-ai/claude-code"),
+        pip_package: None,
+        cli_command: "claude",
+        version_flag: "--version",
+    },
+    AgentConfig {
+        agent_type: "hermes",
+        npm_package: None,
+        pip_package: Some("hermes-agent"),
+        cli_command: "hermes",
+        version_flag: "--version",
+    },
+    AgentConfig {
+        agent_type: "codex",
+        npm_package: Some("@openai/codex"),
+        pip_package: None,
+        cli_command: "codex",
+        version_flag: "--version",
+    },
+];
 
-const ENV_CACHE_TTL: Duration = Duration::from_secs(30);
+// ──────────────────────────────────────────────
+//  工具函数
+// ──────────────────────────────────────────────
 
-fn get_version(cmd: &str, arg: &str) -> Option<String> {
-    let output = Command::new(cmd).arg(arg)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output().ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let first_line = stdout.lines().next()?;
-    if output.status.success() {
-        Some(first_line.trim().to_string())
-    } else {
-        None
-    }
-}
-
-/// Run a .cmd/.bat script with absolute path on Windows, with 15s timeout.
-fn get_version_bat(exe_path: &str, arg: &str) -> Option<String> {
+/// Run a command and capture stdout, with timeout.
+/// For .cmd/.bat scripts on Windows, wraps in `cmd /C`.
+fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
     let (tx, rx) = mpsc::channel();
-    let exe = exe_path.to_string();
+    let cmd_s = cmd.to_string();
     let arg_s = arg.to_string();
     thread::spawn(move || {
-        let output = Command::new("cmd")
-            .args(["/C", &exe, &arg_s])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output();
+        let output = if use_cmd_wrapper {
+            Command::new("cmd")
+                .args(["/C", &cmd_s, &arg_s])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+        } else {
+            Command::new(&cmd_s).arg(&arg_s)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+        };
         let _ = tx.send(output);
     });
 
     let output = match rx.recv_timeout(Duration::from_secs(15)) {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            log_env!("[env] Spawn failed for {}: {}", exe_path, e);
+            log_env!("[env] Spawn failed for {}: {}", cmd, e);
             return None;
         }
         Err(_) => {
-            log_env!("[env] Timeout (15s) for: {} {}", exe_path, arg);
+            log_env!("[env] Timeout (15s) for: {} {}", cmd, arg);
             return None;
         }
     };
@@ -83,86 +103,67 @@ fn get_version_bat(exe_path: &str, arg: &str) -> Option<String> {
     }
 }
 
-fn probe_version(paths: &[&str], arg: &str) -> Option<String> {
-    for p in paths {
-        if let Some(v) = get_version_bat(p, arg) {
+/// 探测工具版本：先尝试动态查找（用 cmd /C 处理 .cmd 脚本），再回退 PATH
+fn probe_tool_version(name: &str, version_flag: &str) -> Option<String> {
+    if let Some(path) = crate::utils::paths::resolve_in_path(name) {
+        if let Some(v) = run_cmd(&path, version_flag, true) {
             return Some(v);
         }
     }
-    get_version(paths.last().unwrap_or(&""), arg)
+    run_cmd(name, version_flag, false)
 }
 
-/// Clean version string: keep only the semver part (e.g. "2.1.157 (Claude Code)" → "2.1.157")
-/// Also strips leading 'v'.
+/// Clean version string: keep only the semver part
 fn clean_version_string(raw: &str) -> String {
     let trimmed = raw.trim();
-    // Take only up to first space or '('
-    trimmed
-        .trim_start_matches('v')
+    let segments: Vec<&str> = trimmed
         .split(|c: char| c == ' ' || c == '(')
-        .next()
-        .unwrap_or(trimmed)
-        .trim()
-        .to_string()
+        .collect();
+
+    // Priority 1: "v" + digit (e.g. "v0.16.0")
+    if let Some(ver) = segments.iter().find(|s| {
+        s.starts_with('v') && s.len() > 1
+            && s[1..].chars().next().map_or(false, |c| c.is_ascii_digit())
+    }) {
+        return ver.trim_start_matches('v').trim().to_string();
+    }
+
+    // Priority 2: starts with digit (e.g. "2.1.177", "0.140.0-alpha.2")
+    if let Some(ver) = segments.iter().find(|s| {
+        !s.is_empty() && s.chars().next().map_or(false, |c| c.is_ascii_digit())
+    }) {
+        return ver.trim().to_string();
+    }
+
+    trimmed.to_string()
 }
 
-fn detect_env_inner() -> Result<EnvInfo, AppError> {
-    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\Administrator".into());
-    let appdata = std::env::var("APPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Roaming", home));
-    let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| format!(r"{}\AppData\Local", home));
+// ──────────────────────────────────────────────
+//  环境检测
+// ──────────────────────────────────────────────
 
+/// 简单缓存：仅用于避免高频重复检测
+static LAST_DETECT: std::sync::RwLock<Option<(Instant, EnvInfo)>> = std::sync::RwLock::new(None);
+const CACHE_TTL: Duration = Duration::from_secs(30);
+
+fn detect_env_inner() -> Result<EnvInfo, AppError> {
     log_env!("[env] Detecting environment...");
 
-    let claude_paths = [
-        &format!(r"{}\npm\claude.cmd", appdata),
-        "claude",
-    ];
+    let node_version = probe_tool_version("node", "--version");
+    let git_version = probe_tool_version("git", "--version");
+    let python_version = probe_tool_version("python", "--version")
+        .or_else(|| probe_tool_version("python3", "--version"));
 
-    let hermes_paths = [
-        &format!(r"{}\Programs\Python\Python313\Scripts\hermes.bat", localappdata),
-        &format!(r"{}\Programs\Python\Python312\Scripts\hermes.bat", localappdata),
-        &format!(r"{}\Programs\Python\Python311\Scripts\hermes.bat", localappdata),
-        "hermes",
-    ];
+    let claude_code_version = probe_tool_version("claude", "--version")
+        .as_deref().map(clean_version_string);
+    let hermes_version = probe_tool_version("hermes", "--version")
+        .as_deref().map(clean_version_string);
+    let codex_version = probe_tool_version("codex", "--version")
+        .as_deref().map(clean_version_string);
 
-    let claude_code_version = probe_version(&claude_paths, "--version")
-        .as_deref()
-        .map(clean_version_string);
-    log_env!("[env] claude: {:?}", claude_code_version);
-
-    let hermes_version = probe_version(&hermes_paths, "version")
-        .map(|v| {
-            let first_line = v.lines().next().unwrap_or(&v);
-            clean_version_string(first_line.trim_start_matches("Hermes Agent "))
-        });
-    log_env!("[env] hermes: {:?}", hermes_version);
-
-    // Try known node paths (Tauri process may not inherit full PATH)
-    let node_version = get_version_bat(r"F:\soft\nodejs\node.exe", "--version")
-        .or_else(|| get_version("node", "--version"));
-
-    // Git: try common install paths first, fall back to PATH
-    let git_paths = [
-        &format!(r"{}\Program Files\Git\bin\git.exe", std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into())),
-        &format!(r"{}\Program Files\Git\cmd\git.exe", std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into())),
-        &format!(r"{}\Program Files (x86)\Git\bin\git.exe", std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into())),
-        "git",
-    ];
-    let git_version = probe_version(&git_paths, "--version");
-
-    // Python: try common install paths first, fall back to PATH
-    let python_paths = [
-        &format!(r"{}\Programs\Python\Python313\python.exe", localappdata),
-        &format!(r"{}\Programs\Python\Python312\python.exe", localappdata),
-        &format!(r"{}\Programs\Python\Python311\python.exe", localappdata),
-        &format!(r"C:\Python313\python.exe"),
-        &format!(r"C:\Python312\python.exe"),
-        "python",
-        "python3",
-    ];
-    let python_version = probe_version(&python_paths, "--version");
-
-    log_env!("[env] node={:?} git={:?} python={:?}", node_version, git_version, python_version);
+    log_env!("[env] node={:?} git={:?} python={:?} claude={:?} hermes={:?} codex={:?}",
+        node_version, git_version, python_version,
+        claude_code_version, hermes_version, codex_version);
 
     Ok(EnvInfo {
         node_version,
@@ -170,142 +171,100 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
         python_version,
         claude_code_version,
         hermes_version,
+        codex_version,
     })
 }
 
 #[tauri::command]
 pub async fn detect_env() -> Result<EnvInfo, AppError> {
-    // Return cached result if fresh (within TTL)
     {
-        let cache = ENV_CACHE.lock().unwrap();
-        if let (Some(ref info), Some(fetched)) = (&cache.value, &cache.fetched_at) {
-            if fetched.elapsed() < ENV_CACHE_TTL {
-                log_env!("[env] Returning cached result ({}ms old)", fetched.elapsed().as_millis());
+        let cache = LAST_DETECT.read().unwrap();
+        if let Some((fetched, ref info)) = *cache {
+            if fetched.elapsed() < CACHE_TTL {
                 return Ok(info.clone());
             }
         }
     }
 
-    // Prevent concurrent detections — wait or return cached
-    let need_detect = {
-        let mut cache = ENV_CACHE.lock().unwrap();
-        if cache.in_progress {
-            if cache.value.is_some() {
-                return Ok(cache.value.clone().unwrap());
-            }
-            drop(cache);
-            log_env!("[env] Waiting for in-progress detection...");
-            for _ in 0..300 {
-                std::thread::sleep(Duration::from_millis(100));
-                let cache = ENV_CACHE.lock().unwrap();
-                if let Some(ref info) = cache.value {
-                    if let Some(fetched) = &cache.fetched_at {
-                        if fetched.elapsed() < Duration::from_secs(5) {
-                            return Ok(info.clone());
-                        }
-                    }
-                }
-                drop(cache);
-            }
-            false // give up
-        } else {
-            cache.in_progress = true;
-            true
-        }
-    };
-    if !need_detect {
-        { let mut c = ENV_CACHE.lock().unwrap(); c.in_progress = false; }
-        return Err(AppError {
-            code: "ENV_DETECT_BUSY".into(),
-            message: "环境检测繁忙，请稍后重试".into(),
-            details: None,
-        });
+    let result = tokio::task::spawn_blocking(detect_env_inner).await
+        .map_err(|e| AppError::External(format!("环境检测任务失败: {}", e)))?;
+
+    if let Ok(ref info) = result {
+        let mut cache = LAST_DETECT.write().unwrap();
+        *cache = Some((Instant::now(), info.clone()));
     }
 
-    let result = tokio::task::spawn_blocking(detect_env_inner).await;
+    result
+}
 
-    let mut cache = ENV_CACHE.lock().unwrap();
-    cache.in_progress = false;
-    match result {
-        Ok(Ok(info)) => {
-            cache.value = Some(info.clone());
-            cache.fetched_at = Some(Instant::now());
-            Ok(info)
-        }
-        Ok(Err(e)) => Err(e),
-        Err(e) => Err(AppError {
-            code: "ENV_DETECT_FAILED".into(),
-            message: format!("环境检测任务失败: {}", e),
-            details: None,
-        }),
+/// 清除环境检测缓存（安装/更新后调用）
+pub fn clear_env_cache() {
+    if let Ok(mut cache) = LAST_DETECT.write() {
+        *cache = None;
     }
 }
 
-#[tauri::command]
-pub async fn install_claude_code(app: tauri::AppHandle) -> Result<(), AppError> {
-    let child = Command::new("cmd").args(["/C", "npm", "install", "-g", "@anthropic-ai/claude-code"]).spawn().map_err(|e| AppError {
-        code: "FATAL_INSTALL_FAILED".into(),
-        message: format!("安装 Claude Code 失败: {}", e),
-        details: None,
-    })?;
+// ──────────────────────────────────────────────
+//  泛化安装函数
+// ──────────────────────────────────────────────
 
-    let output = child.wait_with_output().map_err(|e| AppError {
-        code: "FATAL_INSTALL_FAILED".into(),
-        message: format!("安装 Claude Code 过程出错: {}", e),
-        details: None,
-    })?;
+enum PackageManager { Npm, Pip }
+
+fn run_install(app: &tauri::AppHandle, manager: PackageManager, package: &str, agent: &str) -> Result<(), AppError> {
+    let cmd = match manager {
+        PackageManager::Npm => format!("npm install -g {}", package),
+        PackageManager::Pip => format!("pip install {}", package),
+    };
+
+    let child = Command::new("cmd")
+        .args(["/C", &cmd])
+        .spawn()
+        .map_err(|e| AppError::External(format!("安装 {} 失败: {}", agent, e)))?;
+
+    let output = child.wait_with_output().map_err(|e| AppError::External(format!("安装 {} 过程出错: {}", agent, e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError {
-            code: "ERR_INSTALL_FAILED".into(),
-            message: "Claude Code 安装失败".into(),
-            details: Some(stderr.to_string()),
-        });
+        return Err(AppError::External(format!("{} 安装失败: {}", agent, stderr)));
     }
 
     let _ = app.emit("install-progress", serde_json::json!({
-        "agent": "claude",
-        "message": "Claude Code 安装完成",
+        "agent": agent,
+        "message": format!("{} 安装完成", agent),
         "progress": 100
     }));
 
-    // Clear cache so next detect_env picks up the new installation
-    { let mut c = ENV_CACHE.lock().unwrap(); c.value = None; c.fetched_at = None; }
-
+    clear_env_cache();
     Ok(())
+}
+
+/// 根据 AGENTS 配置表泛化安装命令
+#[tauri::command]
+pub async fn install_agent(app: tauri::AppHandle, agent_type: String) -> Result<(), AppError> {
+    let config = AGENTS.iter().find(|a| a.agent_type == agent_type)
+        .ok_or_else(|| AppError::InvalidInput(format!("未知 Agent 类型: {}", agent_type)))?;
+
+    let (manager, package) = match (config.npm_package, config.pip_package) {
+        (Some(pkg), _) => (PackageManager::Npm, pkg),
+        (_, Some(pkg)) => (PackageManager::Pip, pkg),
+        _ => return Err(AppError::Config(format!("{} 无可用的包管理器", agent_type))),
+    };
+
+    run_install(&app, manager, package, &agent_type)
+}
+
+// 保留旧命令作为别名（兼容前端调用）
+#[tauri::command]
+pub async fn install_claude_code(app: tauri::AppHandle) -> Result<(), AppError> {
+    install_agent(app, "claude".to_string()).await
 }
 
 #[tauri::command]
 pub async fn install_hermes(app: tauri::AppHandle) -> Result<(), AppError> {
-    let child = Command::new("cmd").args(["/C", "pip", "install", "hermes-cli"]).spawn().map_err(|e| AppError {
-        code: "FATAL_INSTALL_FAILED".into(),
-        message: format!("安装 Hermes Agent 失败: {}", e),
-        details: None,
-    })?;
+    install_agent(app, "hermes".to_string()).await
+}
 
-    let output = child.wait_with_output().map_err(|e| AppError {
-        code: "FATAL_INSTALL_FAILED".into(),
-        message: format!("安装 Hermes Agent 过程出错: {}", e),
-        details: None,
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError {
-            code: "ERR_INSTALL_FAILED".into(),
-            message: "Hermes Agent 安装失败".into(),
-            details: Some(stderr.to_string()),
-        });
-    }
-
-    let _ = app.emit("install-progress", serde_json::json!({
-        "agent": "hermes",
-        "message": "Hermes Agent 安装完成",
-        "progress": 100
-    }));
-
-    { let mut c = ENV_CACHE.lock().unwrap(); c.value = None; c.fetched_at = None; }
-
-    Ok(())
+#[tauri::command]
+pub async fn install_codex(app: tauri::AppHandle) -> Result<(), AppError> {
+    install_agent(app, "codex".to_string()).await
 }

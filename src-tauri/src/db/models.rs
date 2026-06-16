@@ -27,6 +27,18 @@ pub struct Message {
     pub content: String,
     pub mode: String,
     pub timestamp: i64,
+    /// Reasoning/thinking content (e.g. DeepSeek reasoning_content)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    /// Tool calls requested by the model (JSON array string)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<String>,
+    /// Tool call ID for role='tool' messages
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Tool name for role='tool' messages
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -66,4 +78,33 @@ pub struct EnvInfo {
     pub python_version: Option<String>,
     pub claude_code_version: Option<String>,
     pub hermes_version: Option<String>,
+    pub codex_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntry {
+    pub id: i64,
+    pub timestamp: i64,
+    pub message: String,
+    pub level: String,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    pub category: String,
+}
+
+impl SkillInfo {
+    pub fn new(name: &str, description: &str, category: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: description.to_string(),
+            category: category.to_string(),
+        }
+    }
 }

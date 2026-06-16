@@ -1,86 +1,79 @@
 import { useState, useEffect } from 'react';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { useSessionStore } from './stores/sessionStore';
 import { useSkillStore } from './stores/skillStore';
-import { useConfigStore } from './stores/configStore';
-import { useWebSocket } from './hooks/useWebSocket';
+import { useAgentEvent } from './hooks/useAgentEvent';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
 import { MarketPage } from './components/inspiration/MarketPage';
 import { SettingsPage } from './pages/SettingsPage';
 import './styles/ui.css';
 
-type PageView = 'main' | 'market' | 'settings';
-
-function App() {
-  const [currentPage, setCurrentPage] = useState<PageView>('main');
+function MainLayout() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const navigate = useNavigate();
   const currentSession = useSessionStore((s) => {
     const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
     return cs;
   });
 
-  // WebSocket status monitoring (shared with StatusBar)
-  const { isConnected: wsConnected, requestAllSkills } = useWebSocket(19830, {
+  // Agent Event status monitoring (replaces WebSocket)
+  const { requestAllSkills } = useAgentEvent({
     onSkills: (agentType, skills) => {
-      // Convert string[] to SkillInfo[]
       const skillInfos = (skills as string[]).map((name: string) => ({ name, description: '' }));
       useSkillStore.getState().setAgentSkills(agentType, skillInfos);
     },
   });
 
-  // Load config on app startup
-  const { fetchConfig } = useConfigStore();
-  useEffect(() => {
-    fetchConfig();
-  }, [fetchConfig]);
-
-  // Fetch all agent skills when WebSocket connects
+  // Fetch all agent skills on mount
   const { setLoading: setSkillsLoading } = useSkillStore();
   useEffect(() => {
-    if (wsConnected) {
-      setSkillsLoading(true);
-      requestAllSkills();
-    }
-  }, [wsConnected, requestAllSkills, setSkillsLoading]);
-
-  // Update window title based on current session
-  useEffect(() => {
-    const base = 'PilotDesk';
-    if (currentPage === 'market') {
-      document.title = `${base} - 灵感市集`;
-    } else if (currentPage === 'settings') {
-      document.title = `${base} - 设置`;
-    } else if (currentSession) {
-      document.title = `${base} - ${currentSession.title}`;
-    } else {
-      document.title = base;
-    }
-  }, [currentPage, currentSession]);
+    setSkillsLoading(true);
+    requestAllSkills().then(() => setSkillsLoading(false));
+  }, [requestAllSkills, setSkillsLoading]);
 
   return (
-    <div className="pilotdesk-glow">
-      <div className="pilotdesk-window-shell">
-        <div className="pilotdesk-window-content flex flex-col h-full">
+    <div className="pilotdesk-window-shell">
+      <div className="pilotdesk-window-content flex flex-col h-full">
           <TitleBar
-            onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")}
+            onOpenSettings={() => navigate('/settings')}
             onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
             rightPanelOpen={rightPanelOpen}
           />
-          {currentPage === 'market' ? (
-            <MarketPage onBack={() => setCurrentPage('main')} />
-          ) : currentPage === 'settings' ? (
-            <SettingsPage onBack={() => setCurrentPage('main')} />
-          ) : (
-            <div className="flex-1 flex overflow-hidden relative">
-              <SessionList />
-              <MainPanel />
-              <RightPanel isOpen={rightPanelOpen} />
-            </div>
-          )}
-          <StatusBar onOpenSettings={() => setCurrentPage(p => p === "settings" ? "main" : "settings")} wsConnected={wsConnected} />
+          <div className="flex-1 flex overflow-hidden relative">
+            <SessionList />
+            <MainPanel />
+            <RightPanel isOpen={rightPanelOpen} />
+          </div>
+          <StatusBar onOpenSettings={() => navigate('/settings')} />
         </div>
       </div>
+  );
+}
 
-    </div>
+function App() {
+  const location = useLocation();
+
+  // Update window title based on current route
+  useEffect(() => {
+    const base = 'PilotDesk';
+    const path = location.pathname;
+    if (path === '/market') {
+      document.title = `${base} - 灵感市集`;
+    } else if (path === '/settings') {
+      document.title = `${base} - 设置`;
+    } else {
+      const currentSession = useSessionStore.getState().currentSessionId;
+      const session = useSessionStore.getState().sessions.find((s) => s.id === currentSession);
+      document.title = session ? `${base} - ${session.title}` : base;
+    }
+  }, [location]);
+
+  return (
+    <Routes>
+      <Route path="/" element={<MainLayout />} />
+      <Route path="/market" element={<MarketPage onBack={() => window.history.back()} />} />
+      <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
+    </Routes>
   );
 }
 

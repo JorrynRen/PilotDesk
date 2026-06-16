@@ -1,119 +1,179 @@
 @import "tailwindcss";
 
+/* ═══════════════════════════════════════════════════
+   PilotDesk Design Token System v1.0
+   ═══════════════════════════════════════════════════
+   Usage guidelines:
+     --bg-*       : Background colors (primary/secondary/tertiary/panel)
+     --text-*     : Text colors (primary/secondary/tertiary)
+     --border     : Border color
+     --accent     : Primary accent (interactive elements, links)
+     --tag-*      : Agent type tag colors
+     --status-*   : Status colors (success/danger/warning/info)
+     --radius-*   : Border radius tokens
+     --shadow-*   : Box shadow tokens
+     --font-*     : Font family tokens
+   =================================================== */
+
 :root {
+  /* ── Background ── */
   --bg-primary: #FFFFFF;
   --bg-secondary: #F5F5F5;
   --bg-tertiary: #ECECED;
   --bg-panel: #FFFFFF;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-overlay: rgba(0, 0, 0, 0.5);
+
+  /* ── Text ── */
   --text-primary: #1F2937;
   --text-secondary: #6B7280;
   --text-tertiary: #9CA3AF;
+  --text-inverse: #FFFFFF;
+
+  /* ── Border ── */
   --border: #E5E7EB;
+  --border-light: #F3F4F6;
+
+  /* ── Accent ── */
   --accent: #2563EB;
-  --claude-tag: #3B82F6;
-  --hermes-tag: #8B5CF6;
-  --api-tag: #10B981;
-  --success: #10B981;
-  --danger: #EF4444;
-  --danger-bg: #FEE2E2;
-  --success-bg: #D1FAE5;
+  --accent-hover: #1D4ED8;
+  --accent-light: rgba(37, 99, 235, 0.12);
+
+  /* ── Agent Tags ── */
+  --tag-claude: #3B82F6;
+  --tag-hermes: #8B5CF6;
+  --tag-api: #10B981;
+  --tag-codex: #F59E0B;
+
+  /* ── Status ── */
+  --status-success: #10B981;
+  --status-danger: #EF4444;
+  --status-warning: #F59E0B;
+  --status-info: #3B82F6;
+  --status-success-bg: #D1FAE5;
+  --status-danger-bg: #FEE2E2;
+  --status-warning-bg: #FEF3C7;
+  --status-info-bg: #DBEAFE;
+
+  /* ── Border Radius ── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+
+  /* ── Typography ── */
+  --font-sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+
+  /* ── Sizing ── */
+  --sidebar-width: 260px;
+  --right-panel-width: 320px;
+  --titlebar-height: 36px;
+  --statusbar-height: 28px;
 }
 
 [data-theme="dark"] {
+  /* ── Background ── */
   --bg-primary: #0F1117;
   --bg-secondary: #1A1D27;
   --bg-tertiary: #242837;
   --bg-panel: #1A1D27;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-overlay: rgba(0, 0, 0, 0.6);
+
+  /* ── Text ── */
   --text-primary: #E5E7EB;
   --text-secondary: #9CA3AF;
   --text-tertiary: #6B7280;
+  --text-inverse: #0F1117;
+
+  /* ── Border ── */
   --border: #2D3348;
+  --border-light: #1F2335;
+
+  /* ── Accent ── */
   --accent: #3B82F6;
-  --claude-tag: #3B82F6;
-  --hermes-tag: #8B5CF6;
-  --api-tag: #10B981;
-  --success: #10B981;
-  --danger: #F87171;
-  --danger-bg: #450A0A;
-  --success-bg: #022C22;
+  --accent-hover: #60A5FA;
+  --accent-light: rgba(59, 130, 246, 0.15);
+
+  /* ── Status ── */
+  --status-success: #10B981;
+  --status-danger: #F87171;
+  --status-warning: #FBBF24;
+  --status-info: #60A5FA;
+  --status-success-bg: #022C22;
+  --status-danger-bg: #450A0A;
+  --status-warning-bg: #451A03;
+  --status-info-bg: #172554;
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
 }
 
-html, body, #root {
+/* ═══════════════════════════════════════════════════
+   Base Styles
+   ═══════════════════════════════════════════════════ */
+
+html {
+  height: 100%;
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+#root {
   margin: 0;
   padding: 0;
   width: 100%;
   height: 100%;
   background-color: var(--bg-primary);
-  font-family: 'Segoe UI', -apple-system, sans-serif;
+  font-family: var(--font-sans);
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid rgba(128, 128, 128, 0.25);
 }
 
-/* Layer 1: Glow background — fills viewport, radial-gradient glow centered */
-.pilotdesk-glow {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 0;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(0, 0, 0, 0.45) 0%,
-    rgba(0, 0, 0, 0.35) 12%,
-    rgba(0, 0, 0, 0.25) 25%,
-    rgba(0, 0, 0, 0.16) 38%,
-    rgba(0, 0, 0, 0.09) 52%,
-    rgba(0, 0, 0, 0.04) 68%,
-    rgba(0, 0, 0, 0.01) 82%,
-    transparent 95%
-  );
-  pointer-events: none;
+[data-theme="dark"] #root {
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-[data-theme="dark"] .pilotdesk-glow {
-  background: radial-gradient(
-    ellipse at center,
-    rgba(59, 130, 246, 0.32) 0%,
-    rgba(139, 92, 246, 0.24) 12%,
-    rgba(59, 130, 246, 0.17) 25%,
-    rgba(139, 92, 246, 0.10) 38%,
-    rgba(59, 130, 246, 0.05) 52%,
-    rgba(139, 92, 246, 0.02) 68%,
-    rgba(59, 130, 246, 0.01) 82%,
-    transparent 95%
-  );
-}
-
-/* Layer 2: Window shell — rounded rectangle window */
+/* Window content */
 .pilotdesk-window-shell {
-  position: fixed;
-  top: 6px;
-  left: 6px;
-  right: 6px;
-  bottom: 6px;
-  border-radius: 20px;
-  background-color: var(--bg-primary);
+  position: relative;
+  width: 100%;
+  height: 100%;
   color: var(--text-primary);
-  z-index: 1;
   pointer-events: auto;
 }
 
-/* Layer 3: Inner content — overflow containment */
+/* Inner content */
 .pilotdesk-window-content {
   width: 100%;
   height: 100%;
-  border-radius: 20px;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  flex: 1;
 }
 
 /* Selection */
 ::selection {
-  background-color: rgba(59, 130, 246, 0.2);
+  background-color: var(--accent-light);
   color: inherit;
 }
 
-/* Scrollbar styling */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -125,14 +185,14 @@ html, body, #root {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
 
-/* Focus styles */
+/* Focus */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -142,7 +202,17 @@ html, body, #root {
   outline: none;
 }
 
-/* Prose overrides for dark mode */
+/* Textarea */
+textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+textarea {
+  scrollbar-width: none;
+}
+
+/* Prose overrides */
 [data-theme="dark"] .prose {
   color: var(--text-primary);
 }
@@ -161,16 +231,6 @@ html, body, #root {
 
 [data-theme="dark"] .prose pre code {
   background-color: var(--bg-primary);
-}
-
-/* Hide scrollbar on textarea input */
-textarea::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
-textarea {
-  scrollbar-width: none;
 }
 
 /* Markdown renderer */

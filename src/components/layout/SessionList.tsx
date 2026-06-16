@@ -1,13 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, Search, Archive, Key, ChevronDown, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
-import { useWebSocket } from '../../hooks/useWebSocket';
+import { invoke } from '@tauri-apps/api/core';
+import { showToast } from '../../utils/toast';
+import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { AGENT_THEMES } from '../../types';
 import { SessionListItem } from './SessionListItem';
 import { showToast } from '../../utils/toast';
 
-type NewSessionType = 'claude' | 'hermes' | 'api';
+type NewSessionType = 'claude' | 'hermes' | 'codex' | 'api' | 'codex';
 
 export function SessionList() {
   const {
@@ -26,6 +28,11 @@ export function SessionList() {
   } = useSessionStore();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<typeof sessions>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newSessionType, setNewSessionType] = useState<NewSessionType>('claude');
   const [selectedApiProvider, setSelectedApiProvider] = useState('');
@@ -35,19 +42,96 @@ export function SessionList() {
   const [customTitle, setCustomTitle] = useState('');
   const [customCwd, setCustomCwd] = useState('');
   const [creating, setCreating] = useState(false);
+  const [installedAgents, setInstalledAgents] = useState<Set<string>>(new Set());
+  const [envLoading, setEnvLoading] = useState(true);
 
   // WebSocket for Agent session lifecycle
-  const { createAgentSession: wsCreateSession, closeAgentSession: wsCloseSession } = useWebSocket(19830);
+  const { createAgentSession: wsCreateSession, closeAgentSession: wsCloseSession } = useAgentEvent();
 
   // API providers from SQLite via store
   const { providers: apiProviders, fetchProviders } = useApiProviderStore();
 
   useEffect(() => {
     fetchSessions().catch((err) => {
-      showToast(`加载会话失败: ${err}`, 'error');
+      showToast(`加载会话失败: ${err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)}`, 'error');
     });
     fetchProviders().catch(() => {});
+
+    // Detect installed agents for session creation filtering
+    (async () => {
+      try {
+        const info = await invoke<any>('detect_env');
+        const installed = new Set<string>();
+        if (info.claudeCodeVersion) installed.add('claude');
+        if (info.hermesVersion) installed.add('hermes');
+        if (info.codexVersion) installed.add('codex');
+        setInstalledAgents(installed);
+      } catch { /* ignore */ }
+      setEnvLoading(false);
+    })();
   }, [fetchSessions, fetchProviders]);
+
+  // Debounced session search
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const results = await invoke<typeof sessions>('search_sessions', { query: searchQuery.trim() });
+        setSearchResults(results);
+      } catch { /* ignore */ }
+      setIsSearching(false);
+    }, 300);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [searchQuery]);
+
+  // Batch operations
+  const toggleBatchSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const selectAll = useCallback(() => {
+    const ids = new Set(filteredList.map((s) => s.id));
+    setSelectedIds(ids);
+  }, [filteredList]);
+
+  const deselectAll = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const batchArchive = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    for (const id of selectedIds) {
+      try { await invoke('archive_session', { sessionId: id }); } catch { /* ignore */ }
+    }
+    setSelectedIds(new Set());
+    setBatchMode(false);
+    fetchSessions();
+    showToast(`已归档 ${selectedIds.size} 个会话`, 'success');
+  }, [selectedIds, fetchSessions]);
+
+  const batchDelete = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    for (const id of selectedIds) {
+      try { await invoke('delete_session', { sessionId: id }); } catch { /* ignore */ }
+    }
+    setSelectedIds(new Set());
+    setBatchMode(false);
+    fetchSessions();
+    showToast(`已删除 ${selectedIds.size} 个会话`, 'success');
+  }, [selectedIds, fetchSessions]);
 
   // Reload providers when dialog opens
   useEffect(() => {
@@ -77,9 +161,12 @@ export function SessionList() {
   }, [selectedApiProvider, apiProviders]);
 
   const displayList = showArchived ? archivedSessions : sessions;
-  const filteredList = displayList.filter((s) =>
-    s.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const isSearchActive = searchQuery.trim().length > 0;
+  const filteredList = isSearchActive
+    ? searchResults
+    : displayList.filter((s) =>
+        s.title.toLowerCase().includes(searchQuery.toLowerCase())
+      );
 
   // Group by time
   const now = Date.now() / 1000;
@@ -132,7 +219,7 @@ export function SessionList() {
         selectSession(session.id);
       }
     } catch (err) {
-      showToast(`创建会话失败: ${err}`, 'error');
+      showToast(`创建会话失败: ${err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)}`, 'error');
     } finally {
       setCreating(false);
     }
@@ -147,7 +234,7 @@ export function SessionList() {
       }
       await archiveSession(id);
     } catch (err) {
-      showToast(`归档失败: ${err}`, 'error');
+      showToast(`归档失败: ${err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)}`, 'error');
     }
   };
 
@@ -155,7 +242,7 @@ export function SessionList() {
     try {
       await renameSession(id, newTitle);
     } catch (err) {
-      showToast(`重命名失败: ${err}`, 'error');
+      showToast(`重命名失败: ${err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)}`, 'error');
     }
   };
 
@@ -168,7 +255,7 @@ export function SessionList() {
       }
       await deleteSession(id);
     } catch (err) {
-      showToast(`删除失败: ${err}`, 'error');
+      showToast(`删除失败: ${err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)}`, 'error');
     }
   };
 
@@ -224,6 +311,54 @@ export function SessionList() {
         </div>
       </div>
 
+      {/* Batch mode toggle */}
+      <div className="px-3 pt-1.5 flex items-center gap-2">
+        <button
+          onClick={() => { setBatchMode(!batchMode); setSelectedIds(new Set()); }}
+          className={`text-[10px] px-2 py-1 rounded transition-all ${batchMode ? 'text-white' : ''}`}
+          style={{
+            backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
+            color: batchMode ? '#fff' : 'var(--text-secondary)',
+          }}
+        >
+          {batchMode ? '退出批量' : '批量操作'}
+        </button>
+        {batchMode && (
+          <>
+            <button
+              onClick={selectAll}
+              className="text-[10px] px-2 py-1 rounded transition-all"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            >
+              全选
+            </button>
+            <button
+              onClick={deselectAll}
+              className="text-[10px] px-2 py-1 rounded transition-all"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            >
+              取消全选
+            </button>
+            <div className="flex-1" />
+            <button
+              onClick={batchArchive}
+              className="text-[10px] px-2 py-1 rounded transition-all"
+              style={{ backgroundColor: 'var(--status-info-bg)', color: 'var(--status-info)' }}
+              disabled={selectedIds.size === 0}
+            >
+              归档({selectedIds.size})
+            </button>
+            <button
+              onClick={batchDelete}
+              className="text-[10px] px-2 py-1 rounded transition-all"
+              style={{ backgroundColor: 'var(--status-danger-bg)', color: 'var(--status-danger)' }}
+              disabled={selectedIds.size === 0}
+            >
+              删除({selectedIds.size})
+            </button>
+          </>
+        )}
+      </div>
       {/* Search */}
       <div className="px-3 py-1.5">
         <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs" style={{ backgroundColor: 'var(--bg-secondary)' }}>
@@ -291,8 +426,14 @@ export function SessionList() {
               {([
                 { type: 'claude' as const, ...AGENT_THEMES.claude },
                 { type: 'hermes' as const, ...AGENT_THEMES.hermes },
+                { type: 'codex' as const, ...AGENT_THEMES.codex },
                 { type: 'api' as const, ...AGENT_THEMES.api },
-              ]).map(({ type, color, label }) => (
+              ]).filter(({ type }) => {
+                // API mode always visible; agent types only if installed or still loading
+                if (type === 'api') return true;
+                if (envLoading) return true;
+                return installedAgents.has(type);
+              }).map(({ type, color, label }) => (
                 <button
                   key={type}
                   onClick={() => setNewSessionType(type)}
@@ -309,7 +450,7 @@ export function SessionList() {
               ))}
             </div>
 
-            {/* Claude / Hermes: optional title & cwd */}
+            {/* Agent sessions: optional title & cwd */}
             {newSessionType !== 'api' && (
               <div className="space-y-3 mb-4">
                 <div>
@@ -320,7 +461,7 @@ export function SessionList() {
                     type="text"
                     value={customTitle}
                     onChange={(e) => setCustomTitle(e.target.value)}
-                    placeholder={newSessionType === 'claude' ? 'Claude Code 新会话' : 'Hermes Agent 新会话'}
+                    placeholder={newSessionType === 'claude' ? 'Claude Code 新会话' : newSessionType === 'hermes' ? 'Hermes Agent 新会话' : 'codeX 新会话'}
                     className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                     style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                   />

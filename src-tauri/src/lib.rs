@@ -1,162 +1,224 @@
-mod agent_config;
+mod agent;
 mod commands;
 mod db;
-mod sidecar;
+mod plugin;
 mod utils;
 
 use tauri::Manager;
-use db::init::init_db;
+use db::init::{init_db, DbPool};
 use std::sync::Mutex;
-use rusqlite::Connection;
-use commands::bot as bot_cmds;
-use commands::api_provider as api_cmds;
-use sidecar::manager::SidecarManager;
+use agent::AgentManager;
 
 pub struct DbState {
-    pub conn: Mutex<Connection>,
+    pub pool: DbPool,
+}
+
+impl DbState {
+    pub fn get_conn(&self) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, crate::utils::errors::AppError> {
+        self.pool.get().map_err(|e| crate::utils::errors::AppError::Lock(format!("数据库连接获取失败: {}", e)))
+    }
+}
+
+// ── 数据库命令 ──
+
+#[tauri::command]
+fn list_tags(state: tauri::State<'_, DbState>) -> Result<Vec<String>, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::inspiration::list_tags(&conn)
 }
 
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! Welcome to PilotDesk.", name)
-}
-
-// --- Inspiration commands ---
-#[tauri::command]
-fn list_inspirations(conn: tauri::State<'_, DbState>, tag: Option<String>, favorite_only: Option<bool>) -> Result<Vec<commands::inspiration::Inspiration>, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    commands::inspiration::list_inspirations(&conn, tag, favorite_only.unwrap_or(false))
+fn list_bot_channels(state: tauri::State<'_, DbState>) -> Result<Vec<commands::bot::BotChannel>, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::bot::list_bot_channels(&conn)
 }
 
 #[tauri::command]
-fn get_inspiration(conn: tauri::State<'_, DbState>, id: String) -> Result<commands::inspiration::Inspiration, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+fn list_api_providers(state: tauri::State<'_, DbState>) -> Result<Vec<commands::api_provider::ApiProvider>, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::api_provider::list_api_providers(&conn)
+}
+
+#[tauri::command]
+fn get_inspiration(state: tauri::State<'_, DbState>, id: String) -> Result<commands::inspiration::Inspiration, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
     commands::inspiration::get_inspiration(&conn, id)
 }
 
 #[tauri::command]
-fn create_inspiration(conn: tauri::State<'_, DbState>, payload: commands::inspiration::CreateInspirationPayload) -> Result<commands::inspiration::Inspiration, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+fn create_inspiration(state: tauri::State<'_, DbState>, payload: commands::inspiration::CreateInspirationPayload) -> Result<commands::inspiration::Inspiration, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
     commands::inspiration::create_inspiration(&conn, payload)
 }
 
 #[tauri::command]
-fn update_inspiration(conn: tauri::State<'_, DbState>, payload: commands::inspiration::UpdateInspirationPayload) -> Result<commands::inspiration::Inspiration, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+fn update_inspiration(state: tauri::State<'_, DbState>, payload: commands::inspiration::UpdateInspirationPayload) -> Result<commands::inspiration::Inspiration, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
     commands::inspiration::update_inspiration(&conn, payload)
 }
 
 #[tauri::command]
-fn delete_inspiration(conn: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+fn delete_inspiration(state: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
     commands::inspiration::delete_inspiration(&conn, id)
 }
 
 #[tauri::command]
-fn search_inspirations(conn: tauri::State<'_, DbState>, query: String, limit: Option<u32>) -> Result<Vec<commands::inspiration::Inspiration>, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+fn save_bot_channel(state: tauri::State<'_, DbState>, payload: commands::bot::SaveBotChannelPayload) -> Result<commands::bot::BotChannel, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::bot::save_bot_channel(&conn, payload)
+}
+
+#[tauri::command]
+fn delete_bot_channel(state: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::bot::delete_bot_channel(&conn, id)
+}
+
+#[tauri::command]
+fn list_inspirations(
+    state: tauri::State<'_, DbState>,
+    tag: Option<String>,
+    favorite_only: Option<bool>,
+) -> Result<Vec<commands::inspiration::Inspiration>, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::inspiration::list_inspirations(&conn, tag, favorite_only.unwrap_or(false))
+}
+
+#[tauri::command]
+fn search_inspirations(
+    state: tauri::State<'_, DbState>,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<commands::inspiration::Inspiration>, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
     commands::inspiration::search_inspirations(&conn, query, limit.unwrap_or(50))
 }
 
 #[tauri::command]
-fn list_tags(conn: tauri::State<'_, DbState>) -> Result<Vec<String>, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    commands::inspiration::list_tags(&conn)
-}
-
-// --- Bot channel commands ---
-#[tauri::command]
-fn list_bot_channels(conn: tauri::State<'_, DbState>) -> Result<Vec<bot_cmds::BotChannel>, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    bot_cmds::list_bot_channels(&conn)
+fn get_api_provider(state: tauri::State<'_, DbState>, id: String) -> Result<Option<commands::api_provider::ApiProvider>, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::api_provider::get_api_provider(&conn, &id)
 }
 
 #[tauri::command]
-fn save_bot_channel(conn: tauri::State<'_, DbState>, payload: bot_cmds::SaveBotChannelPayload) -> Result<bot_cmds::BotChannel, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    bot_cmds::save_bot_channel(&conn, payload)
+fn upsert_api_provider(state: tauri::State<'_, DbState>, payload: commands::api_provider::CreateOrUpdateProvider) -> Result<commands::api_provider::ApiProvider, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::api_provider::upsert_api_provider(&conn, &payload)
 }
 
 #[tauri::command]
-fn delete_bot_channel(conn: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    bot_cmds::delete_bot_channel(&conn, id)
-}
-
-// --- API Provider commands ---
-#[tauri::command]
-fn list_api_providers(conn: tauri::State<'_, DbState>) -> Result<Vec<api_cmds::ApiProvider>, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    api_cmds::list_api_providers(&conn)
+fn delete_api_provider(state: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::api_provider::delete_api_provider(&conn, &id)
 }
 
 #[tauri::command]
-fn get_api_provider(conn: tauri::State<'_, DbState>, id: String) -> Result<Option<api_cmds::ApiProvider>, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    api_cmds::get_api_provider(&conn, &id)
+fn get_api_key(state: tauri::State<'_, DbState>, id: String) -> Result<Option<String>, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::api_provider::get_api_key(&conn, &id)
 }
 
 #[tauri::command]
-fn upsert_api_provider(conn: tauri::State<'_, DbState>, payload: api_cmds::CreateOrUpdateProvider) -> Result<api_cmds::ApiProvider, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    api_cmds::upsert_api_provider(&conn, &payload)
+fn reorder_api_providers(state: tauri::State<'_, DbState>, ids: Vec<String>) -> Result<(), crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::api_provider::reorder_api_providers(&conn, &ids)
 }
 
 #[tauri::command]
-fn delete_api_provider(conn: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    api_cmds::delete_api_provider(&conn, &id)
-}
-
-#[tauri::command]
-fn get_api_key(conn: tauri::State<'_, DbState>, id: String) -> Result<Option<String>, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    api_cmds::get_api_key(&conn, &id)
-}
-
-#[tauri::command]
-fn reorder_api_providers(conn: tauri::State<'_, DbState>, ids: Vec<String>) -> Result<(), crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
-    api_cmds::reorder_api_providers(&conn, &ids)
-}
-
-// --- App Settings commands ---
-#[tauri::command]
-fn get_app_setting(conn: tauri::State<'_, DbState>, key: String) -> Result<Option<String>, crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+fn get_app_setting(state: tauri::State<'_, DbState>, key: String) -> Result<Option<String>, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
     commands::app_settings::get_setting(&conn, &key)
 }
 
 #[tauri::command]
-fn set_app_setting(conn: tauri::State<'_, DbState>, key: String, value: String) -> Result<(), crate::utils::errors::AppError> {
-    let conn = conn.conn.lock().map_err(|e| crate::utils::errors::AppError { code: "ERR_LOCK".into(), message: "数据库锁获取失败".into(), details: Some(e.to_string()) })?;
+fn set_app_setting(state: tauri::State<'_, DbState>, key: String, value: String) -> Result<(), crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
     commands::app_settings::set_setting(&conn, &key, &value)
 }
 
-// --- Theme commands ---
 #[tauri::command]
-fn get_theme() -> String {
-    commands::theme::get_theme()
+fn get_theme(state: tauri::State<'_, DbState>) -> Result<String, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::theme::get_theme(&conn)
 }
 
 #[tauri::command]
-fn set_theme_cmd(theme: String) -> Result<String, crate::utils::errors::AppError> {
-    commands::theme::set_theme(theme)
+fn set_theme_cmd(state: tauri::State<'_, DbState>, theme: String) -> Result<String, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::theme::set_theme(&conn, theme)
+}
+
+// ── Agent 命令 ──
+
+#[tauri::command]
+async fn agent_send_message(
+    app: tauri::AppHandle,
+    agent_mgr: tauri::State<'_, Mutex<AgentManager>>,
+    session_id: String,
+    agent_type: String,
+    message: String,
+    mode: String,
+    cwd: Option<String>,
+    system_prompt: Option<String>,
+) -> Result<(), String> {
+    let mut mgr = agent_mgr.lock().map_err(|e| format!("Agent 管理器锁定失败: {}", e))?;
+    mgr.send_message(app, session_id, agent_type, message, mode, cwd, system_prompt).await
+}
+
+#[tauri::command]
+async fn agent_stop_generation(
+    agent_mgr: tauri::State<'_, Mutex<AgentManager>>,
+    session_id: String,
+) -> Result<(), String> {
+    let mut mgr = agent_mgr.lock().map_err(|e| format!("Agent 管理器锁定失败: {}", e))?;
+    mgr.stop_generation(&session_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn agent_create_session(
+    agent_mgr: tauri::State<'_, Mutex<AgentManager>>,
+    session_id: String,
+    agent_type: String,
+    cwd: Option<String>,
+) -> Result<(), String> {
+    let mut mgr = agent_mgr.lock().map_err(|e| format!("Agent 管理器锁定失败: {}", e))?;
+    mgr.create_session(&session_id, &agent_type, cwd.as_deref());
+    Ok(())
+}
+
+#[tauri::command]
+async fn agent_close_session(
+    agent_mgr: tauri::State<'_, Mutex<AgentManager>>,
+    session_id: String,
+) -> Result<(), String> {
+    let mut mgr = agent_mgr.lock().map_err(|e| format!("Agent 管理器锁定失败: {}", e))?;
+    mgr.close_session(&session_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn agent_list_skills(agent_type: String) -> Result<Vec<crate::db::models::SkillInfo>, String> {
+    Ok(agent::AgentManager::list_skills(&agent_type).await)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let conn = init_db().expect("Failed to initialize database");
-    
+    let pool = init_db().expect("Failed to initialize database");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(DbState { conn: Mutex::new(conn) })
+        .manage(DbState { pool })
+        .manage(Mutex::new(AgentManager::new()))
+        .manage(Mutex::new(plugin::PluginHost::new()))
         .invoke_handler(tauri::generate_handler![
-            greet,
             commands::env::detect_env,
+            commands::env::install_agent,
             commands::env::install_claude_code,
             commands::env::install_hermes,
+            commands::env::install_codex,
             commands::install_log::insert_log,
             commands::install_log::list_logs,
             commands::install_log::clear_logs,
@@ -172,10 +234,9 @@ pub fn run() {
             commands::session::archive_session,
             commands::session::delete_session,
             commands::session::save_message,
-            commands::config::get_config,
-            commands::config::save_claude_config,
-            commands::config::save_hermes_config,
-            commands::config::get_agent_api_key,
+            commands::session::update_message,
+            commands::session::search_sessions,
+            commands::session::search_messages,
             list_inspirations,
             get_inspiration,
             create_inspiration,
@@ -196,25 +257,21 @@ pub fn run() {
             set_app_setting,
             get_theme,
             set_theme_cmd,
+            agent_send_message,
+            agent_stop_generation,
+            agent_create_session,
+            agent_close_session,
+            agent_list_skills,
+            plugin::plugin_discover,
+            plugin::plugin_list,
+            plugin::plugin_enable,
+            plugin::plugin_disable,
+            plugin::plugin_get_sandbox_info,
         ])
         .setup(|app| {
-            // Start sidecar WebSocket server
-            let app_handle = app.handle().clone();
-            let mut sidecar = SidecarManager::new(19830);
-            match sidecar.start(app_handle) {
-                Ok(port) => println!("[Sidecar] WebSocket server started on port {}", port),
-                Err(e) => println!("[Sidecar] Failed to start: {} — WebSocket features will be unavailable", e),
-            }
-            // Store sidecar as managed state so it gets dropped on app exit
-            app.manage(std::sync::Mutex::new(sidecar));
-
-            println!("PilotDesk initialized successfully.");
+            log::info!("PilotDesk initialized successfully (AgentManager mode, r2d2 pool).");
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-
-// touch
-
-// rebuild for CSP fix

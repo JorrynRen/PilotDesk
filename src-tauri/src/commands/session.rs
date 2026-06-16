@@ -29,16 +29,16 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
         content: row.get(3)?,
         mode: row.get(4)?,
         timestamp: row.get(5)?,
+        reasoning_content: row.get(6).ok(),
+        tool_calls: row.get(7).ok(),
+        tool_call_id: row.get(8).ok(),
+        tool_name: row.get(9).ok(),
     })
 }
 
 #[tauri::command]
 pub fn list_sessions(state: State<'_, DbState>) -> Result<Vec<Session>, AppError> {
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
     let mut stmt = conn.prepare(
         "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
@@ -53,11 +53,7 @@ pub fn list_sessions(state: State<'_, DbState>) -> Result<Vec<Session>, AppError
 
 #[tauri::command]
 pub fn list_archived_sessions(state: State<'_, DbState>) -> Result<Vec<Session>, AppError> {
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
     let mut stmt = conn.prepare(
         "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
@@ -79,8 +75,8 @@ pub fn create_session(
     api_provider: Option<String>,
     api_model: Option<String>,
 ) -> Result<Session, AppError> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().timestamp();
+    let id = crate::utils::new_id();
+    let now = crate::utils::now();
     let title = title.unwrap_or_else(|| {
         match agent_type.as_str() {
             "claude" => "Claude Code 新会话".into(),
@@ -91,11 +87,7 @@ pub fn create_session(
     });
     let cwd = cwd.unwrap_or_default();
     
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
     conn.execute(
         "INSERT INTO sessions (id, agent_type, title, cwd, created_at, updated_at, api_provider, api_model) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -119,11 +111,7 @@ pub fn create_session(
 
 #[tauri::command]
 pub fn get_session(state: State<'_, DbState>, session_id: String) -> Result<Session, AppError> {
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
     let session = conn.query_row(
         "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
@@ -142,17 +130,13 @@ pub fn get_session_messages(
     offset: Option<i64>,
     limit: Option<i64>,
 ) -> Result<Vec<Message>, AppError> {
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
     let offset = offset.unwrap_or(0);
     let limit = limit.unwrap_or(100);
     
     let mut stmt = conn.prepare(
-        "SELECT id, session_id, role, content, mode, timestamp 
+        "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name 
          FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC LIMIT ?2 OFFSET ?3"
     )?;
     
@@ -170,19 +154,19 @@ pub fn save_message(
     role: String,
     content: String,
     mode: String,
+    reasoning_content: Option<String>,
+    tool_calls: Option<String>,
+    tool_call_id: Option<String>,
+    tool_name: Option<String>,
 ) -> Result<Message, AppError> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().timestamp();
+    let id = crate::utils::new_id();
+    let now = crate::utils::now();
     
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
     conn.execute(
-        "INSERT INTO messages (id, session_id, role, content, mode, timestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, session_id, role, content, mode, now],
+        "INSERT INTO messages (id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![id, session_id, role, content, mode, now, reasoning_content, tool_calls, tool_call_id, tool_name],
     )?;
     
     // Update session preview and count (UTF-8 safe truncation)
@@ -204,6 +188,10 @@ pub fn save_message(
         content,
         mode,
         timestamp: now,
+        reasoning_content,
+        tool_calls,
+        tool_call_id,
+        tool_name,
     })
 }
 
@@ -213,13 +201,9 @@ pub fn rename_session(
     session_id: String,
     new_title: String,
 ) -> Result<(), AppError> {
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
-    let now = chrono::Utc::now().timestamp();
+    let now = crate::utils::now();
     conn.execute(
         "UPDATE sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
         params![new_title, now, session_id],
@@ -233,13 +217,9 @@ pub fn archive_session(
     state: State<'_, DbState>,
     session_id: String,
 ) -> Result<(), AppError> {
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
-    let now = chrono::Utc::now().timestamp();
+    let now = crate::utils::now();
     conn.execute(
         "UPDATE sessions SET status = 'archived', updated_at = ?1 WHERE id = ?2",
         params![now, session_id],
@@ -253,14 +233,99 @@ pub fn delete_session(
     state: State<'_, DbState>,
     session_id: String,
 ) -> Result<(), AppError> {
-    let conn = state.conn.lock().map_err(|e| AppError {
-        code: "ERR_LOCK".into(),
-        message: "获取数据库锁失败".into(),
-        details: Some(e.to_string()),
-    })?;
+    let conn = state.get_conn()?;
     
     conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
     // CASCADE will delete related messages
     
     Ok(())
 }
+/// Update an existing message's content
+#[tauri::command]
+pub fn update_message(
+    state: State<'_, DbState>,
+    message_id: String,
+    content: String,
+) -> Result<Message, AppError> {
+    let conn = state.get_conn()?;
+
+    // Get existing message
+    let msg = conn.query_row(
+        "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name
+         FROM messages WHERE id = ?1",
+        params![message_id],
+        row_to_message,
+    )?;
+
+    // Update content
+    let now = crate::utils::now();
+    conn.execute(
+        "UPDATE messages SET content = ?1 WHERE id = ?2",
+        params![content, message_id],
+    )?;
+
+    // Update session timestamp
+    conn.execute(
+        "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
+        params![now, msg.session_id],
+    )?;
+
+    Ok(Message {
+        content,
+        ..msg
+    })
+}
+
+/// Search sessions by title (fuzzy match)
+#[tauri::command]
+pub fn search_sessions(
+    state: State<'_, DbState>,
+    query: String,
+) -> Result<Vec<Session>, AppError> {
+    let conn = state.get_conn()?;
+
+    let pattern = format!("%{}%", query);
+    let mut stmt = conn.prepare(
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model
+         FROM sessions WHERE status = 'active' AND title LIKE ?1 ORDER BY updated_at DESC LIMIT 50"
+    )?;
+
+    let sessions = stmt.query_map(params![pattern], row_to_session)?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(sessions)
+}
+
+/// Search messages by content (LIKE fuzzy match)
+#[tauri::command]
+pub fn search_messages(
+    state: State<'_, DbState>,
+    session_id: Option<String>,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<Message>, AppError> {
+    let conn = state.get_conn()?;
+    let limit = limit.unwrap_or(50) as i64;
+    let pattern = format!("%{}%", query);
+
+    let sql = match session_id {
+        Some(_) => "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name
+                    FROM messages WHERE session_id = ?1 AND content LIKE ?2
+                    ORDER BY timestamp DESC LIMIT ?3",
+        None => "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name
+                 FROM messages WHERE content LIKE ?1
+                 ORDER BY timestamp DESC LIMIT ?2",
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+
+    let messages = match &session_id {
+        Some(sid) => stmt.query_map(params![sid, pattern, limit], row_to_message)?
+            .collect::<Result<Vec<_>, _>>()?,
+        None => stmt.query_map(params![pattern, limit], row_to_message)?
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+
+    Ok(messages)
+}
+

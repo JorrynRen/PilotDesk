@@ -7,6 +7,7 @@ interface SessionState {
   archivedSessions: Session[];
   currentSessionId: string | null;
   messages: Message[];
+  messageIds: Set<string>;       // ID 去重集合
   isLoadingSessions: boolean;
   isLoadingMessages: boolean;
   showArchived: boolean;
@@ -14,7 +15,7 @@ interface SessionState {
   fetchSessions: () => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   createSession: (
-    agentType: 'claude' | 'hermes' | 'api',
+    agentType: 'claude' | 'hermes' | 'codex' | 'api' | 'codex',
     cwd?: string,
     title?: string | null,
     apiProvider?: string,
@@ -25,6 +26,27 @@ interface SessionState {
   deleteSession: (id: string) => Promise<void>;
   toggleArchived: () => void;
   addMessage: (msg: Message) => void;
+  updateMessage: (id: string, content: string) => Promise<void>;
+}
+
+/** 持久化消息到 SQLite（fire-and-forget） */
+async function persistMessage(msg: Message): Promise<void> {
+  try {
+    const saved = await invoke<Message>('save_message', {
+      sessionId: msg.sessionId,
+      role: msg.role,
+      content: msg.content,
+      mode: msg.mode,
+      reasoningContent: msg.reasoningContent ?? null,
+      toolCalls: msg.toolCalls ?? null,
+      toolCallId: msg.toolCallId ?? null,
+      toolName: msg.toolName ?? null,
+    });
+    // 更新会话预览
+    useSessionStore.getState().fetchSessions();
+  } catch (err) {
+    console.error('Failed to persist message:', err);
+  }
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
@@ -32,6 +54,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   archivedSessions: [],
   currentSessionId: null,
   messages: [],
+  messageIds: new Set(),
   isLoadingSessions: false,
   isLoadingMessages: false,
   showArchived: false,
@@ -55,7 +78,10 @@ export const useSessionStore = create<SessionState>((set) => ({
       const messages = await invoke<Message[]>('get_session_messages', {
         sessionId: id,
       });
-      set({ messages });
+      set({
+        messages,
+        messageIds: new Set(messages.map((m) => m.id)),
+      });
     } catch (err) {
       console.error('Failed to load messages:', err);
     } finally {
@@ -75,6 +101,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       sessions: [session, ...state.sessions],
       currentSessionId: session.id,
       messages: [],
+      messageIds: new Set(),
     }));
     return session;
   },
@@ -89,13 +116,21 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
 
   archiveSession: async (id) => {
+    const archivedSessions = await invoke<Session[]>('list_archived_sessions');
     await invoke('archive_session', { sessionId: id });
-    set((state) => ({
-      sessions: state.sessions.filter((s) => s.id !== id),
-      currentSessionId:
-        state.currentSessionId === id ? null : state.currentSessionId,
-      messages: state.currentSessionId === id ? [] : state.messages,
-    }));
+    set((state) => {
+      const session = state.sessions.find((s) => s.id === id);
+      return {
+        sessions: state.sessions.filter((s) => s.id !== id),
+        archivedSessions: session
+          ? [...archivedSessions, session]
+          : archivedSessions,
+        currentSessionId:
+          state.currentSessionId === id ? null : state.currentSessionId,
+        messages: state.currentSessionId === id ? [] : state.messages,
+        messageIds: state.currentSessionId === id ? new Set() : state.messageIds,
+      };
+    });
   },
 
   deleteSession: async (id) => {
@@ -106,6 +141,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       currentSessionId:
         state.currentSessionId === id ? null : state.currentSessionId,
       messages: state.currentSessionId === id ? [] : state.messages,
+      messageIds: state.currentSessionId === id ? new Set() : state.messageIds,
     }));
   },
 
@@ -113,35 +149,30 @@ export const useSessionStore = create<SessionState>((set) => ({
     set((state) => ({ showArchived: !state.showArchived }));
   },
 
-  addMessage: (msg: Message) => {
-    // Dedup: check against last message before adding
-    const skip = useSessionStore.getState().messages.slice(-1)[0];
-    if (skip && skip.role === msg.role && skip.content === msg.content && Math.abs(skip.timestamp - msg.timestamp) <= 2) {
-      return; // skip duplicate entirely
+  updateMessage: async (id: string, content: string) => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const updated = await invoke<Message>('update_message', { messageId: id, content });
+      set((state) => ({
+        messages: state.messages.map((m) => m.id === id ? updated : m),
+      }));
+    } catch (err) {
+      console.error('Failed to update message:', err);
     }
+  },
 
-    // Add to in-memory state immediately for UI responsiveness
+  addMessage: (msg: Message) => {
+    // ID-based dedup（可靠，无时间窗口问题）
+    const state = useSessionStore.getState();
+    if (state.messageIds.has(msg.id)) return;
+
+    // 立即更新 UI
     set((state) => ({
       messages: [...state.messages, msg],
+      messageIds: new Set(state.messageIds).add(msg.id),
     }));
 
-    // Persist to database (fire-and-forget, don't block UI)
-    invoke<Message>('save_message', {
-      sessionId: msg.sessionId,
-      role: msg.role,
-      content: msg.content,
-      mode: msg.mode,
-    }).then((saved) => {
-      // Update session list with latest preview
-      set((state) => ({
-        sessions: state.sessions.map((s) =>
-          s.id === msg.sessionId
-            ? { ...s, lastMessagePreview: saved.content.slice(0, 100), messageCount: s.messageCount + 1, updatedAt: saved.timestamp }
-            : s
-        ),
-      }));
-    }).catch((err) => {
-      console.error('Failed to persist message:', err);
-    });
+    // 异步持久化（分离关注点）
+    persistMessage(msg);
   },
 }));

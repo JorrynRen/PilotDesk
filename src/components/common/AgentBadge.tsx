@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import { AGENT_THEMES } from '../../types';
 
 interface AgentBadgeProps {
-  agentType: 'claude' | 'hermes' | 'api';
+  agentType: 'claude' | 'hermes' | 'codex' | 'api' | 'codex';
   size?: 'sm' | 'md';
 }
 

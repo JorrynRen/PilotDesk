@@ -1,24 +1,48 @@
 import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { useThemeStore } from '../stores/themeStore';
 
 type Theme = 'light' | 'dark' | 'system';
 
+/**
+ * useTheme — 主题管理 hook。
+ *
+ * 持久化到 SQLite app_settings 表（而非 localStorage），
+ * 确保与后端主题设置一致。
+ */
 export function useTheme() {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    try {
-      return localStorage.getItem('pilotdesk-theme') as Theme || 'system';
-    } catch {
-      return 'system';
-    }
-  });
+  const [theme, setThemeState] = useState<Theme>('system');
+  const [loaded, setLoaded] = useState(false);
 
-  const setTheme = (t: Theme) => {
+  // Load theme from SQLite on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = await invoke<string | null>('get_app_setting', { key: 'theme' });
+        if (saved && (saved === 'light' || saved === 'dark' || saved === 'system')) {
+          setThemeState(saved as Theme);
+        }
+      } catch { /* fallback to default */ }
+      setLoaded(true);
+    })();
+  }, []);
+
+  // Load custom theme colors
+  const { loadColors } = useThemeStore();
+  useEffect(() => {
+    loadColors();
+  }, [loadColors]);
+
+  const setTheme = async (t: Theme) => {
     setThemeState(t);
     try {
-      localStorage.setItem('pilotdesk-theme', t);
+      await invoke('set_app_setting', { key: 'theme', value: t });
     } catch { /* ignore */ }
   };
 
+  // Apply theme to document
   useEffect(() => {
+    if (!loaded) return;
     const apply = () => {
       if (theme === 'system') {
         const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -33,7 +57,7 @@ export function useTheme() {
       mq.addEventListener('change', apply);
       return () => mq.removeEventListener('change', apply);
     }
-  }, [theme]);
+  }, [theme, loaded]);
 
-  return { theme, setTheme };
+  return { theme, setTheme, loaded };
 }

@@ -1,6 +1,9 @@
+import { invoke as _invoke } from '@tauri-apps/api/core';
+export { _invoke as invoke };
+
 export interface Session {
   id: string;
-  agentType: 'claude' | 'hermes' | 'api';
+  agentType: 'claude' | 'hermes' | 'api' | 'codex';
   title: string;
   cwd: string;
   createdAt: number;
@@ -64,7 +67,7 @@ export interface Inspiration {
   icon: string;
   title: string;
   content: string;
-  sourceAgent: 'claude' | 'hermes' | 'manual';
+  sourceAgent: 'claude' | 'hermes' | 'codex' | 'manual';
   isFavorite: boolean;
   tags: string[];
   createdAt: number;
@@ -90,6 +93,7 @@ export interface EnvInfo {
   pythonVersion: string | null;
   claudeCodeVersion: string | null;
   hermesVersion: string | null;
+  codexVersion: string | null;
 }
 
 export type ChatMode = 'native' | 'fast' | 'think' | 'expert';
@@ -98,16 +102,49 @@ export type PanelContent =
   | { kind: 'inspiration-form'; prefill: string }
   | { kind: 'skill-detail'; skillName: string }
   | { kind: 'memory-browser' }
-  | { kind: 'config-editor'; agent: string }
   | { kind: 'bot-setup'; agent: string }
   | { kind: 'update-check' };
 
-export const MODE_PROMPTS: Record<ChatMode, string> = {
+/**
+ * Chat mode system prompts — loaded from app_settings storage.
+ * Falls back to built-in defaults if not yet customized.
+ */
+const DEFAULT_MODE_PROMPTS: Record<ChatMode, string> = {
   native: '',
   fast: '快速简洁回答，直接给出结论，无需详细解释推理过程',
   think: '逐步分析推理，详细解释你的思路和过程，给出完整的推理链',
   expert: '以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案',
 };
+
+export const MODE_PROMPTS_DEFAULTS = DEFAULT_MODE_PROMPTS;
+
+/** Get the current system prompt for a chat mode (from storage or default) */
+export async function getModePrompt(mode: ChatMode): Promise<string> {
+  try {
+    const key = `mode_prompt_${mode}`;
+    const value = await _invoke('get_app_setting', { key });
+    if (typeof value === 'string' && value !== '') return value;
+  } catch { /* storage not available or error — use default */ }
+  return DEFAULT_MODE_PROMPTS[mode] ?? '';
+}
+
+/** Save a custom system prompt for a chat mode */
+export async function saveModePrompt(mode: ChatMode, prompt: string): Promise<void> {
+  const key = `mode_prompt_${mode}`;
+  try {
+    await _invoke('set_app_setting', { key, value: prompt });
+  } catch { /* ignore save errors */ }
+}
+
+/** Get all mode prompts at once */
+export async function getAllModePrompts(): Promise<Record<ChatMode, string>> {
+  const modes: ChatMode[] = ['native', 'fast', 'think', 'expert'];
+  const result: Record<ChatMode, string> = { native: '', fast: '', think: '', expert: '' };
+  for (const m of modes) {
+    result[m] = await getModePrompt(m);
+  }
+  return result;
+}
 
 export const MODE_LABELS: Record<ChatMode, string> = {
   native: '原生',
@@ -153,6 +190,13 @@ export const AGENT_THEMES: Record<string, AgentTheme> = {
     label: 'API 直连',
     initial: 'A',
     cssVar: 'var(--api-tag)',
+  },
+  codex: {
+    color: '#F59E0B',
+    bg: 'rgba(245,158,11,0.15)',
+    label: 'codeX',
+    initial: 'X',
+    cssVar: 'var(--codex-tag)',
   },
   manual: {
     color: '#6B7280',

@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Plus, Star, Search, Send, Trash2, Edit3, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { AGENT_THEMES } from '../../types';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 
-const EMOJI_OPTIONS = ['💡', '🔥', '🎯', '⚡', '🚀', '🌟', '📝', '🔧', '🎨', '🧠', '📊', '🛠️', '💻', '📱', '🌐', '🔬', '🎭', '🎵', '🏆', '💎', '🌈', '🔑', '📖', '🧩'];
+import { EMOJI_OPTIONS } from '../../constants';
 
 export function InspirationPanel() {
   const currentSession = useSessionStore((s) => {
@@ -27,8 +27,6 @@ export function InspirationPanel() {
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingInspiration, setEditingInspiration] = useState<InspirationItem | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(() => {
     fetchInspirations();
   }, [fetchInspirations]);
@@ -48,10 +46,6 @@ export function InspirationPanel() {
 
   const handleSearch = useCallback((query: string) => {
     setSearchQuery(query);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      // local filter is sufficient
-    }, 300);
   }, []);
 
   const handleDelete = async (id: string) => {

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu, ChevronUp } from 'lucide-react';
 import type { ChatMode, Session } from '../../types';
-import { MODE_LABELS, MODE_COLORS } from '../../types';
+import { MODE_LABELS, MODE_COLORS, MODE_PROMPTS_DEFAULTS, getModePrompt } from '../../types';
 import { InspirationPicker } from '../input/InspirationPicker';
 import { SkillPicker } from '../input/SkillPicker';
 import { showToast } from '../../utils/toast';
@@ -34,7 +34,19 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
   const pickerAnchorRef = useRef<HTMLDivElement>(null);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Consume pending input
+  // Load prompt descriptions for tooltip
+  const [modeDescriptions, setModeDescriptions] = useState<Record<string, string>>({});
+  useEffect(() => {
+    (async () => {
+      const descs: Record<string, string> = {};
+      for (const m of ['native', 'fast', 'think', 'expert'] as const) {
+        const p = await getModePrompt(m);
+        if (p && p.trim() !== '') descs[m] = p;
+        else descs[m] = '原生模式，使用默认对话风格';
+      }
+      setModeDescriptions(descs);
+    })();
+  }, []);
   useEffect(() => {
     if (pendingInput) {
       setInput(pendingInput);
@@ -111,6 +123,8 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
     ? '向 Claude Code 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
     : session.agentType === 'api'
     ? '向 API 模型发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
+    : session.agentType === 'codex'
+    ? '向 codeX 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
     : '向 Hermes Agent 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)';
 
   return (
@@ -127,6 +141,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
               color: MODE_COLORS[mode],
               border: '1px solid var(--border)',
             }}
+            title={modeDescriptions[mode] || '加载中...'}
           >
             {(() => {
               const Icon = MODE_ICONS[mode];
@@ -141,7 +156,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
               style={{
                 backgroundColor: 'var(--bg-panel)',
                 border: '1px solid var(--border)',
-                minWidth: '120px',
+                minWidth: '200px',
               }}
             >
               {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
@@ -156,9 +171,10 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
                       color: isActive ? MODE_COLORS[m] : 'var(--text-primary)',
                       backgroundColor: isActive ? `${MODE_COLORS[m]}11` : 'transparent',
                     }}
+                    title={modeDescriptions[m] || '加载中...'}
                   >
                     <Icon size={12} />
-                    {MODE_LABELS[m]}
+                    <span className="flex-1">{MODE_LABELS[m]}</span>
                   </button>
                 );
               })}

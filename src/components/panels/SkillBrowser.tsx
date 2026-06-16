@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Cpu, Search, ChevronRight, FolderOpen, Bot } from 'lucide-react';
 import { useSkillStore } from '../../stores/skillStore';
+import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { AGENT_THEMES } from '../../types';
+import type { SkillInfo } from '../../stores/skillStore';
 
 interface SkillBrowserProps {
   agentType: string;
@@ -15,9 +17,39 @@ const AGENT_LABELS: Record<string, string> = {
 };
 
 export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
-  const { skillsByAgent, isLoading } = useSkillStore();
+  const { skillsByAgent, isLoading, setAgentSkills, setLoading } = useSkillStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSkill, setSelectedSkill] = useState<{ agent: string; name: string; description: string; category?: string } | null>(null);
+
+  const { requestAllSkills } = useAgentEvent();
+
+  // Auto-fetch skills on mount
+  useEffect(() => {
+    const cached = skillsByAgent[agentType];
+    if (!cached) {
+      setLoading(true);
+      requestAllSkills();
+    }
+  }, [agentType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Subscribe to skillStore changes instead of polling
+  useEffect(() => {
+    // Check if data already exists
+    const existing = useSkillStore.getState().skillsByAgent[agentType];
+    if (existing && existing.length > 0) {
+      setLoading(false);
+      return;
+    }
+
+    // Subscribe to store changes
+    const unsub = useSkillStore.subscribe((state) => {
+      const agentSkills = state.skillsByAgent[agentType];
+      if (agentSkills && agentSkills.length > 0) {
+        setLoading(false);
+      }
+    });
+    return () => unsub();
+  }, [agentType]);
 
   // 按分类聚合所有 agent 的技能
   const allAgentTypes = Object.keys(skillsByAgent);

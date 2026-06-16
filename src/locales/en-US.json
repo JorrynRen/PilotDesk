@@ -1,0 +1,67 @@
+{
+  "app.name": "PilotDesk",
+  "app.tagline": "Unified Agent Desktop Client",
+
+  "session.new": "New Session",
+  "session.search": "Search sessions...",
+  "session.batch": "Batch",
+  "session.batch.exit": "Exit Batch",
+  "session.selectAll": "Select All",
+  "session.deselectAll": "Deselect All",
+  "session.archive": "Archive",
+  "session.delete": "Delete",
+  "session.rename": "Rename",
+  "session.empty": "Create or select a session from the left to start chatting",
+  "session.empty.new": "Start a new conversation",
+  "session.empty.hint.agent": "Type a message or use a skill to interact with the Agent",
+  "session.empty.hint.api": "Messages will be sent via API direct connection",
+
+  "message.search": "Search messages...",
+  "message.search.results": "Found {count} results",
+  "message.copy": "Copy",
+  "message.copied": "Copied",
+  "message.edit": "Edit",
+  "message.modify": "Modify",
+  "message.save": "Save",
+  "message.cancel": "Cancel",
+  "message.resend": "Resend",
+  "message.saveInspiration": "Save Inspiration",
+  "message.updated": "Message updated",
+  "message.archived": "Archived {count} sessions",
+  "message.deleted": "Deleted {count} sessions",
+
+  "inspiration.added": "Added to Inspiration Market",
+  "inspiration.ready": "Inspiration content ready, go to Inspiration Market to save",
+
+  "input.placeholder": "Type a message...",
+  "input.filled": "Message filled in input box, you can modify and resend",
+
+  "status.ready": "Agent: Ready",
+  "status.thinking": "Thinking...",
+  "status.sending": "Sending...",
+  "status.timeout": "Request timeout: Agent did not respond within 60 seconds",
+  "status.error": "Error: {error}",
+  "status.requestFailed": "Request failed: {error}",
+
+  "mode.native": "Native",
+  "mode.fast": "Fast",
+  "mode.think": "Deep Think",
+  "mode.expert": "Expert",
+
+  "agent.claude": "Claude Code",
+  "agent.hermes": "Hermes Agent",
+  "agent.codex": "Codex",
+  "agent.api": "API",
+
+  "settings.title": "Settings",
+  "settings.theme": "Theme",
+  "settings.theme.light": "Light",
+  "settings.theme.dark": "Dark",
+  "settings.theme.system": "System",
+
+  "common.loading": "Loading...",
+  "common.error": "Error",
+  "common.success": "Success",
+  "common.confirm": "Confirm",
+  "common.cancel": "Cancel"
+}
