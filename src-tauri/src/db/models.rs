@@ -57,21 +57,6 @@ pub struct Inspiration {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct BotChannel {
-    pub id: String,
-    pub agent_type: String,
-    pub platform: String,
-    pub method: String,
-    pub status: String,
-    pub trigger_prefix: String,
-    pub response_format: String,
-    pub config: serde_json::Value,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
 pub struct EnvInfo {
     pub node_version: Option<String>,
     pub git_version: Option<String>,

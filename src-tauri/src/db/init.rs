@@ -69,20 +69,7 @@ pub fn init_db() -> Result<DbPool, AppError> {
             PRIMARY KEY (inspiration_id, tag)
         );
 
-        CREATE TABLE IF NOT EXISTS bot_channels (
-            id TEXT PRIMARY KEY,
-            agent_type TEXT NOT NULL CHECK(agent_type IN ('claude', 'hermes', 'codex')),
-            platform TEXT NOT NULL DEFAULT 'wechat',
-            method TEXT DEFAULT 'clawbot',
-            status TEXT DEFAULT 'disconnected',
-            trigger_prefix TEXT DEFAULT '',
-            response_format TEXT DEFAULT 'markdown',
-            config TEXT DEFAULT '{}',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-
-        CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);
+CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);
         CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);
         CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);

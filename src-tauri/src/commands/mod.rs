@@ -1,6 +1,5 @@
 pub mod api_provider;
 pub mod app_settings;
-pub mod bot;
 pub mod env;
 pub mod install_log;
 pub mod inspiration;

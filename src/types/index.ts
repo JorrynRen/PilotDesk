@@ -74,19 +74,6 @@ export interface Inspiration {
   updatedAt: number;
 }
 
-export interface BotChannel {
-  id: string;
-  agentType: 'claude' | 'hermes';
-  platform: string;
-  method: string;
-  status: string;
-  triggerPrefix: string;
-  responseFormat: string;
-  config: Record<string, unknown>;
-  createdAt: number;
-  updatedAt: number;
-}
-
 export interface EnvInfo {
   nodeVersion: string | null;
   gitVersion: string | null;

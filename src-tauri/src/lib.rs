@@ -28,12 +28,6 @@ fn list_tags(state: tauri::State<'_, DbState>) -> Result<Vec<String>, crate::uti
 }
 
 #[tauri::command]
-fn list_bot_channels(state: tauri::State<'_, DbState>) -> Result<Vec<commands::bot::BotChannel>, crate::utils::errors::AppError> {
-    let conn = state.get_conn()?;
-    commands::bot::list_bot_channels(&conn)
-}
-
-#[tauri::command]
 fn list_api_providers(state: tauri::State<'_, DbState>) -> Result<Vec<commands::api_provider::ApiProvider>, crate::utils::errors::AppError> {
     let conn = state.get_conn()?;
     commands::api_provider::list_api_providers(&conn)
@@ -61,18 +55,6 @@ fn update_inspiration(state: tauri::State<'_, DbState>, payload: commands::inspi
 fn delete_inspiration(state: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
     let conn = state.get_conn()?;
     commands::inspiration::delete_inspiration(&conn, id)
-}
-
-#[tauri::command]
-fn save_bot_channel(state: tauri::State<'_, DbState>, payload: commands::bot::SaveBotChannelPayload) -> Result<commands::bot::BotChannel, crate::utils::errors::AppError> {
-    let conn = state.get_conn()?;
-    commands::bot::save_bot_channel(&conn, payload)
-}
-
-#[tauri::command]
-fn delete_bot_channel(state: tauri::State<'_, DbState>, id: String) -> Result<(), crate::utils::errors::AppError> {
-    let conn = state.get_conn()?;
-    commands::bot::delete_bot_channel(&conn, id)
 }
 
 #[tauri::command]
@@ -244,9 +226,6 @@ pub fn run() {
             delete_inspiration,
             search_inspirations,
             list_tags,
-            list_bot_channels,
-            save_bot_channel,
-            delete_bot_channel,
             list_api_providers,
             get_api_provider,
             upsert_api_provider,

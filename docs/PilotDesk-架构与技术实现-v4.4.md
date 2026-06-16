@@ -55,7 +55,6 @@ PilotDesk 是一个 **Agent 统一桌面客户端**，将多个 AI Agent（Claud
 - **API 直连模式**：支持 OpenAI 兼容 API 的直接调用
 - **灵感市集**：灵感/提示词管理与搜索（FTS5 全文搜索）
 - **技能系统**：Agent 技能列表与调用
-- **Bot 频道**：Agent Bot 频道配置管理
 - **插件系统**：支持第三方插件发现、启用/禁用
 - **自定义主题色**：9 种预设颜色 + 自定义颜色选择器
 - **国际化基础**：中英文语言包（zh-CN / en-US）
@@ -1004,7 +1003,6 @@ inspirations 1 ---- 1 inspirations_fts  (content=inspirations, content_rowid=row
 - `api_providers` -- 独立表，sessions.api_provider 逻辑关联但不设 FK
 - `app_settings` -- 独立 KV 表
 - `install_logs` -- 独立日志表
-- `bot_channels` -- 独立配置表
 
 ### 6.4 迁移机制
 
@@ -1737,7 +1735,6 @@ function useI18n() {
 | `src-tauri/src/commands/app_settings.rs` | ~80 | 应用设置 KV |
 | `src-tauri/src/commands/install_log.rs` | ~74 | 安装日志 |
 | `src-tauri/src/commands/inspiration.rs` | ~200 | 灵感 CRUD + FTS5 搜索 |
-| `src-tauri/src/commands/bot.rs` | ~90 | Bot 频道管理 |
 | `src-tauri/src/commands/theme.rs` | ~60 | 主题管理（SQLite 持久化） |
 | `src-tauri/src/utils/mod.rs` | ~30 | new_id(), now(), now_millis() |
 | `src-tauri/src/utils/paths.rs` | ~12 | 路径工具 |
