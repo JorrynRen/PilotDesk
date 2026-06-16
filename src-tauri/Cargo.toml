@@ -34,4 +34,4 @@ tauri-plugin-dialog = "2.7.1"
 aes-gcm = "0.10"
 base64 = "0.22"
 semver = "1.0"
-zip = "2.2"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
