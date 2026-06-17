@@ -206,10 +206,10 @@ var STYLE = {
 };
 
 var CATEGORIES = [
-  { id: 'prompt', label: 'Prompt', style: STYLE.catPrompt },
-  { id: 'code', label: 'Code', style: STYLE.catCode },
-  { id: 'template', label: 'Template', style: STYLE.catTemplate },
-  { id: 'general', label: 'General', style: STYLE.catGeneral },
+  { id: 'prompt', label: '提示词', style: STYLE.catPrompt },
+  { id: 'code', label: '代码', style: STYLE.catCode },
+  { id: 'template', label: '模板', style: STYLE.catTemplate },
+  { id: 'general', label: '通用', style: STYLE.catGeneral },
 ];
 
 var CATEGORY_MAP = {};
@@ -223,7 +223,7 @@ function getCategoryStyle(catId) {
 
 function getCategoryLabel(catId) {
   var cat = CATEGORY_MAP[catId];
-  return cat ? cat.label : 'General';
+  return cat ? cat.label : '通用';
 }
 
 // ── 模态框组件 ──
@@ -257,19 +257,19 @@ function SnippetFormModal(props) {
   },
     React.createElement('div', { style: STYLE.modalContent, onClick: function(e) { e.stopPropagation(); } },
       React.createElement('div', { style: STYLE.modalTitle },
-        snippet ? 'Edit Snippet' : 'New Snippet'
+        snippet ? '编辑片段' : '新建片段'
       ),
 
-      React.createElement('label', { style: STYLE.fieldLabel }, 'Title'),
+      React.createElement('label', { style: STYLE.fieldLabel }, '标题'),
       React.createElement('input', {
         style: STYLE.fieldInput,
         value: title,
         onChange: function(e) { setTitle(e.target.value); },
-        placeholder: 'e.g. Code Review Prompt',
+        placeholder: '例如：代码审查提示词',
         autoFocus: true,
       }),
 
-      React.createElement('label', { style: STYLE.fieldLabel }, 'Category'),
+      React.createElement('label', { style: STYLE.fieldLabel }, '分类'),
       React.createElement('select', {
         style: STYLE.selectField,
         value: category,
@@ -280,20 +280,20 @@ function SnippetFormModal(props) {
         })
       ),
 
-      React.createElement('label', { style: STYLE.fieldLabel }, 'Content'),
+      React.createElement('label', { style: STYLE.fieldLabel }, '内容'),
       React.createElement('textarea', {
         style: STYLE.fieldTextarea,
         value: content,
         onChange: function(e) { setContent(e.target.value); },
-        placeholder: 'Paste your snippet content here...',
+        placeholder: '在此粘贴片段内容...',
       }),
 
       React.createElement('div', { style: STYLE.modalActions },
-        React.createElement('button', { style: STYLE.cancelBtn, onClick: onCancel }, 'Cancel'),
+        React.createElement('button', { style: STYLE.cancelBtn, onClick: onCancel }, '取消'),
         React.createElement('button', {
           style: STYLE.saveBtn,
           onClick: handleSave,
-        }, snippet ? 'Update' : 'Save')
+        }, snippet ? '更新' : '保存')
       )
     )
   );
@@ -348,7 +348,7 @@ function SnippetPanel(props) {
           break;
         }
       }
-      api.ui.showToast('Snippet updated', 'success');
+      api.ui.showToast('片段已更新', 'success');
     } else {
       // 新增
       list.unshift({
@@ -358,7 +358,7 @@ function SnippetPanel(props) {
         category: data.category,
         createdAt: Date.now(),
       });
-      api.ui.showToast('Snippet saved', 'success');
+      api.ui.showToast('片段已保存', 'success');
     }
     persistSnippets(list);
     setShowForm(false);
@@ -369,14 +369,14 @@ function SnippetPanel(props) {
   function handleDelete(id) {
     var list = snippets.filter(function(s) { return s.id !== id; });
     persistSnippets(list);
-    api.ui.showToast('Snippet deleted', 'info');
+    api.ui.showToast('片段已删除', 'info');
   }
 
   // 复制到剪贴板
   function handleCopy(content) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(content).then(function() {
-        api.ui.showToast('Copied to clipboard', 'success');
+        api.ui.showToast('已复制到剪贴板', 'success');
       });
     }
   }
@@ -407,12 +407,12 @@ function SnippetPanel(props) {
         style: STYLE.searchInput,
         value: search,
         onChange: function(e) { setSearch(e.target.value); },
-        placeholder: 'Search snippets...',
+        placeholder: '搜索片段...',
       }),
       React.createElement('button', {
         style: STYLE.addBtn,
         onClick: function() { setEditing(null); setShowForm(true); },
-      }, '+ New')
+      }, '+ 新建')
     ),
 
     // 分类统计
@@ -432,8 +432,8 @@ function SnippetPanel(props) {
       filtered.length === 0
         ? React.createElement('div', { style: STYLE.emptyState },
             search.trim()
-              ? 'No snippets match "' + search + '"'
-              : 'No snippets yet.\nClick "+ New" to add your first snippet.'
+              ? '没有匹配 "' + search + '" 的片段'
+              : '暂无片段。\n点击 "+ 新建" 添加第一个片段。'
           )
         : filtered.map(function(s) {
             return React.createElement('div', {
@@ -456,12 +456,12 @@ function SnippetPanel(props) {
                   React.createElement('button', {
                     style: STYLE.copyBtn,
                     onClick: function(e) { e.stopPropagation(); handleCopy(s.content); },
-                    title: 'Copy to clipboard',
-                  }, 'Copy'),
+                    title: '复制到剪贴板',
+                  }, '复制'),
                   React.createElement('button', {
                     style: STYLE.deleteBtn,
                     onClick: function(e) { e.stopPropagation(); handleDelete(s.id); },
-                    title: 'Delete',
+                    title: '删除',
                   }, '✕'),
                 )
               ),
@@ -477,7 +477,7 @@ function SnippetPanel(props) {
                 React.createElement('button', {
                   style: { ...STYLE.deleteBtn, color: 'var(--text-tertiary)', fontSize: '9px', textDecoration: 'underline' },
                   onClick: function() { setEditing(s); setShowForm(true); },
-                }, 'Edit')
+                }, '编辑')
               )
             );
           })
@@ -501,13 +501,13 @@ export default {
 
     api.ui.addPanel({
       id: 'snippets',
-      title: 'Snippets',
+      title: '片段',
       component: function() {
         return React.createElement(SnippetPanel, { api: api });
       },
     });
 
-    api.ui.showToast('Snippet Manager loaded', 'success');
+    api.ui.showToast('片段管理器已加载', 'success');
   },
 
   onUnload: function() {
