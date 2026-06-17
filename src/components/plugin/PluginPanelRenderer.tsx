@@ -59,9 +59,6 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
       {/* 面板内容 */}
       {activePanel && (
         <div className="p-3">
-          <div className="text-[10px] mb-2" style={{ color: 'var(--text-tertiary)' }}>
-            来自插件: {activePanel.pluginName}
-          </div>
           {Component ? (
             <Component pluginId={activePanel.pluginId} />
           ) : (
