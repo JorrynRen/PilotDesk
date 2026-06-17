@@ -58,8 +58,7 @@
   "minAppVersion": "0.1.0",
   "permissions": ["ui:panel", "ui:toast", "session:read"],
   "entry": {
-    "main": "index.js",
-    "styles": "styles.css"
+    "main": "index.js"
   },
   "contributes": {
     "panels": [

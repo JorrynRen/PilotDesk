@@ -8,7 +8,6 @@ PilotDesk 插件系统的示例插件，展示插件开发的基本模式。
 hello-world/
 ├── manifest.json    # 插件清单（必填）
 ├── index.js        # 插件入口（必填，纯 JS 格式）
-└── styles.css       # 插件样式（可选）
 ```
 
 ## manifest.json 字段说明
@@ -23,7 +22,6 @@ hello-world/
 | `minAppVersion` | string | 是 | 最低兼容的 PilotDesk 版本 |
 | `permissions` | string[] | 是 | 所需权限列表 |
 | `entry.main` | string | 是 | 入口文件路径（相对于插件目录） |
-| `entry.styles` | string | 否 | 样式文件路径 |
 | `contributes` | object | 否 | 贡献点声明（面板/命令/钩子） |
 
 ### contributes 字段

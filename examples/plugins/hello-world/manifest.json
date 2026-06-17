@@ -11,8 +11,7 @@
     "session:read"
   ],
   "entry": {
-    "main": "index.js",
-    "styles": "styles.css"
+    "main": "index.js"
   },
   "contributes": {
     "panels": [

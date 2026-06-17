@@ -1465,7 +1465,6 @@ manifest.json icon 字段
 hello-world/
 ├── manifest.json    # 插件清单（静态声明面板/命令/钩子）
 ├── index.js        # 插件入口（纯 JS，运行时注册面板组件）
-├── styles.css       # 插件样式
 └── README.md        # 插件开发文档
 ```
 

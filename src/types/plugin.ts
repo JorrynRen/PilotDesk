@@ -15,7 +15,6 @@ export interface PluginManifest {
   permissions: PluginPermission[];
   entry: {
     main: string;
-    styles?: string;
   };
   contributes?: {
     panels?: PanelContribution[];

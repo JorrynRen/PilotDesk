@@ -63,7 +63,6 @@ pub struct PluginManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginEntry {
     pub main: String,
-    pub styles: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
