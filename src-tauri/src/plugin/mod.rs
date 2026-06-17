@@ -354,16 +354,20 @@ impl PluginHost {
             return Err("插件目录路径包含 '..'，已拒绝加载".to_string());
         }
 
-        // 5. 清单字段验证
-        match Self::validate_manifest(&manifest, plugin_path) {
-            Ok(_) => {}
-            Err(errors) => {
-                let error_msg = errors.iter()
-                    .map(|e| format!("[{}] {}", e.field, e.message))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                return Err(format!("清单验证失败: {}", error_msg));
+        // 5. 清单字段验证（沙箱禁用时跳过）
+        if self.sandbox_enabled {
+            match Self::validate_manifest(&manifest, plugin_path) {
+                Ok(_) => {}
+                Err(errors) => {
+                    let error_msg = errors.iter()
+                        .map(|e| format!("[{}] {}", e.field, e.message))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    return Err(format!("清单验证失败: {}", error_msg));
+                }
             }
+        } else {
+            log::info!("[PluginSandbox] 沙箱已禁用，跳过清单验证");
         }
 
         // 6. 权限检查（沙箱禁用时放行所有权限）

@@ -40,32 +40,21 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
 
   return (
     <div className="plugin-panels">
-      {/* 面板标签页导航 */}
-      <div
-        className="flex items-center gap-0.5 px-2 py-1 overflow-x-auto"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
-        {panels.map((panel) => (
-          <button
-            key={panel.pluginId + ':' + panel.contribution.id}
-            onClick={() => onPanelChange?.(panel.contribution.id)}
-            className="px-2 py-1 rounded text-[10px] whitespace-nowrap transition-colors"
-            style={{
-              color:
-                activePanelId === panel.contribution.id
-                  ? 'var(--accent)'
-                  : 'var(--text-secondary)',
-              backgroundColor:
-                activePanelId === panel.contribution.id
-                  ? 'var(--border)'
-                  : 'transparent',
-            }}
-          >
-            <PluginIcon icon={panel.contribution.icon} pluginId={panel.pluginId} size={14} />
-            {panel.contribution.title}
-          </button>
-        ))}
-      </div>
+      {/* 当前插件标题栏 */}
+      {activePanel && (
+        <div
+          className="flex items-center gap-2 px-3 py-2"
+          style={{ borderBottom: '1px solid var(--border)' }}
+        >
+          <PluginIcon icon={activePanel.contribution.icon} pluginId={activePanel.pluginId} size={16} />
+          <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+            {activePanel.contribution.title}
+          </span>
+          <span className="text-[9px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+            {activePanel.pluginName}
+          </span>
+        </div>
+      )}
 
       {/* 面板内容 */}
       {activePanel && (
