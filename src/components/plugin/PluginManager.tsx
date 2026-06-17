@@ -304,7 +304,7 @@ export function PluginManager() {
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
                           {plugin.manifest.name}
                         </span>
@@ -312,11 +312,11 @@ export function PluginManager() {
                           v{plugin.manifest.version}
                         </span>
                         {loadState?.loaded && (
-                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(16,185,129,0.1)', color: '#10B981' }}>
+                          <span className="text-[9px] px-1 py-0.5 rounded shrink-0" style={{ backgroundColor: 'rgba(16,185,129,0.1)', color: '#10B981' }}>
                             已加载
                           </span>)}
                       </div>
-                      <p className="text-[10px] mt-0.5 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                      <p className="text-[10px] mt-0.5 line-clamp-2 pr-2" style={{ color: 'var(--text-secondary)' }}>
                         {plugin.manifest.description}
                       </p>
                       <div className="flex items-center gap-1.5 mt-1.5">
