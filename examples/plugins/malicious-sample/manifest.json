@@ -11,8 +11,7 @@
     "fs:write"
   ],
   "entry": {
-    "main": "../../etc/passwd",
-    "styles": "../secret.css"
+    "main": "../../etc/passwd"
   },
   "contributes": {
     "panels": [

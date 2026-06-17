@@ -13,6 +13,7 @@
 | 高风险权限 | 声明 `fs:read` 和 `fs:write` |
 | 入口越界 | entry.main 指向插件目录外的文件 |
 | 图标路径遍历 | icon 指向 `../../../windows/system32/drivers/etc/hosts` |
+| 样式文件越界(已移除) | 原 entry.styles 指向 `../secret.css`，该字段已从架构中移除 |
 
 ## 预期行为
 

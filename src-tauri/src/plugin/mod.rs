@@ -258,14 +258,6 @@ impl PluginHost {
                 message: "入口文件路径不能包含 '..'".to_string(),
             });
         }
-        if let Some(ref styles) = manifest.entry.styles {
-            if styles.contains("..") {
-                errors.push(ManifestValidationError {
-                    field: "entry.styles".to_string(),
-                    message: "样式文件路径不能包含 '..'".to_string(),
-                });
-            }
-        }
 
         // 6. 检查入口文件是否存在
         let main_path = plugin_path.join(&manifest.entry.main);
