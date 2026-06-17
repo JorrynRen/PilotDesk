@@ -1,0 +1,16 @@
+/* Snippet Manager 插件样式 */
+
+.snippet-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.snippet-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.snippet-panel::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 2px;
+}
