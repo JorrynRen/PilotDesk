@@ -302,51 +302,21 @@ export function PluginManager() {
                     opacity: plugin.enabled ? 1 : 0.5,
                   }}
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
-                          {plugin.manifest.name}
-                        </span>
-                        <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                          v{plugin.manifest.version}
-                        </span>
-                        {loadState?.loaded && (
-                          <span className="text-[9px] px-1 py-0.5 rounded shrink-0" style={{ backgroundColor: 'rgba(16,185,129,0.1)', color: '#10B981' }}>
-                            已加载
-                          </span>)}
-                      </div>
-                      <p className="text-[10px] mt-0.5 line-clamp-2 pr-2" style={{ color: 'var(--text-secondary)' }}>
-                        {plugin.manifest.description}
-                      </p>
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <span
-                          className="text-[9px] px-1.5 py-0.5 rounded"
-                          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
-                        >
-                          {plugin.manifest.author}
-                        </span>
-                        {plugin.permission_checks.map((check) => (
-                          <PermissionBadge key={check.permission} check={check} />
-                        ))}
-                      </div>
-                      {plugin.manifest.contributes && (
-                        <div className="flex items-center gap-1.5 mt-1">
-                          {plugin.manifest.contributes.panels && plugin.manifest.contributes.panels.length > 0 && (
-                            <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(59,130,246,0.1)', color: '#3B82F6' }}>
-                              {plugin.manifest.contributes.panels.length} 面板
-                            </span>)}
-                          {plugin.manifest.contributes.commands && plugin.manifest.contributes.commands.length > 0 && (
-                            <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(139,92,246,0.1)', color: '#8B5CF6' }}>
-                              {plugin.manifest.contributes.commands.length} 命令
-                            </span>)}
-                          {plugin.manifest.contributes.hooks && plugin.manifest.contributes.hooks.length > 0 && (
-                            <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
-                              {plugin.manifest.contributes.hooks.length} 钩子
-                            </span>)}
-                        </div>)}
+                  {/* 标题行：名称 + 版本 + 状态 + 操作按钮 */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                        {plugin.manifest.name}
+                      </span>
+                      <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                        v{plugin.manifest.version}
+                      </span>
+                      {loadState?.loaded && (
+                        <span className="text-[9px] px-1 py-0.5 rounded shrink-0" style={{ backgroundColor: 'rgba(16,185,129,0.1)', color: '#10B981' }}>
+                          已加载
+                        </span>)}
                     </div>
-                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => handleUninstall(plugin)}
                         className="pd-btn px-1.5 py-1 rounded text-[10px]"
@@ -378,6 +348,42 @@ export function PluginManager() {
                             : '已禁用'}
                       </button>
                     </div>
+                  </div>
+
+                  {/* 分割线 */}
+                  <div className="my-2" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
+
+                  {/* 详情区域：描述 + 作者 + 权限 + 贡献点 — 占满全宽 */}
+                  <div>
+                    <p className="text-[10px] line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                      {plugin.manifest.description}
+                    </p>
+                    <div className="flex items-center gap-1.5 mt-1.5">
+                      <span
+                        className="text-[9px] px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
+                      >
+                        {plugin.manifest.author}
+                      </span>
+                      {plugin.permission_checks.map((check) => (
+                        <PermissionBadge key={check.permission} check={check} />
+                      ))}
+                    </div>
+                    {plugin.manifest.contributes && (
+                      <div className="flex items-center gap-1.5 mt-1">
+                        {plugin.manifest.contributes.panels && plugin.manifest.contributes.panels.length > 0 && (
+                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(59,130,246,0.1)', color: '#3B82F6' }}>
+                            {plugin.manifest.contributes.panels.length} 面板
+                          </span>)}
+                        {plugin.manifest.contributes.commands && plugin.manifest.contributes.commands.length > 0 && (
+                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(139,92,246,0.1)', color: '#8B5CF6' }}>
+                            {plugin.manifest.contributes.commands.length} 命令
+                          </span>)}
+                        {plugin.manifest.contributes.hooks && plugin.manifest.contributes.hooks.length > 0 && (
+                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
+                            {plugin.manifest.contributes.hooks.length} 钩子
+                          </span>)}
+                      </div>)}
                   </div>
                   {plugin.error && (
                     <p className="text-[10px] mt-1.5" style={{ color: '#EF4444' }}>
