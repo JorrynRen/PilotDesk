@@ -2,11 +2,13 @@
  * PluginPanelRenderer — 插件面板渲染器
  *
  * 在右侧面板中显示所有已注册的插件面板。
- * 每个插件面板作为一个独立的标签页。
+ * 面板数据来自 pluginStore.registeredPanels，组件来自 PluginRegistry。
  */
 
-import { useEffect, useState } from 'react';
-import { pluginRegistry, type RegisteredPanel } from '../../plugin/PluginRegistry';
+import { useCallback } from 'react';
+import { usePluginStore } from '../../stores/pluginStore';
+import { pluginRegistry } from '../../plugin/PluginRegistry';
+import { PluginIcon } from './PluginIcon';
 
 interface PluginPanelRendererProps {
   /** 当前选中的插件面板 ID */
@@ -16,25 +18,25 @@ interface PluginPanelRendererProps {
 }
 
 export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPanelRendererProps) {
-  const [panels, setPanels] = useState<RegisteredPanel[]>([]);
+  const registeredPanels = usePluginStore((s) => s.registeredPanels);
+  const panels = Array.from(registeredPanels.values());
 
-  useEffect(() => {
-    // 初始加载
-    setPanels(pluginRegistry.getPanels());
-
-    // 订阅变更
-    const unsub = pluginRegistry.subscribe(() => {
-      setPanels(pluginRegistry.getPanels());
-    });
-
-    return unsub;
-  }, []);
+  /** 获取面板组件 */
+  const getComponent = useCallback((panelId: string) => {
+    for (const panel of registeredPanels.values()) {
+      if (panel.contribution.id === panelId) {
+        return pluginRegistry.getPanelComponent(panel.pluginPath, panelId);
+      }
+    }
+    return undefined;
+  }, [registeredPanels]);
 
   if (panels.length === 0) {
     return null;
   }
 
   const activePanel = panels.find((p) => p.contribution.id === activePanelId);
+  const Component = activePanelId ? getComponent(activePanelId) : undefined;
 
   return (
     <div className="plugin-panels">
@@ -45,7 +47,7 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
       >
         {panels.map((panel) => (
           <button
-            key={`${panel.pluginId}:${panel.contribution.id}`}
+            key={panel.pluginId + ':' + panel.contribution.id}
             onClick={() => onPanelChange?.(panel.contribution.id)}
             className="px-2 py-1 rounded text-[10px] whitespace-nowrap transition-colors"
             style={{
@@ -59,7 +61,8 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
                   : 'transparent',
             }}
           >
-            {panel.contribution.icon || '📦'} {panel.contribution.title}
+            <PluginIcon icon={panel.contribution.icon} pluginPath={panel.pluginPath} size={14} />
+            {panel.contribution.title}
           </button>
         ))}
       </div>
@@ -70,8 +73,8 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
           <div className="text-[10px] mb-2" style={{ color: 'var(--text-tertiary)' }}>
             来自插件: {activePanel.pluginName}
           </div>
-          {activePanel.component ? (
-            <activePanel.component pluginId={activePanel.pluginId} />
+          {Component ? (
+            <Component pluginId={activePanel.pluginId} />
           ) : (
             <div
               className="text-xs py-8 text-center rounded"

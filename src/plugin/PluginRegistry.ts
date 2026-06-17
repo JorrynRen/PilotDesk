@@ -1,38 +1,17 @@
 /**
- * PluginRegistry — 插件贡献点全局注册表
+ * PluginRegistry — 插件面板组件注册表 + 插件运行时
  *
- * 管理插件注册的面板、命令、事件钩子等前端组件。
- * 插件系统通过此注册表实现"前端插件入口"功能。
+ * 管理面板组件的注册与加载状态。
+ * 加载插件时读取并执行入口 JS 文件，调用 onLoad/onUnload 生命周期。
  */
 
-import type { PluginInstance, PanelContribution, CommandContribution, HookContribution } from '../types/plugin';
+import React from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import type { PluginInstance } from '../types/plugin';
+import { DefaultPluginPanel } from '../components/plugin/DefaultPluginPanel';
+import { PluginAPI } from './PluginAPI';
 
 // ── 类型定义 ──
-
-/** 已注册的面板实例 */
-export interface RegisteredPanel {
-  pluginId: string;
-  pluginName: string;
-  contribution: PanelContribution;
-  /** 面板组件（由宿主应用注册） */
-  component?: React.ComponentType<{ pluginId: string }>;
-}
-
-/** 已注册的命令实例 */
-export interface RegisteredCommand {
-  pluginId: string;
-  pluginName: string;
-  contribution: CommandContribution;
-  handler?: (...args: unknown[]) => void;
-}
-
-/** 已注册的事件钩子实例 */
-export interface RegisteredHook {
-  pluginId: string;
-  pluginName: string;
-  contribution: HookContribution;
-  handler?: (...args: unknown[]) => void;
-}
 
 /** 插件加载状态 */
 export interface PluginLoadState {
@@ -41,240 +20,170 @@ export interface PluginLoadState {
   error?: string;
 }
 
+/** 插件运行时实例 */
+interface PluginRuntime {
+  api: PluginAPI;
+  module: { onLoad?: (api: PluginAPI) => void | Promise<void>; onUnload?: () => void | Promise<void> } | null;
+}
+
 // ── 注册表 ──
 
-type Listener = () => void;
-
 class PluginRegistry {
-  private panels: Map<string, RegisteredPanel> = new Map();
-  private commands: Map<string, RegisteredCommand> = new Map();
-  private hooks: Map<string, RegisteredHook[]> = new Map();
+  /** 面板组件映射 key: pluginPath:panelId */
+  private panelComponents: Map<string, React.ComponentType<{ pluginId: string }>> = new Map();
+  /** 加载状态 key: pluginPath */
   private loadStates: Map<string, PluginLoadState> = new Map();
-  private listeners: Set<Listener> = new Set();
+  /** 运行时实例 key: pluginPath */
+  private runtimes: Map<string, PluginRuntime> = new Map();
 
-  // ── 订阅 ──
+  // ── 面板组件管理 ──
 
-  subscribe(listener: Listener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private notify() {
-    this.listeners.forEach((fn) => fn());
-  }
-
-  // ── 面板管理 ──
-
-  /** 注册插件面板 */
-  registerPanel(plugin: PluginInstance, contribution: PanelContribution): void {
-    const key = `${plugin.manifest.id}:${contribution.id}`;
-    this.panels.set(key, {
-      pluginId: plugin.manifest.id,
-      pluginName: plugin.manifest.name,
-      contribution,
-    });
-    this.notify();
-  }
-
-  /** 注销插件面板 */
-  unregisterPanel(pluginId: string, panelId: string): void {
-    const key = `${pluginId}:${panelId}`;
-    this.panels.delete(key);
-    this.notify();
-  }
-
-  /** 注销插件所有面板 */
-  unregisterPluginPanels(pluginId: string): void {
-    for (const [key, panel] of this.panels) {
-      if (panel.pluginId === pluginId) {
-        this.panels.delete(key);
-      }
-    }
-    this.notify();
-  }
-
-  /** 获取所有已注册面板 */
-  getPanels(): RegisteredPanel[] {
-    return Array.from(this.panels.values());
-  }
-
-  /** 获取指定插件的面板 */
-  getPluginPanels(pluginId: string): RegisteredPanel[] {
-    return this.getPanels().filter((p) => p.pluginId === pluginId);
-  }
-
-  /** 设置面板组件 */
   setPanelComponent(
-    pluginId: string,
+    pluginPath: string,
     panelId: string,
     component: React.ComponentType<{ pluginId: string }>,
   ): void {
-    const key = `${pluginId}:${panelId}`;
-    const panel = this.panels.get(key);
-    if (panel) {
-      panel.component = component;
-      this.notify();
-    }
+    this.panelComponents.set(pluginPath + ':' + panelId, component);
   }
 
-  // ── 命令管理 ──
-
-  /** 注册插件命令 */
-  registerCommand(plugin: PluginInstance, contribution: CommandContribution): void {
-    const key = `${plugin.manifest.id}:${contribution.id}`;
-    this.commands.set(key, {
-      pluginId: plugin.manifest.id,
-      pluginName: plugin.manifest.name,
-      contribution,
-    });
-    this.notify();
+  getPanelComponent(pluginPath: string, panelId: string): React.ComponentType<{ pluginId: string }> | undefined {
+    return this.panelComponents.get(pluginPath + ':' + panelId);
   }
 
-  /** 注销插件命令 */
-  unregisterCommand(pluginId: string, commandId: string): void {
-    const key = `${pluginId}:${commandId}`;
-    this.commands.delete(key);
-    this.notify();
+  unsetPanelComponent(pluginPath: string, panelId: string): void {
+    this.panelComponents.delete(pluginPath + ':' + panelId);
   }
 
-  /** 注销插件所有命令 */
-  unregisterPluginCommands(pluginId: string): void {
-    for (const [key, cmd] of this.commands) {
-      if (cmd.pluginId === pluginId) {
-        this.commands.delete(key);
-      }
-    }
-    this.notify();
-  }
-
-  /** 获取所有已注册命令 */
-  getCommands(): RegisteredCommand[] {
-    return Array.from(this.commands.values());
-  }
-
-  /** 执行命令 */
-  executeCommand(pluginId: string, commandId: string, ...args: unknown[]): void {
-    const key = `${pluginId}:${commandId}`;
-    const cmd = this.commands.get(key);
-    if (cmd?.handler) {
-      cmd.handler(...args);
-    }
-  }
-
-  // ── 事件钩子管理 ──
-
-  /** 注册事件钩子 */
-  registerHook(plugin: PluginInstance, contribution: HookContribution): void {
-    const hooks = this.hooks.get(contribution.event) || [];
-    hooks.push({
-      pluginId: plugin.manifest.id,
-      pluginName: plugin.manifest.name,
-      contribution,
-    });
-    this.hooks.set(contribution.event, hooks);
-    this.notify();
-  }
-
-  /** 注销插件所有钩子 */
-  unregisterPluginHooks(pluginId: string): void {
-    for (const [event, hooks] of this.hooks) {
-      const filtered = hooks.filter((h) => h.pluginId !== pluginId);
-      if (filtered.length === 0) {
-        this.hooks.delete(event);
-      } else {
-        this.hooks.set(event, filtered);
-      }
-    }
-    this.notify();
-  }
-
-  /** 触发事件（调用所有注册的钩子） */
-  emitEvent(event: string, ...args: unknown[]): void {
-    const hooks = this.hooks.get(event) || [];
-    for (const hook of hooks) {
-      try {
-        hook.handler?.(...args);
-      } catch (err) {
-        console.warn(`[PluginRegistry] Hook error (${hook.pluginId}/${hook.contribution.handler}):`, err);
+  unsetPluginPanelComponents(pluginPath: string): void {
+    for (const key of this.panelComponents.keys()) {
+      if (key.startsWith(pluginPath + ':')) {
+        this.panelComponents.delete(key);
       }
     }
   }
 
-  /** 获取指定事件的所有钩子 */
-  getHooks(event: string): RegisteredHook[] {
-    return this.hooks.get(event) || [];
+  // ── 加载状态管理 ──
+
+  setLoadState(pluginPath: string, state: PluginLoadState): void {
+    this.loadStates.set(pluginPath, state);
+  }
+
+  getPluginLoadState(pluginPath: string): PluginLoadState | undefined {
+    return this.loadStates.get(pluginPath);
+  }
+
+  clearLoadState(pluginPath: string): void {
+    this.loadStates.delete(pluginPath);
+  }
+
+  clearAllLoadStates(): void {
+    this.loadStates.clear();
+  }
+
+  // ── 插件 JS 执行 ──
+
+  /**
+   * 读取并执行插件入口文件
+   * 将 export default { onLoad, onUnload } 转换为可调用的模块
+   */
+  private async executePluginEntry(plugin: PluginInstance): Promise<{ onLoad?: Function; onUnload?: Function } | null> {
+    try {
+      // 1. 读取入口文件内容
+      const source = await invoke<string>('plugin_read_entry', { pluginId: plugin.manifest.id });
+
+      // 2. 将 export default 替换为 return，包装为函数体
+      // 这样整个源码（含函数声明）都能被执行
+      const wrapped = source.replace(/export\s+default\s*/, 'return ');
+      const factory = new Function('React', wrapped);
+
+      // 3. 执行并获取模块对象
+      const module = factory(React);
+      return {
+        onLoad: typeof module.onLoad === 'function' ? module.onLoad : undefined,
+        onUnload: typeof module.onUnload === 'function' ? module.onUnload : undefined,
+      };
+    } catch (err) {
+      console.warn('[PluginRegistry] 执行插件 ' + plugin.manifest.name + ' 入口失败:', err);
+      return null;
+    }
   }
 
   // ── 插件生命周期 ──
 
-  /** 加载插件（注册贡献点） */
-  loadPlugin(plugin: PluginInstance): void {
-    const id = plugin.manifest.id;
-    if (this.loadStates.get(id)?.loaded) {
-      return; // 已加载
+  /** 加载插件 */
+  async loadPlugin(plugin: PluginInstance): Promise<void> {
+    const key = plugin.path;
+    if (this.loadStates.get(key)?.loaded) {
+      return;
     }
 
     try {
-      // 注册面板贡献点
+      // 1. 注册默认面板组件
       if (plugin.manifest.contributes?.panels) {
         for (const panel of plugin.manifest.contributes.panels) {
-          this.registerPanel(plugin, panel);
+          this.setPanelComponent(plugin.path, panel.id, DefaultPluginPanel);
         }
       }
 
-      // 注册命令贡献点
-      if (plugin.manifest.contributes?.commands) {
-        for (const cmd of plugin.manifest.contributes.commands) {
-          this.registerCommand(plugin, cmd);
-        }
+      // 2. 执行插件入口 JS
+      const api = new PluginAPI(plugin.path, plugin.manifest.id, plugin.manifest.name);
+      const module = await this.executePluginEntry(plugin);
+
+      // 3. 调用 onLoad 生命周期
+      if (module?.onLoad) {
+        await module.onLoad(api);
       }
 
-      // 注册事件钩子
-      if (plugin.manifest.contributes?.hooks) {
-        for (const hook of plugin.manifest.contributes.hooks) {
-          this.registerHook(plugin, hook);
-        }
-      }
+      // 4. 保存运行时实例
+      this.runtimes.set(key, { api, module });
 
-      this.loadStates.set(id, { pluginId: id, loaded: true });
-      console.log(`[PluginRegistry] 插件 '${plugin.manifest.name}' 已加载`);
+      this.loadStates.set(key, { pluginId: plugin.manifest.id, loaded: true });
+      console.log('[PluginRegistry] 插件 ' + plugin.manifest.name + ' (' + plugin.path + ') 已加载');
     } catch (err) {
       const msg = String(err);
-      this.loadStates.set(id, { pluginId: id, loaded: false, error: msg });
-      console.warn(`[PluginRegistry] 插件 '${plugin.manifest.name}' 加载失败:`, msg);
+      this.loadStates.set(key, { pluginId: plugin.manifest.id, loaded: false, error: msg });
+      console.warn('[PluginRegistry] 插件 ' + plugin.manifest.name + ' (' + plugin.path + ') 加载失败: ' + msg);
+    }
+  }
+
+  /** 卸载插件 */
+  async unloadPlugin(pluginPath: string): Promise<void> {
+    // 1. 调用 onUnload 生命周期
+    const runtime = this.runtimes.get(pluginPath);
+    if (runtime?.module?.onUnload) {
+      try {
+        await runtime.module.onUnload();
+      } catch (err) {
+        console.warn('[PluginRegistry] 插件卸载 onUnload 失败:', err);
+      }
     }
 
-    this.notify();
+    // 2. 清理 API 资源
+    runtime?.api.dispose();
+
+    // 3. 注销面板组件
+    this.unsetPluginPanelComponents(pluginPath);
+
+    // 4. 清理状态
+    this.runtimes.delete(pluginPath);
+    this.loadStates.delete(pluginPath);
   }
 
-  /** 卸载插件（注销所有贡献点） */
-  unloadPlugin(pluginId: string): void {
-    this.unregisterPluginPanels(pluginId);
-    this.unregisterPluginCommands(pluginId);
-    this.unregisterPluginHooks(pluginId);
-    this.loadStates.delete(pluginId);
-    this.notify();
-  }
-
-  /** 获取插件加载状态 */
-  getPluginLoadState(pluginId: string): PluginLoadState | undefined {
-    return this.loadStates.get(pluginId);
-  }
-
-  /** 批量加载所有已启用的插件 */
-  loadAllPlugins(plugins: PluginInstance[]): void {
+  /** 批量加载所有插件 */
+  async loadAllPlugins(plugins: PluginInstance[]): Promise<void> {
+    this.loadStates.clear();
     for (const plugin of plugins) {
-      if (plugin.enabled && !plugin.has_unauthorized_permissions) {
-        this.loadPlugin(plugin);
+      if (!plugin.has_unauthorized_permissions) {
+        await this.loadPlugin(plugin);
       }
     }
   }
 
   /** 批量卸载所有插件 */
-  unloadAllPlugins(): void {
-    const ids = Array.from(this.loadStates.keys());
-    for (const id of ids) {
-      this.unloadPlugin(id);
+  async unloadAllPlugins(): Promise<void> {
+    const paths = Array.from(this.loadStates.keys());
+    for (const path of paths) {
+      await this.unloadPlugin(path);
     }
   }
 }

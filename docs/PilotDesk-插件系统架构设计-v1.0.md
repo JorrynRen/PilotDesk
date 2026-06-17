@@ -1,7 +1,7 @@
 # PilotDesk 插件系统架构设计 v1.0
 
-> 更新时间：2026-06-16
-> 状态：设计阶段
+> 更新时间：2026-06-17
+> 状态：已实现
 
 ---
 
@@ -19,15 +19,18 @@
 │                    PilotDesk Core                         │
 │                                                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
-│  │  PluginHost   │  │  PluginAPI   │  │  EventBus    │   │
-│  │  (Rust)       │  │  (TypeScript)│  │  (跨层通信)  │   │
+│  │  PluginHost   │  │  PluginAPI   │  │  PluginAPI   │   │
+│  │  (Rust)       │  │  (运行时)    │  │  (事件总线)  │   │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘   │
 │         │                 │                  │           │
 │  ┌──────┴─────────────────┴──────────────────┴───────┐   │
-│  │                 Plugin Registry                    │   │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐           │   │
-│  │  │Plugin A │  │Plugin B │  │Plugin C │  ...      │   │
-│  │  └─────────┘  └─────────┘  └─────────┘           │   │
+│  │              Zustand PluginStore                    │   │
+│  │  plugins[] + registeredPanels/Commands/Hooks       │   │
+│  └──────────────────────┬────────────────────────────┘   │
+│                         │                                │
+│  ┌──────────────────────┴────────────────────────────┐   │
+│  │              PluginRegistry (组件注册表)           │   │
+│  │  面板组件注册 + 加载状态 + JS 执行 + 生命周期     │   │
 │  └───────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -35,32 +38,32 @@
 ## 3. 插件生命周期
 
 ```
-发现 (Discovery) → 加载 (Load) → 初始化 (Init) → 运行 (Run) → 卸载 (Unload)
+发现 (Discovery) → 加载 (Load) → 执行 JS → 运行 (Run) → 卸载 (Unload)
 ```
 
 ### 3.1 发现
 - 扫描 `~/.pilotdesk/plugins/` 目录
 - 每个插件是一个独立目录，包含 `manifest.json` + 代码文件
-- 支持 npm 包安装 (`npm install pilotdesk-plugin-xxx`)
+- 支持通过管理面板的「+ 安装」按钮上传 .zip 压缩包安装
 
 ### 3.2 manifest.json 规范
 
 ```json
 {
-  "id": "plugin-hello-world",
+  "id": "hello-world",
   "name": "Hello World",
   "version": "1.0.0",
   "description": "示例插件",
-  "author": "PilotDesk",
+  "author": "PilotDesk Team",
   "minAppVersion": "0.1.0",
-  "permissions": ["ui:panel", "session:read"],
+  "permissions": ["ui:panel", "ui:toast", "session:read"],
   "entry": {
-    "main": "index.tsx",
+    "main": "index.js",
     "styles": "styles.css"
   },
   "contributes": {
     "panels": [
-      { "id": "hello-panel", "title": "Hello", "icon": "Smile" }
+      { "id": "hello-panel", "title": "Hello World", "icon": "https://example.com/icon.png" }
     ],
     "commands": [
       { "id": "hello.say", "title": "Say Hello" }
@@ -72,26 +75,33 @@
 }
 ```
 
+### 3.3 icon 字段说明
+
+`contributes.panels[].icon` 字段支持三种格式：
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| 网络图片 | `"https://example.com/icon.png"` | 直接渲染为 `<img>` 标签 |
+| 插件本地路径 | `"image/favicon.png"` | 相对于插件目录，通过 Tauri `convertFileSrc()` 转换 |
+| 空/未定义 | 省略或 `""` | 显示默认图标 `📦` |
+
+**注意**：图标以 14px 尺寸渲染，加载失败时自动回退到默认图标。
+
 ## 4. Plugin API
 
 ### 4.1 前端 API (TypeScript)
 
 ```typescript
-// 插件可用的核心 API
 interface PluginAPI {
   // UI 能力
   ui: {
-    addPanel(config: PanelConfig): void;
+    addPanel(config: PanelContribution & { component: React.ComponentType }): void;
     removePanel(id: string): void;
     showToast(message: string, type: 'info' | 'success' | 'error'): void;
-    openModal(content: React.ReactNode): void;
   };
 
   // 数据访问
   data: {
-    getSessions(): Promise<Session[]>;
-    getMessages(sessionId: string): Promise<Message[]>;
-    getInspirations(): Promise<Inspiration[]>;
     invoke<T>(cmd: string, params?: Record<string, unknown>): Promise<T>;
   };
 
@@ -110,21 +120,27 @@ interface PluginAPI {
 }
 ```
 
-### 4.2 插件入口
+### 4.2 插件入口（纯 JS 格式）
 
-```typescript
-// index.tsx — 插件入口文件
+插件入口文件使用纯 JavaScript 编写，通过 `React.createElement` 构建 UI，无需 JSX 转译。
+
+```javascript
+// index.js — 插件入口文件（纯 JS 格式）
+function MyPanel() {
+  return React.createElement('div', null,
+    React.createElement('h3', null, 'Hello from Plugin!')
+  );
+}
+
 export default {
-  onLoad(api: PluginAPI) {
-    // 初始化逻辑
+  onLoad: function(api) {
     api.ui.addPanel({
       id: 'my-panel',
       title: 'My Plugin',
-      component: MyPanelComponent,
+      component: MyPanel,
     });
   },
-
-  onUnload() {
+  onUnload: function() {
     // 清理逻辑
   },
 };
@@ -132,21 +148,77 @@ export default {
 
 ## 5. 安全模型
 
-| 权限 | 说明 | 默认 |
-|------|------|------|
-| `ui:panel` | 添加/移除面板 | 需声明 |
-| `ui:toast` | 显示通知 | 默认 |
-| `session:read` | 读取会话 | 需声明 |
-| `session:write` | 修改会话 | 需声明 |
-| `data:invoke` | 调用 Tauri 命令 | 需声明 |
-| `storage:*` | 插件独立存储 | 默认 |
+| 权限 | 说明 | 风险等级 | 默认 |
+|------|------|---------|------|
+| `ui:panel` | 添加/移除面板 | 低 | 需声明 |
+| `ui:toast` | 显示通知 | 低 | 默认授权 |
+| `ui:modal` | 打开模态框 | 低 | 需声明 |
+| `session:read` | 读取会话和消息 | 中 | 需声明 |
+| `session:write` | 创建/修改/删除会话 | 中 | 需声明 |
+| `data:invoke` | 调用 Tauri 命令 | **高** | 需声明 |
+| `storage:*` | 插件独立存储 | 低 | 默认授权 |
+| `fs:read` | 读取文件系统 | **高** | 需声明 |
+| `fs:write` | 写入文件系统 | **高** | 需声明 |
 
-## 6. 实现计划
+### 沙箱规则
 
-| Phase | 内容 | 预估工时 |
-|-------|------|---------|
-| P1 | PluginHost Rust 端（扫描 manifest、加载、生命周期管理） | 8h |
-| P2 | PluginAPI TypeScript 端（UI API、数据 API、事件 API） | 6h |
-| P3 | Plugin Registry UI（管理面板、启用/禁用） | 4h |
-| P4 | 示例插件 + 文档 | 3h |
-| P5 | 安全沙箱 + 权限校验 | 4h |
+1. **清单验证**：manifest.json 大小限制 64KB，字段格式严格校验
+2. **路径保护**：所有文件路径禁止包含 `..`，防止目录遍历攻击
+3. **权限白名单**：未知权限自动拒绝，高风险权限标记警告
+4. **入口验证**：入口文件必须存在，路径必须在插件目录内
+5. **沙箱禁用时**：所有权限检查跳过，插件可正常加载
+
+## 6. 数据流
+
+### 6.1 面板注册数据流
+
+```
+manifest.json (contributes.panels 静态声明)
+  → Rust PluginHost 解析
+  → Zustand PluginStore.refreshRegistrations()
+    → registeredPanels Map → RightPanel 下拉菜单
+    → registeredCommands Map → (预留)
+    → registeredHooks Map → (预留)
+
+index.js (运行时注册)
+  → PluginRegistry.loadPlugin()
+    → Rust: plugin_read_entry 读取文件
+    → new Function('React', source) 执行
+    → 调用 onLoad(api)
+      → api.ui.addPanel() 注册真实 React 组件
+      → api.ui.showToast() 显示通知
+      → api.events.on() 监听事件
+      → api.storage.set/get() 存储数据
+```
+
+### 6.2 图标渲染数据流
+
+```
+manifest.json contributes.panels[].icon
+  → pluginStore.buildRegistrations()
+    → registeredPanels Map (contribution 原样保留)
+  → PluginPanelRenderer / RightPanel
+    → PluginIcon 组件
+      → parsePluginIcon(icon, pluginPath)
+        → 网络地址: 直接返回 URL
+        → 本地路径: 拼接插件目录 + convertFileSrc()
+      → 渲染 <img> 标签 (14px)
+      → 加载失败 → 回退默认图标 📦
+```
+
+## 7. 文件清单
+
+| 文件 | 说明 |
+|------|------|
+| `src-tauri/src/plugin/mod.rs` | Rust PluginHost（扫描、验证、沙箱、Tauri 命令） |
+| `src/plugin/PluginAPI.ts` | 插件运行时 API 实现 |
+| `src/plugin/PluginRegistry.ts` | 面板组件注册表 + JS 执行 + 生命周期 |
+| `src/stores/pluginStore.ts` | Zustand store（插件列表 + 注册数据） |
+| `src/components/plugin/PluginManager.tsx` | 插件管理 UI |
+| `src/components/plugin/PluginPanelRenderer.tsx` | 插件面板渲染器 |
+| `src/components/plugin/PluginIcon.tsx` | 插件图标渲染组件 |
+| `src/components/plugin/DefaultPluginPanel.tsx` | 默认面板组件 |
+| `src/utils/pluginIcon.ts` | 插件图标解析工具 |
+| `src/types/plugin.ts` | 类型定义 |
+| `examples/plugins/hello-world/` | 示例插件 |
+| `examples/plugins/malicious-sample/` | 恶意插件示例（沙箱测试） |

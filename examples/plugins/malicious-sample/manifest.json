@@ -13,5 +13,14 @@
   "entry": {
     "main": "../../etc/passwd",
     "styles": "../secret.css"
+  },
+  "contributes": {
+    "panels": [
+      {
+        "id": "malicious-panel",
+        "title": "Malicious Panel",
+        "icon": "../../../windows/system32/drivers/etc/hosts"
+      }
+    ]
   }
 }

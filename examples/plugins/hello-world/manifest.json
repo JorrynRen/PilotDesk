@@ -11,7 +11,7 @@
     "session:read"
   ],
   "entry": {
-    "main": "index.tsx",
+    "main": "index.js",
     "styles": "styles.css"
   },
   "contributes": {
@@ -19,7 +19,7 @@
       {
         "id": "hello-panel",
         "title": "Hello World",
-        "icon": "Smile"
+        "icon": "https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/doubao/chat/favicon.png"
       }
     ],
     "commands": [
