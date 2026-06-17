@@ -4,9 +4,9 @@ mod db;
 mod plugin;
 mod utils;
 
-use tauri::Manager;
 use db::init::{init_db, DbPool};
 use std::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 use agent::AgentManager;
 
 pub struct DbState {
@@ -136,7 +136,7 @@ fn set_theme_cmd(state: tauri::State<'_, DbState>, theme: String) -> Result<Stri
 #[tauri::command]
 async fn agent_send_message(
     app: tauri::AppHandle,
-    agent_mgr: tauri::State<'_, Mutex<AgentManager>>,
+    agent_mgr: tauri::State<'_, AsyncMutex<AgentManager>>,
     session_id: String,
     agent_type: String,
     message: String,
@@ -144,38 +144,38 @@ async fn agent_send_message(
     cwd: Option<String>,
     system_prompt: Option<String>,
 ) -> Result<(), String> {
-    let mut mgr = agent_mgr.lock().map_err(|e| format!("Agent 管理器锁定失败: {}", e))?;
+    let mut mgr = agent_mgr.lock().await;
     mgr.send_message(app, session_id, agent_type, message, mode, cwd, system_prompt).await
 }
 
 #[tauri::command]
 async fn agent_stop_generation(
-    agent_mgr: tauri::State<'_, Mutex<AgentManager>>,
+    agent_mgr: tauri::State<'_, AsyncMutex<AgentManager>>,
     session_id: String,
 ) -> Result<(), String> {
-    let mut mgr = agent_mgr.lock().map_err(|e| format!("Agent 管理器锁定失败: {}", e))?;
+    let mut mgr = agent_mgr.lock().await;
     mgr.stop_generation(&session_id);
     Ok(())
 }
 
 #[tauri::command]
 async fn agent_create_session(
-    agent_mgr: tauri::State<'_, Mutex<AgentManager>>,
+    agent_mgr: tauri::State<'_, AsyncMutex<AgentManager>>,
     session_id: String,
     agent_type: String,
     cwd: Option<String>,
 ) -> Result<(), String> {
-    let mut mgr = agent_mgr.lock().map_err(|e| format!("Agent 管理器锁定失败: {}", e))?;
+    let mut mgr = agent_mgr.lock().await;
     mgr.create_session(&session_id, &agent_type, cwd.as_deref());
     Ok(())
 }
 
 #[tauri::command]
 async fn agent_close_session(
-    agent_mgr: tauri::State<'_, Mutex<AgentManager>>,
+    agent_mgr: tauri::State<'_, AsyncMutex<AgentManager>>,
     session_id: String,
 ) -> Result<(), String> {
-    let mut mgr = agent_mgr.lock().map_err(|e| format!("Agent 管理器锁定失败: {}", e))?;
+    let mut mgr = agent_mgr.lock().await;
     mgr.close_session(&session_id);
     Ok(())
 }
@@ -193,7 +193,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(DbState { pool })
-        .manage(Mutex::new(AgentManager::new()))
+        .manage(AsyncMutex::new(AgentManager::new()))
         .manage(Mutex::new(plugin::PluginHost::new()))
         .invoke_handler(tauri::generate_handler![
             commands::env::detect_env,
@@ -248,6 +248,10 @@ pub fn run() {
             plugin::plugin_get_sandbox_info,
             plugin::plugin_install_zip,
             plugin::plugin_uninstall,
+    plugin::plugin_set_sandbox_enabled,
+    plugin::plugin_get_panel_content,
+    plugin::plugin_read_entry,
+    plugin::plugin_read_icon_file,
         ])
         .setup(|app| {
             log::info!("PilotDesk initialized successfully (AgentManager mode, r2d2 pool).");

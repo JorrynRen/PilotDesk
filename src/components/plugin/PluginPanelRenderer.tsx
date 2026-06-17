@@ -61,7 +61,7 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
                   : 'transparent',
             }}
           >
-            <PluginIcon icon={panel.contribution.icon} pluginPath={panel.pluginPath} size={14} />
+            <PluginIcon icon={panel.contribution.icon} pluginId={panel.pluginId} size={14} />
             {panel.contribution.title}
           </button>
         ))}

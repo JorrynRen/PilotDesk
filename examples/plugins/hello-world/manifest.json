@@ -19,7 +19,7 @@
       {
         "id": "hello-panel",
         "title": "Hello World",
-        "icon": "https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/doubao/chat/favicon.png"
+        "icon": "icon: favicon.png"
       }
     ],
     "commands": [

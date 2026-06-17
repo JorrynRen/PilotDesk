@@ -1,27 +1,26 @@
 /**
  * pluginIcon — 插件图标解析工具
  *
- * 支持三种图标格式：
- * 1. "icon:" 前缀 + 网络地址 → 如 "icon: https://example.com/icon.png"
- * 2. "icon:" 前缀 + 插件本地路径 → 如 "icon: image/favicon.png"
- * 3. 纯网络地址 → 如 "https://example.com/icon.png"
- * 4. 纯本地路径 → 如 "image/favicon.png"
- * 5. 空/未定义 → 返回 text 类型，由调用方显示默认图标
+ * 解析 manifest.json 中 icon 字段的值，返回图标类型和原始值。
+ * 支持格式：
+ * - "icon: https://..." 或 "https://..." → 网络图片
+ * - "icon: image/favicon.png" 或 "image/favicon.png" → 插件本地文件
+ * - 空/未定义 → text 类型，由调用方显示默认图标
  */
 
-import { convertFileSrc } from '@tauri-apps/api/core';
+export type IconType = 'network' | 'local' | 'text';
 
 export interface ParsedIcon {
-  type: 'image' | 'text';
-  src?: string;
+  type: IconType;
+  /** 网络地址的 URL，或本地文件的相对路径 */
+  value?: string;
 }
 
 /**
- * 解析插件图标字段
+ * 解析插件图标字段（同步，不涉及文件读取）
  * @param icon - manifest.json 中的 icon 字段值
- * @param pluginPath - 插件安装目录的绝对路径
  */
-export function parsePluginIcon(icon: string | undefined, pluginPath: string): ParsedIcon {
+export function parsePluginIcon(icon: string | undefined): ParsedIcon {
   if (!icon || icon.trim() === '') {
     return { type: 'text' };
   }
@@ -38,16 +37,11 @@ export function parsePluginIcon(icon: string | undefined, pluginPath: string): P
     return { type: 'text' };
   }
 
-  // 网络地址：直接使用
+  // 网络地址
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    return { type: 'image', src: trimmed };
+    return { type: 'network', value: trimmed };
   }
 
-  // 插件本地路径：拼接后通过 Tauri asset protocol 转换
-  const normalizedPath = trimmed.replace(/\//g, '\\');
-  const fullPath = pluginPath.endsWith('\\')
-    ? pluginPath + normalizedPath
-    : pluginPath + '\\' + normalizedPath;
-
-  return { type: 'image', src: convertFileSrc(fullPath) };
+  // 插件本地路径
+  return { type: 'local', value: trimmed };
 }

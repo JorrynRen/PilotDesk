@@ -1,5 +1,6 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -318,8 +319,8 @@ impl PluginHost {
 
                 match self.load_and_validate_plugin(&path, &manifest_path) {
                     Ok(instance) => {
-                        let id = instance.manifest.id.clone();
-                        self.plugins.insert(id.clone(), instance.clone());
+                        let key = instance.path.clone();
+                        self.plugins.insert(key, instance.clone());
                         instances.push(instance);
                     }
                     Err(e) => {
@@ -374,8 +375,17 @@ impl PluginHost {
             }
         }
 
-        // 6. 权限检查
-        let permission_checks = Self::check_permissions(&manifest.permissions);
+        // 6. 权限检查（沙箱禁用时放行所有权限）
+        let permission_checks = if self.sandbox_enabled {
+            Self::check_permissions(&manifest.permissions)
+        } else {
+            // 沙箱禁用时，所有权限标记为允许
+            manifest.permissions.iter().map(|perm| PermissionCheck {
+                permission: perm.clone(),
+                allowed: true,
+                reason: Some("沙箱已禁用，权限检查已跳过".to_string()),
+            }).collect::<Vec<_>>()
+        };
         let has_unauthorized = permission_checks.iter().any(|c| !c.allowed);
 
         // 7. 构建实例
@@ -403,6 +413,12 @@ impl PluginHost {
         self.plugins.values().cloned().collect()
     }
 
+    /// 设置沙箱启用/禁用状态
+    pub fn set_sandbox_enabled(&mut self, enabled: bool) {
+        self.sandbox_enabled = enabled;
+        log::info!("[PluginSandbox] 沙箱状态已切换: {}", if enabled { "启用" } else { "禁用" });
+    }
+
     /// 获取沙箱信息
     pub fn get_sandbox_info(&self) -> SandboxInfo {
         SandboxInfo {
@@ -416,35 +432,42 @@ impl PluginHost {
 
     // ── 启用/禁用 ──
 
-    /// 启用插件（含权限校验）
-    pub fn enable_plugin(&mut self, id: &str) -> Result<(), String> {
-        if let Some(plugin) = self.plugins.get_mut(id) {
-            if plugin.has_unauthorized_permissions {
-                return Err(format!(
-                    "插件 '{}' 包含未授权的权限，无法启用。请检查 manifest.json 中的 permissions 字段。",
-                    plugin.manifest.name
-                ));
-            }
-            plugin.enabled = true;
-            Ok(())
-        } else {
-            Err(format!("插件 '{}' 未找到", id))
+    /// 通过路径或ID查找插件
+    fn find_plugin_key(&self, path_or_id: &str) -> Option<String> {
+        if self.plugins.contains_key(path_or_id) {
+            return Some(path_or_id.to_string());
         }
+        self.plugins.iter()
+            .find(|(_, p)| p.manifest.id == path_or_id)
+            .map(|(k, _)| k.clone())
+    }
+
+    /// 启用插件（含权限校验）
+    pub fn enable_plugin(&mut self, path_or_id: &str) -> Result<(), String> {
+        let key = self.find_plugin_key(path_or_id).ok_or_else(|| format!("插件 '{}' 未找到", path_or_id))?;
+        let plugin = self.plugins.get_mut(&key).ok_or_else(|| format!("插件 '{}' 未找到", path_or_id))?;
+        if plugin.has_unauthorized_permissions {
+            return Err(format!(
+                "插件 '{}' 包含未授权的权限，无法启用。请检查 manifest.json 中的 permissions 字段。",
+                plugin.manifest.name
+            ));
+        }
+        plugin.enabled = true;
+        Ok(())
     }
 
     /// 禁用插件
-    pub fn disable_plugin(&mut self, id: &str) -> Result<(), String> {
-        if let Some(plugin) = self.plugins.get_mut(id) {
-            plugin.enabled = false;
-            Ok(())
-        } else {
-            Err(format!("插件 '{}' 未找到", id))
-        }
+    pub fn disable_plugin(&mut self, path_or_id: &str) -> Result<(), String> {
+        let key = self.find_plugin_key(path_or_id).ok_or_else(|| format!("插件 '{}' 未找到", path_or_id))?;
+        let plugin = self.plugins.get_mut(&key).ok_or_else(|| format!("插件 '{}' 未找到", path_or_id))?;
+        plugin.enabled = false;
+        Ok(())
     }
 
     /// 获取单个插件详情
-    pub fn get_plugin(&self, id: &str) -> Option<&PluginInstance> {
-        self.plugins.get(id)
+    pub fn get_plugin(&self, path_or_id: &str) -> Option<&PluginInstance> {
+        let key = self.find_plugin_key(path_or_id)?;
+        self.plugins.get(&key)
     }
 
     // ── 安装与卸载 ──
@@ -453,7 +476,7 @@ impl PluginHost {
     pub fn install_from_zip(&mut self, zip_path: &str) -> Result<PluginInstance, String> {
         let zip_path = PathBuf::from(zip_path);
         if !zip_path.exists() {
-            return Err(format!("文件不存在: {}", zip_path));
+            return Err(format!("文件不存在: {}", zip_path.display()));
         }
 
         // 确保插件目录存在
@@ -504,9 +527,10 @@ impl PluginHost {
             return Err("插件 ID 包含非法字符".to_string());
         }
 
-        // 检查是否已存在
-        if self.plugins.contains_key(&manifest.id) {
-            return Err(format!("插件 '{}' 已安装", manifest.id));
+        // 检查是否已存在（按路径而非ID）
+        let target_dir = self.plugins_dir.join(&manifest.id);
+        if target_dir.exists() {
+            return Err(format!("插件目录 '{}' 已存在", target_dir.display()));
         }
 
         // 目标目录: plugins/<plugin-id>/
@@ -582,14 +606,15 @@ impl PluginHost {
     }
 
     /// 卸载插件
-    pub fn uninstall_plugin(&mut self, id: &str) -> Result<(), String> {
-        let plugin = self.plugins.get(id)
-            .ok_or_else(|| format!("插件 '{}' 未找到", id))?;
+    pub fn uninstall_plugin(&mut self, path_or_id: &str) -> Result<(), String> {
+        let key = self.find_plugin_key(path_or_id).ok_or_else(|| format!("插件 '{}' 未找到", path_or_id))?;
+        let plugin = self.plugins.get(&key)
+            .ok_or_else(|| format!("插件 '{}' 未找到", path_or_id))?;
 
         let plugin_path = PathBuf::from(&plugin.path);
 
         // 从 HashMap 移除
-        self.plugins.remove(id);
+        self.plugins.remove(&key);
 
         // 删除目录
         if plugin_path.exists() {
@@ -597,7 +622,7 @@ impl PluginHost {
                 .map_err(|e| format!("删除插件目录失败: {}", e))?;
         }
 
-        log::info!("[PluginUninstall] 插件 '{}' 已卸载", id);
+        log::info!("[PluginUninstall] 插件 '{}' 已卸载", path_or_id);
         Ok(())
     }
 }
@@ -634,6 +659,13 @@ pub fn plugin_get_sandbox_info(host: tauri::State<'_, std::sync::Mutex<PluginHos
     Ok(host.get_sandbox_info())
 }
 
+#[tauri::command]
+pub fn plugin_set_sandbox_enabled(host: tauri::State<'_, std::sync::Mutex<PluginHost>>, enabled: bool) -> Result<(), String> {
+    let mut host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+    host.set_sandbox_enabled(enabled);
+    Ok(())
+}
+
 /// 从 zip 文件安装插件
 #[tauri::command]
 pub fn plugin_install_zip(
@@ -652,4 +684,96 @@ pub fn plugin_uninstall(
 ) -> Result<(), String> {
     let mut host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
     host.uninstall_plugin(&id)
+}
+
+/// 读取插件入口文件内容
+#[tauri::command]
+pub fn plugin_read_entry(host: tauri::State<'_, std::sync::Mutex<PluginHost>>, plugin_id: String) -> Result<String, String> {
+    let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+    let plugins = host.list_plugins();
+    let plugin = plugins.iter().find(|p| p.manifest.id == plugin_id)
+        .ok_or_else(|| format!("插件 '{}' 未找到", plugin_id))?;
+
+    let entry_path = std::path::Path::new(&plugin.path).join(&plugin.manifest.entry.main);
+    let content = std::fs::read_to_string(&entry_path)
+        .map_err(|e| format!("读取入口文件失败: {}", e))?;
+
+    Ok(content)
+}
+
+/// 读取插件图标文件，返回 base64 data URL
+/// 支持图片格式：png, jpg, jpeg, gif, svg, webp, ico
+#[tauri::command]
+pub fn plugin_read_icon_file(
+    host: tauri::State<'_, std::sync::Mutex<PluginHost>>,
+    plugin_id: String,
+    icon_path: String,
+) -> Result<String, String> {
+    use std::io::Read;
+
+    let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+    let plugins = host.list_plugins();
+    let plugin = plugins.iter().find(|p| p.manifest.id == plugin_id)
+        .ok_or_else(|| format!("插件 '{}' 未找到", plugin_id))?;
+
+    // 路径遍历检查
+    if icon_path.contains("..") {
+        return Err("图标路径不能包含 '..'".to_string());
+    }
+
+    let full_path = std::path::Path::new(&plugin.path).join(&icon_path);
+    if !full_path.exists() {
+        return Err(format!("图标文件不存在: {}", icon_path));
+    }
+
+    // 读取文件
+    let mut file = std::fs::File::open(&full_path)
+        .map_err(|e| format!("读取图标文件失败: {}", e))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .map_err(|e| format!("读取图标文件失败: {}", e))?;
+
+    // 根据扩展名推断 MIME 类型
+    let ext = full_path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    };
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&buf);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+/// 获取插件面板内容
+#[tauri::command]
+pub fn plugin_get_panel_content(
+    host: tauri::State<'_, std::sync::Mutex<PluginHost>>,
+    plugin_id: String,
+    panel_id: String,
+) -> Result<String, String> {
+    let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+    let plugins = host.list_plugins();
+    let plugin = plugins.iter().find(|p| p.manifest.id == plugin_id)
+        .ok_or_else(|| format!("插件 '{}' 未找到", plugin_id))?;
+
+    // 构建面板内容：显示插件基本信息
+    let mut content = String::new();
+    content.push_str(&format!("插件: {}\n", plugin.manifest.name));
+    content.push_str(&format!("版本: {}\n", plugin.manifest.version));
+    content.push_str(&format!("作者: {}\n", plugin.manifest.author));
+    content.push_str(&format!("描述: {}\n", plugin.manifest.description));
+    content.push_str(&format!("路径: {}\n", plugin.path));
+    content.push_str(&format!("沙箱: {}\n", if host.get_sandbox_info().sandbox_enabled { "已启用" } else { "已禁用" }));
+    content.push_str(&format!("面板ID: {}\n", panel_id));
+
+    Ok(content)
 }

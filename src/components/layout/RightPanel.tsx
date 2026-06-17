@@ -149,7 +149,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
                 backgroundColor: isPluginPanelActive ? 'var(--accent-light)' : 'transparent',
               }}
             >
-              <PluginIcon icon={activePluginPanel ? activePluginPanel.icon : undefined} pluginPath={activePluginPanel ? activePluginPanel.pluginPath : ""} size={12} />
+              <PluginIcon icon={activePluginPanel ? activePluginPanel.icon : undefined} pluginId={activePluginPanel ? activePluginPanel.pluginId : ""} size={12} />
               <span title={activePluginPanel ? activePluginPanel.title : '面板'} className="truncate" style={{ maxWidth: '5ch', display: 'inline-block', verticalAlign: 'middle' }}>
                 {activePluginPanel ? activePluginPanel.title : '面板'}
               </span>
@@ -176,7 +176,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
                       backgroundColor: activeTab === 'plugin:' + panel.uniqueKey ? 'var(--accent-light)' : 'transparent',
                     }}
                   >
-                    <PluginIcon icon={panel.icon} pluginPath={panel.pluginPath} size={12} />
+                    <PluginIcon icon={panel.icon} pluginId={panel.pluginId} size={12} />
                     <span className="truncate">{panel.title}</span>
                     <span className="text-[9px] ml-auto shrink-0" style={{ color: 'var(--text-tertiary)' }}>
                       · {panel.pluginId}
