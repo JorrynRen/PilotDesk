@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { MessageSquare, Archive, Trash2, Pencil, Check, X } from 'lucide-react';
 import { AGENT_THEMES } from '../../types';
 import { AgentBadge } from '../common/AgentBadge';
@@ -33,7 +33,7 @@ function formatTime(timestamp: number): string {
   return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
 }
 
-export function SessionListItem({
+export const SessionListItem = memo(function SessionListItem({
   session,
   isActive,
   onSelect,
@@ -45,7 +45,7 @@ export function SessionListItem({
   onToggleSelect,
 }: SessionListItemProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const isGenerating = useGeneratingStore((s) => s.generatingSessionIds.has(session.id));
+  const isGenerating = useGeneratingStore((s) => !!s.generatingMap[session.id]);
   const [editTitle, setEditTitle] = useState(session.title);
 
   const handleStartEdit = (e: React.MouseEvent) => {
@@ -210,4 +210,4 @@ export function SessionListItem({
       </div>
     </div>
   );
-}
+});

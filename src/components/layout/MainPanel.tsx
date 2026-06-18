@@ -247,15 +247,11 @@ export function MainPanel() {
 
   // ── Side effect: sync generating state to shared store for SessionList indicator ──
   useEffect(() => {
-    const setGen = useGeneratingStore.getState().setGenerating;
-    // 清除所有旧状态，同步当前正在生成的会话
     const currentGenerating = new Set(Object.keys(state.generatingSessions));
-    // 使用 setTimeout 避免在渲染循环中同步
-    const timer = setTimeout(() => {
-      setGen(currentGenerating);
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [state.generatingSessions]);
+    useGeneratingStore.getState().syncGeneratingSessions(currentGenerating);
+    // 仅在 generatingSessions 的 key 集合变化时同步（忽略 streaming content 变化）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Object.keys(state.generatingSessions).join(',')]);
 
   // ── Side effect: consume pending input from shared store ──
 
