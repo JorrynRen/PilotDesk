@@ -104,10 +104,10 @@ export const SessionListItem = memo(function SessionListItem({
         <div className="relative shrink-0">
           <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} />
           {isGenerating && (
-            <div className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 flex items-center gap-[2px]">
-              <span className="w-1 h-1 rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '0ms' }} />
-              <span className="w-1 h-1 rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '150ms' }} />
-              <span className="w-1 h-1 rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '300ms' }} />
+            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-[3px]">
+              <span className="w-[3px] h-[3px] rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '0ms' }} />
+              <span className="w-[3px] h-[3px] rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '150ms' }} />
+              <span className="w-[3px] h-[3px] rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '300ms' }} />
             </div>
           )}
         </div>

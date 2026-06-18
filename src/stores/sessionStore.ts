@@ -42,8 +42,8 @@ async function persistMessage(msg: Message): Promise<void> {
       toolCallId: msg.toolCallId ?? null,
       toolName: msg.toolName ?? null,
     });
-    // 更新会话预览
-    useSessionStore.getState().fetchSessions();
+    // 不再调用 fetchSessions()，避免每次消息持久化时刷新整个会话列表
+    // 会话预览通过其他机制更新（如 selectSession 时加载最新数据）
   } catch (err) {
     console.error('Failed to persist message:', err);
   }
