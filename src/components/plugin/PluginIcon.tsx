@@ -87,6 +87,11 @@ export function PluginIcon({ icon, pluginId, size = 14 }: PluginIconProps) {
     return <span style={{ fontSize: size, opacity: 0.4 }}>📦</span>;
   }
 
+  // 文本图标（emoji、文字符号等）
+  if (parsed.type === 'text' && parsed.value) {
+    return <span style={{ fontSize: size, lineHeight: 1 }}>{parsed.value}</span>;
+  }
+
   // 文本模式或图片加载失败：显示默认图标
   return <span style={{ fontSize: size }}>📦</span>;
 }

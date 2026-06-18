@@ -42,6 +42,15 @@ export function parsePluginIcon(icon: string | undefined): ParsedIcon {
     return { type: 'network', value: trimmed };
   }
 
-  // 插件本地路径
-  return { type: 'local', value: trimmed };
+  // 判断是否为文件路径（包含扩展名或路径分隔符）
+  const hasExtension = /\.[a-zA-Z0-9]{2,4}$/.test(trimmed);
+  const hasPathSeparator = trimmed.includes('/') || trimmed.includes('\\');
+
+  if (hasExtension || hasPathSeparator) {
+    // 插件本地文件路径
+    return { type: 'local', value: trimmed };
+  }
+
+  // 纯文本图标（emoji、文字符号等）
+  return { type: 'text', value: trimmed };
 }
