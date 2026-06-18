@@ -207,13 +207,23 @@ export function MainPanel() {
     dispatch({ type: 'GENERATION_ERROR', sessionId, error });
   }, [currentSessionId, addMessage, clearSessionTimeout]);
 
+  // ── Agent session ID handler: save agent-side session ID to database ──
+  const onSession = useCallback((sessionId: string, agentSessionId: string) => {
+    // Persist agent_session_id to database
+    invoke('update_session_agent_id', { sessionId, agentSessionId }).catch((err) => {
+      console.error('[Session] Failed to save agent session ID:', err);
+    });
+    // Also update local state
+    useSessionStore.getState().fetchSessions();
+  }, []);
+
   const {
     sendChat,
     sendApiChat,
     stopGeneration,
     stopApiChat,
     createAgentSession,
-  } = useAgentEvent({ onChunk, onDone, onError });
+  } = useAgentEvent({ onChunk, onDone, onError, onSession });
 
   // ── Side effect: persist completed streaming content as a message ──
 
@@ -327,7 +337,9 @@ export function MainPanel() {
       } else {
         // Agent via Tauri Event
         const systemPrompt = await getModePrompt(mode);
-        sendChat(sid, message, mode, currentSession.agentType, undefined, systemPrompt);
+        // Pass agent_session_id for session continuity (Claude Code --resume)
+        const agentSessionId = currentSession.agentSessionId || undefined;
+        sendChat(sid, message, mode, currentSession.agentType, undefined, systemPrompt, agentSessionId);
       }
     },
     [currentSession, sendChat, sendApiChat, addMessage, clearSessionTimeout, stopApiChat, stopGeneration, messages],

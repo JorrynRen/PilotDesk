@@ -166,13 +166,43 @@ export const useSessionStore = create<SessionState>((set) => ({
     const state = useSessionStore.getState();
     if (state.messageIds.has(msg.id)) return;
 
+    // 计算预览文本（取前 100 个字符）
+    const preview = msg.content.length > 100
+      ? msg.content.slice(0, 100) + '...'
+      : msg.content;
+
+    // 首条用户消息时，自动更新会话标题为消息摘要
+    const session = state.sessions.find(s => s.id === msg.sessionId);
+    const isFirstUserMessage = msg.role === 'user' && session && session.messageCount === 0 && !session.title;
+
     // 仅当消息属于当前会话时才更新 UI 消息列表
     // 后台会话的消息仅持久化，不污染当前显示
     if (msg.sessionId === state.currentSessionId) {
-      set((state) => ({
-        messages: [...state.messages, msg],
-        messageIds: new Set(state.messageIds).add(msg.id),
-      }));
+      set((state) => {
+        // 更新标题（首条用户消息）
+        let updatedSessions = state.sessions.map((s) =>
+          s.id === msg.sessionId
+            ? { ...s, lastMessagePreview: preview, messageCount: s.messageCount + 1 }
+            : s
+        );
+
+        if (isFirstUserMessage) {
+          const titlePreview = msg.content.length > 30
+            ? msg.content.slice(0, 30) + '...'
+            : msg.content;
+          updatedSessions = updatedSessions.map((s) =>
+            s.id === msg.sessionId ? { ...s, title: titlePreview } : s
+          );
+          // 异步持久化标题更新
+          invoke('rename_session', { sessionId: msg.sessionId, newTitle: titlePreview }).catch(console.error);
+        }
+
+        return {
+          messages: [...state.messages, msg],
+          messageIds: new Set(state.messageIds).add(msg.id),
+          sessions: updatedSessions,
+        };
+      });
     } else {
       // 非当前会话：仅记录 ID 防重，不更新 UI
       set((state) => ({

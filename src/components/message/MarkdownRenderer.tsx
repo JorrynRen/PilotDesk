@@ -197,21 +197,21 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           },
           p({ children, ...props }) {
             return (
-              <p style={{ margin: '4px 0', lineHeight: '1.7' }} {...props}>
+              <p style={{ margin: 0, lineHeight: '1.625', fontSize: '13px', whiteSpace: 'pre-wrap' }} {...props}>
                 {children}
               </p>
             );
           },
           ul({ children, ...props }) {
             return (
-              <ul style={{ margin: '4px 0', paddingLeft: '20px', lineHeight: '1.7' }} {...props}>
+              <ul style={{ margin: '4px 0', paddingLeft: '20px', lineHeight: '1.625', fontSize: '13px' }} {...props}>
                 {children}
               </ul>
             );
           },
           ol({ children, ...props }) {
             return (
-              <ol style={{ margin: '4px 0', paddingLeft: '20px', lineHeight: '1.7' }} {...props}>
+              <ol style={{ margin: '4px 0', paddingLeft: '20px', lineHeight: '1.625', fontSize: '13px' }} {...props}>
                 {children}
               </ol>
             );

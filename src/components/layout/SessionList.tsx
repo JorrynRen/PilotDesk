@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
-import { Plus, Search, Archive, Key, ChevronDown, X, Trash2 } from 'lucide-react';
+import { Plus, Search, Archive, Key, ChevronDown, X, Trash2, FolderOpen } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
 import { invoke } from '@tauri-apps/api/core';
@@ -55,9 +55,8 @@ function SessionListFn() {
 
     fetchProviders().catch(() => {});
 
-
     // Detect installed agents for session creation filtering
-    (async () => {
+    ;(async () => {
       try {
         const info = await invoke<any>('detect_env');
         const installed = new Set<string>();
@@ -69,6 +68,19 @@ function SessionListFn() {
       setEnvLoading(false);
     })();
   }, [fetchSessions, fetchProviders]);
+
+  // Load workspace setting from SQLite when dialog opens
+  useEffect(() => {
+    if (showNewDialog) {
+      invoke<string | null>('get_app_setting', { key: 'pilotdesk-workspace' })
+        .then((val) => {
+          if (val && !customCwd) {
+            setCustomCwd(val);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [showNewDialog]);
 
   // Debounced session search
   useEffect(() => {
@@ -183,9 +195,55 @@ function SessionListFn() {
     }
   }, [selectedApiProvider, apiProviders]);
 
+  const validateAndEnsureDir = async (dir: string): Promise<string | null> => {
+    // If empty, use global workspace setting
+    if (!dir.trim()) {
+      try {
+        const globalDir = await invoke<string | null>('get_app_setting', { key: 'pilotdesk-workspace' });
+        if (globalDir) {
+          // Validate and ensure global workspace dir
+          return await invoke<string>('ensure_dir', { path: globalDir });
+        }
+        return null; // No global setting either, use default
+      } catch {
+        return null;
+      }
+    }
+
+    const trimmed = dir.trim();
+
+    // Basic path validation
+    if (/[<>"|?*]/.test(trimmed)) {
+      showToast('路径包含非法字符（< > " | ? *）', 'error');
+      return null;
+    }
+
+    // Windows drive letter check
+    if (/^[a-zA-Z]:$/.test(trimmed)) {
+      showToast('路径不完整，请输入完整目录路径（如 C:\Users\work）', 'error');
+      return null;
+    }
+
+    // Ensure directory exists (create if needed)
+    try {
+      return await invoke<string>('ensure_dir', { path: trimmed });
+    } catch (err) {
+      showToast(`目录校验失败: ${err}`, 'error');
+      return null;
+    }
+  };
+
   const handleCreate = async () => {
     setCreating(true);
     try {
+      // Validate and resolve working directory
+      const resolvedCwd = await validateAndEnsureDir(customCwd);
+      if (resolvedCwd === null && customCwd.trim()) {
+        // User entered a path but validation failed
+        setCreating(false);
+        return;
+      }
+
       if (newSessionType === 'api') {
         // Check if API key is configured
         const apiKey = await getApiKey(selectedApiProvider);
@@ -204,8 +262,8 @@ function SessionListFn() {
         const provider = apiProviders.find((p) => p.id === selectedApiProvider)!;
         const session = await createSession(
           'api' as const,
-          undefined,
-          customTitle.trim() || `API: ${provider.name} - ${model}`,
+          resolvedCwd || undefined,
+          customTitle.trim() || null,
           selectedApiProvider,
           model,
         );
@@ -214,11 +272,11 @@ function SessionListFn() {
       } else {
         const session = await createSession(
           newSessionType,
-          customCwd.trim() || undefined,
-          customTitle.trim() || undefined,
+          resolvedCwd || undefined,
+          customTitle.trim() || null,
         );
         // Notify Sidecar to create the Agent session
-        wsCreateSession(session.id, newSessionType, customCwd.trim() || undefined);
+        wsCreateSession(session.id, newSessionType, resolvedCwd || undefined);
         setShowNewDialog(false);
         selectSession(session.id);
       }
@@ -480,7 +538,7 @@ function SessionListFn() {
                     type="text"
                     value={customTitle}
                     onChange={(e) => setCustomTitle(e.target.value)}
-                    placeholder={newSessionType === 'claude' ? 'Claude Code 新会话' : newSessionType === 'hermes' ? 'Hermes Agent 新会话' : 'codeX 新会话'}
+                    placeholder={newSessionType === 'claude' ? 'Claude Code 新会话' : newSessionType === 'hermes' ? 'Hermes Agent 新会话' : newSessionType === 'codex' ? 'codeX 新会话' : 'API 新会话'}
                     className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                     style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                   />
@@ -489,14 +547,32 @@ function SessionListFn() {
                   <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
                     工作目录（可选）
                   </label>
-                  <input
-                    type="text"
-                    value={customCwd}
-                    onChange={(e) => setCustomCwd(e.target.value)}
-                    placeholder="留空使用默认目录"
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customCwd}
+                      onChange={(e) => setCustomCwd(e.target.value)}
+                      placeholder="留空使用默认目录"
+                      className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                    />
+                    <button
+                      onClick={async () => {
+                        try {
+                          const { open } = await import('@tauri-apps/plugin-dialog');
+                          const selected = await open({ directory: true, multiple: false });
+                          if (selected && typeof selected === 'string') {
+                            setCustomCwd(selected);
+                          }
+                        } catch { /* ignore */ }
+                      }}
+                      className="px-2.5 py-2 rounded-lg shrink-0 transition-colors hover:opacity-80"
+                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                      title="选择目录"
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -605,6 +681,37 @@ function SessionListFn() {
                     className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                     style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                   />
+                </div>
+                <div>
+                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    工作目录（可选）
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customCwd}
+                      onChange={(e) => setCustomCwd(e.target.value)}
+                      placeholder="留空使用默认目录"
+                      className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                    />
+                    <button
+                      onClick={async () => {
+                        try {
+                          const { open } = await import('@tauri-apps/plugin-dialog');
+                          const selected = await open({ directory: true, multiple: false });
+                          if (selected && typeof selected === 'string') {
+                            setCustomCwd(selected);
+                          }
+                        } catch { /* ignore */ }
+                      }}
+                      className="px-2.5 py-2 rounded-lg shrink-0 transition-colors hover:opacity-80"
+                      style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                      title="选择目录"
+                    >
+                      <FolderOpen size={14} />
+                    </button>
+                  </div>
                 </div>
                 <div
                   className="px-3 py-2 rounded-lg text-xs"

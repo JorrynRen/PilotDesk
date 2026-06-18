@@ -1,5 +1,5 @@
 import { useState, memo } from 'react';
-import { MessageSquare, Archive, Trash2, Pencil, Check, X } from 'lucide-react';
+import { Archive, Trash2, Pencil, Check, X } from 'lucide-react';
 import { AGENT_THEMES } from '../../types';
 import { AgentBadge } from '../common/AgentBadge';
 import { useGeneratingStore } from '../../stores/generatingStore';
@@ -48,6 +48,12 @@ export const SessionListItem = memo(function SessionListItem({
   const isGenerating = useGeneratingStore((s) => !!s.generatingMap[session.id]);
   const [editTitle, setEditTitle] = useState(session.title);
 
+  // Fallback display title when title is empty
+  const displayTitle = session.title || (() => {
+    const theme = AGENT_THEMES[session.agentType as keyof typeof AGENT_THEMES] || AGENT_THEMES.claude;
+    return `${theme.label} 新会话`;
+  })();
+
   const handleStartEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
     setEditTitle(session.title);
@@ -84,6 +90,7 @@ export const SessionListItem = memo(function SessionListItem({
       className="group px-3 py-2 cursor-pointer transition-colors"
       style={{
         backgroundColor: selected ? 'var(--accent-light)' : isActive ? 'var(--border)' : 'transparent',
+        borderBottom: '1px solid var(--border)',
       }}
       onClick={isEditing ? undefined : batchMode ? () => onToggleSelect?.(session.id) : onSelect}
     >
@@ -101,12 +108,12 @@ export const SessionListItem = memo(function SessionListItem({
             </div>
           </div>
         )}
-        <div className="relative shrink-0">
-          <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} />
-          {isGenerating && (
-            <div className="flex justify-center mt-1.5">
-              <span className="block w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: 'var(--accent)', boxShadow: '0 0 6px 2px var(--accent)' }} />
-            </div>
+        <div className="shrink-0 flex flex-col items-center gap-1">
+          <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} isGenerating={isGenerating} />
+          {!isEditing && (
+            <span className="text-[9px] leading-none" style={{ color: 'var(--text-tertiary)' }}>
+              {session.messageCount}
+            </span>
           )}
         </div>
         <div className="flex-1 min-w-0">
@@ -148,7 +155,7 @@ export const SessionListItem = memo(function SessionListItem({
               </div>
             ) : (
               <>
-                <span className="text-xs  truncate">{session.title}</span>
+                <span className="text-xs  truncate">{displayTitle}</span>
                 <span className="text-[10px] shrink-0 ml-1" style={{ color: 'var(--text-secondary)' }}>
                   {formatTime(session.updatedAt)}
                 </span>
@@ -162,12 +169,7 @@ export const SessionListItem = memo(function SessionListItem({
                   {session.lastMessagePreview}
                 </p>
               )}
-              <div className="flex items-center gap-2 mt-0.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                <span className="flex items-center gap-0.5">
-                  <MessageSquare size={9} />
-                  {session.messageCount}
-                </span>
-              </div>
+
             </>
           )}
         </div>

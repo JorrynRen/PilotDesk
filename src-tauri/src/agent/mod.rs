@@ -46,18 +46,48 @@ impl AgentType {
         }
     }
 
-    pub fn build_args(&self, message: &str, _mode: &str, _system_prompt: Option<&str>) -> Vec<String> {
+    pub fn build_args(&self, message: &str, _mode: &str, _system_prompt: Option<&str>, agent_session_id: Option<&str>) -> Vec<String> {
         match self {
-            Self::Claude => vec![
-                "-p".into(),
-                "--verbose".into(),
-                "--output-format".into(),
-                "stream-json".into(),
-                "--dangerously-skip-permissions".into(),
-                message.into(),
-            ],
-            Self::Hermes => vec!["chat".into(), "-q".into(), message.into(), "-Q".into()],
-            Self::Codex => vec!["exec".into(), message.into()],
+            Self::Claude => {
+                let mut args = vec![
+                    "-p".into(),
+                    "--output-format".into(),
+                    "stream-json".into(),
+                    "--verbose".into(),
+                    "--dangerously-skip-permissions".into(),
+                ];
+                // If we have an agent session ID, resume that session
+                if let Some(sid) = agent_session_id {
+                    args.push("--resume".into());
+                    args.push(sid.to_string());
+                }
+                args.push(message.into());
+                args
+            },
+            Self::Hermes => {
+                let mut args = vec!["chat".into(), "-q".into(), message.into(), "-Q".into()];
+                // If we have an agent session ID, resume that session
+                if let Some(sid) = agent_session_id {
+                    args.push("--resume".into());
+                    args.push(sid.to_string());
+                }
+                args
+            },
+            Self::Codex => {
+                let mut args = vec![
+                    "exec".into(),
+                    "--json".into(),
+                    "--skip-git-repo-check".into(),
+                    "--dangerously-bypass-approvals-and-sandbox".into(),
+                ];
+                // If we have an agent session ID, resume that session
+                if let Some(sid) = agent_session_id {
+                    args.push("resume".into());
+                    args.push(sid.to_string());
+                }
+                args.push(message.into());
+                args
+            },
         }
     }
 
@@ -135,11 +165,26 @@ fn parse_hermes_output(line: &str) -> Option<String> {
 }
 
 fn parse_codex_output(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    if !trimmed.is_empty() {
-        Some(trimmed.to_string() + "\n")
-    } else {
+    // Codex --json mode outputs JSONL events
+    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
+        // Extract text from item.completed events
+        if event["type"] == "item.completed" {
+            if let Some(text) = event["item"]["text"].as_str() {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string() + "\n");
+                }
+            }
+        }
         None
+    } else {
+        // Fallback: plain text output
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            Some(trimmed.to_string() + "\n")
+        } else {
+            None
+        }
     }
 }
 
@@ -197,6 +242,7 @@ impl AgentManager {
         mode: String,
         cwd: Option<String>,
         system_prompt: Option<String>,
+        agent_session_id: Option<String>,
     ) -> Result<(), String> {
         let agent = AgentType::from_str(&agent_type)
             .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
@@ -204,7 +250,7 @@ impl AgentManager {
         let aborted = Arc::new(AtomicBool::new(false));
         let aborted_clone = aborted.clone();
 
-        let args = agent.build_args(&message, &mode, system_prompt.as_deref());
+        let args = agent.build_args(&message, &mode, system_prompt.as_deref(), agent_session_id.as_deref());
         let cmd_name = agent.cli_command();
 
         let work_dir = cwd.unwrap_or_else(|| {
@@ -266,6 +312,8 @@ impl AgentManager {
         let agent_type_name = agent_type.clone();
 
         let agent_type_name_for_stderr = agent_type_name.clone();
+        let app_clone_for_stderr = app_handle.clone();
+        let sid_for_stderr = session_id.clone();
 
         // 主任务：读取 stdout（带 300s 超时）+ 等待子进程 + 检查退出码
         tokio::spawn(async move {
@@ -279,6 +327,29 @@ impl AgentManager {
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     if aborted.load(Ordering::Relaxed) { break; }
+
+                    // Extract agent session ID from JSON stream
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
+                        // Claude Code: system/init event
+                        if agent_type_name == "claude" && event["type"] == "system" && event["subtype"] == "init" {
+                            if let Some(sid_agent) = event["session_id"].as_str() {
+                                let _ = app_clone.emit("agent-session", serde_json::json!({
+                                    "sessionId": sid,
+                                    "agentSessionId": sid_agent,
+                                }));
+                            }
+                        }
+                        // Codex: thread.started event
+                        if agent_type_name == "codex" && event["type"] == "thread.started" {
+                            if let Some(sid_agent) = event["thread_id"].as_str() {
+                                let _ = app_clone.emit("agent-session", serde_json::json!({
+                                    "sessionId": sid,
+                                    "agentSessionId": sid_agent,
+                                }));
+                            }
+                        }
+                    }
+
                     if let Some(content) = agent.parse_output_line(&line) {
                         let _ = app_clone.emit("agent-chunk", serde_json::json!({
                             "sessionId": sid,
@@ -332,6 +403,15 @@ impl AgentManager {
             use tokio::io::AsyncBufReadExt;
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                // Extract Hermes session ID from stderr (format: "session_id: xxxxx")
+                if agent_type_name_for_stderr == "hermes" {
+                    if let Some(sid_agent) = line.strip_prefix("session_id: ") {
+                        let _ = app_clone_for_stderr.emit("agent-session", serde_json::json!({
+                            "sessionId": sid_for_stderr,
+                            "agentSessionId": sid_agent.trim(),
+                        }));
+                    }
+                }
                 if let Ok(mut buf) = stderr_buf_for_reader.lock() {
                     buf.push_str(&line);
                     buf.push('\n');

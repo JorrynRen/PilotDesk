@@ -230,6 +230,34 @@ pub async fn clear_env_detect_cache() -> Result<(), AppError> {
 
 enum PackageManager { Npm, Pip }
 
+fn run_uninstall(app: &tauri::AppHandle, manager: PackageManager, package: &str, agent: &str) -> Result<(), AppError> {
+    let cmd = match manager {
+        PackageManager::Npm => format!("npm uninstall -g {}", package),
+        PackageManager::Pip => format!("pip uninstall {} -y", package),
+    };
+
+    let child = Command::new("cmd")
+        .args(["/C", &cmd])
+        .spawn()
+        .map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent, e)))?;
+
+    let output = child.wait_with_output().map_err(|e| AppError::External(format!("卸载 {} 过程出错: {}", agent, e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::External(format!("{} 卸载失败: {}", agent, stderr)));
+    }
+
+    let _ = app.emit("install-progress", serde_json::json!({
+        "agent": agent,
+        "message": format!("{} 卸载完成", agent),
+        "progress": 100
+    }));
+
+    clear_env_cache();
+    Ok(())
+}
+
 fn run_install(app: &tauri::AppHandle, manager: PackageManager, package: &str, agent: &str) -> Result<(), AppError> {
     let cmd = match manager {
         PackageManager::Npm => format!("npm install -g {}", package),
@@ -256,6 +284,21 @@ fn run_install(app: &tauri::AppHandle, manager: PackageManager, package: &str, a
 
     clear_env_cache();
     Ok(())
+}
+
+/// 根据 AGENTS 配置表泛化卸载命令
+#[tauri::command]
+pub async fn uninstall_agent(app: tauri::AppHandle, agent_type: String) -> Result<(), AppError> {
+    let config = AGENTS.iter().find(|a| a.agent_type == agent_type)
+        .ok_or_else(|| AppError::InvalidInput(format!("未知 Agent 类型: {}", agent_type)))?;
+
+    let (manager, package) = match (config.npm_package, config.pip_package) {
+        (Some(pkg), _) => (PackageManager::Npm, pkg),
+        (_, Some(pkg)) => (PackageManager::Pip, pkg),
+        _ => return Err(AppError::Config(format!("{} 无可用的包管理器", agent_type))),
+    };
+
+    run_uninstall(&app, manager, package, &agent_type)
 }
 
 /// 根据 AGENTS 配置表泛化安装命令
@@ -287,4 +330,56 @@ pub async fn install_hermes(app: tauri::AppHandle) -> Result<(), AppError> {
 #[tauri::command]
 pub async fn install_codex(app: tauri::AppHandle) -> Result<(), AppError> {
     install_agent(app, "codex".to_string()).await
+}
+
+
+/// Validate a directory path and create it if it doesn't exist.
+/// Returns the normalized path on success, or an error message on failure.
+#[tauri::command]
+pub fn ensure_dir(path: String) -> Result<String, String> {
+    if path.trim().is_empty() {
+        return Err("路径不能为空".into());
+    }
+
+    let trimmed = path.trim();
+    let p = std::path::Path::new(trimmed);
+
+    #[cfg(target_os = "windows")]
+    {
+        // Reject bare drive letters like "C:" or "D:"
+        if trimmed.len() <= 2 && trimmed.ends_with(':') {
+            return Err("路径不完整，请输入完整目录路径（如 C:\\Users\\work）".into());
+        }
+
+        // Check for invalid path characters on Windows
+        let invalid_chars = ['<', '>', '"', '|', '?', '*'];
+        for c in invalid_chars {
+            if trimmed.contains(c) {
+                return Err(format!("路径包含非法字符 '{}'", c));
+            }
+        }
+
+        // Ensure drive letter is valid (A-Z)
+        let bytes = trimmed.as_bytes();
+        if bytes.len() >= 2 && bytes[1] == b':' {
+            let drive = bytes[0].to_ascii_uppercase();
+            if drive < b'A' || drive > b'Z' {
+                return Err("无效的盘符，请输入有效的驱动器号（如 C:、D:）".into());
+            }
+        }
+    }
+
+    // Check if path exists
+    if p.exists() {
+        if p.is_dir() {
+            Ok(trimmed.to_string())
+        } else {
+            Err(format!("路径已存在但不是一个目录: {}", trimmed))
+        }
+    } else {
+        // Create directory (including parent directories)
+        std::fs::create_dir_all(p)
+            .map_err(|e| format!("创建目录失败: {}", e))?;
+        Ok(trimmed.to_string())
+    }
 }

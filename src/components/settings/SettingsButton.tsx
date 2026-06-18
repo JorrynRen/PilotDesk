@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'success' | 'warning';
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'success' | 'warning' | 'danger';
 
 interface SettingsButtonProps {
   children: ReactNode;
@@ -35,6 +35,11 @@ const VARIANT_STYLES: Record<ButtonVariant, React.CSSProperties> = {
   },
   warning: {
     backgroundColor: '#F59E0B',
+    color: '#fff',
+    border: 'none',
+  },
+  danger: {
+    backgroundColor: '#EF4444',
     color: '#fff',
     border: 'none',
   },

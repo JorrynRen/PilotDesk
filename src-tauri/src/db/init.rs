@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 6;
+const MIGRATION_VERSION: i64 = 7;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -98,6 +98,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
     if current_version < 6 {
         migrate_add_message_extensions(&conn)?;
     }
+    if current_version < 7 {
+        migrate_add_agent_session_id(&conn)?;
+    }
+
 
     if current_version < MIGRATION_VERSION {
         conn.pragma_update(None, "user_version", MIGRATION_VERSION)?;
@@ -192,7 +196,7 @@ fn migrate_add_type(conn: &Connection) -> Result<(), AppError> {
             message_count INTEGER DEFAULT 0,
             status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
             api_provider TEXT,
-            api_model TEXT
+            api_model TEXT,
         );
 
         INSERT OR IGNORE INTO sessions_new (id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model)
@@ -238,3 +242,18 @@ fn migrate_add_install_logs(conn: &Connection) -> Result<(), AppError> {
     )?;
     Ok(())
 }
+
+fn migrate_add_agent_session_id(conn: &Connection) -> Result<(), AppError> {
+    let has_column = conn
+        .prepare("SELECT agent_session_id FROM sessions LIMIT 0")
+        .is_ok();
+
+    if !has_column {
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN agent_session_id TEXT DEFAULT NULL;"
+        )?;
+    }
+
+    Ok(())
+}
+

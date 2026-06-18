@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { CheckCircle, XCircle, Download, RefreshCw, Loader2, ArrowUpCircle, ExternalLink } from 'lucide-react';
+import { CheckCircle, XCircle, Download, RefreshCw, Loader2, ArrowUpCircle, ExternalLink, Trash2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
@@ -30,6 +30,7 @@ export type { EnvManagerProps };
 export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const { envInfo, loading, refresh: fetchEnv } = useEnvInfo();
   const [installing, setInstalling] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ key: string; action: 'update' | 'uninstall' | 'reinstall' | 'install' } | null>(null);
   const [logs, setLogs] = useState<Array<{ timestamp: number; message: string; level: 'info' | 'warn' | 'error' | 'success' }>>([]);
   /** Latest versions from remote registries */
   const [latestVersions, setLatestVersions] = useState<Record<string, { version: string; releaseTime: string | null } | null>>({});
@@ -225,6 +226,24 @@ const fetchEnvWithLog = useCallback(async () => {
     setInstalling(null);
   };
 
+  const handleUninstall = async (key: string) => {
+    const name = key === 'claude' ? 'Claude Code' : key === 'hermes' ? 'Hermes Agent' : 'codeX';
+    setInstalling(key);
+    addLog(`开始卸载 ${name}...`, 'info');
+    try {
+      await invoke('uninstall_agent', { agentType: key });
+      addLog(`${name} 卸载成功`, 'success');
+      const info = await fetchEnv();
+      if (info) {
+        setLatestVersions((prev) => ({ ...prev, [key]: null }));
+      }
+    } catch (err: any) {
+      const msg = err?.message || err?.details || (typeof err === 'string' ? err : JSON.stringify(err));
+      addLog(`${name} 卸载失败: ${msg}`, 'error');
+    }
+    setInstalling(null);
+  };
+
   return (
     <div className="space-y-6">
       {/* Prerequisites */}
@@ -289,7 +308,7 @@ const fetchEnvWithLog = useCallback(async () => {
               <div className="flex items-center gap-1.5 shrink-0">
                 {!dep.installed && (
                   <SettingsButton
-                    onClick={() => handleInstall(dep.key)}
+                    onClick={() => setConfirmAction({ key: dep.key, action: 'install' })}
                     disabled={!!dep.installing}
                     variant="primary"
                   >
@@ -301,32 +320,62 @@ const fetchEnvWithLog = useCallback(async () => {
                   </SettingsButton>
                 )}
                 {dep.hasUpdate && dep.installed && (
-                  <SettingsButton
-                    onClick={() => handleInstall(dep.key)}
-                    disabled={!!dep.installing}
-                    variant="warning"
-                  >
-                    {dep.installing ? (
-                      <><Loader2 size={11} className="animate-spin" /> 更新中</>
-                    ) : (
-                      <><ArrowUpCircle size={11} /> 更新</>
-                    )}
-                  </SettingsButton>
+                  <>
+                    <SettingsButton
+                      onClick={() => setConfirmAction({ key: dep.key, action: 'update' })}
+                      disabled={!!dep.installing}
+                      variant="warning"
+                    >
+                      {dep.installing ? (
+                        <><Loader2 size={11} className="animate-spin" /> 更新中</>
+                      ) : (
+                        <><ArrowUpCircle size={11} /> 更新</>
+                      )}
+                    </SettingsButton>
+                    <SettingsButton
+                      onClick={() => setConfirmAction({ key: dep.key, action: 'uninstall' })}
+                      disabled={!!dep.installing}
+                      variant="danger"
+                      icon={<Trash2 size={11} />}
+                    >
+                      卸载
+                    </SettingsButton>
+                  </>
                 )}
                 {dep.installed && !dep.hasUpdate && dep.latestVersion && (
-                  <span className="text-[10px]" style={{ color: '#10B981' }}>
-                    已是最新
-                  </span>
+                  <>
+                    <span className="text-[10px]" style={{ color: '#10B981' }}>
+                      已是最新
+                    </span>
+                    <SettingsButton
+                      onClick={() => setConfirmAction({ key: dep.key, action: 'uninstall' })}
+                      disabled={!!dep.installing}
+                      variant="danger"
+                      icon={<Trash2 size={11} />}
+                    >
+                      卸载
+                    </SettingsButton>
+                  </>
                 )}
                 {dep.installed && !dep.hasUpdate && !dep.latestVersion && !dep.updateChecking && (
-                  <SettingsButton
-                    onClick={() => handleInstall(dep.key)}
-                    disabled={!!dep.installing}
-                    variant="secondary"
-                    icon={<RefreshCw size={11} />}
-                  >
-                    重装
-                  </SettingsButton>
+                  <>
+                    <SettingsButton
+                      onClick={() => setConfirmAction({ key: dep.key, action: 'reinstall' })}
+                      disabled={!!dep.installing}
+                      variant="secondary"
+                      icon={<RefreshCw size={11} />}
+                    >
+                      重装
+                    </SettingsButton>
+                    <SettingsButton
+                      onClick={() => setConfirmAction({ key: dep.key, action: 'uninstall' })}
+                      disabled={!!dep.installing}
+                      variant="danger"
+                      icon={<Trash2 size={11} />}
+                    >
+                      卸载
+                    </SettingsButton>
+                  </>
                 )}
               </div>
             </SettingsCard>
@@ -346,6 +395,64 @@ const fetchEnvWithLog = useCallback(async () => {
 
       {/* Install Log */}
       <InstallLog isActive={!!installing} />
+
+      {/* Confirmation Dialog */}
+      {confirmAction && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setConfirmAction(null)}
+        >
+          <div
+            className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
+            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+              {confirmAction.action === 'uninstall' && '确认卸载'}
+              {confirmAction.action === 'update' && '确认更新'}
+              {confirmAction.action === 'reinstall' && '确认重装'}
+              {confirmAction.action === 'install' && '确认安装'}
+            </div>
+            <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+              {confirmAction.action === 'uninstall' && `确定要卸载 ${
+                confirmAction.key === 'claude' ? 'Claude Code' : confirmAction.key === 'hermes' ? 'Hermes Agent' : 'codeX'
+              } 吗？此操作将从系统中移除该工具。`}
+              {confirmAction.action === 'update' && `确定要更新 ${
+                confirmAction.key === 'claude' ? 'Claude Code' : confirmAction.key === 'hermes' ? 'Hermes Agent' : 'codeX'
+              } 到最新版本吗？`}
+              {confirmAction.action === 'install' && `确定要安装${confirmAction.key === 'claude' ? 'Claude Code' : confirmAction.key === 'hermes' ? 'Hermes Agent' : 'codeX'} 吗？`}
+              {confirmAction.action === 'reinstall' && `确定要重新安装 ${
+                confirmAction.key === 'claude' ? 'Claude Code' : confirmAction.key === 'hermes' ? 'Hermes Agent' : 'codeX'
+              } 吗？`}
+            </div>
+            <div className="flex justify-end gap-2">
+              <SettingsButton
+                variant="secondary"
+                onClick={() => setConfirmAction(null)}
+              >
+                取消
+              </SettingsButton>
+              <SettingsButton
+                variant={confirmAction.action === 'uninstall' ? 'danger' : 'primary'}
+                onClick={() => {
+                  const { key, action } = confirmAction;
+                  setConfirmAction(null);
+                  if (action === 'uninstall') {
+                    handleUninstall(key);
+                  } else if (action === 'install') {
+                    handleInstall(key);
+                  } else {
+                    handleInstall(key);
+                  }
+                }}
+              >
+                {confirmAction.action === 'uninstall' ? '确认卸载' : confirmAction.action === 'install' ? '确认安装' : '确认'}
+              </SettingsButton>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

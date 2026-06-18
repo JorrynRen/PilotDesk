@@ -16,6 +16,10 @@ pub struct Session {
     pub api_provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_model: Option<String>,
+    /// Agent-side session ID (e.g. Claude Code session UUID)
+    /// Extracted from the first system/init event in JSON stream
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

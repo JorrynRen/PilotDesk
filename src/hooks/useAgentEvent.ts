@@ -16,6 +16,7 @@ export interface AgentEventHandlers {
   onDone?: (sessionId: string) => void;
   onError?: (sessionId: string, error: string) => void;
   onStatus?: (sessionId: string, status: string) => void;
+  onSession?: (sessionId: string, agentSessionId: string) => void;
   onSkills?: (agentType: string, skills: Array<{ name: string; description: string; category?: string }>) => void;
 }
 
@@ -103,6 +104,14 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
       });
       unlisteners.push(errorUnlisten);
 
+      const sessionUnlisten = await listen<{ sessionId: string; agentSessionId: string }>('agent-session', (event) => {
+        if (cancelled) return;
+        handlersRef.current?.onSession?.(event.payload.sessionId, event.payload.agentSessionId);
+      });
+      unlisteners.push(sessionUnlisten);
+
+
+
       unlistenRef.current = unlisteners;
     })();
 
@@ -124,6 +133,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
       agentType?: string,
       cwd?: string,
       systemPrompt?: string,
+      agentSessionId?: string,
     ) => {
       try {
         await invoke('agent_send_message', {
@@ -133,6 +143,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
           mode: mode || 'native',
           cwd: cwd || null,
           systemPrompt: systemPrompt || null,
+          agentSessionId: agentSessionId || null,
         });
       } catch (err) {
         handlersRef.current?.onError?.(sessionId, String(err));

@@ -18,6 +18,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
         status: row.get(8)?,
         api_provider: row.get(9).ok(),
         api_model: row.get(10).ok(),
+        agent_session_id: row.get(11).ok(),
     })
 }
 
@@ -41,7 +42,7 @@ pub fn list_sessions(state: State<'_, DbState>) -> Result<Vec<Session>, AppError
     let conn = state.get_conn()?;
     
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id
          FROM sessions WHERE status = 'active' ORDER BY updated_at DESC"
     )?;
     
@@ -56,7 +57,7 @@ pub fn list_archived_sessions(state: State<'_, DbState>) -> Result<Vec<Session>,
     let conn = state.get_conn()?;
     
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id
          FROM sessions WHERE status = 'archived' ORDER BY updated_at DESC"
     )?;
     
@@ -77,14 +78,7 @@ pub fn create_session(
 ) -> Result<Session, AppError> {
     let id = crate::utils::new_id();
     let now = crate::utils::now();
-    let title = title.unwrap_or_else(|| {
-        match agent_type.as_str() {
-            "claude" => "Claude Code 新会话".into(),
-            "hermes" => "Hermes Agent 新会话".into(),
-            "api" => "API 直连会话".into(),
-            _ => "新会话".into(),
-        }
-    });
+    let title = title.unwrap_or_default();
     let cwd = cwd.unwrap_or_default();
     
     let conn = state.get_conn()?;
@@ -93,7 +87,7 @@ pub fn create_session(
         "INSERT INTO sessions (id, agent_type, title, cwd, created_at, updated_at, api_provider, api_model) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![id, agent_type, title, cwd, now, now, api_provider, api_model],
     )?;
-    
+
     Ok(Session {
         id,
         agent_type,
@@ -106,6 +100,7 @@ pub fn create_session(
         status: "active".into(),
         api_provider,
         api_model,
+        agent_session_id: None,
     })
 }
 
@@ -114,7 +109,7 @@ pub fn get_session(state: State<'_, DbState>, session_id: String) -> Result<Sess
     let conn = state.get_conn()?;
     
     let session = conn.query_row(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model 
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id
          FROM sessions WHERE id = ?1",
         params![session_id],
         row_to_session,
@@ -240,6 +235,21 @@ pub fn delete_session(
     
     Ok(())
 }
+/// Update the agent_session_id for a session
+#[tauri::command]
+pub fn update_session_agent_id(
+    state: State<'_, DbState>,
+    session_id: String,
+    agent_session_id: String,
+) -> Result<(), AppError> {
+    let conn = state.get_conn()?;
+    conn.execute(
+        "UPDATE sessions SET agent_session_id = ?1 WHERE id = ?2",
+        params![agent_session_id, session_id],
+    )?;
+    Ok(())
+}
+
 /// Update an existing message's content
 #[tauri::command]
 pub fn update_message(
@@ -286,7 +296,7 @@ pub fn search_sessions(
 
     let pattern = format!("%{}%", query);
     let mut stmt = conn.prepare(
-        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id
          FROM sessions WHERE status = 'active' AND title LIKE ?1 ORDER BY updated_at DESC LIMIT 50"
     )?;
 

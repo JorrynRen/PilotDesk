@@ -131,7 +131,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
     const modelInfo = session.agentType === 'api' && session.apiModel
       ? ` · ${session.apiModel}`
       : '';
-    const dotColor = agentTheme.cssVar;
+    const dotColor = agentTheme.color;
 
     return (
       <div className="flex-1 flex items-center justify-center">

@@ -15,6 +15,8 @@ export interface Session {
   apiProvider?: string;
   /** For API direct sessions: which model (e.g. "claude-sonnet-4-20250514") */
   apiModel?: string;
+  /** Agent-side session ID (e.g. Claude Code session UUID) for session continuity */
+  agentSessionId?: string;
 }
 
 export interface Message {

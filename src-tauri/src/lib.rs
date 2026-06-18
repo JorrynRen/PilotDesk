@@ -143,9 +143,10 @@ async fn agent_send_message(
     mode: String,
     cwd: Option<String>,
     system_prompt: Option<String>,
+    agent_session_id: Option<String>,
 ) -> Result<(), String> {
     let mut mgr = agent_mgr.lock().await;
-    mgr.send_message(app, session_id, agent_type, message, mode, cwd, system_prompt).await
+    mgr.send_message(app, session_id, agent_type, message, mode, cwd, system_prompt, agent_session_id).await
 }
 
 #[tauri::command]
@@ -204,6 +205,7 @@ pub fn run() {
             commands::env::detect_env,
             commands::env::clear_env_detect_cache,
             commands::env::install_agent,
+            commands::env::uninstall_agent,
             commands::env::install_claude_code,
             commands::env::install_hermes,
             commands::env::install_codex,
@@ -223,8 +225,10 @@ pub fn run() {
             commands::session::delete_session,
             commands::session::save_message,
             commands::session::update_message,
+            commands::session::update_session_agent_id,
             commands::session::search_sessions,
             commands::session::search_messages,
+            commands::env::ensure_dir,
             list_inspirations,
             get_inspiration,
             create_inspiration,
