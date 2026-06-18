@@ -6,12 +6,22 @@ interface GeneratingState {
   syncGeneratingSessions: (sessionIds: Set<string>) => void;
 }
 
-export const useGeneratingStore = create<GeneratingState>((set) => ({
+function areEqual(a: Record<string, boolean>, b: Record<string, boolean>): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((k) => k in b);
+}
+
+export const useGeneratingStore = create<GeneratingState>((set, get) => ({
   generatingMap: {},
   syncGeneratingSessions: (sessionIds) => {
     const next: Record<string, boolean> = {};
     sessionIds.forEach((id) => { next[id] = true; });
-    set({ generatingMap: next });
+    const prev = get().generatingMap;
+    if (!areEqual(prev, next)) {
+      set({ generatingMap: next });
+    }
   },
 }));
 
