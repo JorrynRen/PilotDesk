@@ -10,7 +10,7 @@ import { SessionListItem } from './SessionListItem';
 
 type NewSessionType = 'claude' | 'hermes' | 'codex' | 'api' | 'codex';
 
-export const SessionList = memo(function SessionList() {
+function SessionListFn() {
   const sessions = useSessionStore((s) => s.sessions);
   const archivedSessions = useSessionStore((s) => s.archivedSessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
@@ -51,8 +51,10 @@ export const SessionList = memo(function SessionList() {
   useEffect(() => {
     fetchSessions().catch((err) => {
       showToast(`加载会话失败: ${err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)}`, 'error');
-    });
-    fetchProviders().catch(() => {});
+    }
+
+    fetchProviders().catch(() => {}
+
 
     // Detect installed agents for session creation filtering
     (async () => {
@@ -79,7 +81,8 @@ export const SessionList = memo(function SessionList() {
     searchDebounceRef.current = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const results = await invoke<typeof sessions>('search_sessions', { query: searchQuery.trim() });
+        const results = await invoke<typeof sessions>('search_sessions', { query: searchQuery.trim() }
+
         setSearchResults(results);
       } catch { /* ignore */ }
       setIsSearching(false);
@@ -96,7 +99,8 @@ export const SessionList = memo(function SessionList() {
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
-    });
+    }
+
   }, []);
 
   const displayList = showArchived ? archivedSessions : sessions;
@@ -132,7 +136,8 @@ export const SessionList = memo(function SessionList() {
   const batchArchive = useCallback(async () => {
     if (selectedIds.size === 0) return;
     for (const id of selectedIds) {
-      try { await invoke('archive_session', { sessionId: id }); } catch { /* ignore */ }
+      try { await invoke('archive_session', { sessionId: id }
+
     }
     setSelectedIds(new Set());
     setBatchMode(false);
@@ -143,7 +148,8 @@ export const SessionList = memo(function SessionList() {
   const batchDelete = useCallback(async () => {
     if (selectedIds.size === 0) return;
     for (const id of selectedIds) {
-      try { await invoke('delete_session', { sessionId: id }); } catch { /* ignore */ }
+      try { await invoke('delete_session', { sessionId: id }
+
     }
     setSelectedIds(new Set());
     setBatchMode(false);
@@ -156,7 +162,8 @@ export const SessionList = memo(function SessionList() {
     if (showNewDialog) {
       fetchProviders().then(() => {
         // After fetch, auto-select first provider via the updated store state
-      }).catch(() => {});
+      }).catch(() => {}
+
       // Reset state
       setUseCustomModel(false);
       setCustomModel('');
@@ -632,5 +639,7 @@ export const SessionList = memo(function SessionList() {
       )}
     </aside>
   );
-});
+}
+
+export const SessionList = memo(SessionListFn);
 
