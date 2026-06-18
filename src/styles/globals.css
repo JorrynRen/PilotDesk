@@ -37,7 +37,7 @@
   /* ── Accent ── */
   --accent: #2563EB;
   --accent-hover: #1D4ED8;
-  --accent-light: rgba(37, 99, 235, 0.12);
+  --accent-light: rgba(37, 99, 235, 0.2);
 
   /* ── Agent Tags ── */
   --tag-claude: #3B82F6;
@@ -71,6 +71,22 @@
   --font-sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
 
+  /* ── Font Size Scale ── */
+  --fs-10: 10px;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-20: 20px;
+
+  /* ── Font Weight Tokens ── */
+  --fw-normal: 100;
+  --fw-medium: 200;
+  --fw-semibold: 300;
+  --fw-bold: 500;
+
   /* ── Sizing ── */
   --sidebar-width: 260px;
   --right-panel-width: 320px;
@@ -100,7 +116,7 @@
   /* ── Accent ── */
   --accent: #3B82F6;
   --accent-hover: #60A5FA;
-  --accent-light: rgba(59, 130, 246, 0.15);
+  --accent-light: rgba(59, 130, 246, 0.25);
 
   /* ── Status ── */
   --status-success: #10B981;
@@ -116,6 +132,176 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+}
+
+/* Dark mode button overlay uses lighter overlay */
+[data-theme="dark"] button:hover {
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.06);
+}
+[data-theme="dark"] button:active {
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.1);
+}
+[data-theme="dark"] .pd-btn:hover {
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.06);
+}
+
+/* ═══════════════════════════════════════════════════
+   Font Utility Classes
+   ═══════════════════════════════════════════════════ */
+.pd-text-10 { font-size: var(--fs-10); }
+.pd-text-11 { font-size: var(--fs-11); }
+.pd-text-12 { font-size: var(--fs-12); }
+.pd-text-13 { font-size: var(--fs-13); }
+.pd-text-14 { font-size: var(--fs-14); }
+.pd-text-16 { font-size: var(--fs-16); }
+.pd-text-18 { font-size: var(--fs-18); }
+.pd-text-20 { font-size: var(--fs-20); }
+
+.pd-fw-normal { font-weight: var(--fw-normal); }
+.pd-fw-medium { font-weight: var(--fw-medium); }
+.pd-fw-semibold { font-weight: var(--fw-semibold); }
+.pd-fw-bold { font-weight: var(--fw-bold); }
+
+/* ═══════════════════════════════════════════════════
+   Unified Search Input
+   ═══════════════════════════════════════════════════ */
+.search-input {
+  width: 100%;
+  padding: 6px 12px 6px 32px;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-12);
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  outline: none;
+  box-sizing: border-box;
+}
+.search-input:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ═══════════════════════════════════════════════════
+   Global Button Reset
+   ═══════════════════════════════════════════════════
+   All <button> elements get consistent hover/cursor/active feedback.
+   Override with pd-btn-plain to remove default styles.
+   =================================================== */
+button {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+button:hover {
+  box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.06);
+}
+button:active {
+  box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.1);
+  transform: scale(0.97);
+}
+button:active {
+  transform: scale(0.97);
+}
+button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+}
+button:disabled:hover {
+  background-color: inherit !important;
+}
+
+/* Remove default button styles for specific cases */
+.pd-btn-plain {
+  cursor: default;
+  display: inline;
+  gap: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  transition: none;
+}
+.pd-btn-plain:hover {
+  background-color: transparent !important;
+}
+.pd-btn-plain:active {
+  transform: none;
+}
+
+/* ═══════════════════════════════════════════════════
+   Button Utility Classes
+   ═══════════════════════════════════════════════════
+   Usage: className="pd-btn" + pd-btn-active / pd-btn-primary
+   Hover: automatically applies var(--bg-hover)
+   Selected: add pd-btn-active for accent highlight
+   Primary: add pd-btn-primary for solid accent background
+   =================================================== */
+.pd-btn {
+  /* Base button styles inherited from global button reset */
+  /* This class exists for explicit opt-in and overrides */
+}
+.pd-btn:hover {
+  box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.06);
+}
+.pd-btn:active {
+  transform: scale(0.97);
+}
+.pd-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+}
+.pd-btn:disabled:hover {
+  background-color: inherit !important;
+}
+
+/* Active/selected state */
+.pd-btn-active {
+  background-color: var(--accent-light) !important;
+  color: var(--accent) !important;
+}
+
+/* Primary action (solid accent) */
+.pd-btn-primary {
+  background-color: var(--accent) !important;
+  color: #fff !important;
+}
+.pd-btn-primary:hover {
+  opacity: 0.9;
+  background-color: var(--accent) !important;
+}
+
+/* Danger action */
+.pd-btn-danger {
+  color: var(--status-danger) !important;
+}
+.pd-btn-danger:hover {
+  background-color: rgba(239, 68, 68, 0.12) !important;
+}
+
+/* Info action */
+.pd-btn-info {
+  color: var(--status-info) !important;
+}
+.pd-btn-info:hover {
+  background-color: rgba(59, 130, 246, 0.12) !important;
+}
+
+/* ── Button size variants ── */
+.pd-btn-sm {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.pd-btn-md {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -194,7 +380,7 @@ body {
 
 /* Focus */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
 

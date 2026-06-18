@@ -17,19 +17,11 @@ function MainLayout() {
   });
 
   // Agent Event status monitoring (replaces WebSocket)
-  const { requestAllSkills } = useAgentEvent({
+  useAgentEvent({
     onSkills: (agentType, skills) => {
-      const skillInfos = (skills as string[]).map((name: string) => ({ name, description: '' }));
-      useSkillStore.getState().setAgentSkills(agentType, skillInfos);
+      useSkillStore.getState().setAgentSkills(agentType, skills);
     },
   });
-
-  // Fetch all agent skills on mount
-  const { setLoading: setSkillsLoading } = useSkillStore();
-  useEffect(() => {
-    setSkillsLoading(true);
-    requestAllSkills().then(() => setSkillsLoading(false));
-  }, [requestAllSkills, setSkillsLoading]);
 
   return (
     <div className="pilotdesk-window-shell">

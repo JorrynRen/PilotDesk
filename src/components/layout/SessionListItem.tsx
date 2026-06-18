@@ -81,12 +81,9 @@ export function SessionListItem({
     <div
       className="group px-3 py-2 cursor-pointer transition-colors"
       style={{
-        backgroundColor: isActive ? 'var(--border)' : 'transparent',
-      }}
-      onClick={isEditing ? undefined : batchMode ? () => onToggleSelect?.(session.id) : onSelect}
-      style={{
         backgroundColor: selected ? 'var(--accent-light)' : isActive ? 'var(--border)' : 'transparent',
       }}
+      onClick={isEditing ? undefined : batchMode ? () => onToggleSelect?.(session.id) : onSelect}
     >
       <div className="flex items-start gap-2">
         {batchMode && (
@@ -125,7 +122,7 @@ export function SessionListItem({
                 />
                 <button
                   onClick={handleConfirmEdit}
-                  className="p-0.5 rounded"
+                  className="pd-btn p-0.5 rounded"
                   style={{ color: AGENT_THEMES.api.color }}
                   title="确认"
                 >
@@ -133,7 +130,7 @@ export function SessionListItem({
                 </button>
                 <button
                   onClick={handleCancelEdit}
-                  className="p-0.5 rounded"
+                  className="pd-btn p-0.5 rounded"
                   style={{ color: 'var(--text-secondary)' }}
                   title="取消"
                 >
@@ -142,7 +139,7 @@ export function SessionListItem({
               </div>
             ) : (
               <>
-                <span className="text-xs font-medium truncate">{session.title}</span>
+                <span className="text-xs  truncate">{session.title}</span>
                 <span className="text-[10px] shrink-0 ml-1" style={{ color: 'var(--text-secondary)' }}>
                   {formatTime(session.updatedAt)}
                 </span>
@@ -170,7 +167,7 @@ export function SessionListItem({
             {onRename && (
               <button
                 onClick={handleStartEdit}
-                className="p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
+                className="pd-btn p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
                 style={{ color: 'var(--accent)' }}
                 title="重命名"
               >

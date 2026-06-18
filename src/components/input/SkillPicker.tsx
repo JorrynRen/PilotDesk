@@ -89,7 +89,7 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
           className="flex-1 text-xs outline-none bg-transparent"
           style={{ color: 'var(--text-primary)' }}
         />
-        <button onClick={onClose} className="p-0.5" style={{ color: 'var(--text-tertiary)' }}>
+        <button onClick={onClose} className="pd-btn p-0.5" style={{ color: 'var(--text-tertiary)' }}>
           <X size={12} />
         </button>
       </div>
@@ -117,10 +117,10 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
                 backgroundColor: idx === selectedIndex ? 'var(--bg-tertiary)' : 'transparent',
               }}
             >
-              <Cpu size={14} className="mt-0.5 shrink-0" style={{ color: AGENT_THEMES.hermes.cssVar }} />
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                  {skill.name}
+                <div className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
+                  <Cpu size={12} className="shrink-0" style={{ color: AGENT_THEMES.hermes.cssVar }} />
+                  <span className="truncate">{skill.name}</span>
                 </div>
                 <div className="text-[10px] truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>
                   {skill.description}

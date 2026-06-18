@@ -98,10 +98,10 @@ export function MarketPage({ onBack }: MarketPageProps) {
       {/* Header */}
       <div className="shrink-0 px-4 py-3 flex items-center justify-between gap-3" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
+          <button onClick={onBack} className="pd-btn p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
             <ArrowLeft size={16} />
           </button>
-          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>灵感市集</h2>
+          <h2 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>灵感市集</h2>
           <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
             {inspirations.length}
           </span>
@@ -119,7 +119,7 @@ export function MarketPage({ onBack }: MarketPageProps) {
           </button>
           <button
             onClick={openNewForm}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium"
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs "
             style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
           >
             <Plus size={12} />

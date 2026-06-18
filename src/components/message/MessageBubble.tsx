@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Copy, Edit3, Bookmark, Check, User } from 'lucide-react';
+import { Copy, Edit3, Pencil, Bookmark, Check, User } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { AGENT_THEMES, MODE_LABELS, MODE_COLORS } from '../../types';
 import { useInspirationStore } from '../../stores/inspirationStore';
@@ -134,24 +134,38 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
 
   if (isUser) {
     return (
-      <div className="group flex justify-end gap-2.5 px-4 py-[3px]">
-        <div style={{ maxWidth: '75%' }}>
+      <div className="group flex gap-2.5 px-4 py-[3px]">
+        {/* User avatar */}
+        <div className="shrink-0 pt-0.5">
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold"
+            style={{
+              backgroundColor: 'rgba(59, 130, 246, 0.15)',
+              color: '#3B82F6',
+            }}
+          >
+            <User size={14} />
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
           {/* User label + time */}
-          <div className="flex items-center gap-2 mb-1 justify-end">
-            <span className="text-[11px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-              {formatTimestamp(message.timestamp)}
-            </span>
-            <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[11px] " style={{ color: 'var(--text-primary)' }}>
               User
             </span>
+            <span className="text-[11px] " style={{ color: 'var(--text-tertiary)' }}>
+              {formatTimestamp(message.timestamp)}
+            </span>
           </div>
-          {/* Bubble */}
+
+          {/* Card with accent background */}
           <div
-            className="rounded-2xl px-3.5 py-2.5"
+            className="rounded-xl px-3.5 py-2.5"
             style={{
-              color: '#fff',
               backgroundColor: 'var(--accent)',
-              borderRadius: '16px 4px 16px 16px',
+              color: '#fff',
             }}
           >
             {isEditing ? (
@@ -173,11 +187,12 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
             </p>
           )}
           </div>
+
           {/* Actions */}
-          <div className="flex items-center gap-1 mt-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
               onClick={handleCopy}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+              className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
               style={{ color: 'var(--text-secondary)' }}
               title="复制"
             >
@@ -188,7 +203,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
               <>
                 <button
                   onClick={handleSaveEdit}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                  className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
                   style={{ color: '#22c55e' }}
                   title="保存"
                 >
@@ -197,7 +212,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
                 </button>
                 <button
                   onClick={handleCancelEdit}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                  className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
                   style={{ color: 'var(--text-secondary)' }}
                   title="取消"
                 >
@@ -209,29 +224,20 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
               <>
                 {onEdit && (
                   <button
-                    onClick={() => onEdit(message.content)}
-                    className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                    onClick={handleStartEdit}
+                    className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
                     style={{ color: 'var(--text-secondary)' }}
                     title="编辑"
                   >
-                    <Edit3 size={11} />
+                    <Pencil size={11} />
                     编辑
                   </button>
                 )}
-                <button
-                  onClick={handleStartEdit}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
-                  style={{ color: 'var(--text-secondary)' }}
-                  title="修改消息"
-                >
-                  <Edit3 size={11} />
-                  修改
-                </button>
               </>
             )}
             <button
               onClick={handleSaveInspiration}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+              className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
               style={{ color: 'var(--text-secondary)' }}
               title="收藏灵感"
             >
@@ -241,7 +247,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
             {onResend && (
               <button
                 onClick={handleResend}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-black/[.08] active:scale-95"
+                className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
                 style={{ color: 'var(--accent)' }}
                 title="重发"
               >
@@ -249,18 +255,6 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
                 重发
               </button>
             )}
-          </div>
-        </div>
-        {/* User avatar */}
-        <div className="shrink-0 pt-4">
-          <div
-            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-            style={{
-              backgroundColor: 'rgba(59, 130, 246, 0.15)',
-              color: '#3B82F6',
-            }}
-          >
-            <User size={14} />
           </div>
         </div>
       </div>
@@ -277,7 +271,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
       {/* Avatar */}
       <div className="shrink-0 pt-0.5">
         <div
-          className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+          className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold"
           style={{
             backgroundColor: `${agentColor}20`,
             color: agentColor,
@@ -291,7 +285,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
       <div className="flex-1 min-w-0">
         {/* Agent label */}
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+          <span className="text-[11px] " style={{ color: 'var(--text-primary)' }}>
             {buildAgentLabel()}
           </span>
           {message.mode !== 'native' && (
@@ -319,7 +313,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
         <div className="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
+            className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
             style={{ color: 'var(--text-secondary)' }}
             title="复制"
           >
@@ -328,7 +322,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
           </button>
           <button
             onClick={handleSaveInspiration}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
+            className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95"
             style={{ color: 'var(--text-secondary)' }}
             title="收藏灵感"
           >

@@ -88,7 +88,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
   return (
     <aside
       className="w-[340px] flex flex-col shrink-0"
-      style={{ borderLeft: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+      style={{ borderLeft: '1px solid var(--border)', backgroundColor: 'var(--bg-primary)' }}
     >
       {/* Header */}
       <div className="flex items-center px-3 h-9 gap-0.5" style={{ borderBottom: '1px solid var(--border)' }}>

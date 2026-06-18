@@ -49,13 +49,13 @@ export function UpdateChecker() {
     <div className="p-4 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+        <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
           更新检查
         </h3>
         <button
           onClick={fetchUpdates}
           disabled={checking}
-          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors disabled:opacity-50"
+          className="pd-btn flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors disabled:opacity-50"
           style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
         >
           {checking ? (
@@ -100,7 +100,7 @@ export function UpdateChecker() {
               <Check size={14} style={{ color: '#10B981', flexShrink: 0 }} />
             )}
             <div className="min-w-0">
-              <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+              <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
                 PilotDesk
               </span>
               <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
@@ -124,7 +124,7 @@ export function UpdateChecker() {
             {pd.hasUpdate && (
               <button
                 onClick={handleOpenReleasePage}
-                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-colors"
+                className="pd-btn flex items-center gap-1 px-2 py-1 rounded text-[10px]  transition-colors"
                 style={{ backgroundColor: '#F59E0B', color: '#fff' }}
                 title="前往 GitHub 下载新版本"
               >
@@ -149,7 +149,7 @@ export function UpdateChecker() {
         >
           <Rocket size={14} style={{ color: '#F59E0B', flexShrink: 0, marginTop: 1 }} />
           <div>
-            <p className="text-xs font-medium" style={{ color: '#F59E0B' }}>
+            <p className="text-xs " style={{ color: '#F59E0B' }}>
               发现新版本
             </p>
             <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>

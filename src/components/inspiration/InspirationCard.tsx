@@ -33,7 +33,7 @@ export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
           <span className="text-xl">{inspiration.icon}</span>
-          <h4 className="text-sm font-medium leading-tight" style={{ color: 'var(--text-primary)' }}>
+          <h4 className="text-sm  leading-tight" style={{ color: 'var(--text-primary)' }}>
             {inspiration.title}
           </h4>
         </div>

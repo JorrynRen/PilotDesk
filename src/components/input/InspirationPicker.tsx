@@ -107,7 +107,7 @@ export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps)
           className="flex-1 text-xs outline-none bg-transparent"
           style={{ color: 'var(--text-primary)' }}
         />
-        <button onClick={onClose} className="p-0.5" style={{ color: 'var(--text-tertiary)' }}>
+        <button onClick={onClose} className="pd-btn p-0.5" style={{ color: 'var(--text-tertiary)' }}>
           <X size={12} />
         </button>
       </div>
@@ -136,7 +136,7 @@ export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps)
             >
               <span className="text-base shrink-0 mt-0.5">{insp.icon}</span>
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                <div className="text-xs  truncate" style={{ color: 'var(--text-primary)' }}>
                   {insp.title}
                 </div>
                 <div className="text-[10px] truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>

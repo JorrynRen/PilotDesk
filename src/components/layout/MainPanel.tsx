@@ -11,29 +11,31 @@ import { getModePrompt } from '../../types';
 
 // ── State Machine ──
 
-interface MainPanelState {
-  isGenerating: boolean;
+interface SessionGenerationState {
   streamingContent: string;
   streamingStatus: string;
+}
+
+interface MainPanelState {
+  generatingSessions: Record<string, SessionGenerationState>;
   pendingInput: string | null;
   /** Content that finished streaming, awaiting message creation */
   pendingComplete: { sessionId: string; content: string } | null;
 }
 
 type Action =
-  | { type: 'SEND_START'; status: string }
-  | { type: 'APPEND_CHUNK'; content: string }
+  | { type: 'SEND_START'; sessionId: string; status: string }
+  | { type: 'APPEND_CHUNK'; sessionId: string; content: string }
   | { type: 'GENERATION_DONE'; sessionId: string }
   | { type: 'GENERATION_ERROR'; sessionId: string; error: string }
   | { type: 'GENERATION_TIMEOUT'; sessionId: string }
   | { type: 'STOP_GENERATION'; sessionId: string }
+  | { type: 'CLEAR_SESSION'; sessionId: string }
   | { type: 'CLEAR_PENDING_COMPLETE' }
   | { type: 'SET_PENDING_INPUT'; content: string | null };
 
 const initialState: MainPanelState = {
-  isGenerating: false,
-  streamingContent: '',
-  streamingStatus: '',
+  generatingSessions: {},
   pendingInput: null,
   pendingComplete: null,
 };
@@ -41,52 +43,80 @@ const initialState: MainPanelState = {
 function reducer(state: MainPanelState, action: Action): MainPanelState {
   switch (action.type) {
     case 'SEND_START':
-      return { ...state, isGenerating: true, streamingContent: '', streamingStatus: action.status, pendingComplete: null };
-
-    case 'APPEND_CHUNK':
-      return { ...state, streamingContent: state.streamingContent + action.content };
-
-    case 'GENERATION_DONE':
       return {
         ...state,
-        isGenerating: false,
-        streamingStatus: '',
-        pendingComplete: { sessionId: action.sessionId, content: state.streamingContent },
-        streamingContent: '',
+        generatingSessions: {
+          ...state.generatingSessions,
+          [action.sessionId]: { streamingContent: '', streamingStatus: action.status },
+        },
+        pendingComplete: null,
       };
 
-    case 'GENERATION_ERROR':
+    case 'APPEND_CHUNK': {
+      const session = state.generatingSessions[action.sessionId];
+      if (!session) return state;
       return {
         ...state,
-        isGenerating: false,
-        streamingStatus: '',
-        streamingContent: '',
+        generatingSessions: {
+          ...state.generatingSessions,
+          [action.sessionId]: {
+            ...session,
+            streamingContent: session.streamingContent + action.content,
+          },
+        },
       };
+    }
 
-    case 'GENERATION_TIMEOUT':
+    case 'GENERATION_DONE': {
+      const session = state.generatingSessions[action.sessionId];
+      if (!session) return state;
+      const { [action.sessionId]: _, ...rest } = state.generatingSessions;
       return {
         ...state,
-        isGenerating: false,
-        streamingStatus: '',
+        generatingSessions: rest,
+        pendingComplete: session.streamingContent
+          ? { sessionId: action.sessionId, content: session.streamingContent }
+          : null,
+      };
+    }
+
+    case 'GENERATION_ERROR': {
+      const { [action.sessionId]: _, ...rest } = state.generatingSessions;
+      return { ...state, generatingSessions: rest };
+    }
+
+    case 'GENERATION_TIMEOUT': {
+      const session = state.generatingSessions[action.sessionId];
+      const { [action.sessionId]: _, ...rest } = state.generatingSessions;
+      const timeoutMsg = '*(请求超时：智能体未在 60 秒内响应，请检查智能体状态后重试)*';
+      return {
+        ...state,
+        generatingSessions: rest,
         pendingComplete: {
           sessionId: action.sessionId,
-          content: state.streamingContent
-            ? state.streamingContent + '\n\n*(请求超时：智能体未在 60 秒内响应，请检查智能体状态后重试)*'
-            : '*(请求超时：智能体未在 60 秒内响应，请检查智能体状态后重试)*',
+          content: session?.streamingContent
+            ? session.streamingContent + '\n\n' + timeoutMsg
+            : timeoutMsg,
         },
-        streamingContent: '',
       };
+    }
 
-    case 'STOP_GENERATION':
+    case 'STOP_GENERATION': {
+      const session = state.generatingSessions[action.sessionId];
+      const { [action.sessionId]: _, ...rest } = state.generatingSessions;
       return {
         ...state,
-        isGenerating: false,
-        streamingStatus: '',
-        pendingComplete: state.streamingContent
-          ? { sessionId: action.sessionId, content: state.streamingContent + '\n\n*(已停止生成)*' }
+        generatingSessions: rest,
+        pendingComplete: session?.streamingContent
+          ? { sessionId: action.sessionId, content: session.streamingContent + '\n\n*(已停止生成)*' }
           : null,
-        streamingContent: '',
       };
+    }
+
+    case 'CLEAR_SESSION': {
+      const { [action.sessionId]: _, ...rest } = state.generatingSessions;
+      return { ...state, generatingSessions: rest };
+    }
 
     case 'CLEAR_PENDING_COMPLETE':
       return { ...state, pendingComplete: null };
@@ -113,9 +143,10 @@ export function MainPanel() {
 
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  // Side-effect refs (not UI state)
-  const doneSessionIdRef = useRef<string | null>(null);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 每个会话独立的超时计时器
+  const timeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // 已完成的会话 ID 集合（防止重复处理）
+  const doneSessionIdsRef = useRef<Set<string>>(new Set());
   const createdSessionsRef = useRef<Set<string>>(new Set());
 
   const currentSession = sessions.find((s) => s.id === currentSessionId)
@@ -124,47 +155,56 @@ export function MainPanel() {
 
   const currentAgentType = currentSession?.agentType ?? null;
 
-  // ── Agent Event handlers ──
+  // 当前会话的生成状态
+  const currentGenState = currentSessionId
+    ? state.generatingSessions[currentSessionId]
+    : undefined;
 
-  const onChunk = useCallback((sessionId: string, content: string) => {
-    if (sessionId === currentSessionId) {
-      dispatch({ type: 'APPEND_CHUNK', content });
-    }
-  }, [currentSessionId]);
+  // ── 超时管理 ──
 
-  const clearTimeoutSafe = useCallback(() => {
-    if (timeoutRef.current !== null) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
+  const clearSessionTimeout = useCallback((sessionId: string) => {
+    if (timeoutRefs.current[sessionId]) {
+      clearTimeout(timeoutRefs.current[sessionId]);
+      delete timeoutRefs.current[sessionId];
     }
   }, []);
 
+  // ── Agent Event handlers ──
+
+  const onChunk = useCallback((sessionId: string, content: string) => {
+    // 无条件写入对应会话的 streamingContent
+    dispatch({ type: 'APPEND_CHUNK', sessionId, content });
+  }, []);
+
   const onDone = useCallback((sessionId: string) => {
-    if (doneSessionIdRef.current === sessionId) return;
-    doneSessionIdRef.current = sessionId;
-    clearTimeoutSafe();
-    if (sessionId === currentSessionId) {
-      dispatch({ type: 'GENERATION_DONE', sessionId });
-    }
-  }, [currentSessionId, clearTimeoutSafe]);
+    // 防止重复处理
+    if (doneSessionIdsRef.current.has(sessionId)) return;
+    doneSessionIdsRef.current.add(sessionId);
+
+    clearSessionTimeout(sessionId);
+    dispatch({ type: 'GENERATION_DONE', sessionId });
+  }, [clearSessionTimeout]);
 
   const onError = useCallback((sessionId: string, error: string) => {
+    clearSessionTimeout(sessionId);
+
+    // 只有当前可见会话的错误才弹 Toast
     if (sessionId === currentSessionId) {
-      clearTimeoutSafe();
       showToast(`错误: ${error}`, 'error');
-      if (currentSessionId) {
-        addMessage({
-          id: `msg-err-${Date.now()}`,
-          sessionId: currentSessionId,
-          role: 'system',
-          content: `❗ 请求失败: ${error}`,
-          mode: 'native',
-          timestamp: Math.floor(Date.now() / 1000),
-        });
-      }
-      dispatch({ type: 'GENERATION_ERROR', sessionId, error });
     }
-  }, [currentSessionId, addMessage, clearTimeoutSafe]);
+
+    // 向对应会话添加错误消息
+    addMessage({
+      id: `msg-err-${Date.now()}`,
+      sessionId,
+      role: 'system',
+      content: `❗ 请求失败: ${error}`,
+      mode: 'native',
+      timestamp: Math.floor(Date.now() / 1000),
+    });
+
+    dispatch({ type: 'GENERATION_ERROR', sessionId, error });
+  }, [currentSessionId, addMessage, clearSessionTimeout]);
 
   const {
     sendChat,
@@ -181,7 +221,6 @@ export function MainPanel() {
     const { sessionId, content } = state.pendingComplete;
     dispatch({ type: 'CLEAR_PENDING_COMPLETE' });
 
-    if (sessionId !== currentSessionId) return;
     if (!content) return;
 
     addMessage({
@@ -192,7 +231,7 @@ export function MainPanel() {
       mode: 'native',
       timestamp: Math.floor(Date.now() / 1000),
     });
-  }, [state.pendingComplete, currentSessionId, addMessage]);
+  }, [state.pendingComplete, addMessage]);
 
   // ── Side effect: ensure Rust backend session exists for Agent sessions ──
 
@@ -220,37 +259,43 @@ export function MainPanel() {
   const handleSend = useCallback(
     async (message: string, mode: ChatMode) => {
       if (!currentSession) return;
-      doneSessionIdRef.current = null;
-      clearTimeoutSafe();
-      dispatch({ type: 'SEND_START', status: '发送中...' });
+
+      const sid = currentSession.id;
+
+      // 清除当前会话的旧状态
+      doneSessionIdsRef.current.delete(sid);
+      clearSessionTimeout(sid);
+
+      dispatch({ type: 'SEND_START', sessionId: sid, status: '发送中...' });
 
       // Save user message to store
       addMessage({
         id: `msg-${Date.now()}`,
-        sessionId: currentSession.id,
+        sessionId: sid,
         role: 'user',
         content: message,
         mode,
         timestamp: Math.floor(Date.now() / 1000),
       });
 
-      // Start 60s frontend timeout
-      timeoutRef.current = setTimeout(() => {
-        dispatch({ type: 'GENERATION_TIMEOUT', sessionId: currentSession.id });
+      // 每个会话独立的 60s 超时计时器
+      const timeoutId = setTimeout(() => {
+        dispatch({ type: 'GENERATION_TIMEOUT', sessionId: sid });
         if (currentSession.agentType === 'api') {
           stopApiChat();
         } else {
-          stopGeneration(currentSession.id);
+          stopGeneration(sid);
         }
         showToast('请求超时：智能体未在 60 秒内响应', 'error');
       }, 60000);
+      timeoutRefs.current[sid] = timeoutId;
 
       if (currentSession.agentType === 'api') {
         // API direct call
         if (!currentSession.apiProvider || !currentSession.apiModel) {
           showToast('API 会话缺少提供商或模型配置', 'error');
-          clearTimeoutSafe();
-          dispatch({ type: 'GENERATION_ERROR', sessionId: currentSession.id, error: '缺少 API 配置' });
+          clearSessionTimeout(sid);
+          dispatch({ type: 'GENERATION_ERROR', sessionId: sid, error: '缺少 API 配置' });
           return;
         }
         let apiEndpoint = '';
@@ -262,41 +307,44 @@ export function MainPanel() {
         } catch { /* ignore */ }
         if (!apiEndpoint) {
           showToast('未找到 API URL，请在设置中配置', 'error');
-          clearTimeoutSafe();
-          dispatch({ type: 'GENERATION_ERROR', sessionId: currentSession.id, error: '未找到 API URL' });
+          clearSessionTimeout(sid);
+          dispatch({ type: 'GENERATION_ERROR', sessionId: sid, error: '未找到 API URL' });
           return;
         }
         const history = messages
           .filter((m) => m.role === 'user' || m.role === 'assistant')
           .map((m) => ({ role: m.role, content: m.content }));
-        sendApiChat(currentSession.id, message, apiEndpoint, currentSession.apiProvider, currentSession.apiModel, history);
+        sendApiChat(sid, message, apiEndpoint, currentSession.apiProvider, currentSession.apiModel, history);
       } else {
         // Agent via Tauri Event
         const systemPrompt = await getModePrompt(mode);
-        sendChat(currentSession.id, message, mode, currentSession.agentType, undefined, systemPrompt);
+        sendChat(sid, message, mode, currentSession.agentType, undefined, systemPrompt);
       }
     },
-    [currentSession, sendChat, sendApiChat, addMessage, clearTimeoutSafe, stopApiChat, stopGeneration, messages],
+    [currentSession, sendChat, sendApiChat, addMessage, clearSessionTimeout, stopApiChat, stopGeneration, messages],
   );
 
   const handleStop = useCallback(() => {
-    clearTimeoutSafe();
-    if (currentSession) {
-      if (currentSession.agentType === 'api') {
-        stopApiChat();
-      } else {
-        stopGeneration(currentSession.id);
-      }
-      dispatch({ type: 'STOP_GENERATION', sessionId: currentSession.id });
+    if (!currentSession) return;
+    const sid = currentSession.id;
+
+    clearSessionTimeout(sid);
+
+    if (currentSession.agentType === 'api') {
+      stopApiChat();
+    } else {
+      stopGeneration(sid);
     }
-  }, [currentSession, stopGeneration, stopApiChat, clearTimeoutSafe]);
+
+    dispatch({ type: 'STOP_GENERATION', sessionId: sid });
+  }, [currentSession, stopGeneration, stopApiChat, clearSessionTimeout]);
 
   // ── Build display messages ──
 
-  const streamingMsg = state.isGenerating && state.streamingContent
+  const streamingMsg = currentGenState?.streamingContent
     ? {
         role: 'assistant' as const,
-        content: state.streamingContent,
+        content: currentGenState.streamingContent,
         sessionId: currentSessionId || '',
         id: 'streaming',
         mode: 'native' as ChatMode,
@@ -317,8 +365,8 @@ export function MainPanel() {
         <MessageList
           messages={displayMessages}
           session={currentSession}
-          isGenerating={state.isGenerating}
-          streamingStatus={state.streamingStatus}
+          isGenerating={!!currentGenState}
+          streamingStatus={currentGenState?.streamingStatus ?? ''}
           onEditMessage={(content) => {
             dispatch({ type: 'SET_PENDING_INPUT', content });
             showToast('消息已填入输入框，可修改后重新发送', 'info');
@@ -337,7 +385,8 @@ export function MainPanel() {
         session={currentSession}
         onSend={handleSend}
         onStop={handleStop}
-        isGenerating={state.isGenerating}
+        isGenerating={!!currentGenState}
+        streamingStatus={currentGenState?.streamingStatus ?? ''}
         pendingInput={state.pendingInput}
         onPendingConsumed={() => dispatch({ type: 'SET_PENDING_INPUT', content: null })}
       />

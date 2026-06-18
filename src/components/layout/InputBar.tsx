@@ -20,11 +20,12 @@ interface InputBarProps {
   onSend: (message: string, mode: ChatMode) => void;
   onStop?: () => void;
   isGenerating?: boolean;
+  streamingStatus?: string;
   pendingInput?: string | null;
   onPendingConsumed?: () => void;
 }
 
-export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, onPendingConsumed }: InputBarProps) {
+export function InputBar({ session, onSend, onStop, isGenerating, streamingStatus, pendingInput, onPendingConsumed }: InputBarProps) {
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<ChatMode>('native');
   const [showInspirationPicker, setShowInspirationPicker] = useState(false);
@@ -129,6 +130,20 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
 
   return (
     <div className="shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+      {/* 等待提示条 */}
+      {isGenerating && (
+        <div className="flex items-center gap-2 px-4 py-1.5" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '0ms' }} />
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '150ms' }} />
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '300ms' }} />
+          </div>
+          <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+            {'思考中...'}
+          </span>
+        </div>
+      )}
+
       {/* Toolbar: mode selector + inspiration + skill + send */}
       <div className="flex items-center gap-1 px-4 pt-3">
         {/* Mode dropdown */}
@@ -215,7 +230,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
         {isGenerating ? (
           <button
             onClick={onStop}
-            className="p-1.5 rounded-lg transition-colors"
+            className="pd-btn p-1.5 rounded-lg transition-colors"
             style={{ backgroundColor: '#EF444422', color: '#EF4444' }}
             title="停止生成"
           >
@@ -225,7 +240,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
           <button
             onClick={handleSendInternal}
             disabled={!input.trim() || !session}
-            className="p-1.5 rounded-lg transition-colors disabled:opacity-30"
+            className="pd-btn p-1.5 rounded-lg transition-colors disabled:opacity-30"
             style={{
               backgroundColor: input.trim() && session ? 'var(--accent)' : 'var(--bg-tertiary)',
               color: input.trim() && session ? '#fff' : 'var(--text-secondary)',
@@ -260,7 +275,20 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
           {showInspirationPicker && (
             <InspirationPicker
               onSelect={(content) => {
-                setInput((prev) => prev + content);
+                const ta = textareaRef.current;
+                if (ta) {
+                  const cursorPos = ta.selectionStart ?? ta.value.length;
+                  const text = ta.value;
+                  const before = text.slice(0, cursorPos);
+                  const after = text.slice(cursorPos);
+                  setInput(before + content + after);
+                  requestAnimationFrame(() => {
+                    ta.focus();
+                    ta.selectionStart = ta.selectionEnd = cursorPos + content.length;
+                  });
+                } else {
+                  setInput((prev) => prev + content);
+                }
                 setShowInspirationPicker(false);
               }}
               onClose={() => setShowInspirationPicker(false)}
@@ -269,8 +297,23 @@ export function InputBar({ session, onSend, onStop, isGenerating, pendingInput, 
           {showSkillPicker && (
             <SkillPicker
               agentType={session?.agentType ?? 'claude'}
-              onSelect={(content) => {
-                setInput((prev) => prev + content);
+              onSelect={(name) => {
+                const ta = textareaRef.current;
+                if (ta) {
+                  const cursorPos = ta.selectionStart ?? ta.value.length;
+                  const text = ta.value;
+                  const before = text.slice(0, cursorPos);
+                  const after = text.slice(cursorPos);
+                  const insertion = `@${name} `;
+                  setInput(before + insertion + after);
+                  // Restore cursor position after insertion
+                  requestAnimationFrame(() => {
+                    ta.focus();
+                    ta.selectionStart = ta.selectionEnd = cursorPos + insertion.length;
+                  });
+                } else {
+                  setInput((prev) => prev + `@${name} `);
+                }
                 setShowSkillPicker(false);
               }}
               onClose={() => setShowSkillPicker(false)}

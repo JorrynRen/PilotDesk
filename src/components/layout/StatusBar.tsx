@@ -36,7 +36,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
         </span>
         <button
           onClick={onOpenSettings}
-          className="flex items-center gap-1 transition-colors hover:opacity-80"
+          className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
           title="点击打开设置"
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: claudeStatus.color }} />
@@ -44,7 +44,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
         </button>
         <button
           onClick={onOpenSettings}
-          className="flex items-center gap-1 transition-colors hover:opacity-80"
+          className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
           title="点击打开设置"
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: hermesStatus.color }} />
@@ -52,7 +52,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
         </button>
         <button
           onClick={onOpenSettings}
-          className="flex items-center gap-1 transition-colors hover:opacity-80"
+          className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
           title="点击打开设置"
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: codexStatus.color }} />

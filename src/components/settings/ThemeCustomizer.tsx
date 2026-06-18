@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useThemeStore } from '../../stores/themeStore';
+import { SettingsSection, SettingsButton } from './index';
 
 const PRESET_COLORS = [
   '#3B82F6', // Blue (default)
@@ -38,10 +39,7 @@ export function ThemeCustomizer() {
   };
 
   return (
-    <div className="p-4">
-      <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
-        主题色
-      </h3>
+    <SettingsSection title="主题色">
 
       {/* Preset colors */}
       <div className="flex flex-wrap gap-2 mb-3">
@@ -62,30 +60,16 @@ export function ThemeCustomizer() {
 
       {/* Custom color picker */}
       <div className="flex items-center gap-2">
-        <button
-          onClick={() => setShowPicker(!showPicker)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-all"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-secondary)',
-          }}
-        >
+        <SettingsButton onClick={() => setShowPicker(!showPicker)} variant="secondary">
           <div
             className="w-4 h-4 rounded"
             style={{ backgroundColor: colors.accent }}
           />
           自定义颜色
-        </button>
-        <button
-          onClick={resetColors}
-          className="px-3 py-1.5 rounded-lg text-xs transition-all"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-tertiary)',
-          }}
-        >
+        </SettingsButton>
+        <SettingsButton onClick={resetColors} variant="ghost">
           重置
-        </button>
+        </SettingsButton>
       </div>
 
       {showPicker && (
@@ -99,6 +83,6 @@ export function ThemeCustomizer() {
           />
         </div>
       )}
-    </div>
+    </SettingsSection>
   );
 }

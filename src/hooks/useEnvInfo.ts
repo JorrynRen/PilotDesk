@@ -23,20 +23,22 @@ function notifyListeners() {
   }
 }
 
-async function fetchEnv() {
-  if (globalFetching) return;
+async function fetchEnv(): Promise<EnvInfo | null> {
+  if (globalFetching) return globalEnvInfo;
   globalFetching = true;
   globalLoading = true;
   notifyListeners();
   try {
     const info = await invoke<EnvInfo>('detect_env');
     globalEnvInfo = info;
+    return info;
   } catch {
-    // Silent fail
+    return null;
+  } finally {
+    globalLoading = false;
+    globalFetching = false;
+    notifyListeners();
   }
-  globalLoading = false;
-  globalFetching = false;
-  notifyListeners();
 }
 
 export function useEnvInfo() {

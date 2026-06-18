@@ -17,36 +17,68 @@ interface MessageListProps {
 
 export function MessageList({ messages, session, isGenerating, streamingStatus, onEditMessage, onSaveInspiration, onResendMessage }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const prevLengthRef = useRef(messages.length);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
   const [isSearchingMessages, setIsSearchingMessages] = useState(false);
 
-  const handleMessageSearch = useCallback(async (query: string) => {
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleMessageSearch = useCallback((query: string) => {
     setSearchQuery(query);
+    // Clear previous timer
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+      searchTimerRef.current = null;
+    }
     if (!query.trim()) {
       setSearchResults(null);
       return;
     }
-    setIsSearchingMessages(true);
-    try {
-      const results = await invoke<Message[]>('search_messages', {
-        sessionId: session?.id ?? null,
-        query: query.trim(),
-        limit: 50,
-      });
-      setSearchResults(results);
-    } catch { /* ignore */ }
-    setIsSearchingMessages(false);
+    // Debounce search to avoid invoke on every keystroke
+    searchTimerRef.current = setTimeout(async () => {
+      setIsSearchingMessages(true);
+      try {
+        const results = await invoke<Message[]>('search_messages', {
+          sessionId: session?.id ?? null,
+          query: query.trim(),
+          limit: 50,
+        });
+        setSearchResults(results);
+      } catch { /* ignore */ }
+      setIsSearchingMessages(false);
+    }, 300);
   }, [session?.id]);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Cleanup timer on unmount
   useEffect(() => {
-    if (messages.length > prevLengthRef.current) {
-      virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' });
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, []);
+
+  // 记录上一个会话 ID，用于检测会话切换
+  const prevSessionIdRef = useRef<string | null>(null);
+
+  // 切换会话时 → 滚动到底部
+  useEffect(() => {
+    if (session?.id && session.id !== prevSessionIdRef.current) {
+      prevSessionIdRef.current = session.id;
+      if (messages.length > 0) {
+        setTimeout(() => {
+          virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'auto' });
+        }, 100);
+      }
     }
-    prevLengthRef.current = messages.length;
-  }, [messages.length]);
+  }, [session?.id]);
+
+  // 收到消息时 → 滚动到底部
+  useEffect(() => {
+    if (messages.length > 0) {
+      requestAnimationFrame(() => {
+        virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' });
+      });
+    }
+  }, [messages]);
 
   const itemContent = useCallback((index: number) => {
     const msg = messages[index];
@@ -64,7 +96,6 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
     );
   }, [messages, session, onEditMessage, onSaveInspiration]);
 
-  const showTypingIndicator = isGenerating && messages.length > 0 && messages[messages.length - 1].role === 'user';
 
   if (!session) {
     return (
@@ -76,7 +107,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
             className="w-16 h-16 mx-auto mb-5 rounded-2xl opacity-90"
             draggable={false}
           />
-          <h2 className="text-base font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
+          <h2 className="text-base font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
             PilotDesk
           </h2>
           <p className="text-xs leading-relaxed mb-4" style={{ color: 'var(--text-secondary)' }}>
@@ -112,7 +143,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: dotColor }} />
             {agentLabel}{modelInfo}
           </div>
-          <p className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>
+          <p className="text-sm  mb-1" style={{ color: 'var(--text-primary)' }}>
             开始新的对话
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
@@ -127,6 +158,62 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Floating search bar - outside Virtuoso, stays at top */}
+      {messages.length > 0 && (
+        <div className="shrink-0 px-4 flex items-center border-b" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-primary)', height: '36px' }}>
+          <div className="flex items-center gap-2 flex-1">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => handleMessageSearch(e.target.value)}
+                placeholder="搜索消息..."
+                className="w-full text-xs px-3 py-1 rounded-lg outline-none"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                }}
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => { setSearchQuery(''); setSearchResults(null); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2"
+                  style={{ color: 'var(--text-tertiary)' }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              )}
+              {isSearchingMessages && (
+                <div className="absolute right-6 top-1/2 -translate-y-1/2">
+                  <div className="w-3 h-3 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: 'var(--text-tertiary)', borderTopColor: 'transparent' }} />
+                </div>
+              )}
+            </div>
+            {searchResults !== null && (
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="pd-text-10" style={{ color: 'var(--text-tertiary)' }}>
+                  {searchResults.length} 条
+                </span>
+                {searchResults.length > 0 && (
+                  <button
+                    onClick={() => {
+                      const first = messages.findIndex(m => m.id === searchResults[0].id);
+                      if (first >= 0) virtuosoRef.current?.scrollToIndex({ index: first, behavior: 'smooth' });
+                    }}
+                    className="pd-text-10 px-1.5 py-0.5 rounded transition-colors hover:opacity-80"
+                    style={{ color: 'var(--accent)' }}
+                    title="定位到第一条"
+                  >
+                    定位
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <Virtuoso
         ref={virtuosoRef}
         className="flex-1"
@@ -135,66 +222,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
         followOutput="smooth"
         increaseViewportBy={{ top: 200, bottom: 200 }}
         components={{
-          Header: () => (
-            <div className="px-4 py-2 border-b" style={{ borderColor: 'var(--border)' }}>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => handleMessageSearch(e.target.value)}
-                  placeholder="搜索消息..."
-                  className="w-full text-xs px-3 py-1.5 rounded-lg outline-none"
-                  style={{
-                    backgroundColor: 'var(--bg-tertiary)',
-                    color: 'var(--text-primary)',
-                    border: '1px solid var(--border)',
-                  }}
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => { setSearchQuery(''); setSearchResults(null); }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  </button>
-                )}
-                {isSearchingMessages && (
-                  <div className="absolute right-6 top-1/2 -translate-y-1/2">
-                    <div className="w-3 h-3 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: 'var(--text-tertiary)', borderTopColor: 'transparent' }} />
-                  </div>
-                )}
-              </div>
-              {searchResults !== null && (
-                <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-                  找到 {searchResults.length} 条结果
-                </div>
-              )}
-            </div>
-          ),
-          Footer: () => showTypingIndicator ? (
-            <div className="flex gap-3 px-4 py-[3px]" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-              <div className="shrink-0 pt-0.5">
-                <div
-                  className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-                  style={{
-                    backgroundColor: (AGENT_THEMES[session?.agentType ?? ''] ?? AGENT_THEMES.claude).bg,
-                    color: (AGENT_THEMES[session?.agentType ?? ''] ?? AGENT_THEMES.claude).color,
-                  }}
-                >
-                  {(AGENT_THEMES[session?.agentType ?? ''] ?? AGENT_THEMES.claude).initial}
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5 py-2">
-                <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '0ms' }} />
-                <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '150ms' }} />
-                <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '300ms' }} />
-                <span className="text-xs ml-2" style={{ color: 'var(--text-tertiary)' }}>
-                  {streamingStatus || '思考中...'}
-                </span>
-              </div>
-            </div>
-          ) : null,
+          Footer: () => null,
         }}
       />
     </div>

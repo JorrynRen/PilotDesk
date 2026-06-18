@@ -113,7 +113,7 @@ export function InspirationPanel() {
               setEditingInspiration(null);
               setShowForm(true);
             }}
-            className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px] font-medium shrink-0 transition-colors"
+            className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px]  shrink-0 transition-colors"
             style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
             title="新建灵感"
           >
@@ -185,7 +185,7 @@ interface InspirationRowProps {
 function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDelete, onEdit }: InspirationRowProps) {
   const sourceTheme = AGENT_THEMES[inspiration.sourceAgent ?? ''];
   const sourceLabel = sourceTheme?.label ?? inspiration.sourceAgent;
-  const sourceColor = sourceTheme?.cssVar ?? 'var(--text-tertiary)';
+  const sourceColor = sourceTheme?.color ?? '#6B7280';
 
   return (
     <div
@@ -197,19 +197,23 @@ function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDele
         <span className="text-sm leading-none shrink-0">{inspiration.icon || '💡'}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1">
-            <span className="text-[11px] font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+            <span className="text-[11px]  truncate" style={{ color: 'var(--text-primary)' }}>
               {inspiration.title}
             </span>
             <span
-              className="text-[9px] px-1 rounded shrink-0"
-              style={{ backgroundColor: `${sourceColor}15`, color: sourceColor }}
+              className="text-[9px] px-1.5 py-0.5 rounded shrink-0 font-medium"
+              style={{
+                backgroundColor: sourceColor,
+                color: '#fff',
+                opacity: 0.85,
+              }}
             >
               {sourceLabel ?? inspiration.sourceAgent}
             </span>
           </div>
         </div>
         {/* Actions (show on hover) */}
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-0.5 shrink-0">
           <button
             onClick={() => onToggleFavorite(inspiration.id)}
             className="p-0.5 rounded transition-colors hover:bg-black/5"
@@ -240,7 +244,7 @@ function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDele
       {/* Send to session */}
       <button
         onClick={() => onSendToSession(inspiration.content)}
-        className="flex items-center gap-1 text-[10px] transition-colors opacity-0 group-hover:opacity-100"
+        className="flex items-center gap-1 text-[10px] transition-colors"
         style={{ color: 'var(--accent)' }}
       >
         <Send size={10} />
@@ -335,7 +339,7 @@ function InspirationInlineForm({ initialData, sourceAgent, onSave, onCancel }: I
       <div className="flex items-center justify-end gap-1.5">
         <button
           onClick={onCancel}
-          className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px] transition-colors"
+          className="pd-btn flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px] transition-colors"
           style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-primary)' }}
         >
           <X size={10} />
@@ -344,7 +348,7 @@ function InspirationInlineForm({ initialData, sourceAgent, onSave, onCancel }: I
         <button
           onClick={handleSave}
           disabled={!title.trim() || !content.trim() || saving}
-          className="flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px] font-medium transition-colors disabled:opacity-40"
+          className="pd-btn flex items-center gap-0.5 px-2 py-1 rounded-md text-[11px]  transition-colors disabled:opacity-40"
           style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
         >
           {saving ? '保存中...' : initialData ? '更新' : '保存'}

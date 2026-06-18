@@ -95,10 +95,10 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
-          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+          <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
             {initialData ? '编辑灵感' : '新建灵感'}
           </h3>
-          <button onClick={onCancel} className="p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
+          <button onClick={onCancel} className="pd-btn p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
             <X size={16} />
           </button>
         </div>
@@ -205,7 +205,7 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
                     border: '1px solid var(--border)',
                   }}
                 />
-                <button onClick={addTag} className="p-0.5" style={{ color: 'var(--text-secondary)' }}>
+                <button onClick={addTag} className="pd-btn p-0.5" style={{ color: 'var(--text-secondary)' }}>
                   <Plus size={14} />
                 </button>
               </div>
@@ -217,7 +217,7 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
         <div className="flex items-center justify-end gap-2 px-5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
           <button
             onClick={onCancel}
-            className="px-4 py-2 rounded-lg text-sm"
+            className="pd-btn px-4 py-2 rounded-lg text-sm"
             style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)' }}
           >
             取消
@@ -225,7 +225,7 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
           <button
             onClick={handleSave}
             disabled={!title.trim() || saving}
-            className="px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+            className="pd-btn px-4 py-2 rounded-lg text-sm  disabled:opacity-50"
             style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
           >
             {saving ? '保存中...' : '保存'}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Search, Archive, Key, ChevronDown, X } from 'lucide-react';
+import { Plus, Search, Archive, Key, ChevronDown, X, Trash2 } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
 import { invoke } from '@tauri-apps/api/core';
@@ -7,7 +7,6 @@ import { showToast } from '../../utils/toast';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { AGENT_THEMES } from '../../types';
 import { SessionListItem } from './SessionListItem';
-import { showToast } from '../../utils/toast';
 
 type NewSessionType = 'claude' | 'hermes' | 'codex' | 'api' | 'codex';
 
@@ -102,6 +101,27 @@ export function SessionList() {
     });
   }, []);
 
+  const displayList = showArchived ? archivedSessions : sessions;
+  const isSearchActive = searchQuery.trim().length > 0;
+  const filteredList = isSearchActive
+    ? searchResults
+    : displayList.filter((s) =>
+        s.title.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+
+  // Group by time
+  const now = Date.now() / 1000;
+  const todayStart = Math.floor(now / 86400) * 86400;
+  const yesterdayStart = todayStart - 86400;
+
+  const today = filteredList.filter((s) => s.updatedAt >= todayStart);
+  const yesterday = filteredList.filter(
+    (s) => s.updatedAt >= yesterdayStart && s.updatedAt < todayStart
+  );
+  const earlier = filteredList.filter((s) => s.updatedAt < yesterdayStart);
+
+
+
   const selectAll = useCallback(() => {
     const ids = new Set(filteredList.map((s) => s.id));
     setSelectedIds(ids);
@@ -159,25 +179,6 @@ export function SessionList() {
       setCustomModel('');
     }
   }, [selectedApiProvider, apiProviders]);
-
-  const displayList = showArchived ? archivedSessions : sessions;
-  const isSearchActive = searchQuery.trim().length > 0;
-  const filteredList = isSearchActive
-    ? searchResults
-    : displayList.filter((s) =>
-        s.title.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-
-  // Group by time
-  const now = Date.now() / 1000;
-  const todayStart = Math.floor(now / 86400) * 86400;
-  const yesterdayStart = todayStart - 86400;
-
-  const today = filteredList.filter((s) => s.updatedAt >= todayStart);
-  const yesterday = filteredList.filter(
-    (s) => s.updatedAt >= yesterdayStart && s.updatedAt < todayStart
-  );
-  const earlier = filteredList.filter((s) => s.updatedAt < yesterdayStart);
 
   const handleCreate = async () => {
     setCreating(true);
@@ -263,7 +264,7 @@ export function SessionList() {
     if (items.length === 0) return null;
     return (
       <div key={label}>
-        <div className="px-3 py-1 text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+        <div className="px-3 py-1 text-[10px] " style={{ color: 'var(--text-secondary)' }}>
           {label}
         </div>
         {items.map((session) => (
@@ -275,6 +276,9 @@ export function SessionList() {
             onArchive={showArchived ? undefined : () => handleArchive(session.id)}
             onRename={handleRename}
             onDelete={() => handleDelete(session.id)}
+            batchMode={batchMode}
+            selected={selectedIds.has(session.id)}
+            onToggleSelect={toggleBatchSelect}
           />
         ))}
       </div>
@@ -286,90 +290,102 @@ export function SessionList() {
   return (
     <aside
       className="w-[260px] shrink-0 flex flex-col overflow-hidden"
-      style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-panel)' }}
+      style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
     >
       {/* Header */}
-      <div className="px-3 py-2 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
-        <span className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>会话</span>
+      <div className="flex items-center px-3 h-9" style={{ borderBottom: '1px solid var(--border)' }}>
+        <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>会话</span>
+        <div className="flex-1" />
         <div className="flex items-center gap-1">
           <button
+            onClick={() => setBatchMode(!batchMode)}
+            className="pd-btn pd-btn-sm"
+            style={{
+              backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
+              color: batchMode ? '#fff' : 'var(--text-secondary)',
+            }}
+            title="批量操作"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+            批量
+          </button>
+          <button
             onClick={toggleArchived}
-            className="p-1 rounded transition-colors"
-            style={{ color: showArchived ? 'var(--accent)' : 'var(--text-secondary)' }}
+            className="pd-btn pd-btn-sm"
+            style={{ color: showArchived ? 'var(--accent)' : 'var(--text-secondary)', backgroundColor: showArchived ? 'var(--accent-light)' : 'var(--bg-tertiary)' }}
             title="归档"
           >
-            <Archive size={14} />
+            <Archive size={11} />
+            归档
           </button>
           <button
             onClick={() => setShowNewDialog(true)}
-            className="p-1 rounded transition-colors"
-            style={{ color: 'var(--accent)' }}
+            className="pd-btn pd-btn-sm pd-btn-primary"
             title="新建会话"
           >
-            <Plus size={14} />
+            <Plus size={11} />
+            新建
           </button>
         </div>
       </div>
 
-      {/* Batch mode toggle */}
-      <div className="px-3 pt-1.5 flex items-center gap-2">
-        <button
-          onClick={() => { setBatchMode(!batchMode); setSelectedIds(new Set()); }}
-          className={`text-[10px] px-2 py-1 rounded transition-all ${batchMode ? 'text-white' : ''}`}
-          style={{
-            backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
-            color: batchMode ? '#fff' : 'var(--text-secondary)',
-          }}
-        >
-          {batchMode ? '退出批量' : '批量操作'}
-        </button>
-        {batchMode && (
-          <>
-            <button
-              onClick={selectAll}
-              className="text-[10px] px-2 py-1 rounded transition-all"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            >
-              全选
-            </button>
-            <button
-              onClick={deselectAll}
-              className="text-[10px] px-2 py-1 rounded transition-all"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            >
-              取消全选
-            </button>
-            <div className="flex-1" />
-            <button
-              onClick={batchArchive}
-              className="text-[10px] px-2 py-1 rounded transition-all"
-              style={{ backgroundColor: 'var(--status-info-bg)', color: 'var(--status-info)' }}
-              disabled={selectedIds.size === 0}
-            >
-              归档({selectedIds.size})
-            </button>
-            <button
-              onClick={batchDelete}
-              className="text-[10px] px-2 py-1 rounded transition-all"
-              style={{ backgroundColor: 'var(--status-danger-bg)', color: 'var(--status-danger)' }}
-              disabled={selectedIds.size === 0}
-            >
-              删除({selectedIds.size})
-            </button>
-          </>
-        )}
-      </div>
+      {/* Batch operations row - above search */}
+      {batchMode && (
+        <div className="flex items-center gap-1 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
+          <button
+            onClick={selectAll}
+            className="pd-btn pd-btn-sm"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="全选"
+          >
+            全
+          </button>
+          <button
+            onClick={deselectAll}
+            className="pd-btn pd-btn-sm"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="取消全选"
+          >
+            重
+          </button>
+          <div className="w-px h-4 mx-0.5" style={{ backgroundColor: 'var(--border)' }} />
+          <button
+            onClick={batchArchive}
+            className="pd-btn pd-btn-sm pd-btn-info"
+            disabled={selectedIds.size === 0}
+            title="批量归档"
+          >
+            档({selectedIds.size})
+          </button>
+          <button
+            onClick={batchDelete}
+            className="pd-btn pd-btn-sm pd-btn-danger"
+            disabled={selectedIds.size === 0}
+            title="批量删除"
+          >
+            删({selectedIds.size})
+          </button>
+          <div className="flex-1" />
+          <button
+            onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }}
+            className="pd-btn pd-btn-sm"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="退出批量模式"
+          >
+            退
+          </button>
+        </div>
+      )}
       {/* Search */}
       <div className="px-3 py-1.5">
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-          <Search size={12} style={{ color: 'var(--text-secondary)' }} />
+        <div className="relative">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索会话..."
-            className="flex-1 bg-transparent outline-none text-xs"
-            style={{ color: 'var(--text-primary)' }}
+            className="search-input"
           />
         </div>
       </div>
@@ -419,7 +435,7 @@ export function SessionList() {
             className="w-[420px] rounded-xl p-4"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
           >
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>新建会话</h3>
+            <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>新建会话</h3>
 
             {/* Session type selector */}
             <div className="flex gap-2 mb-4">
@@ -437,7 +453,7 @@ export function SessionList() {
                 <button
                   key={type}
                   onClick={() => setNewSessionType(type)}
-                  className="flex-1 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1"
+                  className="flex-1 py-2 rounded-lg text-xs  transition-colors flex items-center justify-center gap-1"
                   style={{
                     backgroundColor: newSessionType === type ? `${color}15` : 'var(--bg-secondary)',
                     color: newSessionType === type ? color : 'var(--text-secondary)',
@@ -454,7 +470,7 @@ export function SessionList() {
             {newSessionType !== 'api' && (
               <div className="space-y-3 mb-4">
                 <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
                     会话标题（可选）
                   </label>
                   <input
@@ -467,7 +483,7 @@ export function SessionList() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
                     工作目录（可选）
                   </label>
                   <input
@@ -486,7 +502,7 @@ export function SessionList() {
             {newSessionType === 'api' && (
               <div className="space-y-3 mb-4">
                 <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
                     API 提供商
                   </label>
                   {apiProviders.length === 0 ? (
@@ -519,7 +535,7 @@ export function SessionList() {
                 {currentApiProvider && (
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                      <label className="text-xs " style={{ color: 'var(--text-secondary)' }}>
                         模型
                       </label>
                       <button
@@ -575,7 +591,7 @@ export function SessionList() {
                 )}
 
                 <div>
-                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>
                     会话标题（可选）
                   </label>
                   <input
@@ -607,7 +623,7 @@ export function SessionList() {
               <button
                 onClick={handleCreate}
                 disabled={creating || (newSessionType === 'api' && apiProviders.length === 0)}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50"
+                className="pd-btn px-3 py-1.5 rounded-lg text-xs  disabled:opacity-50"
                 style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
               >
                 {creating ? '创建中...' : '创建'}

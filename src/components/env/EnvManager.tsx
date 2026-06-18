@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
 import { InstallLog } from './InstallLog';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
+import { SettingsSection, SettingsCard, SettingsButton, SettingsStatusIcon } from '../settings';
 
 interface DependencyStatus {
   name: string;
@@ -42,17 +43,6 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     invoke('insert_log', { message, level }).catch(() => {});
   }, []);
 
-  const fetchEnvWithLog = useCallback(async () => {
-    await fetchEnv();
-    addLog('环境检测完成', 'success');
-  }, [fetchEnv, addLog]);
-
-  interface VersionTimeInfo {
-    version: string;
-    releaseTime: string | null;
-  }
-
-  /** Query latest version for a single agent from registry */
   const checkAgentUpdate = useCallback(async (key: string, packageName: string, registry: 'npm' | 'pypi') => {
     setUpdateChecking((prev) => ({ ...prev, [key]: true }));
     try {
@@ -76,16 +66,9 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     }
   }, [addLog]);
 
-  const fetchedRef = useRef(false);
-
   useEffect(() => {
-    // Prevent duplicate fetch in React StrictMode (dev mode double-invocation)
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-
-    fetchEnv();
-
     // Listen for install progress events
+    // useEnvInfo already handles initial environment detection on first mount
     const unlisten = listen<string>('install-progress', (event) => {
       addLog(event.payload, 'info');
     });
@@ -93,22 +76,34 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [fetchEnv, addLog]);
+  }, [addLog]);
   
-  /** After env detection completes, auto-check updates for installed agents */
-  useEffect(() => {
-    if (envInfo) {
-      if (envInfo.claudeCodeVersion) {
+
+
+const fetchEnvWithLog = useCallback(async () => {
+    const info = await fetchEnv();
+    addLog('环境检测完成', 'success');
+    // After detection, check updates for installed agents
+    if (info) {
+      if (info.claudeCodeVersion) {
         checkAgentUpdate('claude', '@anthropic-ai/claude-code', 'npm');
       }
-      if (envInfo.hermesVersion) {
+      if (info.hermesVersion) {
         checkAgentUpdate('hermes', 'hermes-agent', 'pypi');
       }
-      if (envInfo.codexVersion) {
+      if (info.codexVersion) {
         checkAgentUpdate('codex', '@openai/codex', 'npm');
       }
     }
-  }, [envInfo, checkAgentUpdate]);
+  }, [fetchEnv, addLog, checkAgentUpdate]);
+
+  interface VersionTimeInfo {
+    version: string;
+    releaseTime: string | null;
+  }
+
+  /** Query latest version for a single agent from registry */
+  
 
   /** Simple semver older check */
   const isOlder = (current: string, latest: string) => {
@@ -216,7 +211,14 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         await invoke('install_codex');
         addLog('codeX 安装成功', 'success');
       }
-      await fetchEnv();
+      const info = await fetchEnv();
+      if (info) {
+        const pkg = key === 'claude' ? '@anthropic-ai/claude-code'
+          : key === 'hermes' ? 'hermes-agent'
+          : '@openai/codex';
+        const registry = key === 'hermes' ? 'pypi' as const : 'npm' as const;
+        checkAgentUpdate(key, pkg, registry);
+      }
     } catch (err: any) {
       const msg = err?.message || err?.details || (typeof err === 'string' ? err : JSON.stringify(err));
       addLog(`${name} 安装失败: ${msg}`, 'error');
@@ -227,60 +229,35 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   return (
     <div className="space-y-6">
       {/* Prerequisites */}
-      <section>
-        <h3 className="text-xs font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-          前置依赖
-        </h3>
+      <SettingsSection title="前置依赖">
         <div className="space-y-2">
           {dependencies.slice(0, 3).map((dep) => (
-            <div
-              key={dep.name}
-              className="flex items-center justify-between px-3 py-2 rounded-lg"
-              style={{ backgroundColor: 'var(--bg-tertiary)' }}
-            >
+            <SettingsCard key={dep.name}>
               <div className="flex items-center gap-2">
-                {dep.installed ? (
-                  <CheckCircle size={14} style={{ color: '#10B981' }} />
-                ) : (
-                  <XCircle size={14} style={{ color: '#EF4444' }} />
-                )}
-                <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                <SettingsStatusIcon installed={dep.installed} />
+                <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
                   {dep.name}
                 </span>
               </div>
-              <span className="text-[10px]" style={{ color: dep.installed ? 'var(--text-secondary)' : 'var(--danger)' }}>
+              <span className="text-[10px]" style={{ color: dep.installed ? 'var(--text-secondary)' : '#EF4444' }}>
                 {dep.version ?? '未安装'}
               </span>
-            </div>
+            </SettingsCard>
           ))}
         </div>
-      </section>
+      </SettingsSection>
 
       {/* Agent Detection with Update Check */}
-      <section>
-        <h3 className="text-xs font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-          Agent 检测
-        </h3>
+      <SettingsSection title="Agent 检测">
         <div className="space-y-2">
           {dependencies.slice(3).map((dep) => (
-            <div
-              key={dep.name}
-              className="flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors"
-              style={{
-                backgroundColor: dep.hasUpdate ? 'rgba(245, 158, 11, 0.06)' : 'var(--bg-tertiary)',
-                border: dep.hasUpdate ? '1px solid rgba(245, 158, 11, 0.2)' : '1px solid transparent',
-              }}
-            >
+            <SettingsCard key={dep.name} highlight={dep.hasUpdate}>
               {/* Left: status icon + name + version */}
               <div className="flex items-center gap-2 min-w-0">
-                {dep.installed ? (
-                  <CheckCircle size={14} style={{ color: '#10B981', flexShrink: 0 }} />
-                ) : (
-                  <XCircle size={14} style={{ color: '#EF4444', flexShrink: 0 }} />
-                )}
+                <SettingsStatusIcon installed={dep.installed} />
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                    <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
                       {dep.name}
                     </span>
                     {dep.hasUpdate && (
@@ -312,32 +289,30 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
               {/* Right: action buttons */}
               <div className="flex items-center gap-1.5 shrink-0">
                 {!dep.installed && (
-                  <button
+                  <SettingsButton
                     onClick={() => handleInstall(dep.key)}
                     disabled={!!dep.installing}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium transition-colors disabled:opacity-50"
-                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                    variant="primary"
                   >
                     {dep.installing ? (
                       <><Loader2 size={11} className="animate-spin" /> 安装中</>
                     ) : (
                       <><Download size={11} /> 安装</>
                     )}
-                  </button>
+                  </SettingsButton>
                 )}
                 {dep.hasUpdate && dep.installed && (
-                  <button
+                  <SettingsButton
                     onClick={() => handleInstall(dep.key)}
                     disabled={!!dep.installing}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium transition-colors disabled:opacity-50"
-                    style={{ backgroundColor: '#F59E0B', color: '#fff' }}
+                    variant="warning"
                   >
                     {dep.installing ? (
                       <><Loader2 size={11} className="animate-spin" /> 更新中</>
                     ) : (
                       <><ArrowUpCircle size={11} /> 更新</>
                     )}
-                  </button>
+                  </SettingsButton>
                 )}
                 {dep.installed && !dep.hasUpdate && dep.latestVersion && (
                   <span className="text-[10px]" style={{ color: '#10B981' }}>
@@ -345,40 +320,30 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                   </span>
                 )}
                 {dep.installed && !dep.hasUpdate && !dep.latestVersion && !dep.updateChecking && (
-                  <button
+                  <SettingsButton
                     onClick={() => handleInstall(dep.key)}
                     disabled={!!dep.installing}
-                    className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors disabled:opacity-50"
-                    style={{
-                      backgroundColor: 'var(--bg-secondary)',
-                      color: 'var(--text-secondary)',
-                      border: '1px solid var(--border)',
-                    }}
+                    variant="secondary"
+                    icon={<RefreshCw size={11} />}
                   >
-                    <RefreshCw size={11} />
                     重装
-                  </button>
+                  </SettingsButton>
                 )}
               </div>
-            </div>
+            </SettingsCard>
           ))}
         </div>
-      </section>
+      </SettingsSection>
 
       {/* Refresh button */}
-      <button
+      <SettingsButton
         onClick={fetchEnvWithLog}
         disabled={loading}
-        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors disabled:opacity-50"
-        style={{
-          backgroundColor: 'var(--bg-tertiary)',
-          color: 'var(--text-secondary)',
-          border: '1px solid var(--border)',
-        }}
+        variant="secondary"
+        icon={<RefreshCw size={12} className={loading ? 'animate-spin' : ''} />}
       >
-        <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
         重新检测环境
-      </button>
+      </SettingsButton>
 
       {/* Install Log */}
       <InstallLog logs={logs} isActive={!!installing} onClear={() => { setLogs([]); invoke('clear_logs').catch(() => {}); }} />

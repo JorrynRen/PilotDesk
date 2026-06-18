@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Cpu, Search, ChevronRight, FolderOpen, Bot } from 'lucide-react';
+import { Cpu, Search, FolderOpen, Bot, ChevronDown, ChevronRight } from 'lucide-react';
 import { useSkillStore } from '../../stores/skillStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { AGENT_THEMES } from '../../types';
@@ -20,40 +20,59 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
   const { skillsByAgent, isLoading, setAgentSkills, setLoading } = useSkillStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSkill, setSelectedSkill] = useState<{ agent: string; name: string; description: string; category?: string } | null>(null);
+  const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(new Set());
 
-  const { requestAllSkills } = useAgentEvent();
-
-  // Auto-fetch skills on mount
-  useEffect(() => {
-    const cached = skillsByAgent[agentType];
-    if (!cached) {
-      setLoading(true);
-      requestAllSkills();
-    }
-  }, [agentType]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Subscribe to skillStore changes instead of polling
-  useEffect(() => {
-    // Check if data already exists
-    const existing = useSkillStore.getState().skillsByAgent[agentType];
-    if (existing && existing.length > 0) {
-      setLoading(false);
-      return;
-    }
-
-    // Subscribe to store changes
-    const unsub = useSkillStore.subscribe((state) => {
-      const agentSkills = state.skillsByAgent[agentType];
-      if (agentSkills && agentSkills.length > 0) {
-        setLoading(false);
+  const toggleAgent = (agent: string) => {
+    setCollapsedAgents((prev) => {
+      const next = new Set(prev);
+      if (next.has(agent)) {
+        next.delete(agent);
+      } else {
+        next.add(agent);
       }
+      return next;
     });
-    return () => unsub();
-  }, [agentType]);
+  };
 
-  // 按分类聚合所有 agent 的技能
-  const allAgentTypes = Object.keys(skillsByAgent);
-  const hasAny = allAgentTypes.length > 0 && allAgentTypes.some(a => (skillsByAgent[a] || []).length > 0);
+  const { requestSkills } = useAgentEvent({
+    onSkills: (agentType, skills) => {
+      setAgentSkills(agentType, skills);
+    },
+  });
+
+  // Auto-fetch skills: detect installed agents first, then fetch skills for each
+  useEffect(() => {
+    const fetchAll = async () => {
+      setLoading(true);
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const installed = await invoke<string[]>('agent_detect_installed');
+        for (const agent of installed) {
+          const cached = skillsByAgent[agent];
+          if (!cached) {
+            await requestSkills(agent);
+          }
+        }
+      } catch {
+        // Fallback: try known agents
+        for (const agent of ['claude', 'hermes', 'codex']) {
+          const cached = skillsByAgent[agent];
+          if (!cached) {
+            await requestSkills(agent);
+          }
+        }
+      }
+      setLoading(false);
+    };
+    fetchAll();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 按分类聚合所有 agent 的技能（固定排序：hermes → claude → codex）
+  const AGENT_ORDER = ['hermes', 'claude', 'codex'];
+  const allAgentTypes = Object.keys(skillsByAgent).sort(
+    (a, b) => AGENT_ORDER.indexOf(a) - AGENT_ORDER.indexOf(b)
+  );
+  const hasAny = allAgentTypes.length > 0;
 
   // 搜索过滤
   const getFiltered = (agentType: string) => {
@@ -70,7 +89,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
-        <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
+        <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
           全部技能
         </h3>
         <div className="relative">
@@ -80,12 +99,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索技能..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs outline-none"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
+            className="search-input"
           />
         </div>
       </div>
@@ -106,62 +120,60 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
         ) : (
           allAgentTypes.map((agt) => {
             const filtered = getFiltered(agt);
-            if (filtered.length === 0) return null;
-
             return (
               <div key={agt}>
-                {/* Agent group header */}
+                {/* Agent group header — click to toggle */}
                 <div
-                  className="flex items-center gap-2 px-4 py-2"
+                  className="flex items-center gap-2 px-4 py-2 cursor-pointer select-none"
                   style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
+                  onClick={() => toggleAgent(agt)}
                 >
-                  <Bot size={12} style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
-                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
+                  <Bot size={14} style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
+                  <span className="text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
                     {AGENT_LABELS[agt] || agt}
                   </span>
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
                     ({filtered.length})
+                  </span>
+                  <span className="ml-auto shrink-0 flex items-center" style={{ color: 'var(--text-tertiary)' }}>
+                    {collapsedAgents.has(agt) ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
                   </span>
                 </div>
 
                 {/* Skills */}
-                {filtered.map((skill) => (
-                  <button
-                    key={`${agt}:${skill.name}`}
-                    onClick={() => {
-                      setSelectedSkill({ agent: agt, ...skill });
-                      onSkillSelect?.(skill.name);
-                    }}
-                    className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
-                    style={{
-                      backgroundColor: selectedSkill?.agent === agt && selectedSkill?.name === skill.name
-                        ? 'var(--bg-tertiary)'
-                        : 'transparent',
-                      borderBottom: '1px solid var(--border)',
-                    }}
-                  >
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-                      <Cpu size={16} style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                        {skill.name}
+                {!collapsedAgents.has(agt) && (
+                  filtered.length > 0 ? filtered.map((skill) => (
+                    <button
+                      key={`${agt}:${skill.name}`}
+                      onClick={() => {
+                        setSelectedSkill({ agent: agt, ...skill });
+                        onSkillSelect?.(skill.name);
+                      }}
+                      className="w-full flex items-center gap-2 px-4 py-2.5 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                      style={{
+                        backgroundColor: selectedSkill?.agent === agt && selectedSkill?.name === skill.name
+                          ? 'var(--bg-tertiary)'
+                          : 'transparent',
+                        borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
+                          <Cpu size={12} className="shrink-0" style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
+                          <span className="truncate">{skill.name}</span>
+                        </div>
+                        <div className="text-[10px] truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                          {skill.description}
+                        </div>
                       </div>
-                      <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-                        {skill.description}
-                      </div>
+
+                    </button>
+                  )) : (
+                    <div className="px-4 py-2 text-[10px]" style={{ color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border)' }}>
+                      暂无技能文件
                     </div>
-                    {skill.category && (
-                      <span
-                        className="text-[10px] px-1.5 py-0.5 rounded"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
-                      >
-                        {skill.category}
-                      </span>
-                    )}
-                    <ChevronRight size={14} style={{ color: 'var(--text-tertiary)' }} />
-                  </button>
-                ))}
+                  )
+                )}
               </div>
             );
           })

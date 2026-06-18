@@ -1,14 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy } from 'lucide-react';
+import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft } from 'lucide-react';
 
 interface TitleBarProps {
   onOpenSettings?: () => void;
   onToggleRightPanel?: () => void;
   rightPanelOpen?: boolean;
+  showBackButton?: boolean;
 }
 
-export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen, showBackButton }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const [isMaximized, setIsMaximized] = useState(false);
   const [tauriReady, setTauriReady] = useState(true);
@@ -106,14 +107,10 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
   const handleHeaderMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const pos = mouseDownPosRef.current;
     if (pos && !draggingRef.current) {
-      const dx = Math.abs(e.clientX - pos.x);
-      const dy = Math.abs(e.clientY - pos.y);
-      if (dx > 5 || dy > 5) {
-        // Mouse moved beyond threshold — start OS-level drag
-        draggingRef.current = true;
-        mouseDownPosRef.current = null;
-        try { getCurrentWindow().startDragging(); } catch { /* ignore */ }
-      }
+      // Start OS-level drag immediately to avoid cursor ghosting
+      draggingRef.current = true;
+      mouseDownPosRef.current = null;
+      try { getCurrentWindow().startDragging(); } catch { /* ignore */ }
     }
   }, []);
 
@@ -125,30 +122,46 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
   return (
     <header
       className="flex items-center justify-between px-3 h-12 shrink-0 select-none"
-      style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+      style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
       onMouseDown={handleHeaderMouseDown}
       onMouseUp={handleHeaderMouseUp}
       onMouseMove={handleHeaderMouseMove}
       onMouseLeave={handleHeaderMouseLeave}
     >
-      {/* Left: logo + title */}
+      {/* Left: back button or logo + title */}
       <div className="flex items-center gap-2 h-full">
-        <img
-          src="/logo.png"
-          alt=""
-          className="w-5 h-5 rounded pointer-events-none"
-          draggable={false}
-          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-        />
-        <span className="text-xs font-semibold pointer-events-none">PilotDesk</span>
+        {showBackButton ? (
+          <>
+            <button
+              onClick={onOpenSettings}
+              className="pd-btn p-1 rounded transition-colors hover:opacity-80"
+              style={{ color: 'var(--text-secondary)' }}
+              title="返回"
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <span className="text-xs font-medium pointer-events-none" style={{ color: 'var(--text-primary)' }}>设置</span>
+          </>
+        ) : (
+          <>
+            <img
+              src="/logo.png"
+              alt=""
+              className="w-5 h-5 rounded pointer-events-none"
+              draggable={false}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            />
+            <span className="text-xs font-medium pointer-events-none">PilotDesk</span>
+          </>
+        )}
       </div>
 
       {/* Right: settings + panel toggle | window controls */}
       <div className="flex items-center h-full">
-        {onOpenSettings && (
+        {!showBackButton && onOpenSettings && (
           <button
             onClick={onOpenSettings}
-            className="p-1 rounded transition-colors hover:opacity-80"
+            className="pd-btn p-1 rounded transition-colors hover:opacity-80"
             style={{ color: 'var(--text-secondary)', background: 'transparent' }}
             title="设置"
           >
@@ -158,7 +171,7 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
         {onToggleRightPanel && (
           <button
             onClick={onToggleRightPanel}
-            className="p-1 rounded transition-colors hover:opacity-80"
+            className="pd-btn p-1 rounded transition-colors hover:opacity-80"
             style={{
               color: rightPanelOpen ? 'var(--accent)' : 'var(--text-secondary)',
               background: rightPanelOpen ? 'var(--border)' : 'transparent',
@@ -180,14 +193,14 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
           <>
             <button
               onClick={handleMinimize}
-              className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
+              className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
               title="最小化"
             >
               <Minus size={13} style={{ color: 'var(--text-secondary)' }} />
             </button>
             <button
               onClick={handleToggleMaximize}
-              className="w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
+              className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
               title={isMaximized ? '还原' : '最大化'}
             >
               {isMaximized ? (
@@ -198,7 +211,7 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen }:
             </button>
             <button
               onClick={handleClose}
-              className="w-8 h-full flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
+              className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
               title="关闭"
             >
               <X size={13} style={{ color: 'var(--text-secondary)' }} />

@@ -1,0 +1,10 @@
+feat(plugin): 插件图标系统 - 支持网络图片和本地路径作为图标
+
+- 新增 pluginIcon.ts 图标解析工具（parsePluginIcon）
+- 新增 PluginIcon.tsx 图标渲染组件（14px，加载失败回退默认图标）
+- PluginPanelRenderer / RightPanel 集成 PluginIcon
+- tauri.conf.json 配置 asset protocol 白名单 + CSP
+- 更新架构文档 v4.4→v4.5（新增 10.8.1 插件图标系统章节）
+- 更新插件系统架构设计文档（新增 3.3 icon 字段说明、6.2 图标渲染数据流）
+- hello-world 示例插件 icon 改为真实图片 URL
+- malicious-sample 新增图标路径遍历测试项

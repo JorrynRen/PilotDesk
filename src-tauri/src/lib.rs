@@ -185,6 +185,11 @@ async fn agent_list_skills(agent_type: String) -> Result<Vec<crate::db::models::
     Ok(agent::AgentManager::list_skills(&agent_type).await)
 }
 
+#[tauri::command]
+async fn agent_detect_installed() -> Result<Vec<String>, String> {
+    Ok(agent::detect_installed_agents())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let pool = init_db().expect("Failed to initialize database");
@@ -241,6 +246,7 @@ pub fn run() {
             agent_create_session,
             agent_close_session,
             agent_list_skills,
+            agent_detect_installed,
             plugin::plugin_discover,
             plugin::plugin_list,
             plugin::plugin_enable,

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Brain, Search, Clock, Tag } from 'lucide-react';
-import { AGENT_THEMES } from '../../types';
+import { Brain, Search, Clock } from 'lucide-react';
+import { AgentBadge } from '../common/AgentBadge';
 
 interface MemoryItem {
   id: string;
@@ -80,7 +80,7 @@ export function MemoryBrowser({ agentType, onSelect }: MemoryBrowserProps) {
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
-        <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
+        <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
           Agent 记忆
         </h3>
         <div className="relative">
@@ -90,12 +90,7 @@ export function MemoryBrowser({ agentType, onSelect }: MemoryBrowserProps) {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索记忆..."
-            className="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs outline-none"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
+            className="search-input"
           />
         </div>
       </div>
@@ -114,7 +109,7 @@ export function MemoryBrowser({ agentType, onSelect }: MemoryBrowserProps) {
             </span>
           </div>
         ) : (
-          <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex flex-col gap-2 px-3 py-2">
             {filteredMemories.map((memory) => (
               <button
                 key={memory.id}
@@ -122,44 +117,31 @@ export function MemoryBrowser({ agentType, onSelect }: MemoryBrowserProps) {
                   setSelectedMemory(memory);
                   onSelect?.(memory.content);
                 }}
-                className="w-full text-left px-4 py-3 transition-colors hover:bg-[var(--bg-tertiary)]"
+                className="w-full text-left px-3 py-2.5 transition-colors hover:scale-[1.01] flex flex-col rounded-xl"
                 style={{
-                  backgroundColor: selectedMemory?.id === memory.id ? 'var(--bg-tertiary)' : 'transparent',
+                  backgroundColor: 'var(--bg-secondary)',
+                  border: '1px solid var(--border)',
+                  alignItems: 'stretch',
                 }}
               >
-                {/* Meta */}
-                <div className="flex items-center gap-2 mb-1">
-                  <span
-                    className="text-[10px] px-1.5 py-0.5 rounded"
-                    style={{
-                      backgroundColor: (AGENT_THEMES[memory.agentType] ?? AGENT_THEMES.claude).cssVar,
-                      color: '#fff',
-                    }}
-                  >
-                    {(AGENT_THEMES[memory.agentType] ?? AGENT_THEMES.claude).label}
-                  </span>
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                {/* Header row: Agent tag + session title + date */}
+                <div className="flex items-center gap-2 mb-1 min-w-0">
+                  <AgentBadge agentType={memory.agentType as 'claude' | 'hermes' | 'codex' | 'api'} />
+                  <span className="text-[10px] truncate min-w-0 font-semibold" style={{ color: 'var(--text-primary)' }}>
                     {memory.sessionTitle}
+                  </span>
+                  <span className="text-[10px] shrink-0 ml-auto" style={{ color: 'var(--text-tertiary)' }}>
+                    {formatTime(memory.timestamp)}
                   </span>
                 </div>
                 {/* Content preview */}
                 <p
-                  className="text-xs leading-relaxed line-clamp-2 mb-1"
+                  className="text-xs leading-relaxed line-clamp-2 mb-1 break-words"
                   style={{ color: 'var(--text-secondary)' }}
                 >
                   {memory.content.length > 120 ? memory.content.slice(0, 120) + '...' : memory.content}
                 </p>
-                {/* Footer */}
-                <div className="flex items-center gap-2">
-                  <Clock size={10} style={{ color: 'var(--text-tertiary)' }} />
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    {formatTime(memory.timestamp)}
-                  </span>
-                  <Tag size={10} style={{ color: 'var(--text-tertiary)' }} />
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    {memory.mode}
-                  </span>
-                </div>
+
               </button>
             ))}
           </div>

@@ -49,6 +49,9 @@ const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[]
 
 
 
+import { SettingsSection, SettingsButton, SettingsInput } from '../components/settings';
+import { TitleBar, StatusBar } from '../components/layout';
+
 // ============================================================
 // 1. General Settings
 // ============================================================
@@ -99,10 +102,7 @@ function GeneralSettings() {
   return (
     <div className="space-y-6">
       {/* Theme */}
-      <section>
-        <h3 className="text-xs font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-          主题设置
-        </h3>
+      <SettingsSection title="主题模式">
         <div className="flex gap-1">
           {themeOptions.map(({ value, icon: Icon, label }) => (
             <button
@@ -123,50 +123,27 @@ function GeneralSettings() {
         <div className="mt-3">
           <ThemeCustomizer />
         </div>
-      </section>
+      </SettingsSection>
 
       {/* Workspace directory */}
-      <section>
-        <h3 className="text-xs font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-          工作区目录
-        </h3>
+      <SettingsSection title="工作区目录">
         <div className="flex items-center gap-2">
-          <input
-            type="text"
+          <SettingsInput
             value={workspace}
-            onChange={(e) => handleWorkspaceChange(e.target.value)}
+            onChange={handleWorkspaceChange}
             placeholder="设置默认工作区路径..."
-            className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
           />
-          <button
-            onClick={handlePickWorkspace}
-            className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs transition-colors"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
-            title="浏览选择目录"
-          >
-            <FolderOpen size={12} />
+          <SettingsButton onClick={handlePickWorkspace} icon={<FolderOpen size={12} />}>
             浏览
-          </button>
+          </SettingsButton>
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           Agent 会话的默认工作目录。可直接输入路径或点击浏览选择。
         </p>
-      </section>
+      </SettingsSection>
 
       {/* Language */}
-      <section>
-        <h3 className="text-xs font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-          语言
-        </h3>
+      <SettingsSection title="语言">
         <div className="relative inline-block">
           <div
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm cursor-default"
@@ -183,11 +160,10 @@ function GeneralSettings() {
             更多语言支持即将推出
           </p>
         </div>
-      </section>
+      </SettingsSection>
     </div>
   );
 }
-
 // ============================================================
 // 4. API Configuration
 // ============================================================
@@ -335,7 +311,7 @@ function SortableProviderCard({
             style={{ borderBottom: '1px solid var(--border)' }}
           >
             <div className="flex items-center gap-2">
-              <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+              <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
                 {isEditing ? (
                   <input
                     type="text"
@@ -395,7 +371,7 @@ function SortableProviderCard({
                 <>
                   <button
                     onClick={onSaveEdit}
-                    className="p-1 rounded transition-colors"
+                    className="pd-btn p-1 rounded transition-colors"
                     style={{ color: 'var(--success)' }}
                     title="保存"
                   >
@@ -403,7 +379,7 @@ function SortableProviderCard({
                   </button>
                   <button
                     onClick={onCancelEdit}
-                    className="p-1 rounded transition-colors"
+                    className="pd-btn p-1 rounded transition-colors"
                     style={{ color: 'var(--text-secondary)' }}
                     title="取消"
                   >
@@ -446,7 +422,7 @@ function SortableProviderCard({
                   : 'var(--danger)',
               }}
             >
-              <span className="font-medium">
+              <span className="">
                 {testResult.status === 'success' ? '✓' : '✗'}
               </span>
               {testResult.message}
@@ -457,7 +433,7 @@ function SortableProviderCard({
           <div className="px-3 py-2 space-y-2">
             {/* API Endpoint */}
             <div>
-              <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+              <label className="text-[10px] " style={{ color: 'var(--text-tertiary)' }}>
                 API URL
               </label>
               {isEditing ? (
@@ -485,7 +461,7 @@ function SortableProviderCard({
             {/* API Key */}
             {isEditing && (
               <div>
-                <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                <label className="text-[10px] " style={{ color: 'var(--text-tertiary)' }}>
                   API Key {p.apiKeySet && '（留空保持不变）'}
                 </label>
                 <input
@@ -507,7 +483,7 @@ function SortableProviderCard({
 
             {/* Models */}
             <div>
-              <label className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+              <label className="text-[10px] " style={{ color: 'var(--text-tertiary)' }}>
                 可用模型
               </label>
               {isEditing ? (
@@ -773,7 +749,7 @@ function ApiConfig() {
       {/* Header with add button */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
+          <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
             API 提供商列表
           </h3>
           <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
@@ -782,7 +758,7 @@ function ApiConfig() {
         </div>
         <button
           onClick={handleAddProvider}
-          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs  transition-colors"
           style={{
             backgroundColor: 'var(--accent)',
             color: '#fff',
@@ -861,7 +837,7 @@ function AboutSection() {
 
       {/* App name + version */}
       <div className="text-center">
-        <h3 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+        <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
           PilotDesk
         </h3>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
@@ -916,32 +892,24 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* Header */}
-      <div
-        className="shrink-0 px-4 py-3 flex items-center gap-3"
-      >
-        <button
-          onClick={onBack}
-          className="p-1 rounded transition-colors hover:opacity-80"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          <ArrowLeft size={16} />
-        </button>
-        <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-          设置
-        </h2>
-      </div>
+      {/* TitleBar with back button */}
+      <TitleBar
+        onOpenSettings={onBack}
+        onToggleRightPanel={undefined}
+        rightPanelOpen={false}
+        showBackButton={true}
+      />
 
       {/* Tab navigation */}
       <div
-        className="shrink-0 px-4 flex gap-0.5 overflow-x-clip"
+        className="shrink-0 px-4 pt-1 flex gap-0.5 overflow-x-clip"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         {SETTINGS_TABS.map(({ id, icon: Icon, label }) => (
           <button
             key={id}
             onClick={() => setActiveTab(id)}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-t-lg transition-colors whitespace-nowrap"
+            className="pd-btn px-3 py-2 text-xs rounded-t-lg whitespace-nowrap"
             style={{
               color: activeTab === id ? 'var(--accent)' : 'var(--text-secondary)',
               backgroundColor: activeTab === id ? 'var(--bg-tertiary)' : 'transparent',
@@ -965,6 +933,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           {activeTab === 'about' && <AboutSection />}
         </div>
       </div>
+
+      {/* StatusBar */}
+      <StatusBar onOpenSettings={onBack} />
     </div>
   );
 }

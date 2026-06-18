@@ -16,7 +16,7 @@ export interface AgentEventHandlers {
   onDone?: (sessionId: string) => void;
   onError?: (sessionId: string, error: string) => void;
   onStatus?: (sessionId: string, status: string) => void;
-  onSkills?: (agentType: string, skills: string[]) => void;
+  onSkills?: (agentType: string, skills: Array<{ name: string; description: string; category?: string }>) => void;
 }
 
 /**
@@ -184,7 +184,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
   const requestSkills = useCallback(
     async (agentType: string) => {
       try {
-        const skills = await invoke<string[]>('agent_list_skills', { agentType });
+        const skills = await invoke<Array<{ name: string; description: string; category: string }>>('agent_list_skills', { agentType });
         handlersRef.current?.onSkills?.(agentType, skills);
       } catch (err) {
         console.error('[Agent] list skills failed:', err);

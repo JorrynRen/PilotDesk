@@ -71,7 +71,7 @@ export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLog
       <div className="flex items-center justify-between px-3 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex items-center gap-1.5">
           <Terminal size={12} style={{ color: 'var(--text-tertiary)' }} />
-          <span className="text-[10px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+          <span className="text-[10px] " style={{ color: 'var(--text-secondary)' }}>
             安装日志
           </span>
           {isActive && (
@@ -82,7 +82,7 @@ export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLog
         </div>
         <button
           onClick={handleClear}
-          className="p-0.5 rounded transition-colors"
+          className="pd-btn p-0.5 rounded transition-colors"
           style={{ color: 'var(--text-tertiary)' }}
           title="清空日志"
         >

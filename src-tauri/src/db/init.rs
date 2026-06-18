@@ -57,7 +57,7 @@ pub fn init_db() -> Result<DbPool, AppError> {
             icon TEXT NOT NULL DEFAULT '💡',
             title TEXT NOT NULL,
             content TEXT NOT NULL DEFAULT '',
-            source_agent TEXT DEFAULT 'manual' CHECK(source_agent IN ('claude', 'hermes', 'codex', 'manual')),
+            source_agent TEXT DEFAULT 'manual' CHECK(source_agent IN ('claude', 'hermes', 'codex', 'api', 'manual')),
             is_favorite INTEGER DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL

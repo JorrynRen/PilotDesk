@@ -31,7 +31,7 @@ function CopyButton({ code }: { code: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="absolute top-2 right-2 p-1 rounded transition-colors"
+      className="pd-btn absolute top-2 right-2 p-1 rounded transition-colors"
       style={{
         backgroundColor: copied ? 'var(--accent)' : 'var(--border)',
         color: copied ? '#fff' : 'var(--text-secondary)',

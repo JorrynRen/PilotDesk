@@ -95,7 +95,16 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let first_line = stdout.lines().next()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Some tools (e.g. python on Windows) output version to stderr
+    let output_text = if stdout.trim().is_empty() && !stderr.trim().is_empty() {
+        stderr
+    } else {
+        stdout
+    };
+
+    let first_line = output_text.lines().next()?;
     if output.status.success() {
         Some(first_line.trim().to_string())
     } else {
