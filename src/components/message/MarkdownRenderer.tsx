@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 
 interface MarkdownRendererProps {
@@ -50,7 +51,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <div className="pilotdesk-markdown" style={{ color: 'var(--text-primary)' }}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         rehypePlugins={[rehypeHighlight]}
         components={{
           code({ className, children, ...props }) {
