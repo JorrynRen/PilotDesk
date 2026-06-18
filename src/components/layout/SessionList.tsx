@@ -51,9 +51,9 @@ function SessionListFn() {
   useEffect(() => {
     fetchSessions().catch((err) => {
       showToast(`加载会话失败: ${err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)}`, 'error');
-    }
+    });
 
-    fetchProviders().catch(() => {}
+    fetchProviders().catch(() => {});
 
 
     // Detect installed agents for session creation filtering
@@ -81,7 +81,7 @@ function SessionListFn() {
     searchDebounceRef.current = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const results = await invoke<typeof sessions>('search_sessions', { query: searchQuery.trim() }
+        const results = await invoke<typeof sessions>('search_sessions', { query: searchQuery.trim() });
 
         setSearchResults(results);
       } catch { /* ignore */ }
@@ -99,7 +99,7 @@ function SessionListFn() {
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
-    }
+    });
 
   }, []);
 
@@ -136,8 +136,7 @@ function SessionListFn() {
   const batchArchive = useCallback(async () => {
     if (selectedIds.size === 0) return;
     for (const id of selectedIds) {
-      try { await invoke('archive_session', { sessionId: id }
-
+      try { await invoke('archive_session', { sessionId: id }); } catch { /* ignore */ }
     }
     setSelectedIds(new Set());
     setBatchMode(false);
@@ -148,8 +147,7 @@ function SessionListFn() {
   const batchDelete = useCallback(async () => {
     if (selectedIds.size === 0) return;
     for (const id of selectedIds) {
-      try { await invoke('delete_session', { sessionId: id }
-
+      try { await invoke('delete_session', { sessionId: id }); } catch { /* ignore */ }
     }
     setSelectedIds(new Set());
     setBatchMode(false);
@@ -162,7 +160,7 @@ function SessionListFn() {
     if (showNewDialog) {
       fetchProviders().then(() => {
         // After fetch, auto-select first provider via the updated store state
-      }).catch(() => {}
+      }).catch(() => {});
 
       // Reset state
       setUseCustomModel(false);
