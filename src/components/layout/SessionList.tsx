@@ -11,20 +11,18 @@ import { SessionListItem } from './SessionListItem';
 type NewSessionType = 'claude' | 'hermes' | 'codex' | 'api' | 'codex';
 
 export function SessionList() {
-  const {
-    sessions,
-    archivedSessions,
-    currentSessionId,
-    isLoadingSessions,
-    showArchived,
-    fetchSessions,
-    selectSession,
-    createSession,
-    archiveSession,
-    deleteSession,
-    renameSession,
-    toggleArchived,
-  } = useSessionStore();
+  const sessions = useSessionStore((s) => s.sessions);
+  const archivedSessions = useSessionStore((s) => s.archivedSessions);
+  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const isLoadingSessions = useSessionStore((s) => s.isLoadingSessions);
+  const showArchived = useSessionStore((s) => s.showArchived);
+  const fetchSessions = useSessionStore((s) => s.fetchSessions);
+  const selectSession = useSessionStore((s) => s.selectSession);
+  const createSession = useSessionStore((s) => s.createSession);
+  const archiveSession = useSessionStore((s) => s.archiveSession);
+  const deleteSession = useSessionStore((s) => s.deleteSession);
+  const renameSession = useSessionStore((s) => s.renameSession);
+  const toggleArchived = useSessionStore((s) => s.toggleArchived);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<typeof sessions>([]);

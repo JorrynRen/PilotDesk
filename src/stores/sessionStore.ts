@@ -166,11 +166,19 @@ export const useSessionStore = create<SessionState>((set) => ({
     const state = useSessionStore.getState();
     if (state.messageIds.has(msg.id)) return;
 
-    // 立即更新 UI
-    set((state) => ({
-      messages: [...state.messages, msg],
-      messageIds: new Set(state.messageIds).add(msg.id),
-    }));
+    // 仅当消息属于当前会话时才更新 UI 消息列表
+    // 后台会话的消息仅持久化，不污染当前显示
+    if (msg.sessionId === state.currentSessionId) {
+      set((state) => ({
+        messages: [...state.messages, msg],
+        messageIds: new Set(state.messageIds).add(msg.id),
+      }));
+    } else {
+      // 非当前会话：仅记录 ID 防重，不更新 UI
+      set((state) => ({
+        messageIds: new Set(state.messageIds).add(msg.id),
+      }));
+    }
 
     // 异步持久化（分离关注点）
     persistMessage(msg);
