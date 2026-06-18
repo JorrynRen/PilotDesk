@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Terminal, Trash2 } from 'lucide-react';
 
 interface LogEntry {
@@ -34,12 +35,23 @@ export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLog
       });
   }, [externalLogs]);
 
-  // Auto-scroll to bottom
+  // Listen for install-progress events to dynamically refresh log list
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs]);
+    if (externalLogs) return;
+    const unlisten = listen<string>('log-updated', () => {
+      invoke<LogEntry[]>('list_logs', { limit: 200 })
+        .then((entries) => {
+          setInternalLogs(entries || []);
+        })
+        .catch(() => {});
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [externalLogs]);
+
+  // No auto-scroll needed: logs are in descending order (newest first),
+  // so the most recent entries are already visible at the top.
 
   const levelColor: Record<string, string> = {
     info: 'var(--text-secondary)',
@@ -72,7 +84,7 @@ export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLog
         <div className="flex items-center gap-1.5">
           <Terminal size={12} style={{ color: 'var(--text-tertiary)' }} />
           <span className="text-[10px] " style={{ color: 'var(--text-secondary)' }}>
-            安装日志
+            操作日志
           </span>
           {isActive && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full animate-pulse" style={{ backgroundColor: '#3B82F622', color: '#3B82F6' }}>
@@ -91,12 +103,15 @@ export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLog
       </div>
 
       {/* Log content */}
-      <div ref={scrollRef} className="px-3 py-2 font-mono text-[11px] leading-relaxed overflow-y-auto" style={{ maxHeight: '160px' }}>
+      <div ref={scrollRef} className="px-3 py-2 font-mono text-[11px] leading-relaxed overflow-y-auto" style={{ maxHeight: '95px' }}>
         {logs.length === 0 ? (
           <span style={{ color: 'var(--text-tertiary)' }}>等待操作...</span>
         ) : (
           logs.map((entry, idx) => {
-            const time = new Date(entry.timestamp).toLocaleTimeString('zh-CN', {
+            const time = new Date(entry.timestamp).toLocaleString('zh-CN', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
               hour: '2-digit',
               minute: '2-digit',
               second: '2-digit',

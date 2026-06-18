@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Settings, Globe, Key, Info,
   Sun, Moon, Monitor, FolderOpen, ChevronDown,
@@ -292,17 +293,6 @@ function SortableProviderCard({
           borderRadius: '0.5rem',
         }}
       >
-        {/* Drag handle */}
-        <div
-          className="flex items-center justify-center px-1.5 shrink-0 cursor-grab active:cursor-grabbing"
-          style={{ borderRight: '1px solid var(--border)' }}
-          {...attributes}
-          {...listeners}
-          title="拖拽排序"
-        >
-          <GripVertical size={12} style={{ color: 'var(--text-tertiary)' }} />
-        </div>
-
         {/* Card content */}
         <div className="flex-1 min-w-0">
           {/* Card header */}
@@ -311,6 +301,14 @@ function SortableProviderCard({
             style={{ borderBottom: '1px solid var(--border)' }}
           >
             <div className="flex items-center gap-2">
+              <div
+                className="flex items-center justify-center cursor-grab active:cursor-grabbing"
+                {...attributes}
+                {...listeners}
+                title="拖拽排序"
+              >
+                <GripVertical size={12} style={{ color: 'var(--text-tertiary)' }} />
+              </div>
               <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
                 {isEditing ? (
                   <input
@@ -888,7 +886,12 @@ function AboutSection() {
 }
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [searchParams] = useSearchParams();
+  const urlTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
+    if (urlTab === 'environment') return 'environment';
+    return 'general';
+  });
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>

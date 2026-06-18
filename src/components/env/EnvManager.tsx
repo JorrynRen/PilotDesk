@@ -58,9 +58,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       if (info) {
         addLog(`${key} 最新版本: ${info.version}${info.releaseTime ? ` (${info.releaseTime})` : ''}`, 'info');
       }
-    } catch (err: any) {
-      const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
-      addLog(`检查 ${key} 更新失败: ${msg}`, 'warn');
+    } catch {
+      addLog(`检查 ${key} 更新失败`, 'warn');
     } finally {
       setUpdateChecking((prev) => ({ ...prev, [key]: false }));
     }
@@ -346,7 +345,7 @@ const fetchEnvWithLog = useCallback(async () => {
       </SettingsButton>
 
       {/* Install Log */}
-      <InstallLog logs={logs} isActive={!!installing} onClear={() => { setLogs([]); invoke('clear_logs').catch(() => {}); }} />
+      <InstallLog isActive={!!installing} />
     </div>
   );
 }

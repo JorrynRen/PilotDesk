@@ -202,6 +202,7 @@ pub fn run() {
         .manage(Mutex::new(plugin::PluginHost::new()))
         .invoke_handler(tauri::generate_handler![
             commands::env::detect_env,
+            commands::env::clear_env_detect_cache,
             commands::env::install_agent,
             commands::env::install_claude_code,
             commands::env::install_hermes,

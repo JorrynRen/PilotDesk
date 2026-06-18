@@ -36,7 +36,10 @@ function MainLayout() {
             <MainPanel />
             <RightPanel isOpen={rightPanelOpen} />
           </div>
-          <StatusBar onOpenSettings={() => navigate('/settings')} />
+          <StatusBar
+            onOpenSettings={() => navigate('/settings')}
+            onOpenEnvSettings={() => navigate('/settings?tab=environment')}
+          />
         </div>
       </div>
   );

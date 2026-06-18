@@ -1,7 +1,7 @@
 # PilotDesk 架构与技术实现
 
 > **项目**: PilotDesk | **架构**: Tauri 2.0 + React 19 + TypeScript + Rust + SQLite
-> **版本**: v4.5 | **日期**: 2026-06-17 | **状态**: 定稿
+> **版本**: v4.6 | **日期**: 2026-06-18 | **状态**: 定稿
 > **代码仓库**: `E:\WorkSpace_HermesAgent\pilotdeskProject\pilotdesk`
 
 ---
@@ -123,7 +123,8 @@ PilotDesk 是一个 **Agent 统一桌面客户端**，将多个 AI Agent（Claud
 | v4.2 | 消息重发 + 批量操作 + 插件架构 | 功能增强 |
 | v4.3 | 插件系统运行时 + 自定义主题色 | 扩展能力 |
 | **v4.4** | **综合文档合并** | 合并 v3.5~v4.3 为一份文档 |
-| **v4.5** | **插件系统完善** | **本文档** |
+| **v4.5** | **插件系统完善** | 插件系统完善 |
+| **v4.6** | **UI 修复 + 环境检测修复** | **本文档** |
 
 ### 2.3 数据流
 
@@ -1861,7 +1862,32 @@ function useI18n() {
 
 ## 15. 变更记录
 
-### 15.1 v4.5（本文档）
+### 15.1 v4.6（本文档）
+
+**日期**：2026-06-18
+
+**变更内容**：
+1. **StatusBar 优化**："Agent: 就绪" 改为纯文本 "Agent: "，三个 agent 版本号按钮新增 `onOpenEnvSettings` 回调，点击直接导航至设置页的环境检测 tab
+2. **SettingsPage URL 参数支持**：新增 `useSearchParams` 读取 `?tab=environment` 参数，自动切换到环境检测 tab
+3. **环境检测修复**：
+   - `run_cmd` 中清除 `PYTHONHOME`/`PYTHONPATH` 环境变量，消除 WPS 灵犀环境变量污染
+   - Python 检测新增 `py`（Python Launcher）作为 Windows fallback
+   - 新增 `clear_env_detect_cache` Tauri 命令
+   - `useEnvInfo` 的 `refresh` 回调改为返回 Promise
+4. **npm 版本查询修复**：
+   - `reqwest` 新增 `gzip` 和 `native-tls` 特性，修复 HTTPS 请求解码失败
+   - HTTP 超时从 10s 增加到 30s
+   - 错误消息简化为 `检查 {key} 更新失败`
+5. **操作日志重构**：
+   - 标题 "安装日志" → "操作日志"
+   - 时间格式增加年月日（`yyyy/MM/dd HH:mm:ss`）
+   - 查询改为 `ORDER BY timestamp DESC`，最新日志显示在最上方
+   - 移除自动滚动到底部逻辑
+   - 新增 `log-updated` 事件监听，每次写入日志后自动刷新列表
+   - InstallLog 组件独立从数据库加载全部日志，不再依赖外部 props
+6. **API 配置卡片拖拽优化**：拖动排序图标从卡片左侧独立容器移到卡片头部、API 供应商名称之前
+
+### 15.2 v4.5
 
 **日期**：2026-06-17
 
@@ -1878,7 +1904,7 @@ function useI18n() {
 10. **示例插件更新**：hello-world/index.js 改为纯 JS 格式；README.md 补充 contributes 说明和生命周期章节
 11. **文档更新**：插件系统架构设计文档状态改为"已实现"；架构文档 v4.4→v4.5
 
-### 15.2 v4.4
+### 15.3 v4.4
 
 **日期**：2026-06-16
 
@@ -1893,7 +1919,7 @@ function useI18n() {
 8. **前端插件入口**：PluginRegistry 全局注册表（面板/命令/钩子管理）、PluginPanelRenderer 面板渲染器、RightPanel 动态标签页集成
 9. **本地上传安装**：plugin_install_zip / plugin_uninstall Rust 命令、zip 解压安装、沙箱验证、卸载时目录清理
 
-### 15.2 v4.3
+### 15.4 v4.3
 
 **日期**：2026-06-16
 
@@ -1901,7 +1927,7 @@ function useI18n() {
 1. **插件系统运行时**：Rust PluginHost + 前端 PluginStore + PluginManager UI + RightPanel 集成
 2. **自定义主题色集成**：themeStore + ThemeCustomizer + SettingsPage 集成
 
-### 15.3 v4.2
+### 15.5 v4.2
 
 **日期**：2026-06-16
 
@@ -1909,7 +1935,7 @@ function useI18n() {
 1. **Phase 6**：消息重发功能、会话批量操作（批量归档/删除）、消息搜索（LIKE %query%）
 2. **Phase 7 设计**：插件系统架构设计文档 + 类型定义、i18n 基础设施（hook + JSON 文件）、自定义主题色（themeStore + ThemeCustomizer）
 
-### 15.4 v4.1
+### 15.6 v4.1
 
 **日期**：2026-06-16
 
@@ -1917,7 +1943,7 @@ function useI18n() {
 1. **Phase 4**：react-virtuoso 虚拟滚动、消息内联编辑、会话搜索（search_sessions 命令）
 2. **Phase 5**：42 个 CSS 设计令牌系统、主题 SQLite 持久化（useTheme 重写）
 
-### 15.5 v4.0
+### 15.7 v4.0
 
 **日期**：2026-06-16
 
@@ -1939,7 +1965,7 @@ function useI18n() {
    - inspirationStore.ts 精简 ~135 行
    - apiProviderStore.ts 精简 ~204 行
 
-### 15.6 v3.5
+### 15.8 v3.5
 
 **日期**：2026-06-16
 
@@ -1949,7 +1975,7 @@ function useI18n() {
 3. DPAPI 密钥保护（Windows CryptProtectData）
 4. sessionStore 竞态修复（会话存在性检查）
 
-### 15.7 v3.4
+### 15.9 v3.4
 
 **日期**：2026-06-16
 
@@ -1964,4 +1990,4 @@ function useI18n() {
 
 ---
 
-> PilotDesk 架构与技术实现 v4.5 | 2026-06-17
+> PilotDesk 架构与技术实现 v4.6 | 2026-06-18

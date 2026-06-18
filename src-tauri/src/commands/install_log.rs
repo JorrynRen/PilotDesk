@@ -1,12 +1,13 @@
 use rusqlite::params;
 use tauri::State;
+use tauri::Emitter;
 use crate::DbState;
 use crate::utils::errors::AppError;
 use crate::db::models::LogEntry;
 
 /// Insert a log entry into the install_logs table
 #[tauri::command]
-pub fn insert_log(conn: State<'_, DbState>, message: String, level: Option<String>) -> Result<i64, AppError> {
+pub fn insert_log(app: tauri::AppHandle, conn: State<'_, DbState>, message: String, level: Option<String>) -> Result<i64, AppError> {
     let level = level.unwrap_or_else(|| "info".to_string());
     let ts = crate::utils::now_millis();
 
@@ -21,6 +22,9 @@ pub fn insert_log(conn: State<'_, DbState>, message: String, level: Option<Strin
     let cutoff = crate::utils::now_millis() - 7 * 24 * 60 * 60 * 1000;
     let _ = conn.execute("DELETE FROM install_logs WHERE timestamp < ?1", params![cutoff]);
 
+    // Emit event so InstallLog can refresh
+    let _ = app.emit("log-updated", format!("log:{}", message));
+
     Ok(ts)
 }
 
@@ -31,7 +35,7 @@ pub fn list_logs(conn: State<'_, DbState>, limit: Option<i64>) -> Result<Vec<Log
     let conn = conn.get_conn()?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, timestamp, message, level FROM install_logs ORDER BY timestamp ASC LIMIT ?1"
+        "SELECT id, timestamp, message, level FROM install_logs ORDER BY timestamp DESC LIMIT ?1"
     )?;
 
     let rows = stmt.query_map(params![limit], |row| {

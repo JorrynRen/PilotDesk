@@ -59,7 +59,7 @@ export function useEnvInfo() {
   }, []);
 
   const refresh = useCallback(() => {
-    fetchEnv();
+    return fetchEnv();
   }, []);
 
   return {

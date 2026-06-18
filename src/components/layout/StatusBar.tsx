@@ -3,9 +3,10 @@ import { useEnvInfo } from '../../hooks/useEnvInfo';
 
 interface StatusBarProps {
   onOpenSettings?: () => void;
+  onOpenEnvSettings?: () => void;
 }
 
-export function StatusBar({ onOpenSettings }: StatusBarProps) {
+export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps) {
   const { envInfo, loading } = useEnvInfo();
 
   const pendingLabel = loading && !envInfo ? '查询中…' : '未安装';
@@ -31,29 +32,28 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
       <div className="flex items-center gap-3">
         {/* Agent status — no longer needs Sidecar/WS indicator */}
         <span className="flex items-center gap-1">
-          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: '#10B981' }} />
-          Agent: 就绪
+          Agent:
         </span>
         <button
-          onClick={onOpenSettings}
+          onClick={onOpenEnvSettings ?? onOpenSettings}
           className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
-          title="点击打开设置"
+          title="点击查看环境检测"
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: claudeStatus.color }} />
           Claude: {claudeStatus.label}
         </button>
         <button
-          onClick={onOpenSettings}
+          onClick={onOpenEnvSettings ?? onOpenSettings}
           className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
-          title="点击打开设置"
+          title="点击查看环境检测"
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: hermesStatus.color }} />
           Hermes: {hermesStatus.label}
         </button>
         <button
-          onClick={onOpenSettings}
+          onClick={onOpenEnvSettings ?? onOpenSettings}
           className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
-          title="点击打开设置"
+          title="点击查看环境检测"
         >
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: codexStatus.color }} />
           codeX: {codexStatus.label}

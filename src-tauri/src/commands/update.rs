@@ -38,7 +38,7 @@ fn is_version_older(a: &str, b: &str) -> bool {
 /// Build a shared HTTP client with 10s timeout.
 fn http_client() -> Result<reqwest::Client, AppError> {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| AppError::Network(format!("HTTP client build failed: {}", e)))
 }

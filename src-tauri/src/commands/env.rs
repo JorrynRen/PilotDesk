@@ -67,18 +67,22 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
     let cmd_s = cmd.to_string();
     let arg_s = arg.to_string();
     thread::spawn(move || {
-        let output = if use_cmd_wrapper {
-            Command::new("cmd")
-                .args(["/C", &cmd_s, &arg_s])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
+        let mut command = if use_cmd_wrapper {
+            let mut c = Command::new("cmd");
+            c.args(["/C", &cmd_s, &arg_s]);
+            c
         } else {
-            Command::new(&cmd_s).arg(&arg_s)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
+            let mut c = Command::new(&cmd_s);
+            c.arg(&arg_s);
+            c
         };
+        // Clear PYTHONHOME to avoid interference from parent process (WPS 灵犀)
+        command.env_remove("PYTHONHOME");
+        command.env_remove("PYTHONPATH");
+        let output = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
         let _ = tx.send(output);
     });
 
@@ -161,7 +165,8 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
     let node_version = probe_tool_version("node", "--version");
     let git_version = probe_tool_version("git", "--version");
     let python_version = probe_tool_version("python", "--version")
-        .or_else(|| probe_tool_version("python3", "--version"));
+        .or_else(|| probe_tool_version("python3", "--version"))
+        .or_else(|| probe_tool_version("py", "--version"));
 
     let claude_code_version = probe_tool_version("claude", "--version")
         .as_deref().map(clean_version_string);
@@ -211,6 +216,12 @@ pub fn clear_env_cache() {
     if let Ok(mut cache) = LAST_DETECT.write() {
         *cache = None;
     }
+}
+
+#[tauri::command]
+pub async fn clear_env_detect_cache() -> Result<(), AppError> {
+    clear_env_cache();
+    Ok(())
 }
 
 // ──────────────────────────────────────────────
