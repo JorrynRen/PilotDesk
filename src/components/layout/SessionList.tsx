@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { Plus, Search, Archive, Key, ChevronDown, X, Trash2 } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
@@ -10,7 +10,7 @@ import { SessionListItem } from './SessionListItem';
 
 type NewSessionType = 'claude' | 'hermes' | 'codex' | 'api' | 'codex';
 
-export function SessionList() {
+export const SessionList = memo(function SessionList() {
   const sessions = useSessionStore((s) => s.sessions);
   const archivedSessions = useSessionStore((s) => s.archivedSessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
@@ -632,4 +632,5 @@ export function SessionList() {
       )}
     </aside>
   );
-}
+});
+

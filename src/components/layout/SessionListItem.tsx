@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { MessageSquare, Archive, Trash2, Pencil, Check, X } from 'lucide-react';
 import { AGENT_THEMES } from '../../types';
 import { AgentBadge } from '../common/AgentBadge';
+import { useGeneratingStore } from '../../stores/generatingStore';
 import type { Session } from '../../types';
 
 interface SessionListItemProps {
@@ -44,6 +45,7 @@ export function SessionListItem({
   onToggleSelect,
 }: SessionListItemProps) {
   const [isEditing, setIsEditing] = useState(false);
+  const isGenerating = useGeneratingStore((s) => s.generatingSessionIds.has(session.id));
   const [editTitle, setEditTitle] = useState(session.title);
 
   const handleStartEdit = (e: React.MouseEvent) => {
@@ -99,7 +101,16 @@ export function SessionListItem({
             </div>
           </div>
         )}
-        <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} />
+        <div className="relative shrink-0">
+          <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} />
+          {isGenerating && (
+            <div className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 flex items-center gap-[2px]">
+              <span className="w-1 h-1 rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '0ms' }} />
+              <span className="w-1 h-1 rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '150ms' }} />
+              <span className="w-1 h-1 rounded-full animate-bounce" style={{ backgroundColor: 'var(--accent)', animationDelay: '300ms' }} />
+            </div>
+          )}
+        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">
             {isEditing ? (

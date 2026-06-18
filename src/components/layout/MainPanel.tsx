@@ -6,6 +6,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { showToast } from '../../utils/toast';
+import { useGeneratingStore } from '../../stores/generatingStore';
 import type { ChatMode, Message } from '../../types';
 import { getModePrompt } from '../../types';
 
@@ -243,6 +244,18 @@ export function MainPanel() {
       }
     }
   }, [currentSessionId, currentAgentType, createAgentSession]);
+
+  // ── Side effect: sync generating state to shared store for SessionList indicator ──
+  useEffect(() => {
+    const setGen = useGeneratingStore.getState().setGenerating;
+    // 清除所有旧状态，同步当前正在生成的会话
+    const currentGenerating = new Set(Object.keys(state.generatingSessions));
+    // 使用 setTimeout 避免在渲染循环中同步
+    const timer = setTimeout(() => {
+      setGen(currentGenerating);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [state.generatingSessions]);
 
   // ── Side effect: consume pending input from shared store ──
 
