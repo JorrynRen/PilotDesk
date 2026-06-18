@@ -105,7 +105,7 @@ export const SessionListItem = memo(function SessionListItem({
           <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} />
           {isGenerating && (
             <div className="flex justify-center mt-1.5">
-              <span className="block w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: 'var(--accent)' }} />
+              <span className="block w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: 'var(--accent)', boxShadow: '0 0 6px 2px rgba(255, 200, 0, 0.6)' }} />
             </div>
           )}
         </div>
