@@ -289,6 +289,7 @@ pub fn run() {
             commands::agents::export_agents_json,
             commands::agents::import_agents_json,
             commands::agents::list_agent_market,
+            commands::agents::read_agent_icon,
         ])
         .setup(|app| {
             // 初始化资源路径

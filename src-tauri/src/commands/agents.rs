@@ -305,7 +305,7 @@ pub fn get_market_templates() -> Vec<AgentConfig> {
             session_id_field: "session_id".into(),
             resume_arg_template: "--resume {session_id}".into(),
             skills_dir: String::new(), skill_entry_file: "SKILL.md".into(), skill_display_mode: "recursive".into(),
-            color: "#3B82F6".into(), icon: "🤖".into(),
+            color: "#3B82F6".into(), icon: "file:claude_icon.ico".into(),
             sort_order: 1, is_enabled: true, is_builtin: true,
             created_at: now, updated_at: now,
         },
@@ -330,7 +330,7 @@ pub fn get_market_templates() -> Vec<AgentConfig> {
             session_id_field: String::new(),
             resume_arg_template: "--resume {session_id}".into(),
             skills_dir: String::new(), skill_entry_file: "SKILL.md".into(), skill_display_mode: "recursive".into(),
-            color: "#8B5CF6".into(), icon: "🤖".into(),
+            color: "#8B5CF6".into(), icon: "file:hermes_icon.ico".into(),
             sort_order: 2, is_enabled: true, is_builtin: true,
             created_at: now, updated_at: now,
         },
@@ -354,7 +354,7 @@ pub fn get_market_templates() -> Vec<AgentConfig> {
             session_id_field: "thread_id".into(),
             resume_arg_template: "exec resume {session_id}".into(),
             skills_dir: String::new(), skill_entry_file: "SKILL.md".into(), skill_display_mode: "recursive".into(),
-            color: "#F59E0B".into(), icon: "🤖".into(),
+            color: "#F59E0B".into(), icon: "file:codex_icon.ico".into(),
             sort_order: 3, is_enabled: true, is_builtin: true,
             created_at: now, updated_at: now,
         },
@@ -364,6 +364,29 @@ pub fn get_market_templates() -> Vec<AgentConfig> {
 #[tauri::command]
 pub fn list_agent_market() -> Vec<AgentConfig> {
     get_market_templates()
+}
+
+#[tauri::command]
+pub fn read_agent_icon(icon_name: String, resources: tauri::State<'_, crate::ResourcePaths>) -> Result<String, AppError> {
+    // icon_name: "claude_icon.ico" (不含 file: 前缀)
+    let icon_path = resources.builtin.join("icons").join(&icon_name);
+    if !icon_path.exists() {
+        return Err(AppError::NotFound(format!("图标文件不存在: {}", icon_name)));
+    }
+    let data = std::fs::read(&icon_path)
+        .map_err(|e| AppError::Io(format!("读取图标文件失败: {}", e)))?;
+    // 检测文件扩展名确定 MIME 类型
+    let mime = match icon_path.extension().and_then(|e| e.to_str()) {
+        Some("ico") => "image/x-icon",
+        Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    };
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(format!("data:{};base64,{}", mime, b64))
 }
 
 // ──────────────────────────────────────────────

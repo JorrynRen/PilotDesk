@@ -340,32 +340,37 @@ import { Virtuoso } from 'react-virtuoso';
 ### 4.1 目录结构
 
 ```
-src-tauri/src/
-+-- main.rs                    # Tauri 入口
-+-- lib.rs                     # 模块注册 + 命令注册 + setup
-+-- commands/                  # Tauri Commands
-|   +-- mod.rs
-|   +-- session.rs             # 会话 CRUD + 消息 CRUD + 搜索
-|   +-- api_provider.rs        # API 提供商管理
-|   +-- app_settings.rs        # 应用设置 KV
-|   +-- env.rs                 # 环境检测 + Agent 安装
-|   +-- update.rs              # npm/pypi 版本检测
-|   +-- install_log.rs         # 安装日志
-|   +-- inspiration.rs         # 灵感 CRUD + FTS5 搜索
-|   +-- bot.rs                 # Bot 频道管理
-|   +-- theme.rs               # 主题管理（SQLite 持久化）
-+-- agent/
-|   +-- mod.rs                 # AgentManager（统一管理 Agent 进程生命周期）
-+-- db/
-|   +-- mod.rs
-|   +-- init.rs                # 数据库初始化 + 迁移（v6，返回 r2d2 Pool）
-|   +-- models.rs              # 数据模型（Session, Message, Inspiration, BotChannel, EnvInfo, SkillInfo）
-+-- plugin/
-|   +-- mod.rs                 # PluginHost（插件发现/启用/禁用）
-+-- utils/
-    +-- mod.rs                 # new_id(), now(), now_millis() 辅助函数
-    +-- paths.rs               # 路径工具
-    +-- errors.rs              # 错误类型枚举（AppError, 9 个变体）
+src-tauri/
++-- resources/                 # 资源目录（打包携带）
+|   +-- agents/                # 内置 Agent 配置
+|   +-- icons/                 # 内置 Agent 图标文件
+|   +-- assets/                # 其他资源
++-- src/
+|   +-- main.rs                # Tauri 入口
+|   +-- lib.rs                 # 模块注册 + 命令注册 + setup（含 ResourcePaths 初始化）
+|   +-- commands/              # Tauri Commands
+|   |   +-- mod.rs
+|   |   +-- session.rs         # 会话 CRUD + 消息 CRUD + 搜索
+|   |   +-- api_provider.rs    # API 提供商管理
+|   |   +-- app_settings.rs    # 应用设置 KV
+|   |   +-- env.rs             # 环境检测 + Agent 安装
+|   |   +-- update.rs          # npm/pypi 版本检测
+|   |   +-- install_log.rs     # 安装日志
+|   |   +-- inspiration.rs     # 灵感 CRUD + FTS5 搜索
+|   |   +-- bot.rs             # Bot 频道管理
+|   |   +-- theme.rs           # 主题管理（SQLite 持久化）
+|   +-- agent/
+|   |   +-- mod.rs             # AgentManager（统一管理 Agent 进程生命周期）
+|   +-- db/
+|   |   +-- mod.rs
+|   |   +-- init.rs            # 数据库初始化 + 迁移（v6，返回 r2d2 Pool）
+|   |   +-- models.rs          # 数据模型
+|   +-- plugin/
+|   |   +-- mod.rs             # PluginHost（插件发现/启用/禁用）
+|   +-- utils/
+|       +-- mod.rs             # new_id(), now(), now_millis()
+|       +-- paths.rs           # 路径工具
+|       +-- errors.rs          # AppError 枚举（9 个变体）
 ```
 
 ### 4.2 命令注册
@@ -562,6 +567,42 @@ impl DbState {
     }
 }
 ```
+
+### 4.8 资源路径管理（v4.5 新增）
+
+v4.5 新增 `ResourcePaths` 结构体，统一管理内置资源和用户资源路径：
+
+```rust
+pub struct ResourcePaths {
+    pub builtin: PathBuf,  // 内置资源（打包携带，只读）
+    pub user: PathBuf,     // 用户资源（可读写）
+}
+```
+
+**路径规则**：
+
+| 类型 | 开发模式 | 生产模式（Windows MSI） |
+|------|---------|----------------------|
+| 内置资源 | `src-tauri/resources/` | `%LOCALAPPDATA%\com.pilotdesk.app\resources\` |
+| 用户资源 | `app_data_dir/resources/` | `app_data_dir/resources/` |
+
+**目录结构**：
+
+```
+resources/
+├── agents/      # 内置 Agent 配置（JSON/YAML）
+├── icons/       # Agent 图标文件（.ico/.png/.svg）
+└── assets/      # 其他资源
+```
+
+**初始化**：在 `setup()` 阶段通过 `app.path().resource_dir()` 和 `app.path().app_data_dir()` 获取路径，通过 `app.manage(ResourcePaths { ... })` 注册为 Tauri State，所有命令通过 `State<ResourcePaths>` 访问。
+
+**图标加载流程**：
+
+1. Agent 配置中 `icon` 字段以 `file:claude_icon.ico` 格式存储
+2. 前端 `AgentIcon` 组件检测到 `file:` 前缀，调用 `read_agent_icon` Rust 命令
+3. Rust 端从 `ResourcePaths.builtin/icons/` 目录读取文件，返回 base64 data URL
+4. 前端渲染 `<img>` 标签显示图标
 
 - 最大连接数：8
 - 读写不再互斥，并行查询性能提升显著
@@ -1943,7 +1984,29 @@ function useI18n() {
 1. **Phase 4**：react-virtuoso 虚拟滚动、消息内联编辑、会话搜索（search_sessions 命令）
 2. **Phase 5**：42 个 CSS 设计令牌系统、主题 SQLite 持久化（useTheme 重写）
 
-### 15.7 v4.0
+### 15.7 v4.5
+
+**日期**：2026-06-20
+
+**变更内容**：
+1. **资源目录架构**
+   - 新增 `src-tauri/resources/` 目录（agents/ icons/ assets/）
+   - 新增 `ResourcePaths` 结构体（Tauri State），管理内置/用户资源路径
+   - 新增 `paths.rs` 中 `builtin_resources_dir()` / `user_resources_dir()` 函数
+   - 打包配置 `tauri.conf.json bundle.resources`
+2. **Agent 图标系统**
+   - 三个内置 Agent 图标文件：`claude_icon.ico`、`hermes_icon.ico`、`codex_icon.ico`
+   - 新增 `read_agent_icon` Rust 命令（读取图标文件返回 base64 data URL）
+   - 新增 `AgentIcon` 前端组件（支持 file: 前缀/网络图片/Emoji）
+   - Agent 配置 icon 字段格式：`file:claude_icon.ico`
+   - Agent 市场模板和数据库种子数据 icon 字段更新
+3. **Agent 表单优化**
+   - 字段按 6 个分类分组（基础信息/包参数/会话参数/延续会话/生命周期/技能引用）
+   - 分类标题加粗 + 主题色图标
+   - 输入框 placeholder 统一为具体示例
+   - 图标字段 label 补全值类型说明
+
+### 15.8 v4.0
 
 **日期**：2026-06-16
 
@@ -1965,7 +2028,7 @@ function useI18n() {
    - inspirationStore.ts 精简 ~135 行
    - apiProviderStore.ts 精简 ~204 行
 
-### 15.8 v3.5
+### 15.9 v3.5
 
 **日期**：2026-06-16
 
@@ -1975,7 +2038,7 @@ function useI18n() {
 3. DPAPI 密钥保护（Windows CryptProtectData）
 4. sessionStore 竞态修复（会话存在性检查）
 
-### 15.9 v3.4
+### 15.10 v3.4
 
 **日期**：2026-06-16
 
@@ -1990,4 +2053,4 @@ function useI18n() {
 
 ---
 
-> PilotDesk 架构与技术实现 v4.6 | 2026-06-18
+> PilotDesk 架构与技术实现 v4.5 | 2026-06-20

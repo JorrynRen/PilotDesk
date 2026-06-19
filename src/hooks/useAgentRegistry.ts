@@ -95,6 +95,7 @@ export function useAgentRegistry() {
         label: agent.displayName,
         initial: agentTypeToInitial(agentType),
         cssVar: agentTypeToCssVar(agentType),
+        icon: agent.icon || undefined,
       };
     }
     return getBuiltinTheme(agentType);
