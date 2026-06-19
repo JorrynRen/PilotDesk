@@ -460,18 +460,18 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
             label="Agent标识（不可重复）"
             value={form.agentType || ''}
             onChange={(v) => onChange({ ...form, agentType: v })}
-            placeholder="claude-code"
+            placeholder="如 code"
             readOnly={mode === 'edit'}
           />
-          <FormField label="显示名称" value={form.displayName || ''} onChange={(v) => onChange({ ...form, displayName: v })} placeholder="Claude Code" />
+          <FormField label="显示名称" value={form.displayName || ''} onChange={(v) => onChange({ ...form, displayName: v })} placeholder="如 Code Agent" />
         </div>
-        <FormField label="描述" value={form.description || ''} onChange={(v) => onChange({ ...form, description: v })} placeholder="Anthropic 官方 CLI Agent，支持多文件编辑" />
-        <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="claude" />
+        <FormField label="描述" value={form.description || ''} onChange={(v) => onChange({ ...form, description: v })} placeholder="如 AI 编程助手，支持代码生成与重构" />
+        <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="如 code" />
         <div className="grid grid-cols-2 gap-2 mt-2">
-          <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="#6366F1" />
-          <FormField label="图标" value={form.icon || '🤖'} onChange={(v) => onChange({ ...form, icon: v })} placeholder="🤖" />
+          <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
+          <FormField label="图标" value={form.icon || '🤖'} onChange={(v) => onChange({ ...form, icon: v })} placeholder="如 🤖" />
         </div>
-        <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="0" />
+        <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
       </div>
 
       {/* 包参数配置 */}
@@ -481,8 +481,8 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           <span>包参数配置</span>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <FormField label="npm 包名" value={form.npmPackage || ''} onChange={(v) => onChange({ ...form, npmPackage: v || null })} placeholder="@anthropic-ai/claude-code" />
-          <FormField label="pip 包名" value={form.pipPackage || ''} onChange={(v) => onChange({ ...form, pipPackage: v || null })} placeholder="hermes-agent" />
+          <FormField label="npm 包名" value={form.npmPackage || ''} onChange={(v) => onChange({ ...form, npmPackage: v || null })} placeholder="如 @scope/code" />
+          <FormField label="pip 包名" value={form.pipPackage || ''} onChange={(v) => onChange({ ...form, pipPackage: v || null })} placeholder="如 code" />
         </div>
       </div>
 
@@ -492,14 +492,14 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           <Terminal size={11} style={{ color: 'var(--accent)' }} />
           <span>会话参数配置</span>
         </div>
-        <FormField label="运行命令模板" value={form.runCmdTemplate || ''} onChange={(v) => onChange({ ...form, runCmdTemplate: v })} placeholder="claude --print {message}" />
+        <FormField label="运行命令模板" value={form.runCmdTemplate || ''} onChange={(v) => onChange({ ...form, runCmdTemplate: v })} placeholder="如 code {message}" />
         <div className="grid grid-cols-2 gap-2 mt-2">
           <SelectField label="输出解析器" value={form.outputParser || 'raw-text'} onChange={(v) => onChange({ ...form, outputParser: v })} options={[
             { value: 'raw-text', label: 'raw-text（原始文本）' },
             { value: 'json-stream', label: 'json-stream（JSON 流）' },
             { value: 'ansi-text', label: 'ansi-text（ANSI 文本）' },
           ]} />
-          <FormField label="输出过滤正则" value={form.outputFilterRegex || ''} onChange={(v) => onChange({ ...form, outputFilterRegex: v })} placeholder="^(?:\[info\]|DEBUG)" />
+          <FormField label="输出过滤正则" value={form.outputFilterRegex || ''} onChange={(v) => onChange({ ...form, outputFilterRegex: v })} placeholder="如 ^(?:\\[info\\]|DEBUG)" />
         </div>
       </div>
 
@@ -515,11 +515,11 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
             { value: 'stdout-json', label: 'stdout-json（标准输出 JSON）' },
             { value: 'stderr-text', label: 'stderr-text（标准错误文本行）' },
           ]} />
-          <FormField label="Session ID 事件类型" value={form.sessionIdEventType || ''} onChange={(v) => onChange({ ...form, sessionIdEventType: v })} placeholder="system/session_created" />
+          <FormField label="Session ID 事件类型" value={form.sessionIdEventType || ''} onChange={(v) => onChange({ ...form, sessionIdEventType: v })} placeholder="如 system/init" />
         </div>
         <div className="grid grid-cols-2 gap-2 mt-2">
-          <FormField label="Session ID 字段名" value={form.sessionIdField || ''} onChange={(v) => onChange({ ...form, sessionIdField: v })} placeholder="session_id" />
-          <FormField label="恢复参数模板" value={form.resumeArgTemplate || ''} onChange={(v) => onChange({ ...form, resumeArgTemplate: v })} placeholder="--resume {session_id}" />
+          <FormField label="Session ID 字段名" value={form.sessionIdField || ''} onChange={(v) => onChange({ ...form, sessionIdField: v })} placeholder="如 session_id" />
+          <FormField label="恢复参数模板" value={form.resumeArgTemplate || ''} onChange={(v) => onChange({ ...form, resumeArgTemplate: v })} placeholder="如 --resume {session_id}" />
         </div>
       </div>
 
@@ -530,16 +530,16 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           <span>生命周期命令配置</span>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <FormField label="安装命令" value={form.installCmd || ''} onChange={(v) => onChange({ ...form, installCmd: v })} placeholder="npm install -g @anthropic-ai/claude-code" />
-          <FormField label="卸载命令" value={form.uninstallCmd || ''} onChange={(v) => onChange({ ...form, uninstallCmd: v })} placeholder="npm uninstall -g @anthropic-ai/claude-code" />
+          <FormField label="安装命令" value={form.installCmd || ''} onChange={(v) => onChange({ ...form, installCmd: v })} placeholder="如 npm install -g code" />
+          <FormField label="卸载命令" value={form.uninstallCmd || ''} onChange={(v) => onChange({ ...form, uninstallCmd: v })} placeholder="如 npm uninstall -g code" />
         </div>
         <div className="grid grid-cols-2 gap-2 mt-2">
-          <FormField label="更新命令" value={form.updateCmd || ''} onChange={(v) => onChange({ ...form, updateCmd: v })} placeholder="npm update -g @anthropic-ai/claude-code" />
-          <FormField label="版本检测命令" value={form.versionCmd || ''} onChange={(v) => onChange({ ...form, versionCmd: v })} placeholder="claude --version" />
+          <FormField label="更新命令" value={form.updateCmd || ''} onChange={(v) => onChange({ ...form, updateCmd: v })} placeholder="如 npm update -g code" />
+          <FormField label="版本检测命令" value={form.versionCmd || ''} onChange={(v) => onChange({ ...form, versionCmd: v })} placeholder="如 code --version" />
         </div>
         <div className="grid grid-cols-2 gap-2 mt-2">
-          <FormField label="最新版本查询命令" value={form.latestVersionCmd || ''} onChange={(v) => onChange({ ...form, latestVersionCmd: v })} placeholder="npm view @anthropic-ai/claude-code version" />
-          <FormField label="版本号提取正则" value={form.versionPattern || ''} onChange={(v) => onChange({ ...form, versionPattern: v })} placeholder="(\\d+\\.\\d+\\.\\d+)" />
+          <FormField label="最新版本查询命令" value={form.latestVersionCmd || ''} onChange={(v) => onChange({ ...form, latestVersionCmd: v })} placeholder="如 npm view code version" />
+          <FormField label="版本号提取正则" value={form.versionPattern || ''} onChange={(v) => onChange({ ...form, versionPattern: v })} placeholder="如 (\\d+\\.\\d+\\.\\d+)" />
         </div>
       </div>
 
@@ -550,7 +550,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           <span>技能引用配置</span>
         </div>
         <div className="grid grid-cols-3 gap-2">
-          <FormField label="技能目录路径" value={form.skillsDir || ''} onChange={(v) => onChange({ ...form, skillsDir: v })} placeholder="~/.claude/skills" />
+          <FormField label="技能目录路径" value={form.skillsDir || ''} onChange={(v) => onChange({ ...form, skillsDir: v })} placeholder="如 ~/.code/skills" />
           <FormField label="技能入口文件名" value={form.skillEntryFile || 'SKILL.md'} onChange={(v) => onChange({ ...form, skillEntryFile: v })} />
           <SelectField label="技能显示模式" value={form.skillDisplayMode || 'recursive'} onChange={(v) => onChange({ ...form, skillDisplayMode: v })} options={[
             { value: 'recursive', label: 'recursive（递归显示全部）' },
