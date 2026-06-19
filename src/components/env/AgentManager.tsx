@@ -310,7 +310,10 @@ export function AgentManager() {
                 <div className="grid grid-cols-3 gap-3">
                   <FormField label="技能目录路径" value={addForm.skillsDir || ''} onChange={(v) => setAddForm({ ...addForm, skillsDir: v })} placeholder="如 ~/.claude/skills" />
                   <FormField label="技能入口文件名" value={addForm.skillEntryFile || 'SKILL.md'} onChange={(v) => setAddForm({ ...addForm, skillEntryFile: v })} />
-                  <FormField label="技能显示模式" value={addForm.skillDisplayMode || 'recursive'} onChange={(v) => setAddForm({ ...addForm, skillDisplayMode: v })} placeholder="recursive 或 collection" />
+                                    <SelectField label="技能显示模式" value={addForm.skillDisplayMode || 'recursive'} onChange={(v) => setAddForm({ ...addForm, skillDisplayMode: v })} options={[
+                    { value: 'recursive', label: 'recursive（递归显示全部）' },
+                    { value: 'collection', label: 'collection（只显示集合名）' },
+                  ]} />
                 </div>
               </div>
               <div className="flex gap-2 justify-end pt-1">
@@ -501,7 +504,10 @@ function EditForm({ form, onChange, onSave, onCancel, saving }: {
         <div className="grid grid-cols-3 gap-2">
           <FormField label="技能目录路径" value={form.skillsDir || ''} onChange={(v) => onChange({ ...form, skillsDir: v })} />
           <FormField label="技能入口文件名" value={form.skillEntryFile || 'SKILL.md'} onChange={(v) => onChange({ ...form, skillEntryFile: v })} />
-          <FormField label="技能显示模式" value={form.skillDisplayMode || 'recursive'} onChange={(v) => onChange({ ...form, skillDisplayMode: v })} />
+                    <SelectField label="技能显示模式" value={form.skillDisplayMode || 'recursive'} onChange={(v) => onChange({ ...form, skillDisplayMode: v })} options={[
+            { value: 'recursive', label: 'recursive（递归显示全部）' },
+            { value: 'collection', label: 'collection（只显示集合名）' },
+          ]} />
         </div>
       </div>
       <div className="flex gap-2 justify-end pt-1">
@@ -534,3 +540,27 @@ function FormField({ label, value, onChange, placeholder }: {
     </div>
   );
 }
+function SelectField({ label, value, onChange, options }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <div>
+      <label className="block text-[10px] mb-0.5" style={{ color: 'var(--text-secondary)' }}>{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
+        style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+      >
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>{opt.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+
