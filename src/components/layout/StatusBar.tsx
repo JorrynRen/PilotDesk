@@ -18,6 +18,7 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
   // Show all enabled agents from DB, with versions from envInfo
   const agentEntries = agents
     .filter(a => a.isEnabled)
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     .map(agent => [agent.agentType, envInfo?.agentVersions?.[agent.agentType] ?? null] as const);
 
   // Show loading state when envInfo is being fetched

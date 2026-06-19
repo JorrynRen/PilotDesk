@@ -147,7 +147,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       updateChecking: false,
     },
     // Dynamic agents from DB
-    ...agents.filter(a => a.isEnabled).map((agent) => {
+    ...agents.filter(a => a.isEnabled).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)).map((agent) => {
       const version = envInfo?.agentVersions?.[agent.agentType] ?? null;
       return {
         name: agent.displayName,

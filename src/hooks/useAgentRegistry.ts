@@ -108,7 +108,7 @@ export function useAgentRegistry() {
 
   /** Get enabled agent types (for session creation dropdown) */
   const getEnabledAgentTypes = useCallback((): string[] => {
-    const dbTypes = globalAgents.filter(a => a.isEnabled).map(a => a.agentType);
+    const dbTypes = globalAgents.filter(a => a.isEnabled).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)).map(a => a.agentType);
     if (!dbTypes.includes('api')) {
       return [...dbTypes, 'api'];
     }
