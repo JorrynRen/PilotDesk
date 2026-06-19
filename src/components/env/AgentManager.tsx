@@ -261,76 +261,14 @@ export function AgentManager() {
         {showAddForm && (
           <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
             <div className="text-xs font-medium mb-3" style={{ color: 'var(--text-primary)' }}>添加自定义 Agent</div>
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="Agent标识（不可重复）" value={addForm.agentType || ''} onChange={(v) => setAddForm({ ...addForm, agentType: v })} placeholder="如 my-agent" />
-                <FormField label="显示名称" value={addForm.displayName || ''} onChange={(v) => setAddForm({ ...addForm, displayName: v })} placeholder="如 My Agent" />
-              </div>
-              <FormField label="描述" value={addForm.description || ''} onChange={(v) => setAddForm({ ...addForm, description: v })} placeholder="简短描述" />
-              <FormField label="CLI 命令" value={addForm.cliCommand || ''} onChange={(v) => setAddForm({ ...addForm, cliCommand: v })} placeholder="如 my-cli" />
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="npm 包名" value={addForm.npmPackage || ''} onChange={(v) => setAddForm({ ...addForm, npmPackage: v || null })} placeholder="如 @scope/my-agent" />
-                <FormField label="pip 包名" value={addForm.pipPackage || ''} onChange={(v) => setAddForm({ ...addForm, pipPackage: v || null })} placeholder="如 my-agent" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="安装命令" value={addForm.installCmd || ''} onChange={(v) => setAddForm({ ...addForm, installCmd: v })} placeholder="如 npm install -g my-agent" />
-                <FormField label="卸载命令" value={addForm.uninstallCmd || ''} onChange={(v) => setAddForm({ ...addForm, uninstallCmd: v })} placeholder="如 my-agent uninstall" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="更新命令" value={addForm.updateCmd || ''} onChange={(v) => setAddForm({ ...addForm, updateCmd: v })} placeholder="如 my-agent update" />
-                <FormField label="版本检测命令" value={addForm.versionCmd || ''} onChange={(v) => setAddForm({ ...addForm, versionCmd: v })} placeholder="如 my-agent --version" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="最新版本查询命令" value={addForm.latestVersionCmd || ''} onChange={(v) => setAddForm({ ...addForm, latestVersionCmd: v })} placeholder="如 npm view my-agent version" />
-                <FormField label="版本号提取正则" value={addForm.versionPattern || ''} onChange={(v) => setAddForm({ ...addForm, versionPattern: v })} placeholder="v?(\d+\.\d+\.\d+)" />
-              </div>
-              <FormField label="运行命令模板" value={addForm.runCmdTemplate || ''} onChange={(v) => setAddForm({ ...addForm, runCmdTemplate: v })} placeholder="如 my-cli {message}" />
-              <div className="grid grid-cols-3 gap-3">
-                <SelectField label="输出解析器" value={addForm.outputParser || 'raw-text'} onChange={(v) => setAddForm({ ...addForm, outputParser: v })} options={[
-                    { value: 'raw-text', label: 'raw-text（原始文本）' },
-                    { value: 'json-stream', label: 'json-stream（JSON 流）' },
-                    { value: 'ansi-text', label: 'ansi-text（ANSI 文本）' },
-                  ]} />
-                <FormField label="输出过滤正则" value={addForm.outputFilterRegex || ''} onChange={(v) => setAddForm({ ...addForm, outputFilterRegex: v })} placeholder="过滤噪声行" />
-                <FormField label="排序序号" value={String(addForm.sortOrder ?? 0)} onChange={(v) => setAddForm({ ...addForm, sortOrder: parseInt(v) || 0 })} placeholder="0" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="主题色" value={addForm.color || '#6366F1'} onChange={(v) => setAddForm({ ...addForm, color: v })} placeholder="#6366F1" />
-                <FormField label="图标" value={addForm.icon || '🤖'} onChange={(v) => setAddForm({ ...addForm, icon: v })} placeholder="🤖" />
-              </div>
-              <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
-                <div className="text-[10px] font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>会话延续配置</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <SelectField label="Session ID 来源" value={addForm.sessionIdSource || 'none'} onChange={(v) => setAddForm({ ...addForm, sessionIdSource: v })} options={[
-                    { value: 'none', label: 'none（不支持会话延续）' },
-                    { value: 'stdout-json', label: 'stdout-json（标准输出 JSON）' },
-                    { value: 'stderr-text', label: 'stderr-text（标准错误文本行）' },
-                  ]} />
-                  <FormField label="Session ID 事件类型" value={addForm.sessionIdEventType || ''} onChange={(v) => setAddForm({ ...addForm, sessionIdEventType: v })} placeholder="如 system/init" />
-                </div>
-                <div className="grid grid-cols-2 gap-3 mt-2">
-                  <FormField label="Session ID 字段名" value={addForm.sessionIdField || ''} onChange={(v) => setAddForm({ ...addForm, sessionIdField: v })} placeholder="如 session_id" />
-                  <FormField label="恢复参数模板" value={addForm.resumeArgTemplate || ''} onChange={(v) => setAddForm({ ...addForm, resumeArgTemplate: v })} placeholder="如 --resume {session_id}" />
-                </div>
-              </div>
-              <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
-                <div className="text-[10px] font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>技能配置</div>
-                <div className="grid grid-cols-3 gap-3">
-                  <FormField label="技能目录路径" value={addForm.skillsDir || ''} onChange={(v) => setAddForm({ ...addForm, skillsDir: v })} placeholder="如 ~/.claude/skills" />
-                  <FormField label="技能入口文件名" value={addForm.skillEntryFile || 'SKILL.md'} onChange={(v) => setAddForm({ ...addForm, skillEntryFile: v })} />
-                                    <SelectField label="技能显示模式" value={addForm.skillDisplayMode || 'recursive'} onChange={(v) => setAddForm({ ...addForm, skillDisplayMode: v })} options={[
-                    { value: 'recursive', label: 'recursive（递归显示全部）' },
-                    { value: 'collection', label: 'collection（只显示集合名）' },
-                  ]} />
-                </div>
-              </div>
-              <div className="flex gap-2 justify-end pt-1">
-                <SettingsButton variant="secondary" onClick={() => { setShowAddForm(false); setAddForm({}); }}>取消</SettingsButton>
-                <SettingsButton variant="primary" onClick={handleAdd} disabled={saving}>
-                  {saving ? <><Loader2 size={11} className="animate-spin" /> 添加中</> : '确认添加'}
-                </SettingsButton>
-              </div>
-            </div>
+            <AgentForm
+              form={addForm}
+              onChange={setAddForm}
+              onSubmit={handleAdd}
+              onCancel={() => { setShowAddForm(false); setAddForm({}); }}
+              saving={saving}
+              mode="add"
+            />
           </div>
         )}
 
@@ -341,12 +279,13 @@ export function AgentManager() {
             return (
               <SettingsCard key={agent.agentType}>
                 {isEditing ? (
-                  <EditForm
+                  <AgentForm
                     form={editForm!}
                     onChange={setEditForm}
-                    onSave={handleSave}
+                    onSubmit={handleSave}
                     onCancel={() => { setEditingType(null); setEditForm(null); }}
                     saving={saving}
+                    mode="edit"
                   />
                 ) : (
                   <div className="flex items-center gap-3 w-full">
