@@ -13,6 +13,14 @@ pub struct DbState {
     pub pool: DbPool,
 }
 
+/// 资源路径管理
+pub struct ResourcePaths {
+    /// 内置资源目录（打包携带的 Agent 配置、默认图标等，只读）
+    pub builtin: std::path::PathBuf,
+    /// 用户资源目录（自定义图标、用户上传文件等，可读写）
+    pub user: std::path::PathBuf,
+}
+
 impl DbState {
     pub fn get_conn(&self) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, crate::utils::errors::AppError> {
         self.pool.get().map_err(|e| crate::utils::errors::AppError::Lock(format!("数据库连接获取失败: {}", e)))
@@ -212,7 +220,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(DbState { pool })
+                .manage(DbState { pool })
         .manage(AsyncMutex::new(AgentManager::new()))
         .manage(Mutex::new(plugin::PluginHost::new()))
         .invoke_handler(tauri::generate_handler![
@@ -283,18 +291,24 @@ pub fn run() {
             commands::agents::list_agent_market,
         ])
         .setup(|app| {
-            // 确保用户资源目录存在（首次运行时创建）
-            // 用户上传的资源（自定义图标等）存放在 app_data_dir/resources/ 下
-            if let Ok(data_dir) = app.path().app_data_dir() {
-                let user_resources = data_dir.join("resources");
-                for sub in &["agents", "icons", "assets"] {
-                    let dir = user_resources.join(sub);
-                    if !dir.exists() {
-                        let _ = std::fs::create_dir_all(&dir);
-                    }
+            // 初始化资源路径
+            let builtin = app.path().resource_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("resources"));
+            let user = app.path().app_data_dir()
+                .unwrap_or_else(|_| dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("PilotDesk"))
+                .join("resources");
+
+            // 确保用户资源子目录存在（首次运行时创建）
+            for sub in &["agents", "icons", "assets"] {
+                let dir = user.join(sub);
+                if !dir.exists() {
+                    let _ = std::fs::create_dir_all(&dir);
                 }
             }
-            log::info!("PilotDesk initialized successfully (AgentManager mode, r2d2 pool).");
+
+            app.manage(ResourcePaths { builtin, user });
+
+            log::info!("PilotDesk initialized successfully.");
             Ok(())
         })
         .run(tauri::generate_context!())
