@@ -1,9 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, Pencil, Save, X, Loader2, Check, Palette, Download, Upload } from 'lucide-react';
+import { Plus, Trash2, Pencil, Save, X, Loader2, Check, Palette, Download, Upload, Cpu, Search, FolderOpen, Bot, ChevronDown, ChevronRight } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { AgentConfig } from '../../types';
+import { useSkillStore } from '../../stores/skillStore';
+import { useAgentEvent } from '../../hooks/useAgentEvent';
+import { AGENT_THEMES } from '../../types';
+import type { SkillInfo } from '../../stores/skillStore';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
 
 // ──────────────────────────────────────────────
@@ -20,6 +24,80 @@ export function AgentManager() {
   const [marketAgents, setMarketAgents] = useState<AgentConfig[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const [showMarket, setShowMarket] = useState(false);
+
+  // SkillBrowser state
+  const { skillsByAgent, isLoading: skillsLoading, setAgentSkills, setLoading: setSkillsLoading } = useSkillStore();
+  const { agents: allAgents, getDisplayName } = useAgentRegistry();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSkill, setSelectedSkill] = useState<{ agent: string; name: string; description: string; category?: string } | null>(null);
+  const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(new Set());
+
+  const toggleAgent = (agent: string) => {
+    setCollapsedAgents((prev) => {
+      const next = new Set(prev);
+      if (next.has(agent)) {
+        next.delete(agent);
+      } else {
+        next.add(agent);
+      }
+      return next;
+    });
+  };
+
+  const { requestSkills } = useAgentEvent({
+    onSkills: (agentType, skills) => {
+      setAgentSkills(agentType, skills);
+    },
+  });
+
+  // Agent display order from DB
+  const agentOrder = allAgents
+    .filter(a => a.isEnabled)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(a => a.agentType);
+
+  // Auto-fetch skills
+  useEffect(() => {
+    const fetchAll = async () => {
+      setSkillsLoading(true);
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const installed = await invoke<string[]>('agent_detect_installed');
+        for (const agent of installed) {
+          const cached = skillsByAgent[agent];
+          if (!cached) {
+            await requestSkills(agent);
+          }
+        }
+      } catch {
+        for (const agent of agentOrder) {
+          const cached = skillsByAgent[agent];
+          if (!cached) {
+            await requestSkills(agent);
+          }
+        }
+      }
+      setSkillsLoading(false);
+    };
+    fetchAll();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 按 DB 排序聚合所有 agent 的技能
+  const allAgentTypes = Object.keys(skillsByAgent).sort(
+    (a, b) => agentOrder.indexOf(a) - agentOrder.indexOf(b)
+  );
+  const hasAnySkills = allAgentTypes.length > 0;
+
+  // 搜索过滤
+  const getFiltered = (agentType: string) => {
+    const skills = skillsByAgent[agentType] || [];
+    if (!searchQuery) return skills;
+    return skills.filter(
+      (s) =>
+        s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        s.description.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  };
 
   const handleEdit = (agent: AgentConfig) => {
     setEditingType(agent.agentType);
@@ -341,6 +419,110 @@ export function AgentManager() {
             })
           )}
         </div>
+      </SettingsSection>
+
+      {/* ────────────────────────────── */}
+      {/* 技能浏览 */}
+      {/* ────────────────────────────── */}
+      <SettingsSection title="技能浏览">
+        <div className="relative mb-3">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索技能..."
+            className="w-full pl-7 pr-3 py-1.5 rounded-lg text-xs outline-none"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          />
+        </div>
+
+        {skillsLoading ? (
+          <div className="flex items-center justify-center py-4">
+            <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-secondary)' }} />
+          </div>
+        ) : !hasAnySkills ? (
+          <div className="flex flex-col items-center justify-center py-4 gap-1">
+            <FolderOpen size={20} style={{ color: 'var(--text-tertiary)' }} />
+            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+              {searchQuery ? '未找到匹配技能' : '暂无已安装技能'}
+            </span>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {allAgentTypes.map((agt) => {
+              const filtered = getFiltered(agt);
+              return (
+                <div key={agt} className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+                  {/* Agent header */}
+                  <div
+                    className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
+                    style={{ backgroundColor: 'var(--bg-secondary)' }}
+                    onClick={() => toggleAgent(agt)}
+                  >
+                    <Bot size={13} style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
+                    <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                      {getDisplayName(agt)}
+                    </span>
+                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      ({filtered.length})
+                    </span>
+                    <span className="ml-auto" style={{ color: 'var(--text-tertiary)' }}>
+                      {collapsedAgents.has(agt) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                    </span>
+                  </div>
+
+                  {/* Skills */}
+                  {!collapsedAgents.has(agt) && (
+                    filtered.length > 0 ? filtered.map((skill) => (
+                      <button
+                        key={`${agt}:${skill.name}`}
+                        onClick={() => {
+                          setSelectedSkill({ agent: agt, ...skill });
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--bg-tertiary)]"
+                        style={{
+                          backgroundColor: selectedSkill?.agent === agt && selectedSkill?.name === skill.name
+                            ? 'var(--bg-tertiary)'
+                            : 'transparent',
+                          borderTop: '1px solid var(--border)',
+                        }}
+                      >
+                        <Cpu size={12} className="shrink-0" style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
+                        <div className="flex-1 min-w-0 text-left">
+                          <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                            {skill.name}
+                          </div>
+                          <div className="text-[10px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                            {skill.description}
+                          </div>
+                        </div>
+                      </button>
+                    )) : (
+                      <div className="px-3 py-2 text-[10px]" style={{ color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}>
+                        暂无技能文件
+                      </div>
+                    )
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Skill detail */}
+        {selectedSkill && (
+          <div className="mt-2 px-3 py-2 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+            <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+              <span style={{ color: 'var(--text-tertiary)' }}>来源:</span> {getDisplayName(selectedSkill.agent)}
+              {selectedSkill.category && (
+                <span className="ml-2">
+                  <span style={{ color: 'var(--text-tertiary)' }}>分类:</span> {selectedSkill.category}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
       </SettingsSection>
 
       {/* Add Agent button */}

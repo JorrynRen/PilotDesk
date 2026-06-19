@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { Lightbulb, Cpu, Bot, ChevronDown } from 'lucide-react';
-import { SkillBrowser } from '../panels/SkillBrowser';
 import { MemoryBrowser } from '../panels/MemoryBrowser';
 import { useSessionStore } from '../../stores/sessionStore';
 import { InspirationPanel } from './InspirationPanel';
@@ -53,15 +52,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
 
   const renderContent = () => {
     switch (activeTab) {
-      case 'skills':
-        return (
-          <SkillBrowser
-            agentType={currentSession?.agentType ?? ''}
-            onSkillSelect={(name) => {
-              console.log('Skill selected:', name);
-            }}
-          />
-        );
+
       case 'memory':
         return (
           <MemoryBrowser
@@ -104,17 +95,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
           <Lightbulb size={12} />
           灵感
         </button>
-        <button
-          onClick={() => setActiveTab('skills')}
-          className="pd-btn px-2 py-1 rounded text-xs shrink-0"
-          style={{
-            color: activeTab === 'skills' ? 'var(--accent)' : 'var(--text-secondary)',
-            backgroundColor: activeTab === 'skills' ? 'var(--accent-light)' : 'transparent',
-          }}
-        >
-          <Cpu size={12} />
-          技能
-        </button>
+
         <button
           onClick={() => setActiveTab('memory')}
           className="pd-btn px-2 py-1 rounded text-xs shrink-0"
