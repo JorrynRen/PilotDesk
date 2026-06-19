@@ -15,15 +15,14 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
   const pendingLabel = loading && !envInfo ? '查询中…' : '未安装';
   const pendingColor = loading && !envInfo ? '#9CA3AF' : '#6B7280';
 
-  // Only show enabled agents that have been detected
-  const enabledAgentTypes = agents.filter(a => a.isEnabled).map(a => a.agentType);
-  const agentEntries = envInfo?.agentVersions
-    ? Object.entries(envInfo.agentVersions).filter(([agentType]) => enabledAgentTypes.includes(agentType))
-    : [];
+  // Show all enabled agents from DB, with versions from envInfo
+  const agentEntries = agents
+    .filter(a => a.isEnabled)
+    .map(agent => [agent.agentType, envInfo?.agentVersions?.[agent.agentType] ?? null] as const);
 
   // Show loading state when envInfo is being fetched
   const showLoading = loading && !envInfo;
-  // Show fallback when envInfo loaded but no enabled agents detected
+  // Show fallback when envInfo loaded but no enabled agents
   const showEmpty = !loading && envInfo && agentEntries.length === 0;
 
   return (
