@@ -155,6 +155,7 @@ export interface AgentTheme {
   label: string;    // Display name
   initial: string;  // Single letter initial
   cssVar: string;   // CSS variable reference
+  icon?: string;    // Icon reference (file:filename.ico / URL / emoji)
 }
 
 /** Agent config from the backend agents table */
