@@ -308,7 +308,7 @@ export function AgentManager() {
                           )}
                         </div>
                         <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                          {agent.cliCommand}
+                          {agent.cliCommand} · {agent.description}
                         </div>
                       </div>
                     </div>
