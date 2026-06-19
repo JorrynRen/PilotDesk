@@ -365,7 +365,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "npm view @anthropic-ai/claude-code version",
          "claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}",
          "json-stream", "", 1, "stdout-json", "system/init", "session_id", "--resume {session_id}",
-         "#3B82F6", "\\U0001f916", 1),
+         "#3B82F6", "file:claude_icon.ico", 1),
         ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
          "hermes", None, Some("hermes-agent"),
          "pip install hermes-agent",
@@ -377,7 +377,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "ansi-text",
          "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
          "stderr-text", "", "", "--resume {session_id}",
-         "#8B5CF6", "\\U0001f916", 2),
+         "#8B5CF6", "file:hermes_icon.ico", 2),
         ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
          "codex", Some("@openai/codex"), None,
          "npm install -g @openai/codex",
@@ -387,7 +387,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "npm view @openai/codex version",
          "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}",
          "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "exec resume {session_id}",
-         "#F59E0B", "\\U0001f916", 3),
+         "#F59E0B", "file:codex_icon.ico", 3),
     ];
 
     for (agent_type, display_name, description, cli_command, npm_package, pip_package,

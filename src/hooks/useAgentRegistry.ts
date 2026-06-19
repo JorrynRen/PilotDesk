@@ -138,9 +138,9 @@ function hexToRgba(hex: string, alpha: number): string {
 
 /** Built-in fallback themes for types not yet in agents table */
 const BUILTIN_THEMES: Record<string, AgentTheme> = {
-  claude: { color: '#3B82F6', bg: 'rgba(59,130,246,0.15)', label: 'Claude Code', initial: 'C', cssVar: 'var(--claude-tag)' },
-  hermes: { color: '#8B5CF6', bg: 'rgba(139,92,246,0.15)', label: 'Hermes Agent', initial: 'H', cssVar: 'var(--hermes-tag)' },
-  codex: { color: '#F59E0B', bg: 'rgba(245,158,11,0.15)', label: 'codeX', initial: 'X', cssVar: 'var(--codex-tag)' },
+  claude: { color: '#3B82F6', bg: 'rgba(59,130,246,0.15)', label: 'Claude Code', initial: 'C', cssVar: 'var(--claude-tag)', icon: 'file:claude_icon.ico' },
+  hermes: { color: '#8B5CF6', bg: 'rgba(139,92,246,0.15)', label: 'Hermes Agent', initial: 'H', cssVar: 'var(--hermes-tag)', icon: 'file:hermes_icon.ico' },
+  codex: { color: '#F59E0B', bg: 'rgba(245,158,11,0.15)', label: 'codeX', initial: 'X', cssVar: 'var(--codex-tag)', icon: 'file:codex_icon.ico' },
   api: { color: '#10B981', bg: 'rgba(16,185,129,0.15)', label: 'API 直连', initial: 'A', cssVar: 'var(--api-tag)' },
   manual: { color: '#6B7280', bg: 'rgba(107,114,128,0.15)', label: '手动', initial: 'M', cssVar: 'var(--text-tertiary)' },
 };

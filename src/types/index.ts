@@ -200,6 +200,7 @@ export const AGENT_THEMES: Record<string, AgentTheme> = {
     label: 'Claude Code',
     initial: 'C',
     cssVar: 'var(--claude-tag)',
+    icon: 'file:claude_icon.ico',
   },
   hermes: {
     color: '#8B5CF6',
@@ -207,6 +208,7 @@ export const AGENT_THEMES: Record<string, AgentTheme> = {
     label: 'Hermes Agent',
     initial: 'H',
     cssVar: 'var(--hermes-tag)',
+    icon: 'file:hermes_icon.ico',
   },
   api: {
     color: '#10B981',
@@ -221,6 +223,7 @@ export const AGENT_THEMES: Record<string, AgentTheme> = {
     label: 'codeX',
     initial: 'X',
     cssVar: 'var(--codex-tag)',
+    icon: 'file:codex_icon.ico',
   },
   manual: {
     color: '#6B7280',
