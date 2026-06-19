@@ -7,17 +7,17 @@ pub fn app_data_dir() -> PathBuf {
         .join("PilotDesk")
 }
 
-/// 获取应用资源目录（内置 Agent 配置、图标、用户上传资源等）
-/// 打包后通过 tauri::path::BaseDirectory::Resource 解析
-pub fn resources_dir() -> PathBuf {
-    // 开发阶段直接使用项目目录下的 resources 文件夹
-    // 打包后 Tauri 会自动处理资源路径
+/// 获取内置资源目录（打包携带的 Agent 配置、默认图标等，只读）
+pub fn builtin_resources_dir() -> PathBuf {
     let mut dir = std::env::current_exe()
         .expect("Cannot determine executable path");
-    dir.pop(); // 移除 exe 文件名
-    // 开发模式: target/debug/ -> 项目根目录/src-tauri/resources
-    // 打包后: 资源会被复制到 exe 同级目录下的 resources/
+    dir.pop();
     dir.join("resources")
+}
+
+/// 获取用户资源目录（自定义图标、用户上传文件等，可读写）
+pub fn user_resources_dir() -> PathBuf {
+    app_data_dir().join("resources")
 }
 
 pub fn db_path() -> PathBuf {

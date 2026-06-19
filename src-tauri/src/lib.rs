@@ -283,6 +283,17 @@ pub fn run() {
             commands::agents::list_agent_market,
         ])
         .setup(|app| {
+            // 确保用户资源目录存在（首次运行时创建）
+            // 用户上传的资源（自定义图标等）存放在 app_data_dir/resources/ 下
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                let user_resources = data_dir.join("resources");
+                for sub in &["agents", "icons", "assets"] {
+                    let dir = user_resources.join(sub);
+                    if !dir.exists() {
+                        let _ = std::fs::create_dir_all(&dir);
+                    }
+                }
+            }
             log::info!("PilotDesk initialized successfully (AgentManager mode, r2d2 pool).");
             Ok(())
         })
