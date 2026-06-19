@@ -316,7 +316,7 @@ export function AgentManager() {
                     <div className="flex items-center gap-1 shrink-0">
                       <SettingsButton
                         onClick={() => handleToggleEnabled(agent)}
-                        variant="secondary"
+                        variant={agent.isEnabled ? 'primary' : 'secondary'}
                         icon={agent.isEnabled ? <Check size={11} /> : <X size={11} />}
                       >
                         {agent.isEnabled ? '已启用' : '已禁用'}
