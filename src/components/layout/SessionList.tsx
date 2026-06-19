@@ -507,27 +507,42 @@ function SessionListFn() {
 
             {/* Session type selector */}
             <div className="flex gap-2 mb-4">
-              {getEnabledAgentTypes().map((type) => {
-                const theme = getTheme(type);
-                const label = getDisplayName(type);
-                const isInstalled = type === 'api' || envLoading || installedAgents.has(type);
-                if (!isInstalled) return null;
-                return (
-                  <button
-                    key={type}
-                    onClick={() => setNewSessionType(type)}
-                    className="flex-1 py-2 rounded-lg text-xs  transition-colors flex items-center justify-center gap-1"
-                    style={{
-                      backgroundColor: newSessionType === type ? `${theme.color}15` : 'var(--bg-secondary)',
-                      color: newSessionType === type ? theme.color : 'var(--text-secondary)',
-                      border: `1px solid ${newSessionType === type ? theme.color : 'var(--border)'}`,
-                    }}
-                  >
-                    {type === 'api' && <Key size={12} />}
-                    {label}
-                  </button>
-                );
-              })}
+              {(() => {
+                // Filter: API直连 only when providers exist
+                const hasApiProviders = apiProviders.length > 0;
+                const types = getEnabledAgentTypes().filter(t => t !== 'api' || hasApiProviders);
+                
+                if (types.length === 0) {
+                  return (
+                    <div className="w-full px-3 py-3 rounded-lg text-xs text-center" 
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}>
+                      暂无可用会话模式。请先在「设置」中配置 Agent 集成或 API 提供商。
+                    </div>
+                  );
+                }
+                
+                return types.map((type) => {
+                  const theme = getTheme(type);
+                  const label = getDisplayName(type);
+                  const isInstalled = type === 'api' || envLoading || installedAgents.has(type);
+                  if (!isInstalled) return null;
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => setNewSessionType(type)}
+                      className="flex-1 py-2 rounded-lg text-xs  transition-colors flex items-center justify-center gap-1"
+                      style={{
+                        backgroundColor: newSessionType === type ? `${theme.color}15` : 'var(--bg-secondary)',
+                        color: newSessionType === type ? theme.color : 'var(--text-secondary)',
+                        border: `1px solid ${newSessionType === type ? theme.color : 'var(--border)'}`,
+                      }}
+                    >
+                      {type === 'api' && <Key size={12} />}
+                      {label}
+                    </button>
+                  );
+                });
+              })()}
             </div>
 
             {/* Agent sessions: optional title & cwd */}
@@ -591,7 +606,7 @@ function SessionListFn() {
                       className="px-3 py-2 rounded-lg text-xs"
                       style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
                     >
-                      暂无配置的 API 提供商，请先在「设置 - API 配置」中添加
+                      暂无配置的 API 提供商，请先在「设置 - API集成配置」中添加
                     </div>
                   ) : (
                     <select

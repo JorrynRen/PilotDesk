@@ -45,7 +45,7 @@ const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[]
   { id: 'general', icon: Settings, label: '通用设置' },
   { id: 'environment', icon: Globe, label: '环境检测' },
   { id: 'agents', icon: Bot, label: 'Agent集成配置' },
-  { id: 'api', icon: Key, label: 'API 配置' },
+  { id: 'api', icon: Key, label: 'API集成配置' },
   { id: 'mode', icon: Zap, label: '对话模式' },
   { id: 'about', icon: Info, label: '关于' },
 ];
