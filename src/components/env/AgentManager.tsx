@@ -469,7 +469,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
         <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="如 claude" />
         <div className="grid grid-cols-2 gap-2 mt-2">
           <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
-          <FormField label="图标" value={form.icon || '🤖'} onChange={(v) => onChange({ ...form, icon: v })} placeholder="如 🤖" />
+          <FormField label="图标（支持 Emoji）" value={form.icon || '🤖'} onChange={(v) => onChange({ ...form, icon: v })} placeholder="如 🤖" />
         </div>
         <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
       </div>
