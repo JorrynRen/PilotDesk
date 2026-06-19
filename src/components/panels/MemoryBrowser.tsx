@@ -126,7 +126,7 @@ export function MemoryBrowser({ agentType, onSelect }: MemoryBrowserProps) {
               >
                 {/* Header row: Agent tag + session title + date */}
                 <div className="flex items-center gap-2 mb-1 min-w-0">
-                  <AgentBadge agentType={memory.agentType as 'claude' | 'hermes' | 'codex' | 'api'} />
+                  <AgentBadge agentType={memory.agentType} />
                   <span className="text-[10px] truncate min-w-0 font-semibold" style={{ color: 'var(--text-primary)' }}>
                     {memory.sessionTitle}
                   </span>

@@ -65,9 +65,7 @@ pub struct EnvInfo {
     pub node_version: Option<String>,
     pub git_version: Option<String>,
     pub python_version: Option<String>,
-    pub claude_code_version: Option<String>,
-    pub hermes_version: Option<String>,
-    pub codex_version: Option<String>,
+    pub agent_versions: std::collections::HashMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

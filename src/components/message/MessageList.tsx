@@ -4,6 +4,7 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { MessageBubble } from './MessageBubble';
 import { AGENT_THEMES } from '../../types';
 import type { Message, Session } from '../../types';
+import { isApiSession } from '../../utils/sessionType';
 
 interface MessageListProps {
   messages: Message[];
@@ -86,7 +87,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
     return (
       <MessageBubble
         message={msg}
-        agentType={session?.agentType ?? 'claude'}
+        agentType={session?.agentType ?? ''}
         apiProviderId={session?.apiProvider}
         apiModel={session?.apiModel}
         onEdit={onEditMessage}
@@ -128,7 +129,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
   if (messages.length === 0) {
     const agentTheme = AGENT_THEMES[session.agentType] || AGENT_THEMES.claude;
     const agentLabel = agentTheme.label;
-    const modelInfo = session.agentType === 'api' && session.apiModel
+    const modelInfo = isApiSession(session.agentType) && session.apiModel
       ? ` · ${session.apiModel}`
       : '';
     const dotColor = agentTheme.color;
@@ -147,7 +148,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
             开始新的对话
           </p>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-            {session.agentType === 'api'
+            {isApiSession(session.agentType)
               ? '消息将通过 API 直连发送'
               : '输入消息或使用技能与 Agent 交互'}
           </p>

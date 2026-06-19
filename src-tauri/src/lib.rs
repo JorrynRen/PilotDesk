@@ -133,10 +133,13 @@ fn set_theme_cmd(state: tauri::State<'_, DbState>, theme: String) -> Result<Stri
 
 // ── Agent 命令 ──
 
+/// 使用 AgentConfig 元信息驱动的 send_message
+/// 从 DB 加载 AgentConfig，通过 StdioHandler 驱动进程交互
 #[tauri::command]
-async fn agent_send_message(
+async fn agent_send_message_with_config(
     app: tauri::AppHandle,
     agent_mgr: tauri::State<'_, AsyncMutex<AgentManager>>,
+    state: tauri::State<'_, DbState>,
     session_id: String,
     agent_type: String,
     message: String,
@@ -145,8 +148,12 @@ async fn agent_send_message(
     system_prompt: Option<String>,
     agent_session_id: Option<String>,
 ) -> Result<(), String> {
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+    let config = commands::agents::get_agent_inner(&conn, &agent_type)
+        .map_err(|e| format!("查询 Agent 配置失败: {}", e))?
+        .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
     let mut mgr = agent_mgr.lock().await;
-    mgr.send_message(app, session_id, agent_type, message, mode, cwd, system_prompt, agent_session_id).await
+    mgr.send_message_with_config(app, session_id, config, message, mode, cwd, system_prompt, agent_session_id).await
 }
 
 #[tauri::command]
@@ -182,13 +189,20 @@ async fn agent_close_session(
 }
 
 #[tauri::command]
-async fn agent_list_skills(agent_type: String) -> Result<Vec<crate::db::models::SkillInfo>, String> {
-    Ok(agent::AgentManager::list_skills(&agent_type).await)
+async fn agent_list_skills(state: tauri::State<'_, DbState>, agent_type: String) -> Result<Vec<crate::db::models::SkillInfo>, String> {
+    let config = state.get_conn()
+        .ok()
+        .and_then(|conn| commands::agents::get_agent_inner(&conn, &agent_type).ok()?)
+        ;
+    Ok(agent::AgentManager::list_skills(&agent_type, config.as_ref()).await)
 }
 
 #[tauri::command]
-async fn agent_detect_installed() -> Result<Vec<String>, String> {
-    Ok(agent::detect_installed_agents())
+async fn agent_detect_installed(state: tauri::State<'_, DbState>) -> Result<Vec<String>, String> {
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+    let agents = commands::agents::list_agents_inner(&conn)
+        .map_err(|e| format!("查询 Agent 列表失败: {}", e))?;
+    Ok(agent::detect_installed_agents(&agents))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -206,15 +220,11 @@ pub fn run() {
             commands::env::clear_env_detect_cache,
             commands::env::install_agent,
             commands::env::uninstall_agent,
-            commands::env::install_claude_code,
-            commands::env::install_hermes,
-            commands::env::install_codex,
             commands::install_log::insert_log,
             commands::install_log::list_logs,
             commands::install_log::clear_logs,
             commands::update::check_pilotdesk_update,
-            commands::update::check_single_npm,
-            commands::update::check_single_pypi,
+            commands::update::check_agent_update,
             commands::session::list_sessions,
             commands::session::list_archived_sessions,
             commands::session::create_session,
@@ -246,7 +256,7 @@ pub fn run() {
             set_app_setting,
             get_theme,
             set_theme_cmd,
-            agent_send_message,
+            agent_send_message_with_config,
             agent_stop_generation,
             agent_create_session,
             agent_close_session,
@@ -263,6 +273,14 @@ pub fn run() {
     plugin::plugin_get_panel_content,
     plugin::plugin_read_entry,
     plugin::plugin_read_icon_file,
+            commands::agents::list_agents,
+            commands::agents::get_agent,
+            commands::agents::add_agent,
+            commands::agents::update_agent,
+            commands::agents::delete_agent,
+            commands::agents::export_agents_json,
+            commands::agents::import_agents_json,
+            commands::agents::list_agent_market,
         ])
         .setup(|app| {
             log::info!("PilotDesk initialized successfully (AgentManager mode, r2d2 pool).");

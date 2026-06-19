@@ -109,7 +109,7 @@ export const SessionListItem = memo(function SessionListItem({
           </div>
         )}
         <div className="shrink-0 flex flex-col items-center gap-1">
-          <AgentBadge agentType={session.agentType as 'claude' | 'hermes' | 'api'} isGenerating={isGenerating} />
+          <AgentBadge agentType={session.agentType} isGenerating={isGenerating} />
           {!isEditing && (
             <span className="text-[9px] leading-none" style={{ color: 'var(--text-tertiary)' }}>
               {session.messageCount}

@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, Settings, Globe, Key, Info,
+  ArrowLeft, Settings, Globe, Key, Info, Bot,
   Sun, Moon, Monitor, FolderOpen, ChevronDown,
   Plus, Trash2, Edit3, Check, X, Pencil,
   Loader2, Zap, GripVertical,
@@ -28,6 +28,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useTheme } from '../hooks/useTheme';
 import { ThemeCustomizer } from '../components/settings/ThemeCustomizer';
 import { EnvManager } from '../components/env/EnvManager';
+import { AgentManager } from '../components/env/AgentManager';
 import { UpdateChecker } from '../components/panels/UpdateChecker';
 import { ModePromptSettings } from '../components/panels/ModePromptSettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
@@ -38,11 +39,12 @@ interface SettingsPageProps {
   onBack: () => void;
 }
 
-type SettingsTab = 'general' | 'environment' | 'api' | 'mode' | 'about';
+type SettingsTab = 'general' | 'environment' | 'agents' | 'api' | 'mode' | 'about';
 
 const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[] = [
   { id: 'general', icon: Settings, label: '通用设置' },
   { id: 'environment', icon: Globe, label: '环境检测' },
+  { id: 'agents', icon: Bot, label: 'Agent 管理' },
   { id: 'api', icon: Key, label: 'API 配置' },
   { id: 'mode', icon: Zap, label: '对话模式' },
   { id: 'about', icon: Info, label: '关于' },
@@ -50,7 +52,7 @@ const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[]
 
 
 
-import { SettingsSection, SettingsButton, SettingsInput } from '../components/settings';
+import { SettingsSection, SettingsButton } from '../components/settings';
 import { TitleBar, StatusBar } from '../components/layout';
 
 // ============================================================
@@ -91,14 +93,7 @@ function GeneralSettings() {
     }
   };
 
-  const handleWorkspaceChange = (val: string) => {
-    setWorkspace(val);
-    // Debounce save to SQLite
-    clearTimeout((handleWorkspaceChange as any)._timer);
-    (handleWorkspaceChange as any)._timer = setTimeout(async () => {
-      try { await invoke('set_app_setting', { key: 'pilotdesk-workspace', value: val }); } catch { /* ignore */ }
-    }, 500);
-  };
+
 
   return (
     <div className="space-y-6">
@@ -129,17 +124,19 @@ function GeneralSettings() {
       {/* Workspace directory */}
       <SettingsSection title="工作区目录">
         <div className="flex items-center gap-2">
-          <SettingsInput
-            value={workspace}
-            onChange={handleWorkspaceChange}
-            placeholder="设置默认工作区路径..."
-          />
+          <div
+            className="flex-1 px-3 py-2 rounded-lg text-sm truncate"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            title={workspace || '未设置'}
+          >
+            {workspace || '未设置'}
+          </div>
           <SettingsButton onClick={handlePickWorkspace} icon={<FolderOpen size={12} />}>
             浏览
           </SettingsButton>
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          Agent 会话的默认工作目录。可直接输入路径或点击浏览选择。
+          Agent 会话的默认工作目录。Agent 可在该目录下创建和修改工作产物文件。
         </p>
       </SettingsSection>
 
@@ -931,6 +928,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         <div className="p-4 max-w-2xl mx-auto w-full">
           {activeTab === 'general' && <GeneralSettings />}
           {activeTab === 'environment' && <EnvManager />}
+          {activeTab === 'agents' && <AgentManager />}
           {activeTab === 'api' && <ApiConfig />}
           {activeTab === 'mode' && <ModePromptSettings />}
           {activeTab === 'about' && <AboutSection />}

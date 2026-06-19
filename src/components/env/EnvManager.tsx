@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
 import { InstallLog } from './InstallLog';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { SettingsSection, SettingsCard, SettingsButton, SettingsStatusIcon } from '../settings';
 
 interface DependencyStatus {
@@ -28,7 +29,8 @@ interface EnvManagerProps {
 export type { EnvManagerProps };
 
 export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
-  const { envInfo, loading, refresh: fetchEnv } = useEnvInfo();
+  const { envInfo, loading: envLoading, refresh: fetchEnv } = useEnvInfo();
+  const { agents, loading: agentsLoading, fetchAgents } = useAgentRegistry();
   const [installing, setInstalling] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ key: string; action: 'update' | 'uninstall' | 'reinstall' | 'install' } | null>(null);
   const [logs, setLogs] = useState<Array<{ timestamp: number; message: string; level: 'info' | 'warn' | 'error' | 'success' }>>([]);
@@ -36,25 +38,16 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const [latestVersions, setLatestVersions] = useState<Record<string, { version: string; releaseTime: string | null } | null>>({});
   const [updateChecking, setUpdateChecking] = useState<Record<string, boolean>>({});
 
-
   const addLog = useCallback((message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') => {
     const entry = { timestamp: Date.now(), message, level };
     setLogs((prev) => [...prev, entry]);
-    // Persist to SQLite (fire-and-forget)
     invoke('insert_log', { message, level }).catch(() => {});
   }, []);
 
-  const checkAgentUpdate = useCallback(async (key: string, packageName: string, registry: 'npm' | 'pypi') => {
+  const checkAgentUpdate = useCallback(async (key: string) => {
     setUpdateChecking((prev) => ({ ...prev, [key]: true }));
     try {
-      let info: VersionTimeInfo | null = null;
-      if (registry === 'npm') {
-        const resp = await invoke<VersionTimeInfo>('check_single_npm', { packageName });
-        info = resp && resp.version ? resp : null;
-      } else {
-        const resp = await invoke<VersionTimeInfo>('check_single_pypi', { packageName });
-        info = resp && resp.version ? resp : null;
-      }
+      const info = await invoke<{ version: string; releaseTime: string | null } | null>('check_agent_update', { agentType: key });
       setLatestVersions((prev) => ({ ...prev, [key]: info }));
       if (info) {
         addLog(`${key} 最新版本: ${info.version}${info.releaseTime ? ` (${info.releaseTime})` : ''}`, 'info');
@@ -67,43 +60,45 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   }, [addLog]);
 
   useEffect(() => {
-    // Listen for install progress events
-    // useEnvInfo already handles initial environment detection on first mount
     const unlisten = listen<string>('install-progress', (event) => {
       addLog(event.payload, 'info');
     });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
+    return () => { unlisten.then((fn) => fn()); };
   }, [addLog]);
-  
 
+  // Track last snapshot to prevent duplicate checks from re-renders
+  // Auto-detect once per mount when envInfo and agents are both ready
+  // (covers: initial load, tab switch)
+  const autoDetected = useRef(false);
 
-const fetchEnvWithLog = useCallback(async () => {
-    const info = await fetchEnv();
-    addLog('环境检测完成', 'success');
-    // After detection, check updates for installed agents
-    if (info) {
-      if (info.claudeCodeVersion) {
-        checkAgentUpdate('claude', '@anthropic-ai/claude-code', 'npm');
-      }
-      if (info.hermesVersion) {
-        checkAgentUpdate('hermes', 'hermes-agent', 'pypi');
-      }
-      if (info.codexVersion) {
-        checkAgentUpdate('codex', '@openai/codex', 'npm');
+  useEffect(() => {
+    if (!envLoading && !agentsLoading && envInfo?.agentVersions && agents.length > 0 && !autoDetected.current) {
+      autoDetected.current = true;
+      for (const agent of agents) {
+        if (agent.isEnabled && envInfo.agentVersions[agent.agentType]) {
+          checkAgentUpdate(agent.agentType);
+        }
       }
     }
-  }, [fetchEnv, addLog, checkAgentUpdate]);
+  }, [envLoading, agentsLoading, envInfo, agents, checkAgentUpdate]);
 
-  interface VersionTimeInfo {
-    version: string;
-    releaseTime: string | null;
-  }
-
-  /** Query latest version for a single agent from registry */
-  
+  const fetchEnvWithLog = useCallback(async () => {
+    const info = await fetchEnv();
+    if (info) {
+      addLog(`Node.js: ${info.nodeVersion || '未安装'}`, info.nodeVersion ? 'success' : 'warn');
+      addLog(`Git: ${info.gitVersion || '未安装'}`, info.gitVersion ? 'success' : 'warn');
+      addLog(`Python: ${info.pythonVersion || '未安装'}`, info.pythonVersion ? 'success' : 'warn');
+    }
+    addLog('环境检测完成', 'success');
+    // 手动刷新后直接触发版本检测（autoDetected 守卫阻止 useEffect 重复执行）
+    if (info?.agentVersions) {
+      for (const agent of agents) {
+        if (agent.isEnabled && info.agentVersions[agent.agentType]) {
+          checkAgentUpdate(agent.agentType);
+        }
+      }
+    }
+  }, [fetchEnv, addLog, agents, checkAgentUpdate]);
 
   /** Simple semver older check */
   const isOlder = (current: string, latest: string) => {
@@ -119,6 +114,7 @@ const fetchEnvWithLog = useCallback(async () => {
     return false;
   };
 
+  // Build dependencies: prerequisites + dynamic agents
   const dependencies: DependencyStatus[] = [
     {
       name: 'Node.js',
@@ -150,75 +146,37 @@ const fetchEnvWithLog = useCallback(async () => {
       hasUpdate: false,
       updateChecking: false,
     },
-    {
-      name: 'Claude Code',
-      key: 'claude',
-      version: envInfo?.claudeCodeVersion ?? null,
-      installed: !!envInfo?.claudeCodeVersion,
-      action: envInfo?.claudeCodeVersion ? 'update' : 'install',
-      installing: installing === 'claude',
-      latestVersion: latestVersions['claude']?.version ?? null,
-      latestReleaseTime: latestVersions['claude']?.releaseTime ?? null,
-      hasUpdate: envInfo?.claudeCodeVersion && latestVersions['claude']
-        ? isOlder(envInfo.claudeCodeVersion, latestVersions['claude'].version)
-        : false,
-      updateChecking: updateChecking['claude'] ?? false,
-
-    },
-    {
-      name: 'Hermes Agent',
-      key: 'hermes',
-      version: envInfo?.hermesVersion ?? null,
-      installed: !!envInfo?.hermesVersion,
-      action: envInfo?.hermesVersion ? 'update' : 'install',
-      installing: installing === 'hermes',
-      latestVersion: latestVersions['hermes']?.version ?? null,
-      latestReleaseTime: latestVersions['hermes']?.releaseTime ?? null,
-      hasUpdate: envInfo?.hermesVersion && latestVersions['hermes']
-        ? isOlder(envInfo.hermesVersion, latestVersions['hermes'].version)
-        : false,
-      updateChecking: updateChecking['hermes'] ?? false,
-
-    },
-    {
-      name: 'codeX',
-      key: 'codex',
-      version: envInfo?.codexVersion ?? null,
-      installed: !!envInfo?.codexVersion,
-      action: envInfo?.codexVersion ? 'update' : 'install',
-      installing: installing === 'codex',
-      latestVersion: latestVersions['codex']?.version ?? null,
-      latestReleaseTime: latestVersions['codex']?.releaseTime ?? null,
-      hasUpdate: envInfo?.codexVersion && latestVersions['codex']
-        ? isOlder(envInfo.codexVersion, latestVersions['codex'].version)
-        : false,
-      updateChecking: updateChecking['codex'] ?? false,
-    },
+    // Dynamic agents from DB
+    ...agents.filter(a => a.isEnabled).map((agent) => {
+      const version = envInfo?.agentVersions?.[agent.agentType] ?? null;
+      return {
+        name: agent.displayName,
+        key: agent.agentType,
+        version,
+        installed: !!version,
+        action: version ? 'update' as const : 'install' as const,
+        installing: installing === agent.agentType,
+        latestVersion: latestVersions[agent.agentType]?.version ?? null,
+        latestReleaseTime: latestVersions[agent.agentType]?.releaseTime ?? null,
+        hasUpdate: version && latestVersions[agent.agentType]
+          ? isOlder(version, latestVersions[agent.agentType].version)
+          : false,
+        updateChecking: updateChecking[agent.agentType] ?? false,
+      };
+    }),
   ];
 
   const handleInstall = async (key: string) => {
-    const name = key === 'claude' ? 'Claude Code' : key === 'hermes' ? 'Hermes Agent' : 'codeX';
+    const agent = agents.find(a => a.agentType === key);
+    const name = agent?.displayName || key;
     setInstalling(key);
     addLog(`开始安装 ${name}...`, 'info');
     try {
-      if (key === 'claude') {
-        await invoke('install_claude_code');
-        addLog('Claude Code 安装成功', 'success');
-      } else if (key === 'hermes') {
-        await invoke('install_hermes');
-        addLog('Hermes Agent 安装成功', 'success');
-      } else if (key === 'codex') {
-        await invoke('install_codex');
-        addLog('codeX 安装成功', 'success');
-      }
-      const info = await fetchEnv();
-      if (info) {
-        const pkg = key === 'claude' ? '@anthropic-ai/claude-code'
-          : key === 'hermes' ? 'hermes-agent'
-          : '@openai/codex';
-        const registry = key === 'hermes' ? 'pypi' as const : 'npm' as const;
-        checkAgentUpdate(key, pkg, registry);
-      }
+      await invoke('install_agent', { agentType: key });
+      addLog(`${name} 安装成功`, 'success');
+      await fetchEnv();
+      // 安装完成后直接触发版本检测（autoDetected 守卫阻止 useEffect 重复执行）
+      checkAgentUpdate(key);
     } catch (err: any) {
       const msg = err?.message || err?.details || (typeof err === 'string' ? err : JSON.stringify(err));
       addLog(`${name} 安装失败: ${msg}`, 'error');
@@ -227,21 +185,25 @@ const fetchEnvWithLog = useCallback(async () => {
   };
 
   const handleUninstall = async (key: string) => {
-    const name = key === 'claude' ? 'Claude Code' : key === 'hermes' ? 'Hermes Agent' : 'codeX';
+    const agent = agents.find(a => a.agentType === key);
+    const name = agent?.displayName || key;
     setInstalling(key);
     addLog(`开始卸载 ${name}...`, 'info');
     try {
       await invoke('uninstall_agent', { agentType: key });
       addLog(`${name} 卸载成功`, 'success');
-      const info = await fetchEnv();
-      if (info) {
-        setLatestVersions((prev) => ({ ...prev, [key]: null }));
-      }
+      await fetchEnv();
+      setLatestVersions((prev) => ({ ...prev, [key]: null }));
     } catch (err: any) {
       const msg = err?.message || err?.details || (typeof err === 'string' ? err : JSON.stringify(err));
       addLog(`${name} 卸载失败: ${msg}`, 'error');
     }
     setInstalling(null);
+  };
+
+  const getAgentName = (key: string) => {
+    const agent = agents.find(a => a.agentType === key);
+    return agent?.displayName || key;
   };
 
   return (
@@ -270,7 +232,6 @@ const fetchEnvWithLog = useCallback(async () => {
         <div className="space-y-2">
           {dependencies.slice(3).map((dep) => (
             <SettingsCard key={dep.name} highlight={dep.hasUpdate}>
-              {/* Left: status icon + name + version */}
               <div className="flex items-center gap-2 min-w-0">
                 <SettingsStatusIcon installed={dep.installed} />
                 <div className="min-w-0">
@@ -286,7 +247,6 @@ const fetchEnvWithLog = useCallback(async () => {
                     <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                       {dep.installed ? `v${dep.version}` : '未安装'}
                     </span>
-
                     {dep.updateChecking && (
                       <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
                     )}
@@ -386,15 +346,15 @@ const fetchEnvWithLog = useCallback(async () => {
       {/* Refresh button */}
       <SettingsButton
         onClick={fetchEnvWithLog}
-        disabled={loading}
+        disabled={envLoading}
         variant="secondary"
-        icon={<RefreshCw size={12} className={loading ? 'animate-spin' : ''} />}
+        icon={<RefreshCw size={12} className={envLoading ? 'animate-spin' : ''} />}
       >
         重新检测环境
       </SettingsButton>
 
       {/* Install Log */}
-      <InstallLog isActive={!!installing} />
+      <InstallLog logs={logs} isActive={!!installing} onClear={() => { setLogs([]); invoke('clear_logs').catch(() => {}); }} />
 
       {/* Confirmation Dialog */}
       {confirmAction && (
@@ -415,22 +375,13 @@ const fetchEnvWithLog = useCallback(async () => {
               {confirmAction.action === 'install' && '确认安装'}
             </div>
             <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              {confirmAction.action === 'uninstall' && `确定要卸载 ${
-                confirmAction.key === 'claude' ? 'Claude Code' : confirmAction.key === 'hermes' ? 'Hermes Agent' : 'codeX'
-              } 吗？此操作将从系统中移除该工具。`}
-              {confirmAction.action === 'update' && `确定要更新 ${
-                confirmAction.key === 'claude' ? 'Claude Code' : confirmAction.key === 'hermes' ? 'Hermes Agent' : 'codeX'
-              } 到最新版本吗？`}
-              {confirmAction.action === 'install' && `确定要安装${confirmAction.key === 'claude' ? 'Claude Code' : confirmAction.key === 'hermes' ? 'Hermes Agent' : 'codeX'} 吗？`}
-              {confirmAction.action === 'reinstall' && `确定要重新安装 ${
-                confirmAction.key === 'claude' ? 'Claude Code' : confirmAction.key === 'hermes' ? 'Hermes Agent' : 'codeX'
-              } 吗？`}
+              {confirmAction.action === 'uninstall' && `确定要卸载 ${getAgentName(confirmAction.key)} 吗？此操作将从系统中移除该工具。`}
+              {confirmAction.action === 'update' && `确定要更新 ${getAgentName(confirmAction.key)} 到最新版本吗？`}
+              {confirmAction.action === 'install' && `确定要安装 ${getAgentName(confirmAction.key)} 吗？`}
+              {confirmAction.action === 'reinstall' && `确定要重新安装 ${getAgentName(confirmAction.key)} 吗？`}
             </div>
             <div className="flex justify-end gap-2">
-              <SettingsButton
-                variant="secondary"
-                onClick={() => setConfirmAction(null)}
-              >
+              <SettingsButton variant="secondary" onClick={() => setConfirmAction(null)}>
                 取消
               </SettingsButton>
               <SettingsButton
@@ -440,8 +391,6 @@ const fetchEnvWithLog = useCallback(async () => {
                   setConfirmAction(null);
                   if (action === 'uninstall') {
                     handleUninstall(key);
-                  } else if (action === 'install') {
-                    handleInstall(key);
                   } else {
                     handleInstall(key);
                   }

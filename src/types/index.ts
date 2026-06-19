@@ -3,7 +3,7 @@ export { _invoke as invoke };
 
 export interface Session {
   id: string;
-  agentType: 'claude' | 'hermes' | 'api' | 'codex';
+  agentType: string;
   title: string;
   cwd: string;
   createdAt: number;
@@ -69,7 +69,7 @@ export interface Inspiration {
   icon: string;
   title: string;
   content: string;
-  sourceAgent: 'claude' | 'hermes' | 'codex' | 'manual';
+  sourceAgent: string;
   isFavorite: boolean;
   tags: string[];
   createdAt: number;
@@ -80,9 +80,8 @@ export interface EnvInfo {
   nodeVersion: string | null;
   gitVersion: string | null;
   pythonVersion: string | null;
-  claudeCodeVersion: string | null;
-  hermesVersion: string | null;
-  codexVersion: string | null;
+  /** Dynamic agent versions keyed by agent_type */
+  agentVersions: Record<string, string | null>;
 }
 
 export type ChatMode = 'native' | 'fast' | 'think' | 'expert';
@@ -158,6 +157,42 @@ export interface AgentTheme {
   cssVar: string;   // CSS variable reference
 }
 
+/** Agent config from the backend agents table */
+export interface AgentConfig {
+  agentType: string;
+  displayName: string;
+  description: string;
+  cliCommand: string;
+  npmPackage: string | null;
+  pipPackage: string | null;
+  installCmd: string;
+  uninstallCmd: string;
+  updateCmd: string;
+  versionCmd: string;
+  latestVersionCmd: string;
+  runCmdTemplate: string;
+  outputParser: string;
+  outputFilterRegex: string;
+  versionPattern: string;
+  supportsSessionContinuity: boolean;
+  sessionIdSource: string;
+  sessionIdEventType: string;
+  sessionIdField: string;
+  resumeArgTemplate: string;
+  skillsDir: string;
+  skillEntryFile: string;
+  skillDisplayMode: string;
+  color: string;
+  icon: string;
+  sortOrder: number;
+  isEnabled: boolean;
+  isBuiltin: boolean;
+}
+
+/**
+ * @deprecated Use useAgentRegistry() hook instead for dynamic agent themes.
+ * This static map is kept as fallback for components not yet migrated.
+ */
 export const AGENT_THEMES: Record<string, AgentTheme> = {
   claude: {
     color: '#3B82F6',

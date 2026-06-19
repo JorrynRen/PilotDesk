@@ -56,7 +56,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
       case 'skills':
         return (
           <SkillBrowser
-            agentType={currentSession?.agentType ?? 'claude'}
+            agentType={currentSession?.agentType ?? ''}
             onSkillSelect={(name) => {
               console.log('Skill selected:', name);
             }}

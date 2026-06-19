@@ -8,101 +8,12 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use tauri::Emitter;
+use crate::commands::agents::AgentConfig;
+use crate::agent::handler::ProcessHandler;
 
-// ──────────────────────────────────────────────
-//  Agent 类型枚举 — 新增 Agent 只需在此添加变体
-// ──────────────────────────────────────────────
+pub mod handler;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentType {
-    Claude,
-    Hermes,
-    Codex,
-}
 
-impl AgentType {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "claude" => Some(Self::Claude),
-            "hermes" => Some(Self::Hermes),
-            "codex" => Some(Self::Codex),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Hermes => "hermes",
-            Self::Codex => "codex",
-        }
-    }
-
-    pub fn cli_command(&self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Hermes => "hermes",
-            Self::Codex => "codex",
-        }
-    }
-
-    pub fn build_args(&self, message: &str, _mode: &str, _system_prompt: Option<&str>, agent_session_id: Option<&str>) -> Vec<String> {
-        match self {
-            Self::Claude => {
-                let mut args = vec![
-                    "-p".into(),
-                    "--output-format".into(),
-                    "stream-json".into(),
-                    "--verbose".into(),
-                    "--dangerously-skip-permissions".into(),
-                ];
-                // If we have an agent session ID, resume that session
-                if let Some(sid) = agent_session_id {
-                    args.push("--resume".into());
-                    args.push(sid.to_string());
-                }
-                args.push(message.into());
-                args
-            },
-            Self::Hermes => {
-                let mut args = vec!["chat".into(), "-q".into(), message.into(), "-Q".into()];
-                // If we have an agent session ID, resume that session
-                if let Some(sid) = agent_session_id {
-                    args.push("--resume".into());
-                    args.push(sid.to_string());
-                }
-                args
-            },
-            Self::Codex => {
-                let mut args = vec![
-                    "exec".into(),
-                    "--json".into(),
-                    "--skip-git-repo-check".into(),
-                    "--dangerously-bypass-approvals-and-sandbox".into(),
-                ];
-                // If we have an agent session ID, resume that session
-                if let Some(sid) = agent_session_id {
-                    args.push("resume".into());
-                    args.push(sid.to_string());
-                }
-                args.push(message.into());
-                args
-            },
-        }
-    }
-
-    pub fn parse_output_line(&self, line: &str) -> Option<String> {
-        match self {
-            Self::Claude => parse_claude_output(line),
-            Self::Hermes => parse_hermes_output(line),
-            Self::Codex => parse_codex_output(line),
-        }
-    }
-
-    pub fn friendly_error(&self, exit_code: i32, stderr: &str) -> String {
-        friendly_agent_error(self.as_str(), exit_code, stderr)
-    }
-}
 
 // ──────────────────────────────────────────────
 //  输出解析器
@@ -233,25 +144,31 @@ impl AgentManager {
         Self { processes: HashMap::new() }
     }
 
-    pub async fn send_message(
+pub async fn send_message_with_config(
         &mut self,
         app_handle: tauri::AppHandle,
         session_id: String,
-        agent_type: String,
+        config: AgentConfig,
         message: String,
-        mode: String,
+        _mode: String,
         cwd: Option<String>,
-        system_prompt: Option<String>,
+        _system_prompt: Option<String>,
         agent_session_id: Option<String>,
     ) -> Result<(), String> {
-        let agent = AgentType::from_str(&agent_type)
-            .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
+        let process_handler = handler::StdioHandler::from_config(config);
+        let agent_type = process_handler.config.agent_type.clone();
+        let cmd_name = process_handler.config.cli_command.clone();
 
         let aborted = Arc::new(AtomicBool::new(false));
         let aborted_clone = aborted.clone();
 
-        let args = agent.build_args(&message, &mode, system_prompt.as_deref(), agent_session_id.as_deref());
-        let cmd_name = agent.cli_command();
+        let (cmd_name_from_template, args) = process_handler.build_command(&message, agent_session_id.as_deref());
+        // Use the command name from template if available, otherwise fallback to cli_command
+        let effective_cmd = if cmd_name_from_template.is_empty() {
+            cmd_name.clone()
+        } else {
+            cmd_name_from_template
+        };
 
         let work_dir = cwd.unwrap_or_else(|| {
             std::env::current_dir()
@@ -260,8 +177,8 @@ impl AgentManager {
         });
 
         // 使用 resolve_in_path 解析完整路径（PATH 解析）
-        let resolved_cmd = resolve_in_path(cmd_name)
-            .unwrap_or_else(|| cmd_name.to_string());
+        let resolved_cmd = resolve_in_path(&effective_cmd)
+            .unwrap_or_else(|| effective_cmd.to_string());
 
         // Windows: .cmd/.bat 文件需要 cmd /C 包装
         #[cfg(target_os = "windows")]
@@ -274,10 +191,9 @@ impl AgentManager {
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
             cmd.kill_on_drop(true);
-            // 清除 PYTHONHOME 环境变量，防止污染子进程
             cmd.env_remove("PYTHONHOME");
             cmd.spawn()
-                .map_err(|e| format!("启动 {} 失败: {}", cmd_name, e))?
+                .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?
         };
         #[cfg(not(target_os = "windows"))]
         let mut child = {
@@ -289,16 +205,16 @@ impl AgentManager {
             cmd.kill_on_drop(true);
             cmd.env_remove("PYTHONHOME");
             cmd.spawn()
-                .map_err(|e| format!("启动 {} 失败: {}", cmd_name, e))?
+                .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?
         };
 
         let pid = child.id().unwrap_or(0);
         let stdout = child.stdout.take()
-            .ok_or_else(|| format!("无法获取 {} stdout", cmd_name))?;
+            .ok_or_else(|| format!("无法获取 {} stdout", agent_type))?;
         let stderr = child.stderr.take()
-            .ok_or_else(|| format!("无法获取 {} stderr", cmd_name))?;
+            .ok_or_else(|| format!("无法获取 {} stderr", agent_type))?;
 
-        // 共享 stderr 缓冲区，供 stdout 任务和 stderr 收集任务使用
+        // 共享 stderr 缓冲区
         let stderr_buf = Arc::new(Mutex::new(String::new()));
         let stderr_buf_for_reader = stderr_buf.clone();
 
@@ -307,6 +223,7 @@ impl AgentManager {
             aborted: aborted_clone,
         });
 
+        let handler_for_stderr = process_handler.clone();
         let app_clone = app_handle.clone();
         let sid = session_id.clone();
         let agent_type_name = agent_type.clone();
@@ -319,7 +236,6 @@ impl AgentManager {
         tokio::spawn(async move {
             let timeout_duration = Duration::from_secs(300);
 
-            // 带超时的 stdout 读取
             let read_result = timeout(timeout_duration, async {
                 let reader = BufReader::new(stdout);
                 use tokio::io::AsyncBufReadExt;
@@ -328,29 +244,15 @@ impl AgentManager {
                 while let Ok(Some(line)) = lines.next_line().await {
                     if aborted.load(Ordering::Relaxed) { break; }
 
-                    // Extract agent session ID from JSON stream
-                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) {
-                        // Claude Code: system/init event
-                        if agent_type_name == "claude" && event["type"] == "system" && event["subtype"] == "init" {
-                            if let Some(sid_agent) = event["session_id"].as_str() {
-                                let _ = app_clone.emit("agent-session", serde_json::json!({
-                                    "sessionId": sid,
-                                    "agentSessionId": sid_agent,
-                                }));
-                            }
-                        }
-                        // Codex: thread.started event
-                        if agent_type_name == "codex" && event["type"] == "thread.started" {
-                            if let Some(sid_agent) = event["thread_id"].as_str() {
-                                let _ = app_clone.emit("agent-session", serde_json::json!({
-                                    "sessionId": sid,
-                                    "agentSessionId": sid_agent,
-                                }));
-                            }
-                        }
+                    // 使用 handler 提取 session_id（从 stdout）
+                    if let Some(sid_agent) = process_handler.extract_session_id(&line, false) {
+                        let _ = app_clone.emit("agent-session", serde_json::json!({
+                            "sessionId": sid,
+                            "agentSessionId": sid_agent,
+                        }));
                     }
 
-                    if let Some(content) = agent.parse_output_line(&line) {
+                    if let Some(content) = process_handler.parse_output_line(&line) {
                         let _ = app_clone.emit("agent-chunk", serde_json::json!({
                             "sessionId": sid,
                             "content": content,
@@ -359,7 +261,6 @@ impl AgentManager {
                 }
             }).await;
 
-            // 超时处理
             if read_result.is_err() {
                 let _ = app_clone.emit("agent-error", serde_json::json!({
                     "sessionId": sid,
@@ -371,7 +272,6 @@ impl AgentManager {
                 return;
             }
 
-            // 等待子进程退出并检查退出码
             match child.wait().await {
                 Ok(status) => {
                     if let Some(code) = status.code() {
@@ -379,7 +279,7 @@ impl AgentManager {
                             let stderr_text = stderr_buf.lock()
                                 .map(|b| b.clone())
                                 .unwrap_or_default();
-                            let err_msg = agent.friendly_error(code, &stderr_text);
+                            let err_msg = friendly_agent_error(&agent_type_name, code, &stderr_text);
                             let _ = app_clone.emit("agent-error", serde_json::json!({
                                 "sessionId": sid,
                                 "error": err_msg,
@@ -403,14 +303,12 @@ impl AgentManager {
             use tokio::io::AsyncBufReadExt;
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                // Extract Hermes session ID from stderr (format: "session_id: xxxxx")
-                if agent_type_name_for_stderr == "hermes" {
-                    if let Some(sid_agent) = line.strip_prefix("session_id: ") {
-                        let _ = app_clone_for_stderr.emit("agent-session", serde_json::json!({
-                            "sessionId": sid_for_stderr,
-                            "agentSessionId": sid_agent.trim(),
-                        }));
-                    }
+                // 使用 handler 提取 session_id（从 stderr）
+                if let Some(sid_agent) = handler_for_stderr.extract_session_id(&line, true) {
+                    let _ = app_clone_for_stderr.emit("agent-session", serde_json::json!({
+                        "sessionId": sid_for_stderr,
+                        "agentSessionId": sid_agent,
+                    }));
                 }
                 if let Ok(mut buf) = stderr_buf_for_reader.lock() {
                     buf.push_str(&line);
@@ -466,23 +364,25 @@ impl AgentManager {
         log::info!("[Agent] Session closed: {}", session_id);
     }
 
-    pub async fn list_skills(agent_type: &str) -> Vec<crate::db::models::SkillInfo> {
-        // 所有已安装的 agent 都支持技能搜索
-        // 有明确定义路径的走定义路径，未定义的走智能目录 ".agent名称/skills/"
-        match agent_type {
-            "claude" => claude_skills().await,
-            "hermes" => hermes_skills().await,
-            "codex" => codex_skills().await,
-            other => {
-                // 智能目录: ~/.{agent_name}/skills/
-                if let Some(home) = home_dir() {
-                    let skills_dir = home.join(format!(".{}", other)).join("skills");
-                    scan_skills_dir(&skills_dir)
-                } else {
-                    vec![]
-                }
+    pub async fn list_skills(agent_type: &str, config: Option<&crate::commands::agents::AgentConfig>) -> Vec<crate::db::models::SkillInfo> {
+        // 优先使用 DB 中的技能配置
+        if let Some(cfg) = config {
+            if !cfg.skills_dir.is_empty() {
+                // 有明确定义的技能目录路径（支持 {agent_type} 占位符）
+                let resolved = cfg.skills_dir.replace("{agent_type}", &cfg.agent_type);
+                let skills_dir = std::path::PathBuf::from(&resolved);
+                return scan_skills_dir(&skills_dir, &cfg.skill_entry_file, &cfg.skill_display_mode);
             }
         }
+
+        // 智能目录: ~/.{agent_name}/skills/
+        if let Some(home) = home_dir() {
+            let skills_dir = home.join(format!(".{}", agent_type)).join("skills");
+            let entry_file = config.map(|c| c.skill_entry_file.as_str()).unwrap_or("SKILL.md");
+            let display_mode = config.map(|c| c.skill_display_mode.as_str()).unwrap_or("recursive");
+            return scan_skills_dir(&skills_dir, entry_file, display_mode);
+        }
+        vec![]
     }
 }
 
@@ -519,12 +419,15 @@ impl Drop for AgentManager {
 // ──────────────────────────────────────────────
 
 /// 检测系统上已安装的 Agent（通过 PATH 查找 CLI 命令）
-pub fn detect_installed_agents() -> Vec<String> {
-    let agents = ["claude", "hermes", "codex"];
+/// 从 DB 读取 agents 列表，动态检测
+pub fn detect_installed_agents(agents: &[crate::commands::agents::AgentConfig]) -> Vec<String> {
     let mut installed = Vec::new();
-    for name in &agents {
-        if which(name) {
-            installed.push(name.to_string());
+    for agent in agents {
+        if !agent.is_enabled {
+            continue;
+        }
+        if which(&agent.cli_command) {
+            installed.push(agent.agent_type.clone());
         }
     }
     installed
@@ -574,20 +477,26 @@ fn parse_skill_md(path: &std::path::Path) -> Option<SkillInfo> {
     Some(SkillInfo::new(&name, &description, ""))
 }
 
-/// 递归扫描目录，遇到包含 SKILL.md 的目录即停止向下递归
-fn scan_skills_dir(skills_dir: &std::path::Path) -> Vec<SkillInfo> {
+/// 扫描技能目录
+/// display_mode: recursive（递归显示全部）或 collection（只显示集合名）
+fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode: &str) -> Vec<SkillInfo> {
     if !skills_dir.exists() || !skills_dir.is_dir() {
         return vec![];
     }
 
     let mut skills = Vec::new();
 
-    // 如果当前目录有 SKILL.md，直接解析并返回（不递归子目录）
-    let own_skill = skills_dir.join("SKILL.md");
+    // 如果当前目录有入口文件，直接解析并返回
+    let own_skill = skills_dir.join(entry_file);
     if own_skill.exists() {
         if let Some(info) = parse_skill_md(&own_skill) {
             skills.push(info);
         }
+        // collection 模式：只显示集合名，不递归子目录
+        if display_mode == "collection" {
+            return skills;
+        }
+        // recursive 模式：有入口文件也返回（不继续递归）
         return skills;
     }
 
@@ -600,7 +509,7 @@ fn scan_skills_dir(skills_dir: &std::path::Path) -> Vec<SkillInfo> {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            skills.extend(scan_skills_dir(&path));
+            skills.extend(scan_skills_dir(&path, entry_file, display_mode));
         }
     }
     skills
@@ -614,35 +523,4 @@ fn home_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-async fn claude_skills() -> Vec<SkillInfo> {
-    let home = match home_dir() {
-        Some(h) => h,
-        None => return vec![],
-    };
-    let skills_dir = home.join(".claude").join("skills");
-    scan_skills_dir(&skills_dir)
-}
 
-async fn hermes_skills() -> Vec<SkillInfo> {
-    let home = match home_dir() {
-        Some(h) => h,
-        None => return vec![],
-    };
-    // 优先 ~/AppData/Local/hermes/skills/，回退 ~/.hermes/skills/
-    let primary = home.join("AppData").join("Local").join("hermes").join("skills");
-    let skills = scan_skills_dir(&primary);
-    if !skills.is_empty() {
-        return skills;
-    }
-    let fallback = home.join(".hermes").join("skills");
-    scan_skills_dir(&fallback)
-}
-
-async fn codex_skills() -> Vec<SkillInfo> {
-    let home = match home_dir() {
-        Some(h) => h,
-        None => return vec![],
-    };
-    let skills_dir = home.join(".codex").join("skills");
-    scan_skills_dir(&skills_dir)
-}

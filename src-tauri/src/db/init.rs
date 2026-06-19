@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 7;
+const MIGRATION_VERSION: i64 = 11;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -31,7 +31,7 @@ pub fn init_db() -> Result<DbPool, AppError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
-            agent_type TEXT NOT NULL CHECK(agent_type IN ('claude', 'hermes', 'api', 'codex')),
+            agent_type TEXT NOT NULL DEFAULT '',
             title TEXT NOT NULL DEFAULT '',
             cwd TEXT DEFAULT '',
             created_at INTEGER NOT NULL,
@@ -57,7 +57,7 @@ pub fn init_db() -> Result<DbPool, AppError> {
             icon TEXT NOT NULL DEFAULT '💡',
             title TEXT NOT NULL,
             content TEXT NOT NULL DEFAULT '',
-            source_agent TEXT DEFAULT 'manual' CHECK(source_agent IN ('claude', 'hermes', 'codex', 'api', 'manual')),
+            source_agent TEXT DEFAULT 'manual',
             is_favorite INTEGER DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
@@ -101,13 +101,75 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
     if current_version < 7 {
         migrate_add_agent_session_id(&conn)?;
     }
+    if current_version < 8 {
+        migrate_add_agents_table(&conn)?;
+    }
+    if current_version < 9 {
+        migrate_agents_full_schema(&conn)?;
+    }
 
 
-    if current_version < MIGRATION_VERSION {
+        if current_version < 11 {
+        migrate_add_skill_fields(&conn)?;
+    }
+
+if current_version < MIGRATION_VERSION {
         conn.pragma_update(None, "user_version", MIGRATION_VERSION)?;
     }
 
     Ok(pool)
+}
+
+fn migrate_remove_check_constraints(conn: &Connection) -> Result<(), AppError> {
+    // Remove CHECK constraints from sessions.agent_type and inspirations.source_agent
+    // SQLite cannot ALTER TABLE DROP CHECK, so we need to recreate the tables
+
+    // Recreate sessions table without CHECK constraint on agent_type
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS sessions_new (
+            id TEXT PRIMARY KEY,
+            agent_type TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            cwd TEXT DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_message_preview TEXT DEFAULT '',
+            message_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+            api_provider TEXT,
+            api_model TEXT,
+            agent_session_id TEXT
+        );
+        INSERT OR IGNORE INTO sessions_new SELECT * FROM sessions;
+        DROP TABLE sessions;
+        ALTER TABLE sessions_new RENAME TO sessions;"
+    )?;
+
+    // Recreate inspirations table without CHECK constraint on source_agent
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS inspirations_new (
+            id TEXT PRIMARY KEY,
+            icon TEXT NOT NULL DEFAULT '💡',
+            title TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            source_agent TEXT DEFAULT 'manual',
+            is_favorite INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO inspirations_new SELECT * FROM inspirations;
+        DROP TABLE inspirations;
+        ALTER TABLE inspirations_new RENAME TO inspirations;"
+    )?;
+
+    // Recreate the FTS table (needs to be recreated after inspirations table)
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS inspirations_fts;
+        CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);
+        INSERT INTO inspirations_fts(rowid, title, content) SELECT rowid, title, content FROM inspirations;"
+    )?;
+
+    Ok(())
 }
 
 fn migrate_add_api_providers(conn: &Connection) -> Result<(), AppError> {
@@ -142,6 +204,7 @@ fn migrate_add_app_settings(conn: &Connection) -> Result<(), AppError> {
         ("mode_prompt_fast", "快速简洁回答，直接给出结论，无需详细解释推理过程"),
         ("mode_prompt_think", "逐步分析推理，详细解释你的思路和过程，给出完整的推理链"),
         ("mode_prompt_expert", "以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案"),
+        ("pilotdesk-workspace", "~\\AppData\\Roaming\\PilotDesk"),
     ];
     let now = crate::utils::now();
     for (key, value) in seeds {
@@ -187,7 +250,7 @@ fn migrate_add_type(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS sessions_new (
             id TEXT PRIMARY KEY,
-            agent_type TEXT NOT NULL CHECK(agent_type IN ('claude', 'hermes', 'api', 'codex')),
+            agent_type TEXT NOT NULL DEFAULT '',
             title TEXT NOT NULL DEFAULT '',
             cwd TEXT DEFAULT '',
             created_at INTEGER NOT NULL,
@@ -257,3 +320,168 @@ fn migrate_add_agent_session_id(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS agents (
+            agent_type TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            cli_command TEXT NOT NULL DEFAULT '',
+            npm_package TEXT,
+            pip_package TEXT,
+            version_flag TEXT NOT NULL DEFAULT '--version',
+            install_cmd TEXT NOT NULL DEFAULT '',
+            uninstall_cmd TEXT NOT NULL DEFAULT '',
+            update_cmd TEXT NOT NULL DEFAULT '',
+            version_cmd TEXT NOT NULL DEFAULT '',
+            latest_version_cmd TEXT NOT NULL DEFAULT '',
+            run_cmd_template TEXT NOT NULL DEFAULT '',
+            output_parser TEXT NOT NULL DEFAULT 'raw-text',
+            output_filter_regex TEXT NOT NULL DEFAULT '',
+            version_pattern TEXT NOT NULL DEFAULT 'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)',
+            supports_session_continuity INTEGER NOT NULL DEFAULT 0,
+            session_id_source TEXT NOT NULL DEFAULT 'none',
+            session_id_event_type TEXT NOT NULL DEFAULT '',
+            session_id_field TEXT NOT NULL DEFAULT '',
+            resume_arg_template TEXT NOT NULL DEFAULT '',
+            color TEXT NOT NULL DEFAULT '#6366F1',
+            icon TEXT NOT NULL DEFAULT '\\U0001f916',
+            sort_order INTEGER DEFAULT 0,
+            is_enabled INTEGER DEFAULT 1,
+            is_builtin INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );"
+    )?;
+
+    let now = crate::utils::now();
+    let seeds: Vec<(&str, &str, &str, &str, Option<&str>, Option<&str>, &str, &str, &str, &str, &str, &str, &str, &str, i64, &str, &str, &str, &str, &str, &str, i64)> = vec![
+        ("claude", "Claude Code", "Anthropic 出品的 AI 编程助手",
+         "claude", Some("@anthropic-ai/claude-code"), None,
+         "npm install -g @anthropic-ai/claude-code",
+         "claude uninstall",
+         "claude update",
+         "claude --version",
+         "npm view @anthropic-ai/claude-code version",
+         "claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}",
+         "json-stream", "", 1, "stdout-json", "system/init", "session_id", "--resume {session_id}",
+         "#3B82F6", "\\U0001f916", 1),
+        ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
+         "hermes", None, Some("hermes-agent"),
+         "pip install hermes-agent",
+         "hermes uninstall",
+         "hermes update",
+         "hermes --version",
+         "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version",
+         "hermes chat -q {message} -Q",
+         "ansi-text",
+         "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
+         "stderr-text", "", "", "--resume {session_id}",
+         "#8B5CF6", "\\U0001f916", 2),
+        ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
+         "codex", Some("@openai/codex"), None,
+         "npm install -g @openai/codex",
+         "codex uninstall",
+         "codex update",
+         "codex --version",
+         "npm view @openai/codex version",
+         "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}",
+         "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "exec resume {session_id}",
+         "#F59E0B", "\\U0001f916", 3),
+    ];
+
+    for (agent_type, display_name, description, cli_command, npm_package, pip_package,
+         install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
+         output_parser, output_filter_regex, supports_session_continuity,
+         session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+         color, icon, sort_order) in seeds {
+        conn.execute(
+            "INSERT OR IGNORE INTO agents (agent_type, display_name, description, cli_command, npm_package, pip_package,
+             version_flag, install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
+             output_parser, output_filter_regex, version_pattern, supports_session_continuity,
+             session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+             color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '--version', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+             'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)', ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 1, 1, ?23, ?23)",
+            rusqlite::params![agent_type, display_name, description, cli_command, npm_package, pip_package,
+                install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
+                output_parser, output_filter_regex, supports_session_continuity,
+                session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+                color, icon, sort_order, now],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn migrate_add_skill_fields(conn: &Connection) -> Result<(), AppError> {
+    // Add skills_dir, skill_entry_file, skill_display_mode columns
+    // Remove version_flag column (SQLite doesn't support DROP COLUMN before 3.35.0,
+    // so we recreate the table)
+    let has_skills_dir = conn.prepare("SELECT skills_dir FROM agents LIMIT 0").is_ok();
+    if !has_skills_dir {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agents_new (
+                agent_type TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                cli_command TEXT NOT NULL DEFAULT '',
+                npm_package TEXT,
+                pip_package TEXT,
+                install_cmd TEXT NOT NULL DEFAULT '',
+                uninstall_cmd TEXT NOT NULL DEFAULT '',
+                update_cmd TEXT NOT NULL DEFAULT '',
+                version_cmd TEXT NOT NULL DEFAULT '',
+                latest_version_cmd TEXT NOT NULL DEFAULT '',
+                run_cmd_template TEXT NOT NULL DEFAULT '',
+                output_parser TEXT NOT NULL DEFAULT 'raw-text',
+                output_filter_regex TEXT NOT NULL DEFAULT '',
+                version_pattern TEXT NOT NULL DEFAULT 'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)',
+                supports_session_continuity INTEGER NOT NULL DEFAULT 0,
+                session_id_source TEXT NOT NULL DEFAULT 'none',
+                session_id_event_type TEXT NOT NULL DEFAULT '',
+                session_id_field TEXT NOT NULL DEFAULT '',
+                resume_arg_template TEXT NOT NULL DEFAULT '',
+                skills_dir TEXT NOT NULL DEFAULT '',
+                skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
+                skill_display_mode TEXT NOT NULL DEFAULT 'recursive',
+                color TEXT NOT NULL DEFAULT '#6366F1',
+                icon TEXT NOT NULL DEFAULT '\\U0001f916',
+                sort_order INTEGER DEFAULT 0,
+                is_enabled INTEGER DEFAULT 1,
+                is_builtin INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT OR IGNORE INTO agents_new (
+                agent_type, display_name, description, cli_command,
+                npm_package, pip_package,
+                install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd,
+                run_cmd_template, output_parser, output_filter_regex, version_pattern,
+                supports_session_continuity, session_id_source, session_id_event_type,
+                session_id_field, resume_arg_template,
+                skills_dir, skill_entry_file, skill_display_mode,
+                color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at
+            )
+            SELECT agent_type, display_name, description, cli_command,
+                npm_package, pip_package,
+                install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd,
+                run_cmd_template, output_parser, output_filter_regex, version_pattern,
+                supports_session_continuity, session_id_source, session_id_event_type,
+                session_id_field, resume_arg_template,
+                '', 'SKILL.md', 'recursive',
+                color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at
+            FROM agents;
+            DROP TABLE agents;
+            ALTER TABLE agents_new RENAME TO agents;"
+        )?;
+    }
+    Ok(())
+}
+
+fn migrate_agents_full_schema(conn: &Connection) -> Result<(), AppError> {
+    // Drop old table and recreate with full schema
+    conn.execute_batch("DROP TABLE IF EXISTS agents;")?;
+    // Reuse the full schema from migrate_add_agents_table
+    migrate_add_agents_table(conn)
+}

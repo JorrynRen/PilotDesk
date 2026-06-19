@@ -9,6 +9,7 @@ import { showToast } from '../../utils/toast';
 import { useGeneratingStore } from '../../stores/generatingStore';
 import type { ChatMode, Message } from '../../types';
 import { getModePrompt } from '../../types';
+import { isApiSession } from '../../utils/sessionType';
 
 // ── State Machine ──
 
@@ -300,7 +301,7 @@ export function MainPanel() {
       // 每个会话独立的 60s 超时计时器
       const timeoutId = setTimeout(() => {
         dispatch({ type: 'GENERATION_TIMEOUT', sessionId: sid });
-        if (currentSession.agentType === 'api') {
+        if (isApiSession(currentSession.agentType)) {
           stopApiChat();
         } else {
           stopGeneration(sid);
@@ -309,7 +310,7 @@ export function MainPanel() {
       }, 60000);
       timeoutRefs.current[sid] = timeoutId;
 
-      if (currentSession.agentType === 'api') {
+      if (isApiSession(currentSession.agentType)) {
         // API direct call
         if (!currentSession.apiProvider || !currentSession.apiModel) {
           showToast('API 会话缺少提供商或模型配置', 'error');
@@ -339,7 +340,7 @@ export function MainPanel() {
         const systemPrompt = await getModePrompt(mode);
         // Pass agent_session_id for session continuity (Claude Code --resume)
         const agentSessionId = currentSession.agentSessionId || undefined;
-        sendChat(sid, message, mode, currentSession.agentType, undefined, systemPrompt, agentSessionId);
+        sendChat(sid, message, mode, currentSession.agentType, currentSession.cwd || undefined, systemPrompt, agentSessionId);
       }
     },
     [currentSession, sendChat, sendApiChat, addMessage, clearSessionTimeout, stopApiChat, stopGeneration, messages],
@@ -351,7 +352,7 @@ export function MainPanel() {
 
     clearSessionTimeout(sid);
 
-    if (currentSession.agentType === 'api') {
+    if (isApiSession(currentSession.agentType)) {
       stopApiChat();
     } else {
       stopGeneration(sid);

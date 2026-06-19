@@ -6,9 +6,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { AGENT_THEMES } from '../../types';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { getAgentLabel } from '../../utils/sessionType';
 import { SessionListItem } from './SessionListItem';
 
-type NewSessionType = 'claude' | 'hermes' | 'codex' | 'api' | 'codex';
+type NewSessionType = string;
 
 function SessionListFn() {
   const sessions = useSessionStore((s) => s.sessions);
@@ -41,6 +43,7 @@ function SessionListFn() {
   const [creating, setCreating] = useState(false);
   const [installedAgents, setInstalledAgents] = useState<Set<string>>(new Set());
   const [envLoading, setEnvLoading] = useState(true);
+  const { agents, getTheme, getDisplayName, getEnabledAgentTypes, fetchAgents } = useAgentRegistry();
 
   // WebSocket for Agent session lifecycle
   const { createAgentSession: wsCreateSession, closeAgentSession: wsCloseSession } = useAgentEvent();
@@ -60,9 +63,13 @@ function SessionListFn() {
       try {
         const info = await invoke<any>('detect_env');
         const installed = new Set<string>();
-        if (info.claudeCodeVersion) installed.add('claude');
-        if (info.hermesVersion) installed.add('hermes');
-        if (info.codexVersion) installed.add('codex');
+        // Dynamically detect all agents from env info
+        // Dynamically detect all agents from env info
+        if (info.agentVersions) {
+          for (const [agentType, version] of Object.entries(info.agentVersions)) {
+            if (version) installed.add(agentType);
+          }
+        }
         setInstalledAgents(installed);
       } catch { /* ignore */ }
       setEnvLoading(false);
@@ -500,31 +507,27 @@ function SessionListFn() {
 
             {/* Session type selector */}
             <div className="flex gap-2 mb-4">
-              {([
-                { type: 'claude' as const, ...AGENT_THEMES.claude },
-                { type: 'hermes' as const, ...AGENT_THEMES.hermes },
-                { type: 'codex' as const, ...AGENT_THEMES.codex },
-                { type: 'api' as const, ...AGENT_THEMES.api },
-              ]).filter(({ type }) => {
-                // API mode always visible; agent types only if installed or still loading
-                if (type === 'api') return true;
-                if (envLoading) return true;
-                return installedAgents.has(type);
-              }).map(({ type, color, label }) => (
-                <button
-                  key={type}
-                  onClick={() => setNewSessionType(type)}
-                  className="flex-1 py-2 rounded-lg text-xs  transition-colors flex items-center justify-center gap-1"
-                  style={{
-                    backgroundColor: newSessionType === type ? `${color}15` : 'var(--bg-secondary)',
-                    color: newSessionType === type ? color : 'var(--text-secondary)',
-                    border: `1px solid ${newSessionType === type ? color : 'var(--border)'}`,
-                  }}
-                >
-                  {type === 'api' && <Key size={12} />}
-                  {label}
-                </button>
-              ))}
+              {getEnabledAgentTypes().map((type) => {
+                const theme = getTheme(type);
+                const label = getDisplayName(type);
+                const isInstalled = type === 'api' || envLoading || installedAgents.has(type);
+                if (!isInstalled) return null;
+                return (
+                  <button
+                    key={type}
+                    onClick={() => setNewSessionType(type)}
+                    className="flex-1 py-2 rounded-lg text-xs  transition-colors flex items-center justify-center gap-1"
+                    style={{
+                      backgroundColor: newSessionType === type ? `${theme.color}15` : 'var(--bg-secondary)',
+                      color: newSessionType === type ? theme.color : 'var(--text-secondary)',
+                      border: `1px solid ${newSessionType === type ? theme.color : 'var(--border)'}`,
+                    }}
+                  >
+                    {type === 'api' && <Key size={12} />}
+                    {label}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Agent sessions: optional title & cwd */}
@@ -538,7 +541,7 @@ function SessionListFn() {
                     type="text"
                     value={customTitle}
                     onChange={(e) => setCustomTitle(e.target.value)}
-                    placeholder={newSessionType === 'claude' ? 'Claude Code 新会话' : newSessionType === 'hermes' ? 'Hermes Agent 新会话' : newSessionType === 'codex' ? 'codeX 新会话' : 'API 新会话'}
+                    placeholder={`${getDisplayName(newSessionType)} 新会话`}
                     className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                     style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                   />
@@ -548,14 +551,13 @@ function SessionListFn() {
                     工作目录（可选）
                   </label>
                   <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={customCwd}
-                      onChange={(e) => setCustomCwd(e.target.value)}
-                      placeholder="留空使用默认目录"
-                      className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                    <div
+                      className="flex-1 px-3 py-2 rounded-lg text-sm truncate"
                       style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-                    />
+                      title={customCwd || '留空使用默认目录'}
+                    >
+                      {customCwd || '留空使用默认目录'}
+                    </div>
                     <button
                       onClick={async () => {
                         try {

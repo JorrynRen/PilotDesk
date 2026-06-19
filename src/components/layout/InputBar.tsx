@@ -6,6 +6,7 @@ import { InspirationPicker } from '../input/InspirationPicker';
 import { SkillPicker } from '../input/SkillPicker';
 import { showToast } from '../../utils/toast';
 import { AGENT_THEMES } from '../../types';
+import { getAgentLabel } from '../../utils/sessionType';
 
 
 const MODE_ICONS: Record<ChatMode, typeof Send> = {
@@ -118,15 +119,10 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
   }, [input, mode, session, onSend]);
 
   // Placeholder based on context
+  const agentLabel = session ? getAgentLabel(session.agentType) : '';
   const placeholder = !session
     ? '选择会话开始对话...'
-    : session.agentType === 'claude'
-    ? '向 Claude Code 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
-    : session.agentType === 'api'
-    ? '向 API 模型发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
-    : session.agentType === 'codex'
-    ? '向 codeX 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)'
-    : '向 Hermes Agent 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)';
+    : `向 ${agentLabel} 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)`;
 
   return (
     <div className="shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
@@ -296,7 +292,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
           )}
           {showSkillPicker && (
             <SkillPicker
-              agentType={session?.agentType ?? 'claude'}
+              agentType={session?.agentType ?? ''}
               onSelect={(name) => {
                 const ta = textareaRef.current;
                 if (ta) {

@@ -89,79 +89,24 @@ pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppErro
     })
 }
 
-/// Registry type for version queries
-enum Registry {
-    Npm,
-    Pypi,
-}
-
-impl Registry {
-    fn url(&self, package: &str) -> String {
-        match self {
-            Registry::Npm => format!("https://registry.npmjs.org/{}", package),
-            Registry::Pypi => format!("https://pypi.org/pypi/{}/json", package),
-        }
-    }
-
-    fn extract_version(&self, body: &serde_json::Value) -> String {
-        match self {
-            Registry::Npm => body.get("dist-tags")
-                .and_then(|d| d.get("latest"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            Registry::Pypi => body.get("info")
-                .and_then(|i| i.get("version"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-        }
-    }
-
-    fn extract_release_time(&self, body: &serde_json::Value, version: &str) -> Option<String> {
-        match self {
-            Registry::Npm => body.get("time")
-                .and_then(|t| t.get(version))
-                .and_then(|v| v.as_str())
-                .map(|s| s.split('T').next().unwrap_or(s).to_string()),
-            Registry::Pypi => body.get("releases")
-                .and_then(|r| r.get(version))
-                .and_then(|arr| arr.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|r| r.get("upload_time"))
-                .and_then(|t| t.as_str())
-                .map(|s| s.split('T').next().unwrap_or(s).to_string()),
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        match self {
-            Registry::Npm => "npm",
-            Registry::Pypi => "PyPI",
-        }
-    }
-}
-
-/// Query a package registry for latest version and release time.
-async fn query_registry(registry: Registry, package_name: &str) -> Result<VersionTimeInfo, AppError> {
-    let url = registry.url(package_name);
-    let body = http_get_json(&url).await
-        .map_err(|e| AppError::Network(format!("查询 {} 失败: {}", registry.label(), e)))?;
-
-    let version = registry.extract_version(&body);
-    let release_time = registry.extract_release_time(&body, &version);
-
-    Ok(VersionTimeInfo { version, release_time })
-}
-
-/// Check latest version for a single npm package (used by EnvManager for per-agent checking)
+/// Generic agent update check: reads latest_version_cmd from agents table and executes it.
+/// 完全依赖数据库命令模板，代码不做任何特殊处理，保证通用性和可拓展性。
 #[tauri::command]
-pub async fn check_single_npm(package_name: String) -> Result<VersionTimeInfo, AppError> {
-    query_registry(Registry::Npm, &package_name).await
-}
+pub async fn check_agent_update(state: tauri::State<'_, crate::DbState>, agent_type: String) -> Result<VersionTimeInfo, AppError> {
+    let conn = state.get_conn()?;
+    let config = crate::commands::agents::get_agent_inner(&conn, &agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
 
-/// Check latest version for a single PyPI package (used by EnvManager for per-agent checking)
-#[tauri::command]
-pub async fn check_single_pypi(package_name: String) -> Result<VersionTimeInfo, AppError> {
-    query_registry(Registry::Pypi, &package_name).await
+    let cmd = config.latest_version_cmd;
+    if cmd.is_empty() {
+        return Err(AppError::Config(format!("{} 未配置版本查询命令", agent_type)));
+    }
+
+    // 统一执行命令，不区分命令类型
+    let output = crate::commands::env::run_shell_cmd(&cmd)
+        .map_err(|e| AppError::External(format!("版本查询失败: {}", e)))?;
+    Ok(VersionTimeInfo {
+        version: output,
+        release_time: None,
+    })
 }

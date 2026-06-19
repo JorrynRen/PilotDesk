@@ -22,6 +22,13 @@ export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLog
   const scrollRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
 
+  // Auto-scroll to bottom when logs change
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs]);
+
   // Load persisted logs from Rust on mount (only for internal mode)
   useEffect(() => {
     if (externalLogs || initialized.current) return;
@@ -50,8 +57,7 @@ export function InstallLog({ logs: externalLogs, isActive, onClear }: InstallLog
     };
   }, [externalLogs]);
 
-  // No auto-scroll needed: logs are in descending order (newest first),
-  // so the most recent entries are already visible at the top.
+  // Auto-scroll to bottom when new logs arrive (ascending order display)
 
   const levelColor: Record<string, string> = {
     info: 'var(--text-secondary)',

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Cpu, Search, FolderOpen, Bot, ChevronDown, ChevronRight } from 'lucide-react';
 import { useSkillStore } from '../../stores/skillStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { AGENT_THEMES } from '../../types';
 import type { SkillInfo } from '../../stores/skillStore';
 
@@ -10,14 +11,9 @@ interface SkillBrowserProps {
   onSkillSelect?: (name: string) => void;
 }
 
-const AGENT_LABELS: Record<string, string> = {
-  claude: 'Claude Code',
-  hermes: 'Hermes Agent',
-  api: 'API 直连',
-};
-
 export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
   const { skillsByAgent, isLoading, setAgentSkills, setLoading } = useSkillStore();
+  const { agents, getDisplayName } = useAgentRegistry();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSkill, setSelectedSkill] = useState<{ agent: string; name: string; description: string; category?: string } | null>(null);
   const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(new Set());
@@ -40,6 +36,12 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
     },
   });
 
+  // Agent display order from DB
+  const agentOrder = agents
+    .filter(a => a.isEnabled)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map(a => a.agentType);
+
   // Auto-fetch skills: detect installed agents first, then fetch skills for each
   useEffect(() => {
     const fetchAll = async () => {
@@ -54,8 +56,8 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
           }
         }
       } catch {
-        // Fallback: try known agents
-        for (const agent of ['claude', 'hermes', 'codex']) {
+        // Fallback: try enabled agents from DB
+        for (const agent of agentOrder) {
           const cached = skillsByAgent[agent];
           if (!cached) {
             await requestSkills(agent);
@@ -67,10 +69,9 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
     fetchAll();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 按分类聚合所有 agent 的技能（固定排序：hermes → claude → codex）
-  const AGENT_ORDER = ['hermes', 'claude', 'codex'];
+  // 按 DB 排序聚合所有 agent 的技能
   const allAgentTypes = Object.keys(skillsByAgent).sort(
-    (a, b) => AGENT_ORDER.indexOf(a) - AGENT_ORDER.indexOf(b)
+    (a, b) => agentOrder.indexOf(a) - agentOrder.indexOf(b)
   );
   const hasAny = allAgentTypes.length > 0;
 
@@ -130,7 +131,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
                 >
                   <Bot size={14} style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
                   <span className="text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
-                    {AGENT_LABELS[agt] || agt}
+                    {getDisplayName(agt)}
                   </span>
                   <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
                     ({filtered.length})
@@ -184,7 +185,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
       {selectedSkill && (
         <div className="px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
           <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-            <span style={{ color: 'var(--text-tertiary)' }}>来源:</span> {AGENT_LABELS[selectedSkill.agent] || selectedSkill.agent}
+            <span style={{ color: 'var(--text-tertiary)' }}>来源:</span> {getDisplayName(selectedSkill.agent)}
             {selectedSkill.category && (
               <span className="ml-2">
                 <span style={{ color: 'var(--text-tertiary)' }}>分类:</span> {selectedSkill.category}

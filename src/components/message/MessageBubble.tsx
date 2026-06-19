@@ -7,10 +7,11 @@ import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { showToast } from '../../utils/toast';
 import { useSessionStore } from '../../stores/sessionStore';
 import { type Message } from '../../types';
+import { isApiSession } from '../../utils/sessionType';
 
 interface MessageBubbleProps {
   message: Message;
-  agentType: 'claude' | 'hermes' | 'codex' | 'api';
+  agentType: string;
   apiProviderId?: string;
   apiModel?: string;
   onEdit?: (content: string) => void;
@@ -56,7 +57,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
     const typeLabel = AGENT_THEMES[agentType]?.label || agentType;
     const time = formatTimestamp(message.timestamp);
     const parts = [typeLabel];
-    if (agentType === 'api') {
+    if (isApiSession(agentType)) {
       // API type: provider name comes from user-configured providers list
       if (providerName) parts.push(providerName);
       if (apiModel) parts.push(apiModel);

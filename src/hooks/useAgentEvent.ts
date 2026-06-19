@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { useAgentRegistry } from './useAgentRegistry';
 import { getApiKey } from '../stores/apiProviderStore';
 import { inferApiFormat, resolveChatUrl, buildHeaders, buildBody } from '../utils/apiClient';
 
@@ -72,6 +73,9 @@ async function readSSEStream(
 }
 
 export function useAgentEvent(handlers?: AgentEventHandlers) {
+  const { agents: registryAgents } = useAgentRegistry();
+  const agentTypes = useMemo(() => registryAgents.map(a => a.agentType), [registryAgents]);
+  const defaultAgentType = useMemo(() => agentTypes[0] || 'claude', [agentTypes]);
   const handlersRef = useRef(handlers);
   useEffect(() => {
     handlersRef.current = handlers;
@@ -136,9 +140,9 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
       agentSessionId?: string,
     ) => {
       try {
-        await invoke('agent_send_message', {
+        await invoke('agent_send_message_with_config', {
           sessionId,
-          agentType: agentType || 'claude',
+          agentType: agentType || defaultAgentType,
           message,
           mode: mode || 'native',
           cwd: cwd || null,
@@ -183,7 +187,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
       try {
         await invoke('agent_close_session', {
           sessionId,
-          agentType: agentType || 'claude',
+          agentType: agentType || defaultAgentType,
         });
       } catch (err) {
         console.error('[Agent] close session failed:', err);
@@ -205,11 +209,10 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
   );
 
   const requestAllSkills = useCallback(async () => {
-    const agents = ['claude', 'hermes', 'codex'];
-    for (const agentType of agents) {
+    for (const agentType of agentTypes) {
       await requestSkills(agentType);
     }
-  }, [requestSkills]);
+  }, [requestSkills, agentTypes]);
 
   // ── API 直连（保持现有 fetch SSE 逻辑） ──
 

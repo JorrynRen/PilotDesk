@@ -15,7 +15,7 @@ interface SessionState {
   fetchSessions: () => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   createSession: (
-    agentType: 'claude' | 'hermes' | 'codex' | 'api' | 'codex',
+    agentType: string,
     cwd?: string,
     title?: string | null,
     apiProvider?: string,

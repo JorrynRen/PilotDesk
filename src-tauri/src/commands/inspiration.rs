@@ -93,10 +93,7 @@ pub fn create_inspiration(conn: &Connection, payload: CreateInspirationPayload) 
     let id = crate::utils::new_id();
     let now = crate::utils::now();
     let icon = payload.icon.unwrap_or_else(|| "💡".to_string());
-    let source_agent = match payload.source_agent.as_deref() {
-        Some("claude") | Some("hermes") | Some("codex") | Some("api") => payload.source_agent.unwrap(),
-        _ => "manual".to_string(),
-    };
+    let source_agent = payload.source_agent.unwrap_or_else(|| "manual".to_string());
 
     conn.execute(
         "INSERT INTO inspirations (id, icon, title, content, source_agent, is_favorite, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)",
@@ -128,10 +125,7 @@ pub fn update_inspiration(conn: &Connection, payload: UpdateInspirationPayload) 
     let icon = payload.icon.unwrap_or(existing.icon);
     let title = payload.title.unwrap_or(existing.title);
     let content = payload.content.unwrap_or(existing.content);
-    let source_agent = match payload.source_agent.as_deref() {
-        Some("claude") | Some("hermes") | Some("codex") | Some("api") => payload.source_agent.unwrap(),
-        _ => existing.source_agent,
-    };
+    let source_agent = payload.source_agent.unwrap_or(existing.source_agent);
     let is_favorite = payload.is_favorite.unwrap_or(existing.is_favorite) as i32;
 
     conn.execute(

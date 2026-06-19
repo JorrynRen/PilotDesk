@@ -5,6 +5,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use crate::db::models::EnvInfo;
 use crate::utils::errors::AppError;
+use crate::commands::agents;
 
 /// Debug logging for env detection
 macro_rules! log_env {
@@ -12,49 +13,6 @@ macro_rules! log_env {
         log::debug!($($arg)*);
     }};
 }
-
-// ──────────────────────────────────────────────
-//  Agent 集中配置表
-// ──────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct AgentConfig {
-    /// Agent 类型标识（claude / hermes / codex）
-    pub agent_type: &'static str,
-    /// npm 包名（None 表示非 npm 安装）
-    pub npm_package: Option<&'static str>,
-    /// pip 包名（None 表示非 pip 安装）
-    pub pip_package: Option<&'static str>,
-    /// CLI 命令名
-    pub cli_command: &'static str,
-    /// 版本检测参数
-    pub version_flag: &'static str,
-}
-
-pub const AGENTS: &[AgentConfig] = &[
-    AgentConfig {
-        agent_type: "claude",
-        npm_package: Some("@anthropic-ai/claude-code"),
-        pip_package: None,
-        cli_command: "claude",
-        version_flag: "--version",
-    },
-    AgentConfig {
-        agent_type: "hermes",
-        npm_package: None,
-        pip_package: Some("hermes-agent"),
-        cli_command: "hermes",
-        version_flag: "--version",
-    },
-    AgentConfig {
-        agent_type: "codex",
-        npm_package: Some("@openai/codex"),
-        pip_package: None,
-        cli_command: "codex",
-        version_flag: "--version",
-    },
-];
 
 // ──────────────────────────────────────────────
 //  工具函数
@@ -116,6 +74,30 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
     }
 }
 
+/// Run a full shell command string via cmd /C (for install/uninstall/update commands from DB)
+pub fn run_shell_cmd(cmd_str: &str) -> Result<String, String> {
+    let mut child = Command::new("cmd");
+    child.args(["/C", cmd_str])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Clear PYTHONHOME to avoid interference from parent process (WPS 灵犀)
+    child.env_remove("PYTHONHOME");
+    child.env_remove("PYTHONPATH");
+    let child = child.spawn()
+        .map_err(|e| format!("执行命令失败: {}", e))?;
+
+    let output = child.wait_with_output()
+        .map_err(|e| format!("命令执行过程出错: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("命令执行失败 (exit code {:?}): {}", output.status.code(), stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.trim().to_string())
+}
+
 /// 探测工具版本：先尝试动态查找（用 cmd /C 处理 .cmd 脚本），再回退 PATH
 fn probe_tool_version(name: &str, version_flag: &str) -> Option<String> {
     if let Some(path) = crate::utils::paths::resolve_in_path(name) {
@@ -159,7 +141,7 @@ fn clean_version_string(raw: &str) -> String {
 static LAST_DETECT: std::sync::RwLock<Option<(Instant, EnvInfo)>> = std::sync::RwLock::new(None);
 const CACHE_TTL: Duration = Duration::from_secs(30);
 
-fn detect_env_inner() -> Result<EnvInfo, AppError> {
+fn detect_env_inner(state: &crate::DbState) -> Result<EnvInfo, AppError> {
     log_env!("[env] Detecting environment...");
 
     let node_version = probe_tool_version("node", "--version");
@@ -168,29 +150,34 @@ fn detect_env_inner() -> Result<EnvInfo, AppError> {
         .or_else(|| probe_tool_version("python3", "--version"))
         .or_else(|| probe_tool_version("py", "--version"));
 
-    let claude_code_version = probe_tool_version("claude", "--version")
-        .as_deref().map(clean_version_string);
-    let hermes_version = probe_tool_version("hermes", "--version")
-        .as_deref().map(clean_version_string);
-    let codex_version = probe_tool_version("codex", "--version")
-        .as_deref().map(clean_version_string);
+    // Read enabled agents from DB and detect versions
+    let conn = state.get_conn()?;
+    let db_agents = agents::list_agents_inner(&conn).unwrap_or_default();
 
-    log_env!("[env] node={:?} git={:?} python={:?} claude={:?} hermes={:?} codex={:?}",
-        node_version, git_version, python_version,
-        claude_code_version, hermes_version, codex_version);
+    let mut agent_versions = std::collections::HashMap::new();
+
+    for agent in &db_agents {
+        if !agent.is_enabled {
+            continue;
+        }
+        let version = run_shell_cmd(&agent.version_cmd).ok()
+            .map(|v| clean_version_string(&v));
+        agent_versions.insert(agent.agent_type.clone(), version);
+    }
+
+    log_env!("[env] node={:?} git={:?} python={:?} agents={:?}",
+        node_version, git_version, python_version, agent_versions);
 
     Ok(EnvInfo {
         node_version,
         git_version,
         python_version,
-        claude_code_version,
-        hermes_version,
-        codex_version,
+        agent_versions,
     })
 }
 
 #[tauri::command]
-pub async fn detect_env() -> Result<EnvInfo, AppError> {
+pub async fn detect_env(state: tauri::State<'_, crate::DbState>) -> Result<EnvInfo, AppError> {
     {
         let cache = LAST_DETECT.read().unwrap();
         if let Some((fetched, ref info)) = *cache {
@@ -200,7 +187,8 @@ pub async fn detect_env() -> Result<EnvInfo, AppError> {
         }
     }
 
-    let result = tokio::task::spawn_blocking(detect_env_inner).await
+    let state_ref: crate::DbState = crate::DbState { pool: state.pool.clone() };
+    let result = tokio::task::spawn_blocking(move || detect_env_inner(&state_ref)).await
         .map_err(|e| AppError::External(format!("环境检测任务失败: {}", e)))?;
 
     if let Ok(ref info) = result {
@@ -225,32 +213,32 @@ pub async fn clear_env_detect_cache() -> Result<(), AppError> {
 }
 
 // ──────────────────────────────────────────────
-//  泛化安装函数
+//  安装/卸载/更新 — 从 DB 读取命令并执行
 // ──────────────────────────────────────────────
 
-enum PackageManager { Npm, Pip }
+/// 根据 agent_type 从 DB 读取 install_cmd 并执行
+#[tauri::command]
+pub async fn install_agent(app: tauri::AppHandle, state: tauri::State<'_, crate::DbState>, agent_type: String) -> Result<(), AppError> {
+    let conn = state.get_conn()?;
+    let config = agents::get_agent_inner(&conn, &agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
 
-fn run_uninstall(app: &tauri::AppHandle, manager: PackageManager, package: &str, agent: &str) -> Result<(), AppError> {
-    let cmd = match manager {
-        PackageManager::Npm => format!("npm uninstall -g {}", package),
-        PackageManager::Pip => format!("pip uninstall {} -y", package),
-    };
-
-    let child = Command::new("cmd")
-        .args(["/C", &cmd])
-        .spawn()
-        .map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent, e)))?;
-
-    let output = child.wait_with_output().map_err(|e| AppError::External(format!("卸载 {} 过程出错: {}", agent, e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::External(format!("{} 卸载失败: {}", agent, stderr)));
+    let cmd = config.install_cmd;
+    if cmd.is_empty() {
+        return Err(AppError::Config(format!("{} 未配置安装命令", agent_type)));
     }
 
     let _ = app.emit("install-progress", serde_json::json!({
-        "agent": agent,
-        "message": format!("{} 卸载完成", agent),
+        "agent": agent_type,
+        "message": format!("正在安装 {}...", config.display_name),
+        "progress": 50
+    }));
+
+    run_shell_cmd(&cmd).map_err(|e| AppError::External(format!("安装 {} 失败: {}", agent_type, e)))?;
+
+    let _ = app.emit("install-progress", serde_json::json!({
+        "agent": agent_type,
+        "message": format!("{} 安装完成", config.display_name),
         "progress": 100
     }));
 
@@ -258,27 +246,29 @@ fn run_uninstall(app: &tauri::AppHandle, manager: PackageManager, package: &str,
     Ok(())
 }
 
-fn run_install(app: &tauri::AppHandle, manager: PackageManager, package: &str, agent: &str) -> Result<(), AppError> {
-    let cmd = match manager {
-        PackageManager::Npm => format!("npm install -g {}", package),
-        PackageManager::Pip => format!("pip install {}", package),
-    };
+/// 根据 agent_type 从 DB 读取 uninstall_cmd 并执行
+#[tauri::command]
+pub async fn uninstall_agent(app: tauri::AppHandle, state: tauri::State<'_, crate::DbState>, agent_type: String) -> Result<(), AppError> {
+    let conn = state.get_conn()?;
+    let config = agents::get_agent_inner(&conn, &agent_type)?
+        .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
 
-    let child = Command::new("cmd")
-        .args(["/C", &cmd])
-        .spawn()
-        .map_err(|e| AppError::External(format!("安装 {} 失败: {}", agent, e)))?;
-
-    let output = child.wait_with_output().map_err(|e| AppError::External(format!("安装 {} 过程出错: {}", agent, e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AppError::External(format!("{} 安装失败: {}", agent, stderr)));
+    let cmd = config.uninstall_cmd;
+    if cmd.is_empty() {
+        return Err(AppError::Config(format!("{} 未配置卸载命令", agent_type)));
     }
 
     let _ = app.emit("install-progress", serde_json::json!({
-        "agent": agent,
-        "message": format!("{} 安装完成", agent),
+        "agent": agent_type,
+        "message": format!("正在卸载 {}...", config.display_name),
+        "progress": 50
+    }));
+
+    run_shell_cmd(&cmd).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
+
+    let _ = app.emit("install-progress", serde_json::json!({
+        "agent": agent_type,
+        "message": format!("{} 卸载完成", config.display_name),
         "progress": 100
     }));
 
@@ -286,52 +276,9 @@ fn run_install(app: &tauri::AppHandle, manager: PackageManager, package: &str, a
     Ok(())
 }
 
-/// 根据 AGENTS 配置表泛化卸载命令
-#[tauri::command]
-pub async fn uninstall_agent(app: tauri::AppHandle, agent_type: String) -> Result<(), AppError> {
-    let config = AGENTS.iter().find(|a| a.agent_type == agent_type)
-        .ok_or_else(|| AppError::InvalidInput(format!("未知 Agent 类型: {}", agent_type)))?;
-
-    let (manager, package) = match (config.npm_package, config.pip_package) {
-        (Some(pkg), _) => (PackageManager::Npm, pkg),
-        (_, Some(pkg)) => (PackageManager::Pip, pkg),
-        _ => return Err(AppError::Config(format!("{} 无可用的包管理器", agent_type))),
-    };
-
-    run_uninstall(&app, manager, package, &agent_type)
-}
-
-/// 根据 AGENTS 配置表泛化安装命令
-#[tauri::command]
-pub async fn install_agent(app: tauri::AppHandle, agent_type: String) -> Result<(), AppError> {
-    let config = AGENTS.iter().find(|a| a.agent_type == agent_type)
-        .ok_or_else(|| AppError::InvalidInput(format!("未知 Agent 类型: {}", agent_type)))?;
-
-    let (manager, package) = match (config.npm_package, config.pip_package) {
-        (Some(pkg), _) => (PackageManager::Npm, pkg),
-        (_, Some(pkg)) => (PackageManager::Pip, pkg),
-        _ => return Err(AppError::Config(format!("{} 无可用的包管理器", agent_type))),
-    };
-
-    run_install(&app, manager, package, &agent_type)
-}
-
-// 保留旧命令作为别名（兼容前端调用）
-#[tauri::command]
-pub async fn install_claude_code(app: tauri::AppHandle) -> Result<(), AppError> {
-    install_agent(app, "claude".to_string()).await
-}
-
-#[tauri::command]
-pub async fn install_hermes(app: tauri::AppHandle) -> Result<(), AppError> {
-    install_agent(app, "hermes".to_string()).await
-}
-
-#[tauri::command]
-pub async fn install_codex(app: tauri::AppHandle) -> Result<(), AppError> {
-    install_agent(app, "codex".to_string()).await
-}
-
+// ──────────────────────────────────────────────
+//  目录校验
+// ──────────────────────────────────────────────
 
 /// Validate a directory path and create it if it doesn't exist.
 /// Returns the normalized path on success, or an error message on failure.
@@ -342,7 +289,19 @@ pub fn ensure_dir(path: String) -> Result<String, String> {
     }
 
     let trimmed = path.trim();
-    let p = std::path::Path::new(trimmed);
+
+    // Expand ~ to user home directory
+    let expanded = if trimmed.starts_with("~") {
+        if let Some(home) = dirs::home_dir() {
+            trimmed.replacen("~", &home.to_string_lossy(), 1)
+        } else {
+            return Err("无法解析用户主目录路径".into());
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    let p = std::path::Path::new(&expanded);
 
     #[cfg(target_os = "windows")]
     {
@@ -372,14 +331,14 @@ pub fn ensure_dir(path: String) -> Result<String, String> {
     // Check if path exists
     if p.exists() {
         if p.is_dir() {
-            Ok(trimmed.to_string())
+            Ok(expanded.to_string())
         } else {
-            Err(format!("路径已存在但不是一个目录: {}", trimmed))
+            Err(format!("路径已存在但不是一个目录: {}", expanded))
         }
     } else {
         // Create directory (including parent directories)
         std::fs::create_dir_all(p)
             .map_err(|e| format!("创建目录失败: {}", e))?;
-        Ok(trimmed.to_string())
+        Ok(expanded.to_string())
     }
 }
