@@ -7,7 +7,7 @@ import { AGENT_THEMES } from '../../types';
 import type { SkillInfo } from '../../stores/skillStore';
 
 interface SkillBrowserProps {
-  agentType?: string;
+  agentType: string;
   onSkillSelect?: (name: string) => void;
 }
 
