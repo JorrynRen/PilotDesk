@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, Pencil, Save, X, Loader2, Check, Palette, Download, Upload } from 'lucide-react';
+import { Plus, Trash2, Pencil, Save, X, Loader2, Check, Palette, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
@@ -407,51 +407,67 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
   mode: 'add' | 'edit';
 }) {
   return (
-    <div className="w-full space-y-2">
-      <div className="grid grid-cols-2 gap-2">
-        <FormField
-          label="Agent标识（不可重复）"
-          value={form.agentType || ''}
-          onChange={(v) => onChange({ ...form, agentType: v })}
-          placeholder="如 my-agent"
-          readOnly={mode === 'edit'}
-        />
-        <FormField label="显示名称" value={form.displayName || ''} onChange={(v) => onChange({ ...form, displayName: v })} placeholder="如 My Agent" />
-      </div>
-      <FormField label="描述" value={form.description || ''} onChange={(v) => onChange({ ...form, description: v })} placeholder="简短描述" />
-      <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="如 my-cli" />
-      <div className="grid grid-cols-2 gap-2">
-        <FormField label="npm 包名" value={form.npmPackage || ''} onChange={(v) => onChange({ ...form, npmPackage: v || null })} placeholder="如 @scope/my-agent" />
-        <FormField label="pip 包名" value={form.pipPackage || ''} onChange={(v) => onChange({ ...form, pipPackage: v || null })} placeholder="如 my-agent" />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <FormField label="安装命令" value={form.installCmd || ''} onChange={(v) => onChange({ ...form, installCmd: v })} placeholder="如 npm install -g my-agent" />
-        <FormField label="卸载命令" value={form.uninstallCmd || ''} onChange={(v) => onChange({ ...form, uninstallCmd: v })} placeholder="如 my-agent uninstall" />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <FormField label="更新命令" value={form.updateCmd || ''} onChange={(v) => onChange({ ...form, updateCmd: v })} placeholder="如 my-agent update" />
-        <FormField label="版本检测命令" value={form.versionCmd || ''} onChange={(v) => onChange({ ...form, versionCmd: v })} placeholder="如 my-agent --version" />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <FormField label="最新版本查询命令" value={form.latestVersionCmd || ''} onChange={(v) => onChange({ ...form, latestVersionCmd: v })} placeholder="如 npm view my-agent version" />
-        <FormField label="版本号提取正则" value={form.versionPattern || ''} onChange={(v) => onChange({ ...form, versionPattern: v })} placeholder="v?(\d+\.\d+\.\d+)" />
-      </div>
-      <FormField label="运行命令模板" value={form.runCmdTemplate || ''} onChange={(v) => onChange({ ...form, runCmdTemplate: v })} placeholder="如 my-cli {message}" />
-      <div className="grid grid-cols-3 gap-2">
-        <SelectField label="输出解析器" value={form.outputParser || 'raw-text'} onChange={(v) => onChange({ ...form, outputParser: v })} options={[
-          { value: 'raw-text', label: 'raw-text（原始文本）' },
-          { value: 'json-stream', label: 'json-stream（JSON 流）' },
-          { value: 'ansi-text', label: 'ansi-text（ANSI 文本）' },
-        ]} />
-        <FormField label="输出过滤正则" value={form.outputFilterRegex || ''} onChange={(v) => onChange({ ...form, outputFilterRegex: v })} placeholder="过滤噪声行" />
+    <div className="w-full space-y-4">
+      {/* 基础信息 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <Info size={11} style={{ color: 'var(--accent)' }} />
+          <span>基础信息</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <FormField
+            label="Agent标识（不可重复）"
+            value={form.agentType || ''}
+            onChange={(v) => onChange({ ...form, agentType: v })}
+            placeholder="如 my-agent"
+            readOnly={mode === 'edit'}
+          />
+          <FormField label="显示名称" value={form.displayName || ''} onChange={(v) => onChange({ ...form, displayName: v })} placeholder="如 My Agent" />
+        </div>
+        <FormField label="描述" value={form.description || ''} onChange={(v) => onChange({ ...form, description: v })} placeholder="简短描述" />
+        <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="如 my-cli" />
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="#6366F1" />
+          <FormField label="图标" value={form.icon || '🤖'} onChange={(v) => onChange({ ...form, icon: v })} placeholder="🤖" />
+        </div>
         <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="0" />
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="#6366F1" />
-        <FormField label="图标" value={form.icon || '🤖'} onChange={(v) => onChange({ ...form, icon: v })} placeholder="🤖" />
+
+      {/* 包参数配置 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <Package size={11} style={{ color: 'var(--accent)' }} />
+          <span>包参数配置</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <FormField label="npm 包名" value={form.npmPackage || ''} onChange={(v) => onChange({ ...form, npmPackage: v || null })} placeholder="如 @scope/my-agent" />
+          <FormField label="pip 包名" value={form.pipPackage || ''} onChange={(v) => onChange({ ...form, pipPackage: v || null })} placeholder="如 my-agent" />
+        </div>
       </div>
-      <div className="border-t pt-2" style={{ borderColor: 'var(--border)' }}>
-        <div className="text-[10px] font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>会话延续配置</div>
+
+      {/* 会话参数配置 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <Terminal size={11} style={{ color: 'var(--accent)' }} />
+          <span>会话参数配置</span>
+        </div>
+        <FormField label="运行命令模板" value={form.runCmdTemplate || ''} onChange={(v) => onChange({ ...form, runCmdTemplate: v })} placeholder="如 my-cli {message}" />
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <SelectField label="输出解析器" value={form.outputParser || 'raw-text'} onChange={(v) => onChange({ ...form, outputParser: v })} options={[
+            { value: 'raw-text', label: 'raw-text（原始文本）' },
+            { value: 'json-stream', label: 'json-stream（JSON 流）' },
+            { value: 'ansi-text', label: 'ansi-text（ANSI 文本）' },
+          ]} />
+          <FormField label="输出过滤正则" value={form.outputFilterRegex || ''} onChange={(v) => onChange({ ...form, outputFilterRegex: v })} placeholder="过滤噪声行" />
+        </div>
+      </div>
+
+      {/* 延续会话配置 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <Repeat size={11} style={{ color: 'var(--accent)' }} />
+          <span>延续会话配置</span>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <SelectField label="Session ID 来源" value={form.sessionIdSource || 'none'} onChange={(v) => onChange({ ...form, sessionIdSource: v })} options={[
             { value: 'none', label: 'none（不支持会话延续）' },
@@ -465,8 +481,33 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           <FormField label="恢复参数模板" value={form.resumeArgTemplate || ''} onChange={(v) => onChange({ ...form, resumeArgTemplate: v })} placeholder="如 --resume {session_id}" />
         </div>
       </div>
-      <div className="border-t pt-2" style={{ borderColor: 'var(--border)' }}>
-        <div className="text-[10px] font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>技能配置</div>
+
+      {/* 生命周期命令配置 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <Activity size={11} style={{ color: 'var(--accent)' }} />
+          <span>生命周期命令配置</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <FormField label="安装命令" value={form.installCmd || ''} onChange={(v) => onChange({ ...form, installCmd: v })} placeholder="如 npm install -g my-agent" />
+          <FormField label="卸载命令" value={form.uninstallCmd || ''} onChange={(v) => onChange({ ...form, uninstallCmd: v })} placeholder="如 my-agent uninstall" />
+        </div>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <FormField label="更新命令" value={form.updateCmd || ''} onChange={(v) => onChange({ ...form, updateCmd: v })} placeholder="如 my-agent update" />
+          <FormField label="版本检测命令" value={form.versionCmd || ''} onChange={(v) => onChange({ ...form, versionCmd: v })} placeholder="如 my-agent --version" />
+        </div>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <FormField label="最新版本查询命令" value={form.latestVersionCmd || ''} onChange={(v) => onChange({ ...form, latestVersionCmd: v })} placeholder="如 npm view my-agent version" />
+          <FormField label="版本号提取正则" value={form.versionPattern || ''} onChange={(v) => onChange({ ...form, versionPattern: v })} placeholder="v?(\d+\.\d+\.\d+)" />
+        </div>
+      </div>
+
+      {/* 技能引用配置 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <BookOpen size={11} style={{ color: 'var(--accent)' }} />
+          <span>技能引用配置</span>
+        </div>
         <div className="grid grid-cols-3 gap-2">
           <FormField label="技能目录路径" value={form.skillsDir || ''} onChange={(v) => onChange({ ...form, skillsDir: v })} placeholder="如 ~/.claude/skills" />
           <FormField label="技能入口文件名" value={form.skillEntryFile || 'SKILL.md'} onChange={(v) => onChange({ ...form, skillEntryFile: v })} />
@@ -476,6 +517,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           ]} />
         </div>
       </div>
+
       <div className="flex gap-2 justify-end pt-1">
         <SettingsButton variant="secondary" onClick={onCancel}>取消</SettingsButton>
         <SettingsButton variant="primary" onClick={onSubmit} disabled={saving}>
