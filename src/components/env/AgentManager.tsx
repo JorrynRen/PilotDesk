@@ -286,7 +286,11 @@ export function AgentManager() {
               </div>
               <FormField label="运行命令模板" value={addForm.runCmdTemplate || ''} onChange={(v) => setAddForm({ ...addForm, runCmdTemplate: v })} placeholder="如 my-cli {message}" />
               <div className="grid grid-cols-3 gap-3">
-                <FormField label="输出解析器" value={addForm.outputParser || 'raw-text'} onChange={(v) => setAddForm({ ...addForm, outputParser: v })} placeholder="json-stream / ansi-text / raw-text" />
+                <SelectField label="输出解析器" value={addForm.outputParser || 'raw-text'} onChange={(v) => setAddForm({ ...addForm, outputParser: v })} options={[
+                    { value: 'raw-text', label: 'raw-text（原始文本）' },
+                    { value: 'json-stream', label: 'json-stream（JSON 流）' },
+                    { value: 'ansi-text', label: 'ansi-text（ANSI 文本）' },
+                  ]} />
                 <FormField label="输出过滤正则" value={addForm.outputFilterRegex || ''} onChange={(v) => setAddForm({ ...addForm, outputFilterRegex: v })} placeholder="过滤噪声行" />
                 <FormField label="排序序号" value={String(addForm.sortOrder ?? 0)} onChange={(v) => setAddForm({ ...addForm, sortOrder: parseInt(v) || 0 })} placeholder="0" />
               </div>
@@ -297,7 +301,11 @@ export function AgentManager() {
               <div className="border-t pt-3" style={{ borderColor: 'var(--border)' }}>
                 <div className="text-[10px] font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>会话延续配置</div>
                 <div className="grid grid-cols-2 gap-3">
-                  <FormField label="Session ID 来源" value={addForm.sessionIdSource || 'none'} onChange={(v) => setAddForm({ ...addForm, sessionIdSource: v })} placeholder="stdout-json / stderr-text / none" />
+                  <SelectField label="Session ID 来源" value={addForm.sessionIdSource || 'none'} onChange={(v) => setAddForm({ ...addForm, sessionIdSource: v })} options={[
+                    { value: 'none', label: 'none（不支持会话延续）' },
+                    { value: 'stdout-json', label: 'stdout-json（标准输出 JSON）' },
+                    { value: 'stderr-text', label: 'stderr-text（标准错误文本行）' },
+                  ]} />
                   <FormField label="Session ID 事件类型" value={addForm.sessionIdEventType || ''} onChange={(v) => setAddForm({ ...addForm, sessionIdEventType: v })} placeholder="如 system/init" />
                 </div>
                 <div className="grid grid-cols-2 gap-3 mt-2">
@@ -484,14 +492,22 @@ function EditForm({ form, onChange, onSave, onCancel, saving }: {
       </div>
       <FormField label="运行命令模板" value={form.runCmdTemplate || ''} onChange={(v) => onChange({ ...form, runCmdTemplate: v })} />
       <div className="grid grid-cols-3 gap-2">
-        <FormField label="输出解析器" value={form.outputParser || 'raw-text'} onChange={(v) => onChange({ ...form, outputParser: v })} />
+        <SelectField label="输出解析器" value={form.outputParser || 'raw-text'} onChange={(v) => onChange({ ...form, outputParser: v })} options={[
+            { value: 'raw-text', label: 'raw-text（原始文本）' },
+            { value: 'json-stream', label: 'json-stream（JSON 流）' },
+            { value: 'ansi-text', label: 'ansi-text（ANSI 文本）' },
+          ]} />
         <FormField label="输出过滤正则" value={form.outputFilterRegex || ''} onChange={(v) => onChange({ ...form, outputFilterRegex: v })} />
         <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} />
       </div>
       <div className="border-t pt-2" style={{ borderColor: 'var(--border)' }}>
         <div className="text-[10px] font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>会话延续配置</div>
         <div className="grid grid-cols-2 gap-2">
-          <FormField label="Session ID 来源" value={form.sessionIdSource || 'none'} onChange={(v) => onChange({ ...form, sessionIdSource: v })} />
+          <SelectField label="Session ID 来源" value={form.sessionIdSource || 'none'} onChange={(v) => onChange({ ...form, sessionIdSource: v })} options={[
+            { value: 'none', label: 'none（不支持会话延续）' },
+            { value: 'stdout-json', label: 'stdout-json（标准输出 JSON）' },
+            { value: 'stderr-text', label: 'stderr-text（标准错误文本行）' },
+          ]} />
           <FormField label="Session ID 事件类型" value={form.sessionIdEventType || ''} onChange={(v) => onChange({ ...form, sessionIdEventType: v })} />
         </div>
         <div className="grid grid-cols-2 gap-2 mt-2">
