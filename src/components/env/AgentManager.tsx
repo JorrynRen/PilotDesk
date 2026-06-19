@@ -20,6 +20,7 @@ export function AgentManager() {
   const [marketAgents, setMarketAgents] = useState<AgentConfig[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
   const [showMarket, setShowMarket] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const handleEdit = (agent: AgentConfig) => {
     setEditingType(agent.agentType);
@@ -72,12 +73,6 @@ export function AgentManager() {
 
   const handleDelete = async (agentType: string) => {
     try {
-      const { confirm } = await import('@tauri-apps/plugin-dialog');
-      const confirmed = await confirm('确定要删除此 Agent 配置吗？此操作不可撤销。', {
-        title: '删除 Agent',
-        kind: 'warning',
-      });
-      if (!confirmed) return;
       await invoke('delete_agent', { agentType });
       showToast('Agent 已删除', 'success');
       fetchAgents();
@@ -336,7 +331,7 @@ export function AgentManager() {
                       />
                       {!agent.isBuiltin && (
                         <SettingsButton
-                          onClick={() => handleDelete(agent.agentType)}
+                          onClick={() => setDeleteConfirm(agent.agentType)}
                           variant="danger"
                           icon={<Trash2 size={11} />}
                           title="删除此 Agent 配置"
@@ -398,6 +393,43 @@ export function AgentManager() {
         </div>
       </SettingsSection>
 
+
+      {/* 删除确认弹窗 */}
+      {deleteConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setDeleteConfirm(null)}
+        >
+          <div
+            className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
+            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+              确认删除
+            </div>
+            <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+              确定要删除 <strong style={{ color: 'var(--text-primary)' }}>{deleteConfirm}</strong> 的配置吗？此操作不可撤销。
+            </div>
+            <div className="flex justify-end gap-2">
+              <SettingsButton variant="secondary" onClick={() => setDeleteConfirm(null)}>
+                取消
+              </SettingsButton>
+              <SettingsButton
+                variant="danger"
+                onClick={() => {
+                  const agentType = deleteConfirm;
+                  setDeleteConfirm(null);
+                  handleDelete(agentType);
+                }}
+              >
+                确认删除
+              </SettingsButton>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
