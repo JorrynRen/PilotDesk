@@ -318,6 +318,7 @@ export function AgentManager() {
                         onClick={() => handleToggleEnabled(agent)}
                         variant={agent.isEnabled ? 'primary' : 'secondary'}
                         icon={agent.isEnabled ? <Check size={11} /> : <X size={11} />}
+                        title={agent.isEnabled ? '点击禁用此 Agent' : '点击启用此 Agent'}
                       >
                         {agent.isEnabled ? '已启用' : '已禁用'}
                       </SettingsButton>
@@ -325,12 +326,14 @@ export function AgentManager() {
                         onClick={() => handleEdit(agent)}
                         variant="secondary"
                         icon={<Pencil size={11} />}
+                        title="编辑此 Agent 配置"
                       />
                       {!agent.isBuiltin && (
                         <SettingsButton
                           onClick={() => handleDelete(agent.agentType)}
                           variant="danger"
                           icon={<Trash2 size={11} />}
+                          title="删除此 Agent 配置"
                         />
                       )}
                     </div>
