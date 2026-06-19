@@ -72,6 +72,12 @@ export function AgentManager() {
 
   const handleDelete = async (agentType: string) => {
     try {
+      const { confirm } = await import('@tauri-apps/plugin-dialog');
+      const confirmed = await confirm('确定要删除此 Agent 配置吗？此操作不可撤销。', {
+        title: '删除 Agent',
+        kind: 'warning',
+      });
+      if (!confirmed) return;
       await invoke('delete_agent', { agentType });
       showToast('Agent 已删除', 'success');
       fetchAgents();
