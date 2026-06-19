@@ -263,7 +263,7 @@ export function AgentManager() {
             <div className="text-xs font-medium mb-3" style={{ color: 'var(--text-primary)' }}>添加自定义 Agent</div>
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
-                <FormField label="Agent 类型" value={addForm.agentType || ''} onChange={(v) => setAddForm({ ...addForm, agentType: v })} placeholder="如 my-agent" />
+                <FormField label="Agent标识（不可重复）" value={addForm.agentType || ''} onChange={(v) => setAddForm({ ...addForm, agentType: v })} placeholder="如 my-agent" />
                 <FormField label="显示名称" value={addForm.displayName || ''} onChange={(v) => setAddForm({ ...addForm, displayName: v })} placeholder="如 My Agent" />
               </div>
               <FormField label="描述" value={addForm.description || ''} onChange={(v) => setAddForm({ ...addForm, description: v })} placeholder="简短描述" />
