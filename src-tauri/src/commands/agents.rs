@@ -656,3 +656,16 @@ pub fn delete_agent_inner(conn: &Connection, agent_type: &str) -> Result<(), App
     }
     Ok(())
 }
+
+#[tauri::command]
+pub fn reorder_agents(state: tauri::State<'_, crate::DbState>, agent_types: Vec<String>) -> Result<(), AppError> {
+    let conn = state.get_conn()?;
+    for (index, agent_type) in agent_types.iter().enumerate() {
+        let sort_order = (index + 1) as i64;
+        conn.execute(
+            "UPDATE agents SET sort_order = ?1, updated_at = ?2 WHERE agent_type = ?3",
+            params![sort_order, crate::utils::now(), agent_type],
+        )?;
+    }
+    Ok(())
+}

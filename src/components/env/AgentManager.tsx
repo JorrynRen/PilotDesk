@@ -21,6 +21,8 @@ export function AgentManager() {
   const [marketLoading, setMarketLoading] = useState(false);
   const [showMarket, setShowMarket] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
 
   const handleEdit = (agent: AgentConfig) => {
     setEditingType(agent.agentType);
@@ -206,6 +208,21 @@ export function AgentManager() {
     setSaving(false);
   };
 
+  const handleReorder = async (fromIndex: number, toIndex: number) => {
+    const reordered = [...agents];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+    // 更新本地状态立即反映拖拽结果
+    const newOrder = reordered.map(a => a.agentType);
+    try {
+      await invoke('reorder_agents', { agentTypes: newOrder });
+      fetchAgents();
+    } catch (err: any) {
+      showToast(`排序失败: ${err}`, 'error');
+      fetchAgents(); // 恢复原始顺序
+    }
+  };
+
   const handleToggleEnabled = async (agent: AgentConfig) => {
     try {
       await invoke('update_agent', {
@@ -322,78 +339,120 @@ export function AgentManager() {
         )}
 
         <div className="space-y-2">
-          {agents.map((agent) => {
+          {agents.map((agent, index) => {
             const theme = getTheme(agent.agentType);
             const isEditing = editingType === agent.agentType;
+            const isDragging = dragIndex === index;
+            const isOver = overIndex === index;
             return (
-              <SettingsCard key={agent.agentType}>
-                {isEditing ? (
-                  <AgentForm
-                    form={editForm!}
-                    onChange={setEditForm}
-                    onSubmit={handleSave}
-                    onCancel={() => { setEditingType(null); setEditForm(null); }}
-                    saving={saving}
-                    mode="edit"
-                  />
-                ) : (
-                  <div className="flex items-center gap-3 w-full">
-                    {/* Color dot + name */}
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <div
-                        className="w-3 h-3 rounded-full shrink-0"
-                        style={{ backgroundColor: agent.color }}
-                      />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                            {agent.displayName}
-                          </span>
-                          {agent.version && (
-                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                              v{agent.version}
+              <div
+                key={agent.agentType}
+                draggable={!isEditing}
+                onDragStart={() => setDragIndex(index)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setOverIndex(index);
+                }}
+                onDragLeave={() => setOverIndex(null)}
+                onDrop={() => {
+                  if (dragIndex !== null && dragIndex !== index) {
+                    handleReorder(dragIndex, index);
+                  }
+                  setDragIndex(null);
+                  setOverIndex(null);
+                }}
+                onDragEnd={() => {
+                  setDragIndex(null);
+                  setOverIndex(null);
+                }}
+                style={{
+                  opacity: isDragging ? 0.4 : 1,
+                  borderTop: isOver && dragIndex !== null && dragIndex > index ? '2px solid var(--accent)' : undefined,
+                  borderBottom: isOver && dragIndex !== null && dragIndex < index ? '2px solid var(--accent)' : undefined,
+                  cursor: isEditing ? 'default' : 'grab',
+                  transition: 'opacity 0.15s, border-color 0.15s',
+                }}
+              >
+                <SettingsCard>
+                  {isEditing ? (
+                    <AgentForm
+                      form={editForm!}
+                      onChange={setEditForm}
+                      onSubmit={handleSave}
+                      onCancel={() => { setEditingType(null); setEditForm(null); }}
+                      saving={saving}
+                      mode="edit"
+                    />
+                  ) : (
+                    <div className="flex items-center gap-3 w-full">
+                      {/* Drag handle */}
+                      <div className="shrink-0" style={{ color: 'var(--text-tertiary)', cursor: 'grab' }}>
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                          <circle cx="4" cy="2" r="1.2" />
+                          <circle cx="8" cy="2" r="1.2" />
+                          <circle cx="4" cy="6" r="1.2" />
+                          <circle cx="8" cy="6" r="1.2" />
+                          <circle cx="4" cy="10" r="1.2" />
+                          <circle cx="8" cy="10" r="1.2" />
+                        </svg>
+                      </div>
+                      {/* Color dot + name */}
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <div
+                          className="w-3 h-3 rounded-full shrink-0"
+                          style={{ backgroundColor: agent.color }}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                              {agent.displayName}
                             </span>
-                          )}
-                          {agent.isBuiltin && (
-                            <span className="text-[10px] px-1 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
-                              预置
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                          {agent.cliCommand} · {agent.description}
+                            {agent.version && (
+                              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                                v{agent.version}
+                              </span>
+                            )}
+                            {agent.isBuiltin && (
+                              <span className="text-[10px] px-1 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+                                预置
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                            {agent.cliCommand} · {agent.description}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Actions */}
-                    <div className="flex items-center gap-1 shrink-0">
-                      <SettingsButton
-                        onClick={() => handleToggleEnabled(agent)}
-                        variant={agent.isEnabled ? 'primary' : 'secondary'}
-                        icon={agent.isEnabled ? <Check size={11} /> : <X size={11} />}
-                        title={agent.isEnabled ? '点击禁用此 Agent' : '点击启用此 Agent'}
-                      >
-                        {agent.isEnabled ? '已启用' : '已禁用'}
-                      </SettingsButton>
-                      <SettingsButton
-                        onClick={() => handleEdit(agent)}
-                        variant="secondary"
-                        icon={<Pencil size={11} />}
-                        title="编辑此 Agent 配置"
-                      />
-                      {!agent.isBuiltin && (
+                      {/* Actions */}
+                      <div className="flex items-center gap-1 shrink-0">
                         <SettingsButton
-                          onClick={() => setDeleteConfirm(agent.agentType)}
-                          variant="danger"
-                          icon={<Trash2 size={11} />}
-                          title="删除此 Agent 配置"
+                          onClick={() => handleToggleEnabled(agent)}
+                          variant={agent.isEnabled ? 'primary' : 'secondary'}
+                          icon={agent.isEnabled ? <Check size={11} /> : <X size={11} />}
+                          title={agent.isEnabled ? '点击禁用此 Agent' : '点击启用此 Agent'}
+                        >
+                          {agent.isEnabled ? '已启用' : '已禁用'}
+                        </SettingsButton>
+                        <SettingsButton
+                          onClick={() => handleEdit(agent)}
+                          variant="secondary"
+                          icon={<Pencil size={11} />}
+                          title="编辑此 Agent 配置"
                         />
-                      )}
+                        {!agent.isBuiltin && (
+                          <SettingsButton
+                            onClick={() => setDeleteConfirm(agent.agentType)}
+                            variant="danger"
+                            icon={<Trash2 size={11} />}
+                            title="删除此 Agent 配置"
+                          />
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </SettingsCard>
+                  )}
+                </SettingsCard>
+              </div>
             );
           })}
         </div>

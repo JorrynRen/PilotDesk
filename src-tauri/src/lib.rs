@@ -289,6 +289,7 @@ pub fn run() {
             commands::agents::delete_agent,
             commands::agents::export_agents_json,
             commands::agents::import_agents_json,
+            commands::agents::reorder_agents,
             commands::agents::upload_agent_icon,
             commands::agents::read_agent_icon,
         ])
