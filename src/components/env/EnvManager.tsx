@@ -60,8 +60,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   }, [addLog]);
 
   useEffect(() => {
-    const unlisten = listen<string>('install-progress', (event) => {
-      addLog(event.payload, 'info');
+    const unlisten = listen<{ agent: string; message: string; progress: number }>('install-progress', (event) => {
+      addLog(event.payload.message, 'info');
     });
     return () => { unlisten.then((fn) => fn()); };
   }, [addLog]);
