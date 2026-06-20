@@ -28,6 +28,7 @@ function SessionListFn() {
   const [searchResults, setSearchResults] = useState<typeof sessions>([]);
   const [isSearching, setIsSearching] = useState(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [installedAgents, setInstalledAgents] = useState<Set<string>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showNewDialog, setShowNewDialog] = useState(false);
@@ -55,7 +56,19 @@ function SessionListFn() {
 
     fetchProviders().catch(() => {});
 
-
+    // Detect installed agents for session creation filtering
+    ;(async () => {
+      try {
+        const info = await invoke<any>('detect_env');
+        const installed = new Set<string>();
+        if (info.agentVersions) {
+          for (const [agentType, version] of Object.entries(info.agentVersions)) {
+            if (version) installed.add(agentType);
+          }
+        }
+        setInstalledAgents(installed);
+      } catch { /* ignore */ }
+    })();
   }, [fetchSessions, fetchProviders]);
 
   // Load workspace setting from SQLite when dialog opens
@@ -512,6 +525,8 @@ function SessionListFn() {
                 return types.map((type) => {
                   const theme = getTheme(type);
                   const label = getDisplayName(type);
+                  const isInstalled = type === 'api' || installedAgents.has(type);
+                  if (!isInstalled) return null;
                   return (
                     <button
                       key={type}

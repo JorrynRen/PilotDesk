@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 12;
+const MIGRATION_VERSION: i64 = 13;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -117,6 +117,10 @@ if current_version < 12 {
         migrate_update_agent_icons(&conn)?;
     }
 
+if current_version < 13 {
+        migrate_remove_agent_type_check(&conn)?;
+    }
+
 if current_version < MIGRATION_VERSION {
         conn.pragma_update(None, "user_version", MIGRATION_VERSION)?;
     }
@@ -124,57 +128,6 @@ if current_version < MIGRATION_VERSION {
     Ok(pool)
 }
 
-fn migrate_remove_check_constraints(conn: &Connection) -> Result<(), AppError> {
-    // Remove CHECK constraints from sessions.agent_type and inspirations.source_agent
-    // SQLite cannot ALTER TABLE DROP CHECK, so we need to recreate the tables
-
-    // Recreate sessions table without CHECK constraint on agent_type
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sessions_new (
-            id TEXT PRIMARY KEY,
-            agent_type TEXT NOT NULL DEFAULT '',
-            title TEXT NOT NULL DEFAULT '',
-            cwd TEXT DEFAULT '',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            last_message_preview TEXT DEFAULT '',
-            message_count INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
-            api_provider TEXT,
-            api_model TEXT,
-            agent_session_id TEXT
-        );
-        INSERT OR IGNORE INTO sessions_new SELECT * FROM sessions;
-        DROP TABLE sessions;
-        ALTER TABLE sessions_new RENAME TO sessions;"
-    )?;
-
-    // Recreate inspirations table without CHECK constraint on source_agent
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS inspirations_new (
-            id TEXT PRIMARY KEY,
-            icon TEXT NOT NULL DEFAULT '💡',
-            title TEXT NOT NULL,
-            content TEXT NOT NULL DEFAULT '',
-            source_agent TEXT DEFAULT 'manual',
-            is_favorite INTEGER DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        INSERT OR IGNORE INTO inspirations_new SELECT * FROM inspirations;
-        DROP TABLE inspirations;
-        ALTER TABLE inspirations_new RENAME TO inspirations;"
-    )?;
-
-    // Recreate the FTS table (needs to be recreated after inspirations table)
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS inspirations_fts;
-        CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);
-        INSERT INTO inspirations_fts(rowid, title, content) SELECT rowid, title, content FROM inspirations;"
-    )?;
-
-    Ok(())
-}
 
 fn migrate_add_api_providers(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(
@@ -263,7 +216,7 @@ fn migrate_add_type(conn: &Connection) -> Result<(), AppError> {
             message_count INTEGER DEFAULT 0,
             status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
             api_provider TEXT,
-            api_model TEXT,
+            api_model TEXT
         );
 
         INSERT OR IGNORE INTO sessions_new (id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model)
@@ -504,6 +457,34 @@ fn migrate_update_agent_icons(conn: &Connection) -> Result<(), AppError> {
     conn.execute(
         "UPDATE agents SET icon = ?1 WHERE agent_type = ?2",
         rusqlite::params!["file:codex_icon.ico", "codex"],
+    )?;
+    Ok(())
+}
+
+/// Migration v13 — 移除 sessions 表对 agent_type 的 CHECK 约束
+/// 确保自定义 Agent 类型可以正常创建会话
+fn migrate_remove_agent_type_check(conn: &Connection) -> Result<(), AppError> {
+    // SQLite cannot ALTER TABLE DROP CHECK, so recreate the table
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS sessions_v13 (
+            id TEXT PRIMARY KEY,
+            agent_type TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            cwd TEXT DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_message_preview TEXT DEFAULT '',
+            message_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+            api_provider TEXT,
+            api_model TEXT,
+            agent_session_id TEXT
+        );
+        INSERT OR IGNORE INTO sessions_v13 SELECT * FROM sessions;
+        DROP TABLE sessions;
+        ALTER TABLE sessions_v13 RENAME TO sessions;
+        CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);"
     )?;
     Ok(())
 }
