@@ -80,6 +80,7 @@ pub fn run_shell_cmd(cmd_str: &str) -> Result<String, String> {
 }
 
 /// 执行 shell 命令，支持可选的标准输入（用于自动确认交互式提示）
+/// 多行输入会逐行写入，每行间隔 300ms，确保多轮交互的每个提示都能独立响应
 fn run_shell_cmd_with_stdin(cmd_str: &str, stdin_input: Option<&str>) -> Result<String, String> {
     let mut child = Command::new("cmd");
     child.args(["/C", cmd_str])
@@ -92,12 +93,15 @@ fn run_shell_cmd_with_stdin(cmd_str: &str, stdin_input: Option<&str>) -> Result<
     let mut child = child.spawn()
         .map_err(|e| format!("执行命令失败: {}", e))?;
 
-    // 关闭 stdin pipe，防止子进程因等待输入而挂起
     if let Some(input) = stdin_input {
-        // 有输入时：写入后关闭
+        // 逐行写入，每行间隔 300ms，兼容多轮交互场景
         if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
-            let _ = stdin.write_all(input.as_bytes());
+            for line in input.lines() {
+                let _ = writeln!(stdin, "{}", line);
+                // 每行写入后短暂等待，让子进程处理当前输入后再发下一行
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
             drop(stdin);
         }
     } else {
@@ -284,7 +288,7 @@ pub async fn uninstall_agent(app: tauri::AppHandle, state: tauri::State<'_, crat
     }));
 
     // 卸载命令可能包含交互式确认提示，自动输入 y 确认
-    run_shell_cmd_with_stdin(&cmd, Some("y\nyes\n1\n")).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
+    run_shell_cmd_with_stdin(&cmd, Some("Y\ny\nYES\nyes\n1\n")).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
 
     let _ = app.emit("install-progress", serde_json::json!({
         "agent": agent_type,
