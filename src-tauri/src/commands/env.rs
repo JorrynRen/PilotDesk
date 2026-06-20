@@ -284,7 +284,7 @@ pub async fn uninstall_agent(app: tauri::AppHandle, state: tauri::State<'_, crat
     }));
 
     // 卸载命令可能包含交互式确认提示，自动输入 y 确认
-    run_shell_cmd_with_stdin(&cmd, Some("y\nyes\n")).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
+    run_shell_cmd_with_stdin(&cmd, Some("y\nyes\n1\n")).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
 
     let _ = app.emit("install-progress", serde_json::json!({
         "agent": agent_type,
