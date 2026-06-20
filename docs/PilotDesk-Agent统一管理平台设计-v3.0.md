@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `name` | Claude Code |
 | `description` | Anthropic 官方 AI 编程助手，支持代码生成、调试、重构 |
 | `install_cmd` | `npm install -g @anthropic-ai/claude-code` |
-| `uninstall_cmd` | `claude uninstall` |
+| `uninstall_cmd` | `npm uninstall -g @anthropic-ai/claude-code` |
 | `update_cmd` | `claude update` |
 | `version_cmd` | `claude --version` |
 | `latest_version_cmd` | `npm view @anthropic-ai/claude-code version` |
@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `name` | Hermes Agent |
 | `description` | 开源 AI 编程助手，支持多模型后端 |
 | `install_cmd` | `pip install hermes-agent` |
-| `uninstall_cmd` | `hermes uninstall` |
+| `uninstall_cmd` | `pip uninstall hermes-agent -y` |
 | `update_cmd` | `hermes update` |
 | `version_cmd` | `hermes --version` |
 | `latest_version_cmd` | `powershell -NoProfile -Command (Invoke-RestMethod 'https://pypi.org/pypi/hermes-agent/json').info.version` |
@@ -234,7 +234,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `name` | Codex CLI |
 | `description` | OpenAI 官方 AI 编程助手 |
 | `install_cmd` | `npm install -g @openai/codex` |
-| `uninstall_cmd` | `codex uninstall` |
+| `uninstall_cmd` | `npm uninstall -g @openai/codex` |
 | `update_cmd` | `codex update` |
 | `version_cmd` | `codex --version` |
 | `latest_version_cmd` | `npm view @openai/codex version` |
@@ -960,7 +960,7 @@ INSERT INTO agents (agent_id, name, description,
 VALUES
     ('claude', 'Claude Code', 'Anthropic 官方 AI 编程助手',
      'npm install -g @anthropic-ai/claude-code',
-     'claude uninstall',
+     'npm uninstall -g @anthropic-ai/claude-code',
      'claude update',
      'claude --version',
      'npm view @anthropic-ai/claude-code version',
@@ -972,7 +972,7 @@ VALUES
 
     ('hermes', 'Hermes Agent', '开源 AI 编程助手，支持多模型后端',
      'pip install hermes-agent',
-     'hermes uninstall',
+     'pip uninstall hermes-agent -y',
      'hermes update',
      'hermes --version',
      'powershell -NoProfile -Command (Invoke-RestMethod ''https://pypi.org/pypi/hermes-agent/json'').info.version',
@@ -985,7 +985,7 @@ VALUES
 
     ('codex', 'Codex CLI', 'OpenAI 官方 AI 编程助手',
      'npm install -g @openai/codex',
-     'codex uninstall',
+     'npm uninstall -g @openai/codex',
      'codex update',
      'codex --version',
      'npm view @openai/codex version',

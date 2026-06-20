@@ -324,7 +324,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
         ("claude", "Claude Code", "Anthropic 出品的 AI 编程助手",
          "claude", Some("@anthropic-ai/claude-code"), None,
          "npm install -g @anthropic-ai/claude-code",
-         "claude uninstall",
+         "npm uninstall -g @anthropic-ai/claude-code",
          "claude update",
          "claude --version",
          "npm view @anthropic-ai/claude-code version",
@@ -334,7 +334,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
         ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
          "hermes", None, Some("hermes-agent"),
          "pip install hermes-agent",
-         "hermes uninstall",
+         "pip uninstall hermes-agent -y",
          "hermes update",
          "hermes --version",
          "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version",
@@ -346,7 +346,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
         ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
          "codex", Some("@openai/codex"), None,
          "npm install -g @openai/codex",
-         "codex uninstall",
+         "npm uninstall -g @openai/codex",
          "codex update",
          "codex --version",
          "npm view @openai/codex version",
@@ -527,6 +527,19 @@ fn migrate_update_builtin_skills(conn: &Connection) -> Result<(), AppError> {
     )?;
     conn.execute(
         "UPDATE agents SET skills_dir = '~/AppData/Local/hermes/skills/' WHERE agent_type = 'hermes'",
+        [],
+    )?;
+    // 内置 Agent 卸载命令改用包管理器直接卸载（-y 自动确认），避免交互式终端检测
+    conn.execute(
+        "UPDATE agents SET uninstall_cmd = 'pip uninstall hermes-agent -y' WHERE agent_type = 'hermes'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE agents SET uninstall_cmd = 'npm uninstall -g @anthropic-ai/claude-code' WHERE agent_type = 'claude'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE agents SET uninstall_cmd = 'npm uninstall -g @openai/codex' WHERE agent_type = 'codex'",
         [],
     )?;
     conn.execute(
