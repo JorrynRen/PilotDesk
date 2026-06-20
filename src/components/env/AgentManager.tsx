@@ -547,6 +547,15 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
   };
   return (
     <div className="w-full space-y-4">
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
+        <FormField label="配置版本号（非Agent版本号）" value={form.version || ''} onChange={(v) => {
+          // 只允许数字和点
+          const cleaned = v.replace(/[^\d.]/g, '');
+          onChange({ ...form, version: cleaned });
+        }} placeholder="如 1.0（留空则默认空）" />
+      </div>
+
       {/* 基础信息 */}
       <div>
         <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
@@ -580,14 +589,6 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
               <Upload size={11} />
             </button>
           </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
-          <FormField label="配置版本号（非Agent版本号）" value={form.version || ''} onChange={(v) => {
-            // 只允许数字和点
-            const cleaned = v.replace(/[^\d.]/g, '');
-            onChange({ ...form, version: cleaned });
-          }} placeholder="如 1.0（留空则默认空）" />
         </div>
       </div>
 
