@@ -172,6 +172,49 @@ export function AgentManager() {
     return false; // equal
   };
 
+  /** 从市场恢复初始配置（强制覆盖本地，不检查版本） */
+  const handleRestoreFromMarket = async (agent: AgentConfig) => {
+    setSaving(true);
+    try {
+      await invoke('update_agent', {
+        payload: {
+          agentType: agent.agentType,
+          displayName: agent.displayName,
+          description: agent.description,
+          cliCommand: agent.cliCommand,
+          npmPackage: agent.npmPackage,
+          pipPackage: agent.pipPackage,
+          installCmd: agent.installCmd,
+          uninstallCmd: agent.uninstallCmd,
+          updateCmd: agent.updateCmd,
+          versionCmd: agent.versionCmd,
+          latestVersionCmd: agent.latestVersionCmd,
+          runCmdTemplate: agent.runCmdTemplate,
+          outputParser: agent.outputParser,
+          outputFilterRegex: agent.outputFilterRegex,
+          versionPattern: agent.versionPattern,
+          sessionIdSource: agent.sessionIdSource,
+          sessionIdEventType: agent.sessionIdEventType,
+          sessionIdField: agent.sessionIdField,
+          resumeArgTemplate: agent.resumeArgTemplate,
+          skillsDir: agent.skillsDir,
+          skillEntryFile: agent.skillEntryFile,
+          skillDisplayMode: agent.skillDisplayMode,
+          color: agent.color,
+          icon: agent.icon,
+          sortOrder: agent.sortOrder,
+          isEnabled: agent.isEnabled,
+          version: agent.version,
+        },
+      });
+      showToast(`已恢复 ${agent.displayName} 初始配置 (v${agent.version})`, 'success');
+      fetchAgents();
+    } catch (err: any) {
+      showToast(`恢复失败: ${err}`, 'error');
+    }
+    setSaving(false);
+  };
+
   const handleInstallFromMarket = async (agent: AgentConfig) => {
     setSaving(true);
     try {
@@ -440,13 +483,34 @@ export function AgentManager() {
                         </div>
                       </div>
                     </div>
-                    <SettingsButton
-                      variant={hasUpdate ? 'primary' : isInstalled ? 'secondary' : 'primary'}
-                      onClick={() => handleInstallFromMarket(agent)}
-                      disabled={saving}
-                    >
-                      {hasUpdate ? `更新 (v${local.version} → v${agent.version})` : isInstalled ? '已安装' : '安装'}
-                    </SettingsButton>
+                    <div className="flex items-center gap-1.5">
+                      {hasUpdate ? (
+                        <SettingsButton
+                          variant="primary"
+                          onClick={() => handleInstallFromMarket(agent)}
+                          disabled={saving}
+                        >
+                          更新 (v{local.version} → v{agent.version})
+                        </SettingsButton>
+                      ) : isInstalled ? (
+                        <SettingsButton
+                          variant="secondary"
+                          onClick={() => handleRestoreFromMarket(agent)}
+                          disabled={saving}
+                          title="用市场配置覆盖本地修改，恢复初始状态"
+                        >
+                          恢复初始配置
+                        </SettingsButton>
+                      ) : (
+                        <SettingsButton
+                          variant="primary"
+                          onClick={() => handleInstallFromMarket(agent)}
+                          disabled={saving}
+                        >
+                          安装
+                        </SettingsButton>
+                      )}
+                    </div>
                   </div>
                 </SettingsCard>
               );
