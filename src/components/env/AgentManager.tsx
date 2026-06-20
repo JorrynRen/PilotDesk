@@ -392,9 +392,10 @@ export function AgentManager() {
       </SettingsSection>
 
       {/* Agent 市场 */}
-      <SettingsSection title="Agent 市场">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex gap-2">
+      <SettingsSection
+        title="Agent 市场"
+        actions={
+          <>
             <SettingsButton
               variant="secondary"
               icon={<Download size={11} />}
@@ -412,8 +413,9 @@ export function AgentManager() {
                 关闭
               </SettingsButton>
             )}
-          </div>
-        </div>
+          </>
+        }
+      >
         <div className="space-y-2">
           {marketAgents.length === 0 ? (
             <div className="text-xs py-2" style={{ color: 'var(--text-secondary)' }}>
