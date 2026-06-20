@@ -67,6 +67,8 @@ pub struct AgentConfig {
     pub is_enabled: bool,
     /// 是否为预置 Agent
     pub is_builtin: bool,
+    /// 版本号（用于 Agent 市场更新检测）
+    pub version: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -101,6 +103,8 @@ pub struct CreateAgentPayload {
     pub icon: Option<String>,
     pub sort_order: Option<i64>,
     pub is_enabled: Option<bool>,
+    /// 版本号
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -133,6 +137,8 @@ pub struct UpdateAgentPayload {
     pub icon: Option<String>,
     pub sort_order: Option<i64>,
     pub is_enabled: Option<bool>,
+    /// 版本号
+    pub version: Option<String>,
 }
 
 // ──────────────────────────────────────────────
@@ -229,6 +235,7 @@ pub fn import_agents_json(state: tauri::State<'_, crate::DbState>, file_path: St
             icon: Some(agent.icon.clone()),
             sort_order: Some(agent.sort_order),
             is_enabled: Some(agent.is_enabled),
+            version: Some(agent.version.clone()),
         }) {
             Ok(_) => success += 1,
             Err(_) => {
@@ -261,6 +268,7 @@ pub fn import_agents_json(state: tauri::State<'_, crate::DbState>, file_path: St
                     icon: Some(agent.icon.clone()),
                     sort_order: Some(agent.sort_order),
                     is_enabled: Some(agent.is_enabled),
+                    version: Some(agent.version.clone()),
                 }) {
                     Ok(_) => success += 1,
                     Err(e) => errors.push(format!("{}: {}", agent.agent_type, e)),
@@ -277,96 +285,6 @@ pub struct ImportResult {
     pub success: u32,
     pub errors: Vec<String>,
 }
-
-// ──────────────────────────────────────────────
-//  Agent 市场 — 内置社区模板
-// ──────────────────────────────────────────────
-
-/// 内置社区 Agent 模板
-pub fn get_market_templates() -> Vec<AgentConfig> {
-    let now = 1718640000000i64;
-    vec![
-        // Claude Code
-        AgentConfig {
-            agent_type: "claude".into(), display_name: "Claude Code".into(),
-            description: "Anthropic 官方 AI 编程助手，支持代码生成、调试、重构".into(),
-            cli_command: "claude".into(),
-            npm_package: Some("@anthropic-ai/claude-code".into()), pip_package: None,
-            install_cmd: "npm install -g @anthropic-ai/claude-code".into(),
-            uninstall_cmd: "claude uninstall".into(),
-            update_cmd: "claude update".into(),
-            version_cmd: "claude --version".into(),
-            latest_version_cmd: "npm view @anthropic-ai/claude-code version".into(),
-            run_cmd_template: "claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}".into(),
-            output_parser: "json-stream".into(), output_filter_regex: String::new(),
-            version_pattern: r"v?(\d+\.\d+\.\d+[\w.-]*)".into(),
-            supports_session_continuity: true,
-            session_id_source: "stdout-json".into(),
-            session_id_event_type: "system/init".into(),
-            session_id_field: "session_id".into(),
-            resume_arg_template: "--resume {session_id}".into(),
-            skills_dir: String::new(), skill_entry_file: "SKILL.md".into(), skill_display_mode: "recursive".into(),
-            color: "#3B82F6".into(), icon: "file:claude_icon.ico".into(),
-            sort_order: 1, is_enabled: true, is_builtin: true,
-            created_at: now, updated_at: now,
-        },
-        // Hermes Agent
-        AgentConfig {
-            agent_type: "hermes".into(), display_name: "Hermes Agent".into(),
-            description: "开源 AI 编程助手，支持多模型后端".into(),
-            cli_command: "hermes".into(),
-            npm_package: None, pip_package: Some("hermes-agent".into()),
-            install_cmd: "pip install hermes-agent".into(),
-            uninstall_cmd: "hermes uninstall".into(),
-            update_cmd: "hermes update".into(),
-            version_cmd: "hermes --version".into(),
-            latest_version_cmd: "powershell -NoProfile -Command (Invoke-RestMethod 'https://pypi.org/pypi/hermes-agent/json').info.version".into(),
-            run_cmd_template: "hermes chat -q {message} -Q".into(),
-            output_parser: "ansi-text".into(),
-            output_filter_regex: "^(Initializing agent|Resume this session|hermes --resume|Session:|Duration:|Messages:|Query:)".into(),
-            version_pattern: r"v?(\d+\.\d+\.\d+[\w.-]*)".into(),
-            supports_session_continuity: true,
-            session_id_source: "stderr-text".into(),
-            session_id_event_type: String::new(),
-            session_id_field: String::new(),
-            resume_arg_template: "--resume {session_id}".into(),
-            skills_dir: String::new(), skill_entry_file: "SKILL.md".into(), skill_display_mode: "recursive".into(),
-            color: "#8B5CF6".into(), icon: "file:hermes_icon.ico".into(),
-            sort_order: 2, is_enabled: true, is_builtin: true,
-            created_at: now, updated_at: now,
-        },
-        // Codex CLI
-        AgentConfig {
-            agent_type: "codex".into(), display_name: "Codex CLI".into(),
-            description: "OpenAI 官方 AI 编程助手".into(),
-            cli_command: "codex".into(),
-            npm_package: Some("@openai/codex".into()), pip_package: None,
-            install_cmd: "npm install -g @openai/codex".into(),
-            uninstall_cmd: "codex uninstall".into(),
-            update_cmd: "codex update".into(),
-            version_cmd: "codex --version".into(),
-            latest_version_cmd: "npm view @openai/codex version".into(),
-            run_cmd_template: "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}".into(),
-            output_parser: "json-stream".into(), output_filter_regex: String::new(),
-            version_pattern: r"v?(\d+\.\d+\.\d+[\w.-]*)".into(),
-            supports_session_continuity: true,
-            session_id_source: "stdout-json".into(),
-            session_id_event_type: "thread.started".into(),
-            session_id_field: "thread_id".into(),
-            resume_arg_template: "exec resume {session_id}".into(),
-            skills_dir: String::new(), skill_entry_file: "SKILL.md".into(), skill_display_mode: "recursive".into(),
-            color: "#F59E0B".into(), icon: "file:codex_icon.ico".into(),
-            sort_order: 3, is_enabled: true, is_builtin: true,
-            created_at: now, updated_at: now,
-        },
-    ]
-}
-
-#[tauri::command]
-pub fn list_agent_market() -> Vec<AgentConfig> {
-    get_market_templates()
-}
-
 
 /// 上传用户选择的图片作为 Agent 图标
 /// 将图片复制到用户资源目录的 icons/ 下（%APPDATA%/com.pilotdesk.app/resources/icons/），命名为 {agentType}_icon.{ext}
@@ -474,7 +392,7 @@ const SELECT_COLS: &str = "agent_type, display_name, description, cli_command, n
     output_parser, output_filter_regex, version_pattern, supports_session_continuity,
     session_id_source, session_id_event_type, session_id_field, resume_arg_template,
     skills_dir, skill_entry_file, skill_display_mode,
-    color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at";
+    color, icon, sort_order, is_enabled, is_builtin, version, created_at, updated_at";
 
 fn row_to_agent(row: &rusqlite::Row) -> rusqlite::Result<AgentConfig> {
     Ok(AgentConfig {
@@ -506,8 +424,9 @@ fn row_to_agent(row: &rusqlite::Row) -> rusqlite::Result<AgentConfig> {
         sort_order: row.get(25)?,
         is_enabled: row.get::<_, i64>(26)? != 0,
         is_builtin: row.get::<_, i64>(27)? != 0,
-        created_at: row.get(28)?,
-        updated_at: row.get(29)?,
+        version: row.get(28)?,
+        created_at: row.get(29)?,
+        updated_at: row.get(30)?,
     })
 }
 
@@ -560,6 +479,7 @@ pub fn add_agent_inner(conn: &Connection, payload: CreateAgentPayload) -> Result
     let color = payload.color.unwrap_or_else(|| "#6366F1".to_string());
     let icon = payload.icon.unwrap_or_default();  // 空字符串表示使用首字母
     let sort_order = payload.sort_order.unwrap_or(0);
+    let version = payload.version.unwrap_or_default();
     let is_enabled = if payload.is_enabled.unwrap_or(true) { 1 } else { 0 };
 
     conn.execute(
@@ -568,8 +488,8 @@ pub fn add_agent_inner(conn: &Connection, payload: CreateAgentPayload) -> Result
          output_parser, output_filter_regex, version_pattern, supports_session_continuity,
          session_id_source, session_id_event_type, session_id_field, resume_arg_template,
          skills_dir, skill_entry_file, skill_display_mode,
-         color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, 0, ?28, ?28)",
+         color, icon, sort_order, is_enabled, is_builtin, version, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, 0, ?28, ?29, ?29)",
         params![
             payload.agent_type, payload.display_name, description, payload.cli_command,
             payload.npm_package, payload.pip_package,
@@ -577,7 +497,7 @@ pub fn add_agent_inner(conn: &Connection, payload: CreateAgentPayload) -> Result
             output_parser, output_filter_regex, version_pattern, supports_session_continuity,
             session_id_source, session_id_event_type, session_id_field, resume_arg_template,
             skills_dir, skill_entry_file, skill_display_mode,
-            color, icon, sort_order, is_enabled, now_ts
+            color, icon, sort_order, is_enabled, version, now_ts
         ],
     )?;
 
@@ -610,6 +530,7 @@ pub fn add_agent_inner(conn: &Connection, payload: CreateAgentPayload) -> Result
         sort_order,
         is_enabled: is_enabled != 0,
         is_builtin: false,
+        version,
         created_at: now_ts,
         updated_at: now_ts,
     })
@@ -645,6 +566,7 @@ pub fn update_agent_inner(conn: &Connection, payload: UpdateAgentPayload) -> Res
     let color = payload.color.unwrap_or(existing.color);
     let icon = payload.icon.unwrap_or(existing.icon);  // None=保留旧值, Some("")=清空
     let sort_order = payload.sort_order.unwrap_or(existing.sort_order);
+    let version = payload.version.unwrap_or(existing.version);
     let is_enabled = if let Some(v) = payload.is_enabled { if v { 1 } else { 0 } } else { if existing.is_enabled { 1 } else { 0 } };
 
     conn.execute(
@@ -654,15 +576,15 @@ pub fn update_agent_inner(conn: &Connection, payload: UpdateAgentPayload) -> Res
          output_filter_regex=?13, version_pattern=?14, supports_session_continuity=?15,
          session_id_source=?16, session_id_event_type=?17, session_id_field=?18,
          resume_arg_template=?19, skills_dir=?20, skill_entry_file=?21, skill_display_mode=?22,
-         color=?23, icon=?24, sort_order=?25, is_enabled=?26,
-         updated_at=?27 WHERE agent_type=?28",
+         color=?23, icon=?24, sort_order=?25, is_enabled=?26, version=?27,
+         updated_at=?28 WHERE agent_type=?29",
         params![display_name, description, cli_command, npm_package, pip_package,
             install_cmd, uninstall_cmd, update_cmd, version_cmd,
             latest_version_cmd, run_cmd_template, output_parser, output_filter_regex,
             version_pattern, supports_session_continuity, session_id_source,
             session_id_event_type, session_id_field, resume_arg_template,
             skills_dir, skill_entry_file, skill_display_mode,
-            color, icon, sort_order, is_enabled, now_ts, payload.agent_type],
+            color, icon, sort_order, is_enabled, version, now_ts, payload.agent_type],
     )?;
 
     Ok(AgentConfig {
@@ -694,6 +616,7 @@ pub fn update_agent_inner(conn: &Connection, payload: UpdateAgentPayload) -> Res
         sort_order,
         is_enabled: is_enabled != 0,
         is_builtin: existing.is_builtin,
+        version,
         created_at: existing.created_at,
         updated_at: now_ts,
     })

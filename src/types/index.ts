@@ -188,6 +188,7 @@ export interface AgentConfig {
   sortOrder: number;
   isEnabled: boolean;
   isBuiltin: boolean;
+  version: string;
 }
 
 /**

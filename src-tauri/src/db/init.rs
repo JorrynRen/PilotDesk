@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 13;
+const MIGRATION_VERSION: i64 = 14;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -119,6 +119,10 @@ if current_version < 12 {
 
 if current_version < 13 {
         migrate_remove_agent_type_check(&conn)?;
+    }
+
+if current_version < 14 {
+        migrate_add_agent_version(&conn)?;
     }
 
 if current_version < MIGRATION_VERSION {
@@ -485,6 +489,19 @@ fn migrate_remove_agent_type_check(conn: &Connection) -> Result<(), AppError> {
         ALTER TABLE sessions_v13 RENAME TO sessions;
         CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);"
+    )?;
+    Ok(())
+}
+
+/// Migration v14 — agents 表增加 version 字段，用于 Agent 市场版本管理
+fn migrate_add_agent_version(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "ALTER TABLE agents ADD COLUMN version TEXT NOT NULL DEFAULT '';"
+    )?;
+    // 为内置 Agent 设置初始版本号
+    conn.execute(
+        "UPDATE agents SET version = '1.0' WHERE is_builtin = 1 AND (version IS NULL OR version = '')",
+        [],
     )?;
     Ok(())
 }

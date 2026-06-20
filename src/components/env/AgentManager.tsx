@@ -59,6 +59,7 @@ export function AgentManager() {
           skillsDir: editForm.skillsDir,
           skillEntryFile: editForm.skillEntryFile,
           skillDisplayMode: editForm.skillDisplayMode,
+          version: editForm.version,
         },
       });
       showToast('Agent 配置已更新', 'success');
@@ -88,7 +89,7 @@ export function AgentManager() {
     }
     setSaving(true);
     try {
-      await invoke('add_agent', { payload: { ...addForm, icon: addForm.icon || '' } });
+      await invoke('add_agent', { payload: { ...addForm, icon: addForm.icon || '', version: addForm.version || '' } });
       showToast('Agent 已添加', 'success');
       setShowAddForm(false);
       setAddForm({});
@@ -99,26 +100,49 @@ export function AgentManager() {
     setSaving(false);
   };
 
+  const MARKET_URL = 'https://raw.githubusercontent.com/PilotDesk/PilotDesk/refs/heads/master/agents-config.json';
+
   const fetchMarket = async () => {
     setMarketLoading(true);
     try {
-      const result = await invoke<AgentConfig[]>('list_agent_market');
-      setMarketAgents(result);
+      const response = await fetch(MARKET_URL);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setMarketAgents(data.agents || []);
     } catch (err: any) {
       showToast(`获取 Agent 市场失败: ${err}`, 'error');
     }
     setMarketLoading(false);
   };
 
+  /** 比较两个版本号（支持 v1, v1.1, v1.1.1 格式），返回 true 表示 a > b */
+  const isNewerVersion = (a: string, b: string): boolean => {
+    const normalize = (v: string) => {
+      const parts = v.replace(/^v/i, '').split('.').map(Number);
+      // 补零对齐：v1 → [1,0,0], v1.1 → [1,1,0]
+      while (parts.length < 3) parts.push(0);
+      return parts;
+    };
+    const pa = normalize(a), pb = normalize(b);
+    for (let i = 0; i < 3; i++) {
+      if (pa[i] > pb[i]) return true;
+      if (pa[i] < pb[i]) return false;
+    }
+    return false; // equal
+  };
+
   const handleInstallFromMarket = async (agent: AgentConfig) => {
     setSaving(true);
     try {
-      await invoke('add_agent', { payload: agent });
-      showToast(`已安装 ${agent.displayName}`, 'success');
-      fetchAgents();
-    } catch (err: any) {
-      // Already exists, try update
-      try {
+      const local = agents.find(a => a.agentType === agent.agentType);
+      if (local) {
+        // 已存在 → 检查版本
+        if (!isNewerVersion(agent.version, local.version)) {
+          showToast(`${agent.displayName} 已是最新版本 (${local.version})`, 'info');
+          setSaving(false);
+          return;
+        }
+        // 更新
         await invoke('update_agent', {
           payload: {
             agentType: agent.agentType,
@@ -147,13 +171,18 @@ export function AgentManager() {
             icon: agent.icon,
             sortOrder: agent.sortOrder,
             isEnabled: agent.isEnabled,
+            version: agent.version,
           },
         });
-        showToast(`已更新 ${agent.displayName}`, 'success');
-        fetchAgents();
-      } catch (updateErr: any) {
-        showToast(`安装失败: ${updateErr}`, 'error');
+        showToast(`已更新 ${agent.displayName} (${local.version} → ${agent.version})`, 'success');
+      } else {
+        // 新安装
+        await invoke('add_agent', { payload: { ...agent, version: agent.version } });
+        showToast(`已安装 ${agent.displayName} (${agent.version})`, 'success');
       }
+      fetchAgents();
+    } catch (err: any) {
+      showToast(`操作失败: ${err}`, 'error');
     }
     setSaving(false);
   };
@@ -509,7 +538,14 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
             </button>
           </div>
         </div>
-        <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
+        <div className="grid grid-cols-2 gap-2">
+          <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
+          <FormField label="版本号" value={form.version || ''} onChange={(v) => {
+            // 只允许数字和点
+            const cleaned = v.replace(/[^\d.]/g, '');
+            onChange({ ...form, version: cleaned });
+          }} placeholder="如 1.0（留空则默认空）" />
+        </div>
       </div>
 
       {/* 包参数配置 */}
