@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 15;
+const MIGRATION_VERSION: i64 = 16;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -127,6 +127,10 @@ if current_version < 14 {
 
     if current_version < 15 {
         migrate_update_builtin_skills(&conn)?;
+    }
+
+    if current_version < 16 {
+        migrate_fix_claude_skills(&conn)?;
     }
 
 if current_version < MIGRATION_VERSION {
@@ -544,6 +548,15 @@ fn migrate_update_builtin_skills(conn: &Connection) -> Result<(), AppError> {
     )?;
     conn.execute(
         "UPDATE agents SET skills_dir = '~/.codex/skills/' WHERE agent_type = 'codex'",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Migration v16 — 修复 claude 技能配置种子数据（v15 执行时未覆盖）
+fn migrate_fix_claude_skills(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE agents SET skills_dir = '~/.claude/skills/', skill_display_mode = 'collection' WHERE agent_type = 'claude'",
         [],
     )?;
     Ok(())
