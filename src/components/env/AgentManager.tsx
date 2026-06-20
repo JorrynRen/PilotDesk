@@ -106,18 +106,21 @@ export function AgentManager() {
   ];
 
   /** 带超时的 fetch，timeoutMs 默认 8 秒 */
-  const fetchWithTimeout = (url: string, timeoutMs = 8000): Promise<Response> => {
+  const fetchWithTimeout = (url: string, timeoutMs = 8000, extra?: RequestInit): Promise<Response> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+    return fetch(url, { signal: controller.signal, ...extra }).finally(() => clearTimeout(timer));
   };
 
   const fetchMarket = async () => {
     setMarketLoading(true);
     let lastError: string | null = null;
+    // 添加时间戳防止 CDN 缓存
+    const ts = Date.now();
     for (const url of MARKET_URLS) {
+      const cacheBustUrl = `${url}${url.includes('?') ? '&' : '?'}_t=${ts}`;
       try {
-        const response = await fetchWithTimeout(url);
+        const response = await fetchWithTimeout(cacheBustUrl, 8000, { cache: 'no-cache' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         setMarketAgents(data.agents || []);
