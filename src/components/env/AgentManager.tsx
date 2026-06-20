@@ -348,13 +348,19 @@ export function AgentManager() {
               <div
                 key={agent.agentType}
                 draggable={!isEditing}
-                onDragStart={() => setDragIndex(index)}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', agent.agentType);
+                  setDragIndex(index);
+                }}
                 onDragOver={(e) => {
                   e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
                   setOverIndex(index);
                 }}
                 onDragLeave={() => setOverIndex(null)}
-                onDrop={() => {
+                onDrop={(e) => {
+                  e.preventDefault();
                   if (dragIndex !== null && dragIndex !== index) {
                     handleReorder(dragIndex, index);
                   }
@@ -386,7 +392,7 @@ export function AgentManager() {
                   ) : (
                     <div className="flex items-center gap-3 w-full">
                       {/* Drag handle */}
-                      <div className="shrink-0" style={{ color: 'var(--text-tertiary)', cursor: 'grab' }}>
+                      <div className="shrink-0" style={{ color: 'var(--text-tertiary)', cursor: 'grab', pointerEvents: 'none' }}>
                         <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                           <circle cx="4" cy="2" r="1.2" />
                           <circle cx="8" cy="2" r="1.2" />
