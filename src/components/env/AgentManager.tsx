@@ -172,7 +172,7 @@ export function AgentManager() {
     return false; // equal
   };
 
-  /** 从市场恢复初始配置（强制覆盖本地，不检查版本） */
+  /** 从市场从市场更新（强制覆盖本地，不检查版本） */
   const handleRestoreFromMarket = async (agent: AgentConfig) => {
     setSaving(true);
     try {
@@ -497,9 +497,9 @@ export function AgentManager() {
                           variant="secondary"
                           onClick={() => handleRestoreFromMarket(agent)}
                           disabled={saving}
-                          title="用市场配置覆盖本地修改，恢复初始状态"
+                          title="用市场配置覆盖本地修改，恢复出厂配置"
                         >
-                          恢复初始配置
+                          从市场更新
                         </SettingsButton>
                       ) : (
                         <SettingsButton
@@ -507,7 +507,7 @@ export function AgentManager() {
                           onClick={() => handleInstallFromMarket(agent)}
                           disabled={saving}
                         >
-                          安装
+                          拉取并注册
                         </SettingsButton>
                       )}
                     </div>
