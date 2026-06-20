@@ -88,10 +88,10 @@ export function AgentManager() {
     }
     setSaving(true);
     try {
-      await invoke('add_agent', { payload: { ...addForm, icon: addForm.icon || null } });
+      await invoke('add_agent', { payload: { ...addForm, icon: addForm.icon || '' } });
       showToast('Agent 已添加', 'success');
       setShowAddForm(false);
-      setAddForm({ icon: null });
+      setAddForm({});
       fetchAgents();
     } catch (err: any) {
       showToast(`添加失败: ${err}`, 'error');
@@ -251,7 +251,7 @@ export function AgentManager() {
             <SettingsButton
               variant="secondary"
               icon={<X size={11} />}
-              onClick={() => { setShowAddForm(false); setAddForm({ icon: null }); }}
+              onClick={() => { setShowAddForm(false); setAddForm({}); }}
             >
               取消添加
             </SettingsButton>
@@ -266,7 +266,7 @@ export function AgentManager() {
               form={addForm}
               onChange={setAddForm}
               onSubmit={handleAdd}
-              onCancel={() => { setShowAddForm(false); setAddForm({ icon: null }); }}
+              onCancel={() => { setShowAddForm(false); setAddForm({}); }}
               saving={saving}
               mode="add"
             />
@@ -497,7 +497,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
           <div className="flex gap-2 items-end">
             <div className="flex-1">
-              <FormField label="图标（支持 Emoji / 图片 URL / 内置图标文件）" value={form.icon || ''} onChange={(v) => onChange({ ...form, icon: v || null })} placeholder="留空则使用名称首字符" />
+              <FormField label="图标（支持 Emoji / 图片 URL / 内置图标文件）" value={form.icon || ''} onChange={(v) => onChange({ ...form, icon: v })} placeholder="留空则使用名称首字符" />
             </div>
             <button
               onClick={handleUploadIcon}
