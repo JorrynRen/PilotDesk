@@ -76,38 +76,15 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
 
 /// Run a full shell command string via cmd /C (for install/uninstall/update commands from DB)
 pub fn run_shell_cmd(cmd_str: &str) -> Result<String, String> {
-    run_shell_cmd_with_stdin(cmd_str, None)
-}
-
-/// 执行 shell 命令，支持可选的标准输入（用于自动确认交互式提示）
-/// 多行输入会逐行写入，每行间隔 300ms，确保多轮交互的每个提示都能独立响应
-fn run_shell_cmd_with_stdin(cmd_str: &str, stdin_input: Option<&str>) -> Result<String, String> {
     let mut child = Command::new("cmd");
     child.args(["/C", cmd_str])
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // Clear PYTHONHOME to avoid interference from parent process (WPS 灵犀)
     child.env_remove("PYTHONHOME");
     child.env_remove("PYTHONPATH");
-    let mut child = child.spawn()
+    let child = child.spawn()
         .map_err(|e| format!("执行命令失败: {}", e))?;
-
-    if let Some(input) = stdin_input {
-        // 逐行写入，每行间隔 300ms，兼容多轮交互场景
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            for line in input.lines() {
-                let _ = writeln!(stdin, "{}", line);
-                // 每行写入后短暂等待，让子进程处理当前输入后再发下一行
-                std::thread::sleep(std::time::Duration::from_millis(300));
-            }
-            drop(stdin);
-        }
-    } else {
-        // 无输入时：直接关闭 stdin，子进程立即读到 EOF
-        drop(child.stdin.take());
-    }
 
     let output = child.wait_with_output()
         .map_err(|e| format!("命令执行过程出错: {}", e))?;
@@ -287,8 +264,7 @@ pub async fn uninstall_agent(app: tauri::AppHandle, state: tauri::State<'_, crat
         "progress": 50
     }));
 
-    // 卸载命令可能包含交互式确认提示，自动输入 y 确认
-    run_shell_cmd_with_stdin(&cmd, Some("Y\ny\nYES\nyes\n1\n")).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
+    run_shell_cmd(&cmd).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
 
     let _ = app.emit("install-progress", serde_json::json!({
         "agent": agent_type,
