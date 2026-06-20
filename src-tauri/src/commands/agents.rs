@@ -202,9 +202,18 @@ pub fn import_agents_json(state: tauri::State<'_, crate::DbState>, file_path: St
         .map_err(|e| AppError::External(format!("读取文件失败: {}", e)))?;
 
     // 兼容两种格式：{ version: 1, agents: [...] } 或 [...]（旧格式）
+    let mut delete_targets: Vec<String> = Vec::new();
     let imported: Vec<AgentConfig> = {
         // 先尝试解析为包装格式
         if let Ok(wrapped) = serde_json::from_str::<serde_json::Value>(&json) {
+            // 提取顶层 __action 删除列表（隐藏功能：删除任意 Agent，包括内置 Agent）
+            if let Some(action_list) = wrapped.get("__action").and_then(|a| a.as_array()) {
+                for item in action_list {
+                    if let Some(s) = item.as_str() {
+                        delete_targets.push(s.to_string());
+                    }
+                }
+            }
             if let Some(agents) = wrapped.get("agents").and_then(|a| a.as_array()) {
                 serde_json::from_value(serde_json::Value::Array(agents.clone()))
                     .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?
@@ -221,7 +230,25 @@ pub fn import_agents_json(state: tauri::State<'_, crate::DbState>, file_path: St
     let mut success = 0u32;
     let mut errors = Vec::new();
 
+    // 先执行 __action 删除（绕过 is_builtin 检查）
+    for agent_type in &delete_targets {
+        match conn.execute("DELETE FROM agents WHERE agent_type = ?1", params![agent_type]) {
+            Ok(affected) => {
+                if affected > 0 {
+                    success += 1;
+                } else {
+                    errors.push(format!("{}: Agent 类型不存在", agent_type));
+                }
+            }
+            Err(e) => errors.push(format!("{}: 删除失败 - {}", agent_type, e)),
+        }
+    }
+
     for agent in &imported {
+        // __action 中已删除的 Agent，跳过 agents 数组中的对应条目，避免先删后加
+        if delete_targets.contains(&agent.agent_type) {
+            continue;
+        }
         if agent.agent_type.is_empty() || agent.display_name.is_empty() || agent.cli_command.is_empty() {
             errors.push(format!("跳过无效配置: {}", agent.display_name));
             continue;
