@@ -431,7 +431,7 @@ export function AgentManager() {
 
       {/* Agent 市场 */}
       <SettingsSection
-        title="Agent 市场"
+        title="Agent 配置市场"
         actions={
           <>
             <SettingsButton
