@@ -346,6 +346,11 @@ export function AgentManager() {
                           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                             {agent.displayName}
                           </span>
+                          {agent.version && (
+                            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                              v{agent.version}
+                            </span>
+                          )}
                           {agent.isBuiltin && (
                             <span className="text-[10px] px-1 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                               预置
