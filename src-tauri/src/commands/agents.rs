@@ -495,7 +495,7 @@ pub fn add_agent_inner(conn: &Connection, payload: CreateAgentPayload) -> Result
     let resume_arg_template = payload.resume_arg_template.unwrap_or_default();
     let skills_dir = payload.skills_dir.unwrap_or_default();
     let skill_entry_file = payload.skill_entry_file.unwrap_or_else(|| "SKILL.md".to_string());
-    let skill_display_mode = payload.skill_display_mode.unwrap_or_else(|| "recursive".to_string());
+    let skill_display_mode = payload.skill_display_mode.unwrap_or_else(|| "collection".to_string());
     let color = payload.color.unwrap_or_else(|| "#6366F1".to_string());
     let icon = payload.icon.unwrap_or_default();  // 空字符串表示使用首字母
     let sort_order = payload.sort_order.unwrap_or(0);

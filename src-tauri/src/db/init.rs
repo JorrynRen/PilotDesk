@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 14;
+const MIGRATION_VERSION: i64 = 15;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -123,6 +123,10 @@ if current_version < 13 {
 
 if current_version < 14 {
         migrate_add_agent_version(&conn)?;
+    }
+
+    if current_version < 15 {
+        migrate_update_builtin_skills(&conn)?;
     }
 
 if current_version < MIGRATION_VERSION {
@@ -316,7 +320,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
     )?;
 
     let now = crate::utils::now();
-    let seeds: Vec<(&str, &str, &str, &str, Option<&str>, Option<&str>, &str, &str, &str, &str, &str, &str, &str, &str, i64, &str, &str, &str, &str, &str, &str, i64)> = vec![
+    let seeds: Vec<(&str, &str, &str, &str, Option<&str>, Option<&str>, &str, &str, &str, &str, &str, &str, &str, &str, i64, &str, &str, &str, &str, &str, &str, &str, &str, i64)> = vec![
         ("claude", "Claude Code", "Anthropic 出品的 AI 编程助手",
          "claude", Some("@anthropic-ai/claude-code"), None,
          "npm install -g @anthropic-ai/claude-code",
@@ -326,7 +330,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "npm view @anthropic-ai/claude-code version",
          "claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}",
          "json-stream", "", 1, "stdout-json", "system/init", "session_id", "--resume {session_id}",
-         "#3B82F6", "file:claude_icon.ico", 1),
+         "#3B82F6", "file:claude_icon.ico", "~/.claude/skills/", "collection", 1),
         ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
          "hermes", None, Some("hermes-agent"),
          "pip install hermes-agent",
@@ -338,7 +342,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "ansi-text",
          "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
          "stderr-text", "", "", "--resume {session_id}",
-         "#8B5CF6", "file:hermes_icon.ico", 2),
+         "#8B5CF6", "file:hermes_icon.ico", "~/AppData/Local/hermes/skills/", "collection", 2),
         ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
          "codex", Some("@openai/codex"), None,
          "npm install -g @openai/codex",
@@ -348,26 +352,29 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "npm view @openai/codex version",
          "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}",
          "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "exec resume {session_id}",
-         "#F59E0B", "file:codex_icon.ico", 3),
+         "#F59E0B", "file:codex_icon.ico", "~/.codex/skills/", "collection", 3),
     ];
 
     for (agent_type, display_name, description, cli_command, npm_package, pip_package,
          install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
          output_parser, output_filter_regex, supports_session_continuity,
          session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+         skills_dir, skill_display_mode,
          color, icon, sort_order) in seeds {
         conn.execute(
             "INSERT OR IGNORE INTO agents (agent_type, display_name, description, cli_command, npm_package, pip_package,
              version_flag, install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
              output_parser, output_filter_regex, version_pattern, supports_session_continuity,
              session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+             skills_dir, skill_display_mode,
              color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, '--version', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-             'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)', ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 1, 1, ?23, ?23)",
+             'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)', ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, 1, 1, ?26, ?26)",
             rusqlite::params![agent_type, display_name, description, cli_command, npm_package, pip_package,
                 install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
                 output_parser, output_filter_regex, supports_session_continuity,
                 session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+                skills_dir, skill_display_mode,
                 color, icon, sort_order, now],
         )?;
     }
@@ -405,7 +412,7 @@ fn migrate_add_skill_fields(conn: &Connection) -> Result<(), AppError> {
                 resume_arg_template TEXT NOT NULL DEFAULT '',
                 skills_dir TEXT NOT NULL DEFAULT '',
                 skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
-                skill_display_mode TEXT NOT NULL DEFAULT 'recursive',
+                skill_display_mode TEXT NOT NULL DEFAULT 'collection',
                 color TEXT NOT NULL DEFAULT '#6366F1',
                 icon TEXT NOT NULL DEFAULT '\\U0001f916',
                 sort_order INTEGER DEFAULT 0,
@@ -501,6 +508,29 @@ fn migrate_add_agent_version(conn: &Connection) -> Result<(), AppError> {
     // 为内置 Agent 设置初始版本号
     conn.execute(
         "UPDATE agents SET version = '1.0' WHERE is_builtin = 1 AND (version IS NULL OR version = '')",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Migration v15 — 更新内置 Agent 技能配置（skills_dir / skill_display_mode）
+fn migrate_update_builtin_skills(conn: &Connection) -> Result<(), AppError> {
+    // 更新 skill_display_mode 为 collection（只显示集合名）
+    conn.execute(
+        "UPDATE agents SET skill_display_mode = 'collection' WHERE is_builtin = 1",
+        [],
+    )?;
+    // 所有内置 Agent 显式设置 skills_dir（后端在 skills_dir 为空时也会回退 ~/.{agent_type}/skills/）
+    conn.execute(
+        "UPDATE agents SET skills_dir = '~/.claude/skills/' WHERE agent_type = 'claude'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE agents SET skills_dir = '~/AppData/Local/hermes/skills/' WHERE agent_type = 'hermes'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE agents SET skills_dir = '~/.codex/skills/' WHERE agent_type = 'codex'",
         [],
     )?;
     Ok(())

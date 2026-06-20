@@ -1,10 +1,25 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { Plus, Trash2, Pencil, Save, X, Loader2, Check, Palette, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { AgentConfig } from '../../types';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 // ──────────────────────────────────────────────
 //  Agent Manager — Phase 4
@@ -21,8 +36,13 @@ export function AgentManager() {
   const [marketLoading, setMarketLoading] = useState(false);
   const [showMarket, setShowMarket] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 4, // 移动4px后才激活拖拽，防止点击误触
+      },
+    })
+  );
 
   const handleEdit = (agent: AgentConfig) => {
     setEditingType(agent.agentType);
@@ -208,18 +228,22 @@ export function AgentManager() {
     setSaving(false);
   };
 
-  const handleReorder = async (fromIndex: number, toIndex: number) => {
-    const reordered = [...agents];
-    const [moved] = reordered.splice(fromIndex, 1);
-    reordered.splice(toIndex, 0, moved);
-    // 更新本地状态立即反映拖拽结果
-    const newOrder = reordered.map(a => a.agentType);
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const ids = agents.map(a => a.agentType);
+    const oldIndex = ids.indexOf(active.id as string);
+    const newIndex = ids.indexOf(over.id as string);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const newOrder = arrayMove(ids, oldIndex, newIndex);
     try {
       await invoke('reorder_agents', { agentTypes: newOrder });
       fetchAgents();
     } catch (err: any) {
       showToast(`排序失败: ${err}`, 'error');
-      fetchAgents(); // 恢复原始顺序
+      fetchAgents();
     }
   };
 
@@ -339,128 +363,26 @@ export function AgentManager() {
         )}
 
         <div className="space-y-2">
-          {agents.map((agent, index) => {
-            const theme = getTheme(agent.agentType);
-            const isEditing = editingType === agent.agentType;
-            const isDragging = dragIndex === index;
-            const isOver = overIndex === index;
-            return (
-              <div
-                key={agent.agentType}
-                draggable={!isEditing}
-                onDragStart={(e) => {
-                  e.dataTransfer.effectAllowed = 'move';
-                  e.dataTransfer.setData('text/plain', agent.agentType);
-                  setDragIndex(index);
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'move';
-                  setOverIndex(index);
-                }}
-                onDragLeave={() => setOverIndex(null)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragIndex !== null && dragIndex !== index) {
-                    handleReorder(dragIndex, index);
-                  }
-                  setDragIndex(null);
-                  setOverIndex(null);
-                }}
-                onDragEnd={() => {
-                  setDragIndex(null);
-                  setOverIndex(null);
-                }}
-                style={{
-                  opacity: isDragging ? 0.4 : 1,
-                  borderTop: isOver && dragIndex !== null && dragIndex > index ? '2px solid var(--accent)' : undefined,
-                  borderBottom: isOver && dragIndex !== null && dragIndex < index ? '2px solid var(--accent)' : undefined,
-                  cursor: isEditing ? 'default' : 'grab',
-                  transition: 'opacity 0.15s, border-color 0.15s',
-                }}
-              >
-                <SettingsCard>
-                  {isEditing ? (
-                    <AgentForm
-                      form={editForm!}
-                      onChange={setEditForm}
-                      onSubmit={handleSave}
-                      onCancel={() => { setEditingType(null); setEditForm(null); }}
-                      saving={saving}
-                      mode="edit"
-                    />
-                  ) : (
-                    <div className="flex items-center gap-3 w-full">
-                      {/* Drag handle */}
-                      <div className="shrink-0" style={{ color: 'var(--text-tertiary)', cursor: 'grab', pointerEvents: 'none' }}>
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                          <circle cx="4" cy="2" r="1.2" />
-                          <circle cx="8" cy="2" r="1.2" />
-                          <circle cx="4" cy="6" r="1.2" />
-                          <circle cx="8" cy="6" r="1.2" />
-                          <circle cx="4" cy="10" r="1.2" />
-                          <circle cx="8" cy="10" r="1.2" />
-                        </svg>
-                      </div>
-                      {/* Color dot + name */}
-                      <div className="flex items-center gap-2 min-w-0 flex-1">
-                        <div
-                          className="w-3 h-3 rounded-full shrink-0"
-                          style={{ backgroundColor: agent.color }}
-                        />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                              {agent.displayName}
-                            </span>
-                            {agent.version && (
-                              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                                v{agent.version}
-                              </span>
-                            )}
-                            {agent.isBuiltin && (
-                              <span className="text-[10px] px-1 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
-                                预置
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                            {agent.cliCommand} · {agent.description}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Actions */}
-                      <div className="flex items-center gap-1 shrink-0">
-                        <SettingsButton
-                          onClick={() => handleToggleEnabled(agent)}
-                          variant={agent.isEnabled ? 'primary' : 'secondary'}
-                          icon={agent.isEnabled ? <Check size={11} /> : <X size={11} />}
-                          title={agent.isEnabled ? '点击禁用此 Agent' : '点击启用此 Agent'}
-                        >
-                          {agent.isEnabled ? '已启用' : '已禁用'}
-                        </SettingsButton>
-                        <SettingsButton
-                          onClick={() => handleEdit(agent)}
-                          variant="secondary"
-                          icon={<Pencil size={11} />}
-                          title="编辑此 Agent 配置"
-                        />
-                        {!agent.isBuiltin && (
-                          <SettingsButton
-                            onClick={() => setDeleteConfirm(agent.agentType)}
-                            variant="danger"
-                            icon={<Trash2 size={11} />}
-                            title="删除此 Agent 配置"
-                          />
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </SettingsCard>
-              </div>
-            );
-          })}
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <SortableContext items={agents.map(a => a.agentType)} strategy={verticalListSortingStrategy}>
+              {agents.map((agent) => (
+                <SortableAgentItem
+                  key={agent.agentType}
+                  agent={agent}
+                  isEditing={editingType === agent.agentType}
+                  editForm={editForm}
+                  setEditForm={setEditForm}
+                  handleSave={handleSave}
+                  saving={saving}
+                  editingType={editingType}
+                  setEditingType={setEditingType}
+                  handleToggleEnabled={handleToggleEnabled}
+                  handleEdit={handleEdit}
+                  setDeleteConfirm={setDeleteConfirm}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
         </div>
       </SettingsSection>
 
@@ -738,7 +660,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
         <div className="grid grid-cols-3 gap-2">
           <FormField label="技能目录路径" value={form.skillsDir || ''} onChange={(v) => onChange({ ...form, skillsDir: v })} placeholder="如 ~/.claude/skills" />
           <FormField label="技能入口文件名" value={form.skillEntryFile || 'SKILL.md'} onChange={(v) => onChange({ ...form, skillEntryFile: v })} />
-          <SelectField label="技能显示模式" value={form.skillDisplayMode || 'recursive'} onChange={(v) => onChange({ ...form, skillDisplayMode: v })} options={[
+          <SelectField label="技能显示模式" value={form.skillDisplayMode || 'collection'} onChange={(v) => onChange({ ...form, skillDisplayMode: v })} options={[
             { value: 'recursive', label: 'recursive（递归显示全部）' },
             { value: 'collection', label: 'collection（只显示集合名）' },
           ]} />
@@ -800,6 +722,131 @@ function SelectField({ label, value, onChange, options }: {
           <option key={opt.value} value={opt.value}>{opt.label}</option>
         ))}
       </select>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+//  SortableAgentItem — 可拖拽排序的 Agent 卡片
+// ──────────────────────────────────────────────
+function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, editingType, setEditingType, handleToggleEnabled, handleEdit, setDeleteConfirm }: {
+  agent: AgentConfig;
+  isEditing: boolean;
+  editForm: Partial<AgentConfig> | null;
+  setEditForm: (f: Partial<AgentConfig>) => void;
+  handleSave: () => void;
+  saving: boolean;
+  editingType: string | null;
+  setEditingType: (t: string | null) => void;
+  handleToggleEnabled: (agent: AgentConfig) => void;
+  handleEdit: (agent: AgentConfig) => void;
+  setDeleteConfirm: (t: string | null) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: agent.agentType });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+    position: 'relative',
+    zIndex: isDragging ? 10 : 'auto',
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      {isEditing ? (
+        <SettingsCard>
+          <AgentForm
+            form={editForm!}
+            onChange={setEditForm}
+            onSubmit={handleSave}
+            onCancel={() => { setEditingType(null); setEditForm(null); }}
+            saving={saving}
+            mode="edit"
+          />
+        </SettingsCard>
+      ) : (
+        <SettingsCard>
+          <div className="flex items-center gap-3 w-full">
+            {/* Drag handle — 直接绑定 attributes/listeners */}
+            <div
+              className="shrink-0 flex items-center justify-center cursor-grab active:cursor-grabbing"
+              style={{ color: 'var(--text-tertiary)', padding: '6px 4px', margin: '-6px -4px' }}
+              {...attributes}
+              {...listeners}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" style={{ display: 'block' }}>
+                <circle cx="4" cy="2" r="1.2" />
+                <circle cx="8" cy="2" r="1.2" />
+                <circle cx="4" cy="6" r="1.2" />
+                <circle cx="8" cy="6" r="1.2" />
+                <circle cx="4" cy="10" r="1.2" />
+                <circle cx="8" cy="10" r="1.2" />
+              </svg>
+            </div>
+            {/* Color dot + name */}
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <div
+                className="w-3 h-3 rounded-full shrink-0"
+                style={{ backgroundColor: agent.color }}
+              />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                    {agent.displayName}
+                  </span>
+                  {agent.version && (
+                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      v{agent.version}
+                    </span>
+                  )}
+                  {agent.isBuiltin && (
+                    <span className="text-[10px] px-1 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+                      预置
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                  {agent.cliCommand} · {agent.description}
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-1 shrink-0">
+              <SettingsButton
+                onClick={() => handleToggleEnabled(agent)}
+                variant={agent.isEnabled ? 'primary' : 'secondary'}
+                icon={agent.isEnabled ? <Check size={11} /> : <X size={11} />}
+                title={agent.isEnabled ? '点击禁用此 Agent' : '点击启用此 Agent'}
+              >
+                {agent.isEnabled ? '已启用' : '已禁用'}
+              </SettingsButton>
+              <SettingsButton
+                onClick={() => handleEdit(agent)}
+                variant="secondary"
+                icon={<Pencil size={11} />}
+                title="编辑此 Agent 配置"
+              />
+              {!agent.isBuiltin && (
+                <SettingsButton
+                  onClick={() => setDeleteConfirm(agent.agentType)}
+                  variant="danger"
+                  icon={<Trash2 size={11} />}
+                  title="删除此 Agent 配置"
+                />
+              )}
+            </div>
+          </div>
+        </SettingsCard>
+      )}
     </div>
   );
 }

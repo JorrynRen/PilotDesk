@@ -368,9 +368,18 @@ pub async fn send_message_with_config(
         // 优先使用 DB 中的技能配置
         if let Some(cfg) = config {
             if !cfg.skills_dir.is_empty() {
-                // 有明确定义的技能目录路径（支持 {agent_type} 占位符）
+                // 有明确定义的技能目录路径（支持 {agent_type} 占位符和 ~ 扩展）
                 let resolved = cfg.skills_dir.replace("{agent_type}", &cfg.agent_type);
-                let skills_dir = std::path::PathBuf::from(&resolved);
+                let skills_dir = if resolved.starts_with("~/") {
+                    // 展开 ~ 为用户 home 目录
+                    if let Some(home) = home_dir() {
+                        home.join(&resolved[2..])
+                    } else {
+                        std::path::PathBuf::from(&resolved)
+                    }
+                } else {
+                    std::path::PathBuf::from(&resolved)
+                };
                 return scan_skills_dir(&skills_dir, &cfg.skill_entry_file, &cfg.skill_display_mode);
             }
         }

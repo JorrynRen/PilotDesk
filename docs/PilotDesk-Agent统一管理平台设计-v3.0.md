@@ -1,6 +1,6 @@
 # PilotDesk Agent 统一管理平台设计
 
-> **版本**: v3.0 | **日期**: 2026-06-20 | **状态**: 草案（已实施会话延续 + 资源目录 + 图标系统 + 表单分类）
+> **版本**: v3.2 | **日期**: 2026-06-21 | **状态**: 已实施（技能配置种子数据补全 + 拖拽排序 + Agent 市场）
 
 ---
 
@@ -113,9 +113,9 @@ CREATE TABLE IF NOT EXISTS agents (
 | `session_id_event_type` | 核心 | JSON 事件类型路径，如 `system/init`、`thread.started` |
 | `session_id_field` | 核心 | JSON 字段名，如 `session_id`、`thread_id` |
 | `resume_arg_template` | 核心 | 恢复参数模板，`{session_id}` 占位符，如 `--resume {session_id}`、`exec resume {session_id}` |
-| `skills_dir` | 建议 | 技能目录路径，支持 `{agent_type}` 占位符；空字符串表示使用智能目录 `~/.{agent_type}/skills/` |
+| `skills_dir` | 建议 | 技能目录路径，支持 `{agent_type}` 占位符和 `~` 扩展；空字符串表示使用智能目录 `~/.{agent_type}/skills/` |
 | `skill_entry_file` | 建议 | 技能入口文件名，默认 `SKILL.md` |
-| `skill_display_mode` | 建议 | 技能显示模式：`recursive`（递归显示全部技能文件）或 `collection`（只显示集合技能名称） |
+| `skill_display_mode` | 建议 | 技能显示模式：`recursive`（递归显示全部技能文件）或 `collection`（只显示集合技能名称），内置 Agent 默认 `collection` |
 | `color` | 建议 | UI 主题色，用于 AgentBadge、消息气泡等 |
 | `icon` | 建议 | UI 图标，支持三种值类型（见第 2.4 节） |
 | `sort_order` | 建议 | 排序优先级，决定 UI 中的展示顺序 |
@@ -173,9 +173,9 @@ CREATE TABLE IF NOT EXISTS agents (
 | `session_id_event_type` | `system/init` |
 | `session_id_field` | `session_id` |
 | `resume_arg_template` | `--resume {session_id}` |
-| `skills_dir` | ``（空字符串，使用智能目录） |
+| `skills_dir` | `~/.claude/skills/`（显式指定） |
 | `skill_entry_file` | `SKILL.md` |
-| `skill_display_mode` | `recursive` |
+| `skill_display_mode` | `collection` |
 | `color` | `#3B82F6`（蓝色） |
 | `icon` | `file:claude_icon.ico` |
 | `sort_order` | `1` |
@@ -210,9 +210,9 @@ CREATE TABLE IF NOT EXISTS agents (
 | `session_id_event_type` | ``（文本行） |
 | `session_id_field` | ``（前缀匹配 `session_id: `） |
 | `resume_arg_template` | `--resume {session_id}` |
-| `skills_dir` | ``（空字符串，使用智能目录） |
+| `skills_dir` | `~/.codex/skills/`（显式指定） |
 | `skill_entry_file` | `SKILL.md` |
-| `skill_display_mode` | `recursive` |
+| `skill_display_mode` | `collection` |
 | `color` | `#8B5CF6`（紫色） |
 | `icon` | `file:hermes_icon.ico` |
 | `sort_order` | `2` |
@@ -247,9 +247,9 @@ CREATE TABLE IF NOT EXISTS agents (
 | `session_id_event_type` | `thread.started` |
 | `session_id_field` | `thread_id` |
 | `resume_arg_template` | `exec resume {session_id}` |
-| `skills_dir` | ``（空字符串，使用智能目录） |
+| `skills_dir` | `~/AppData/Local/hermes/skills/`（显式指定） |
 | `skill_entry_file` | `SKILL.md` |
-| `skill_display_mode` | `recursive` |
+| `skill_display_mode` | `collection` |
 | `color` | `#F59E0B`（琥珀色） |
 | `icon` | `file:codex_icon.ico` |
 | `sort_order` | `3` |
@@ -565,7 +565,7 @@ function SelectField({ label, value, onChange, options }) {
 |------|--------|
 | `outputParser` | `raw-text`（原始文本）、`json-stream`（JSON 流）、`ansi-text`（ANSI 文本） |
 | `sessionIdSource` | `none`（不支持会话延续）、`stdout-json`（标准输出 JSON）、`stderr-text`（标准错误文本行） |
-| `skillDisplayMode` | `recursive`（递归显示全部）、`collection`（只显示集合名） |
+| `skillDisplayMode` | `collection`（只显示集合名，默认）、`recursive`（递归显示全部） |
 
 ### 6.5 Placeholder 规范
 
@@ -593,7 +593,7 @@ function SelectField({ label, value, onChange, options }) {
 | sessionIdEventType | `如 system/init` |
 | sessionIdField | `如 session_id` |
 | resumeArgTemplate | `如 --resume {session_id}` |
-| skillsDir | `如 ~/.claude/skills` |
+| skillsDir | `如 ~/.claude/skills` 或 `~/AppData/Local/hermes/skills/` |
 
 ### 6.6 分类标题样式
 
@@ -890,7 +890,7 @@ CREATE TABLE IF NOT EXISTS agents_new (
     resume_arg_template TEXT NOT NULL DEFAULT '',
     skills_dir TEXT NOT NULL DEFAULT '',
     skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
-    skill_display_mode TEXT NOT NULL DEFAULT 'recursive',
+    skill_display_mode TEXT NOT NULL DEFAULT 'collection',
     color TEXT NOT NULL DEFAULT '#6366F1',
     icon TEXT NOT NULL DEFAULT '\U0001F916',
     sort_order INTEGER DEFAULT 0,
@@ -940,7 +940,7 @@ CREATE TABLE IF NOT EXISTS agents (
     resume_arg_template TEXT NOT NULL DEFAULT '',
     skills_dir TEXT NOT NULL DEFAULT '',
     skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
-    skill_display_mode TEXT NOT NULL DEFAULT 'recursive',
+    skill_display_mode TEXT NOT NULL DEFAULT 'collection',
     color TEXT NOT NULL DEFAULT '#6366F1',
     icon TEXT NOT NULL DEFAULT '\U0001F916',
     sort_order INTEGER NOT NULL DEFAULT 0,
@@ -967,7 +967,7 @@ VALUES
      'claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}',
      'json-stream', '',
      1, 'stdout-json', 'system/init', 'session_id', '--resume {session_id}',
-     '', 'SKILL.md', 'recursive',
+     '~/.claude/skills/', 'SKILL.md', 'collection',
      '#3B82F6', 'file:claude_icon.ico', 1, 1, 1718640000000, 1718640000000),
 
     ('hermes', 'Hermes Agent', '开源 AI 编程助手，支持多模型后端',
@@ -980,7 +980,7 @@ VALUES
      'ansi-text',
      '^(Initializing agent|Resume this session|hermes --resume|Session:|Duration:|Messages:|Query:)',
      1, 'stderr-text', '', '', '--resume {session_id}',
-     '', 'SKILL.md', 'recursive',
+     '~/AppData/Local/hermes/skills/', 'SKILL.md', 'collection',
      '#8B5CF6', 'file:hermes_icon.ico', 2, 1, 1718640000000, 1718640000000),
 
     ('codex', 'Codex CLI', 'OpenAI 官方 AI 编程助手',
@@ -992,7 +992,7 @@ VALUES
      'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}',
      'json-stream', '',
      1, 'stdout-json', 'thread.started', 'thread_id', 'exec resume {session_id}',
-     '', 'SKILL.md', 'recursive',
+     '~/.codex/skills/', 'SKILL.md', 'collection',
      '#F59E0B', 'file:codex_icon.ico', 3, 1, 1718640000000, 1718640000000);
 
 -- 3. 移除 sessions 表的 CHECK 约束（SQLite 需重建表）
@@ -1046,7 +1046,7 @@ CREATE TABLE IF NOT EXISTS agents (
     resume_arg_template TEXT NOT NULL DEFAULT '',
     skills_dir TEXT NOT NULL DEFAULT '',
     skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
-    skill_display_mode TEXT NOT NULL DEFAULT 'recursive',
+    skill_display_mode TEXT NOT NULL DEFAULT 'collection',
     color TEXT NOT NULL DEFAULT '#6366F1',
     icon TEXT NOT NULL DEFAULT '\U0001F916',
     sort_order INTEGER DEFAULT 0,
@@ -1061,9 +1061,9 @@ CREATE TABLE IF NOT EXISTS agents (
 
 | agent_type | display_name | 包管理器 | run_cmd_template | output_parser | session_id_source | session_id_field | resume_arg_template | skills_dir | skill_entry_file | skill_display_mode | color | icon | sort_order |
 |-----------|-------------|---------|-----------------|--------------|-----------------|-----------------|-------------------|-----------|----------------|---------------------|-------|------|-----------|
-| claude | Claude Code | npm | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}` | json-stream | stdout-json | session_id | `--resume {session_id}` | ``（智能目录） | SKILL.md | recursive | #3B82F6 | `file:claude_icon.ico` | 1 |
-| hermes | Hermes Agent | pip | `hermes chat -q {message} -Q` | ansi-text | stderr-text | (前缀匹配) | `--resume {session_id}` | ``（智能目录） | SKILL.md | recursive | #8B5CF6 | `file:hermes_icon.ico` | 2 |
-| codex | Codex CLI | npm | `codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}` | json-stream | stdout-json | thread_id | `exec resume {session_id}` | ``（智能目录） | SKILL.md | recursive | #F59E0B | `file:codex_icon.ico` | 3 |
+| claude | Claude Code | npm | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}` | json-stream | stdout-json | session_id | `--resume {session_id}` | `~/.claude/skills/`（显式） | SKILL.md | collection | #3B82F6 | `file:claude_icon.ico` | 1 |
+| hermes | Hermes Agent | pip | `hermes chat -q {message} -Q` | ansi-text | stderr-text | (前缀匹配) | `--resume {session_id}` | `~/AppData/Local/hermes/skills/`（显式） | SKILL.md | collection | #8B5CF6 | `file:hermes_icon.ico` | 2 |
+| codex | Codex CLI | npm | `codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}` | json-stream | stdout-json | thread_id | `exec resume {session_id}` | `~/.codex/skills/`（显式） | SKILL.md | collection | #F59E0B | `file:codex_icon.ico` | 3 |
 
 **交付物**：
 - `agents` 表创建成功，种子数据可查询
@@ -1177,6 +1177,11 @@ CREATE TABLE IF NOT EXISTS agents (
 | `AgentBadge` 集成 | `components/common/AgentBadge.tsx` | 使用 AgentIcon 渲染 | :white_check_mark: |
 | `AGENT_THEMES` 添加 icon 字段 | `types/index.ts` | 主题条目包含 icon | :white_check_mark: |
 | 种子数据 icon 字段更新 | `db/init.rs` | `\U0001F916` -> `file:xxx.ico` | :white_check_mark: |
+| 种子数据技能字段补全 | `db/init.rs` | 新增 `skills_dir`/`skill_display_mode` 字段，默认 `collection` | :white_check_mark: |
+| Migration v15 | `db/init.rs` | 所有内置 Agent 显式设置 skills_dir（claude/codex 补充） | :white_check_mark: |
+| Tilde 扩展支持 | `agent/mod.rs` | `skillsDir` 中 `~` 展开为 home 目录 | :white_check_mark: |
+| 后端默认值更新 | `commands/agents.rs` | `skill_display_mode` 默认 `collection` | :white_check_mark: |
+| 前端默认值更新 | `AgentManager.tsx` | 表单默认 `collection` | :white_check_mark: |
 | 市场模板 icon 字段更新 | `commands/agents.rs` | `\U0001F916` -> `file:xxx.ico` | :white_check_mark: |
 
 **交付物**：
