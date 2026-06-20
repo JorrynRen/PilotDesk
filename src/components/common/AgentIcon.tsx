@@ -89,9 +89,15 @@ export function AgentIcon({ icon, size = 14, className = '', fallback }: AgentIc
     );
   }
 
-  // 文本模式（Emoji 或字符）
+  // 文本模式（Emoji、Unicode 转义序列或字符）
   if (icon) {
-    return <span style={{ fontSize: size, lineHeight: 1 }}>{icon}</span>;
+    // 解析 Unicode 转义序列（如 \U0001f916 → 🤖）
+    const displayText = icon.replace(/\\U([0-9a-fA-F]{8})/g, (_, hex) =>
+      String.fromCodePoint(parseInt(hex, 16))
+    ).replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+      String.fromCodePoint(parseInt(hex, 16))
+    );
+    return <span style={{ fontSize: size, lineHeight: 1 }}>{displayText}</span>;
   }
 
   // 无图标
