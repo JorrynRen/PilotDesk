@@ -7,6 +7,7 @@ import { SkillPicker } from '../input/SkillPicker';
 import { showToast } from '../../utils/toast';
 import { AGENT_THEMES } from '../../types';
 import { getAgentLabel } from '../../utils/sessionType';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
 
 const MODE_ICONS: Record<ChatMode, typeof Send> = {
@@ -37,6 +38,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
   const modeDropdownRef = useRef<HTMLDivElement>(null);
 
   // Load prompt descriptions for tooltip
+  const { getTheme } = useAgentRegistry();
   const [modeDescriptions, setModeDescriptions] = useState<Record<string, string>>({});
   useEffect(() => {
     (async () => {
@@ -130,9 +132,9 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
       {isGenerating && (
         <div className="flex items-center gap-2 px-4 py-1.5" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
           <div className="flex items-center gap-1">
-            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '0ms' }} />
-            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '150ms' }} />
-            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: 'var(--text-tertiary)', animationDelay: '300ms' }} />
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: session ? getTheme(session.agentType).color : 'var(--text-tertiary)', animationDelay: '0ms' }} />
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: session ? getTheme(session.agentType).color : 'var(--text-tertiary)', animationDelay: '150ms' }} />
+            <span className="inline-block w-1.5 h-1.5 rounded-full animate-bounce" style={{ backgroundColor: session ? getTheme(session.agentType).color : 'var(--text-tertiary)', animationDelay: '300ms' }} />
           </div>
           <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
             {'思考中...'}
