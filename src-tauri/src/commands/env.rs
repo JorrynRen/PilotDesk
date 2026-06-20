@@ -76,15 +76,34 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
 
 /// Run a full shell command string via cmd /C (for install/uninstall/update commands from DB)
 pub fn run_shell_cmd(cmd_str: &str) -> Result<String, String> {
+    run_shell_cmd_with_stdin(cmd_str, None)
+}
+
+/// 执行 shell 命令，支持可选的标准输入（用于自动确认交互式提示）
+fn run_shell_cmd_with_stdin(cmd_str: &str, stdin_input: Option<&str>) -> Result<String, String> {
     let mut child = Command::new("cmd");
     child.args(["/C", cmd_str])
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // Clear PYTHONHOME to avoid interference from parent process (WPS 灵犀)
     child.env_remove("PYTHONHOME");
     child.env_remove("PYTHONPATH");
-    let child = child.spawn()
+    let mut child = child.spawn()
         .map_err(|e| format!("执行命令失败: {}", e))?;
+
+    // 关闭 stdin pipe，防止子进程因等待输入而挂起
+    if let Some(input) = stdin_input {
+        // 有输入时：写入后关闭
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(input.as_bytes());
+            drop(stdin);
+        }
+    } else {
+        // 无输入时：直接关闭 stdin，子进程立即读到 EOF
+        drop(child.stdin.take());
+    }
 
     let output = child.wait_with_output()
         .map_err(|e| format!("命令执行过程出错: {}", e))?;
@@ -264,7 +283,8 @@ pub async fn uninstall_agent(app: tauri::AppHandle, state: tauri::State<'_, crat
         "progress": 50
     }));
 
-    run_shell_cmd(&cmd).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
+    // 卸载命令可能包含交互式确认提示，自动输入 y 确认
+    run_shell_cmd_with_stdin(&cmd, Some("y\nyes\n")).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
 
     let _ = app.emit("install-progress", serde_json::json!({
         "agent": agent_type,
