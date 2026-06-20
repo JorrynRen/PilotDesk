@@ -183,7 +183,12 @@ pub fn delete_agent(state: tauri::State<'_, crate::DbState>, agent_type: String)
 pub fn export_agents_json(state: tauri::State<'_, crate::DbState>, file_path: String) -> Result<(), AppError> {
     let conn = state.get_conn()?;
     let agents = list_agents_inner(&conn)?;
-    let json = serde_json::to_string_pretty(&agents)
+    // 使用与 Agent 市场一致的格式：{ version: 1, agents: [...] }
+    let output = serde_json::json!({
+        "version": 1,
+        "agents": agents
+    });
+    let json = serde_json::to_string_pretty(&output)
         .map_err(|e| AppError::External(format!("JSON 序列化失败: {}", e)))?;
     std::fs::write(&file_path, json)
         .map_err(|e| AppError::External(format!("写入文件失败: {}", e)))?;
@@ -195,8 +200,23 @@ pub fn import_agents_json(state: tauri::State<'_, crate::DbState>, file_path: St
     let conn = state.get_conn()?;
     let json = std::fs::read_to_string(&file_path)
         .map_err(|e| AppError::External(format!("读取文件失败: {}", e)))?;
-    let imported: Vec<AgentConfig> = serde_json::from_str(&json)
-        .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?;
+
+    // 兼容两种格式：{ version: 1, agents: [...] } 或 [...]（旧格式）
+    let imported: Vec<AgentConfig> = {
+        // 先尝试解析为包装格式
+        if let Ok(wrapped) = serde_json::from_str::<serde_json::Value>(&json) {
+            if let Some(agents) = wrapped.get("agents").and_then(|a| a.as_array()) {
+                serde_json::from_value(serde_json::Value::Array(agents.clone()))
+                    .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?
+            } else {
+                serde_json::from_str(&json)
+                    .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?
+            }
+        } else {
+            serde_json::from_str(&json)
+                .map_err(|e| AppError::InvalidInput(format!("JSON 解析失败: {}", e)))?
+        }
+    };
 
     let mut success = 0u32;
     let mut errors = Vec::new();
