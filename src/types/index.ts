@@ -184,7 +184,7 @@ export interface AgentConfig {
   skillEntryFile: string;
   skillDisplayMode: string;
   color: string;
-  icon: string;
+  icon?: string;
   sortOrder: number;
   isEnabled: boolean;
   isBuiltin: boolean;

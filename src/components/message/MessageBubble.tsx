@@ -7,6 +7,7 @@ import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { showToast } from '../../utils/toast';
 import { useSessionStore } from '../../stores/sessionStore';
 import { type Message } from '../../types';
+import { AgentIcon } from '../common/AgentIcon';
 import { isApiSession } from '../../utils/sessionType';
 
 interface MessageBubbleProps {
@@ -269,17 +270,31 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
 
   return (
     <div className="group flex gap-2.5 px-4 py-[3px]">
-      {/* Avatar */}
+      {/* Avatar — AgentIcon (有图标时替换整个圆形背景，无图标或加载失败时回退字母+主题色背景） */}
       <div className="shrink-0 pt-0.5">
-        <div
-          className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold"
-          style={{
-            backgroundColor: `${agentColor}20`,
-            color: agentColor,
-          }}
-        >
-          {agentInitial}
-        </div>
+        {agentTheme.icon ? (
+          <AgentIcon icon={agentTheme.icon} size={22} fallback={
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold"
+              style={{
+                backgroundColor: `${agentColor}20`,
+                color: agentColor,
+              }}
+            >
+              {agentInitial}
+            </div>
+          } />
+        ) : (
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold"
+            style={{
+              backgroundColor: `${agentColor}20`,
+              color: agentColor,
+            }}
+          >
+            {agentInitial}
+          </div>
+        )}
       </div>
 
       {/* Content */}

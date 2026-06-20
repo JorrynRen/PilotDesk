@@ -8,6 +8,7 @@ use db::init::{init_db, DbPool};
 use std::sync::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
 use agent::AgentManager;
+use tauri::Manager;
 
 pub struct DbState {
     pub pool: DbPool,
@@ -289,10 +290,11 @@ pub fn run() {
             commands::agents::export_agents_json,
             commands::agents::import_agents_json,
             commands::agents::list_agent_market,
+            commands::agents::upload_agent_icon,
             commands::agents::read_agent_icon,
         ])
         .setup(|app| {
-            // 初始化资源路径
+            // 初始化资源路径（Windows: app_data_dir = %APPDATA%/com.pilotdesk.app/）
             let builtin = app.path().resource_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("resources"));
             let user = app.path().app_data_dir()

@@ -23,7 +23,7 @@ export function AgentBadge({ agentType, size = 'sm', isGenerating }: AgentBadgeP
         transition: 'background-color 0.3s, color 0.3s',
       }}
     >
-      {theme.icon ? <AgentIcon icon={theme.icon} size={size === 'sm' ? 10 : 12} /> : theme.initial}
+      {theme.icon ? <AgentIcon icon={theme.icon} size={size === 'sm' ? 10 : 12} fallback={theme.initial} /> : theme.initial}
     </span>
   );
 }

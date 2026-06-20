@@ -88,10 +88,10 @@ export function AgentManager() {
     }
     setSaving(true);
     try {
-      await invoke('add_agent', { payload: addForm });
+      await invoke('add_agent', { payload: { ...addForm, icon: addForm.icon || null } });
       showToast('Agent 已添加', 'success');
       setShowAddForm(false);
-      setAddForm({});
+      setAddForm({ icon: null });
       fetchAgents();
     } catch (err: any) {
       showToast(`添加失败: ${err}`, 'error');
@@ -251,7 +251,7 @@ export function AgentManager() {
             <SettingsButton
               variant="secondary"
               icon={<X size={11} />}
-              onClick={() => { setShowAddForm(false); setAddForm({}); }}
+              onClick={() => { setShowAddForm(false); setAddForm({ icon: null }); }}
             >
               取消添加
             </SettingsButton>
@@ -266,7 +266,7 @@ export function AgentManager() {
               form={addForm}
               onChange={setAddForm}
               onSubmit={handleAdd}
-              onCancel={() => { setShowAddForm(false); setAddForm({}); }}
+              onCancel={() => { setShowAddForm(false); setAddForm({ icon: null }); }}
               saving={saving}
               mode="add"
             />
@@ -447,6 +447,32 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
   saving: boolean;
   mode: 'add' | 'edit';
 }) {
+  const handleUploadIcon = async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const filePath = await open({
+        filters: [{ name: '图片文件', extensions: ['png', 'jpg', 'jpeg', 'gif', 'ico', 'svg', 'webp'] }],
+        multiple: false,
+      });
+      if (!filePath) return;
+
+      const agentType = form.agentType;
+      if (!agentType) {
+        showToast('请先填写 Agent 标识', 'error');
+        return;
+      }
+
+      const result = await invoke<string>('upload_agent_icon', {
+        agentType,
+        sourcePath: filePath as string,
+      });
+
+      onChange({ ...form, icon: result });
+      showToast('图标已上传', 'success');
+    } catch (err: any) {
+      showToast(`上传失败: ${err}`, 'error');
+    }
+  };
   return (
     <div className="w-full space-y-4">
       {/* 基础信息 */}
@@ -469,7 +495,19 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
         <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="如 claude" />
         <div className="grid grid-cols-2 gap-2 mt-2">
           <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
-          <FormField label="图标（支持 Emoji / 图片 URL）" value={form.icon || '🤖'} onChange={(v) => onChange({ ...form, icon: v })} placeholder="如 🤖" />
+          <div className="flex gap-2 items-end">
+            <div className="flex-1">
+              <FormField label="图标（支持 Emoji / 图片 URL / 内置图标文件）" value={form.icon || ''} onChange={(v) => onChange({ ...form, icon: v || null })} placeholder="留空则使用名称首字符" />
+            </div>
+            <button
+              onClick={handleUploadIcon}
+              className="px-2 py-1.5 rounded-lg text-xs outline-none shrink-0"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              title="选择本地图片作为图标"
+            >
+              <Upload size={11} />
+            </button>
+          </div>
         </div>
         <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
       </div>

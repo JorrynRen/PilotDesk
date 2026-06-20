@@ -33,7 +33,7 @@ function SessionListFn() {
   const [batchMode, setBatchMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showNewDialog, setShowNewDialog] = useState(false);
-  const [newSessionType, setNewSessionType] = useState<NewSessionType>('claude');
+    const [newSessionType, setNewSessionType] = useState<NewSessionType>('');
   const [selectedApiProvider, setSelectedApiProvider] = useState('');
   const [selectedApiModel, setSelectedApiModel] = useState('');
   const [customModel, setCustomModel] = useState('');
@@ -186,6 +186,12 @@ function SessionListFn() {
       setCustomModel('');
       setCustomTitle('');
       setCustomCwd('');
+
+      // Auto-select first enabled agent
+      const enabled = getEnabledAgentTypes().filter(t => t !== 'api');
+      if (enabled.length > 0 && !newSessionType) {
+        setNewSessionType(enabled[0]);
+      }
     }
   }, [showNewDialog]);
 
@@ -500,7 +506,7 @@ function SessionListFn() {
           onClick={(e) => { if (e.target === e.currentTarget) setShowNewDialog(false); }}
         >
           <div
-            className="w-[420px] rounded-xl p-4"
+            className="w-auto min-w-[420px] max-w-[560px] rounded-xl p-4"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
           >
             <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>新建会话</h3>

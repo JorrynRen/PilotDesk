@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 11;
+const MIGRATION_VERSION: i64 = 12;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -111,6 +111,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
 
         if current_version < 11 {
         migrate_add_skill_fields(&conn)?;
+    }
+
+if current_version < 12 {
+        migrate_update_agent_icons(&conn)?;
     }
 
 if current_version < MIGRATION_VERSION {
@@ -484,4 +488,22 @@ fn migrate_agents_full_schema(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch("DROP TABLE IF EXISTS agents;")?;
     // Reuse the full schema from migrate_add_agents_table
     migrate_add_agents_table(conn)
+}
+
+
+/// Migration v12 — 更新预置 Agent 图标字段（Emoji -> file:xxx.ico）
+fn migrate_update_agent_icons(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE agents SET icon = ?1 WHERE agent_type = ?2",
+        rusqlite::params!["file:claude_icon.ico", "claude"],
+    )?;
+    conn.execute(
+        "UPDATE agents SET icon = ?1 WHERE agent_type = ?2",
+        rusqlite::params!["file:hermes_icon.ico", "hermes"],
+    )?;
+    conn.execute(
+        "UPDATE agents SET icon = ?1 WHERE agent_type = ?2",
+        rusqlite::params!["file:codex_icon.ico", "codex"],
+    )?;
+    Ok(())
 }

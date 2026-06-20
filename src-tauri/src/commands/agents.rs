@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use rusqlite::{params, Connection};
 use crate::utils::errors::AppError;
 use crate::utils::now;
+use base64::Engine;
 
 // ──────────────────────────────────────────────
 //  数据模型
@@ -366,13 +367,88 @@ pub fn list_agent_market() -> Vec<AgentConfig> {
     get_market_templates()
 }
 
+
+/// 上传用户选择的图片作为 Agent 图标
+/// 将图片复制到用户资源目录的 icons/ 下（%APPDATA%/com.pilotdesk.app/resources/icons/），命名为 {agentType}_icon.{ext}
+#[tauri::command]
+pub fn upload_agent_icon(
+    agent_type: String,
+    source_path: String,
+    resources: tauri::State<'_, crate::ResourcePaths>,
+) -> Result<String, AppError> {
+    let source = std::path::Path::new(&source_path);
+    if !source.exists() {
+        return Err(AppError::NotFound(format!("源文件不存在: {}", source_path)));
+    }
+
+    // 获取文件扩展名
+    let ext = source.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+
+    // 验证扩展名
+    match ext.as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "ico" | "svg" | "webp" => {},
+        _ => return Err(AppError::InvalidInput(format!("不支持的图片格式: .{} (支持: png/jpg/gif/ico/svg/webp)", ext))),
+    }
+
+    // 目标文件名: {agentType}_icon.{ext}
+    let file_name = format!("{}_icon.{}", agent_type, ext);
+    let dest = resources.user.join("icons").join(&file_name);
+
+    // 确保目标目录存在
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppError::Io(format!("创建目录失败: {}", e)))?;
+    }
+
+    // 复制文件
+    std::fs::copy(&source, &dest)
+        .map_err(|e| AppError::Io(format!("复制图标文件失败: {}", e)))?;
+
+    // 返回 file: 协议路径
+    Ok(format!("file:{}", file_name))
+}
+
 #[tauri::command]
 pub fn read_agent_icon(icon_name: String, resources: tauri::State<'_, crate::ResourcePaths>) -> Result<String, AppError> {
     // icon_name: "claude_icon.ico" (不含 file: 前缀)
-    let icon_path = resources.builtin.join("icons").join(&icon_name);
-    if !icon_path.exists() {
-        return Err(AppError::NotFound(format!("图标文件不存在: {}", icon_name)));
-    }
+    // 路径规则（按优先级）：
+    //   1. 用户资源目录: user/icons/xxx.ico（用户上传的自定义图标）
+    //   2. 内置资源目录: builtin/resources/icons/xxx.ico（生产模式）
+    //   3. Dev 模式:     exe/../../resources/icons/xxx.ico
+    let icon_path = {
+        // 1. 用户资源目录
+        let user_path = resources.user.join("icons").join(&icon_name);
+        if user_path.exists() {
+            user_path
+        } else {
+            // 2. 内置资源目录（生产模式）
+            let builtin_path = resources.builtin.join("resources").join("icons").join(&icon_name);
+            if builtin_path.exists() {
+                builtin_path
+            } else {
+                // 3. Dev 模式 fallback
+                let mut dev_path = std::env::current_exe()
+                    .map_err(|e| AppError::Io(format!("获取 exe 路径失败: {}", e)))?;
+                dev_path.pop();
+                dev_path.pop();
+                dev_path.pop();
+                dev_path.push("resources");
+                dev_path.push("icons");
+                dev_path.push(&icon_name);
+                if dev_path.exists() {
+                    dev_path
+                } else {
+                    return Err(AppError::NotFound(format!(
+                        "图标文件不存在 (已尝试 user/builtin/dev 路径): {}",
+                        icon_name
+                    )));
+                }
+            }
+        }
+    };
     let data = std::fs::read(&icon_path)
         .map_err(|e| AppError::Io(format!("读取图标文件失败: {}", e)))?;
     // 检测文件扩展名确定 MIME 类型
@@ -482,7 +558,7 @@ pub fn add_agent_inner(conn: &Connection, payload: CreateAgentPayload) -> Result
     let skill_entry_file = payload.skill_entry_file.unwrap_or_else(|| "SKILL.md".to_string());
     let skill_display_mode = payload.skill_display_mode.unwrap_or_else(|| "recursive".to_string());
     let color = payload.color.unwrap_or_else(|| "#6366F1".to_string());
-    let icon = payload.icon.unwrap_or_else(|| "🤖".to_string());
+    let icon = payload.icon.unwrap_or_default();  // 空字符串表示使用首字母
     let sort_order = payload.sort_order.unwrap_or(0);
     let is_enabled = if payload.is_enabled.unwrap_or(true) { 1 } else { 0 };
 
@@ -567,7 +643,7 @@ pub fn update_agent_inner(conn: &Connection, payload: UpdateAgentPayload) -> Res
     let skill_entry_file = payload.skill_entry_file.unwrap_or(existing.skill_entry_file);
     let skill_display_mode = payload.skill_display_mode.unwrap_or(existing.skill_display_mode);
     let color = payload.color.unwrap_or(existing.color);
-    let icon = payload.icon.unwrap_or(existing.icon);
+    let icon = payload.icon.unwrap_or(existing.icon);  // None=保留旧值, Some("")=清空
     let sort_order = payload.sort_order.unwrap_or(existing.sort_order);
     let is_enabled = if let Some(v) = payload.is_enabled { if v { 1 } else { 0 } } else { if existing.is_enabled { 1 } else { 0 } };
 

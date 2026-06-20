@@ -186,7 +186,7 @@ src/
 +-- constants.ts               # 共享常量（EMOJI_OPTIONS 等）
 +-- components/
 |   +-- common/
-|   |   +-- AgentBadge.tsx     # Agent 类型徽章（C/H/X/A）
+|   |   +-- AgentBadge.tsx     # Agent 类型徽章（AgentIcon + 首字母回退）
 |   +-- env/
 |   |   +-- EnvManager.tsx     # 环境检测与 Agent 安装管理
 |   |   +-- InstallLog.tsx     # 安装日志
@@ -204,7 +204,7 @@ src/
 |   |   +-- TitleBar.tsx       # 自定义标题栏
 |   |   +-- RightPanel.tsx     # 右侧面板（灵感/技能/记忆/插件）
 |   +-- message/
-|   |   +-- MessageBubble.tsx  # 消息气泡（内联编辑 + 重发）
+|   |   +-- MessageBubble.tsx  # 消息气泡（AgentIcon 角色标识 + 内联编辑 + 重发）
 |   |   +-- MarkdownRenderer.tsx # Markdown 渲染
 |   +-- panels/
 |   |   +-- SkillBrowser.tsx   # 技能浏览器
@@ -581,10 +581,10 @@ pub struct ResourcePaths {
 
 **路径规则**：
 
-| 类型 | 开发模式 | 生产模式（Windows MSI） |
-|------|---------|----------------------|
-| 内置资源 | `src-tauri/resources/` | `%LOCALAPPDATA%\com.pilotdesk.app\resources\` |
-| 用户资源 | `app_data_dir/resources/` | `app_data_dir/resources/` |
+| 类型 | 开发模式 | 生产模式（Windows） |
+|------|---------|-------------------|
+| 内置资源 | `src-tauri/resources/` | `%APPDATA%\com.pilotdesk.app\resources\` |
+| 用户资源 | `app_data_dir/resources/` | `%APPDATA%\com.pilotdesk.app\resources\`（Roaming） |
 
 **目录结构**：
 
@@ -603,6 +603,25 @@ resources/
 2. 前端 `AgentIcon` 组件检测到 `file:` 前缀，调用 `read_agent_icon` Rust 命令
 3. Rust 端从 `ResourcePaths.builtin/icons/` 目录读取文件，返回 base64 data URL
 4. 前端渲染 `<img>` 标签显示图标
+
+**AgentIcon 集成点**：
+
+| 组件 | 文件 | 显示逻辑 |
+|------|------|---------|
+| `AgentBadge` | `components/common/AgentBadge.tsx` | 始终渲染 `AgentIcon`，`fallback` 为 Agent 首字母（C/H/X） |
+| `MessageBubble`（Assistant） | `components/message/MessageBubble.tsx` | 圆形头像区域渲染 `AgentIcon`，`fallback` 为首字母 + 主题色背景 |
+| `MessageBubble`（User） | `components/message/MessageBubble.tsx` | 硬编码 `User` 图标（待实施项：接入用户系统后替换为用户头像/昵称） |
+
+**Agent 图标显示规则**（非用户消息气泡标识）：
+
+1. `icon` 字段值不为空且图标存在（文件存在或为有效 Emoji/图片）→ 显示为 icon 图标
+2. `icon` 字段为空或图标不存在 → 以 Agent 名称（`name` 字段）的第一个字符（英文字符格式化为大写）+ Agent 主题色背景
+3. 主题色亦为空或无效 → 使用系统全局主题色
+
+**用户消息气泡标识**（待实施项）：
+
+- 预留拓展接口，当前硬编码 `User` 图标
+- 后续用户系统（用户昵称和用户头像等）完成后替换
 
 - 最大连接数：8
 - 读写不再互斥，并行查询性能提升显著
@@ -1595,6 +1614,8 @@ loadPlugin()
 | 插件市场 | 待实施 | 在线插件浏览和安装 |
 | 命令面板 | 待实施 | 注册的命令在前端可执行 |
 | 事件钩子管道 | 待实施 | 钩子事件的实际触发链路 |
+| 用户系统 | 待实施 | 用户昵称、头像管理，替换消息气泡中 User 图标 |
+| 跨平台适配（macOS/Linux） | 待实施 | 内置图标格式从 .ico 扩展为 .png/.svg；种子数据中 PowerShell 命令替换为跨平台方案；Dev 路径回退逻辑验证 |
 
 ---
 
@@ -1997,9 +2018,12 @@ function useI18n() {
 2. **Agent 图标系统**
    - 三个内置 Agent 图标文件：`claude_icon.ico`、`hermes_icon.ico`、`codex_icon.ico`
    - 新增 `read_agent_icon` Rust 命令（读取图标文件返回 base64 data URL）
-   - 新增 `AgentIcon` 前端组件（支持 file: 前缀/网络图片/Emoji）
+   - 新增 `AgentIcon` 前端组件（支持 file: 前缀/网络图片/Emoji，含 fallback 机制）
    - Agent 配置 icon 字段格式：`file:claude_icon.ico`
    - Agent 市场模板和数据库种子数据 icon 字段更新
+   - `AgentBadge` 集成 AgentIcon（图标加载失败回退首字母）
+   - `MessageBubble` Assistant 消息集成 AgentIcon（圆形头像区域）
+   - `MessageBubble` User 消息标记为待实施项（后续用户系统接入）
 3. **Agent 表单优化**
    - 字段按 6 个分类分组（基础信息/包参数/会话参数/延续会话/生命周期/技能引用）
    - 分类标题加粗 + 主题色图标
