@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Copy, Edit3, Pencil, Bookmark, Check, User } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { AGENT_THEMES, MODE_LABELS, MODE_COLORS } from '../../types';
+import { MODE_LABELS, MODE_COLORS } from '../../types';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useInspirationStore } from '../../stores/inspirationStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { showToast } from '../../utils/toast';
@@ -54,8 +55,9 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
   }, [apiProviderId, providers.length, fetchProviders]);
 
   // Build agent label: "AgentType | Provider | Model Time"
+  const { getDisplayName } = useAgentRegistry();
   const buildAgentLabel = () => {
-    const typeLabel = AGENT_THEMES[agentType]?.label || agentType;
+    const typeLabel = getDisplayName(agentType) || agentType;
     const time = formatTimestamp(message.timestamp);
     const parts = [typeLabel];
     if (isApiSession(agentType)) {
@@ -264,7 +266,8 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
   }
 
   // Assistant message
-  const agentTheme = AGENT_THEMES[agentType] || AGENT_THEMES.claude;
+  const { getTheme } = useAgentRegistry();
+  const agentTheme = getTheme(agentType);
   const agentColor = agentTheme.color;
   const agentInitial = agentTheme.initial;
 

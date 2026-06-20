@@ -1,6 +1,7 @@
 import { useState, memo } from 'react';
 import { Archive, Trash2, Pencil, Check, X } from 'lucide-react';
 import { AGENT_THEMES } from '../../types';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { AgentBadge } from '../common/AgentBadge';
 import { useGeneratingStore } from '../../stores/generatingStore';
 import type { Session } from '../../types';
@@ -49,8 +50,9 @@ export const SessionListItem = memo(function SessionListItem({
   const [editTitle, setEditTitle] = useState(session.title);
 
   // Fallback display title when title is empty
+  const { getTheme } = useAgentRegistry();
   const displayTitle = session.title || (() => {
-    const theme = AGENT_THEMES[session.agentType as keyof typeof AGENT_THEMES] || AGENT_THEMES.claude;
+    const theme = getTheme(session.agentType);
     return `${theme.label} 新会话`;
   })();
 

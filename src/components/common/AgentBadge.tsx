@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { AGENT_THEMES } from '../../types';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { AgentIcon } from './AgentIcon';
 
 interface AgentBadgeProps {
@@ -9,7 +9,8 @@ interface AgentBadgeProps {
 }
 
 export function AgentBadge({ agentType, size = 'sm', isGenerating }: AgentBadgeProps) {
-  const theme = AGENT_THEMES[agentType] || AGENT_THEMES.claude;
+  const { getTheme } = useAgentRegistry();
+  const theme = getTheme(agentType);
   return (
     <span
       className={clsx(
