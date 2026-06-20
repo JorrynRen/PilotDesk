@@ -1,6 +1,6 @@
 # PilotDesk Agent 统一管理平台设计
 
-> **版本**: v3.2 | **日期**: 2026-06-21 | **状态**: 已实施（技能配置种子数据补全 + 拖拽排序 + Agent 市场）
+> **版本**: v3.3 | **日期**: 2026-06-21 | **状态**: 已实施（技能配置种子数据补全 + 拖拽排序 + Agent 市场 + 导入隐藏删除 + 卸载命令优化）
 
 ---
 
@@ -916,6 +916,17 @@ ALTER TABLE agents_new RENAME TO agents;
 
 **种子数据更新**：种子数据中移除 `version_flag` 列，新增 `skills_dir` / `skill_entry_file` / `skill_display_mode` 列，`icon` 字段从 Emoji 更新为 `file:xxx.ico`。
 
+#### Migration v15 -- 内置 Agent 技能配置 + 卸载命令补全（2026-06-21）
+
+**变更内容**：
+1. 所有内置 Agent 显式设置 `skills_dir`（claude: `~/.claude/skills/`，hermes: `~/AppData/Local/hermes/skills/`，codex: `~/.codex/skills/`）
+2. `skill_display_mode` 统一设为 `collection`
+3. 内置 Agent 卸载命令改用包管理器直接卸载（`-y` 自动确认），避免交互式终端检测
+
+#### Migration v16 -- 修复 claude 技能配置遗留数据（2026-06-21）
+
+**变更内容**：修复 v15 执行时未覆盖的 claude 的 `skills_dir` 和 `skill_display_mode` 字段。
+
 ---
 
 ```sql
@@ -1178,11 +1189,13 @@ CREATE TABLE IF NOT EXISTS agents (
 | `AGENT_THEMES` 添加 icon 字段 | `types/index.ts` | 主题条目包含 icon | :white_check_mark: |
 | 种子数据 icon 字段更新 | `db/init.rs` | `\U0001F916` -> `file:xxx.ico` | :white_check_mark: |
 | 种子数据技能字段补全 | `db/init.rs` | 新增 `skills_dir`/`skill_display_mode` 字段，默认 `collection` | :white_check_mark: |
-| Migration v15 | `db/init.rs` | 所有内置 Agent 显式设置 skills_dir（claude/codex 补充） | :white_check_mark: |
+| Migration v15 | `db/init.rs` | 所有内置 Agent 显式设置 skills_dir + uninstall_cmd | :white_check_mark: |
 | Tilde 扩展支持 | `agent/mod.rs` | `skillsDir` 中 `~` 展开为 home 目录 | :white_check_mark: |
 | 后端默认值更新 | `commands/agents.rs` | `skill_display_mode` 默认 `collection` | :white_check_mark: |
 | 前端默认值更新 | `AgentManager.tsx` | 表单默认 `collection` | :white_check_mark: |
 | 市场模板 icon 字段更新 | `commands/agents.rs` | `\U0001F916` -> `file:xxx.ico` | :white_check_mark: |
+| Migration v16 | `db/init.rs` | 修复 claude 技能配置遗留数据（skills_dir/skill_display_mode） | :white_check_mark: |
+| 导入隐藏删除功能 | `commands/agents.rs` | `__action` 字段支持删除任意 Agent（含内置） | :white_check_mark: |
 
 **交付物**：
 - 内置 Agent 显示对应图标（Claude 蓝、Hermes 紫、Codex 琥珀）
