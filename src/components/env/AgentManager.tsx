@@ -393,30 +393,50 @@ export function AgentManager() {
 
       {/* Agent 市场 */}
       <SettingsSection title="Agent 市场">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex gap-2">
+            <SettingsButton
+              variant="secondary"
+              icon={<Download size={11} />}
+              onClick={() => { fetchMarket(); setShowMarket(true); }}
+              disabled={marketLoading}
+            >
+              {marketLoading ? '加载中...' : '刷新'}
+            </SettingsButton>
+            {marketAgents.length > 0 && (
+              <SettingsButton
+                variant="secondary"
+                icon={<X size={11} />}
+                onClick={() => setMarketAgents([])}
+              >
+                关闭
+              </SettingsButton>
+            )}
+          </div>
+        </div>
         <div className="space-y-2">
           {marketAgents.length === 0 ? (
             <div className="text-xs py-2" style={{ color: 'var(--text-secondary)' }}>
-              {marketLoading ? '加载中...' : (
-                <SettingsButton
-                  variant="secondary"
-                  icon={<Download size={11} />}
-                  onClick={() => { fetchMarket(); setShowMarket(true); }}
-                >
-                  浏览 Agent 市场
-                </SettingsButton>
-              )}
+              {marketLoading ? '加载中...' : '点击"刷新"浏览 Agent 市场'}
             </div>
           ) : (
             marketAgents.map((agent) => {
-              const isInstalled = agents.some(a => a.agentType === agent.agentType);
+              const local = agents.find(a => a.agentType === agent.agentType);
+              const isInstalled = !!local;
+              const hasUpdate = isInstalled && isNewerVersion(agent.version, local.version);
               return (
                 <SettingsCard key={`market-${agent.agentType}`}>
                   <div className="flex items-center gap-3 w-full">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
                       <div className="min-w-0">
-                        <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                          {agent.displayName}
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                            {agent.displayName}
+                          </span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                            v{agent.version}
+                          </span>
                         </div>
                         <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                           {agent.description}
@@ -424,11 +444,11 @@ export function AgentManager() {
                       </div>
                     </div>
                     <SettingsButton
-                      variant={isInstalled ? 'secondary' : 'primary'}
+                      variant={hasUpdate ? 'primary' : isInstalled ? 'secondary' : 'primary'}
                       onClick={() => handleInstallFromMarket(agent)}
                       disabled={saving}
                     >
-                      {isInstalled ? '已安装' : '安装'}
+                      {hasUpdate ? `更新 (v${local.version} → v${agent.version})` : isInstalled ? '已安装' : '安装'}
                     </SettingsButton>
                   </div>
                 </SettingsCard>
@@ -556,7 +576,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
         </div>
         <div className="grid grid-cols-2 gap-2">
           <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
-          <FormField label="版本号" value={form.version || ''} onChange={(v) => {
+          <FormField label="配置版本号（非Agent版本号）" value={form.version || ''} onChange={(v) => {
             // 只允许数字和点
             const cleaned = v.replace(/[^\d.]/g, '');
             onChange({ ...form, version: cleaned });
