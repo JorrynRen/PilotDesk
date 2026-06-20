@@ -89,9 +89,10 @@ export function useAgentRegistry() {
   const getTheme = useCallback((agentType: string): AgentTheme => {
     const agent = globalAgents.find(a => a.agentType === agentType);
     if (agent) {
+      const color = isValidHexColor(agent.color) ? agent.color : '#3B82F6';
       return {
-        color: agent.color,
-        bg: hexToRgba(agent.color, 0.15),
+        color,
+        bg: isValidHexColor(agent.color) ? hexToRgba(agent.color, 0.15) : 'rgba(59,130,246,0.15)',
         label: agent.displayName,
         initial: agentTypeToInitial(agentType),
         cssVar: agentTypeToCssVar(agentType),
@@ -126,6 +127,12 @@ export function useAgentRegistry() {
     getDisplayName,
     getEnabledAgentTypes,
   };
+}
+
+/** 校验颜色值是否有效：空值、非法 hex 格式时返回 false */
+function isValidHexColor(color: string): boolean {
+  if (!color || color.trim() === '') return false;
+  return /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color.trim());
 }
 
 function hexToRgba(hex: string, alpha: number): string {
