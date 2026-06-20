@@ -100,7 +100,7 @@ export function AgentManager() {
     setSaving(false);
   };
 
-  const MARKET_URL = 'https://raw.githubusercontent.com/JorrynRen/PilotDesk/refs/heads/main/server/market/agents-config/agents-config.json';
+  const MARKET_URL = 'https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main/server/market/agents-config/agents-config.json';
 
   const fetchMarket = async () => {
     setMarketLoading(true);
