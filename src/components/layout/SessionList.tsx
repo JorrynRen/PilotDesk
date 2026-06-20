@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
-import { Plus, Search, Archive, Key, ChevronDown, X, Trash2, FolderOpen } from 'lucide-react';
+import { Plus, Search, Archive, Key, X, Trash2, FolderOpen } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
-import { AGENT_THEMES } from '../../types';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
-import { getAgentLabel } from '../../utils/sessionType';
 import { SessionListItem } from './SessionListItem';
 
 type NewSessionType = string;
@@ -41,8 +39,7 @@ function SessionListFn() {
   const [customTitle, setCustomTitle] = useState('');
   const [customCwd, setCustomCwd] = useState('');
   const [creating, setCreating] = useState(false);
-  const [installedAgents, setInstalledAgents] = useState<Set<string>>(new Set());
-  const [envLoading, setEnvLoading] = useState(true);
+
   const { agents, getTheme, getDisplayName, getEnabledAgentTypes, fetchAgents } = useAgentRegistry();
 
   // WebSocket for Agent session lifecycle
@@ -58,22 +55,7 @@ function SessionListFn() {
 
     fetchProviders().catch(() => {});
 
-    // Detect installed agents for session creation filtering
-    ;(async () => {
-      try {
-        const info = await invoke<any>('detect_env');
-        const installed = new Set<string>();
-        // Dynamically detect all agents from env info
-        // Dynamically detect all agents from env info
-        if (info.agentVersions) {
-          for (const [agentType, version] of Object.entries(info.agentVersions)) {
-            if (version) installed.add(agentType);
-          }
-        }
-        setInstalledAgents(installed);
-      } catch { /* ignore */ }
-      setEnvLoading(false);
-    })();
+
   }, [fetchSessions, fetchProviders]);
 
   // Load workspace setting from SQLite when dialog opens
@@ -530,8 +512,6 @@ function SessionListFn() {
                 return types.map((type) => {
                   const theme = getTheme(type);
                   const label = getDisplayName(type);
-                  const isInstalled = type === 'api' || envLoading || installedAgents.has(type);
-                  if (!isInstalled) return null;
                   return (
                     <button
                       key={type}
