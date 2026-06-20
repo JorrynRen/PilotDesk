@@ -100,18 +100,34 @@ export function AgentManager() {
     setSaving(false);
   };
 
-  const MARKET_URL = 'https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main/server/market/agents-config/agents-config.json';
+  const MARKET_URLS = [
+    'https://raw.githubusercontent.com/JorrynRen/PilotDesk/refs/heads/main/server/market/agents-config/agents-config.json',
+    'https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main/server/market/agents-config/agents-config.json',
+  ];
+
+  /** 带超时的 fetch，timeoutMs 默认 8 秒 */
+  const fetchWithTimeout = (url: string, timeoutMs = 8000): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+  };
 
   const fetchMarket = async () => {
     setMarketLoading(true);
-    try {
-      const response = await fetch(MARKET_URL);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      setMarketAgents(data.agents || []);
-    } catch (err: any) {
-      showToast(`获取 Agent 市场失败: ${err}`, 'error');
+    let lastError: string | null = null;
+    for (const url of MARKET_URLS) {
+      try {
+        const response = await fetchWithTimeout(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        setMarketAgents(data.agents || []);
+        setMarketLoading(false);
+        return;
+      } catch (err: any) {
+        lastError = err.name === 'AbortError' ? '连接超时' : String(err.message || err);
+      }
     }
+    showToast(`无法连接 Agent 市场，请检查网络连接`, 'warning');
     setMarketLoading(false);
   };
 
