@@ -1,4 +1,4 @@
-{"schemaVersion":"1.0","updatedAt":"2026-06-21T20:52:05Z","plugins":[
+{"schemaVersion":"1.0","updatedAt":"2026-06-21T21:29:09Z","plugins":[
 {
   "id": "hello-world",
   "name": "Hello World",
@@ -8,8 +8,9 @@
   "minAppVersion": "0.1.0",
   "path": "plugins/hello-world/1.0.0",
   "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0",
-  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/icon.png",
-  "size": "24K"
+  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/favicon.png",
+  "size": "24K",
+  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/README.md"
 }
 ,
 {
@@ -22,7 +23,8 @@
   "path": "plugins/malicious-sample/1.0.0",
   "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/malicious-sample/1.0.0",
   "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/malicious-sample/1.0.0/icon.png",
-  "size": "12K"
+  "size": "12K",
+  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/malicious-sample/1.0.0/README.md"
 }
 ,
 {
@@ -35,6 +37,7 @@
   "path": "plugins/snippet-manager/1.0.0",
   "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0",
   "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/icon.png",
-  "size": "28K"
+  "size": "28K",
+  "readme": ""
 }
 ]}
