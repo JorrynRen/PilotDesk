@@ -285,6 +285,42 @@ pub async fn plugin_store_install(
 
     let base_url = online_plugin.base_url.clone();
 
+    // ── 安装过程：任何步骤失败则回滚删除目录 ──
+    let install_result = install_plugin_files(&target_dir, &base_url, &online_plugin, &*host).await;
+
+    match install_result {
+        Ok(instance_id) => {
+            // 重新 discover 加载新插件（短暂锁定，不跨 await）
+            {
+                let mut guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+                guard.discover();
+            }
+
+            Ok(InstallResult {
+                plugin_id: instance_id,
+                plugin_name: online_plugin.name.clone(),
+                version: online_plugin.version.clone(),
+                already_installed: false,
+            })
+        }
+        Err(e) => {
+            // 安装失败，回滚：删除残留的插件目录
+            log::warn!("[PluginInstall] 安装失败，回滚删除目录: {}", target_dir.display());
+            if target_dir.exists() {
+                let _ = std::fs::remove_dir_all(&target_dir);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// 执行插件文件下载和加载（内部函数，失败时由调用方回滚）
+async fn install_plugin_files(
+    target_dir: &std::path::Path,
+    base_url: &str,
+    online_plugin: &OnlinePluginInfo,
+    host: &Mutex<PluginHost>,
+) -> Result<String, String> {
     // 下载 manifest.json
     let manifest_url = format!("{}/manifest.json", base_url);
     let manifest_content = fetch_url(&manifest_url).await?;
@@ -363,23 +399,12 @@ pub async fn plugin_store_install(
     let manifest_path = target_dir.join("manifest.json");
     let instance = {
         let guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
-        guard.load_and_validate_plugin(&target_dir, &manifest_path)?
+        guard.load_and_validate_plugin(target_dir, &manifest_path)?
     };
 
     let id = instance.manifest.id.clone();
 
-    // 重新 discover 加载新插件（短暂锁定，不跨 await）
-    {
-        let mut guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
-        guard.discover();
-    }
-
-    Ok(InstallResult {
-        plugin_id: id,
-        plugin_name: online_plugin.name.clone(),
-        version: online_plugin.version.clone(),
-        already_installed: false,
-    })
+    Ok(id)
 }
 
 #[tauri::command]
