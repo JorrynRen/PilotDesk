@@ -337,7 +337,7 @@ impl PluginHost {
     }
 
     /// 加载并验证单个插件
-    fn load_and_validate_plugin(&self, plugin_path: &Path, manifest_path: &Path) -> Result<PluginInstance, String> {
+    pub(crate) fn load_and_validate_plugin(&self, plugin_path: &Path, manifest_path: &Path) -> Result<PluginInstance, String> {
         // 1. 文件大小检查（防止大文件攻击）
         let metadata = fs::metadata(manifest_path)
             .map_err(|e| format!("读取清单元数据失败: {}", e))?;

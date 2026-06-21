@@ -1,9 +1,14 @@
 # 插件商店索引自动生成
-# 当 server/market/plugins/ 目录下的插件包发生变更时，
+# 当 server/market/plugins/ 目录下的插件文件发生变更时，
 # 自动重新生成 index.json 索引文件并提交到仓库。
 #
+# 目录结构:
+#   server/market/plugins/<plugin-id>/<version>/
+#     ├── manifest.json     # 插件清单（version 字段从此读取）
+#     ├── index.js          # 插件入口
+#     └── icon.png          # 插件图标（可选）
+#
 # 索引文件位置: server/market/plugins/index.json
-# 插件包位置:   server/market/plugins/<plugin-id>/<version>/plugin.zip
 
 name: Generate Plugin Index
 
@@ -11,15 +16,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'server/market/plugins/**/*.zip'
-      - 'server/market/plugins/**/manifest.json'
+      - 'server/market/plugins/**'
   workflow_dispatch:
-    inputs:
-      force_refresh:
-        description: '强制刷新所有插件索引'
-        required: false
-        default: false
-        type: boolean
+
+permissions:
+  contents: write
 
 jobs:
   generate-index:
@@ -33,13 +34,71 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - name: Generate index.json
+        run: |
+          # 生成索引文件头
+          echo '{"schemaVersion":"1.0","updatedAt":"'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'","plugins":[' > server/market/plugins/index.json
 
-      - name: Generate plugin index
-        run: node server/market/scripts/generate-index.js
+          first=true
+          # 扫描 server/market/plugins/<plugin-id>/<version>/manifest.json
+          for manifest in server/market/plugins/*/*/manifest.json; do
+            [ ! -f "$manifest" ] && continue
+
+            plugin_dir=$(dirname "$manifest")
+            # 提取 plugin-id 和 version（从路径中获取，但 version 以 manifest.json 为准）
+            rel_path="${plugin_dir#server/market/plugins/}"
+            plugin_id=$(echo "$rel_path" | cut -d'/' -f1)
+            dir_version=$(echo "$rel_path" | cut -d'/' -f2)
+
+            # 读取 manifest.json 中的 version 字段
+            manifest_version=$(jq -r '.version // empty' "$manifest")
+            [ -z "$manifest_version" ] && manifest_version="$dir_version"
+
+            # 计算目录大小
+            size=$(du -sh "$plugin_dir" | cut -f1)
+
+            # 构建插件信息 JSON
+            [ "$first" = true ] && first=false || echo ',' >> server/market/plugins/index.json
+
+            jq -n --arg id "$plugin_id" \
+              --arg name "$(jq -r '.name // empty' "$manifest")" \
+              --arg version "$manifest_version" \
+              --arg description "$(jq -r '.description // empty' "$manifest")" \
+              --arg author "$(jq -r '.author // empty' "$manifest")" \
+              --arg minAppVersion "$(jq -r '.minAppVersion // empty' "$manifest")" \
+              --argjson permissions "$(jq -c '.permissions // []' "$manifest")" \
+              --argjson entry "$(jq -c '.entry // {"main":"index.js"}' "$manifest")" \
+              --argjson contributes "$(jq -c '.contributes // {}' "$manifest")" \
+              --arg path "plugins/$rel_path" \
+              --arg baseUrl "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path" \
+              --arg icon "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path/icon.png" \
+              --arg size "$size" \
+              --arg tags "$(jq -r '[.tags[]?] | join(",")' "$manifest")" \
+              '{
+                id: $id,
+                name: $name,
+                version: $version,
+                description: $description,
+                author: $author,
+                minAppVersion: $minAppVersion,
+                permissions: $permissions,
+                entry: $entry,
+                contributes: $contributes,
+                path: $path,
+                baseUrl: $baseUrl,
+                icon: $icon,
+                size: $size,
+                tags: (if $tags == "" then null else ($tags | split(",")) end),
+                createdAt: null,
+                updatedAt: null
+              }' >> server/market/plugins/index.json
+          done
+
+          # 关闭 JSON 数组
+          echo ']}' >> server/market/plugins/index.json
+
+          echo "Index generated: $(wc -c < server/market/plugins/index.json) bytes"
+          echo "Plugin count: $(jq '.plugins | length' server/market/plugins/index.json)"
 
       - name: Validate index.json
         run: |
@@ -48,8 +107,13 @@ jobs:
             echo "Error: index.json not generated"
             exit 1
           fi
+          # 验证 JSON 格式
+          if ! jq empty server/market/plugins/index.json 2>/dev/null; then
+            echo "Error: index.json is not valid JSON"
+            exit 1
+          fi
           echo "Index file size: $(wc -c < server/market/plugins/index.json) bytes"
-          echo "Plugin count: $(node -e "const i=require('./server/market/plugins/index.json'); console.log(i.plugins.length)")"
+          echo "Plugin count: $(jq '.plugins | length' server/market/plugins/index.json)"
 
       - name: Commit and push if changed
         run: |
@@ -59,6 +123,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to index.json"
           else
-            git commit -m "chore(plugin-market): auto-generate plugin index"
+            git commit -m "chore(plugin-market): auto-generate plugin index [skip ci]"
             git push
           fi

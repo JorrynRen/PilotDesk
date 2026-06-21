@@ -20,6 +20,7 @@ interface OnlinePluginInfo {
   author: string;
   minAppVersion: string;
   permissions: string[];
+  baseUrl: string;
   icon?: string;
   size?: string;
   tags?: string[];

@@ -20,8 +20,8 @@ pub struct OnlinePluginInfo {
     pub entry: OnlinePluginEntry,
     pub contributes: Option<OnlinePluginContributes>,
     pub path: String,
-    #[serde(rename = "downloadUrl")]
-    pub download_url: String,
+    #[serde(rename = "baseUrl")]
+    pub base_url: String,
     pub icon: Option<String>,
     pub size: Option<String>,
     pub tags: Option<Vec<String>>,
@@ -95,6 +95,21 @@ fn fetch_url(url: &str) -> Result<String, String> {
         .map_err(|e| format!("读取响应失败: {}", e))
 }
 
+/// 从 raw URL 下载文件内容（二进制）
+fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let response = reqwest::blocking::get(url)
+        .map_err(|e| format!("HTTP 请求失败: {}", e))?;
+
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err(format!("HTTP {}: {}", status, url));
+    }
+
+    response.bytes()
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("读取响应失败: {}", e))
+}
+
 #[tauri::command]
 pub fn plugin_store_fetch_index(
     host: tauri::State<'_, Mutex<PluginHost>>,
@@ -105,7 +120,6 @@ pub fn plugin_store_fetch_index(
     let force = force_refresh.unwrap_or(false);
 
     if force {
-        // 强制刷新：直接走 raw
         let content = fetch_url(INDEX_RAW_URL)?;
         let index: PluginIndex = serde_json::from_str(&content)
             .map_err(|e| format!("解析索引失败: {}", e))?;
@@ -120,7 +134,6 @@ pub fn plugin_store_fetch_index(
             source: "raw".to_string(),
         })
     } else {
-        // 优先 CDN，失败降级 raw
         let (content, source) = match fetch_url(INDEX_CDN_URL) {
             Ok(c) => (c, "cdn"),
             Err(_) => {
@@ -144,12 +157,14 @@ pub fn plugin_store_fetch_index(
     }
 }
 
+/// 从在线商店安装插件（文件夹模式）
+/// 从 raw.githubusercontent.com 逐个下载插件文件到本地插件目录
 #[tauri::command]
 pub fn plugin_store_install(
     host: tauri::State<'_, Mutex<PluginHost>>,
     plugin_id: String,
 ) -> Result<InstallResult, String> {
-    // 先获取索引找到插件信息
+    // 获取索引找到插件信息
     let content = fetch_url(INDEX_RAW_URL)?;
     let index: PluginIndex = serde_json::from_str(&content)
         .map_err(|e| format!("解析索引失败: {}", e))?;
@@ -160,8 +175,8 @@ pub fn plugin_store_install(
 
     // 检查是否已安装
     {
-        let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
-        let local_plugins = host.list_plugins();
+        let guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+        let local_plugins = guard.list_plugins();
         if local_plugins.iter().any(|p| p.manifest.id == plugin_id) {
             return Ok(InstallResult {
                 plugin_id: plugin_id.clone(),
@@ -172,36 +187,90 @@ pub fn plugin_store_install(
         }
     }
 
-    // 下载 zipball
-    let download_url = &online_plugin.download_url;
-    let response = reqwest::blocking::get(download_url)
-        .map_err(|e| format!("下载插件失败: {}", e))?;
+    // 确定插件目录
+    let plugins_dir = {
+        let guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+        let info = guard.get_sandbox_info();
+        std::path::PathBuf::from(info.plugins_dir)
+    };
 
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(format!("下载插件失败: HTTP {}", status));
+    let target_dir = plugins_dir.join(&plugin_id);
+    if target_dir.exists() {
+        std::fs::remove_dir_all(&target_dir)
+            .map_err(|e| format!("清理旧插件目录失败: {}", e))?;
+    }
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("创建插件目录失败: {}", e))?;
+
+    let base_url = &online_plugin.base_url;
+
+    // 下载文件列表（从 manifest.json 推断需要下载的文件）
+    let manifest_url = format!("{}/manifest.json", base_url);
+    let manifest_content = fetch_url(&manifest_url)?;
+
+    // 验证 manifest.json
+    let manifest: super::PluginManifest = serde_json::from_str(&manifest_content)
+        .map_err(|e| format!("解析 manifest.json 失败: {}", e))?;
+
+    // 写入 manifest.json
+    std::fs::write(target_dir.join("manifest.json"), &manifest_content)
+        .map_err(|e| format!("写入 manifest.json 失败: {}", e))?;
+
+    // 下载入口文件
+    let entry_main = &manifest.entry.main;
+    let entry_url = format!("{}/{}", base_url, entry_main);
+    match fetch_bytes(&entry_url) {
+        Ok(data) => {
+            let entry_path = target_dir.join(entry_main);
+            if let Some(parent) = entry_path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(&entry_path, &data)
+                .map_err(|e| format!("写入入口文件失败: {}", e))?;
+        }
+        Err(e) => {
+            // 入口文件可能不存在于 raw（开发阶段），忽略
+            log::warn!("[PluginInstall] 入口文件下载失败 (可能不存在): {}", e);
+        }
     }
 
-    let body = response.bytes()
-        .map_err(|e| format!("读取下载数据失败: {}", e))?;
+    // 下载图标（如果存在）
+    if let Some(icon) = &online_plugin.icon {
+        if !icon.is_empty() {
+            match fetch_bytes(icon) {
+                Ok(data) => {
+                    // 从 icon URL 提取文件名
+                    let icon_name = icon.rsplit('/').next().unwrap_or("icon.png");
+                    std::fs::write(target_dir.join(icon_name), &data)
+                        .map_err(|e| format!("写入图标文件失败: {}", e))?;
+                }
+                Err(_) => {
+                    // 图标不存在是正常的
+                    log::info!("[PluginInstall] 图标不存在 (可选): {}", icon);
+                }
+            }
+        }
+    }
 
-    // 写入临时文件
-    let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!("pilotdesk_plugin_{}.zip", plugin_id));
-    std::fs::write(&temp_path, &body)
-        .map_err(|e| format!("写入临时文件失败: {}", e))?;
+    // 通过 PluginHost 加载插件
+    let manifest_path = target_dir.join("manifest.json");
+    let instance = {
+        let guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+        guard.load_and_validate_plugin(&target_dir, &manifest_path)?
+    };
 
-    // 通过 PluginHost 安装
-    let mut host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
-    let instance = host.install_from_zip(&temp_path.to_string_lossy())?;
+    let id = instance.manifest.id.clone();
 
-    // 清理临时文件
-    let _ = std::fs::remove_file(&temp_path);
+    // 重新 discover 加载新插件
+    {
+        let mut guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+        guard.discover();
+    }
 
     Ok(InstallResult {
-        plugin_id: instance.manifest.id.clone(),
-        plugin_name: instance.manifest.name.clone(),
-        version: instance.manifest.version.clone(),
+        plugin_id: id,
+        plugin_name: online_plugin.name.clone(),
+        version: online_plugin.version.clone(),
         already_installed: false,
     })
 }
