@@ -1,32 +1,29 @@
+{"schemaVersion":"1.0","updatedAt":"2026-06-21T22:33:25Z","plugins":[
 {
-  "schemaVersion": "1.0",
-  "updatedAt": "2026-06-22T00:00:00Z",
-  "plugins": [
-    {
-      "id": "hello-world",
-      "name": "Hello World",
-      "version": "1.0.0",
-      "description": "PilotDesk 示例插件，展示插件系统的基本用法和权限声明",
-      "author": "PilotDesk Team",
-      "minAppVersion": "0.1.0",
-      "path": "plugins/hello-world/1.0.0",
-      "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0",
-      "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/favicon.png",
-      "size": "24K",
-      "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/README.md"
-    },
-    {
-      "id": "snippet-manager",
-      "name": "Snippet Manager",
-      "version": "1.0.0",
-      "description": "管理常用文本片段和提示词模板，支持保存、分类、搜索和快速插入到对话中",
-      "author": "PilotDesk Team",
-      "minAppVersion": "0.1.0",
-      "path": "plugins/snippet-manager/1.0.0",
-      "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0",
-      "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/icon.png",
-      "size": "28K",
-      "readme": ""
-    }
-  ]
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "description": "PilotDesk 示例插件，展示插件系统的基本用法和权限声明",
+  "author": "PilotDesk Team",
+  "minAppVersion": "0.1.0",
+  "path": "plugins/hello-world/1.0.0",
+  "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0",
+  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/favicon.png",
+  "size": "24K",
+  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/README.md"
 }
+,
+{
+  "id": "snippet-manager",
+  "name": "Snippet Manager",
+  "version": "1.0.0",
+  "description": "管理常用文本片段和提示词模板，支持保存、分类、搜索和快速插入到对话中",
+  "author": "PilotDesk Team",
+  "minAppVersion": "0.1.0",
+  "path": "plugins/snippet-manager/1.0.0",
+  "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0",
+  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/icon.png",
+  "size": "28K",
+  "readme": ""
+}
+]}
