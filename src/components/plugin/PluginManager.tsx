@@ -205,7 +205,7 @@ export function PluginManager() {
   }, [uninstall, discover]);
 
   return (
-    <div className="p-4" style={{ height: '100%', overflowY: 'auto' }}>
+    <div className="p-4">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
