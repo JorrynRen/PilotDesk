@@ -1,6 +1,6 @@
 # PilotDesk Agent 统一管理平台设计
 
-> **版本**: v3.3 | **日期**: 2026-06-21 | **状态**: 已实施（技能配置种子数据补全 + 拖拽排序 + Agent 市场 + 导入隐藏删除 + 卸载命令优化）
+> **版本**: v3.4 | **日期**: 2026-06-21 | **状态**: 已实施（消息参数注入修复：-- 分隔符 / = 语法 / 原子参数三种模式通用处理）
 
 ---
 
@@ -164,7 +164,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `update_cmd` | `claude update` |
 | `version_cmd` | `claude --version` |
 | `latest_version_cmd` | `npm view @anthropic-ai/claude-code version` |
-| `run_cmd_template` | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}` |
+| `run_cmd_template` | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}` |
 | `output_parser` | `json-stream` |
 | `output_filter_regex` | `` |
 | `version_pattern` | `v?(\d+\.\d+\.\d+[\w.-]*)` |
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `is_builtin` | `1` |
 
 **进程参数**：
-- 启动命令：`claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}`
+- 启动命令：`claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}`
 - 输出解析：JSON stream 格式，解析 `{"type": "assistant", "message": {"content": [{"type": "text", "text": "..."}]}}`
 - session_id 提取：从 `{"type": "system", "subtype": "init", "session_id": "..."}` 事件提取
 - 会话恢复：`--resume <session_id>` 参数
@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `update_cmd` | `hermes update` |
 | `version_cmd` | `hermes --version` |
 | `latest_version_cmd` | `powershell -NoProfile -Command (Invoke-RestMethod 'https://pypi.org/pypi/hermes-agent/json').info.version` |
-| `run_cmd_template` | `hermes chat -q {message} -Q` |
+| `run_cmd_template` | `hermes chat --query={message} -Q` |
 | `output_parser` | `ansi-text` |
 | `output_filter_regex` | `^(Initializing agent|Resume this session|hermes --resume|Session:|Duration:|Messages:|Query:)` |
 | `version_pattern` | `v?(\d+\.\d+\.\d+[\w.-]*)` |
@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `is_builtin` | `1` |
 
 **进程参数**：
-- 启动命令：`hermes chat -q {message} -Q`
+- 启动命令：`hermes chat --query={message} -Q`
 - 输出解析：ANSI 文本流，需 strip ANSI 转义码后过滤非内容行
 - session_id 提取：从 stderr 文本行 `session_id: xxxxx` 提取
 - 会话恢复：`--resume <session_id>` 参数
@@ -238,7 +238,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `update_cmd` | `codex update` |
 | `version_cmd` | `codex --version` |
 | `latest_version_cmd` | `npm view @openai/codex version` |
-| `run_cmd_template` | `codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}` |
+| `run_cmd_template` | `codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}` |
 | `output_parser` | `json-stream` |
 | `output_filter_regex` | `` |
 | `version_pattern` | `v?(\d+\.\d+\.\d+[\w.-]*)` |
@@ -256,7 +256,7 @@ CREATE TABLE IF NOT EXISTS agents (
 | `is_builtin` | `1` |
 
 **进程参数**：
-- 启动命令：`codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}`
+- 启动命令：`codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}`
 - 输出解析：JSONL 格式，解析 `{"type": "item.completed", "item": {"text": "..."}}`
 - session_id 提取：从 `{"type": "thread.started", "thread_id": "..."}` 事件提取
 - 会话恢复：`exec resume <session_id>` 子命令
@@ -839,8 +839,13 @@ fn exec_agent_cmd(cmd: &str) -> Result<String, AppError> {
 首次消息发送流程：
   send_message(session_id, agent_type, message, agent_session_id=null)
     -> 从 agents 表读取 run_cmd_template
-    -> 替换 {message} 占位符
-    -> 启动子进程
+    -> handler.rs build_command() 处理：
+       -> splitn(2, "{message}") 拆分为前缀和后缀
+       -> 前缀参数经 simple_split 解析
+       -> 检测最后一个参数是否以 = 结尾
+          - 是（Hermes）：消息与 = 参数拼接为 "--key=value"
+          - 否（Claude/Codex）：消息作为独立参数 push（-- 分隔符后的内容均为位置参数）
+       -> 启动子进程
     -> 读取 stdout/stderr
     -> 根据 session_id_source 提取 session_id
     -> 发射 agent-session 事件（含 agentSessionId）
@@ -848,14 +853,151 @@ fn exec_agent_cmd(cmd: &str) -> Result<String, AppError> {
 
 后续消息发送流程：
   send_message(session_id, agent_type, message, agent_session_id="xxx")
-    -> 从 agents 表读取 run_cmd_template
-    -> 从 agents 表读取 resume_arg_template
-    -> 替换 {message} 和 {session_id} 占位符
+    -> 从 agents 表读取 run_cmd_template + resume_arg_template
+    -> handler.rs build_command() 处理：
+       -> 检测到 -- 分隔符时：resume 参数插入到 -- 之前
+          （Claude/Codex：-- 后的消息不被解析为标志；Hermes：= 语法拼接）
+       -> 非 -- 分隔符（Hermes = 语法）：弹出 = 参数 → 插入 resume → 推回 = 参数 → 拼接消息
+          （确保 --query=--help 作为原子参数，不被 resume 隔断）
     -> 启动子进程（带 --resume/exec resume 参数）
     -> agent 恢复上下文，返回有记忆的响应
 ```
 
-### 8.5 数据库迁移
+### 8.6 消息参数注入修复（2026-06-21）
+
+#### 8.6.1 问题根因
+
+用户输入包含 `--help`、`-f`、`/?` 等 CLI 风格文本时，会话崩溃或返回错误。
+
+**根因链路**：
+```
+用户输入 "--help"
+  → build_command() 使用 template.replace("{message}", "--help")
+  → simple_split() 按空格整体拆分
+  → 参数列表包含 "--help"
+  → CLI 将 "--help" 解释为自身标志而非消息内容
+  → argparse/yargs 显示帮助页 / 报错退出
+```
+
+**更深层问题**：含空格的消息也会被拆散。`hello world` 被拆为 `["hello", "world"]` 两个独立参数。
+
+#### 8.6.2 探索过程
+
+修复经历了多轮探索验证：
+
+| 轮次 | 方案 | 验证结果 | 结论 |
+|------|------|---------|------|
+| 1 | 双引号包裹消息 `"{message}"` | `simple_split` 剥离引号，`--help` 仍是裸参数 | ❌ 不彻底 |
+| 2 | `splitn` 拆分模板，消息作为原子参数 `push` | `--help` 仍是独立参数被 argparse 拦截 | ❌ 不够 |
+| 3 | `--query={message}` 长选项 `=` 语法 | Hermes argparse 正确解析 `--query=--help` | ✅ Hermes 通过 |
+| 4 | `-p={message}` 短选项 `=` 语法 | yargs 不支持 `-p=value`，报错 `-=--help` | ❌ Claude 失败 |
+| 5 | `--prompt={message}` 长选项 `=` 语法 | yargs 也不支持 `--prompt=--help`，报错 | ❌ Claude 失败 |
+| 6 | `-- {message}` 分隔符方案 | yargs 和 argparse 均正确识别 | ✅ Claude/Codex 通过 |
+
+**最终确认**：三种 CLI 框架的兼容性：
+
+| CLI 框架 | 适用 Agent | `=` 语法 | `--` 分隔符 |
+|---------|-----------|---------|------------|
+| yargs（Node.js） | Claude Code | ❌ 不支持（短/长均不支持） | ✅ 支持 |
+| argparse（Python） | Hermes | ✅ 支持 | ✅ 支持 |
+| argparse（Python） | Codex | N/A（位置参数） | ✅ 支持 |
+
+#### 8.6.3 修复方案
+
+**三个 Agent 的最终模板**：
+
+| Agent | 模板 | 安全机制 | CLI 框架 |
+|-------|------|---------|---------|
+| Claude | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}` | `--` 分隔符停止解析 | yargs |
+| Hermes | `hermes chat --query={message} -Q` | `=` 语法强制值绑定 | argparse |
+| Codex | `codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}` | `--` 分隔符停止解析 | argparse |
+
+**`handler.rs` 通用处理逻辑**（`build_command()` 方法）：
+
+```
+splitn(2, "{message}") → 前缀 + 后缀
+         ↓
+解析前缀参数 → 检测结构特征
+         ↓
+  ├── 检测到 "--" 分隔符
+  │     ├── resume 参数插入到 "--" 之前（否则不被识别为 CLI 标志）
+  │     └── 消息 push 到末尾（"--" 后的内容均为位置参数）
+  │
+  ├── 检测到 "=" 结尾（如 --query=）
+  │     ├── resume 参数插入到 "=" 参数之前（不隔断原子性）
+  │     └── 消息拼接到 "=" 参数后（形成 "--key=value"）
+  │
+  └── 其他情况
+        ├── resume 参数追加到末尾
+        └── 消息作为独立参数 push
+         ↓
+追加后缀参数
+```
+
+**关键设计点**：
+- 所有分支逻辑仅依赖模板字符串的**结构特征**（`--` 分隔符、`=` 结尾），无任何 Agent 名称硬编码
+- `=` 语法检测优先级低于 `--` 检测（有 `--` 时优先使用 `--` 逻辑）
+- 消息始终作为**单个原子参数**传递，不经过 `simple_split` 拆分
+
+#### 8.6.4 数据流对比
+
+以 `--help` 为例，修复前后对比：
+
+```
+修复前：
+  template.replace("{message}", "--help")
+  → simple_split("claude -p ... --help")
+  → args = ["-p", ..., "--help"]
+  → argparse/yargs 将 --help 解释为自身标志 → 崩溃 ❌
+
+修复后（Claude）：
+  splitn → prefix="claude -p ... -- ", suffix=""
+  simple_split(prefix) → args = ["-p", ..., "--"]
+  resume 插入到 "--" 之前 → args = ["-p", ..., "--resume", "abc-123", "--"]
+  push("--help") → args = ["-p", ..., "--resume", "abc-123", "--", "--help"]
+  → yargs 将 -- 后的 --help 视为位置参数 ✅
+
+修复后（Hermes）：
+  splitn → prefix="hermes chat --query=", suffix=" -Q"
+  simple_split(prefix) → args = ["chat", "--query="]
+  resume 插入到 "=" 之前 → args = ["chat", "--resume", "abc-123", "--query="]
+  push_str("--help") → args = ["chat", "--resume", "abc-123", "--query=--help"]
+  → argparse 将 = 后内容强制作为 --query 的值 ✅
+```
+
+#### 8.6.5 迁移记录
+
+| 版本 | 说明 |
+|------|------|
+| v17 | Hermes 模板 `-q {message}` → `--query={message}` |
+| v18 | Claude 模板 `-p {message}` → `-p={message}`（实际执行时仍为 `-p=`） |
+| v19 | Claude 模板 `-p=` → `--prompt=`（yargs 不支持短选项 `=`） |
+| v20 | Claude 模板 `--prompt=` → `-- {message}`（yargs 也不支持长选项 `=`，最终用 `--` 分隔符） |
+
+#### 8.6.6 新增 Agent 配置指南
+
+新增 Agent 时，只需在 `agents` 表中配置一条记录，后端无需任何代码修改：
+
+**模板选择**：
+
+| 如果 Agent 的 CLI 框架是 | 推荐模板模式 | 示例 |
+|-------------------------|------------|------|
+| yargs / commander（Node.js） | `-- {message}` | `cmd --flag -- {message}` |
+| argparse（Python）且参数支持 `=` | `--key={message}` | `cmd --query={message} -Q` |
+| argparse（Python）且参数为位置参数 | `-- {message}` | `cmd --flag -- {message}` |
+
+**配置字段**：
+
+| 字段 | 说明 |
+|------|------|
+| `run_cmd_template` | 启动命令模板，`{message}` 占位符在运行时替换为用户消息 |
+| `output_parser` | `json-stream` / `ansi-text` / `raw-text` |
+| `session_id_source` | `stdout-json` / `stderr-text` / `none` |
+| `session_id_event_type` | JSON 事件类型路径，如 `system/init`、`thread.started` |
+| `session_id_field` | JSON 字段名，如 `session_id`、`thread_id` |
+| `resume_arg_template` | 恢复参数模板，`{session_id}` 占位符，如 `--resume {session_id}` |
+
+
 
 #### Migration v11 -- 技能管理元数据化（2026-06-20）
 
@@ -975,7 +1117,7 @@ VALUES
      'claude update',
      'claude --version',
      'npm view @anthropic-ai/claude-code version',
-     'claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}',
+     'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}',
      'json-stream', '',
      1, 'stdout-json', 'system/init', 'session_id', '--resume {session_id}',
      '~/.claude/skills/', 'SKILL.md', 'collection',
@@ -987,7 +1129,7 @@ VALUES
      'hermes update',
      'hermes --version',
      'powershell -NoProfile -Command (Invoke-RestMethod ''https://pypi.org/pypi/hermes-agent/json'').info.version',
-     'hermes chat -q {message} -Q',
+     'hermes chat --query={message} -Q',
      'ansi-text',
      '^(Initializing agent|Resume this session|hermes --resume|Session:|Duration:|Messages:|Query:)',
      1, 'stderr-text', '', '', '--resume {session_id}',
@@ -1000,7 +1142,7 @@ VALUES
      'codex update',
      'codex --version',
      'npm view @openai/codex version',
-     'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}',
+     'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}',
      'json-stream', '',
      1, 'stdout-json', 'thread.started', 'thread_id', 'exec resume {session_id}',
      '~/.codex/skills/', 'SKILL.md', 'collection',
@@ -1072,9 +1214,9 @@ CREATE TABLE IF NOT EXISTS agents (
 
 | agent_type | display_name | 包管理器 | run_cmd_template | output_parser | session_id_source | session_id_field | resume_arg_template | skills_dir | skill_entry_file | skill_display_mode | color | icon | sort_order |
 |-----------|-------------|---------|-----------------|--------------|-----------------|-----------------|-------------------|-----------|----------------|---------------------|-------|------|-----------|
-| claude | Claude Code | npm | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}` | json-stream | stdout-json | session_id | `--resume {session_id}` | `~/.claude/skills/`（显式） | SKILL.md | collection | #3B82F6 | `file:claude_icon.ico` | 1 |
-| hermes | Hermes Agent | pip | `hermes chat -q {message} -Q` | ansi-text | stderr-text | (前缀匹配) | `--resume {session_id}` | `~/AppData/Local/hermes/skills/`（显式） | SKILL.md | collection | #8B5CF6 | `file:hermes_icon.ico` | 2 |
-| codex | Codex CLI | npm | `codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}` | json-stream | stdout-json | thread_id | `exec resume {session_id}` | `~/.codex/skills/`（显式） | SKILL.md | collection | #F59E0B | `file:codex_icon.ico` | 3 |
+| claude | Claude Code | npm | `claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}` | json-stream | stdout-json | session_id | `--resume {session_id}` | `~/.claude/skills/`（显式） | SKILL.md | collection | #3B82F6 | `file:claude_icon.ico` | 1 |
+| hermes | Hermes Agent | pip | `hermes chat --query={message} -Q` | ansi-text | stderr-text | (前缀匹配) | `--resume {session_id}` | `~/AppData/Local/hermes/skills/`（显式） | SKILL.md | collection | #8B5CF6 | `file:hermes_icon.ico` | 2 |
+| codex | Codex CLI | npm | `codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}` | json-stream | stdout-json | thread_id | `exec resume {session_id}` | `~/.codex/skills/`（显式） | SKILL.md | collection | #F59E0B | `file:codex_icon.ico` | 3 |
 
 **交付物**：
 - `agents` 表创建成功，种子数据可查询

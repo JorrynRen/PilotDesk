@@ -1,6 +1,6 @@
 # PilotDesk Agent 会话延续能力设计
 
-> **版本**: v2.0 | **日期**: 2026-06-19 | **状态**: 已实施
+> **版本**: v2.1 | **日期**: 2026-06-21 | **状态**: 已实施（消息参数注入修复：-- 分隔符 / = 语法 / 原子参数三种模式通用处理）
 
 ---
 
@@ -11,9 +11,9 @@
 当前 PilotDesk 的 Agent 会话存在根本性设计缺陷：**每一条消息对 agent 来说都是独立的、无上下文的单次调用**。
 
 ```
-消息 1:  claude -p "..."            → 新进程 → 退出
-消息 2:  claude -p "..."            → 新进程 → 退出（不记得消息 1）
-消息 N:  claude -p "..."            → 新进程 → 退出（不记得之前任何消息）
+消息 1:  claude --prompt="..."            → 新进程 → 退出
+消息 2:  claude --prompt="..."            → 新进程 → 退出（不记得消息 1）
+消息 N:  claude --prompt="..."            → 新进程 → 退出（不记得之前任何消息）
 ```
 
 Agent CLI 原生支持会话延续，但 PilotDesk 未利用此能力。
@@ -37,16 +37,18 @@ Claude Code 原生支持会话延续：
 
 ```bash
 # 首次对话
-claude -p "第一次的问题" --verbose --output-format stream-json --dangerously-skip-permissions
+claude --prompt="第一次的问题" --output-format stream-json --verbose --dangerously-skip-permissions
 
 # 恢复指定会话（已验证通过）
-claude -p --output-format stream-json --verbose --dangerously-skip-permissions --resume <session_id> "后续的问题"
+claude --resume <session_id> --prompt="后续的问题" --output-format stream-json --verbose --dangerously-skip-permissions
 ```
 
 **session_id 提取**：从 stdout JSON stream 的第一个事件中提取：
 ```json
 {"type": "system", "subtype": "init", "session_id": "bb3097dd-8545-4c1b-862f-e00e309e30d6"}
 ```
+
+> **注意**：`-- {message}` 使用 `--` 分隔符，yargs（Node.js CLI 框架）停止解析标志，后续内容均为位置参数。
 
 **测试结果**：
 - 首次消息："记住这个数字：42" → 回复"已记住"，提取 `session_id: 3fb2e1c3-9b33-4047-b8d8-863b2b5f4737`
@@ -59,16 +61,18 @@ Hermes 支持 `--resume` 参数恢复会话：
 
 ```bash
 # 首次对话
-hermes chat -q "第一次的问题" -Q
+hermes chat --query="第一次的问题" -Q
 
 # 恢复指定会话（已验证通过）
-hermes chat -q "后续的问题" -Q --resume <session_id>
+hermes chat --resume <session_id> --query="后续的问题" -Q
 ```
 
 **session_id 提取**：从 stderr 文本行中提取：
 ```
 session_id: 20260619_023802_571ee5
 ```
+
+> **注意**：`--query={message}` 使用 `=` 语法，argparse 将 `=` 后的内容强制作为 `--query` 的值，即使以 `--` 开头也不会被解释为标志。
 
 **测试结果**：
 - 首次消息："记住这个数字：42" → 回复"已记住"，提取 `session_id: 20260619_023802_571ee5`
@@ -82,16 +86,18 @@ Codex 支持 `exec resume` 子命令恢复会话：
 
 ```bash
 # 首次对话
-codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "第一次的问题"
+codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- "第一次的问题"
 
 # 恢复指定会话（已验证通过）
-codex exec resume --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox <session_id> "后续的问题"
+codex exec resume --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox <session_id> -- "后续的问题"
 ```
 
 **session_id 提取**：从 stdout JSONL 的 `thread.started` 事件中提取：
 ```json
 {"type":"thread.started","thread_id":"019edc15-1535-7951-8b86-dc6042445b66"}
 ```
+
+> **注意**：`-- {message}` 使用 `--` 分隔符，告诉 argparse 停止解析标志，后续内容均为位置参数。
 
 **文本提取**：从 `item.completed` 事件中提取：
 ```json
@@ -122,7 +128,7 @@ codex exec resume --json --skip-git-repo-check --dangerously-bypass-approvals-an
 | session_id 来源 | stdout JSON stream | stderr 文本行 | stdout JSONL |
 | 提取事件 | `type=system,subtype=init` | `session_id: xxxxx` | `type=thread.started` |
 | session_id 字段 | `event["session_id"]` | `line.strip_prefix("session_id: ")` | `event["thread_id"]` |
-| 恢复参数 | `--resume <uuid>` | `--resume <id>` | `exec resume <uuid>` |
+| 恢复参数 | `--resume <uuid>`（插入到 `--prompt=` 之前） | `--resume <id>`（插入到 `--query=` 之前） | `exec resume <uuid>`（插入到 `--` 之后） |
 | 输出格式 | `stream-json` | `-Q` 安静模式 | `--json` JSONL |
 | 文本提取 | `type=assistant -> message.content[].text` | strip ANSI + 过滤非内容行 | `type=item.completed -> item.text` |
 | 额外标志 | `--verbose`（stream-json 必需） | 无 | `--skip-git-repo-check` `--dangerously-bypass-approvals-and-sandbox` |
@@ -224,46 +230,21 @@ ALTER TABLE sessions ADD COLUMN agent_session_id TEXT DEFAULT NULL;
 #### build_args（agent/mod.rs）
 
 ```rust
-pub fn build_args(&self, message: &str, _mode: &str, _system_prompt: Option<&str>, agent_session_id: Option<&str>) -> Vec<String> {
-    match self {
-        Self::Claude => {
-            let mut args = vec![
-                "-p".into(),
-                "--output-format".into(), "stream-json".into(),
-                "--verbose".into(),
-                "--dangerously-skip-permissions".into(),
-            ];
-            if let Some(sid) = agent_session_id {
-                args.push("--resume".into());
-                args.push(sid.to_string());
-            }
-            args.push(message.into());
-            args
-        },
-        Self::Hermes => {
-            let mut args = vec!["chat".into(), "-q".into(), message.into(), "-Q".into()];
-            if let Some(sid) = agent_session_id {
-                args.push("--resume".into());
-                args.push(sid.to_string());
-            }
-            args
-        },
-        Self::Codex => {
-            let mut args = vec![
-                "exec".into(),
-                "--json".into(),
-                "--skip-git-repo-check".into(),
-                "--dangerously-bypass-approvals-and-sandbox".into(),
-            ];
-            if let Some(sid) = agent_session_id {
-                args.push("resume".into());
-                args.push(sid.to_string());
-            }
-            args.push(message.into());
-            args
-        },
-    }
-}
+// 当前实现已迁移至 handler.rs 的 ProcessHandler trait
+// 通过 run_cmd_template 配置驱动，无需硬编码 build_args
+//
+// 各 Agent 模板（定义在 init.rs 种子数据 + migration v17/v18）：
+//
+// Claude:  claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}
+// Hermes:  hermes chat --query={message} -Q
+// Codex:   codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}
+//
+// handler.rs 的 build_command() 方法通用处理逻辑：
+// 1. splitn(2, "{message}") 拆分为前缀和后缀
+// 2. 检测前缀最后一个参数是否以 = 结尾
+//    - 是（Claude/Hermes）：= 语法，消息与 = 参数拼接为 "--key=value"
+//    - 否（Codex）：消息作为独立参数 push
+// 3. resume 参数插入到 = 参数之前，确保 --query=--help 的原子性
 ```
 
 #### session_id 提取（stdout 循环）
@@ -481,30 +462,30 @@ sendChat(sid, message, mode, currentSession.agentType, undefined, systemPrompt, 
 
 ```bash
 # 首次对话（非交互式 + JSON stream）
-claude -p --output-format stream-json --verbose --dangerously-skip-permissions "问题"
+claude --prompt="问题" --output-format stream-json --verbose --dangerously-skip-permissions
 
 # 恢复指定会话
-claude -p --output-format stream-json --verbose --dangerously-skip-permissions --resume <session_id> "问题"
+claude --resume <session_id> --prompt="问题" --output-format stream-json --verbose --dangerously-skip-permissions
 ```
 
 #### Hermes Agent
 
 ```bash
 # 首次对话（安静模式）
-hermes chat -q "问题" -Q
+hermes chat --query="问题" -Q
 
 # 恢复指定会话
-hermes chat -q "问题" -Q --resume <session_id>
+hermes chat --resume <session_id> --query="问题" -Q
 ```
 
 #### Codex CLI
 
 ```bash
 # 首次对话（JSONL 模式 + 非交互式）
-codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "问题"
+codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- "问题"
 
 # 恢复指定会话
-codex exec resume --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox <session_id> "问题"
+codex exec resume --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox <session_id> -- "问题"
 ```
 
 ### 7.2 测试验证脚本
@@ -525,3 +506,27 @@ codex exec resume --json --skip-git-repo-check --dangerously-bypass-approvals-an
 | JSONL | Codex 的 JSON 行格式，每行一个 JSON 对象 |
 | 安静模式 | Hermes 的 `-Q` 标志，抑制横幅和旋转器 |
 | 上下文能力 | API 会话中携带历史消息列表的能力 |
+
+
+### 7.4 消息参数注入修复探索记录
+
+修复 `--help` 崩溃问题经历了多轮探索验证：
+
+| 轮次 | 方案 | 验证结果 |
+|------|------|---------|
+| 1 | 双引号包裹 `"{message}"` | `simple_split` 剥离引号，`--help` 仍是裸参数 ❌ |
+| 2 | `splitn` 拆分 + 原子参数 `push` | argparse 仍拦截 `--help` ❌ |
+| 3 | `--query={message}` 长选项 `=` 语法 | Hermes argparse 通过 ✅ |
+| 4 | `-p={message}` 短选项 `=` 语法 | yargs 不支持，报错 `-=--help` ❌ |
+| 5 | `--prompt={message}` 长选项 `=` 语法 | yargs 也不支持 ❌ |
+| 6 | `-- {message}` 分隔符方案 | yargs 和 argparse 均通过 ✅ |
+
+**最终模板**：
+
+| Agent | 模板 | 安全机制 |
+|-------|------|---------|
+| Claude | `-p ... --dangerously-skip-permissions -- {message}` | `--` 分隔符 |
+| Hermes | `--query={message} -Q` | `=` 语法 |
+| Codex | `--json ... --dangerously-bypass-approvals-and-sandbox -- {message}` | `--` 分隔符 |
+
+**handler.rs 通用逻辑**：检测 `--` 分隔符 → resume 插入到 `--` 之前；检测 `=` 结尾 → resume 插入到 `=` 之前。
