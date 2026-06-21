@@ -1,3 +1,7 @@
+pub mod plugin_fs;
+pub mod shell;
+pub mod store;
+
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

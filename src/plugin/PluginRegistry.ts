@@ -158,7 +158,7 @@ class PluginRegistry {
       }
     }
 
-    // 2. 清理 API 资源
+    // 2. 清理 API 资源（自动注销命令/事件/全局订阅）
     runtime?.api.dispose();
 
     // 3. 注销面板组件

@@ -7,7 +7,13 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { pluginRegistry } from './PluginRegistry';
-import type { PanelContribution } from '../types/plugin';
+import { commandDispatcher } from './CommandDispatcher';
+import { eventDispatcher } from './EventDispatcher';
+import { globalEventBus } from './GlobalEventBus';
+import { PluginFSAPI } from './PluginAPI.fs';
+import { PluginShellAPI } from './PluginAPI.shell';
+import { PluginAgentAPI } from './PluginAPI.agent';
+import type { PanelContribution, CommandHandler, EventHandler } from '../types/plugin';
 
 /** 插件存储（基于 localStorage，按插件 ID 隔离） */
 class PluginStorage {
@@ -70,6 +76,9 @@ export class PluginAPI {
   };
   readonly events: PluginEventBus;
   readonly storage: PluginStorage;
+  readonly fs: PluginFSAPI;
+  readonly shell: PluginShellAPI;
+  readonly agent: PluginAgentAPI;
 
   private pluginPath: string;
   private pluginId: string;
@@ -80,6 +89,9 @@ export class PluginAPI {
 
     this.events = new PluginEventBus();
     this.storage = new PluginStorage(pluginId);
+    this.fs = new PluginFSAPI(pluginId);
+    this.shell = new PluginShellAPI(pluginId);
+    this.agent = new PluginAgentAPI(pluginId);
 
     this.ui = {
       addPanel: (config) => {
@@ -90,9 +102,7 @@ export class PluginAPI {
         pluginRegistry.unsetPanelComponent(pluginPath, id);
       },
       showToast: (message, type) => {
-        // 使用 Tauri dialog 或自定义 toast
         console.log('[PluginAPI] Toast [' + type + ']: ' + message);
-        // 可通过 Tauri 事件发送到前端
       },
     };
 
@@ -101,10 +111,43 @@ export class PluginAPI {
         return invoke<T>(cmd, params || {});
       },
     };
+
+    // v2.0: 命令注册与执行
+    this.commands = {
+      register: (commandId: string, handler: CommandHandler) => {
+        commandDispatcher.register(pluginId, commandId, handler);
+      },
+      execute: <T = any>(commandId: string, params?: any) => {
+        return commandDispatcher.execute<T>(pluginId, commandId, params);
+      },
+    };
+
+    // v2.0: 事件钩子注册
+    this.hooks = {
+      on: (event: string, handler: EventHandler) => {
+        return eventDispatcher.register(pluginId, event, handler);
+      },
+    };
+
+    // v2.0: 跨插件通信
+    this.global = {
+      on: (event: string, handler: (payload: any) => void) => {
+        return globalEventBus.on(pluginId, event, handler);
+      },
+      emit: (event: string, payload?: any) => {
+        globalEventBus.emit(event, payload);
+      },
+      call: <T = any>(pluginId: string, commandId: string, params?: any) => {
+        return globalEventBus.call<T>(pluginId, commandId, params);
+      },
+    };
   }
 
   /** 清理所有资源 */
   dispose(): void {
     this.events.clear();
+    commandDispatcher.unregisterAll(this.pluginId);
+    eventDispatcher.unregisterAll(this.pluginId);
+    globalEventBus.offAll(this.pluginId);
   }
 }

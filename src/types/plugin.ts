@@ -46,6 +46,14 @@ export interface PanelContribution {
 export interface CommandContribution {
   id: string;
   title: string;
+  input?: {
+    type: 'object';
+    properties?: Record<string, { type: string; description?: string }>;
+  };
+  output?: {
+    type: 'object';
+    properties?: Record<string, { type: string; description?: string }>;
+  };
 }
 
 /** 事件钩子贡献点 */
@@ -89,6 +97,20 @@ export interface ManifestValidationError {
   message: string;
 }
 
+/** 命令 handler */
+export type CommandHandler = (params: any) => Promise<any>;
+
+/** 事件 handler */
+export type EventHandler = (payload: any) => Promise<any | void>;
+
+/** 命令执行结果 */
+export interface CommandResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+  duration?: number;
+}
+
 /** 插件前端 API */
 export interface PluginAPI {
   ui: {
@@ -107,6 +129,42 @@ export interface PluginAPI {
     get(key: string): Promise<string | null>;
     set(key: string, value: string): Promise<void>;
     delete(key: string): Promise<void>;
+  };
+  /** v2.0 新增：命令注册与执行 */
+  commands: {
+    register(commandId: string, handler: CommandHandler): void;
+    execute<T = any>(commandId: string, params?: any): Promise<T>;
+  };
+  /** v2.0 新增：事件钩子注册 */
+  hooks: {
+    on(event: string, handler: EventHandler): () => void;
+  };
+  /** v2.0 新增：跨插件通信 */
+  global: {
+    on(event: string, handler: (payload: any) => void): () => void;
+    emit(event: string, payload?: any): void;
+    call<T = any>(pluginId: string, commandId: string, params?: any): Promise<CommandResult>;
+  };
+  /** v2.0 新增：文件系统操作（沙箱禁用时可用） */
+  fs: {
+    readText(path: string): Promise<string>;
+    writeText(path: string, content: string): Promise<void>;
+    delete(path: string): Promise<void>;
+    exists(path: string): Promise<boolean>;
+    readDir(path: string): Promise<{ name: string; path: string; is_dir: boolean; size: number }[]>;
+  };
+  /** v2.0 新增：Shell 命令执行（沙箱禁用 + 二次确认） */
+  shell: {
+    exec(command: string, options?: { timeout_ms?: number; working_dir?: string }): Promise<{ stdout: string; stderr: string; exit_code: number }>;
+  };
+  /** v2.0 新增：Agent 会话管理 */
+  agent: {
+    createSession(agentType: string, options?: { system_prompt?: string }): Promise<{ session_id: string; agent_type: string; created_at: string }>;
+    sendMessage(sessionId: string, content: string): Promise<{ content: string; session_id: string }>;
+    getHistory(sessionId: string): Promise<{ role: string; content: string; timestamp: string }[]>;
+    listSessions(): Promise<{ session_id: string; agent_type: string; created_at: string }[]>;
+    deleteSession(sessionId: string): Promise<void>;
+    listAgents(): Promise<{ agent_type: string; name: string; version: string }[]>;
   };
 }
 
