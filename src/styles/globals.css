@@ -336,6 +336,19 @@ button:disabled:hover {
   animation: pd-breathe 1.5s ease-in-out infinite;
 }
 
+@keyframes pd-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pd-animate-spin {
+  animation: pd-spin 1s linear infinite;
+}
+
 /* ═══════════════════════════════════════════════════
    Base Styles
    ═══════════════════════════════════════════════════ */
