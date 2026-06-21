@@ -19,13 +19,9 @@ interface OnlinePluginInfo {
   description: string;
   author: string;
   minAppVersion: string;
-  permissions: string[];
   baseUrl: string;
   icon?: string;
   size?: string;
-  tags?: string[];
-  createdAt?: string;
-  updatedAt?: string;
 }
 
 interface LocalPluginVersion {

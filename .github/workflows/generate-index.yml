@@ -55,7 +55,7 @@ jobs:
             # 计算目录大小
             size=$(du -sh "$plugin_dir" | cut -f1)
 
-            # 构建插件信息 JSON
+            # 构建插件信息 JSON（仅存储浏览/搜索所需字段，完整清单安装时从 baseUrl 读取）
             [ "$first" = true ] && first=false || echo ',' >> server/market/plugins/index.json
 
             jq -n --arg id "$plugin_id" \
@@ -64,14 +64,10 @@ jobs:
               --arg description "$(jq -r '.description // empty' "$manifest")" \
               --arg author "$(jq -r '.author // empty' "$manifest")" \
               --arg minAppVersion "$(jq -r '.minAppVersion // empty' "$manifest")" \
-              --argjson permissions "$(jq -c '.permissions // []' "$manifest")" \
-              --argjson entry "$(jq -c '.entry // {"main":"index.js"}' "$manifest")" \
-              --argjson contributes "$(jq -c '.contributes // {}' "$manifest")" \
               --arg path "plugins/$rel_path" \
               --arg baseUrl "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path" \
               --arg icon "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path/icon.png" \
               --arg size "$size" \
-              --arg tags "$(jq -r '[.tags[]?] | join(",")' "$manifest")" \
               '{
                 id: $id,
                 name: $name,
@@ -79,16 +75,10 @@ jobs:
                 description: $description,
                 author: $author,
                 minAppVersion: $minAppVersion,
-                permissions: $permissions,
-                entry: $entry,
-                contributes: $contributes,
                 path: $path,
                 baseUrl: $baseUrl,
                 icon: $icon,
-                size: $size,
-                tags: (if $tags == "" then null else ($tags | split(",")) end),
-                createdAt: null,
-                updatedAt: null
+                size: $size
               }' >> server/market/plugins/index.json
           done
 

@@ -6,7 +6,8 @@ use super::PluginHost;
 /// 索引文件 schema 版本
 const INDEX_SCHEMA_VERSION: &str = "1.0";
 
-/// 在线商店插件信息
+/// 在线商店插件信息（精简版，仅存储浏览/搜索所需字段）
+/// 完整清单（permissions/entry/contributes）安装时从 baseUrl/manifest.json 读取
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OnlinePluginInfo {
     pub id: String,
@@ -16,32 +17,14 @@ pub struct OnlinePluginInfo {
     pub author: String,
     #[serde(rename = "minAppVersion")]
     pub min_app_version: String,
-    pub permissions: Vec<String>,
-    pub entry: OnlinePluginEntry,
-    pub contributes: Option<OnlinePluginContributes>,
     pub path: String,
     #[serde(rename = "baseUrl")]
     pub base_url: String,
     pub icon: Option<String>,
     pub size: Option<String>,
-    pub tags: Option<Vec<String>>,
-    #[serde(rename = "createdAt")]
-    pub created_at: Option<String>,
-    #[serde(rename = "updatedAt")]
-    pub updated_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OnlinePluginEntry {
-    pub main: String,
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OnlinePluginContributes {
-    pub panels: Option<Vec<serde_json::Value>>,
-    pub commands: Option<Vec<serde_json::Value>>,
-    pub hooks: Option<Vec<serde_json::Value>>,
-}
 
 /// 插件索引
 #[derive(Debug, Clone, Serialize, Deserialize)]
