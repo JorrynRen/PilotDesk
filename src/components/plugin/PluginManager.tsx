@@ -205,8 +205,9 @@ export function PluginManager() {
   }, [uninstall, discover]);
 
   return (
-    <div className="p-4" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
-      <div className="flex items-center justify-between mb-4">
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="shrink-0 px-4 pt-4 pb-2">
+        <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
             插件管理
@@ -260,7 +261,7 @@ export function PluginManager() {
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div className="flex-1 overflow-y-auto px-4 pb-4">
       {showStore ? (
         <OnlinePluginStore onClose={() => setShowStore(false)} />
       ) : showSandbox ? (
