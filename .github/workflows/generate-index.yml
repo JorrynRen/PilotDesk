@@ -1,0 +1,64 @@
+# 插件商店索引自动生成
+# 当 server/market/plugins/ 目录下的插件包发生变更时，
+# 自动重新生成 index.json 索引文件并提交到仓库。
+#
+# 索引文件位置: server/market/plugins/index.json
+# 插件包位置:   server/market/plugins/<plugin-id>/<version>/plugin.zip
+
+name: Generate Plugin Index
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/market/plugins/**/*.zip'
+      - 'server/market/plugins/**/manifest.json'
+  workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: '强制刷新所有插件索引'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  generate-index:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate plugin index
+        run: node server/market/scripts/generate-index.js
+
+      - name: Validate index.json
+        run: |
+          echo "Validating index.json..."
+          if [ ! -f server/market/plugins/index.json ]; then
+            echo "Error: index.json not generated"
+            exit 1
+          fi
+          echo "Index file size: $(wc -c < server/market/plugins/index.json) bytes"
+          echo "Plugin count: $(node -e "const i=require('./server/market/plugins/index.json'); console.log(i.plugins.length)")"
+
+      - name: Commit and push if changed
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add server/market/plugins/index.json
+          if git diff --staged --quiet; then
+            echo "No changes to index.json"
+          else
+            git commit -m "chore(plugin-market): auto-generate plugin index"
+            git push
+          fi

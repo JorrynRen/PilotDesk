@@ -86,7 +86,7 @@ class PluginRegistry {
    * 读取并执行插件入口文件
    * 将 export default { onLoad, onUnload } 转换为可调用的模块
    */
-  private async executePluginEntry(plugin: PluginInstance): Promise<{ onLoad?: Function; onUnload?: Function } | null> {
+  private async executePluginEntry(plugin: PluginInstance): Promise<{ onLoad?: ((api: PluginAPI) => void | Promise<void>) | undefined; onUnload?: (() => void | Promise<void>) | undefined; } | null> {
     try {
       // 1. 读取入口文件内容
       const source = await invoke<string>('plugin_read_entry', { pluginId: plugin.manifest.id });

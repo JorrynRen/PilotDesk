@@ -36,7 +36,7 @@ type PluginStatus = 'installed' | 'update-available' | 'not-installed' | 'instal
 
 // ── 组件 ──
 
-export const OnlinePluginStore: React.FC = () => {
+export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
   const [plugins, setPlugins] = useState<OnlinePluginInfo[]>([]);
   const [localVersions, setLocalVersions] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);

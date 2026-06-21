@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Mutex;
 
 use super::PluginHost;
 use crate::agent::AgentManager;
 use crate::commands::agents::get_agent_inner;
-use crate::db::DbState;
+use crate::DbState;
 use tokio::sync::Mutex as AsyncMutex;
 
 /// 会话信息
@@ -44,7 +44,7 @@ pub async fn plugin_agent_create_session(
     host: tauri::State<'_, Mutex<PluginHost>>,
     plugin_id: String,
     agent_type: String,
-    options: Option<serde_json::Value>,
+    _options: Option<serde_json::Value>,
 ) -> Result<AgentSessionInfo, String> {
     let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
     let sandbox_info = host.get_sandbox_info();
@@ -81,18 +81,18 @@ pub async fn plugin_agent_send_message(
     session_id: String,
     content: String,
 ) -> Result<AgentResponse, String> {
-    let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
-    let sandbox_info = host.get_sandbox_info();
+    {
+        let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+        let sandbox_info = host.get_sandbox_info();
 
-    let plugins = host.list_plugins();
-    let plugin = plugins.iter().find(|p| p.manifest.id == plugin_id)
-        .ok_or_else(|| format!("插件 '{}' 未找到", plugin_id))?;
+        let plugins = host.list_plugins();
+        let plugin = plugins.iter().find(|p| p.manifest.id == plugin_id)
+            .ok_or_else(|| format!("插件 '{}' 未找到", plugin_id))?;
 
-    if sandbox_info.sandbox_enabled && !PluginHost::has_permission(plugin, "session:execute") {
-        return Err("沙箱已启用，需要 session:execute 权限".to_string());
+        if sandbox_info.sandbox_enabled && !PluginHost::has_permission(plugin, "session:execute") {
+            return Err("沙箱已启用，需要 session:execute 权限".to_string());
+        }
     }
-
-    drop(host);
 
     // 从 session_id 推断 agent_type (格式: plugin_{pluginId}_{agentType}_{uuid})
     let parts: Vec<&str> = session_id.split('_').collect();
@@ -149,7 +149,7 @@ pub async fn plugin_agent_get_history(
     Ok(messages.into_iter().map(|m| AgentMessage {
         role: m.role,
         content: m.content,
-        timestamp: m.created_at,
+        timestamp: m.timestamp.to_string(),
     }).collect())
 }
 
@@ -172,7 +172,7 @@ pub async fn plugin_agent_list_sessions(
         .map(|s| AgentSessionInfo {
             session_id: s.id,
             agent_type: s.agent_type,
-            created_at: s.created_at,
+            created_at: s.created_at.to_string(),
         })
         .collect())
 }
@@ -182,7 +182,7 @@ pub async fn plugin_agent_list_sessions(
 pub async fn plugin_agent_delete_session(
     host: tauri::State<'_, Mutex<PluginHost>>,
     state: tauri::State<'_, DbState>,
-    plugin_id: String,
+    _plugin_id: String,
     session_id: String,
 ) -> Result<(), String> {
     let _host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
@@ -197,7 +197,7 @@ pub async fn plugin_agent_delete_session(
 pub async fn plugin_agent_list_agents(
     host: tauri::State<'_, Mutex<PluginHost>>,
     state: tauri::State<'_, DbState>,
-    plugin_id: String,
+    _plugin_id: String,
 ) -> Result<Vec<AgentInfo>, String> {
     let _host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
 
@@ -207,7 +207,7 @@ pub async fn plugin_agent_list_agents(
 
     Ok(agents.into_iter().map(|a| AgentInfo {
         agent_type: a.agent_type,
-        name: a.name,
+        name: a.display_name,
         version: a.version,
     }).collect())
 }

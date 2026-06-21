@@ -2,6 +2,7 @@ mod agent;
 mod commands;
 mod db;
 mod plugin;
+mod workflow;
 mod utils;
 
 use db::init::{init_db, DbPool};
@@ -290,6 +291,29 @@ pub fn run() {
             commands::agents::export_agents_json,
             commands::agents::import_agents_json,
             commands::agents::reorder_agents,
+            plugin::agent::plugin_agent_create_session,
+            plugin::agent::plugin_agent_send_message,
+            plugin::agent::plugin_agent_get_history,
+            plugin::agent::plugin_agent_list_sessions,
+            plugin::agent::plugin_agent_delete_session,
+            plugin::agent::plugin_agent_list_agents,
+            plugin::plugin_fs::plugin_fs_read_text,
+            plugin::plugin_fs::plugin_fs_write_text,
+            plugin::plugin_fs::plugin_fs_delete,
+            plugin::plugin_fs::plugin_fs_exists,
+            plugin::plugin_fs::plugin_fs_read_dir,
+            plugin::shell::plugin_shell_exec,
+            plugin::store::plugin_store_fetch_index,
+            plugin::store::plugin_store_install,
+            plugin::store::plugin_store_get_local_versions,
+            workflow::workflow_list_definitions,
+            workflow::workflow_get_definition,
+            workflow::workflow_create_definition,
+            workflow::workflow_update_definition,
+            workflow::workflow_delete_definition,
+            workflow::workflow_list_instances,
+            workflow::workflow_create_instance,
+            workflow::workflow_update_instance_status,
             commands::agents::upload_agent_icon,
             commands::agents::read_agent_icon,
         ])

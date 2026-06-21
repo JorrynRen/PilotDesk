@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use crate::db::models::{Session, Message};
 use crate::utils::errors::AppError;
 use tauri::State;
@@ -235,6 +235,40 @@ pub fn delete_session(
     
     Ok(())
 }
+
+// ──────────────────────────────────────────────
+//  内部函数（可被其他模块调用）
+// ──────────────────────────────────────────────
+
+pub fn list_sessions_inner(conn: &Connection) -> Result<Vec<Session>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id
+         FROM sessions WHERE status = 'active' ORDER BY updated_at DESC"
+    )?;
+    
+    let sessions = stmt.query_map([], row_to_session)?
+        .collect::<Result<Vec<_>, _>>()?;
+    
+    Ok(sessions)
+}
+
+pub fn get_session_messages_inner(conn: &Connection, session_id: &str) -> Result<Vec<Message>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name 
+         FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC"
+    )?;
+    
+    let messages = stmt.query_map(params![session_id], row_to_message)?
+        .collect::<Result<Vec<_>, _>>()?;
+    
+    Ok(messages)
+}
+
+pub fn delete_session_inner(conn: &Connection, session_id: &str) -> Result<(), AppError> {
+    conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
+    Ok(())
+}
+
 /// Update the agent_session_id for a session
 #[tauri::command]
 pub fn update_session_agent_id(

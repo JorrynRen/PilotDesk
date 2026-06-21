@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Trash2, Shield, ShieldOff, Copy, RefreshCw } from 'lucide-react';
+import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store } from 'lucide-react';
 import { usePluginStore } from '../../stores/pluginStore';
+import { OnlinePluginStore } from './OnlinePluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
 import type { PermissionCheck, PluginInstance } from '../../types/plugin';
 
@@ -150,6 +151,7 @@ function SandboxInfoPanel() {
 export function PluginManager() {
   const { plugins, loading, error, discover, enable, disable, installZip, uninstall, sandboxInfo } = usePluginStore();
   const [showSandbox, setShowSandbox] = useState(false);
+  const [showStore, setShowStore] = useState(false);
   const [installStatus, setInstallStatus] = useState<string | null>(null);
 
   useEffect(() => {
@@ -225,6 +227,18 @@ export function PluginManager() {
             + 安装
           </button>
           <button
+            onClick={() => setShowStore(!showStore)}
+            className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
+            style={{
+              backgroundColor: showStore ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+              color: showStore ? 'var(--accent)' : 'var(--text-tertiary)',
+            }}
+            title={showStore ? '收起商店' : '在线插件商店'}
+          >
+            <Store size={11} />
+            商店
+          </button>
+          <button
             onClick={() => setShowSandbox(!showSandbox)}
             className="pd-btn text-[10px] px-2 py-1 rounded"
             style={{
@@ -245,7 +259,9 @@ export function PluginManager() {
         </div>
       </div>
 
-      {showSandbox ? (
+      {showStore ? (
+        <OnlinePluginStore onClose={() => setShowStore(false)} />
+      ) : showSandbox ? (
         <SandboxInfoPanel />
       ) : (
         <>

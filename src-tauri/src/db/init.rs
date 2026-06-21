@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 20;
+const MIGRATION_VERSION: i64 = 21;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -143,6 +143,10 @@ if current_version < 14 {
     }
     if current_version < 20 {
         migrate_fix_claude_dash_dash(&conn)?;
+    }
+
+    if current_version < 21 {
+        migrate_add_workflow_tables(&conn)?;
     }
 
 if current_version < MIGRATION_VERSION {
@@ -615,6 +619,48 @@ fn migrate_fix_claude_dash_dash(conn: &Connection) -> Result<(), AppError> {
     conn.execute(
         "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
         [],
+    )?;
+    Ok(())
+}
+
+
+fn migrate_add_workflow_tables(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflow_definitions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            version TEXT NOT NULL DEFAULT '1.0.0',
+            description TEXT NOT NULL DEFAULT '',
+            nodes TEXT NOT NULL DEFAULT '[]',
+            edges TEXT NOT NULL DEFAULT '[]',
+            input_schema TEXT,
+            output_schema TEXT,
+            max_depth INTEGER DEFAULT 10,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_instances (
+            id TEXT PRIMARY KEY,
+            definition_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            definition_name TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'paused', 'success', 'failed', 'cancelled', 'timeout')),
+            context TEXT NOT NULL DEFAULT '{}',
+            steps TEXT NOT NULL DEFAULT '{}',
+            current_node_id TEXT,
+            trigger TEXT NOT NULL DEFAULT 'manual' CHECK(trigger IN ('manual', 'cron', 'event')),
+            trigger_detail TEXT,
+            started_at INTEGER,
+            completed_at INTEGER,
+            estimated_remaining INTEGER,
+            error TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def ON workflow_instances(definition_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status, created_at);"
     )?;
     Ok(())
 }

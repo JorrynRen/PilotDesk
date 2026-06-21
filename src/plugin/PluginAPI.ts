@@ -67,7 +67,7 @@ class PluginEventBus {
 
 export class PluginAPI {
   readonly ui: {
-    addPanel: (config: PanelContribution & { component: React.ComponentType }) => void;
+    addPanel: (config: PanelContribution & { component: React.ComponentType<any> }) => void;
     removePanel: (id: string) => void;
     showToast: (message: string, type: 'info' | 'success' | 'error') => void;
   };
@@ -79,6 +79,18 @@ export class PluginAPI {
   readonly fs: PluginFSAPI;
   readonly shell: PluginShellAPI;
   readonly agent: PluginAgentAPI;
+  readonly commands: {
+    register: (commandId: string, handler: CommandHandler) => void;
+    execute: (commandId: string, params?: any) => Promise<import('../types/plugin').CommandResult>;
+  };
+  readonly hooks: {
+    on: (event: string, handler: EventHandler) => () => void;
+  };
+  readonly global: {
+    on: (event: string, handler: (payload: any) => void) => () => void;
+    emit: (event: string, payload?: any) => void;
+    call: (targetPluginId: string, commandId: string, params?: any) => Promise<import('../types/plugin').CommandResult>;
+  };
 
   private pluginPath: string;
   private pluginId: string;
@@ -117,8 +129,8 @@ export class PluginAPI {
       register: (commandId: string, handler: CommandHandler) => {
         commandDispatcher.register(pluginId, commandId, handler);
       },
-      execute: <T = any>(commandId: string, params?: any) => {
-        return commandDispatcher.execute<T>(pluginId, commandId, params);
+      execute: (commandId: string, params?: any) => {
+        return commandDispatcher.execute(pluginId, commandId, params);
       },
     };
 
@@ -137,8 +149,8 @@ export class PluginAPI {
       emit: (event: string, payload?: any) => {
         globalEventBus.emit(event, payload);
       },
-      call: <T = any>(pluginId: string, commandId: string, params?: any) => {
-        return globalEventBus.call<T>(pluginId, commandId, params);
+      call: (targetPluginId: string, commandId: string, params?: any) => {
+        return globalEventBus.call(targetPluginId, commandId, params);
       },
     };
   }
