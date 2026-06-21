@@ -15,8 +15,6 @@ name: Generate Plugin Index
 on:
   push:
     branches: [main]
-    paths:
-      - 'server/market/plugins/**'
   workflow_dispatch:
 
 permissions:
