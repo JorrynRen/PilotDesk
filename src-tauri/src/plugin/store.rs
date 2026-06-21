@@ -69,11 +69,11 @@ pub struct LocalPluginVersion {
 const INDEX_CDN_URL: &str = "https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main/server/market/plugins/index.json";
 const INDEX_RAW_URL: &str = "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/index.json";
 
-/// 获取或创建共享的 reqwest 阻塞客户端（带超时）
-fn http_client() -> &'static reqwest::blocking::Client {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+/// 获取或创建共享的异步 HTTP 客户端（带超时）
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
+        reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .timeout(std::time::Duration::from_secs(READ_TIMEOUT_SECS))
             .build()
@@ -81,16 +81,19 @@ fn http_client() -> &'static reqwest::blocking::Client {
     })
 }
 
-/// 从 URL 获取文本内容（带超时）
-fn fetch_url(url: &str) -> Result<String, String> {
+/// 从 URL 获取文本内容（异步，带超时）
+async fn fetch_url(url: &str) -> Result<String, String> {
     let response = http_client()
         .get(url)
         .send()
+        .await
         .map_err(|e| {
             if e.is_timeout() {
                 format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
             } else if e.is_connect() {
                 format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
+            } else if e.is_request() {
+                format!("请求被取消: {}", url)
             } else {
                 format!("HTTP 请求失败: {} - {}", e, url)
             }
@@ -102,19 +105,23 @@ fn fetch_url(url: &str) -> Result<String, String> {
     }
 
     response.text()
+        .await
         .map_err(|e| format!("读取响应失败: {}", e))
 }
 
-/// 从 URL 下载文件内容（二进制，带超时）
-fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+/// 从 URL 下载文件内容（二进制，异步，带超时）
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let response = http_client()
         .get(url)
         .send()
+        .await
         .map_err(|e| {
             if e.is_timeout() {
                 format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
             } else if e.is_connect() {
                 format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
+            } else if e.is_request() {
+                format!("请求被取消: {}", url)
             } else {
                 format!("HTTP 请求失败: {} - {}", e, url)
             }
@@ -126,21 +133,20 @@ fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     }
 
     response.bytes()
+        .await
         .map(|b| b.to_vec())
         .map_err(|e| format!("读取响应失败: {}", e))
 }
 
 #[tauri::command]
-pub fn plugin_store_fetch_index(
-    host: tauri::State<'_, Mutex<PluginHost>>,
+pub async fn plugin_store_fetch_index(
+    _host: tauri::State<'_, Mutex<PluginHost>>,
     force_refresh: Option<bool>,
 ) -> Result<IndexFetchResult, String> {
-    let _host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
-
     let force = force_refresh.unwrap_or(false);
 
     if force {
-        let content = fetch_url(INDEX_RAW_URL)?;
+        let content = fetch_url(INDEX_RAW_URL).await?;
         let index: PluginIndex = serde_json::from_str(&content)
             .map_err(|e| format!("解析索引失败: {}", e))?;
 
@@ -154,10 +160,10 @@ pub fn plugin_store_fetch_index(
             source: "raw".to_string(),
         })
     } else {
-        let (content, source) = match fetch_url(INDEX_CDN_URL) {
+        let (content, source) = match fetch_url(INDEX_CDN_URL).await {
             Ok(c) => (c, "cdn"),
             Err(_) => {
-                let c = fetch_url(INDEX_RAW_URL)?;
+                let c = fetch_url(INDEX_RAW_URL).await?;
                 (c, "raw")
             }
         };
@@ -177,23 +183,24 @@ pub fn plugin_store_fetch_index(
     }
 }
 
-/// 从在线商店安装插件（文件夹模式）
+/// 从在线商店安装插件（文件夹模式，异步）
 /// 从 raw.githubusercontent.com 逐个下载插件文件到本地插件目录
 #[tauri::command]
-pub fn plugin_store_install(
+pub async fn plugin_store_install(
     host: tauri::State<'_, Mutex<PluginHost>>,
     plugin_id: String,
 ) -> Result<InstallResult, String> {
     // 获取索引找到插件信息
-    let content = fetch_url(INDEX_RAW_URL)?;
+    let content = fetch_url(INDEX_RAW_URL).await?;
     let index: PluginIndex = serde_json::from_str(&content)
         .map_err(|e| format!("解析索引失败: {}", e))?;
 
     let online_plugin = index.plugins.iter()
         .find(|p| p.id == plugin_id)
-        .ok_or_else(|| format!("在线商店中未找到插件: {}", plugin_id))?;
+        .ok_or_else(|| format!("在线商店中未找到插件: {}", plugin_id))?
+        .clone();
 
-    // 检查是否已安装
+    // 检查是否已安装（短暂锁定，不跨 await）
     {
         let guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
         let local_plugins = guard.list_plugins();
@@ -207,7 +214,7 @@ pub fn plugin_store_install(
         }
     }
 
-    // 确定插件目录
+    // 确定插件目录（短暂锁定，不跨 await）
     let plugins_dir = {
         let guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
         let info = guard.get_sandbox_info();
@@ -222,11 +229,11 @@ pub fn plugin_store_install(
     std::fs::create_dir_all(&target_dir)
         .map_err(|e| format!("创建插件目录失败: {}", e))?;
 
-    let base_url = &online_plugin.base_url;
+    let base_url = online_plugin.base_url.clone();
 
     // 下载 manifest.json
     let manifest_url = format!("{}/manifest.json", base_url);
-    let manifest_content = fetch_url(&manifest_url)?;
+    let manifest_content = fetch_url(&manifest_url).await?;
 
     // 验证 manifest.json
     let manifest: super::PluginManifest = serde_json::from_str(&manifest_content)
@@ -237,11 +244,11 @@ pub fn plugin_store_install(
         .map_err(|e| format!("写入 manifest.json 失败: {}", e))?;
 
     // 下载入口文件
-    let entry_main = &manifest.entry.main;
+    let entry_main = manifest.entry.main.clone();
     let entry_url = format!("{}/{}", base_url, entry_main);
-    match fetch_bytes(&entry_url) {
+    match fetch_bytes(&entry_url).await {
         Ok(data) => {
-            let entry_path = target_dir.join(entry_main);
+            let entry_path = target_dir.join(&entry_main);
             if let Some(parent) = entry_path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
@@ -256,7 +263,7 @@ pub fn plugin_store_install(
     // 下载图标（如果存在，支持 .png / .ico）
     if let Some(icon) = &online_plugin.icon {
         if !icon.is_empty() {
-            match fetch_bytes(icon) {
+            match fetch_bytes(icon).await {
                 Ok(data) => {
                     let icon_name = icon.rsplit('/').next().unwrap_or("icon.png");
                     std::fs::write(target_dir.join(icon_name), &data)
@@ -272,7 +279,7 @@ pub fn plugin_store_install(
                         String::new()
                     };
                     if !alt_icon.is_empty() {
-                        if let Ok(data) = fetch_bytes(&alt_icon) {
+                        if let Ok(data) = fetch_bytes(&alt_icon).await {
                             let icon_name = alt_icon.rsplit('/').next().unwrap_or("icon.png");
                             std::fs::write(target_dir.join(icon_name), &data)
                                 .map_err(|e| format!("写入图标文件失败: {}", e))?;
@@ -286,7 +293,7 @@ pub fn plugin_store_install(
     // 下载 README.md（如果存在）
     if let Some(readme) = &online_plugin.readme {
         if !readme.is_empty() {
-            match fetch_bytes(readme) {
+            match fetch_bytes(readme).await {
                 Ok(data) => {
                     std::fs::write(target_dir.join("README.md"), &data)
                         .map_err(|e| format!("写入 README.md 失败: {}", e))?;
@@ -298,7 +305,7 @@ pub fn plugin_store_install(
         }
     }
 
-    // 通过 PluginHost 加载插件
+    // 通过 PluginHost 加载插件（短暂锁定，不跨 await）
     let manifest_path = target_dir.join("manifest.json");
     let instance = {
         let guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
@@ -307,7 +314,7 @@ pub fn plugin_store_install(
 
     let id = instance.manifest.id.clone();
 
-    // 重新 discover 加载新插件
+    // 重新 discover 加载新插件（短暂锁定，不跨 await）
     {
         let mut guard = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
         guard.discover();
