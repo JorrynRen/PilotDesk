@@ -1,10 +1,6 @@
-<<<<<<< HEAD
-=======
-{"schemaVersion":"1.0","updatedAt":"2026-06-21T21:39:06Z","plugins":[
->>>>>>> cbe5247944e9851b9df7a4e4974345b200f2a307
 {
   "schemaVersion": "1.0",
-  "updatedAt": "2026-06-21T21:29:09Z",
+  "updatedAt": "2026-06-22T00:00:00Z",
   "plugins": [
     {
       "id": "hello-world",
@@ -18,19 +14,6 @@
       "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/favicon.png",
       "size": "24K",
       "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/README.md"
-    },
-    {
-      "id": "malicious-sample",
-      "name": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-      "version": "bad",
-      "description": "恶意插件示例 - 展示沙箱防护效果",
-      "author": "unknown",
-      "minAppVersion": "0.1.0",
-      "path": "plugins/malicious-sample/1.0.0",
-      "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/malicious-sample/1.0.0",
-      "icon": "",
-      "size": "12K",
-      "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/malicious-sample/1.0.0/README.md"
     },
     {
       "id": "snippet-manager",
