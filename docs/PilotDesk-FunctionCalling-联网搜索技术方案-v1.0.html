@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PilotDesk Function Calling 与联网搜索技术实现方案 v1.0</title>
+<style>
+body {
+    font-family: Arial, "Microsoft YaHei", sans-serif;
+    color: #333333;
+    line-height: 1.8;
+    font-size: 11pt;
+    margin: 0;
+    padding: 40px 60px;
+}
+h1 {
+    font-size: 22pt;
+    color: #1a1a2e;
+    text-align: center;
+    margin-top: 0;
+    padding-bottom: 10px;
+    border-bottom: 3px solid #5B7FFF;
+}
+.subtitle {
+    text-align: center;
+    color: #888888;
+    font-size: 12pt;
+    margin-top: 6px;
+}
+.meta {
+    text-align: center;
+    margin: 20px 0 30px;
+}
+.meta-tag {
+    display: inline-block;
+    background-color: #F0F4FF;
+    color: #5B7FFF;
+    padding: 3px 12px;
+    border-radius: 4px;
+    font-size: 9pt;
+    margin: 0 4px;
+}
+h2 {
+    font-size: 16pt;
+    color: #1a1a2e;
+    border-left: 4px solid #5B7FFF;
+    padding-left: 12px;
+    margin-top: 36px;
+    margin-bottom: 12px;
+}
+h3 {
+    font-size: 13pt;
+    color: #2d2d44;
+    margin-top: 24px;
+    margin-bottom: 8px;
+}
+h4 {
+    font-size: 11pt;
+    color: #444;
+    margin-top: 18px;
+    margin-bottom: 6px;
+}
+p {
+    margin: 8px 0;
+    text-indent: 0;
+}
+blockquote {
+    border-left: 4px solid #8B5CF6;
+    padding: 8px 16px;
+    margin: 12px 0;
+    background-color: #F9F7FF;
+    color: #555;
+    font-size: 10pt;
+}
+.note-box {
+    background-color: #FFF8E1;
+    border: 1px solid #FFE082;
+    padding: 10px 16px;
+    margin: 12px 0;
+    font-size: 10pt;
+    color: #795548;
+}
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 10pt;
+}
+th {
+    background-color: #F0F4FF;
+    color: #1a1a2e;
+    font-weight: bold;
+    border: 1px solid #dddddd;
+    padding: 8px 10px;
+    text-align: left;
+}
+td {
+    border: 1px solid #dddddd;
+    padding: 6px 10px;
+}
+tr:nth-child(even) td {
+    background-color: #FAFAFA;
+}
+code {
+    font-family: Consolas, monospace;
+    background-color: #F5F5F5;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10pt;
+    color: #d63384;
+}
+pre {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    padding: 14px 18px;
+    border-radius: 6px;
+    font-family: Consolas, monospace;
+    font-size: 9pt;
+    line-height: 1.6;
+    overflow-x: auto;
+    margin: 12px 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+ul, ol {
+    margin: 8px 0;
+    padding-left: 24px;
+}
+li {
+    margin: 4px 0;
+}
+.diagram {
+    background-color: #F0F4FF;
+    border: 1px solid #B8C9FF;
+    padding: 14px 18px;
+    margin: 12px 0;
+    font-family: Consolas, monospace;
+    font-size: 9pt;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+.decision-box {
+    background-color: #E8F5E9;
+    border: 1px solid #81C784;
+    padding: 10px 16px;
+    margin: 12px 0;
+}
+.decision-title {
+    font-weight: bold;
+    color: #2E7D32;
+    margin-bottom: 4px;
+}
+.decision-reason {
+    color: #555;
+    font-size: 10pt;
+}
+</style>
+</head>
+<body>
+
+<h1>PilotDesk Function Calling 与联网搜索<br>技术实现方案</h1>
+<p class="subtitle">版本 v1.0 | 2026-06-01 | 方案评审</p>
+<div class="meta">
+    <span class="meta-tag">PilotDesk</span>
+    <span class="meta-tag">Tauri 2.0</span>
+    <span class="meta-tag">中高难度</span>
+    <span class="meta-tag">预估 18-23 工时</span>
+</div>
+
+<!-- ==================== 第1章 ==================== -->
+<h2>1. 背景分析</h2>
+
+<h3>1.1 现状</h3>
+<p>PilotDesk 当前通过 <code>apiClient.ts</code> 与大模型 API 直连，支持 OpenAI 兼容格式的对话接口。消息流经 <code>useWebSocket.ts</code> 中的 <code>sendApiChat</code> 函数，构建 HTTP 请求并通过 <code>ReadableStream</code> 实时接收 SSE 响应。</p>
+<p>该架构实现了基本的对话能力，但存在两个核心功能缺失：</p>
+<ul>
+    <li><strong>深度推理</strong>：无法展示模型的思考过程（如 DeepSeek 的 reasoning_content 字段），用户无法了解模型推理链</li>
+    <li><strong>联网搜索</strong>：模型无法获取实时信息，无法回答时效性问题，无法检索互联网数据</li>
+</ul>
+
+<h3>1.2 问题根源</h3>
+<p>当前 <code>sendApiChat</code> 仅处理 <code>choices[0].delta.content</code> 文本流，未解析 <code>reasoning_content</code> 推理内容字段；同时请求体中未携带 <code>tools</code> 参数，模型无法触发工具调用流程。</p>
+
+<h3>1.3 目标</h3>
+<table border="1">
+    <tr><th>功能</th><th>描述</th><th>优先级</th></tr>
+    <tr><td>推理可视化</td><td>解析并渲染 reasoning_content 字段，以可折叠面板展示思考过程</td><td>P0</td></tr>
+    <tr><td>联网搜索</td><td>通过 Function Calling 协议让模型自主调用搜索工具获取实时信息</td><td>P0</td></tr>
+    <tr><td>通用工具系统</td><td>可扩展的工具注册机制，为未来添加更多工具（文件操作、代码执行等）预留接口</td><td>P1</td></tr>
+</table>
+
+<!-- ==================== 第2章 ==================== -->
+<h2>2. 方案选型</h2>
+
+<h3>2.1 联网搜索实现方案对比</h3>
+
+<table border="1">
+    <tr>
+        <th>维度</th>
+        <th>方案 A：标准 Function Calling</th>
+        <th>方案 B：预检索注入</th>
+        <th>方案 C：Sidecar 代理</th>
+    </tr>
+    <tr>
+        <td>原理</td>
+        <td>在 API 请求中声明 tools，模型自主判断何时调用搜索</td>
+        <td>在发送前先执行搜索，将结果注入 system prompt</td>
+        <td>所有请求经 Sidecar 中转，由 Sidecar 处理搜索</td>
+    </tr>
+    <tr>
+        <td>搜索时机</td>
+        <td>模型自主判断（准确率高）</td>
+        <td>每次对话都搜索（大量冗余）</td>
+        <td>Sidecar 代理判断（增加延迟）</td>
+    </tr>
+    <tr>
+        <td>架构侵入</td>
+        <td>低（改 sendApiChat + 新增工具模块）</td>
+        <td>低（改 handleSend 前置搜索）</td>
+        <td>高（需重构通信架构）</td>
+    </tr>
+    <tr>
+        <td>可扩展性</td>
+        <td>高（通用 tools 协议）</td>
+        <td>低（硬编码搜索逻辑）</td>
+        <td>中（Sidecar 统一管理）</td>
+    </tr>
+    <tr>
+        <td>API 兼容性</td>
+        <td>OpenAI 兼容协议，主流模型支持</td>
+        <td>无特殊要求</td>
+        <td>无特殊要求</td>
+    </tr>
+    <tr>
+        <td>对现有 API 直连的影响</td>
+        <td>无影响（tools 可选参数）</td>
+        <td>增加延迟（前置搜索）</td>
+        <td>破坏直连优势</td>
+    </tr>
+</table>
+
+<div class="decision-box">
+    <p class="decision-title">决策 1：推荐方案 A（标准 Function Calling）</p>
+    <p class="decision-reason">理由：OpenAI 兼容的 tools 协议已成为事实标准，模型自主判断搜索时机的准确率高；改动集中在 sendApiChat 不引入新进程依赖；保持 API 直连模式的核心优势；可扩展为通用工具系统。</p>
+</div>
+
+<h3>2.2 搜索引擎选型</h3>
+
+<table border="1">
+    <tr><th>引擎</th><th>类型</th><th>费用</th><th>优势</th><th>劣势</th></tr>
+    <tr><td>SearXNG</td><td>自部署元搜索</td><td>免费</td><td>聚合多引擎、JSON API 简洁、可私有部署</td><td>需自行部署维护</td></tr>
+    <tr><td>Tavily</td><td>SaaS 搜索 API</td><td>免费额度 / 付费</td><td>专为 AI Agent 设计、返回结构化结果</td><td>依赖第三方、有用量限制</td></tr>
+    <tr><td>DuckDuckGo</td><td>公开搜索</td><td>免费</td><td>无需注册、隐私友好</td><td>无官方 API、接口不稳定</td></tr>
+</table>
+
+<div class="decision-box">
+    <p class="decision-title">决策 2：搜索引擎首选 SearXNG，备选 Tavily</p>
+    <p class="decision-reason">理由：SearXNG 免费自部署、聚合多搜索引擎保障结果质量、JSON API 简洁易集成。Tavily 作为备选，适合不想自部署的场景。</p>
+</div>
+
+<h3>2.3 工具循环执行位置</h3>
+
+<div class="decision-box">
+    <p class="decision-title">决策 3：工具循环在前端（useWebSocket）而非 Sidecar</p>
+    <p class="decision-reason">理由：保持 API 直连模式不依赖 Sidecar 的核心优势；工具调用仅需 HTTP 请求搜索引擎，无需 Sidecar 中转；前端可直接控制循环次数和 UI 反馈。</p>
+</div>
+
+<!-- ==================== 第3章 ==================== -->
+<h2>3. 整体架构</h2>
+
+<h3>3.1 消息流架构</h3>
+
+<div class="diagram">
+用户输入
+  │
+  ▼
+handleSend() ──addMessage(userMsg)──▶ sessionStore
+  │
+  ▼
+sendApiChat(messages, { tools, toolChoice })
+  │
+  ├─▶ 构建请求体（含 tools 定义）
+  ├─▶ SSE 流式接收
+  │     │
+  │     ├─ content ──────▶ 实时渲染到 MessageBubble
+  │     ├─ reasoning_content ─▶ 渲染到折叠面板
+  │     └─ tool_calls ───▶ 累积工具调用参数
+  │
+  ▼
+API 返回 stop_reason = "tool_calls"
+  │
+  ▼
+toolExecutor.execute(toolCall)
+  │  ├─ web_search ──▶ searchProvider.search(query)
+  │  │                    └─▶ SearXNG / Tavily API
+  │  └─ 返回搜索结果
+  │
+  ▼
+将工具结果追加到 messages 数组
+  │
+  ▼
+回到 sendApiChat 继续对话（while 循环，最多 5 轮）
+  │
+  ▼
+API 返回最终 content → 渲染最终回复
+</div>
+
+<h3>3.2 模块依赖关系</h3>
+
+<div class="diagram">
+apiClient.ts          ← 统一 API 调用（扩展 tools 支持）
+  ├── inferApiFormat()
+  ├── resolveChatUrl()
+  ├── buildHeaders()
+  ├── buildBody()       ← 新增 tools 参数
+  └── sendApiRequest()  ← SSE 流式解析
+
+searchProvider.ts      ← 新增：搜索引擎抽象层
+  ├── SearXNGProvider
+  ├── TavilyProvider
+  └── search(query, maxResults)
+
+toolExecutor.ts        ← 新增：工具执行器
+  ├── registerTool(definition)
+  ├── execute(toolCall)
+  └── 内置：web_search 工具
+
+useWebSocket.ts        ← 修改：sendApiChat 改为工具循环
+  └── sendApiChat()     ← while 循环处理 tool_calls
+
+types/index.ts         ← 扩展：工具相关类型定义
+</div>
+
+<!-- ==================== 第4章 ==================== -->
+<h2>4. 详细技术设计</h2>
+
+<h3>4.1 类型定义扩展（types/index.ts）</h3>
+
+<pre>
+// 工具定义（对应 OpenAI tools 格式）
+export interface ToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record&lt;string, unknown&gt;; // JSON Schema
+  };
+}
+
+// 工具调用（模型返回）
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string; // JSON string
+  };
+}
+
+// 工具执行结果
+export interface ToolResult {
+  toolCallId: string;
+  toolName: string;
+  content: string;
+  isError?: boolean;
+}
+
+// 消息类型扩展
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content?: string;
+  reasoningContent?: string; // 新增：推理内容
+  toolCalls?: ToolCall[];     // 新增：工具调用
+  toolCallId?: string;       // 新增：工具结果关联
+  // ... 已有字段保持不变
+}
+</pre>
+
+<h3>4.2 apiClient.ts 扩展</h3>
+
+<pre>
+// buildBody 新增 tools 参数
+export function buildBody(params: {
+  messages: ChatMessage[];
+  model: string;
+  temperature?: number;
+  maxTokens?: number;
+  stream?: boolean;
+  tools?: ToolDefinition[];   // 新增
+  toolChoice?: string | object; // 新增
+  // ... 已有参数
+}) {
+  const body: Record&lt;string, unknown&gt; = {
+    model: params.model,
+    messages: params.messages,
+    stream: params.stream ?? true,
+  };
+
+  if (params.tools?.length) {
+    body.tools = params.tools;
+    if (params.toolChoice) body.tool_choice = params.toolChoice;
+  }
+
+  // ... 已有逻辑
+  return body;
+}
+</pre>
+
+<h3>4.3 搜索引擎模块（searchProvider.ts）</h3>
+
+<pre>
+// 搜索引擎抽象接口
+interface SearchProvider {
+  name: string;
+  search(query: string, maxResults?: number): Promise&lt;SearchResult[]&gt;;
+}
+
+interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+// SearXNG 实现
+class SearXNGProvider implements SearchProvider {
+  constructor(private baseUrl: string, private apiKey?: string) {}
+
+  async search(query: string, maxResults = 5): Promise&lt;SearchResult[]&gt; {
+    const url = `${this.baseUrl}/search?q=${encodeURIComponent(query)}
+                 &amp;format=json&amp;categories=general`;
+    const resp = await fetch(url, {
+      headers: this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}
+    });
+    const data = await resp.json();
+    return data.results?.slice(0, maxResults).map((r: any) =&gt; ({
+      title: r.title,
+      url: r.url,
+      snippet: r.content
+    })) ?? [];
+  }
+}
+</pre>
+
+<h3>4.4 工具执行器（toolExecutor.ts）</h3>
+
+<pre>
+// 内置 web_search 工具定义
+const WEB_SEARCH_TOOL: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'web_search',
+    description: '搜索互联网获取最新信息。当用户询问时效性内容、'
+                + '最新新闻、实时数据或你不确定的事实时调用此工具。',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: '搜索关键词'
+        }
+      },
+      required: ['query']
+    }
+  }
+};
+
+// 工具执行器
+class ToolExecutor {
+  private providers = new Map&lt;string, SearchProvider&gt;();
+  private tools = new Map&lt;string, ToolDefinition&gt;();
+
+  constructor() {
+    // 注册内置工具
+    this.registerTool(WEB_SEARCH_TOOL);
+  }
+
+  registerTool(tool: ToolDefinition) {
+    this.tools.set(tool.function.name, tool);
+  }
+
+  setSearchProvider(provider: SearchProvider) {
+    this.providers.set(provider.name, provider);
+  }
+
+  async execute(toolCall: ToolCall): Promise&lt;ToolResult&gt; {
+    const { name, arguments: argsStr } = toolCall.function;
+    const args = JSON.parse(argsStr);
+
+    if (name === 'web_search') {
+      const provider = this.getPrimaryProvider();
+      const results = await provider.search(args.query, 5);
+      const content = results.map(r =&gt;
+        `【${r.title}】(${r.url})\n${r.snippet}`
+      ).join('\n\n');
+      return { toolCallId: toolCall.id, toolName: name, content };
+    }
+
+    return { toolCallId: toolCall.id, toolName: name,
+             content: `未知工具: ${name}`, isError: true };
+  }
+}
+</pre>
+
+<h3>4.5 sendApiChat 工具循环改造</h3>
+
+<pre>
+// useWebSocket.ts 中 sendApiChat 核心改造
+async function sendApiChat(params: {
+  messages: ChatMessage[];
+  apiProviderId: number;
+  apiModel: string;
+  onChunk: (content: string) =&gt; void;
+  onReasoning: (content: string) =&gt; void;  // 新增
+  onToolCalls: (toolCalls: ToolCall[]) =&gt; void; // 新增
+  onToolResult: (result: ToolResult) =&gt; void;  // 新增
+  onDone: (fullContent: string) =&gt; void;
+  onError: (err: string) =&gt; void;
+}) {
+  const MAX_TOOL_ROUNDS = 5;
+  let round = 0;
+  let messages = [...params.messages];
+  let finalContent = '';
+
+  // 获取工具定义（从设置中判断是否启用搜索）
+  const tools = getEnabledTools();
+  const toolChoice = tools.length ? 'auto' : undefined;
+
+  while (round &lt; MAX_TOOL_ROUNDS) {
+    round++;
+    let assistantContent = '';
+    let reasoningContent = '';
+    let toolCalls: ToolCall[] = [];
+
+    const body = buildBody({
+      messages, model: params.apiModel,
+      stream: true, tools, toolChoice,
+      // ... 其他参数
+    });
+
+    // SSE 流式解析
+    await sendApiRequest(url, headers, body, {
+      onChunk: (s) =&gt; { assistantContent += s; params.onChunk(s); },
+      onReasoning: (s) =&gt; { reasoningContent += s; params.onReasoning(s); },
+      onToolCallChunk: (tc) =&gt; { /* 累积 tool_calls */ },
+    });
+
+    // 判断是否有工具调用
+    if (toolCalls.length &gt; 0) {
+      // 添加 assistant 消息（含 tool_calls）到消息数组
+      messages.push({
+        role: 'assistant', content: assistantContent,
+        reasoningContent, toolCalls
+      });
+
+      // 执行每个工具调用
+      for (const tc of toolCalls) {
+        const result = await toolExecutor.execute(tc);
+        params.onToolResult(result);
+        // 添加 tool 结果消息
+        messages.push({
+          role: 'tool', content: result.content,
+          toolCallId: result.toolCallId
+        });
+      }
+      // 继续循环，让模型处理工具结果
+      continue;
+    }
+
+    // 无工具调用，最终回复
+    finalContent = assistantContent;
+    break;
+  }
+
+  params.onDone(finalContent);
+}
+</pre>
+
+<h3>4.6 MessageBubble 推理内容渲染</h3>
+
+<pre>
+// MessageBubble.tsx 中 reasoning_content 折叠展示
+{message.reasoningContent &amp;&amp; (
+  &lt;div className="reasoning-panel"&gt;
+    &lt;button onClick={() =&gt; setReasoningOpen(!reasoningOpen)}&gt;
+      {reasoningOpen ? '▾' : '▸'} 思考过程
+    &lt;/button&gt;
+    {reasoningOpen &amp;&amp; (
+      &lt;div className="reasoning-content"&gt;
+        &lt;MarkdownRenderer content={message.reasoningContent} /&gt;
+      &lt;/div&gt;
+    )}
+  </div>
+)}
+</pre>
+
+<!-- ==================== 第5章 ==================== -->
+<h2>5. 数据库改动</h2>
+
+<h3>5.1 messages 表 Migration</h3>
+
+<pre>
+-- 新增字段
+ALTER TABLE messages ADD COLUMN reasoning_content TEXT;
+ALTER TABLE messages ADD COLUMN tool_calls TEXT;  -- JSON array
+ALTER TABLE messages ADD COLUMN tool_call_id TEXT;
+</pre>
+
+<p>对应的 Rust Message struct 扩展：</p>
+
+<pre>
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Message {
+    pub id: i64,
+    pub session_id: i64,
+    pub role: String,
+    pub content: Option&lt;String&gt;,
+    pub reasoning_content: Option&lt;String&gt;,  // 新增
+    pub tool_calls: Option&lt;String&gt;,           // 新增 JSON
+    pub tool_call_id: Option&lt;String&gt;,         // 新增
+    pub created_at: String,
+}
+</pre>
+
+<h3>5.2 search_providers 表（新增）</h3>
+
+<pre>
+CREATE TABLE IF NOT EXISTS search_providers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,          -- 'searxng' | 'tavily'
+    base_url TEXT NOT NULL DEFAULT '',
+    api_key TEXT DEFAULT '',
+    is_enabled INTEGER NOT NULL DEFAULT 0,
+    max_results INTEGER NOT NULL DEFAULT 5,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+</pre>
+
+<h3>5.3 app_settings 表扩展</h3>
+
+<pre>
+-- 新增搜索相关设置
+INSERT INTO app_settings (key, value) VALUES
+('search_enabled', 'false'),
+('search_provider_id', ''),
+('search_max_results', '5'),
+('max_tool_rounds', '5');
+</pre>
+
+<!-- ==================== 第6章 ==================== -->
+<h2>6. 设置页扩展</h2>
+
+<p>在 SettingsPage 中新增"联网搜索"配置区块：</p>
+
+<ul>
+    <li><strong>搜索开关</strong>：启用/禁用联网搜索功能（toggle switch）</li>
+    <li><strong>搜索引擎选择</strong>：下拉选择 SearXNG / Tavily</li>
+    <li><strong>SearXNG 配置</strong>：服务器地址（默认 <code>http://localhost:8888</code>）、API Key（可选）</li>
+    <li><strong>Tavily 配置</strong>：API Key</li>
+    <li><strong>最大结果数</strong>：1-10 滑块（默认 5）</li>
+    <li><strong>最大工具轮数</strong>：1-10 滑块（默认 5）</li>
+    <li><strong>连接测试</strong>：测试搜索 API 连通性</li>
+</ul>
+
+<h3>UI 工具状态指示器</h3>
+
+<p>在消息气泡中显示工具执行状态：</p>
+
+<ul>
+    <li><strong>搜索中</strong>：旋转图标 + "正在搜索: {query}"</li>
+    <li><strong>搜索完成</strong>：显示搜索结果数量 + 可展开查看</li>
+    <li><strong>工具循环中</strong>：显示当前轮次 "第 2/5 轮 · 模型正在分析搜索结果"</li>
+</ul>
+
+<!-- ==================== 第7章 ==================== -->
+<h2>7. 文件变更清单</h2>
+
+<table border="1">
+    <tr><th>文件</th><th>操作</th><th>变更内容</th></tr>
+    <tr><td><code>src/types/index.ts</code></td><td>修改</td><td>新增 ToolDefinition, ToolCall, ToolResult, SearchResult 类型；ChatMessage 扩展字段</td></tr>
+    <tr><td><code>src/utils/apiClient.ts</code></td><td>修改</td><td>buildBody 支持 tools/toolChoice 参数；SSE 解析支持 reasoning_content 和 tool_calls</td></tr>
+    <tr><td><code>src/utils/searchProvider.ts</code></td><td>新建</td><td>SearchProvider 接口、SearXNGProvider、TavilyProvider 实现</td></tr>
+    <tr><td><code>src/utils/toolExecutor.ts</code></td><td>新建</td><td>ToolExecutor 类、内置 web_search 工具定义</td></tr>
+    <tr><td><code>src/hooks/useWebSocket.ts</code></td><td>修改</td><td>sendApiChat 改造为 while 工具循环、新增 onReasoning/onToolCalls/onToolResult 回调</td></tr>
+    <tr><td><code>src/stores/sessionStore.ts</code></td><td>修改</td><td>ChatMessage 类型同步扩展、消息存储支持 reasoning_content/tool_calls</td></tr>
+    <tr><td><code>src/components/message/MessageBubble.tsx</code></td><td>修改</td><td>reasoning_content 折叠面板、工具执行状态指示器</td></tr>
+    <tr><td><code>src/components/settings/SettingsPage.tsx</code></td><td>修改</td><td>新增"联网搜索"配置区块</td></tr>
+    <tr><td><code>src-tauri/src/commands/session.rs</code></td><td>修改</td><td>Message struct 扩展、add_message 支持 reasoning_content/tool_calls</td></tr>
+    <tr><td><code>src-tauri/src/db/init.rs</code></td><td>修改</td><td>Migration：messages 表新增字段、search_providers 新表</td></tr>
+    <tr><td><code>src-tauri/src/commands/search_provider.rs</code></td><td>新建</td><td>搜索提供商 CRUD 命令</td></tr>
+    <tr><td><code>src/styles/globals.css</code></td><td>修改</td><td>推理面板样式、工具状态指示器样式</td></tr>
+</table>
+
+<!-- ==================== 第8章 ==================== -->
+<h2>8. 实施路线图</h2>
+
+<table border="1">
+    <tr><th>阶段</th><th>内容</th><th>预估工时</th><th>前置依赖</th></tr>
+    <tr>
+        <td><strong>Phase 1</strong></td>
+        <td>推理可视化：types 扩展 + reasoning_content 解析 + MessageBubble 折叠渲染 + DB migration</td>
+        <td>3-4h</td>
+        <td>无</td>
+    </tr>
+    <tr>
+        <td><strong>Phase 2</strong></td>
+        <td>搜索基础架构：searchProvider.ts + toolExecutor.ts + apiClient.ts tools 支持</td>
+        <td>4-5h</td>
+        <td>Phase 1</td>
+    </tr>
+    <tr>
+        <td><strong>Phase 3</strong></td>
+        <td>工具循环集成：sendApiChat 改造为 while 循环 + MainPanel 新回调 + UI 工具状态指示器</td>
+        <td>5-6h</td>
+        <td>Phase 2</td>
+    </tr>
+    <tr>
+        <td><strong>Phase 4</strong></td>
+        <td>设置与数据库：SettingsPage 搜索配置 UI + messages 表 migration + Message struct 扩展</td>
+        <td>3-4h</td>
+        <td>Phase 3</td>
+    </tr>
+    <tr>
+        <td><strong>Phase 5</strong></td>
+        <td>测试与优化：端到端测试 + 错误处理 + 性能优化 + 边界场景处理</td>
+        <td>3-4h</td>
+        <td>Phase 4</td>
+    </tr>
+</table>
+<p><strong>总计预估：18-23 工时</strong></p>
+
+<!-- ==================== 第9章 ==================== -->
+<h2>9. 风险与应对</h2>
+
+<table border="1">
+    <tr><th>风险</th><th>影响</th><th>概率</th><th>应对措施</th></tr>
+    <tr>
+        <td>部分模型不支持 tools 参数</td>
+        <td>工具调用失败或被忽略</td>
+        <td>中</td>
+        <td>tools 为可选参数，不传时退化为普通对话；在 UI 中标注模型兼容性</td>
+    </tr>
+    <tr>
+        <td>搜索引擎服务不可用</td>
+        <td>搜索工具执行失败</td>
+        <td>中</td>
+        <td>try-catch 包装 + 超时机制 + 错误信息回传模型继续对话</td>
+    </tr>
+    <tr>
+        <td>工具循环无限死循环</td>
+        <td>API 调用次数失控</td>
+        <td>低</td>
+        <td>硬限制最大轮数（默认 5）+ 单次会话总调用计数限制</td>
+    </tr>
+    <tr>
+        <td>reasoning_content 格式不统一</td>
+        <td>解析失败或显示异常</td>
+        <td>中</td>
+        <td>JSON 和文本两种格式兼容解析；缺失时静默不显示</td>
+    </tr>
+    <tr>
+        <td>tool_calls 在流式传输中分片</td>
+        <td>工具调用参数不完整</td>
+        <td>中</td>
+        <td>累积式解析：维护 toolCallBuffer 按 index 累积每个工具调用的参数片段</td>
+    </tr>
+</table>
+
+<!-- ==================== 第10章 ==================== -->
+<h2>10. 设计决策记录</h2>
+
+<div class="decision-box">
+    <p class="decision-title">决策 1：采用标准 Function Calling 协议</p>
+    <p class="decision-reason">OpenAI 兼容的 tools 协议已成为事实标准，DeepSeek、Qwen、Claude 等主流模型均已支持。模型自主判断搜索时机准确率高，避免了方案 B 的冗余搜索和方案 C 的架构侵入。</p>
+</div>
+
+<div class="decision-box">
+    <p class="decision-title">决策 2：搜索引擎首选 SearXNG</p>
+    <p class="decision-reason">免费自部署不依赖第三方、聚合 Google/Bing/DuckDuckGo 等多引擎保障结果质量、JSON API 简洁。Tavily 作为备选适合不想自部署的用户。</p>
+</div>
+
+<div class="decision-box">
+    <p class="decision-title">决策 3：工具循环在前端（useWebSocket）</p>
+    <p class="decision-reason">保持 API 直连模式是 PilotDesk 的核心架构优势，将工具循环放在前端避免了对 Sidecar 的依赖，同时前端可以直接控制 UI 反馈（搜索中/分析中状态）。</p>
+</div>
+
+<div class="decision-box">
+    <p class="decision-title">决策 4：工具系统可扩展设计</p>
+    <p class="decision-reason">toolExecutor 采用注册机制，内置 web_search 工具，同时预留接口用于未来扩展文件操作、代码执行等工具，为 Agent 能力演进奠定基础。</p>
+</div>
+
+<div class="decision-box">
+    <p class="decision-title">决策 5：推理内容存储到数据库</p>
+    <p class="decision-reason">reasoning_content 存入 messages 表而非仅内存中，确保刷新页面后仍可查看历史推理过程，同时为后续分析（推理质量评估）提供数据基础。</p>
+</div>
+
+<hr>
+<p style="text-align: center; color: #999; font-size: 9pt; margin-top: 40px;">
+    PilotDesk Function Calling 与联网搜索技术实现方案 v1.0 | 2026-06-01
+</p>
+
+</body>
+</html>
