@@ -154,7 +154,3 @@ pilotdesk.db
 pilotdesk.db-journal
 pilotdesk.db-wal
 pilotdesk.db-shm
-
-# Server market (user data)
-server/market/agents-config/agents-config.json
-server/market/plugins/
