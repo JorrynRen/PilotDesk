@@ -53,14 +53,6 @@ function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
         </div>
         <div className="flex items-center gap-1.5">
           <button
-            onClick={onClose}
-            className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
-            style={{ color: 'var(--text-tertiary)' }}
-            title="关闭"
-          >
-            <X size={11} />
-          </button>
-          <button
             onClick={() => !sandboxInfo.sandbox_enabled && setSandboxEnabled(true)}
             className="pd-btn px-2 py-1 rounded text-[11px] flex items-center gap-1"
             style={{
@@ -87,6 +79,14 @@ function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
           >
             <ShieldOff size={12} />
             禁用
+          </button>
+          <button
+            onClick={onClose}
+            className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
+            style={{ color: 'var(--text-tertiary)' }}
+            title="关闭"
+          >
+            <X size={11} />
           </button>
         </div>
       </div>

@@ -350,8 +350,7 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
   // 商店容器样式：允许纵向滚动
   const containerStyle: React.CSSProperties = {
     height: '100%',
-    overflowY: 'auto',
-    overflowX: 'hidden',
+    overflow: 'hidden',
     paddingRight: 4,
   };
   const [plugins, setPlugins] = useState<OnlinePluginInfo[]>([]);
