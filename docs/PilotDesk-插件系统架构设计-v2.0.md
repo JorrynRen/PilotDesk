@@ -220,6 +220,59 @@ export default {
 
 ## 5. 安全模型
 
+### 5.1 当前权限列表
+
+```typescript
+type PluginPermission =
+  | 'ui:panel'      // 低
+  | 'ui:toast'      // 低（默认）
+  | 'ui:modal'      // 低
+  | 'session:read'  // 中
+  | 'session:write' // 中
+  | 'data:invoke'   // 高
+  | 'storage:*'     // 低（默认）
+  | 'fs:read'       // 高
+  | 'fs:write'      // 高
+  | 'shell:exec'    // 极高（新增）
+  | 'plugin:call'   // 中（新增）
+  | 'plugin:events' // 中（新增）
+  | 'session:execute' // 高（新增）
+  | 'workflow:trigger'  // 中（新增）
+  | 'workflow:read'     // 低（新增）
+  | 'workflow:write'    // 中（新增）
+;
+```
+
+### 5.2 风险等级划分
+
+| 风险等级 | 权限 | 沙箱行为 |
+|---------|------|---------|
+| **默认** | `ui:toast`, `storage:*` | 自动授权，无需声明 |
+| **低** | `ui:panel`, `ui:modal`, `workflow:read` | 需声明，沙箱放行 |
+| **中** | `session:read`, `session:write`, `plugin:call`, `plugin:events`, `workflow:trigger`, `workflow:write` | 需声明，沙箱提示 |
+| **高** | `data:invoke`, `fs:read`, `fs:write`, `session:execute` | 需声明，沙箱警告 |
+| **极高** | `shell:exec` | 需声明，沙箱禁用+用户二次确认 |
+
+### 5.3 沙箱规则
+
+1. **清单验证**：manifest.json 大小限制 64KB，字段格式严格校验
+2. **路径保护**：所有文件路径禁止包含 `..`，防止目录遍历攻击
+3. **权限白名单**：未知权限自动拒绝，高风险权限标记警告
+4. **入口验证**：入口文件必须存在，路径必须在插件目录内
+5. **沙箱禁用时**：所有权限检查跳过，插件可正常加载
+
+### 5.4 沙箱禁用时的行为变化
+
+| 能力 | 沙箱启用 | 沙箱禁用 |
+|------|---------|---------|
+| UI 面板 | 正常 | 正常 |
+| 数据 invoke | 需 `data:invoke` 权限 | 放行 |
+| 文件系统 | 拒绝（即使有权限） | 需 `fs:read`/`fs:write` 权限 |
+| Shell 命令 | 拒绝 | 需 `shell:exec` 权限 + 二次确认 |
+| Agent 会话 | 需 `session:*` 权限 | 需 `session:*` 权限 |
+| 跨插件通信 | 需 `plugin:call`/`plugin:events` 权限 | 放行 |
+
+
 | 权限 | 说明 | 风险等级 | 默认 |
 |------|------|---------|------|
 | `ui:panel` | 添加/移除面板 | 低 | 需声明 |
@@ -233,16 +286,6 @@ export default {
 | `fs:write` | 写入文件系统 | **高** | 需声明 |
 | `workflow:trigger` | 触发工作流执行（v2.0 新增） | 中 | 需声明 |
 | `workflow:read` | 读取工作流定义和状态（v2.0 新增） | 低 | 需声明 |
-
-### 沙箱规则
-
-1. **清单验证**：manifest.json 大小限制 64KB，字段格式严格校验
-2. **路径保护**：所有文件路径禁止包含 `..`，防止目录遍历攻击
-3. **权限白名单**：未知权限自动拒绝，高风险权限标记警告
-4. **入口验证**：入口文件必须存在，路径必须在插件目录内
-5. **沙箱禁用时**：所有权限检查跳过，插件可正常加载
-
----
 
 ## 6. 数据流
 
@@ -479,19 +522,19 @@ interface WorkflowEngine {
 
 ## 8. 能力边界与集成方向
 
-### 8.1 当前能力边界评估
+### 8.1 当前能力矩阵
 
-| 能力维度 | v1.0 状态 | v2.0 目标 | 差距 |
-|---------|----------|----------|------|
-| **UI 扩展** | 完整 | 完整 | 无差距 |
-| **命令注册** | 半完成（已注册未执行） | 完整（可调度执行） | 需命令调度器 |
-| **事件钩子** | 半完成（已定义未分发） | 完整（核心事件分发） | 需事件分发器 |
-| **数据访问** | 完整 | 完整 | 无差距 |
-| **存储** | 完整 | 完整 | 无差距 |
-| **跨插件通信** | 不支持 | 全局事件总线 | 需新增 |
-| **后台常驻** | 不支持 | 不支持（插件纯前端运行） | 需 Rust 侧后台进程 |
-| **定时任务** | 不支持 | 工作流引擎内置 cron 触发器 | 需新增 |
-| **工作流编排** | 不支持 | 独立工作面板 + 引擎 | 需新增 |
+| 能力维度 | 状态 | 说明 |
+|---------|------|------|
+| **UI 面板扩展** | 完整实现 | panels 贡献点 -> 注册组件 -> RightPanel 渲染 |
+| **命令注册** | 半完成 | commands 被解析到 registeredCommands Map，但**不可执行** |
+| **事件钩子** | 半完成 | hooks 被解析到 registeredHooks Map，但**未分发** |
+| **跨插件通信** | 不支持 | 每个插件有独立 PluginEventBus，事件隔离 |
+| **文件系统操作** | 权限定义但无实现 | `fs:read`/`fs:write` 权限已定义，但 PluginAPI 未暴露任何 FS 方法 |
+| **Shell 命令执行** | 不支持 | 无相关权限定义，无 API 暴露 |
+| **Agent 会话调用** | 不支持 | Agent 会话系统已存在但未集成到插件 API |
+| **后台常驻** | 不支持 | 插件纯前端运行，无 Rust 侧后台进程 |
+| **工作流编排** | 不支持 | 无工作流引擎、无工作面板 |
 
 ### 8.2 集成方向优先级
 
@@ -505,15 +548,35 @@ interface WorkflowEngine {
 
 ### 8.3 风险与约束
 
+#### 安全风险
+
+| 风险 | 等级 | 说明 | 缓解措施 |
+|------|------|------|---------|
+| 恶意插件通过 Shell API 执行破坏命令 | **极高** | `rm -rf /` 等 | 沙箱默认启用 + 极高风险权限二次确认 |
+| 恶意插件通过 FS API 读取敏感文件 | **高** | 读取密码文件、配置等 | 沙箱默认启用 + 路径遍历防护 |
+| 恶意插件通过 Agent API 消耗 Token | **中** | 大量调用 Agent 导致费用 | 速率限制 + 配额控制 |
+| 跨插件调用导致级联故障 | **中** | 插件 A 调用 B，B 崩溃 | 调用超时 + 错误隔离 |
+| 工作流定义无限循环 | **中** | 步骤 A 触发 B，B 触发 A | 循环检测 + 最大执行深度 |
+
+#### 架构风险
+
 | 风险 | 等级 | 说明 |
 |------|------|------|
-| 插件纯前端运行，无法后台常驻 | 高 | 工作流引擎需要后台进程支持定时触发和异步执行 |
-| 沙箱限制 `data:invoke` 为高风险 | 中 | 工作流 Action 需要调用系统命令，权限模型需细化 |
-| 插件卸载时工作流中断 | 中 | 工作流实例引用了已卸载插件的命令，需优雅降级 |
-| 工作流定义版本与插件版本不兼容 | 中 | 插件升级后命令签名变化，工作流执行失败 |
-| 长时间工作流的状态持久化 | 中 | 应用重启后需恢复未完成的工作流实例 |
+| Agent 会话系统与插件系统的集成复杂度 | **中** | 需要理解现有会话系统的完整实现，找到合适的集成点 |
+| 工作流引擎的持久化与 Tauri 状态管理 | **中** | 应用重启后需恢复未完成的工作流实例 |
+| 插件升级导致工作流定义不兼容 | **低** | 插件升级后命令签名变化，工作流执行失败 |
+| 性能影响 | **低** | 大量插件注册事件监听器可能影响核心事件分发性能 |
 
----
+#### 约束条件
+
+| 约束 | 说明 |
+|------|------|
+| 插件纯前端运行 | 插件在浏览器上下文执行，无法直接访问系统资源，所有系统操作必须通过 Tauri invoke 委托 Rust 侧执行 |
+| 沙箱默认启用 | 所有改造必须考虑沙箱启用时的安全限制 |
+| 向后兼容 | 现有插件（如 hello-world）必须在改造后继续正常工作 |
+| 无 JSX 转译 | 插件入口使用纯 JS，通过 React.createElement 构建 UI |
+
+
 
 ## 9. 文件清单
 
@@ -554,8 +617,194 @@ interface WorkflowEngine {
 
 ---
 
+
+---
+
+## 10. 系统能力扩展设计（FS、Shell、Agent 会话）
+
+### 10.1 设计目标
+
+扩展 PluginAPI 能力边界，使插件在沙箱禁用时可操作本地文件系统、执行 Shell 命令、调用 Agent 会话。
+
+```
+改造前：PluginAPI = { ui, data, events, storage }
+改造后：PluginAPI = { ui, data, events, storage, fs, shell, agent }
+```
+
+### 10.2 文件系统 API（fs）
+
+**权限模型**：
+
+| 权限 | 沙箱启用 | 沙箱禁用 |
+|------|---------|---------|
+| `fs:read` | 拒绝（返回权限错误） | 允许（受路径白名单限制） |
+| `fs:write` | 拒绝（返回权限错误） | 允许（受路径白名单限制） |
+
+**API 设计**：
+
+```typescript
+interface PluginAPI {
+  fs: {
+    readText(path: string): Promise<string>;
+    readBinary(path: string): Promise<string>;
+    writeText(path: string, content: string): Promise<void>;
+    writeBinary(path: string, content: string): Promise<void>;
+    appendText(path: string, content: string): Promise<void>;
+    delete(path: string): Promise<void>;
+    createDir(path: string): Promise<void>;
+    removeDir(path: string): Promise<void>;
+    exists(path: string): Promise<boolean>;
+    readDir(path: string): Promise<FileEntry[]>;
+    copy(src: string, dest: string): Promise<void>;
+    move(src: string, dest: string): Promise<void>;
+    stat(path: string): Promise<FileStat>;
+  };
+}
+```
+
+**实现路径**：通过 Tauri invoke 调用 Rust 侧 fs 命令，Rust 侧执行实际文件操作。需新增 `src-tauri/src/plugin/fs.rs`。
+
+### 10.3 Shell 命令执行 API（shell）
+
+**权限模型**：
+
+| 权限 | 说明 | 风险等级 |
+|------|------|---------|
+| `shell:exec` | 执行 Shell 命令 | **极高**（需用户明确确认） |
+
+**API 设计**：
+
+```typescript
+interface PluginAPI {
+  shell: {
+    exec(command: string, options?: ShellExecOptions): Promise<ShellResult>;
+    spawn(command: string, options?: ShellSpawnOptions): ShellProcess;
+  };
+}
+
+interface ShellExecOptions {
+  cwd?: string;
+  timeout?: number;
+  env?: Record<string, string>;
+}
+
+interface ShellResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+```
+
+**实现路径**：通过 Tauri invoke 调用 Rust 侧 shell 命令，Rust 侧使用 `std::process::Command` 执行。需新增 `src-tauri/src/plugin/shell.rs`。
+
+### 10.4 Agent 会话调用 API（agent）
+
+**背景**：Agent 会话系统已在项目其他部分实现（AgentManager、useAgentRegistry），插件系统需复用这些能力。
+
+**API 设计**：
+
+```typescript
+interface PluginAPI {
+  agent: {
+    createSession(agentType: string, options?: SessionOptions): Promise<SessionInfo>;
+    sendMessage(sessionId: string, content: string): Promise<AgentResponse>;
+    sendMessageStream(sessionId: string, content: string, callbacks: StreamCallbacks): Promise<void>;
+    getHistory(sessionId: string): Promise<Message[]>;
+    listSessions(): Promise<SessionInfo[]>;
+    deleteSession(sessionId: string): Promise<void>;
+    listAgents(): Promise<AgentInfo[]>;
+  };
+}
+```
+
+**实现路径**：通过 Tauri invoke 走 Rust 侧，复用已有 Agent 会话系统的接口。插件应拥有独立会话上下文。
+
+
+---
+
+## 11. 实现路线图
+
+### 11.1 阶段划分
+
+```
+Phase 1: 基础能力补齐（P0）
+|-- CommandDispatcher — 让 registeredCommands 可执行
+|-- EventDispatcher — 核心事件分发到插件 hooks
+|-- 权限模型扩展 — 新增 shell:exec / plugin:call / plugin:events / session:execute
++-- 类型定义更新 — plugin.ts 新增所有新类型
+
+Phase 2: 跨插件通信（P1）
+|-- GlobalEventBus — 全局事件总线
+|-- PluginAPI.global — 对外暴露 on/emit/call
+|-- 跨插件命令调用 — CommandDispatcher 支持跨插件路由
++-- 通信协议定义 — CrossPluginRequest/Response
+
+Phase 3: 系统能力扩展（P1）
+|-- FS API — Rust 侧 fs 命令 + PluginAPI.fs
+|-- Shell API — Rust 侧 shell 命令 + PluginAPI.shell
+|-- Agent API — 复用已有会话系统 + PluginAPI.agent
++-- 沙箱联动 — 沙箱启用时拒绝 FS/Shell
+
+Phase 4: 工作流编排（P2）
+|-- WorkflowEngine — 定义解析、状态机、步骤执行
+|-- WorkflowDefinition/Instance — 类型和持久化
+|-- workflowStore — Zustand store
+|-- WorkflowPanel — 可视化编辑器
+|-- WorkflowEditor — 拖拽画布
+|-- WorkflowNodeConfig — 节点配置面板
+|-- WorkflowMonitor — 执行监控
++-- Rust 侧后台触发器 — 定时任务、状态持久化
+```
+
+### 11.2 依赖关系
+
+```
+Phase 1 (CommandDispatcher + EventDispatcher)
+  +-- 被 Phase 2 (GlobalEventBus) 依赖
+    +-- 被 Phase 4 (WorkflowEngine) 依赖
+      +-- 工作流 Action 节点 = CommandDispatcher.execute()
+      +-- 工作流 Trigger 节点 = EventDispatcher 事件源
+
+Phase 3 (FS/Shell/Agent) 独立于其他 Phase
+  +-- 仅依赖 Phase 1 的权限模型扩展
+```
+
+### 11.3 工时估算
+
+| Phase | 组件 | 预估工时 |
+|-------|------|---------|
+| P1 | CommandDispatcher | 4-6h |
+| P1 | EventDispatcher | 3-5h |
+| P1 | 权限模型扩展 + 类型更新 | 2-3h |
+| P2 | GlobalEventBus | 3-4h |
+| P2 | 跨插件命令调用 | 3-5h |
+| P3 | FS API（Rust + TS） | 5-8h |
+| P3 | Shell API（Rust + TS） | 4-6h |
+| P3 | Agent API（复用已有系统） | 4-6h |
+| P4 | WorkflowEngine | 10-15h |
+| P4 | WorkflowPanel + Editor | 12-18h |
+| P4 | Rust 侧后台触发器 | 6-10h |
+| **合计** | | **56-86h** |
+
+
+---
+
+## 12. 关键决策清单
+
+| # | 决策 | 推荐方案 | 理由 |
+|---|------|---------|------|
+| 1 | 命令 handler 注册时机 | 运行时注册（`api.commands.register()`） | 更灵活，支持动态命令 |
+| 2 | 事件分发顺序 | 串行 await | 保证顺序，支持中断 |
+| 3 | 跨插件通信方式 | GlobalEventBus + 直接命令调用 | 兼顾广播和点对点 |
+| 4 | FS/Shell 实现路径 | Rust 侧 Tauri command | 权限检查统一在 Rust 侧 |
+| 5 | Agent 会话集成 | 通过 Tauri invoke 走 Rust 侧 | 统一权限检查 |
+| 6 | 工作流持久化 | SQLite（复用现有数据库） | 无需新增存储引擎 |
+| 7 | 沙箱默认策略 | 启用，FS/Shell 在沙箱启用时拒绝 | 安全优先 |
+
+---
+
 ## 版本里程碑
 
 | 版本 | 日期 | 变更说明 | Git Commit |
 |------|------|---------|------------|
-| v2.0 | 2026-06-21 | 整合工作流编排集成设计，从 v1.0 升级 | `3297403 (32974036b1533427f24820582d3d9eed984412f0)` |
+| v2.0 | 2026-06-21 | 整合工作流编排集成设计 + 系统能力扩展设计 + 实现路线图，从 v1.0 升级 | `e01b8eb (e01b8eb84fa1059cbdf0324f36fa0e9fc6ecd656)` |
