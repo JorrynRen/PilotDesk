@@ -1,10 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use super::PluginHost;
 
 /// 索引文件 schema 版本
 const INDEX_SCHEMA_VERSION: &str = "1.0";
+
+/// HTTP 请求超时配置
+const CONNECT_TIMEOUT_SECS: u64 = 10;
+const READ_TIMEOUT_SECS: u64 = 30;
 
 /// 在线商店插件信息（精简版，仅存储浏览/搜索所需字段）
 /// 完整清单（permissions/entry/contributes）安装时从 baseUrl/manifest.json 读取
@@ -22,9 +27,8 @@ pub struct OnlinePluginInfo {
     pub base_url: String,
     pub icon: Option<String>,
     pub size: Option<String>,
+    pub readme: Option<String>,
 }
-
-
 
 /// 插件索引
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,9 +69,32 @@ pub struct LocalPluginVersion {
 const INDEX_CDN_URL: &str = "https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main/server/market/plugins/index.json";
 const INDEX_RAW_URL: &str = "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/index.json";
 
+/// 获取或创建共享的 reqwest 阻塞客户端（带超时）
+fn http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(READ_TIMEOUT_SECS))
+            .build()
+            .expect("创建 HTTP 客户端失败")
+    })
+}
+
+/// 从 URL 获取文本内容（带超时）
 fn fetch_url(url: &str) -> Result<String, String> {
-    let response = reqwest::blocking::get(url)
-        .map_err(|e| format!("HTTP 请求失败: {}", e))?;
+    let response = http_client()
+        .get(url)
+        .send()
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
+            } else if e.is_connect() {
+                format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
+            } else {
+                format!("HTTP 请求失败: {} - {}", e, url)
+            }
+        })?;
 
     let status = response.status().as_u16();
     if status != 200 {
@@ -78,10 +105,20 @@ fn fetch_url(url: &str) -> Result<String, String> {
         .map_err(|e| format!("读取响应失败: {}", e))
 }
 
-/// 从 raw URL 下载文件内容（二进制）
+/// 从 URL 下载文件内容（二进制，带超时）
 fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let response = reqwest::blocking::get(url)
-        .map_err(|e| format!("HTTP 请求失败: {}", e))?;
+    let response = http_client()
+        .get(url)
+        .send()
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
+            } else if e.is_connect() {
+                format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
+            } else {
+                format!("HTTP 请求失败: {} - {}", e, url)
+            }
+        })?;
 
     let status = response.status().as_u16();
     if status != 200 {
@@ -187,7 +224,7 @@ pub fn plugin_store_install(
 
     let base_url = &online_plugin.base_url;
 
-    // 下载文件列表（从 manifest.json 推断需要下载的文件）
+    // 下载 manifest.json
     let manifest_url = format!("{}/manifest.json", base_url);
     let manifest_content = fetch_url(&manifest_url)?;
 
@@ -212,24 +249,50 @@ pub fn plugin_store_install(
                 .map_err(|e| format!("写入入口文件失败: {}", e))?;
         }
         Err(e) => {
-            // 入口文件可能不存在于 raw（开发阶段），忽略
             log::warn!("[PluginInstall] 入口文件下载失败 (可能不存在): {}", e);
         }
     }
 
-    // 下载图标（如果存在）
+    // 下载图标（如果存在，支持 .png / .ico）
     if let Some(icon) = &online_plugin.icon {
         if !icon.is_empty() {
             match fetch_bytes(icon) {
                 Ok(data) => {
-                    // 从 icon URL 提取文件名
                     let icon_name = icon.rsplit('/').next().unwrap_or("icon.png");
                     std::fs::write(target_dir.join(icon_name), &data)
                         .map_err(|e| format!("写入图标文件失败: {}", e))?;
                 }
                 Err(_) => {
-                    // 图标不存在是正常的
-                    log::info!("[PluginInstall] 图标不存在 (可选): {}", icon);
+                    // 尝试备选扩展名（.png → .ico）
+                    let alt_icon = if icon.ends_with(".png") {
+                        icon.replace(".png", ".ico")
+                    } else if icon.ends_with(".ico") {
+                        icon.replace(".ico", ".png")
+                    } else {
+                        String::new()
+                    };
+                    if !alt_icon.is_empty() {
+                        if let Ok(data) = fetch_bytes(&alt_icon) {
+                            let icon_name = alt_icon.rsplit('/').next().unwrap_or("icon.png");
+                            std::fs::write(target_dir.join(icon_name), &data)
+                                .map_err(|e| format!("写入图标文件失败: {}", e))?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 下载 README.md（如果存在）
+    if let Some(readme) = &online_plugin.readme {
+        if !readme.is_empty() {
+            match fetch_bytes(readme) {
+                Ok(data) => {
+                    std::fs::write(target_dir.join("README.md"), &data)
+                        .map_err(|e| format!("写入 README.md 失败: {}", e))?;
+                }
+                Err(_) => {
+                    log::info!("[PluginInstall] README.md 不存在 (可选): {}", readme);
                 }
             }
         }
