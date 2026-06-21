@@ -205,7 +205,7 @@ export function PluginManager() {
   }, [uninstall, discover]);
 
   return (
-    <div className="p-4">
+    <div className="p-4" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
@@ -260,6 +260,7 @@ export function PluginManager() {
         </div>
       </div>
 
+      <div style={{ flex: 1, overflow: 'hidden' }}>
       {showStore ? (
         <OnlinePluginStore onClose={() => setShowStore(false)} />
       ) : showSandbox ? (
@@ -440,6 +441,7 @@ export function PluginManager() {
             })}
           </div>
         </>)}
+      </div>
     </div>
   );
 }
