@@ -204,60 +204,61 @@ export function PluginManager() {
     }
   }, [uninstall, discover]);
 
-  return (
+    return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="shrink-0 px-4 pt-4 pb-2">
         <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
-            插件管理
-          </h3>
-          <span
-            className="text-[9px] px-1.5 py-0.5 rounded font-medium"
-            style={{
-              backgroundColor: sandboxInfo?.sandbox_enabled
-                ? 'rgba(16,185,129,0.15)'
-                : 'var(--bg-tertiary)',
-              color: sandboxInfo?.sandbox_enabled
-                ? '#10B981'
-                : 'var(--text-tertiary)',
-            }}
-          >
-            {sandboxInfo?.sandbox_enabled ? '沙箱' : '沙箱'}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={handleInstallZip}
-            className="pd-btn text-[10px] px-2 py-1 rounded transition-all"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-            title="从压缩包安装插件"
-          >
-            +安装
-          </button>
-          <button
-            onClick={() => { setShowStore(!showStore); setShowSandbox(false); }}
-            className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
-            style={{
-              backgroundColor: showStore ? 'var(--accent-light)' : 'var(--bg-tertiary)',
-              color: showStore ? 'var(--accent)' : 'var(--text-tertiary)',
-            }}
-            title={showStore ? '收起商店' : '在线插件商店'}
-          >
-            <Store size={11} />
-            插件商店
-          </button>
-          <button
-            onClick={() => { setShowSandbox(!showSandbox); setShowStore(false); }}
-            className="pd-btn text-[10px] px-2 py-1 rounded"
-            style={{
-              backgroundColor: showSandbox ? 'var(--accent-light)' : 'var(--bg-tertiary)',
-              color: showSandbox ? 'var(--accent)' : 'var(--text-tertiary)',
-            }}
-            title={showSandbox ? '收起沙箱信息' : '查看沙箱信息'}
-          >
-            沙箱
-          </button>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
+              插件管理
+            </h3>
+            <span
+              className="text-[9px] px-1.5 py-0.5 rounded font-medium"
+              style={{
+                backgroundColor: sandboxInfo?.sandbox_enabled
+                  ? 'rgba(16,185,129,0.15)'
+                  : 'var(--bg-tertiary)',
+                color: sandboxInfo?.sandbox_enabled
+                  ? '#10B981'
+                  : 'var(--text-tertiary)',
+              }}
+            >
+              {sandboxInfo?.sandbox_enabled ? '沙箱' : '沙箱'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleInstallZip}
+              className="pd-btn text-[10px] px-2 py-1 rounded transition-all"
+              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              title="从压缩包安装插件"
+            >
+              +安装
+            </button>
+            <button
+              onClick={() => { setShowStore(!showStore); setShowSandbox(false); }}
+              className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
+              style={{
+                backgroundColor: showStore ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                color: showStore ? 'var(--accent)' : 'var(--text-tertiary)',
+              }}
+              title={showStore ? '收起商店' : '在线插件商店'}
+            >
+              <Store size={11} />
+              插件商店
+            </button>
+            <button
+              onClick={() => { setShowSandbox(!showSandbox); setShowStore(false); }}
+              className="pd-btn text-[10px] px-2 py-1 rounded"
+              style={{
+                backgroundColor: showSandbox ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                color: showSandbox ? 'var(--accent)' : 'var(--text-tertiary)',
+              }}
+              title={showSandbox ? '收起沙箱信息' : '查看沙箱信息'}
+            >
+              沙箱
+            </button>
+          </div>
         </div>
       </div>
 
@@ -319,7 +320,7 @@ export function PluginManager() {
             <div className="text-xs py-8 text-center" style={{ color: 'var(--text-tertiary)' }}>
               <p className="mb-2">暂无已安装的插件</p>
               <p className="text-[10px] mb-3">
-                点击「+安装」按钮选择 .zip 压缩包安装插件
+                点击「+ 安装」按钮选择 .zip 压缩包安装插件
               </p>
               <p className="text-[10px]">
                 或将插件目录放置到{' '}
@@ -393,7 +394,7 @@ export function PluginManager() {
                   {/* 分割线 */}
                   <div className="my-2" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
 
-                  {/* 详情区域：描述 + 作者 + 权限 + 贡献点 — 占满全宽 */}
+                  {/* 详情区域：描述 + 作者 + 权限 + 贡献点 */}
                   <div>
                     <p className="text-[10px] line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
                       {plugin.manifest.description}
