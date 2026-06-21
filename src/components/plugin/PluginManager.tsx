@@ -300,7 +300,7 @@ export function PluginManager() {
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Package size={14} style={{ color: 'var(--accent)' }} />
-                <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)', margin: 0 }}>
+                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)', margin: 0 }}>
                   已安装插件
                 </h3>
               </div>
