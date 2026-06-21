@@ -5,7 +5,7 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 16;
+const MIGRATION_VERSION: i64 = 20;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -131,6 +131,18 @@ if current_version < 14 {
 
     if current_version < 16 {
         migrate_fix_claude_skills(&conn)?;
+    }
+    if current_version < 17 {
+        migrate_fix_hermes_template(&conn)?;
+    }
+    if current_version < 18 {
+        migrate_fix_claude_codex_templates(&conn)?;
+    }
+    if current_version < 19 {
+        migrate_fix_claude_prompt_template(&conn)?;
+    }
+    if current_version < 20 {
+        migrate_fix_claude_dash_dash(&conn)?;
     }
 
 if current_version < MIGRATION_VERSION {
@@ -332,7 +344,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "claude update",
          "claude --version",
          "npm view @anthropic-ai/claude-code version",
-         "claude -p --output-format stream-json --verbose --dangerously-skip-permissions {message}",
+         "claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
          "json-stream", "", 1, "stdout-json", "system/init", "session_id", "--resume {session_id}",
          "#3B82F6", "file:claude_icon.ico", "~/.claude/skills/", "collection", 1),
         ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
@@ -342,7 +354,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "hermes update",
          "hermes --version",
          "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version",
-         "hermes chat -q {message} -Q",
+         "hermes chat --query={message} -Q",
          "ansi-text",
          "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
          "stderr-text", "", "", "--resume {session_id}",
@@ -354,7 +366,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "codex update",
          "codex --version",
          "npm view @openai/codex version",
-         "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {message}",
+         "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
          "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "exec resume {session_id}",
          "#F59E0B", "file:codex_icon.ico", "~/.codex/skills/", "collection", 3),
     ];
@@ -557,6 +569,51 @@ fn migrate_update_builtin_skills(conn: &Connection) -> Result<(), AppError> {
 fn migrate_fix_claude_skills(conn: &Connection) -> Result<(), AppError> {
     conn.execute(
         "UPDATE agents SET skills_dir = '~/.claude/skills/', skill_display_mode = 'collection' WHERE agent_type = 'claude'",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Migration v17 — 修复 Hermes 消息参数注入问题
+/// 将 run_cmd_template 从 -q {message} 改为 --query={message}
+/// 配合 handler.rs 的 = 拼接逻辑，确保 --help 等不被 argparse 拦截
+fn migrate_fix_hermes_template(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE agents SET run_cmd_template = 'hermes chat --query={message} -Q' WHERE agent_type = 'hermes'",
+        [],
+    )?;
+    Ok(())
+}
+
+
+/// Migration v18 — 修复 Claude 和 Codex 消息参数注入问题
+/// Claude: -p {message} → --prompt={message}（= 语法，yargs 将 = 后内容作为值）
+/// Codex: 末尾添加 -- 分隔符，告诉 argparse 停止解析标志
+fn migrate_fix_claude_codex_templates(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE agents SET run_cmd_template = 'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}' WHERE agent_type = 'codex'",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Migration v19 — 修复 Claude 模板：末尾添加 -- 分隔符（-p 是布尔标志，{message} 是位置参数）
+fn migrate_fix_claude_prompt_template(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Migration v20 — 修复 Claude 模板 --prompt= → -- {message}（v19 执行时 SQL 仍为 --prompt=）
+fn migrate_fix_claude_dash_dash(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
         [],
     )?;
     Ok(())

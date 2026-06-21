@@ -43,21 +43,73 @@ impl ProcessHandler for StdioHandler {
             return (self.config.cli_command.clone(), vec![message.to_string()]);
         }
 
-        let cmd_str = if let Some(sid) = agent_session_id {
-            let resume = self.config.resume_arg_template.replace("{session_id}", sid);
-            // 在 {message} 位置插入 resume 参数 + 消息
-            template.replace("{message}", &format!("{} {}", resume, message))
-        } else {
-            template.replace("{message}", message)
-        };
+        // 按 {message} 拆分为前缀和后缀
+        // 例如 "hermes chat -q {message} -Q"
+        //   → prefix = "hermes chat -q "
+        //   → suffix = " -Q"
+        let parts: Vec<&str> = template.splitn(2, "{message}").collect();
+        let prefix_str = parts.first().unwrap_or(&"").trim();
+        let suffix_str = parts.get(1).map(|s| s.trim()).unwrap_or("");
 
-        // 简单拆分命令和参数（按空格拆分，支持引号包裹的参数）
-        let parts: Vec<String> = simple_split(&cmd_str);
-        if parts.is_empty() {
+        // 解析前缀为固定参数（命令 + CLI 标志）
+        let prefix_parts = simple_split(prefix_str);
+        if prefix_parts.is_empty() {
             return (self.config.cli_command.clone(), vec![message.to_string()]);
         }
-        let cmd = parts[0].clone();
-        let args: Vec<String> = parts[1..].to_vec();
+
+        let cmd = prefix_parts[0].clone();
+        let mut args: Vec<String> = prefix_parts[1..].to_vec();
+
+        // 检测前缀中是否包含 -- 分隔符
+        // -- 告诉 CLI 停止解析标志，后续内容均为位置参数
+        let dash_dash_pos = args.iter().position(|a| a == "--");
+
+        // 检测前缀最后一个参数是否使用 = 语法（如 --query= 或 -q=）
+        // 如果使用 = 语法，后续消息需要与它拼接为 "--key=value" 形式
+        let uses_equals_syntax = !dash_dash_pos.is_some() && args.last().map_or(false, |a| a.ends_with('='));
+
+        // 如果是恢复会话，插入恢复参数
+        // 关键：resume 参数必须插入在 -- 分隔符之前，否则不会被识别为 CLI 标志
+        if let Some(sid) = agent_session_id {
+            let resume = self.config.resume_arg_template.replace("{session_id}", sid);
+            let resume_parts = simple_split(&resume);
+
+            if let Some(pos) = dash_dash_pos {
+                // -- 分隔符模式：resume 参数插入到 -- 之前
+                // 结果: ... --resume abc-123 -- --help
+                let mut new_args: Vec<String> = Vec::with_capacity(args.len() + resume_parts.len());
+                new_args.extend(args[..pos].iter().cloned());
+                new_args.extend(resume_parts);
+                new_args.extend(args[pos..].iter().cloned());
+                args = new_args;
+            } else if uses_equals_syntax {
+                // = 语法：弹出 = 参数 → 插入 resume 参数 → 推回 = 参数
+                let equals_arg = args.pop().unwrap();
+                args.extend(resume_parts);
+                args.push(equals_arg);
+            } else {
+                args.extend(resume_parts);
+            }
+        }
+
+        // 消息内容作为单个原子参数（关键修复！）
+        // 不经过 simple_split 拆分，避免 --help、-f、/? 等被当作 CLI 标志
+        if uses_equals_syntax {
+            // 与最后一个 = 参数拼接为 "--key=value" 形式
+            // argparse 的 = 语法强制将 = 后内容作为值，即使以 "--" 开头
+            if let Some(last) = args.last_mut() {
+                last.push_str(message);
+            }
+        } else {
+            args.push(message.to_string());
+        }
+
+        // 追加后缀固定参数
+        if !suffix_str.is_empty() {
+            let suffix_parts = simple_split(suffix_str);
+            args.extend(suffix_parts);
+        }
+
         (cmd, args)
     }
 
