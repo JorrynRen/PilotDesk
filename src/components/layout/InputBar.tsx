@@ -197,7 +197,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
 
         {/* Inspiration & Skill buttons */}
         <button
-          onClick={() => { setShowInspirationPicker((v) => !v); setShowSkillPicker(false); }}
+          onClick={() => { if (!session) { showToast('请先选择或创建一个会话', 'info'); return; } setShowInspirationPicker((v) => !v); setShowSkillPicker(false); }}
           className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
           style={{
             color: showInspirationPicker ? 'var(--accent)' : 'var(--text-secondary)',
@@ -209,7 +209,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
           灵感
         </button>
         <button
-          onClick={() => { setShowSkillPicker((v) => !v); setShowInspirationPicker(false); }}
+          onClick={() => { if (!session) { showToast('请先选择或创建一个会话', 'info'); return; } setShowSkillPicker((v) => !v); setShowInspirationPicker(false); }}
           className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
           style={{
             color: showSkillPicker ? AGENT_THEMES.hermes.cssVar : 'var(--text-secondary)',

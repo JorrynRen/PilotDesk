@@ -38,6 +38,22 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const [latestVersions, setLatestVersions] = useState<Record<string, { version: string; releaseTime: string | null } | null>>({});
   const [updateChecking, setUpdateChecking] = useState<Record<string, boolean>>({});
 
+  // Load historical logs from database on mount
+  useEffect(() => {
+    invoke<Array<{ id: number; timestamp: number; message: string; level: string }>>('list_logs', { limit: 200 })
+      .then((entries) => {
+        if (entries && entries.length > 0) {
+          // list_logs returns DESC order; reverse to show oldest first
+          setLogs(entries.reverse().map((e) => ({
+            timestamp: e.timestamp,
+            message: e.message,
+            level: e.level as 'info' | 'warn' | 'error' | 'success',
+          })));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const addLog = useCallback((message: string, level: 'info' | 'warn' | 'error' | 'success' = 'info') => {
     const entry = { timestamp: Date.now(), message, level };
     setLogs((prev) => [...prev, entry]);

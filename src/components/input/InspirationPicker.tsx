@@ -97,16 +97,17 @@ export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps)
     >
       {/* Search */}
       <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: '1px solid var(--border)' }}>
-        <Search size={14} style={{ color: 'var(--text-tertiary)' }} />
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => handleSearch(e.target.value)}
-          placeholder="搜索灵感..."
-          className="flex-1 text-xs outline-none bg-transparent"
-          style={{ color: 'var(--text-primary)' }}
-        />
+        <div className="relative flex-1">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => handleSearch(e.target.value)}
+            placeholder="搜索灵感..."
+            className="search-input" style={{ padding: '5px 10px 5px 32px' }}
+          />
+        </div>
         <button onClick={onClose} className="pd-btn p-0.5" style={{ color: 'var(--text-tertiary)' }}>
           <X size={12} />
         </button>
@@ -136,7 +137,7 @@ export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps)
             >
               <span className="text-base shrink-0 mt-0.5">{insp.icon}</span>
               <div className="flex-1 min-w-0">
-                <div className="text-xs  truncate" style={{ color: 'var(--text-primary)' }}>
+                <div className="text-xs  truncate" >
                   {insp.title}
                 </div>
                 <div className="text-[10px] truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>

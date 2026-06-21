@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Search, X, Cpu, Loader2 } from 'lucide-react';
 import { useSkillStore, type SkillInfo } from '../../stores/skillStore';
 import { AGENT_THEMES } from '../../types';
@@ -28,6 +29,19 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Fetch skills from backend when picker opens (if not already cached)
+  useEffect(() => {
+    if (agentType) {
+      invoke<Array<{ name: string; description: string; category: string }>>('agent_list_skills', { agentType })
+        .then((skills) => {
+          if (skills && skills.length > 0) {
+            useSkillStore.getState().setAgentSkills(agentType, skills);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [agentType]);
 
   const handleSelect = useCallback(
     (name: string, description: string) => {
@@ -76,19 +90,20 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
     >
       {/* Search */}
       <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: '1px solid var(--border)' }}>
-        <Search size={14} style={{ color: 'var(--text-tertiary)' }} />
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSelectedIndex(0);
-          }}
-          placeholder="搜索技能..."
-          className="flex-1 text-xs outline-none bg-transparent"
-          style={{ color: 'var(--text-primary)' }}
-        />
+        <div className="relative flex-1">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedIndex(0);
+            }}
+            placeholder="搜索技能..."
+            className="search-input" style={{ padding: '5px 10px 5px 32px' }}
+          />
+        </div>
         <button onClick={onClose} className="pd-btn p-0.5" style={{ color: 'var(--text-tertiary)' }}>
           <X size={12} />
         </button>
@@ -108,7 +123,7 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
             </span>
           </div>
         ) : (
-          filteredSkills.slice(0, 10).map((skill, idx) => (
+          filteredSkills.map((skill, idx) => (
             <button
               key={skill.name}
               onClick={() => handleSelect(skill.name, skill.description)}
@@ -118,7 +133,7 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
               }}
             >
               <div className="flex-1 min-w-0">
-                <div className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
+                <div className="text-xs flex items-center gap-1.5" >
                   <Cpu size={12} className="shrink-0" style={{ color: AGENT_THEMES.hermes.cssVar }} />
                   <span className="truncate">{skill.name}</span>
                 </div>

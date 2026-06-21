@@ -364,8 +364,8 @@ pub async fn send_message_with_config(
         log::info!("[Agent] Session closed: {}", session_id);
     }
 
-    pub async fn list_skills(agent_type: &str, config: Option<&crate::commands::agents::AgentConfig>) -> Vec<crate::db::models::SkillInfo> {
-        // 优先使用 DB 中的技能配置
+    pub async fn list_skills(_agent_type: &str, config: Option<&crate::commands::agents::AgentConfig>) -> Vec<crate::db::models::SkillInfo> {
+        // 仅使用 DB 中配置的技能目录，无硬编码 fallback
         if let Some(cfg) = config {
             if !cfg.skills_dir.is_empty() {
                 // 有明确定义的技能目录路径（支持 {agent_type} 占位符和 ~ 扩展）
@@ -382,14 +382,6 @@ pub async fn send_message_with_config(
                 };
                 return scan_skills_dir(&skills_dir, &cfg.skill_entry_file, &cfg.skill_display_mode);
             }
-        }
-
-        // 智能目录: ~/.{agent_name}/skills/
-        if let Some(home) = home_dir() {
-            let skills_dir = home.join(format!(".{}", agent_type)).join("skills");
-            let entry_file = config.map(|c| c.skill_entry_file.as_str()).unwrap_or("SKILL.md");
-            let display_mode = config.map(|c| c.skill_display_mode.as_str()).unwrap_or("recursive");
-            return scan_skills_dir(&skills_dir, entry_file, display_mode);
         }
         vec![]
     }
@@ -505,11 +497,13 @@ fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode:
         if display_mode == "collection" {
             return skills;
         }
-        // recursive 模式：有入口文件也返回（不继续递归）
-        return skills;
+        // recursive 模式：解析入口文件后继续递归子目录
+        if display_mode != "recursive" {
+            return skills;
+        }
     }
 
-    // 否则递归遍历子目录
+    // 递归遍历子目录
     let entries = match std::fs::read_dir(skills_dir) {
         Ok(e) => e,
         Err(_) => return skills,

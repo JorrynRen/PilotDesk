@@ -34,17 +34,17 @@ PilotDesk 是一个 **Agent 统一桌面客户端**，将多个 AI Agent（Claud
 
 ### 1.2 技术栈
 
-| 层 | 技术 | 说明 |
-|---|------|------|
-| 桌面框架 | Tauri 2.0 | Rust 驱动的跨平台桌面框架 |
-| 前端 | React 19 + TypeScript | 用户界面 |
-| 构建工具 | Vite + Rolldown | 前端构建 |
-| 样式 | Tailwind CSS 4 + CSS 设计令牌 | 原子化 CSS + 语义化变量 |
-| 状态管理 | Zustand + useReducer | 轻量级状态管理 + 状态机 |
-| Rust 后端 | Tauri Commands + Tauri Events | 数据库、文件系统、进程管理、流式推送 |
-| 数据库 | SQLite (rusqlite 0.32 + r2d2 连接池) | 本地持久化 |
-| 进程管理 | tokio::process::Command (Rust) | Agent CLI 进程生命周期管理 |
-| Agent CLI | claude / hermes / codex | AI Agent 命令行工具 |
+| 层         | 技术                                | 说明                 |
+| --------- | --------------------------------- | ------------------ |
+| 桌面框架      | Tauri 2.0                         | Rust 驱动的跨平台桌面框架    |
+| 前端        | React 19 + TypeScript             | 用户界面               |
+| 构建工具      | Vite + Rolldown                   | 前端构建               |
+| 样式        | Tailwind CSS 4 + CSS 设计令牌         | 原子化 CSS + 语义化变量    |
+| 状态管理      | Zustand + useReducer              | 轻量级状态管理 + 状态机      |
+| Rust 后端   | Tauri Commands + Tauri Events     | 数据库、文件系统、进程管理、流式推送 |
+| 数据库       | SQLite (rusqlite 0.32 + r2d2 连接池) | 本地持久化              |
+| 进程管理      | tokio::process::Command (Rust)    | Agent CLI 进程生命周期管理 |
+| Agent CLI | claude / hermes / codex           | AI Agent 命令行工具     |
 
 ### 1.3 核心功能
 
@@ -112,19 +112,19 @@ PilotDesk 是一个 **Agent 统一桌面客户端**，将多个 AI Agent（Claud
 
 ### 2.2 架构演进（v1.0 → v4.4）
 
-| 版本 | 架构特征 | 说明 |
-|------|---------|------|
-| v1.0 | Node.js Sidecar + WebSocket | 3 进程架构：PilotDesk + Sidecar + Agent CLI |
-| v2.0 | AgentType 枚举 | 统一 Agent 类型标识 |
-| v3.0 | Zustand + ID-based 去重 | 状态管理重构 |
-| v3.5 | DPAPI 加密 + 结构化日志 | 安全加固 |
-| **v4.0** | **消除 Sidecar + r2d2 + useReducer** | **架构简化：2 进程架构** |
-| v4.1 | 虚拟滚动 + 消息编辑 + 设计令牌 | 性能优化 |
-| v4.2 | 消息重发 + 批量操作 + 插件架构 | 功能增强 |
-| v4.3 | 插件系统运行时 + 自定义主题色 | 扩展能力 |
-| **v4.4** | **综合文档合并** | 合并 v3.5~v4.3 为一份文档 |
-| **v4.5** | **插件系统完善** | 插件系统完善 |
-| **v4.6** | **UI 修复 + 环境检测修复** | **本文档** |
+| 版本       | 架构特征                               | 说明                                     |
+| -------- | ---------------------------------- | -------------------------------------- |
+| v1.0     | Node.js Sidecar + WebSocket        | 3 进程架构：PilotDesk + Sidecar + Agent CLI |
+| v2.0     | AgentType 枚举                       | 统一 Agent 类型标识                          |
+| v3.0     | Zustand + ID-based 去重              | 状态管理重构                                 |
+| v3.5     | DPAPI 加密 + 结构化日志                   | 安全加固                                   |
+| **v4.0** | **消除 Sidecar + r2d2 + useReducer** | **架构简化：2 进程架构**                        |
+| v4.1     | 虚拟滚动 + 消息编辑 + 设计令牌                 | 性能优化                                   |
+| v4.2     | 消息重发 + 批量操作 + 插件架构                 | 功能增强                                   |
+| v4.3     | 插件系统运行时 + 自定义主题色                   | 扩展能力                                   |
+| **v4.4** | **综合文档合并**                         | 合并 v3.5~v4.3 为一份文档                     |
+| **v4.5** | **插件系统完善**                         | 插件系统完善                                 |
+| **v4.6** | **UI 修复 + 环境检测修复**                 | **本文档**                                |
 
 ### 2.3 数据流
 
@@ -450,25 +450,25 @@ invoke_handler(tauri::generate_handler![
 
 ### 4.3 关键命令
 
-| 命令 | 文件 | 参数 | 返回值 | 说明 |
-|------|------|------|--------|------|
-| `detect_env` | env.rs | 无 | `EnvInfo` | 检测 Node/Git/Python/Agent 版本 |
-| `install_agent` | env.rs | agent_type | `()` | 泛化安装（通过 AGENTS 配置表） |
-| `create_session` | session.rs | agent_type, cwd?, title?, api_provider?, api_model? | `Session` | 创建新会话 |
-| `list_sessions` | session.rs | 无 | `Vec<Session>` | 获取活跃会话列表 |
-| `get_session_messages` | session.rs | session_id | `Vec<Message>` | 获取会话消息列表 |
-| `save_message` | session.rs | session_id, role, content, mode | `Message` | 保存消息并更新会话预览 |
-| `update_message` | session.rs | id, content | `()` | 编辑消息内容（Phase 4 新增） |
-| `search_sessions` | session.rs | query | `Vec<Session>` | 按标题搜索会话（Phase 4 新增） |
-| `search_messages` | session.rs | session_id, query | `Vec<Message>` | 按内容搜索消息（LIKE %query%，Phase 6 新增） |
-| `get_app_setting` | app_settings.rs | key | `Option<String>` | 获取应用设置 |
-| `set_app_setting` | app_settings.rs | key, value | `()` | 设置应用设置 |
-| `list_inspirations` | inspiration.rs | 无 | `Vec<Inspiration>` | 获取灵感列表 |
-| `search_inspirations` | inspiration.rs | query | `Vec<Inspiration>` | FTS5 全文搜索灵感 |
-| `plugin_discover` | plugin/mod.rs | 无 | `Vec<PluginInstance>` | 扫描插件目录 |
-| `plugin_list` | plugin/mod.rs | 无 | `Vec<PluginInstance>` | 列出所有插件 |
-| `plugin_enable` | plugin/mod.rs | id | `()` | 启用插件 |
-| `plugin_disable` | plugin/mod.rs | id | `()` | 禁用插件 |
+| 命令                     | 文件              | 参数                                                  | 返回值                   | 说明                               |
+| ---------------------- | --------------- | --------------------------------------------------- | --------------------- | -------------------------------- |
+| `detect_env`           | env.rs          | 无                                                   | `EnvInfo`             | 检测 Node/Git/Python/Agent 版本      |
+| `install_agent`        | env.rs          | agent_type                                          | `()`                  | 泛化安装（通过 AGENTS 配置表）              |
+| `create_session`       | session.rs      | agent_type, cwd?, title?, api_provider?, api_model? | `Session`             | 创建新会话                            |
+| `list_sessions`        | session.rs      | 无                                                   | `Vec<Session>`        | 获取活跃会话列表                         |
+| `get_session_messages` | session.rs      | session_id                                          | `Vec<Message>`        | 获取会话消息列表                         |
+| `save_message`         | session.rs      | session_id, role, content, mode                     | `Message`             | 保存消息并更新会话预览                      |
+| `update_message`       | session.rs      | id, content                                         | `()`                  | 编辑消息内容（Phase 4 新增）               |
+| `search_sessions`      | session.rs      | query                                               | `Vec<Session>`        | 按标题搜索会话（Phase 4 新增）              |
+| `search_messages`      | session.rs      | session_id, query                                   | `Vec<Message>`        | 按内容搜索消息（LIKE %query%，Phase 6 新增） |
+| `get_app_setting`      | app_settings.rs | key                                                 | `Option<String>`      | 获取应用设置                           |
+| `set_app_setting`      | app_settings.rs | key, value                                          | `()`                  | 设置应用设置                           |
+| `list_inspirations`    | inspiration.rs  | 无                                                   | `Vec<Inspiration>`    | 获取灵感列表                           |
+| `search_inspirations`  | inspiration.rs  | query                                               | `Vec<Inspiration>`    | FTS5 全文搜索灵感                      |
+| `plugin_discover`      | plugin/mod.rs   | 无                                                   | `Vec<PluginInstance>` | 扫描插件目录                           |
+| `plugin_list`          | plugin/mod.rs   | 无                                                   | `Vec<PluginInstance>` | 列出所有插件                           |
+| `plugin_enable`        | plugin/mod.rs   | id                                                  | `()`                  | 启用插件                             |
+| `plugin_disable`       | plugin/mod.rs   | id                                                  | `()`                  | 禁用插件                             |
 
 ### 4.4 环境检测（env.rs）
 
@@ -523,11 +523,11 @@ static LAST_DETECT: std::sync::RwLock<Option<(Instant, EnvInfo)>> = std::sync::R
 
 ### 4.5 Agent 集中配置表
 
-| Agent | npm/pip 包名 | 安装命令 |
-|-------|-------------|---------|
+| Agent       | npm/pip 包名                  | 安装命令                                       |
+| ----------- | --------------------------- | ------------------------------------------ |
 | Claude Code | `@anthropic-ai/claude-code` | `npm install -g @anthropic-ai/claude-code` |
-| Hermes | `hermes-agent` | `pip install hermes-agent` |
-| CodeX | `@openai/codex` | `npm install -g @openai/codex` |
+| Hermes      | `hermes-agent`              | `pip install hermes-agent`                 |
+| CodeX       | `@openai/codex`             | `npm install -g @openai/codex`             |
 
 ### 4.6 错误处理（errors.rs）
 
@@ -581,9 +581,9 @@ pub struct ResourcePaths {
 
 **路径规则**：
 
-| 类型 | 开发模式 | 生产模式（Windows） |
-|------|---------|-------------------|
-| 内置资源 | `src-tauri/resources/` | `%APPDATA%\com.pilotdesk.app\resources\` |
+| 类型   | 开发模式                      | 生产模式（Windows）                                     |
+| ---- | ------------------------- | ------------------------------------------------- |
+| 内置资源 | `src-tauri/resources/`    | `%APPDATA%\com.pilotdesk.app\resources\`          |
 | 用户资源 | `app_data_dir/resources/` | `%APPDATA%\com.pilotdesk.app\resources\`（Roaming） |
 
 **目录结构**：
@@ -606,11 +606,11 @@ resources/
 
 **AgentIcon 集成点**：
 
-| 组件 | 文件 | 显示逻辑 |
-|------|------|---------|
-| `AgentBadge` | `components/common/AgentBadge.tsx` | 始终渲染 `AgentIcon`，`fallback` 为 Agent 首字母（C/H/X） |
-| `MessageBubble`（Assistant） | `components/message/MessageBubble.tsx` | 圆形头像区域渲染 `AgentIcon`，`fallback` 为首字母 + 主题色背景 |
-| `MessageBubble`（User） | `components/message/MessageBubble.tsx` | 硬编码 `User` 图标（待实施项：接入用户系统后替换为用户头像/昵称） |
+| 组件                         | 文件                                     | 显示逻辑                                           |
+| -------------------------- | -------------------------------------- | ---------------------------------------------- |
+| `AgentBadge`               | `components/common/AgentBadge.tsx`     | 始终渲染 `AgentIcon`，`fallback` 为 Agent 首字母（C/H/X） |
+| `MessageBubble`（Assistant） | `components/message/MessageBubble.tsx` | 圆形头像区域渲染 `AgentIcon`，`fallback` 为首字母 + 主题色背景   |
+| `MessageBubble`（User）      | `components/message/MessageBubble.tsx` | 硬编码 `User` 图标（待实施项：接入用户系统后替换为用户头像/昵称）          |
 
 **Agent 图标显示规则**（非用户消息气泡标识）：
 
@@ -621,10 +621,13 @@ resources/
 **用户消息气泡标识**（待实施项）：
 
 - 预留拓展接口，当前硬编码 `User` 图标
+
 - 后续用户系统（用户昵称和用户头像等）完成后替换
 
 - 最大连接数：8
+
 - 读写不再互斥，并行查询性能提升显著
+
 - 所有命令通过 `get_conn()` 获取连接，替代旧 `lock_db()` 模式
 
 ### 4.8 辅助函数（v3.5 新增）
@@ -656,8 +659,6 @@ pub fn now_millis() -> i64 {
 - 密钥文件写入前通过 Windows `CryptProtectData` 加密，绑定当前用户
 - 读取时通过 `CryptUnprotectData` 解密
 - 非 Windows 平台回退为明文存储
-
-
 
 ## 5. Agent 集成（原 Sidecar 层）
 
@@ -746,30 +747,30 @@ close_session(sessionId)
 
 ### 5.3 消除 Sidecar 的收益
 
-| 指标 | 消除前（v3.5） | 消除后（v4.0） | 改进 |
-|------|---------------|---------------|------|
-| 进程数 | 3（App + Sidecar + Agent CLI） | 2（App + Agent CLI） | -33% |
-| 通信延迟 | WebSocket 序列化/反序列化 | 进程内 Tauri Event | 低延迟 |
-| 崩溃点 | Sidecar 进程崩溃 | 无中间进程 | 更可靠 |
-| 代码量 | sidecar/ 目录 ~598 个文件 | agent/mod.rs ~300 行 | -72% |
-| 维护成本 | Node.js + Rust 双栈 | 纯 Rust | 统一技术栈 |
+| 指标   | 消除前（v3.5）                    | 消除后（v4.0）           | 改进    |
+| ---- | ---------------------------- | ------------------- | ----- |
+| 进程数  | 3（App + Sidecar + Agent CLI） | 2（App + Agent CLI）  | -33%  |
+| 通信延迟 | WebSocket 序列化/反序列化           | 进程内 Tauri Event     | 低延迟   |
+| 崩溃点  | Sidecar 进程崩溃                 | 无中间进程               | 更可靠   |
+| 代码量  | sidecar/ 目录 ~598 个文件         | agent/mod.rs ~300 行 | -72%  |
+| 维护成本 | Node.js + Rust 双栈            | 纯 Rust              | 统一技术栈 |
 
 ### 5.4 已废弃的 Sidecar 组件
 
 以下组件在 v4.0 中已全部删除：
 
-| 文件 | 职责 | 删除原因 |
-|------|------|---------|
-| `sidecar/src/server.ts` | WebSocket 服务器 | 由 AgentManager + Tauri Event 替代 |
-| `sidecar/src/adapters/base.ts` | AgentAdapter 接口 | 由 AgentType 枚举方法替代 |
-| `sidecar/src/adapters/claude-code.ts` | Claude Code 适配器 | 由 AgentManager 统一管理 |
-| `sidecar/src/adapters/hermes.ts` | Hermes 适配器 | 由 AgentManager 统一管理 |
-| `sidecar/src/adapters/codex.ts` | CodeX 适配器 | 由 AgentManager 统一管理 |
-| `sidecar/src/types.ts` | 消息类型定义 | 由 Rust 类型替代 |
-| `src-tauri/src/sidecar/manager.rs` | Sidecar 进程管理 | 由 AgentManager 替代 |
-| `src/hooks/useWebSocket.ts` | WebSocket 连接管理 | 由 useAgentEvent 替代 |
-| `src/stores/wsStore.ts` | WebSocket 状态 | 由 useAgentEvent 管理 |
-| `sidecar/` 目录 | 整个 Node.js 项目 | 598 个文件全部删除 |
+| 文件                                    | 职责              | 删除原因                            |
+| ------------------------------------- | --------------- | ------------------------------- |
+| `sidecar/src/server.ts`               | WebSocket 服务器   | 由 AgentManager + Tauri Event 替代 |
+| `sidecar/src/adapters/base.ts`        | AgentAdapter 接口 | 由 AgentType 枚举方法替代              |
+| `sidecar/src/adapters/claude-code.ts` | Claude Code 适配器 | 由 AgentManager 统一管理             |
+| `sidecar/src/adapters/hermes.ts`      | Hermes 适配器      | 由 AgentManager 统一管理             |
+| `sidecar/src/adapters/codex.ts`       | CodeX 适配器       | 由 AgentManager 统一管理             |
+| `sidecar/src/types.ts`                | 消息类型定义          | 由 Rust 类型替代                     |
+| `src-tauri/src/sidecar/manager.rs`    | Sidecar 进程管理    | 由 AgentManager 替代               |
+| `src/hooks/useWebSocket.ts`           | WebSocket 连接管理  | 由 useAgentEvent 替代              |
+| `src/stores/wsStore.ts`               | WebSocket 状态    | 由 useAgentEvent 管理              |
+| `sidecar/` 目录                         | 整个 Node.js 项目   | 598 个文件全部删除                     |
 
 ### 5.5 前端 Agent 通信 Hook
 
@@ -787,13 +788,13 @@ function useAgentEvent(handlers?: AgentEventHandlers) {
 
 **事件类型**：
 
-| 事件名 | 载荷 | 说明 |
-|--------|------|------|
-| `chunk` | `{ sessionId, content }` | 流式输出片段 |
-| `done` | `{ sessionId, content }` | 生成完成 |
-| `error` | `{ sessionId, error }` | 错误信息 |
-| `status` | `{ sessionId, status }` | 状态更新 |
-| `skills` | `{ sessionId, agentType, skills }` | 技能列表 |
+| 事件名      | 载荷                                 | 说明     |
+| -------- | ---------------------------------- | ------ |
+| `chunk`  | `{ sessionId, content }`           | 流式输出片段 |
+| `done`   | `{ sessionId, content }`           | 生成完成   |
+| `error`  | `{ sessionId, error }`             | 错误信息   |
+| `status` | `{ sessionId, status }`            | 状态更新   |
+| `skills` | `{ sessionId, agentType, skills }` | 技能列表   |
 
 ---
 
@@ -833,29 +834,29 @@ CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);
 
 **字段说明**：
 
-| 字段 | 类型 | 约束 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `id` | TEXT | PK | - | UUID v4，创建时生成 |
-| `agent_type` | TEXT | NOT NULL, CHECK | - | Agent 类型：claude / hermes / api / codex |
-| `title` | TEXT | NOT NULL | `''` | 会话标题 |
-| `cwd` | TEXT | - | `''` | 工作目录路径 |
-| `created_at` | INTEGER | NOT NULL | - | Unix 时间戳（秒） |
-| `updated_at` | INTEGER | NOT NULL | - | Unix 时间戳（秒） |
-| `last_message_preview` | TEXT | - | `''` | 最后一条消息的前 100 字符 |
-| `message_count` | INTEGER | - | 0 | 消息总数 |
-| `status` | TEXT | CHECK | `'active'` | active（活跃）/ archived（归档） |
-| `api_provider` | TEXT | - | NULL | 仅 api 类型使用 |
-| `api_model` | TEXT | - | NULL | 仅 api 类型使用 |
+| 字段                     | 类型      | 约束              | 默认值        | 说明                                     |
+| ---------------------- | ------- | --------------- | ---------- | -------------------------------------- |
+| `id`                   | TEXT    | PK              | -          | UUID v4，创建时生成                          |
+| `agent_type`           | TEXT    | NOT NULL, CHECK | -          | Agent 类型：claude / hermes / api / codex |
+| `title`                | TEXT    | NOT NULL        | `''`       | 会话标题                                   |
+| `cwd`                  | TEXT    | -               | `''`       | 工作目录路径                                 |
+| `created_at`           | INTEGER | NOT NULL        | -          | Unix 时间戳（秒）                            |
+| `updated_at`           | INTEGER | NOT NULL        | -          | Unix 时间戳（秒）                            |
+| `last_message_preview` | TEXT    | -               | `''`       | 最后一条消息的前 100 字符                        |
+| `message_count`        | INTEGER | -               | 0          | 消息总数                                   |
+| `status`               | TEXT    | CHECK           | `'active'` | active（活跃）/ archived（归档）               |
+| `api_provider`         | TEXT    | -               | NULL       | 仅 api 类型使用                             |
+| `api_model`            | TEXT    | -               | NULL       | 仅 api 类型使用                             |
 
 **默认标题生成规则**：
 
-| agent_type | 默认标题 |
-|-----------|---------|
-| claude | `Claude Code 新会话` |
-| hermes | `Hermes Agent 新会话` |
-| codex | `codeX 新会话` |
-| api | `API 直连会话` |
-| 其他 | `新会话` |
+| agent_type | 默认标题               |
+| ---------- | ------------------ |
+| claude     | `Claude Code 新会话`  |
+| hermes     | `Hermes Agent 新会话` |
+| codex      | `codeX 新会话`        |
+| api        | `API 直连会话`         |
+| 其他         | `新会话`              |
 
 **Rust 模型**：
 
@@ -894,14 +895,14 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestam
 
 **字段说明**：
 
-| 字段 | 类型 | 约束 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `id` | TEXT | PK | - | UUID v4 |
-| `session_id` | TEXT | NOT NULL, FK -> sessions(id) ON DELETE CASCADE | - | 所属会话 ID |
-| `role` | TEXT | NOT NULL, CHECK | - | user / assistant / system |
-| `content` | TEXT | NOT NULL | `''` | 消息文本内容 |
-| `mode` | TEXT | CHECK | `'native'` | native / fast / think / expert |
-| `timestamp` | INTEGER | NOT NULL | - | Unix 时间戳（秒） |
+| 字段           | 类型      | 约束                                             | 默认值        | 说明                             |
+| ------------ | ------- | ---------------------------------------------- | ---------- | ------------------------------ |
+| `id`         | TEXT    | PK                                             | -          | UUID v4                        |
+| `session_id` | TEXT    | NOT NULL, FK -> sessions(id) ON DELETE CASCADE | -          | 所属会话 ID                        |
+| `role`       | TEXT    | NOT NULL, CHECK                                | -          | user / assistant / system      |
+| `content`    | TEXT    | NOT NULL                                       | `''`       | 消息文本内容                         |
+| `mode`       | TEXT    | CHECK                                          | `'native'` | native / fast / think / expert |
+| `timestamp`  | INTEGER | NOT NULL                                       | -          | Unix 时间戳（秒）                    |
 
 **扩展字段**（v3.4 迁移添加）：
 
@@ -1029,14 +1030,14 @@ CREATE TABLE app_settings (
 
 **默认种子数据**：
 
-| key | value | 说明 |
-|-----|-------|------|
-| `mode_prompt_native` | （空字符串） | 标准模式 |
-| `mode_prompt_fast` | 快速简洁回答... | 快速模式 |
-| `mode_prompt_think` | 逐步分析推理... | 思考模式 |
-| `mode_prompt_expert` | 以资深专家的视角... | 专家模式 |
-| `theme` | light / dark | 主题模式（v4.0 迁移到 app_settings） |
-| `theme_colors` | JSON 字符串 | 自定义主题色（v4.3 新增） |
+| key                  | value        | 说明                          |
+| -------------------- | ------------ | --------------------------- |
+| `mode_prompt_native` | （空字符串）       | 标准模式                        |
+| `mode_prompt_fast`   | 快速简洁回答...    | 快速模式                        |
+| `mode_prompt_think`  | 逐步分析推理...    | 思考模式                        |
+| `mode_prompt_expert` | 以资深专家的视角...  | 专家模式                        |
+| `theme`              | light / dark | 主题模式（v4.0 迁移到 app_settings） |
+| `theme_colors`       | JSON 字符串     | 自定义主题色（v4.3 新增）             |
 
 ---
 
@@ -1064,6 +1065,7 @@ inspirations 1 ---- 1 inspirations_fts  (content=inspirations, content_rowid=row
 ```
 
 各表独立（无外键关联）：
+
 - `api_providers` -- 独立表，sessions.api_provider 逻辑关联但不设 FK
 - `app_settings` -- 独立 KV 表
 - `install_logs` -- 独立日志表
@@ -1107,20 +1109,20 @@ pub fn init_db() -> Result<DbPool, AppError> {
 
 ### 7.1 Zustand Stores
 
-| Store | 文件 | 主要状态 | 说明 |
-|-------|------|---------|------|
-| `sessionStore` | `sessionStore.ts` | sessions, currentSessionId, messages, streamingContent | 会话列表、当前会话、消息列表、流式内容（ID-based 去重） |
-| `skillStore` | `skillStore.ts` | skillsByAgent, loading | 技能列表（按 Agent 类型分组） |
-| `apiProviderStore` | `apiProviderStore.ts` | providers, loading | API 提供商列表（使用 invokeHelper） |
-| `inspirationStore` | `inspirationStore.ts` | inspirations, tags, searchQuery | 灵感列表、标签、搜索（使用 invokeHelper） |
-| `pendingInputStore` | `pendingInputStore.ts` | text, mode | 待发送输入内容 |
-| `pluginStore` | `pluginStore.ts` | plugins, loading | 插件列表（v4.3 新增） |
-| `themeStore` | `themeStore.ts` | accent, accentHover, accentLight | 自定义主题色（v4.3 新增） |
+| Store               | 文件                     | 主要状态                                                   | 说明                               |
+| ------------------- | ---------------------- | ------------------------------------------------------ | -------------------------------- |
+| `sessionStore`      | `sessionStore.ts`      | sessions, currentSessionId, messages, streamingContent | 会话列表、当前会话、消息列表、流式内容（ID-based 去重） |
+| `skillStore`        | `skillStore.ts`        | skillsByAgent, loading                                 | 技能列表（按 Agent 类型分组）               |
+| `apiProviderStore`  | `apiProviderStore.ts`  | providers, loading                                     | API 提供商列表（使用 invokeHelper）       |
+| `inspirationStore`  | `inspirationStore.ts`  | inspirations, tags, searchQuery                        | 灵感列表、标签、搜索（使用 invokeHelper）      |
+| `pendingInputStore` | `pendingInputStore.ts` | text, mode                                             | 待发送输入内容                          |
+| `pluginStore`       | `pluginStore.ts`       | plugins, loading                                       | 插件列表（v4.3 新增）                    |
+| `themeStore`        | `themeStore.ts`        | accent, accentHover, accentLight                       | 自定义主题色（v4.3 新增）                  |
 
 ### 7.2 已移除的 Store
 
-| Store | 移除版本 | 移除原因 |
-|-------|---------|---------|
+| Store     | 移除版本 | 移除原因                             |
+| --------- | ---- | -------------------------------- |
 | `wsStore` | v4.0 | WebSocket 已消除，由 useAgentEvent 替代 |
 
 ### 7.3 ID-based 消息去重
@@ -1218,13 +1220,13 @@ useEffect(() => {
 
 **事件类型**：
 
-| 事件名 | 载荷 | 说明 |
-|--------|------|------|
-| `chunk` | `{ sessionId, content }` | 流式输出片段 |
-| `done` | `{ sessionId, content }` | 生成完成 |
-| `error` | `{ sessionId, error }` | 错误信息 |
-| `status` | `{ sessionId, status }` | 状态更新 |
-| `skills` | `{ sessionId, agentType, skills }` | 技能列表 |
+| 事件名      | 载荷                                 | 说明     |
+| -------- | ---------------------------------- | ------ |
+| `chunk`  | `{ sessionId, content }`           | 流式输出片段 |
+| `done`   | `{ sessionId, content }`           | 生成完成   |
+| `error`  | `{ sessionId, error }`             | 错误信息   |
+| `status` | `{ sessionId, status }`            | 状态更新   |
+| `skills` | `{ sessionId, agentType, skills }` | 技能列表   |
 
 ### 8.3 已废弃的 WebSocket 协议
 
@@ -1273,8 +1275,6 @@ async function* streamChat(endpoint, apiKey, model, messages) {
   // yield 每个 chunk
 }
 ```
-
-
 
 ## 9. 环境检测与版本管理
 
@@ -1326,11 +1326,11 @@ install_agent(agentType)
 
 StatusBar 底部显示各 Agent 安装状态：
 
-| 状态 | 显示 |
-|------|------|
-| 查询中 | `Agent: 查询中...` |
+| 状态  | 显示                                           |
+| --- | -------------------------------------------- |
+| 查询中 | `Agent: 查询中...`                              |
 | 已安装 | `Agent: C v2.1.177 / H v0.16.0 / X v0.140.0` |
-| 未安装 | `Agent: C (未安装) / H (未安装) / X (未安装)` |
+| 未安装 | `Agent: C (未安装) / H (未安装) / X (未安装)`         |
 
 ---
 
@@ -1402,18 +1402,18 @@ pub struct PluginHost {
 
 **Tauri 命令**：
 
-| 命令 | 参数 | 返回 |
-|------|------|------|
-| `plugin_discover` | 无 | `Vec<PluginInstance>` |
-| `plugin_list` | 无 | `Vec<PluginInstance>` |
-| `plugin_enable` | `id: String` | `()` |
-| `plugin_disable` | `id: String` | `()` |
-| `plugin_install_zip` | `zip_path: String` | `PluginInstance` |
-| `plugin_uninstall` | `id: String` | `()` |
-| `plugin_get_sandbox_info` | 无 | `SandboxInfo` |
-| `plugin_set_sandbox_enabled` | `enabled: bool` | `()` |
-| `plugin_read_entry` | `plugin_id: String` | `String`（入口文件源码） |
-| `plugin_get_panel_content` | `plugin_id, panel_id` | `String` |
+| 命令                           | 参数                    | 返回                    |
+| ---------------------------- | --------------------- | --------------------- |
+| `plugin_discover`            | 无                     | `Vec<PluginInstance>` |
+| `plugin_list`                | 无                     | `Vec<PluginInstance>` |
+| `plugin_enable`              | `id: String`          | `()`                  |
+| `plugin_disable`             | `id: String`          | `()`                  |
+| `plugin_install_zip`         | `zip_path: String`    | `PluginInstance`      |
+| `plugin_uninstall`           | `id: String`          | `()`                  |
+| `plugin_get_sandbox_info`    | 无                     | `SandboxInfo`         |
+| `plugin_set_sandbox_enabled` | `enabled: bool`       | `()`                  |
+| `plugin_read_entry`          | `plugin_id: String`   | `String`（入口文件源码）      |
+| `plugin_get_panel_content`   | `plugin_id, panel_id` | `String`              |
 
 ### 10.5 前端 PluginStore
 
@@ -1456,17 +1456,17 @@ interface PluginStoreState {
 
 #### 权限系统
 
-| 权限 | 说明 | 风险等级 |
-|------|------|---------|
-| `ui:panel` | 添加/移除面板 | 低 |
-| `ui:toast` | 显示通知（默认授权） | 低 |
-| `ui:modal` | 打开模态框 | 低 |
-| `session:read` | 读取会话和消息 | 中 |
-| `session:write` | 创建/修改/删除会话 | 中 |
-| `data:invoke` | 调用 Tauri 命令 | **高** |
-| `storage:*` | 插件独立存储（默认授权） | 低 |
-| `fs:read` | 读取文件系统 | **高** |
-| `fs:write` | 写入文件系统 | **高** |
+| 权限              | 说明           | 风险等级  |
+| --------------- | ------------ | ----- |
+| `ui:panel`      | 添加/移除面板      | 低     |
+| `ui:toast`      | 显示通知（默认授权）   | 低     |
+| `ui:modal`      | 打开模态框        | 低     |
+| `session:read`  | 读取会话和消息      | 中     |
+| `session:write` | 创建/修改/删除会话   | 中     |
+| `data:invoke`   | 调用 Tauri 命令  | **高** |
+| `storage:*`     | 插件独立存储（默认授权） | 低     |
+| `fs:read`       | 读取文件系统       | **高** |
+| `fs:write`      | 写入文件系统       | **高** |
 
 #### 沙箱规则
 
@@ -1482,13 +1482,14 @@ interface PluginStoreState {
 
 插件清单 `manifest.json` 的 `contributes.panels[].icon` 字段支持三种格式：
 
-| 格式 | 示例 | 说明 |
-|------|------|------|
-| 网络图片 | `"https://example.com/icon.png"` | 直接渲染为 `<img>` |
-| 本地路径 | `"image/favicon.png"` | 相对于插件目录，通过 Tauri `convertFileSrc()` 转换 |
-| 空/未定义 | `""` 或省略 | 显示默认图标 `📦` |
+| 格式    | 示例                               | 说明                                     |
+| ----- | -------------------------------- | -------------------------------------- |
+| 网络图片  | `"https://example.com/icon.png"` | 直接渲染为 `<img>`                          |
+| 本地路径  | `"image/favicon.png"`            | 相对于插件目录，通过 Tauri `convertFileSrc()` 转换 |
+| 空/未定义 | `""` 或省略                         | 显示默认图标 `📦`                            |
 
 **渲染流程：**
+
 ```
 manifest.json icon 字段
   → parsePluginIcon(icon, pluginPath)
@@ -1530,6 +1531,7 @@ hello-world/
 ```
 
 **功能：**
+
 - 注册"Hello World"面板到右侧面板（含实时时钟 + 计数器）
 - 加载/卸载通知
 - 监听 `message:before-send` 事件
@@ -1564,6 +1566,7 @@ class PluginRegistry {
 ```
 
 **JS 执行流程：**
+
 ```
 loadPlugin()
   → 1. 注册默认面板组件 (DefaultPluginPanel)
@@ -1580,6 +1583,7 @@ loadPlugin()
 **文件：** `src/plugin/PluginAPI.ts`
 
 每个插件实例拥有独立的 `PluginAPI` 实例，包含：
+
 - `ui.addPanel/removePanel/showToast` — UI 操作
 - `data.invoke` — Tauri 命令调用
 - `events.on/emit` — 事件总线（每个插件独立）
@@ -1598,6 +1602,7 @@ loadPlugin()
 **Rust 命令：** `plugin_install_zip` / `plugin_uninstall`
 
 **安装流程：**
+
 ```
 用户点击「+ 安装」按钮
   → Tauri dialog 选择 .zip 文件
@@ -1609,12 +1614,12 @@ loadPlugin()
 
 ### 10.13 待实施
 
-| 项目 | 状态 | 说明 |
-|------|------|------|
-| 插件市场 | 待实施 | 在线插件浏览和安装 |
-| 命令面板 | 待实施 | 注册的命令在前端可执行 |
-| 事件钩子管道 | 待实施 | 钩子事件的实际触发链路 |
-| 用户系统 | 待实施 | 用户昵称、头像管理，替换消息气泡中 User 图标 |
+| 项目                 | 状态  | 说明                                                                  |
+| ------------------ | --- | ------------------------------------------------------------------- |
+| 插件市场               | 待实施 | 在线插件浏览和安装                                                           |
+| 命令面板               | 待实施 | 注册的命令在前端可执行                                                         |
+| 事件钩子管道             | 待实施 | 钩子事件的实际触发链路                                                         |
+| 用户系统               | 待实施 | 用户昵称、头像管理，替换消息气泡中 User 图标                                           |
 | 跨平台适配（macOS/Linux） | 待实施 | 内置图标格式从 .ico 扩展为 .png/.svg；种子数据中 PowerShell 命令替换为跨平台方案；Dev 路径回退逻辑验证 |
 
 ---
@@ -1627,18 +1632,18 @@ loadPlugin()
 
 42 个语义化 CSS 变量，分为 10 个类别：
 
-| 类别 | 变量数量 | 前缀 | 示例 |
-|------|---------|------|------|
-| 背景色 | 5 | `--bg-*` | `--bg-primary`, `--bg-secondary` |
-| 前景色 | 5 | `--text-*` | `--text-primary`, `--text-secondary` |
-| 边框色 | 3 | `--border-*` | `--border-color`, `--border-hover` |
-| 品牌色 | 3 | `--accent-*` | `--accent`, `--accent-hover`, `--accent-light` |
-| Agent 标签色 | 4 | `--*-tag` | `--claude-tag`, `--hermes-tag` |
-| 消息气泡 | 4 | `--msg-*` | `--msg-user-bg`, `--msg-assistant-bg` |
-| 阴影 | 4 | `--shadow-*` | `--shadow-sm`, `--shadow-lg` |
-| 圆角 | 4 | `--radius-*` | `--radius-sm`, `--radius-md` |
-| 间距 | 6 | `--space-*` | `--space-xs`, `--space-md` |
-| 过渡 | 4 | `--transition-*` | `--transition-fast`, `--transition-normal` |
+| 类别        | 变量数量 | 前缀               | 示例                                             |
+| --------- | ---- | ---------------- | ---------------------------------------------- |
+| 背景色       | 5    | `--bg-*`         | `--bg-primary`, `--bg-secondary`               |
+| 前景色       | 5    | `--text-*`       | `--text-primary`, `--text-secondary`           |
+| 边框色       | 3    | `--border-*`     | `--border-color`, `--border-hover`             |
+| 品牌色       | 3    | `--accent-*`     | `--accent`, `--accent-hover`, `--accent-light` |
+| Agent 标签色 | 4    | `--*-tag`        | `--claude-tag`, `--hermes-tag`                 |
+| 消息气泡      | 4    | `--msg-*`        | `--msg-user-bg`, `--msg-assistant-bg`          |
+| 阴影        | 4    | `--shadow-*`     | `--shadow-sm`, `--shadow-lg`                   |
+| 圆角        | 4    | `--radius-*`     | `--radius-sm`, `--radius-md`                   |
+| 间距        | 6    | `--space-*`      | `--space-xs`, `--space-md`                     |
+| 过渡        | 4    | `--transition-*` | `--transition-fast`, `--transition-normal`     |
 
 ### 11.2 主题持久化（v4.0）
 
@@ -1716,11 +1721,11 @@ function useI18n() {
 
 ### 12.4 当前状态
 
-| 项目 | 状态 | 说明 |
-|------|------|------|
-| 语言文件 | 已完成 | zh-CN.json + en-US.json |
-| useI18n hook | 已完成 | 动态 import + locale 切换 |
-| 组件集成 | **暂缓** | 组件硬编码文本待替换为 `t()` 调用 |
+| 项目           | 状态     | 说明                      |
+| ------------ | ------ | ----------------------- |
+| 语言文件         | 已完成    | zh-CN.json + en-US.json |
+| useI18n hook | 已完成    | 动态 import + locale 切换   |
+| 组件集成         | **暂缓** | 组件硬编码文本待替换为 `t()` 调用    |
 
 ---
 
@@ -1733,6 +1738,7 @@ function useI18n() {
 **根因**：WPS 灵犀在 spawn 外部进程前未清除 `PYTHONHOME`。
 
 **处理策略**：
+
 - 不在 PilotDesk 中添加补丁
 - 此问题应由 WPS 灵犀在源头修复（spawn 外部进程前清除 PYTHONHOME）
 - 已在 PilotDesk 中移除所有 PYTHONHOME 补丁（2026-06-15）
@@ -1740,6 +1746,7 @@ function useI18n() {
 ### 13.2 Agent 版本检测规则
 
 **决策**（2026-06-15 确定）：
+
 - 所有 Agent 版本检测仅基于 CLI 版本，不再检测 Desktop 版本
 - Claude Code: `claude --version`
 - Hermes: `hermes --version`
@@ -1823,102 +1830,102 @@ function useI18n() {
 
 ### 14.1 Rust 后端
 
-| 文件 | 行数（约） | 职责 |
-|------|-----------|------|
-| `src-tauri/src/main.rs` | ~20 | Tauri 入口 |
-| `src-tauri/src/lib.rs` | ~200 | 模块注册 + 命令注册 + setup |
-| `src-tauri/src/agent/mod.rs` | ~300 | AgentManager（统一进程管理） |
-| `src-tauri/src/plugin/mod.rs` | ~550 | PluginHost（插件发现/管理/沙箱/zip安装/卸载） |
-| `src-tauri/src/db/init.rs` | ~230 | 数据库初始化 + 7 个迁移函数 |
-| `src-tauri/src/db/models.rs` | ~80 | 统一数据模型 |
-| `src-tauri/src/commands/env.rs` | ~270 | 环境检测 + Agent 安装 |
-| `src-tauri/src/commands/session.rs` | ~280 | 会话/消息 CRUD + 搜索 |
-| `src-tauri/src/commands/update.rs` | ~170 | npm/pypi 版本检测 |
-| `src-tauri/src/commands/api_provider.rs` | ~200 | API 提供商管理 |
-| `src-tauri/src/commands/app_settings.rs` | ~80 | 应用设置 KV |
-| `src-tauri/src/commands/install_log.rs` | ~74 | 安装日志 |
-| `src-tauri/src/commands/inspiration.rs` | ~200 | 灵感 CRUD + FTS5 搜索 |
-| `src-tauri/src/commands/theme.rs` | ~60 | 主题管理（SQLite 持久化） |
-| `src-tauri/src/utils/mod.rs` | ~30 | new_id(), now(), now_millis() |
-| `src-tauri/src/utils/paths.rs` | ~12 | 路径工具 |
-| `src-tauri/src/utils/errors.rs` | ~90 | 错误类型枚举（9 变体） |
-| `src-tauri/src/utils/crypto.rs` | ~130 | DPAPI 加密/解密 |
+| 文件                                       | 行数（约） | 职责                              |
+| ---------------------------------------- | ----- | ------------------------------- |
+| `src-tauri/src/main.rs`                  | ~20   | Tauri 入口                        |
+| `src-tauri/src/lib.rs`                   | ~200  | 模块注册 + 命令注册 + setup             |
+| `src-tauri/src/agent/mod.rs`             | ~300  | AgentManager（统一进程管理）            |
+| `src-tauri/src/plugin/mod.rs`            | ~550  | PluginHost（插件发现/管理/沙箱/zip安装/卸载） |
+| `src-tauri/src/db/init.rs`               | ~230  | 数据库初始化 + 7 个迁移函数                |
+| `src-tauri/src/db/models.rs`             | ~80   | 统一数据模型                          |
+| `src-tauri/src/commands/env.rs`          | ~270  | 环境检测 + Agent 安装                 |
+| `src-tauri/src/commands/session.rs`      | ~280  | 会话/消息 CRUD + 搜索                 |
+| `src-tauri/src/commands/update.rs`       | ~170  | npm/pypi 版本检测                   |
+| `src-tauri/src/commands/api_provider.rs` | ~200  | API 提供商管理                       |
+| `src-tauri/src/commands/app_settings.rs` | ~80   | 应用设置 KV                         |
+| `src-tauri/src/commands/install_log.rs`  | ~74   | 安装日志                            |
+| `src-tauri/src/commands/inspiration.rs`  | ~200  | 灵感 CRUD + FTS5 搜索               |
+| `src-tauri/src/commands/theme.rs`        | ~60   | 主题管理（SQLite 持久化）                |
+| `src-tauri/src/utils/mod.rs`             | ~30   | new_id(), now(), now_millis()   |
+| `src-tauri/src/utils/paths.rs`           | ~12   | 路径工具                            |
+| `src-tauri/src/utils/errors.rs`          | ~90   | 错误类型枚举（9 变体）                    |
+| `src-tauri/src/utils/crypto.rs`          | ~130  | DPAPI 加密/解密                     |
 
 ### 14.2 前端核心
 
-| 文件 | 行数（约） | 职责 |
-|------|-----------|------|
-| `src/App.tsx` | ~60 | 根组件 + 路由 |
-| `src/main.tsx` | ~20 | 入口 |
-| `src/constants.ts` | ~30 | 共享常量 |
-| `src/types/index.ts` | ~220 | 类型定义 + AGENT_THEMES |
-| `src/types/plugin.ts` | ~50 | 插件系统类型定义 |
-| `src/hooks/useAgentEvent.ts` | ~120 | Tauri Event 通信 hook |
-| `src/hooks/useEnvInfo.ts` | ~50 | 环境信息共享 hook |
-| `src/hooks/useTheme.ts` | ~80 | 主题切换（SQLite 持久化） |
-| `src/hooks/useI18n.ts` | ~40 | 国际化 hook |
-| `src/utils/invokeHelper.ts` | ~60 | 5 个通用 invoke 包装函数 |
-| `src/utils/apiClient.ts` | ~80 | SSE 流式解析 |
-| `src/stores/sessionStore.ts` | ~220 | 会话/消息状态 |
-| `src/stores/apiProviderStore.ts` | ~80 | API 提供商状态 |
-| `src/stores/inspirationStore.ts` | ~80 | 灵感状态 |
-| `src/stores/pluginStore.ts` | ~100 | 插件状态 + registeredPanels/Commands/Hooks + refreshRegistrations |
-| `src/stores/themeStore.ts` | ~50 | 自定义主题色状态 |
-| `src/stores/skillStore.ts` | ~40 | 技能列表状态 |
-| `src/stores/pendingInputStore.ts` | ~30 | 待发送输入状态 |
+| 文件                                | 行数（约） | 职责                                                            |
+| --------------------------------- | ----- | ------------------------------------------------------------- |
+| `src/App.tsx`                     | ~60   | 根组件 + 路由                                                      |
+| `src/main.tsx`                    | ~20   | 入口                                                            |
+| `src/constants.ts`                | ~30   | 共享常量                                                          |
+| `src/types/index.ts`              | ~220  | 类型定义 + AGENT_THEMES                                           |
+| `src/types/plugin.ts`             | ~50   | 插件系统类型定义                                                      |
+| `src/hooks/useAgentEvent.ts`      | ~120  | Tauri Event 通信 hook                                           |
+| `src/hooks/useEnvInfo.ts`         | ~50   | 环境信息共享 hook                                                   |
+| `src/hooks/useTheme.ts`           | ~80   | 主题切换（SQLite 持久化）                                              |
+| `src/hooks/useI18n.ts`            | ~40   | 国际化 hook                                                      |
+| `src/utils/invokeHelper.ts`       | ~60   | 5 个通用 invoke 包装函数                                             |
+| `src/utils/apiClient.ts`          | ~80   | SSE 流式解析                                                      |
+| `src/stores/sessionStore.ts`      | ~220  | 会话/消息状态                                                       |
+| `src/stores/apiProviderStore.ts`  | ~80   | API 提供商状态                                                     |
+| `src/stores/inspirationStore.ts`  | ~80   | 灵感状态                                                          |
+| `src/stores/pluginStore.ts`       | ~100  | 插件状态 + registeredPanels/Commands/Hooks + refreshRegistrations |
+| `src/stores/themeStore.ts`        | ~50   | 自定义主题色状态                                                      |
+| `src/stores/skillStore.ts`        | ~40   | 技能列表状态                                                        |
+| `src/stores/pendingInputStore.ts` | ~30   | 待发送输入状态                                                       |
 
 ### 14.3 前端组件
 
-| 文件 | 行数（约） | 职责 |
-|------|-----------|------|
-| `src/components/layout/MainPanel.tsx` | ~350 | 主面板（useReducer 状态机） |
-| `src/components/layout/InputBar.tsx` | ~280 | 输入栏 |
-| `src/components/layout/MessageList.tsx` | ~180 | 消息列表（虚拟滚动 + 搜索） |
-| `src/components/layout/SessionList.tsx` | ~250 | 会话列表（搜索 + 批量操作） |
-| `src/components/layout/SessionListItem.tsx` | ~100 | 会话项（批量选择 checkbox） |
-| `src/components/layout/StatusBar.tsx` | ~80 | 状态栏 |
-| `src/components/layout/TitleBar.tsx` | ~60 | 自定义标题栏 |
-| `src/components/layout/RightPanel.tsx` | ~80 | 右侧面板（含插件标签页） |
-| `src/components/layout/InspirationPanel.tsx` | ~150 | 灵感面板 |
-| `src/components/message/MessageBubble.tsx` | ~350 | 消息气泡（内联编辑 + 重发） |
-| `src/components/message/MarkdownRenderer.tsx` | ~100 | Markdown 渲染 |
-| `src/components/plugin/PluginManager.tsx` | ~300 | 插件管理 UI（含 zip 安装/卸载/注册表集成） |
-| `src/components/settings/ThemeCustomizer.tsx` | ~80 | 自定义主题色 UI |
-| `src/components/env/EnvManager.tsx` | ~260 | 环境管理 |
-| `src/pages/SettingsPage.tsx` | ~300 | 设置页 |
-| `src/pages/EnvPage.tsx` | ~100 | 环境检测页 |
-| `src/styles/globals.css` | ~250 | 全局样式 + 42 CSS 设计令牌 |
-| `src/plugin/PluginRegistry.ts` | ~200 | 插件贡献点全局注册表 |
-| `src/plugin/PluginAPI.ts` | ~100 | 插件运行时 API（ui/events/storage） |
-| `src/components/plugin/PluginPanelRenderer.tsx` | ~80 | 插件面板渲染器 |
-| `src/components/plugin/PluginIcon.tsx` | ~40 | 插件图标渲染组件 |
-| `src/components/plugin/DefaultPluginPanel.tsx` | ~40 | 默认面板组件 |
+| 文件                                              | 行数（约） | 职责                           |
+| ----------------------------------------------- | ----- | ---------------------------- |
+| `src/components/layout/MainPanel.tsx`           | ~350  | 主面板（useReducer 状态机）          |
+| `src/components/layout/InputBar.tsx`            | ~280  | 输入栏                          |
+| `src/components/layout/MessageList.tsx`         | ~180  | 消息列表（虚拟滚动 + 搜索）              |
+| `src/components/layout/SessionList.tsx`         | ~250  | 会话列表（搜索 + 批量操作）              |
+| `src/components/layout/SessionListItem.tsx`     | ~100  | 会话项（批量选择 checkbox）           |
+| `src/components/layout/StatusBar.tsx`           | ~80   | 状态栏                          |
+| `src/components/layout/TitleBar.tsx`            | ~60   | 自定义标题栏                       |
+| `src/components/layout/RightPanel.tsx`          | ~80   | 右侧面板（含插件标签页）                 |
+| `src/components/layout/InspirationPanel.tsx`    | ~150  | 灵感面板                         |
+| `src/components/message/MessageBubble.tsx`      | ~350  | 消息气泡（内联编辑 + 重发）              |
+| `src/components/message/MarkdownRenderer.tsx`   | ~100  | Markdown 渲染                  |
+| `src/components/plugin/PluginManager.tsx`       | ~300  | 插件管理 UI（含 zip 安装/卸载/注册表集成）   |
+| `src/components/settings/ThemeCustomizer.tsx`   | ~80   | 自定义主题色 UI                    |
+| `src/components/env/EnvManager.tsx`             | ~260  | 环境管理                         |
+| `src/pages/SettingsPage.tsx`                    | ~300  | 设置页                          |
+| `src/pages/EnvPage.tsx`                         | ~100  | 环境检测页                        |
+| `src/styles/globals.css`                        | ~250  | 全局样式 + 42 CSS 设计令牌           |
+| `src/plugin/PluginRegistry.ts`                  | ~200  | 插件贡献点全局注册表                   |
+| `src/plugin/PluginAPI.ts`                       | ~100  | 插件运行时 API（ui/events/storage） |
+| `src/components/plugin/PluginPanelRenderer.tsx` | ~80   | 插件面板渲染器                      |
+| `src/components/plugin/PluginIcon.tsx`          | ~40   | 插件图标渲染组件                     |
+| `src/components/plugin/DefaultPluginPanel.tsx`  | ~40   | 默认面板组件                       |
 
 ### 14.4 文档
 
-| 文件 | 说明 |
-|------|------|
-| `docs/PilotDesk-架构与技术实现-v4.4.md` | **本文档** |
-| `docs/PilotDesk-架构与技术实现-v3.5.md` | 旧版架构文档（含 Sidecar 完整描述） |
-| `docs/PilotDesk-架构与技术实现-v4.0.md` | v4.0 变更文档 |
-| `docs/PilotDesk-架构与技术实现-v4.1.md` | v4.1 变更文档 |
-| `docs/PilotDesk-架构与技术实现-v4.2.md` | v4.2 变更文档 |
-| `docs/PilotDesk-架构与技术实现-v4.3.md` | v4.3 变更文档 |
-| `docs/PilotDesk-插件系统架构设计-v1.0.md` | 插件系统设计文档 |
+| 文件                                                | 说明                       |
+| ------------------------------------------------- | ------------------------ |
+| `docs/PilotDesk-架构与技术实现-v4.4.md`                  | **本文档**                  |
+| `docs/PilotDesk-架构与技术实现-v3.5.md`                  | 旧版架构文档（含 Sidecar 完整描述）   |
+| `docs/PilotDesk-架构与技术实现-v4.0.md`                  | v4.0 变更文档                |
+| `docs/PilotDesk-架构与技术实现-v4.1.md`                  | v4.1 变更文档                |
+| `docs/PilotDesk-架构与技术实现-v4.2.md`                  | v4.2 变更文档                |
+| `docs/PilotDesk-架构与技术实现-v4.3.md`                  | v4.3 变更文档                |
+| `docs/PilotDesk-插件系统架构设计-v1.0.md`                 | 插件系统设计文档                 |
 | `docs/PilotDesk-FunctionCalling-联网搜索技术方案-v1.0.md` | Function Calling 与联网搜索方案 |
-| `docs/PilotDesk-内置搜索方案-必应国内版.md` | 必应搜索实现方案 |
+| `docs/PilotDesk-内置搜索方案-必应国内版.md`                  | 必应搜索实现方案                 |
 
 ### 14.5 已删除文件
 
 以下文件在 v4.0 架构重构中已删除：
 
-| 文件 | 行数（约） | 删除原因 |
-|------|-----------|---------|
-| `src-tauri/src/sidecar/manager.rs` | ~340 | Sidecar 进程管理 → AgentManager |
-| `src-tauri/src/sidecar/mod.rs` | ~10 | 模块声明 |
-| `src/hooks/useWebSocket.ts` | ~200 | WebSocket 连接管理 → useAgentEvent |
-| `src/stores/wsStore.ts` | ~160 | WebSocket 状态 |
-| `sidecar/` 目录（598 个文件） | - | 整个 Node.js Sidecar 项目 |
+| 文件                                 | 行数（约） | 删除原因                           |
+| ---------------------------------- | ----- | ------------------------------ |
+| `src-tauri/src/sidecar/manager.rs` | ~340  | Sidecar 进程管理 → AgentManager    |
+| `src-tauri/src/sidecar/mod.rs`     | ~10   | 模块声明                           |
+| `src/hooks/useWebSocket.ts`        | ~200  | WebSocket 连接管理 → useAgentEvent |
+| `src/stores/wsStore.ts`            | ~160  | WebSocket 状态                   |
+| `sidecar/` 目录（598 个文件）             | -     | 整个 Node.js Sidecar 项目          |
 
 ---
 
@@ -1929,23 +1936,37 @@ function useI18n() {
 **日期**：2026-06-18
 
 **变更内容**：
+
 1. **StatusBar 优化**："Agent: 就绪" 改为纯文本 "Agent: "，三个 agent 版本号按钮新增 `onOpenEnvSettings` 回调，点击直接导航至设置页的环境检测 tab
 2. **SettingsPage URL 参数支持**：新增 `useSearchParams` 读取 `?tab=environment` 参数，自动切换到环境检测 tab
 3. **环境检测修复**：
+   
    - `run_cmd` 中清除 `PYTHONHOME`/`PYTHONPATH` 环境变量，消除 WPS 灵犀环境变量污染
+   
    - Python 检测新增 `py`（Python Launcher）作为 Windows fallback
+   
    - 新增 `clear_env_detect_cache` Tauri 命令
+   
    - `useEnvInfo` 的 `refresh` 回调改为返回 Promise
 4. **npm 版本查询修复**：
+   
    - `reqwest` 新增 `gzip` 和 `native-tls` 特性，修复 HTTPS 请求解码失败
+   
    - HTTP 超时从 10s 增加到 30s
+   
    - 错误消息简化为 `检查 {key} 更新失败`
 5. **操作日志重构**：
+   
    - 标题 "安装日志" → "操作日志"
+   
    - 时间格式增加年月日（`yyyy/MM/dd HH:mm:ss`）
+   
    - 查询改为 `ORDER BY timestamp DESC`，最新日志显示在最上方
+   
    - 移除自动滚动到底部逻辑
+   
    - 新增 `log-updated` 事件监听，每次写入日志后自动刷新列表
+   
    - InstallLog 组件独立从数据库加载全部日志，不再依赖外部 props
 6. **API 配置卡片拖拽优化**：拖动排序图标从卡片左侧独立容器移到卡片头部、API 供应商名称之前
 
@@ -1954,6 +1975,7 @@ function useI18n() {
 **日期**：2026-06-17
 
 **变更内容**：
+
 1. **PluginRegistry 重构**：移除订阅/通知机制，合并注册数据到 Zustand PluginStore，组件通过 selector 精确订阅
 2. **插件 JS 执行支持**：新增 PluginAPI 运行时（ui.addPanel/showToast、events、storage），PluginRegistry 执行入口 JS 并调用 onLoad/onUnload 生命周期
 3. **Rust 新增命令**：`plugin_read_entry`（读取入口文件）、`plugin_set_sandbox_enabled`（切换沙箱状态）、`plugin_get_panel_content`
@@ -1971,6 +1993,7 @@ function useI18n() {
 **日期**：2026-06-16
 
 **变更内容**：
+
 1. 合并 v3.5 完整架构描述与 v4.3 最新状态为一份综合文档
 2. 保留 v3.5 的完整结构（三层架构、数据库设计、状态管理、通信协议、关键问题记录、文件清单）
 3. Sidecar 相关内容标注为"已废弃/已消除"，在"Agent 集成"章节展示架构演进
@@ -1986,6 +2009,7 @@ function useI18n() {
 **日期**：2026-06-16
 
 **变更内容**：
+
 1. **插件系统运行时**：Rust PluginHost + 前端 PluginStore + PluginManager UI + RightPanel 集成
 2. **自定义主题色集成**：themeStore + ThemeCustomizer + SettingsPage 集成
 
@@ -1994,6 +2018,7 @@ function useI18n() {
 **日期**：2026-06-16
 
 **变更内容**：
+
 1. **Phase 6**：消息重发功能、会话批量操作（批量归档/删除）、消息搜索（LIKE %query%）
 2. **Phase 7 设计**：插件系统架构设计文档 + 类型定义、i18n 基础设施（hook + JSON 文件）、自定义主题色（themeStore + ThemeCustomizer）
 
@@ -2002,6 +2027,7 @@ function useI18n() {
 **日期**：2026-06-16
 
 **变更内容**：
+
 1. **Phase 4**：react-virtuoso 虚拟滚动、消息内联编辑、会话搜索（search_sessions 命令）
 2. **Phase 5**：42 个 CSS 设计令牌系统、主题 SQLite 持久化（useTheme 重写）
 
@@ -2010,24 +2036,41 @@ function useI18n() {
 **日期**：2026-06-20
 
 **变更内容**：
+
 1. **资源目录架构**
+   
    - 新增 `src-tauri/resources/` 目录（agents/ icons/ assets/）
+   
    - 新增 `ResourcePaths` 结构体（Tauri State），管理内置/用户资源路径
+   
    - 新增 `paths.rs` 中 `builtin_resources_dir()` / `user_resources_dir()` 函数
+   
    - 打包配置 `tauri.conf.json bundle.resources`
 2. **Agent 图标系统**
+   
    - 三个内置 Agent 图标文件：`claude_icon.ico`、`hermes_icon.ico`、`codex_icon.ico`
+   
    - 新增 `read_agent_icon` Rust 命令（读取图标文件返回 base64 data URL）
+   
    - 新增 `AgentIcon` 前端组件（支持 file: 前缀/网络图片/Emoji，含 fallback 机制）
+   
    - Agent 配置 icon 字段格式：`file:claude_icon.ico`
+   
    - Agent 市场模板和数据库种子数据 icon 字段更新
+   
    - `AgentBadge` 集成 AgentIcon（图标加载失败回退首字母）
+   
    - `MessageBubble` Assistant 消息集成 AgentIcon（圆形头像区域）
+   
    - `MessageBubble` User 消息标记为待实施项（后续用户系统接入）
 3. **Agent 表单优化**
+   
    - 字段按 6 个分类分组（基础信息/包参数/会话参数/延续会话/生命周期/技能引用）
+   
    - 分类标题加粗 + 主题色图标
+   
    - 输入框 placeholder 统一为具体示例
+   
    - 图标字段 label 补全值类型说明
 
 ### 15.8 v4.0
@@ -2035,21 +2078,35 @@ function useI18n() {
 **日期**：2026-06-16
 
 **变更内容**：
+
 1. **Phase 1：消除 Sidecar 架构负债**
+   
    - 创建 Rust AgentManager（tokio::process + Tauri Event）
+   
    - 删除 sidecar/ 目录（598 个文件）
+   
    - 删除 useWebSocket.ts、wsStore.ts
+   
    - 创建 useAgentEvent.ts 替代 WebSocket
 2. **Phase 2：后端架构改造**
+   
    - r2d2 连接池替代 Mutex<Connection>
+   
    - MainPanel useReducer 状态机替代 3 useState + 3 useRef
+   
    - 主题存储迁移（theme.txt → app_settings 表）
+   
    - 时间戳统一（f64 → i64）
+   
    - 错误处理增强（新增 Json 变体 + r2d2 From 实现）
 3. **Phase 3：前端代码去重**
+   
    - invokeHelper.ts（5 个通用函数）
+   
    - constants.ts（EMOJI_OPTIONS 共享常量）
+   
    - inspirationStore.ts 精简 ~135 行
+   
    - apiProviderStore.ts 精简 ~204 行
 
 ### 15.9 v3.5
@@ -2057,6 +2114,7 @@ function useI18n() {
 **日期**：2026-06-16
 
 **变更内容**：
+
 1. UUID/now 辅助函数提取（消除 6 个文件中 17 处重复代码）
 2. 结构化日志（println! → log::info!/warn!/error!）
 3. DPAPI 密钥保护（Windows CryptProtectData）
@@ -2067,6 +2125,7 @@ function useI18n() {
 **日期**：2026-06-16
 
 **变更内容**：
+
 1. Message 扩展字段持久化（reasoning_content, tool_calls, tool_call_id, tool_name）
 2. Sidecar 启动失败 emit 事件到前端
 3. WebSocket 断连发送队列
@@ -2081,6 +2140,6 @@ function useI18n() {
 
 ## 版本里程碑
 
-| 版本 | 日期 | 变更说明 | Git Commit |
-|------|------|---------|------------|
-| v4.5 | 2026-06-20 | 架构与技术实现文档 v4.5 | `f38849d (f38849dce2eb732d60cdac42b9dbda5b03000479)` |
+| 版本   | 日期         | 变更说明                                      | Git Commit                                           |
+| ---- | ---------- | ----------------------------------------- | ---------------------------------------------------- |
+| v4.5 | 2026-06-20 | 完整实现agent会话、agent配置管理、第一代插件系统、agent环境维护等。 | `333e60e (333e60eaf02b2964839238cc880e10bbe887b999)` |
