@@ -46,7 +46,7 @@ function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
   };
 
   return (
-    <div className="mb-3 p-3 rounded-lg space-y-3" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+    <div className="mb-3 p-3 rounded-lg space-y-3" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>沙箱保护</span>
