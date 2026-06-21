@@ -10,6 +10,95 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
+// ── 友好错误提示 ──
+
+/** 将后端返回的内部错误信息转换为用户友好的提示文字 */
+function formatUserFriendlyError(raw: string): { title: string; detail: string } {
+  // 网络连接类
+  if (raw.includes('连接失败') || raw.includes('连接超时') || raw.includes('请求超时')) {
+    return {
+      title: '网络连接失败',
+      detail: '无法连接到插件商店服务器，请检查网络连接后重试。',
+    };
+  }
+
+  // HTTP 5xx 服务器错误
+  if (raw.includes('HTTP 5') || raw.includes('HTTP 502') || raw.includes('HTTP 503')) {
+    return {
+      title: '商店服务器繁忙',
+      detail: '插件商店暂时无法响应，请稍后重试。',
+    };
+  }
+
+  // HTTP 4xx 客户端错误
+  if (raw.includes('HTTP 4') || raw.includes('HTTP 404')) {
+    return {
+      title: '插件数据异常',
+      detail: '未找到对应的插件文件，请刷新后重试。',
+    };
+  }
+
+  // 清单验证失败
+  if (raw.includes('清单验证失败')) {
+    return {
+      title: '插件验证未通过',
+      detail: '该插件不符合安全规范，已拒绝安装。',
+    };
+  }
+
+  // 解析失败
+  if (raw.includes('解析索引失败') || raw.includes('解析 manifest')) {
+    return {
+      title: '插件数据异常',
+      detail: '插件数据格式错误，请刷新后重试。',
+    };
+  }
+
+  // 未找到插件
+  if (raw.includes('未找到插件')) {
+    return {
+      title: '插件不存在',
+      detail: '该插件在商店中已不存在，请刷新列表。',
+    };
+  }
+
+  // 目录/文件写入失败
+  if (raw.includes('写入') || raw.includes('创建目录') || raw.includes('清理')) {
+    return {
+      title: '安装失败',
+      detail: '无法写入插件文件，请检查磁盘空间和权限。',
+    };
+  }
+
+  // 重试耗尽
+  if (raw.includes('重试') && raw.includes('失败')) {
+    return {
+      title: '商店服务器繁忙',
+      detail: '多次尝试后仍无法连接，请稍后重试。',
+    };
+  }
+
+  // 锁定失败
+  if (raw.includes('锁定失败')) {
+    return {
+      title: '系统繁忙',
+      detail: '插件系统暂时无法响应，请稍后重试。',
+    };
+  }
+
+  // 兜底：提取关键信息，隐藏 URL 和内部细节
+  const cleaned = raw
+    .replace(/https?:\/\/[^\s]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  if (cleaned.length > 0 && cleaned !== raw) {
+    return { title: '安装失败', detail: cleaned };
+  }
+
+  return { title: '安装失败', detail: '发生未知错误，请稍后重试。' };
+}
+
 // ── 类型定义 ──
 
 interface OnlinePluginInfo {
@@ -66,7 +155,8 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
       }
       setLocalVersions(localMap);
     } catch (err) {
-      setError(String(err));
+      const friendly = formatUserFriendlyError(String(err));
+      setError(friendly.title + '：' + friendly.detail);
     } finally {
       setLoading(false);
     }
@@ -91,7 +181,8 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
       }
       setLocalVersions(localMap);
     } catch (err) {
-      setError('安装失败: ' + String(err));
+      const friendly = formatUserFriendlyError(String(err));
+      setError(friendly.title + '：' + friendly.detail);
     } finally {
       setInstallingId(null);
     }
