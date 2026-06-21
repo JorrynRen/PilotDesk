@@ -1,0 +1,41 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "description": "PilotDesk 示例插件，展示插件系统的基本用法和权限声明",
+  "author": "PilotDesk Team",
+  "minAppVersion": "0.1.0",
+  "permissions": [
+    "ui:panel",
+    "ui:toast",
+    "session:read"
+  ],
+  "entry": {
+    "main": "index.js"
+  },
+  "contributes": {
+    "panels": [
+      {
+        "id": "hello-panel",
+        "title": "Hello World",
+        "icon": "icon: favicon.png"
+      }
+    ],
+    "commands": [
+      {
+        "id": "hello.say",
+        "title": "Say Hello"
+      },
+      {
+        "id": "hello.time",
+        "title": "Show Current Time"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "message:before-send",
+        "handler": "onBeforeSend"
+      }
+    ]
+  }
+}
