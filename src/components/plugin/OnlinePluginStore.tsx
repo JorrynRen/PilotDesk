@@ -423,7 +423,15 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
   const filteredPlugins = plugins.filter((p) => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-      return (
+    return (
+      p.name.toLowerCase().includes(q) ||
+      p.id.toLowerCase().includes(q) ||
+      p.description.toLowerCase().includes(q) ||
+      p.author.toLowerCase().includes(q)
+    );
+  });
+
+  return (
     <div style={containerStyle}>
       {/* 固定头部 */}
       <div className="shrink-0">
