@@ -227,7 +227,7 @@ export function PluginManager() {
             +安装
           </button>
           <button
-            onClick={() => setShowStore(!showStore)}
+            onClick={() => { setShowStore(!showStore); setShowSandbox(false); }}
             className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
             style={{
               backgroundColor: showStore ? 'var(--accent-light)' : 'var(--bg-tertiary)',
@@ -239,7 +239,7 @@ export function PluginManager() {
             插件商店
           </button>
           <button
-            onClick={() => setShowSandbox(!showSandbox)}
+            onClick={() => { setShowSandbox(!showSandbox); setShowStore(false); }}
             className="pd-btn text-[10px] px-2 py-1 rounded"
             style={{
               backgroundColor: showSandbox ? 'var(--accent-light)' : 'var(--bg-tertiary)',
