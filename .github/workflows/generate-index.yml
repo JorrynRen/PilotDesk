@@ -55,6 +55,21 @@ jobs:
             # 计算目录大小
             size=$(du -sh "$plugin_dir" | cut -f1)
 
+            # 预校验 manifest 基本合法性（跳过恶意/损坏的插件）
+            manifest_id=$(jq -r '.id // empty' "$manifest")
+            manifest_name=$(jq -r '.name // empty' "$manifest")
+            manifest_ver=$(jq -r '.version // empty' "$manifest")
+            # 检查 id 是否包含路径分隔符
+            case "$manifest_id" in */*|*\\*) echo "跳过插件 $manifest_id: id 包含路径分隔符" >&2; continue ;; esac
+            # 检查 version 是否为 semver 格式
+            case "$manifest_ver" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "跳过插件 $manifest_id: 版本号非 semver 格式 ($manifest_ver)" >&2; continue ;; esac
+            # 检查 name 长度
+            name_len=${#manifest_name}
+            [ "$name_len" -gt 64 ] && echo "跳过插件 $manifest_id: name 超过 64 字符 ($name_len)" >&2 && continue
+            # 检查 entry.main 是否包含路径遍历
+            entry_main=$(jq -r '.entry.main // "index.js"' "$manifest")
+            case "$entry_main" in *..*) echo "跳过插件 $manifest_id: entry.main 包含路径遍历" >&2; continue ;; esac
+
             # 构建插件信息 JSON（仅存储浏览/搜索所需字段，完整清单安装时从 baseUrl 读取）
             [ "$first" = true ] && first=false || echo ',' >> server/market/plugins/index.json
 
