@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package } from 'lucide-react';
+import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X } from 'lucide-react';
 import { usePluginStore } from '../../stores/pluginStore';
 import { OnlinePluginStore } from './OnlinePluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
@@ -29,7 +29,7 @@ function PermissionBadge({ check }: { check: PermissionCheck }) {
   );
 }
 
-function SandboxInfoPanel() {
+function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
   const { sandboxInfo, fetchSandboxInfo, setSandboxEnabled } = usePluginStore();
   const [copied, setCopied] = useState(false);
 
@@ -52,6 +52,14 @@ function SandboxInfoPanel() {
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>沙箱保护</span>
         </div>
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={onClose}
+            className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
+            style={{ color: 'var(--text-tertiary)' }}
+            title="关闭"
+          >
+            <X size={11} />
+          </button>
           <button
             onClick={() => !sandboxInfo.sandbox_enabled && setSandboxEnabled(true)}
             className="pd-btn px-2 py-1 rounded text-[11px] flex items-center gap-1"
@@ -197,7 +205,7 @@ export function PluginManager() {
   }, [uninstall, discover]);
 
   return (
-    <div className="p-4">
+    <div className="p-4" style={{ height: '100%', overflowY: 'auto' }}>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
@@ -255,7 +263,7 @@ export function PluginManager() {
       {showStore ? (
         <OnlinePluginStore onClose={() => setShowStore(false)} />
       ) : showSandbox ? (
-        <SandboxInfoPanel />
+        <SandboxInfoPanel onClose={() => setShowSandbox(false)} />
       ) : (
         <>
           {installStatus && (
