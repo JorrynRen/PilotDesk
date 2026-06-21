@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod plugin_fs;
 pub mod shell;
 pub mod store;
@@ -17,17 +18,24 @@ pub const ALL_PERMISSIONS: &[&str] = &[
     "ui:modal",
     "session:read",
     "session:write",
+    "session:execute",
     "data:invoke",
     "storage:*",
     "fs:read",
     "fs:write",
+    "shell:exec",
+    "plugin:call",
+    "plugin:events",
+    "workflow:read",
+    "workflow:write",
+    "workflow:trigger",
 ];
 
 /// 默认授予的权限（无需声明）
 pub const DEFAULT_PERMISSIONS: &[&str] = &["ui:toast", "storage:*"];
 
 /// 高风险权限（需额外确认）
-pub const HIGH_RISK_PERMISSIONS: &[&str] = &["fs:read", "fs:write", "data:invoke"];
+pub const HIGH_RISK_PERMISSIONS: &[&str] = &["fs:read", "fs:write", "data:invoke", "shell:exec", "session:execute"];
 
 /// 权限验证结果
 #[derive(Debug, Clone, Serialize)]
