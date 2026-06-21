@@ -154,3 +154,6 @@ pilotdesk.db
 pilotdesk.db-journal
 pilotdesk.db-wal
 pilotdesk.db-shm
+
+# Project docs (not tracked)
+docs/
