@@ -350,6 +350,8 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
   // 商店容器样式：允许纵向滚动
   const containerStyle: React.CSSProperties = {
     height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
   };
   const [plugins, setPlugins] = useState<OnlinePluginInfo[]>([]);
   const [localVersions, setLocalVersions] = useState<Map<string, string>>(new Map());
@@ -421,69 +423,103 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
   const filteredPlugins = plugins.filter((p) => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return (
-      p.name.toLowerCase().includes(q) ||
-      p.id.toLowerCase().includes(q) ||
-      p.description.toLowerCase().includes(q) ||
-      p.author.toLowerCase().includes(q)
-    );
-  });
-
-  return (
+      return (
     <div style={containerStyle}>
-      {/* 头部 */}
-      <div
-        className="flex items-center justify-between mb-4"
-        style={{ borderBottom: '1px solid var(--border)', paddingBottom: 12 }}
-      >
-        <div className="flex items-center gap-2">
-          <Store size={16} style={{ color: 'var(--accent)' }} />
-          <h3 style={{ fontSize: 'var(--fs-14)', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
-            在线插件商店
-          </h3>
-          {source && (
-            <span
-              style={{
-                fontSize: 'var(--fs-10)',
-                color: 'var(--text-tertiary)',
-                padding: '1px 6px',
-                borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--bg-tertiary)',
-              }}
-            >
-              {source === 'cdn' ? 'CDN' : 'GitHub'}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={fetchPlugins}
-            disabled={loading}
-            className="pd-btn"
-            style={{
-              fontSize: 'var(--fs-11)',
-              padding: '4px 10px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-            }}
-          >
-            <RefreshCw size={12} className={loading ? 'pd-animate-spin' : ''} />
-            刷新
-          </button>
-          {onClose && (
+      {/* 固定头部 */}
+      <div className="shrink-0">
+        {/* 头部 */}
+        <div
+          className="flex items-center justify-between mb-4"
+          style={{ borderBottom: '1px solid var(--border)', paddingBottom: 12 }}
+        >
+          <div className="flex items-center gap-2">
+            <Store size={16} style={{ color: 'var(--accent)' }} />
+            <h3 style={{ fontSize: 'var(--fs-14)', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
+              在线插件商店
+            </h3>
+            {source && (
+              <span
+                style={{
+                  fontSize: 'var(--fs-10)',
+                  color: 'var(--text-tertiary)',
+                  padding: '1px 6px',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'var(--bg-tertiary)',
+                }}
+              >
+                {source === 'cdn' ? 'CDN' : 'GitHub'}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
             <button
-              onClick={onClose}
+              onClick={fetchPlugins}
+              disabled={loading}
               className="pd-btn"
               style={{
                 fontSize: 'var(--fs-11)',
-                padding: '4px 8px',
+                padding: '4px 10px',
                 borderRadius: 'var(--radius-md)',
                 backgroundColor: 'var(--bg-tertiary)',
                 color: 'var(--text-secondary)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+            >
+              <RefreshCw size={12} className={loading ? 'pd-animate-spin' : ''} />
+              刷新
+            </button>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="pd-btn"
+                style={{
+                  fontSize: 'var(--fs-11)',
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 搜索栏 */}
+        <div className="relative mb-4">
+          <Search
+            size={13}
+            style={{
+              position: 'absolute',
+              left: 10,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: 'var(--text-tertiary)',
+              pointerEvents: 'none',
+            }}
+          />
+          <input
+            type="text"
+            placeholder="搜索插件名称、描述、作者..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="search-input"
+            style={{ paddingLeft: 32 }}
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="pd-btn"
+              style={{
+                position: 'absolute',
+                right: 8,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                color: 'var(--text-tertiary)',
+                padding: 2,
               }}
             >
               <X size={12} />
@@ -492,126 +528,90 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
         </div>
       </div>
 
-      {/* 搜索栏 */}
-      <div className="relative mb-4">
-        <Search
-          size={13}
-          style={{
-            position: 'absolute',
-            left: 10,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            color: 'var(--text-tertiary)',
-            pointerEvents: 'none',
-          }}
-        />
-        <input
-          type="text"
-          placeholder="搜索插件名称、描述、作者..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="search-input"
-          style={{ paddingLeft: 32 }}
-        />
-        {searchQuery && (
-          <button
-            onClick={() => setSearchQuery('')}
-            className="pd-btn"
+      {/* 可滚动内容区 */}
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {/* 错误提示 */}
+        {error && (
+          <div
+            className="flex items-center gap-2 px-3 py-2 rounded-lg mb-4"
             style={{
-              position: 'absolute',
-              right: 8,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              color: 'var(--text-tertiary)',
-              padding: 2,
+              backgroundColor: 'rgba(239,68,68,0.08)',
+              border: '1px solid rgba(239,68,68,0.2)',
             }}
           >
-            <X size={12} />
-          </button>
+            <AlertCircle size={14} style={{ color: '#EF4444', flexShrink: 0 }} />
+            <span style={{ fontSize: 'var(--fs-11)', color: '#EF4444', flex: 1 }}>{error}</span>
+            <button
+              onClick={fetchPlugins}
+              className="pd-btn"
+              style={{
+                fontSize: 'var(--fs-10)',
+                padding: '2px 8px',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'rgba(239,68,68,0.1)',
+                color: '#EF4444',
+              }}
+            >
+              重试
+            </button>
+          </div>
+        )}
+
+        {/* 加载中：骨架屏 */}
+        {loading && !error && (
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+            {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
+          </div>
+        )}
+
+        {/* 空状态 */}
+        {!loading && !error && filteredPlugins.length === 0 && (
+          <div
+            className="flex flex-col items-center justify-center py-12"
+            style={{ color: 'var(--text-tertiary)' }}
+          >
+            <Package size={32} style={{ opacity: 0.3, marginBottom: 12 }} />
+            <p style={{ fontSize: 'var(--fs-13)', marginBottom: 4 }}>
+              {searchQuery ? '没有匹配的插件' : '商店暂无可用的插件'}
+            </p>
+            <p style={{ fontSize: 'var(--fs-11)' }}>
+              {searchQuery ? '请尝试其他关键词' : '请稍后再来查看'}
+            </p>
+          </div>
+        )}
+
+        {/* 插件列表：网格布局 */}
+        {!loading && !error && filteredPlugins.length > 0 && (
+          <div
+            className="grid gap-3"
+            style={{
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+            }}
+          >
+            {filteredPlugins.map((plugin) => (
+              <PluginCard
+                key={plugin.id}
+                plugin={plugin}
+                status={getPluginStatus(plugin)}
+                installing={installingId === plugin.id}
+                onInstall={installPlugin}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* 底部统计 */}
+        {!loading && !error && plugins.length > 0 && (
+          <div
+            className="flex items-center justify-between mt-4 pt-3"
+            style={{ borderTop: '1px solid var(--border)' }}
+          >
+            <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
+              共 {plugins.length} 个插件{searchQuery ? `，筛选后 ${filteredPlugins.length} 个` : ''}
+            </span>
+          </div>
         )}
       </div>
-
-      {/* 错误提示 */}
-      {error && (
-        <div
-          className="flex items-center gap-2 px-3 py-2 rounded-lg mb-4"
-          style={{
-            backgroundColor: 'rgba(239,68,68,0.08)',
-            border: '1px solid rgba(239,68,68,0.2)',
-          }}
-        >
-          <AlertCircle size={14} style={{ color: '#EF4444', flexShrink: 0 }} />
-          <span style={{ fontSize: 'var(--fs-11)', color: '#EF4444', flex: 1 }}>{error}</span>
-          <button
-            onClick={fetchPlugins}
-            className="pd-btn"
-            style={{
-              fontSize: 'var(--fs-10)',
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'rgba(239,68,68,0.1)',
-              color: '#EF4444',
-            }}
-          >
-            重试
-          </button>
-        </div>
-      )}
-
-      {/* 加载中：骨架屏 */}
-      {loading && !error && (
-        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-          {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
-        </div>
-      )}
-
-      {/* 空状态 */}
-      {!loading && !error && filteredPlugins.length === 0 && (
-        <div
-          className="flex flex-col items-center justify-center py-12"
-          style={{ color: 'var(--text-tertiary)' }}
-        >
-          <Package size={32} style={{ opacity: 0.3, marginBottom: 12 }} />
-          <p style={{ fontSize: 'var(--fs-13)', marginBottom: 4 }}>
-            {searchQuery ? '没有匹配的插件' : '商店暂无可用的插件'}
-          </p>
-          <p style={{ fontSize: 'var(--fs-11)' }}>
-            {searchQuery ? '请尝试其他关键词' : '请稍后再来查看'}
-          </p>
-        </div>
-      )}
-
-      {/* 插件列表：网格布局 */}
-      {!loading && !error && filteredPlugins.length > 0 && (
-        <div
-          className="grid gap-3"
-          style={{
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          }}
-        >
-          {filteredPlugins.map((plugin) => (
-            <PluginCard
-              key={plugin.id}
-              plugin={plugin}
-              status={getPluginStatus(plugin)}
-              installing={installingId === plugin.id}
-              onInstall={installPlugin}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* 底部统计 */}
-      {!loading && !error && plugins.length > 0 && (
-        <div
-          className="flex items-center justify-between mt-4 pt-3"
-          style={{ borderTop: '1px solid var(--border)' }}
-        >
-          <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
-            共 {plugins.length} 个插件{searchQuery ? `，筛选后 ${filteredPlugins.length} 个` : ''}
-          </span>
-        </div>
-      )}
     </div>
   );
 };
