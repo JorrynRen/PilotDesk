@@ -22,6 +22,7 @@ interface OnlinePluginInfo {
   baseUrl: string;
   icon?: string;
   size?: string;
+  readme?: string;
 }
 
 interface LocalPluginVersion {
@@ -79,6 +80,7 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
 
   const installPlugin = async (pluginId: string) => {
     setInstallingId(pluginId);
+    setError(null);
     try {
       await invoke('plugin_store_install', { pluginId });
       // 刷新本地版本
@@ -89,7 +91,7 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
       }
       setLocalVersions(localMap);
     } catch (err) {
-      console.error('安装失败:', err);
+      setError('安装失败: ' + String(err));
     } finally {
       setInstallingId(null);
     }
@@ -113,8 +115,7 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
       p.name.toLowerCase().includes(q) ||
       p.id.toLowerCase().includes(q) ||
       p.description.toLowerCase().includes(q) ||
-      p.author.toLowerCase().includes(q) ||
-      (p.tags && p.tags.some((t) => t.toLowerCase().includes(q)))
+      p.author.toLowerCase().includes(q)
     );
   });
 
@@ -182,13 +183,7 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
                     <span className="plugin-author">作者: {plugin.author}</span>
                     {plugin.size && <span className="plugin-size">大小: {plugin.size}</span>}
                   </div>
-                  {plugin.tags && plugin.tags.length > 0 && (
-                    <div className="plugin-tags">
-                      {plugin.tags.map((tag) => (
-                        <span key={tag} className="plugin-tag">{tag}</span>
-                      ))}
-                    </div>
-                  )}
+                  {/* tags 字段已从索引中移除，如需展示请从 manifest.json 读取 */}
                   <div className="plugin-actions">
                     {status === 'installed' && (
                       <span className="status-installed">已安装</span>

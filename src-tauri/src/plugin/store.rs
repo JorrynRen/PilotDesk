@@ -190,9 +190,12 @@ pub async fn plugin_store_install(
     host: tauri::State<'_, Mutex<PluginHost>>,
     plugin_id: String,
 ) -> Result<InstallResult, String> {
-    // 获取索引找到插件信息
-    let content = fetch_url(INDEX_RAW_URL).await?;
-    let index: PluginIndex = serde_json::from_str(&content)
+    // 获取索引找到插件信息（CDN 优先，raw 降级）
+    let index_content = match fetch_url(INDEX_CDN_URL).await {
+        Ok(c) => c,
+        Err(_) => fetch_url(INDEX_RAW_URL).await?,
+    };
+    let index: PluginIndex = serde_json::from_str(&index_content)
         .map_err(|e| format!("解析索引失败: {}", e))?;
 
     let online_plugin = index.plugins.iter()
