@@ -11,6 +11,10 @@ const INDEX_SCHEMA_VERSION: &str = "1.0";
 const CONNECT_TIMEOUT_SECS: u64 = 10;
 const READ_TIMEOUT_SECS: u64 = 30;
 
+/// HTTP 重试配置
+const MAX_RETRIES: u32 = 3;
+const RETRY_DELAY_MS: u64 = 1000;
+
 /// 在线商店插件信息（精简版，仅存储浏览/搜索所需字段）
 /// 完整清单（permissions/entry/contributes）安装时从 baseUrl/manifest.json 读取
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,61 +85,108 @@ fn http_client() -> &'static reqwest::Client {
     })
 }
 
-/// 从 URL 获取文本内容（异步，带超时）
+/// 从 URL 获取文本内容（异步，带超时，自动重试）
 async fn fetch_url(url: &str) -> Result<String, String> {
-    let response = http_client()
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
-            } else if e.is_connect() {
-                format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
-            } else if e.is_request() {
-                format!("请求被取消: {}", url)
-            } else {
-                format!("HTTP 请求失败: {} - {}", e, url)
+    let mut last_err = String::new();
+    for attempt in 1..=MAX_RETRIES {
+        let response = http_client()
+            .get(url)
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if status == 200 {
+                    return resp.text()
+                        .await
+                        .map_err(|e| format!("读取响应失败: {}", e));
+                } else if status >= 500 && attempt < MAX_RETRIES {
+                    // 5xx 错误可重试
+                    last_err = format!("HTTP {}: {}", status, url);
+                    log::warn!("[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                    continue;
+                } else {
+                    return Err(format!("HTTP {}: {}", status, url));
+                }
             }
-        })?;
-
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(format!("HTTP {}: {}", status, url));
+            Err(e) => {
+                if attempt < MAX_RETRIES && (e.is_timeout() || e.is_connect()) {
+                    last_err = if e.is_timeout() {
+                        format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
+                    } else {
+                        format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
+                    };
+                    log::warn!("[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                    continue;
+                }
+                return Err(if e.is_timeout() {
+                    format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
+                } else if e.is_connect() {
+                    format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
+                } else if e.is_request() {
+                    format!("请求被取消: {}", url)
+                } else {
+                    format!("HTTP 请求失败: {} - {}", e, url)
+                });
+            }
+        }
     }
-
-    response.text()
-        .await
-        .map_err(|e| format!("读取响应失败: {}", e))
+    Err(format!("重试 {} 次后仍失败: {}", MAX_RETRIES, last_err))
 }
 
-/// 从 URL 下载文件内容（二进制，异步，带超时）
+/// 从 URL 下载文件内容（二进制，异步，带超时，自动重试）
 async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let response = http_client()
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
-            } else if e.is_connect() {
-                format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
-            } else if e.is_request() {
-                format!("请求被取消: {}", url)
-            } else {
-                format!("HTTP 请求失败: {} - {}", e, url)
+    let mut last_err = String::new();
+    for attempt in 1..=MAX_RETRIES {
+        let response = http_client()
+            .get(url)
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if status == 200 {
+                    return resp.bytes()
+                        .await
+                        .map(|b| b.to_vec())
+                        .map_err(|e| format!("读取响应失败: {}", e));
+                } else if status >= 500 && attempt < MAX_RETRIES {
+                    last_err = format!("HTTP {}: {}", status, url);
+                    log::warn!("[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                    continue;
+                } else {
+                    return Err(format!("HTTP {}: {}", status, url));
+                }
             }
-        })?;
-
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(format!("HTTP {}: {}", status, url));
+            Err(e) => {
+                if attempt < MAX_RETRIES && (e.is_timeout() || e.is_connect()) {
+                    last_err = if e.is_timeout() {
+                        format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
+                    } else {
+                        format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
+                    };
+                    log::warn!("[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                    continue;
+                }
+                return Err(if e.is_timeout() {
+                    format!("请求超时 ({}s): {}", READ_TIMEOUT_SECS, url)
+                } else if e.is_connect() {
+                    format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
+                } else if e.is_request() {
+                    format!("请求被取消: {}", url)
+                } else {
+                    format!("HTTP 请求失败: {} - {}", e, url)
+                });
+            }
+        }
     }
-
-    response.bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("读取响应失败: {}", e))
+    Err(format!("重试 {} 次后仍失败: {}", MAX_RETRIES, last_err))
 }
 
 #[tauri::command]
