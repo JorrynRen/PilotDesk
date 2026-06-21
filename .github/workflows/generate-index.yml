@@ -67,12 +67,13 @@ jobs:
                   break
                 fi
               done
-              [ -z "$icon_file" ] && icon_file="icon.png"
+              # 无图标文件时留空（索引中 icon 字段为空字符串，前端自行处理）
+              [ -z "$icon_file" ] && icon_file=""
               # 检测 README.md（可选）
               readme_url=""
               [ -f "$plugin_dir/README.md" ] && readme_url="https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path/README.md"
 
-              jq -n --arg id "$plugin_id"               --arg name "$(jq -r '.name // empty' "$manifest")"               --arg version "$manifest_version"               --arg description "$(jq -r '.description // empty' "$manifest")"               --arg author "$(jq -r '.author // empty' "$manifest")"               --arg minAppVersion "$(jq -r '.minAppVersion // empty' "$manifest")"               --arg path "plugins/$rel_path"               --arg baseUrl "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path"               --arg icon "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path/$icon_file"               --arg size "$size"               --arg readme "$readme_url"               '{
+              jq -n --arg id "$plugin_id"               --arg name "$(jq -r '.name // empty' "$manifest")"               --arg version "$manifest_version"               --arg description "$(jq -r '.description // empty' "$manifest")"               --arg author "$(jq -r '.author // empty' "$manifest")"               --arg minAppVersion "$(jq -r '.minAppVersion // empty' "$manifest")"               --arg path "plugins/$rel_path"               --arg baseUrl "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path"               --arg icon "$([ -n "$icon_file" ] && echo "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path/$icon_file" || echo "")"               --arg size "$size"               --arg readme "$readme_url"               '{
                 id: $id,
                 name: $name,
                 version: $version,
