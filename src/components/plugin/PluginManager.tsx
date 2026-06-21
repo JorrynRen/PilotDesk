@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store } from 'lucide-react';
+import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package } from 'lucide-react';
 import { usePluginStore } from '../../stores/pluginStore';
 import { OnlinePluginStore } from './OnlinePluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
@@ -208,13 +208,13 @@ export function PluginManager() {
             style={{
               backgroundColor: sandboxInfo?.sandbox_enabled
                 ? 'rgba(16,185,129,0.15)'
-                : 'rgba(239,68,68,0.15)',
+                : 'var(--bg-tertiary)',
               color: sandboxInfo?.sandbox_enabled
                 ? '#10B981'
-                : '#EF4444',
+                : 'var(--text-tertiary)',
             }}
           >
-            {sandboxInfo?.sandbox_enabled ? '沙箱已启用' : '沙箱已禁用'}
+            {sandboxInfo?.sandbox_enabled ? '沙箱' : '沙箱'}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -224,7 +224,7 @@ export function PluginManager() {
             style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
             title="从压缩包安装插件"
           >
-            + 安装
+            +安装
           </button>
           <button
             onClick={() => setShowStore(!showStore)}
@@ -236,7 +236,7 @@ export function PluginManager() {
             title={showStore ? '收起商店' : '在线插件商店'}
           >
             <Store size={11} />
-            商店
+            插件商店
           </button>
           <button
             onClick={() => setShowSandbox(!showSandbox)}
@@ -248,13 +248,6 @@ export function PluginManager() {
             title={showSandbox ? '收起沙箱信息' : '查看沙箱信息'}
           >
             沙箱
-          </button>
-          <button
-            onClick={discover}
-            className="pd-btn text-[10px] px-2 py-1 rounded transition-all"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-          >
-            刷新
           </button>
         </div>
       </div>
@@ -291,11 +284,32 @@ export function PluginManager() {
               {error}
             </div>)}
 
+          {/* 已安装插件标题行 */}
+          {!loading && (
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Package size={14} style={{ color: 'var(--accent)' }} />
+                <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)', margin: 0 }}>
+                  已安装插件
+                </h3>
+              </div>
+              <button
+                onClick={discover}
+                className="pd-btn text-[10px] px-2 py-1 rounded transition-all flex items-center gap-1"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                title="刷新插件列表"
+              >
+                <RefreshCw size={11} />
+                刷新
+              </button>
+            </div>
+          )}
+
           {!loading && plugins.length === 0 && (
             <div className="text-xs py-8 text-center" style={{ color: 'var(--text-tertiary)' }}>
               <p className="mb-2">暂无已安装的插件</p>
               <p className="text-[10px] mb-3">
-                点击「+ 安装」按钮选择 .zip 压缩包安装插件
+                点击「+安装」按钮选择 .zip 压缩包安装插件
               </p>
               <p className="text-[10px]">
                 或将插件目录放置到{' '}

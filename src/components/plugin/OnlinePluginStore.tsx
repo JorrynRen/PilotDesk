@@ -86,14 +86,8 @@ function PluginCard({
 }) {
   const [iconError, setIconError] = useState(false);
 
-  const statusConfig = {
-    'installed': { label: '已安装', color: '#10B981', bg: 'rgba(16,185,129,0.1)' },
-    'update-available': { label: '可更新', color: '#F59E0B', bg: 'rgba(245,158,11,0.1)' },
-    'not-installed': { label: '未安装', color: 'var(--text-tertiary)', bg: 'transparent' },
-    'installing': { label: '安装中...', color: 'var(--accent)', bg: 'var(--accent-light)' },
-  };
-
-  const cfg = statusConfig[status];
+  const isInstalled = status === 'installed';
+  const isInstalling = status === 'installing';
 
   return (
     <div
@@ -104,14 +98,17 @@ function PluginCard({
         borderRadius: 'var(--radius-lg)',
         padding: '16px',
         transition: 'box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease',
-        cursor: 'default',
+        cursor: isInstalled ? 'default' : 'pointer',
         position: 'relative',
         overflow: 'hidden',
       }}
+      onClick={() => !isInstalled && !isInstalling && onInstall(plugin.id)}
       onMouseEnter={(e) => {
-        e.currentTarget.style.boxShadow = 'var(--shadow-md)';
-        e.currentTarget.style.borderColor = 'var(--accent)';
-        e.currentTarget.style.transform = 'translateY(-1px)';
+        if (!isInstalled) {
+          e.currentTarget.style.boxShadow = 'var(--shadow-md)';
+          e.currentTarget.style.borderColor = 'var(--accent)';
+          e.currentTarget.style.transform = 'translateY(-1px)';
+        }
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.boxShadow = 'none';
@@ -119,7 +116,7 @@ function PluginCard({
         e.currentTarget.style.transform = 'translateY(0)';
       }}
     >
-      {/* 顶部：图标 + 名称 + 版本 */}
+      {/* 顶部：图标 + 名称 + 版本 + 操作按钮 */}
       <div className="flex items-start gap-3 mb-3">
         {/* 图标 */}
         <div
@@ -175,27 +172,51 @@ function PluginCard({
               v{plugin.version}
             </span>
           </div>
+        </div>
 
-          {/* 状态标签 */}
-          <div className="flex items-center gap-2 mt-1">
+        {/* 操作按钮（图标旁边） */}
+        <div className="shrink-0">
+          {isInstalled ? (
             <span
               style={{
                 fontSize: 'var(--fs-10)',
-                padding: '1px 8px',
-                borderRadius: 'var(--radius-full)',
-                backgroundColor: cfg.bg,
-                color: cfg.color,
-                fontWeight: 500,
+                color: '#10B981',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 4,
+                gap: 3,
+                padding: '3px 10px',
+                borderRadius: 'var(--radius-full)',
+                backgroundColor: 'rgba(16,185,129,0.1)',
+                fontWeight: 500,
               }}
             >
-              {status === 'installed' && <CheckCircle size={10} />}
-              {status === 'installing' && <Loader2 size={10} className="pd-animate-spin" />}
-              {cfg.label}
+              <CheckCircle size={10} />
+              已安装
             </span>
-          </div>
+          ) : (
+            <button
+              onClick={(e) => { e.stopPropagation(); onInstall(plugin.id); }}
+              disabled={isInstalling}
+              className="pd-btn-primary"
+              style={{
+                fontSize: 'var(--fs-11)',
+                padding: '5px 14px',
+                borderRadius: 'var(--radius-md)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontWeight: 500,
+              }}
+            >
+              {isInstalling ? (
+                <><Loader2 size={11} className="pd-animate-spin" /></>
+              ) : status === 'update-available' ? (
+                <><Download size={11} /> 更新</>
+              ) : (
+                <><Download size={11} /> 安装</>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -216,7 +237,7 @@ function PluginCard({
       </p>
 
       {/* 元信息 */}
-      <div className="flex items-center gap-3 mb-3" style={{ flexWrap: 'wrap' }}>
+      <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}>
         <div className="flex items-center gap-1">
           <User size={10} style={{ color: 'var(--text-tertiary)' }} />
           <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>{plugin.author}</span>
@@ -236,48 +257,6 @@ function PluginCard({
             <BookOpen size={10} style={{ color: 'var(--text-tertiary)' }} />
             <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>文档</span>
           </div>
-        )}
-      </div>
-
-      {/* 操作按钮 */}
-      <div className="flex items-center gap-2">
-        {status === 'installed' ? (
-          <span
-            style={{
-              fontSize: 'var(--fs-11)',
-              color: '#10B981',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              padding: '4px 12px',
-            }}
-          >
-            <CheckCircle size={12} />
-            已安装
-          </span>
-        ) : (
-          <button
-            onClick={() => onInstall(plugin.id)}
-            disabled={installing}
-            className="pd-btn-primary"
-            style={{
-              fontSize: 'var(--fs-11)',
-              padding: '6px 16px',
-              borderRadius: 'var(--radius-md)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              fontWeight: 500,
-            }}
-          >
-            {installing ? (
-              <><Loader2 size={12} className="pd-animate-spin" /> 安装中...</>
-            ) : status === 'update-available' ? (
-              <><Download size={12} /> 更新</>
-            ) : (
-              <><Download size={12} /> 安装</>
-            )}
-          </button>
         )}
       </div>
     </div>
@@ -368,6 +347,13 @@ function SkeletonCard() {
 // ── 主组件 ──
 
 export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
+  // 商店容器样式：允许纵向滚动
+  const containerStyle: React.CSSProperties = {
+    height: '100%',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    paddingRight: 4,
+  };
   const [plugins, setPlugins] = useState<OnlinePluginInfo[]>([]);
   const [localVersions, setLocalVersions] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -447,7 +433,7 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
   });
 
   return (
-    <div>
+    <div style={containerStyle}>
       {/* 头部 */}
       <div
         className="flex items-center justify-between mb-4"
@@ -618,7 +604,7 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
         </div>
       )}
 
-      {/* 底部信息 */}
+      {/* 底部统计 */}
       {!loading && !error && plugins.length > 0 && (
         <div
           className="flex items-center justify-between mt-4 pt-3"
@@ -626,9 +612,6 @@ export const OnlinePluginStore: React.FC<{ onClose?: () => void }> = ({ onClose 
         >
           <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
             共 {plugins.length} 个插件{searchQuery ? `，筛选后 ${filteredPlugins.length} 个` : ''}
-          </span>
-          <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
-            {installingId ? '正在安装...' : '点击插件卡片安装'}
           </span>
         </div>
       )}
