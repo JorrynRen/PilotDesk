@@ -505,7 +505,7 @@ export function PluginManager() {
               );
             })}
           </div>
-        </>}
+        </>
         </div>
       )}
       </div>
