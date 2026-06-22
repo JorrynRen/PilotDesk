@@ -218,7 +218,7 @@ export function PluginManager() {
     }
   }, [uninstall, discover]);
 
-        return (
+  return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="shrink-0 px-4 pt-4 pb-2">
         <div className="flex items-center justify-between">
