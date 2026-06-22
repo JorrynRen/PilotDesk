@@ -8,13 +8,13 @@ use super::registry::{
     NodeDef, NodeOutput, NodeTypeRegistration,
     NodeTypeRegistrationInfo, WorkflowNodeTypeRegistry, NodeCategory,
 };
-use super::agents::agent_executor::AgentExecutor;
-use super::agents::transform_executor::TransformExecutor;
-use super::agents::human_input_executor::{HumanInputExecutor, HumanInputManager};
-use super::agents::api_executor::ApiExecutor;
-use super::agents::condition_executor::ConditionExecutor;
-use super::agents::aggregator_executor::AggregatorExecutor;
-use super::agents::approval_executor::ApprovalExecutor;
+use super::executors::agent_executor::AgentExecutor;
+use super::executors::transform_executor::TransformExecutor;
+use super::executors::human_input_executor::{HumanInputExecutor, HumanInputManager};
+use super::executors::api_executor::ApiExecutor;
+use super::executors::condition_executor::ConditionExecutor;
+use super::executors::aggregator_executor::AggregatorExecutor;
+use super::executors::approval_executor::ApprovalExecutor;
 
 /// 节点执行器分发器
 pub struct NodeExecutor {
@@ -201,7 +201,7 @@ impl NodeExecutor {
                         type_id: nt.type_id.clone(),
                         name: nt.name.clone(),
                         category: NodeCategory::Plugin(plugin_id.clone()),
-                        executor: Arc::new(crate::workflow::agents::plugin_executor::PluginExecutor::new(
+                        executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
                             plugin_id.clone(),
                             nt.type_id.clone(),
                         )),

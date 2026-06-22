@@ -165,36 +165,21 @@ function PluginIcon({ plugin }: { plugin: PluginInstance }) {
   const [iconError, setIconError] = useState(false);
 
   useEffect(() => {
-    // 尝试加载插件图标（manifest 中可能包含 icon 字段）
-    const manifestIcon = (plugin.manifest as any).icon;
-    if (manifestIcon && typeof manifestIcon === 'string') {
+    // 优先使用 manifest 顶层 icon 字段，fallback 到第一个面板的 icon
+    const iconPath = plugin.manifest.icon || plugin.manifest.contributes?.panels?.[0]?.icon;
+    if (iconPath) {
+      // 去掉 "icon: " 前缀（如果存在）
+      const cleanPath = iconPath.replace(/^icon:\s*/i, '');
       invoke<string>('plugin_read_icon_file', {
         pluginId: plugin.manifest.id,
-        iconPath: manifestIcon,
+        iconPath: cleanPath,
       })
         .then((dataUrl) => setIconSrc(dataUrl))
         .catch(() => setIconError(true));
     } else {
-      // 尝试默认图标文件名
-      const candidates = ['icon.png', 'icon.svg', 'icon.ico', 'icon.jpg', 'icon.jpeg', 'icon.webp'];
-      const tryLoad = async () => {
-        for (const name of candidates) {
-          try {
-            const dataUrl = await invoke<string>('plugin_read_icon_file', {
-              pluginId: plugin.manifest.id,
-              iconPath: name,
-            });
-            setIconSrc(dataUrl);
-            return;
-          } catch {
-            // 继续尝试下一个
-          }
-        }
-        setIconError(true);
-      };
-      tryLoad();
+      setIconError(true);
     }
-  }, [plugin.manifest.id, (plugin.manifest as any).icon]);
+  }, [plugin.manifest.id, plugin.manifest.icon, plugin.manifest.contributes?.panels?.[0]?.icon]);
 
   return (
     <div
@@ -233,6 +218,7 @@ export function PluginManager() {
   const [storeSearchQuery, setStoreSearchQuery] = useState('');
   const [storeLoading, setStoreLoading] = useState(false);
   const [readmePlugin, setReadmePlugin] = useState<PluginInstance | null>(null);
+  const [confirmUninstall, setConfirmUninstall] = useState<PluginInstance | null>(null);
   const [storeStats, setStoreStats] = useState<{ total: number; filtered: number } | null>(null);
 
   useEffect(() => {
@@ -280,17 +266,21 @@ export function PluginManager() {
   }, []);
 
   const handleUninstall = useCallback(async (plugin: PluginInstance) => {
-    if (!window.confirm(`确定要卸载插件「${plugin.manifest.name}」吗？`)) {
-      return;
-    }
+    setConfirmUninstall(plugin);
+  }, []);
+
+  const confirmUninstallAction = useCallback(async () => {
+    if (!confirmUninstall) return;
     try {
-      await uninstall(plugin.manifest.id);
-      await pluginRegistry.unloadPlugin(plugin.path);
+      await uninstall(confirmUninstall.manifest.id);
+      await pluginRegistry.unloadPlugin(confirmUninstall.path);
       await discover();
     } catch (err) {
       console.error('Uninstall failed:', err);
+    } finally {
+      setConfirmUninstall(null);
     }
-  }, [uninstall, discover]);
+  }, [confirmUninstall, uninstall, discover]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -614,6 +604,42 @@ export function PluginManager() {
           pluginName={readmePlugin.manifest.name}
           onClose={() => setReadmePlugin(null)}
         />
+      )}
+      {confirmUninstall && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setConfirmUninstall(null)}
+        >
+          <div
+            className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
+            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+              确认卸载
+            </div>
+            <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+              确定要卸载插件 <strong style={{ color: 'var(--text-primary)' }}>{confirmUninstall.manifest.name}</strong> 吗？此操作将删除插件文件。
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setConfirmUninstall(null)}
+                className="pd-btn px-3 py-1.5 rounded text-[11px]"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmUninstallAction}
+                className="pd-btn px-3 py-1.5 rounded text-[11px]"
+                style={{ backgroundColor: '#EF4444', color: '#fff' }}
+              >
+                确认卸载
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -135,7 +135,7 @@ export function PluginReadmeDialog({ basePath, pluginName, isRemote, onClose }: 
     >
       <div
         className="w-[600px] max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
-        style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+        style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', overflow: 'hidden' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -149,7 +149,7 @@ export function PluginReadmeDialog({ basePath, pluginName, isRemote, onClose }: 
             <X size={14} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="flex-1 overflow-y-auto" style={{ padding: '16px 20px' }}>
           {loading && (
             <div className="flex items-center justify-center py-12">
               <Loader2 size={20} className="pd-animate-spin" style={{ color: 'var(--text-tertiary)' }} />
@@ -172,6 +172,7 @@ export function PluginReadmeDialog({ basePath, pluginName, isRemote, onClose }: 
             />
           )}
         </div>
+        <div style={{ height: 20, flexShrink: 0 }} />
       </div>
     </div>
   );

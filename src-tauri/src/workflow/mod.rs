@@ -2,7 +2,7 @@ pub mod registry;
 pub mod template;
 pub mod executor;
 pub mod engine;
-pub mod agents;
+pub mod executors;
 pub mod scheduler;
 
 use serde::{Deserialize, Serialize};

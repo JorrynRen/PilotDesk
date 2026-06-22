@@ -71,6 +71,7 @@ pub struct PluginManifest {
     pub min_app_version: String,
     pub permissions: Vec<String>,
     pub entry: PluginEntry,
+    pub icon: Option<String>,
     pub contributes: Option<PluginContributes>,
 }
 
@@ -352,7 +353,7 @@ impl PluginHost {
                                             type_id: nt.type_id.clone(),
                                             name: nt.name.clone(),
                                             category: NodeCategory::Plugin(instance.manifest.id.clone()),
-                                            executor: Arc::new(crate::workflow::agents::plugin_executor::PluginExecutor::new(
+                                            executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
                                                 instance.manifest.id.clone(),
                                                 nt.type_id.clone(),
                                             )),
@@ -442,7 +443,7 @@ impl PluginHost {
                         type_id: nt.type_id.clone(),
                         name: nt.name.clone(),
                         category: NodeCategory::Plugin(manifest.id.clone()),
-                        executor: Arc::new(crate::workflow::agents::plugin_executor::PluginExecutor::new(
+                        executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
                             manifest.id.clone(),
                             nt.type_id.clone(),
                         )),

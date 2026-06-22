@@ -16,6 +16,7 @@ export interface PluginManifest {
   entry: {
     main: string;
   };
+  icon?: string;
   contributes?: {
     panels?: PanelContribution[];
     commands?: CommandContribution[];
