@@ -9,7 +9,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Store, Download, RefreshCw, Search, Package, Star, User, HardDrive, BookOpen, X, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
+import { Store, Download, RefreshCw, Search, Package, Shield, User, HardDrive, X, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
+import { PluginReadmeDialog } from './PluginReadmeDialog';
 
 // ── 友好错误提示 ──
 
@@ -61,7 +62,6 @@ interface OnlinePluginInfo {
   baseUrl: string;
   icon?: string;
   size?: string;
-  readme?: string;
 }
 
 interface LocalPluginVersion {
@@ -78,11 +78,13 @@ function PluginCard({
   status,
   installing,
   onInstall,
+  onReadme,
 }: {
   plugin: OnlinePluginInfo;
   status: PluginStatus;
   installing: boolean;
   onInstall: (id: string) => void;
+  onReadme: (plugin: OnlinePluginInfo) => void;
 }) {
   const [iconError, setIconError] = useState(false);
 
@@ -116,7 +118,7 @@ function PluginCard({
         e.currentTarget.style.transform = 'translateY(0)';
       }}
     >
-      {/* 顶部：图标 + 名称 + 版本 + 操作按钮 */}
+      {/* 顶部：图标 + 名称 + 版本 */}
       <div className="flex items-start gap-3 mb-3">
         {/* 图标 */}
         <div
@@ -172,27 +174,41 @@ function PluginCard({
               v{plugin.version}
             </span>
           </div>
-        </div>
-
-        {/* 操作按钮（图标旁边） */}
-        <div className="shrink-0">
+          {/* 操作按钮（标题下方，与标题左对齐） */}
+          <div className="flex items-center gap-2 mt-1.5">
           {isInstalled ? (
-            <span
-              style={{
-                fontSize: 'var(--fs-10)',
-                color: '#10B981',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-                padding: '3px 10px',
-                borderRadius: 'var(--radius-full)',
-                backgroundColor: 'rgba(16,185,129,0.1)',
-                fontWeight: 500,
-              }}
-            >
-              <CheckCircle size={10} />
-              已安装
-            </span>
+            <>
+              <span
+                style={{
+                  fontSize: 'var(--fs-10)',
+                  color: '#10B981',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  padding: '3px 10px',
+                  borderRadius: 'var(--radius-full)',
+                  backgroundColor: 'rgba(16,185,129,0.1)',
+                  fontWeight: 500,
+                }}
+              >
+                <CheckCircle size={10} />
+                已安装
+              </span>
+              <button
+                onClick={(e) => { e.stopPropagation(); onReadme(plugin); }}
+                className="pd-btn"
+                style={{
+                  fontSize: 'var(--fs-10)',
+                  padding: '3px 8px',
+                  borderRadius: 'var(--radius-md)',
+                  color: 'var(--accent)',
+                  backgroundColor: 'var(--bg-tertiary)',
+                }}
+                title="查看 README"
+              >
+                📖
+              </button>
+            </>
           ) : (
             <button
               onClick={(e) => { e.stopPropagation(); onInstall(plugin.id); }}
@@ -217,8 +233,8 @@ function PluginCard({
               )}
             </button>
           )}
+          </div>
         </div>
-      </div>
 
       {/* 描述 */}
       <p
@@ -249,15 +265,10 @@ function PluginCard({
           </div>
         )}
         <div className="flex items-center gap-1">
-          <Star size={10} style={{ color: 'var(--text-tertiary)' }} />
+          <Shield size={10} style={{ color: 'var(--text-tertiary)' }} />
           <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>v{plugin.minAppVersion}+</span>
         </div>
-        {plugin.readme && (
-          <div className="flex items-center gap-1">
-            <BookOpen size={10} style={{ color: 'var(--text-tertiary)' }} />
-            <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>文档</span>
-          </div>
-        )}
+
       </div>
     </div>
   );
@@ -362,6 +373,7 @@ export const OnlinePluginStore: React.FC<{
   const searchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
   const setSearchQuery = onSearchChange || setInternalSearchQuery;
   const [source, setSource] = useState<string>('');
+  const [readmePlugin, setReadmePlugin] = useState<OnlinePluginInfo | null>(null);
 
   const fetchPlugins = useCallback(async () => {
     setLoading(true);
@@ -500,6 +512,7 @@ export const OnlinePluginStore: React.FC<{
               status={getPluginStatus(plugin)}
               installing={installingId === plugin.id}
               onInstall={installPlugin}
+              onReadme={(p) => setReadmePlugin(p)}
             />
           ))}
         </div>
@@ -515,6 +528,14 @@ export const OnlinePluginStore: React.FC<{
             共 {plugins.length} 个插件{searchQuery ? `，筛选后 ${filteredPlugins.length} 个` : ''}
           </span>
         </div>
+      )}
+      {readmePlugin && (
+        <PluginReadmeDialog
+          basePath={readmePlugin.baseUrl}
+          pluginName={readmePlugin.name}
+          isRemote={true}
+          onClose={() => setReadmePlugin(null)}
+        />
       )}
     </div>
   );
