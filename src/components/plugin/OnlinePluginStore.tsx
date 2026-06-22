@@ -254,7 +254,7 @@ function PluginCard({
       </p>
 
       {/* 元信息 */}
-      <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}>
+      <div className="flex items-center gap-3 justify-end" style={{ flexWrap: 'wrap' }}>
         <div className="flex items-center gap-1">
           <User size={10} style={{ color: 'var(--text-tertiary)' }} />
           <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>{plugin.author}</span>
