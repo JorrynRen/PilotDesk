@@ -235,6 +235,7 @@ function PluginCard({
           )}
           </div>
         </div>
+      </div>
 
       {/* 描述 */}
       <p
