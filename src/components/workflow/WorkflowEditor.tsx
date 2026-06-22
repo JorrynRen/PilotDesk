@@ -2,11 +2,13 @@
  * WorkflowEditor — 工作流可视化编辑器
  *
  * 拖拽式工作流编排画布，支持节点添加、连接、配置。
+ * 内置节点类型 + 插件注册的节点类型动态合并。
  */
 
 import React, { useState, useEffect } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { getNodeTypeMeta, generateId } from '../../workflow/WorkflowDefinition';
+import { workflowNodeTypeRegistry } from '../../utils/WorkflowNodeTypeRegistry';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
 import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType } from '../../types/workflow';
 
@@ -15,7 +17,7 @@ interface Props {
   onClose: () => void;
 }
 
-const NODE_TYPES: { type: WorkflowNodeType; label: string }[] = [
+const BUILTIN_NODE_TYPES: { type: WorkflowNodeType; label: string }[] = [
   { type: 'trigger:manual', label: '手动触发' },
   { type: 'trigger:cron', label: '定时触发' },
   { type: 'trigger:event', label: '事件触发' },
@@ -25,6 +27,16 @@ const NODE_TYPES: { type: WorkflowNodeType; label: string }[] = [
   { type: 'delay', label: '延迟等待' },
   { type: 'approval', label: '人工审批' },
 ];
+
+/** 合并内置节点类型和插件注册的节点类型 */
+function useNodeTypes(): { type: WorkflowNodeType; label: string; pluginId?: string }[] {
+  const pluginTypes = workflowNodeTypeRegistry.getPlugin().map((e) => ({
+    type: 'plugin:node' as WorkflowNodeType,
+    label: `[${e.pluginId}] ${e.name}`,
+    pluginId: e.pluginId,
+  }));
+  return [...BUILTIN_NODE_TYPES, ...pluginTypes];
+}
 
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
   const { definitions, updateDefinition } = useWorkflowStore();
@@ -73,9 +85,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
   };
 
   const handleConnect = (sourceId: string, targetId: string) => {
-    // 检查是否已存在相同连接
     if (edges.some((e) => e.source === sourceId && e.target === targetId)) return;
-    // 检查是否自连接
     if (sourceId === targetId) return;
 
     const newEdge: WorkflowEdge = {
@@ -91,6 +101,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
   };
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+
+  const allTypes = useNodeTypes();
+  const builtinTypes = allTypes.filter(t => !t.pluginId);
+  const pluginTypes = allTypes.filter(t => t.pluginId);
 
   return (
     <div className="workflow-editor">
@@ -122,12 +136,31 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
         {/* 左侧节点面板 */}
         <div className="editor-node-palette">
           <h4>节点类型</h4>
-          {NODE_TYPES.map((nt) => {
+          {builtinTypes.map((nt) => {
             const meta = getNodeTypeMeta(nt.type);
             return (
               <div
                 key={nt.type}
                 className="palette-item"
+                onClick={() => handleAddNode(nt.type)}
+                style={{ borderLeftColor: meta.color }}
+              >
+                <span className="palette-icon">{meta.icon}</span>
+                <span className="palette-label">{nt.label}</span>
+              </div>
+            );
+          })}
+          {pluginTypes.length > 0 && (
+            <div className="palette-divider">
+              <span className="palette-divider-label">插件节点</span>
+            </div>
+          )}
+          {pluginTypes.map((nt) => {
+            const meta = getNodeTypeMeta(nt.type);
+            return (
+              <div
+                key={nt.pluginId || nt.type}
+                className="palette-item palette-item--plugin"
                 onClick={() => handleAddNode(nt.type)}
                 style={{ borderLeftColor: meta.color }}
               >

@@ -18,6 +18,9 @@ import type {
 import { validateDefinition } from './WorkflowDefinition';
 import { createInstance, updateStepStatus, canTransition, emitWorkflowEvent } from './WorkflowInstance';
 import { commandDispatcher } from '../plugin/CommandDispatcher';
+import { eventDispatcher } from '../plugin/EventDispatcher';
+import { globalEventBus } from '../plugin/GlobalEventBus';
+import { PluginAgentAPI } from '../plugin/PluginAPI.agent';
 
 // ── 模板变量替换 ──
 
@@ -51,6 +54,10 @@ class WorkflowEngine {
   private instances: Map<string, WorkflowInstance> = new Map();
   /** 是否正在执行 */
   private running: Set<string> = new Set();
+  /** EventDispatcher 取消注册函数 key: definitionId */
+  private eventUnsubscribers: Map<string, () => void> = new Map();
+  /** Agent 会话缓存 key: sessionId */
+  private agentSessions: Map<string, { api: PluginAgentAPI; sessionId: string; agentType: string }> = new Map();
 
   // ── 定义管理 ──
 
@@ -75,6 +82,7 @@ class WorkflowEngine {
   }
 
   async deleteDefinition(id: string): Promise<void> {
+    this.unregisterEventTriggers(id);
     this.definitions.delete(id);
   }
 
@@ -135,6 +143,9 @@ class WorkflowEngine {
     instance.completedAt = new Date().toISOString();
     this.running.delete(instanceId);
     emitWorkflowEvent('instance:cancelled', instanceId);
+
+    // 清理 Agent 会话
+    this.cleanupAgentSessions(instanceId);
   }
 
   async retry(instanceId: string, stepId?: string): Promise<void> {
@@ -180,6 +191,93 @@ class WorkflowEngine {
     if (filter?.status) list = list.filter((i) => i.status === filter.status);
     if (filter?.definitionId) list = list.filter((i) => i.definitionId === filter.definitionId);
     return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  // ── Agent 会话管理 ──
+
+  /**
+   * 清理工作流实例关联的 Agent 会话
+   */
+  private cleanupAgentSessions(instanceId: string): void {
+    // 查找该实例使用的所有会话并清理
+    for (const [sessionId, session] of this.agentSessions.entries()) {
+      try {
+        session.api.deleteSession(sessionId);
+      } catch (err) {
+        console.warn(`[WorkflowEngine] 清理 Agent 会话失败: ${sessionId}`, err);
+      }
+    }
+    this.agentSessions.clear();
+  }
+
+  // ── 事件触发器管理 ──
+
+  /**
+   * 注册工作流中所有 trigger:event 节点的事件监听
+   * 通过 EventDispatcher 订阅事件，事件触发时自动启动工作流
+   */
+  private registerEventTriggers(def: WorkflowDefinition): void {
+    const eventNodes = def.nodes.filter((n) => n.type === 'trigger:event' && n.eventName);
+    if (eventNodes.length === 0) return;
+
+    for (const node of eventNodes) {
+      const eventName = node.eventName!;
+      const unsub = eventDispatcher.register(
+        'workflow-engine',
+        eventName,
+        async (payload: any) => {
+          // 事件触发时启动工作流
+          const context: Record<string, unknown> = {
+            trigger: {
+              event: eventName,
+              payload,
+            },
+          };
+
+          // 如果节点配置了输入映射，将事件 payload 映射到上下文
+          if (node.inputMapping) {
+            for (const [key, path] of Object.entries(node.inputMapping)) {
+              const value = path.split('.').reduce((obj: any, k: string) => obj?.[k], payload);
+              if (value !== undefined) {
+                context[key] = value;
+              }
+            }
+          }
+
+          try {
+            await this.start(def.id, context);
+            console.log(`[WorkflowEngine] 事件 "${eventName}" 触发工作流 "${def.name}"`);
+          } catch (err) {
+            console.error(`[WorkflowEngine] 事件 "${eventName}" 触发工作流失败:`, err);
+          }
+
+          return true; // 继续传播
+        },
+      );
+
+      // 保存取消注册函数
+      const existing = this.eventUnsubscribers.get(def.id);
+      if (existing) {
+        // 合并多个取消函数
+        this.eventUnsubscribers.set(def.id, () => {
+          existing();
+          unsub();
+        });
+      } else {
+        this.eventUnsubscribers.set(def.id, unsub);
+      }
+    }
+  }
+
+  /**
+   * 注销工作流的所有事件触发器
+   */
+  private unregisterEventTriggers(defId: string): void {
+    const unsub = this.eventUnsubscribers.get(defId);
+    if (unsub) {
+      unsub();
+      this.eventUnsubscribers.delete(defId);
+    }
   }
 
   // ── 核心执行逻辑 ──
@@ -263,10 +361,23 @@ class WorkflowEngine {
 
       switch (node.type) {
         case 'trigger:cron':
+          // 定时触发节点：记录触发信息
+          result = { triggered: true, type: 'cron' };
+          break;
+
         case 'trigger:event':
+          // 事件触发节点：从上下文中读取事件 payload
+          result = {
+            triggered: true,
+            type: 'event',
+            eventName: node.eventName,
+            payload: instance.context?.trigger?.payload || null,
+          };
+          break;
+
         case 'trigger:manual':
-          // 触发节点：直接通过
-          result = { triggered: true };
+          // 手动触发节点：直接通过
+          result = { triggered: true, type: 'manual' };
           break;
 
         case 'plugin:command': {
@@ -291,6 +402,51 @@ class WorkflowEngine {
           }
 
           result = cmdResult.data;
+
+          // 输出映射
+          if (node.outputMapping) {
+            for (const [key, path] of Object.entries(node.outputMapping)) {
+              instance.context[path] = result?.[key];
+            }
+          }
+          break;
+        }
+
+        case 'agent_task': {
+          // Agent 任务节点：通过 PluginAPI.agent 创建 Agent 会话并发送消息
+          if (!node.pluginId) {
+            throw new Error(`Agent 任务节点 "${node.label}" 缺少插件 ID`);
+          }
+
+          const agentApi = new PluginAgentAPI(node.pluginId);
+          const agentType = node.params?.agent_type || 'claude';
+
+          // 解析 prompt 模板
+          const promptTemplate = node.params?.prompt_template || '';
+          const prompt = promptTemplate
+            ? resolveTemplate(promptTemplate, instance.context)
+            : '';
+
+          // 创建 Agent 会话
+          const sessionInfo = await agentApi.createSession(agentType, {
+            system_prompt: node.params?.system_prompt,
+          });
+
+          // 缓存会话信息
+          this.agentSessions.set(sessionInfo.session_id, {
+            api: agentApi,
+            sessionId: sessionInfo.session_id,
+            agentType,
+          });
+
+          // 发送消息
+          const response = await agentApi.sendMessage(sessionInfo.session_id, prompt);
+
+          result = {
+            session_id: sessionInfo.session_id,
+            agent_type: agentType,
+            content: response.content,
+          };
 
           // 输出映射
           if (node.outputMapping) {
@@ -326,6 +482,74 @@ class WorkflowEngine {
             ),
           );
           result = { parallel: true };
+          break;
+        }
+
+        case 'human_input': {
+          // 人工介入节点：需要用户输入
+          const humanConfig = node.humanInputConfig || { prompt: '请输入', inputType: 'text' };
+          result = {
+            type: 'human_input',
+            prompt: resolveTemplate(humanConfig.prompt, instance.context),
+            inputType: humanConfig.inputType,
+            options: humanConfig.options,
+            allowCustom: humanConfig.allowCustom,
+            placeholder: humanConfig.placeholder,
+            timeoutMinutes: humanConfig.timeoutMinutes,
+          };
+          // 通过 GlobalEventBus 广播人工介入请求
+          globalEventBus.emit('workflow:awaiting-input', {
+            instanceId,
+            nodeId,
+            config: result,
+          });
+          break;
+        }
+
+        case 'approval': {
+          // 人工审批节点
+          const approvalConfig = node.humanInputConfig || { prompt: '请审批', inputType: 'select', options: [{ label: '通过', value: 'approve' }, { label: '拒绝', value: 'reject' }] };
+          result = {
+            type: 'approval',
+            prompt: resolveTemplate(approvalConfig.prompt, instance.context),
+            options: approvalConfig.options || [
+              { label: '通过', value: 'approve' },
+              { label: '拒绝', value: 'reject' },
+            ],
+            timeoutMinutes: approvalConfig.timeoutMinutes || 1440,
+          };
+          globalEventBus.emit('workflow:awaiting-approval', {
+            instanceId,
+            nodeId,
+            config: result,
+          });
+          break;
+        }
+
+        case 'subflow': {
+          // 子工作流节点
+          const subflowDefId = node.params?.definitionId;
+          if (!subflowDefId) {
+            throw new Error(`子工作流节点 "${node.label}" 缺少 definitionId`);
+          }
+          const subflowDef = this.definitions.get(subflowDefId);
+          if (!subflowDef) {
+            throw new Error(`子工作流定义未找到: ${subflowDefId}`);
+          }
+
+          // 递归执行子工作流
+          const subflowInstanceId = await this.start(subflowDefId, {
+            ...instance.context,
+            ...(node.inputMapping ? resolveParams(node.inputMapping as Record<string, any>, instance.context) : {}),
+          });
+
+          const subflowInstance = this.instances.get(subflowInstanceId);
+          result = {
+            type: 'subflow',
+            definitionId: subflowDefId,
+            instanceId: subflowInstanceId,
+            output: subflowInstance?.context || {},
+          };
           break;
         }
 

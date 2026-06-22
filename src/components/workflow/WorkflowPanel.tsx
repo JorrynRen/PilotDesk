@@ -8,9 +8,10 @@ import React, { useState, useEffect } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { WorkflowEditor } from './WorkflowEditor';
 import { WorkflowMonitor } from './WorkflowMonitor';
+import { ExecutionStats } from './ExecutionStats';
 import { createEmptyDefinition } from '../../workflow/WorkflowDefinition';
 
-type Tab = 'definitions' | 'instances';
+type Tab = 'definitions' | 'instances' | 'stats';
 
 export const WorkflowPanel: React.FC = () => {
   const {
@@ -50,6 +51,9 @@ export const WorkflowPanel: React.FC = () => {
           </button>
           <button className={tab === 'instances' ? 'active' : ''} onClick={() => setTab('instances')}>
             实例 ({instances.length})
+          </button>
+          <button className={tab === 'stats' ? 'active' : ''} onClick={() => setTab('stats')}>
+            统计
           </button>
         </div>
         <div className="workflow-actions">
@@ -107,6 +111,10 @@ export const WorkflowPanel: React.FC = () => {
             setTab('definitions');
           }}
         />
+      )}
+
+      {tab === 'stats' && (
+        <ExecutionStats workflowId={undefined} />
       )}
     </div>
   );

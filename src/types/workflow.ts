@@ -13,10 +13,12 @@ export type WorkflowNodeType =
   | 'trigger:event'      // 事件触发
   | 'trigger:manual'     // 手动触发
   | 'plugin:command'     // 插件命令
+  | 'plugin:node'        // 插件自定义节点类型（通过 node_types 贡献点注册）
   | 'condition'          // 条件判断
   | 'parallel'           // 并行执行
   | 'delay'              // 延迟等待
   | 'approval'           // 人工审批
+  | 'human_input'        // 人工介入（输入/选择/确认）
   | 'subflow';           // 子工作流
 
 /** 工作流节点定义 */
@@ -24,10 +26,12 @@ export interface WorkflowNode {
   id: string;
   type: WorkflowNodeType;
   label: string;
-  /** 插件 ID（仅 plugin:command 类型） */
+  /** 插件 ID（仅 plugin:command / plugin:node 类型） */
   pluginId?: string;
   /** 命令 ID（仅 plugin:command 类型） */
   commandId?: string;
+  /** 插件节点类型 ID（仅 plugin:node 类型，对应 manifest node_types[].type_id） */
+  nodeTypeId?: string;
   /** 执行参数 */
   params?: Record<string, any>;
   /** 条件表达式（仅 condition 类型） */
@@ -48,6 +52,16 @@ export interface WorkflowNode {
   inputMapping?: Record<string, string>;
   /** 输出映射（将结果写入上下文） */
   outputMapping?: Record<string, string>;
+  /** 人工介入配置（仅 human_input / approval 类型） */
+  humanInputConfig?: {
+    prompt: string;
+    inputType: 'text' | 'select' | 'confirm' | 'file';
+    options?: { label: string; value: string }[];
+    defaultValue?: string;
+    timeoutMinutes?: number;
+    allowCustom?: boolean;
+    placeholder?: string;
+  };
   /** 位置信息（UI 画布） */
   position?: { x: number; y: number };
 }

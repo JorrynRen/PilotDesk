@@ -1,6 +1,7 @@
 mod agent;
 mod commands;
 mod db;
+mod market;
 mod plugin;
 mod workflow;
 mod utils;
@@ -8,8 +9,11 @@ mod utils;
 use db::init::{init_db, DbPool};
 use std::sync::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
+use std::sync::Arc;
 use agent::AgentManager;
 use tauri::Manager;
+use workflow::executor::NodeExecutor;
+use workflow::scheduler::WorkflowScheduler;
 
 pub struct DbState {
     pub pool: DbPool,
@@ -222,7 +226,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-                .manage(DbState { pool })
+                .manage(DbState { pool: pool.clone() })
         .manage(AsyncMutex::new(AgentManager::new()))
         .manage(Mutex::new(plugin::PluginHost::new()))
         .invoke_handler(tauri::generate_handler![
@@ -276,6 +280,7 @@ pub fn run() {
             plugin::plugin_list,
             plugin::plugin_enable,
             plugin::plugin_disable,
+            plugin::store::read_plugin_readme,
             plugin::plugin_get_sandbox_info,
             plugin::plugin_install_zip,
             plugin::plugin_uninstall,
@@ -314,10 +319,42 @@ pub fn run() {
             workflow::workflow_list_instances,
             workflow::workflow_create_instance,
             workflow::workflow_update_instance_status,
+            commands::workflow::create_workflow,
+            commands::workflow::list_workflows,
+            commands::workflow::get_workflow,
+            commands::workflow::update_workflow,
+            commands::workflow::delete_workflow,
+            commands::workflow::save_workflow_dag,
+            commands::workflow::start_workflow,
+            commands::workflow::cancel_workflow,
+            commands::workflow::get_execution,
+            commands::workflow::list_executions,
+            commands::workflow::get_node_executions,
+            commands::workflow::respond_human_input,
+            commands::workflow::list_node_types,
+            commands::workflow::create_schedule,
+            commands::workflow::list_schedules,
+            commands::workflow::delete_schedule,
+            commands::workflow::export_workflow,
+            commands::workflow::import_workflow,
+            commands::workflow::test_node,
+            commands::workflow::get_workflow_stats,
+            commands::workflow::get_execution_timeline,
+            commands::workflow::get_node_type_stats,
+            commands::workflow::get_workflow_max_concurrency,
+            commands::workflow::set_workflow_max_concurrency,
+            commands::workflow::duplicate_workflow,
+            commands::workflow::list_workflow_versions,
+            commands::workflow::save_workflow_version,
+            commands::workflow::restore_workflow_version,
+            commands::workflow::get_node_execution_logs,
+            commands::workflow::list_recoverable_executions,
+            commands::workflow::recover_execution,
+            commands::workflow::get_pending_human_inputs,
             commands::agents::upload_agent_icon,
             commands::agents::read_agent_icon,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // 初始化资源路径（Windows: app_data_dir = %APPDATA%/com.pilotdesk.app/）
             let builtin = app.path().resource_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("resources"));
@@ -334,6 +371,23 @@ pub fn run() {
             }
 
             app.manage(ResourcePaths { builtin, user });
+
+            // 初始化 NodeExecutor（工作流节点执行器）
+            // 创建独立的 AgentManager 和 PluginHost 实例供工作流使用
+            let agent_manager = Arc::new(AsyncMutex::new(AgentManager::new()));
+            let plugin_host = Arc::new(std::sync::Mutex::new(plugin::PluginHost::new()));
+            let node_executor = Arc::new(NodeExecutor::new(agent_manager, plugin_host));
+            // 同步插件贡献的节点类型到工作流注册表
+            node_executor.sync_plugin_node_types();
+            app.manage(node_executor.clone());
+
+            // 启动工作流定时调度器
+            let scheduler = WorkflowScheduler::new(pool.clone());
+            let sched_executor = node_executor.clone();
+            let sched_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                scheduler.start(sched_executor, sched_handle).await;
+            });
 
             log::info!("PilotDesk initialized successfully.");
             Ok(())

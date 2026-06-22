@@ -7,6 +7,7 @@
 import React, { useState, useEffect } from 'react';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import type { WorkflowNode } from '../../types/workflow';
+import { workflowNodeTypeRegistry } from '../../utils/WorkflowNodeTypeRegistry';
 
 interface Props {
   node: WorkflowNode;
@@ -40,6 +41,11 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onDelete }
     setCondition(node.condition || '');
     setParamsJson(JSON.stringify(node.params || {}, null, 2));
   }, [node.id]);
+
+  // 获取插件节点类型的配置 schema
+  const pluginNodeType = node.type === 'plugin:node' && node.nodeTypeId
+    ? workflowNodeTypeRegistry.get(node.nodeTypeId)
+    : undefined;
 
   const handleApply = () => {
     const updates: Partial<WorkflowNode> = { label };
@@ -97,6 +103,37 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onDelete }
               className="config-textarea"
             />
           </div>
+        </>
+      )}
+
+      {node.type === 'plugin:node' && (
+        <>
+          <div className="config-section">
+            <label>插件节点类型</label>
+            <div className="config-type config-type--plugin">
+              {pluginNodeType?.pluginId}.{node.nodeTypeId}
+            </div>
+          </div>
+          {pluginNodeType?.configSchema && (
+            <div className="config-section">
+              <label>配置 (JSON)</label>
+              <textarea
+                value={paramsJson}
+                onChange={(e) => setParamsJson(e.target.value)}
+                rows={4}
+                className="config-textarea"
+              />
+              <div className="config-schema-hint">
+                {Object.entries(pluginNodeType.configSchema).map(([key, schema]) => (
+                  <div key={key} className="schema-field">
+                    <span className="schema-field-name">{key}</span>
+                    <span className="schema-field-type">{schema.type}</span>
+                    {schema.description && <span className="schema-field-desc">{schema.description}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
 

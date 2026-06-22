@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { PluginInstance } from '../types/plugin';
 import { DefaultPluginPanel } from '../components/plugin/DefaultPluginPanel';
 import { PluginAPI } from './PluginAPI';
+import { workflowNodeTypeRegistry } from '../utils/WorkflowNodeTypeRegistry';
 
 // ── 类型定义 ──
 
@@ -125,6 +126,26 @@ class PluginRegistry {
         }
       }
 
+      // 1b. 注册工作流节点类型（如果插件声明了 node_types）
+      if (plugin.manifest.contributes?.node_types) {
+        workflowNodeTypeRegistry.registerFromPlugin(
+          plugin.manifest.id,
+          plugin.manifest.contributes.node_types,
+          (typeId) => {
+            // 使用通用插件节点组件，运行时通过 PluginNodeExecutor 执行
+            const PluginNodeComponent: React.FC<{ data: any }> = (props) => {
+              return React.createElement('div', { className: 'workflow-node workflow-node--plugin' },
+                React.createElement('div', { className: 'workflow-node__header' },
+                  React.createElement('span', { className: 'workflow-node__type-badge' }, '[插件]'),
+                  React.createElement('span', { className: 'workflow-node__label' }, props.data?.label || typeId),
+                ),
+              );
+            };
+            return PluginNodeComponent as React.ComponentType<any>;
+          },
+        );
+      }
+
       // 2. 执行插件入口 JS
       const api = new PluginAPI(plugin.path, plugin.manifest.id, plugin.manifest.name);
       const module = await this.executePluginEntry(plugin);
@@ -158,7 +179,12 @@ class PluginRegistry {
       }
     }
 
-    // 2. 清理 API 资源（自动注销命令/事件/全局订阅）
+    // 2. 注销工作流节点类型
+    if (runtime) {
+      workflowNodeTypeRegistry.unregisterPlugin(runtime.api.pluginId);
+    }
+
+    // 3. 清理 API 资源（自动注销命令/事件/全局订阅）
     runtime?.api.dispose();
 
     // 3. 注销面板组件

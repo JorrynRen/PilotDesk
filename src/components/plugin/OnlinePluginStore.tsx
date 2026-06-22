@@ -93,117 +93,77 @@ function PluginCard({
 
   return (
     <div
-      className="plugin-card"
+      className="px-3 py-2.5 rounded-lg transition-colors"
       style={{
         backgroundColor: 'var(--bg-secondary)',
         border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '16px',
-        transition: 'box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease',
         cursor: isInstalled ? 'default' : 'pointer',
-        position: 'relative',
-        overflow: 'hidden',
       }}
       onClick={() => !isInstalled && !isInstalling && onInstall(plugin.id)}
       onMouseEnter={(e) => {
         if (!isInstalled) {
-          e.currentTarget.style.boxShadow = 'var(--shadow-md)';
           e.currentTarget.style.borderColor = 'var(--accent)';
-          e.currentTarget.style.transform = 'translateY(-1px)';
         }
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.boxShadow = 'none';
         e.currentTarget.style.borderColor = 'var(--border)';
-        e.currentTarget.style.transform = 'translateY(0)';
       }}
     >
-      {/* 顶部：图标 + 名称 + 版本 */}
-      <div className="flex items-start gap-3 mb-3">
-        {/* 图标 */}
-        <div
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 'var(--radius-md)',
-            backgroundColor: 'var(--bg-tertiary)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-            overflow: 'hidden',
-            border: '1px solid var(--border)',
-          }}
-        >
-          {plugin.icon && !iconError ? (
-            <img
-              src={plugin.icon}
-              alt={plugin.name}
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              onError={() => setIconError(true)}
-            />
-          ) : (
-            <Package size={18} style={{ color: 'var(--text-tertiary)' }} />
-          )}
-        </div>
-
-        {/* 名称和版本 */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h4
-              style={{
-                fontSize: 'var(--fs-13)',
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-                margin: 0,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {plugin.name}
-            </h4>
-            <span
-              style={{
-                fontSize: 'var(--fs-10)',
-                color: 'var(--text-tertiary)',
-                whiteSpace: 'nowrap',
-                fontFamily: 'var(--font-mono)',
-              }}
-            >
-              v{plugin.version}
-            </span>
+      {/* 顶部行：图标 + 名称/版本 + 操作按钮 */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {/* 图标 */}
+          <div
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: '4px',
+              backgroundColor: 'var(--bg-tertiary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              overflow: 'hidden',
+              border: '1px solid var(--border)',
+            }}
+          >
+            {plugin.icon && !iconError ? (
+              <img
+                src={plugin.icon}
+                alt={plugin.name}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                onError={() => setIconError(true)}
+              />
+            ) : (
+              <Package size={10} style={{ color: 'var(--text-tertiary)' }} />
+            )}
           </div>
-          {/* 操作按钮（标题下方，与标题左对齐） */}
-          <div className="flex items-center gap-2 mt-1.5">
+          <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+            {plugin.name}
+          </span>
+          <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+            v{plugin.version}
+          </span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
           {isInstalled ? (
             <>
               <span
                 style={{
-                  fontSize: 'var(--fs-10)',
+                  fontSize: '10px',
                   color: '#10B981',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 3,
-                  padding: '3px 10px',
-                  borderRadius: 'var(--radius-full)',
+                  padding: '2px 8px',
+                  borderRadius: '999px',
                   backgroundColor: 'rgba(16,185,129,0.1)',
                   fontWeight: 500,
                 }}
               >
-                <CheckCircle size={10} />
                 已安装
               </span>
               <button
                 onClick={(e) => { e.stopPropagation(); onReadme(plugin); }}
-                className="pd-btn"
-                style={{
-                  fontSize: 'var(--fs-10)',
-                  padding: '3px 8px',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--accent)',
-                  backgroundColor: 'var(--bg-tertiary)',
-                }}
+                className="pd-btn px-1.5 py-1 rounded text-[10px]"
+                style={{ color: 'var(--accent)' }}
                 title="查看 README"
               >
                 📖
@@ -213,63 +173,58 @@ function PluginCard({
             <button
               onClick={(e) => { e.stopPropagation(); onInstall(plugin.id); }}
               disabled={isInstalling}
-              className="pd-btn-primary"
+              className="pd-btn px-2 py-1 rounded text-[10px] transition-all"
               style={{
-                fontSize: 'var(--fs-11)',
-                padding: '5px 14px',
-                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'var(--accent)',
+                color: '#fff',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 5,
-                fontWeight: 500,
+                gap: 3,
               }}
             >
               {isInstalling ? (
-                <><Loader2 size={11} className="pd-animate-spin" /></>
+                <><Loader2 size={10} className="pd-animate-spin" /></>
               ) : status === 'update-available' ? (
-                <><Download size={11} /> 更新</>
+                <><Download size={10} /> 更新</>
               ) : (
-                <><Download size={11} /> 安装</>
+                <><Download size={10} /> 安装</>
               )}
             </button>
           )}
-          </div>
         </div>
       </div>
 
+      {/* 分割线 */}
+      <div className="my-1.5" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
+
       {/* 描述 */}
       <p
+        className="text-[10px] line-clamp-2"
         style={{
-          fontSize: 'var(--fs-11)',
           color: 'var(--text-secondary)',
+          margin: '0 0 4px 0',
           lineHeight: 1.5,
-          margin: '0 0 12px 0',
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow: 'hidden',
         }}
       >
         {plugin.description}
       </p>
 
-      {/* 元信息 */}
-      <div className="flex items-center gap-3 justify-end" style={{ flexWrap: 'wrap' }}>
+      {/* 元信息：作者 + 大小 + 最小版本 */}
+      <div className="flex items-center gap-3">
         <div className="flex items-center gap-1">
           <User size={10} style={{ color: 'var(--text-tertiary)' }} />
-          <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>{plugin.author}</span>
+          <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>{plugin.author}</span>
         </div>
         {plugin.size && (
           <div className="flex items-center gap-1">
             <HardDrive size={10} style={{ color: 'var(--text-tertiary)' }} />
-            <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>{plugin.size}</span>
+            <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>{plugin.size}</span>
           </div>
         )}
         <div className="flex items-center gap-1">
           <Shield size={10} style={{ color: 'var(--text-tertiary)' }} />
-          <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>v{plugin.minAppVersion}+</span>
+          <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>v{plugin.minAppVersion}+</span>
         </div>
-
       </div>
     </div>
   );
@@ -280,75 +235,64 @@ function PluginCard({
 function SkeletonCard() {
   return (
     <div
+      className="px-3 py-2.5 rounded-lg"
       style={{
         backgroundColor: 'var(--bg-secondary)',
         border: '1px solid var(--border)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '16px',
       }}
     >
-      <div className="flex items-start gap-3 mb-3">
-        <div
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 'var(--radius-md)',
-            backgroundColor: 'var(--bg-tertiary)',
-          }}
-        />
-        <div className="flex-1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 flex-1">
           <div
             style={{
-              height: 14,
-              width: '60%',
+              width: 20,
+              height: 20,
+              borderRadius: '4px',
               backgroundColor: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-sm)',
-              marginBottom: 8,
+            }}
+          />
+          <div
+            style={{
+              height: 12,
+              width: 100,
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: '2px',
             }}
           />
           <div
             style={{
               height: 10,
-              width: '30%',
+              width: 40,
               backgroundColor: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-sm)',
+              borderRadius: '2px',
             }}
           />
         </div>
+        <div
+          style={{
+            height: 22,
+            width: 50,
+            backgroundColor: 'var(--bg-tertiary)',
+            borderRadius: '4px',
+          }}
+        />
       </div>
-      <div
-        style={{
-          height: 10,
-          width: '100%',
-          backgroundColor: 'var(--bg-tertiary)',
-          borderRadius: 'var(--radius-sm)',
-          marginBottom: 6,
-        }}
-      />
-      <div
-        style={{
-          height: 10,
-          width: '70%',
-          backgroundColor: 'var(--bg-tertiary)',
-          borderRadius: 'var(--radius-sm)',
-          marginBottom: 12,
-        }}
-      />
-      <div className="flex gap-2">
+      <div className="my-1.5" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
+      <div className="flex items-center justify-between gap-2">
         <div
           style={{
             height: 10,
-            width: 60,
+            width: '60%',
             backgroundColor: 'var(--bg-tertiary)',
-            borderRadius: 'var(--radius-sm)',
+            borderRadius: '2px',
           }}
         />
         <div
           style={{
             height: 10,
-            width: 50,
+            width: 80,
             backgroundColor: 'var(--bg-tertiary)',
-            borderRadius: 'var(--radius-sm)',
+            borderRadius: '2px',
           }}
         />
       </div>
@@ -362,7 +306,9 @@ export const OnlinePluginStore: React.FC<{
   onClose?: () => void;
   searchQuery?: string;
   onSearchChange?: (q: string) => void;
-}> = ({ onClose, searchQuery: externalSearchQuery, onSearchChange }) => {
+  /** 统计信息变更回调，用于父组件在标题行显示 */
+  onStatsChange?: (total: number, filtered: number) => void;
+}> = ({ onClose, searchQuery: externalSearchQuery, onSearchChange, onStatsChange }) => {
   // 商店容器样式：允许纵向滚动
   const containerStyle: React.CSSProperties = {};
   const [plugins, setPlugins] = useState<OnlinePluginInfo[]>([]);
@@ -404,9 +350,27 @@ export const OnlinePluginStore: React.FC<{
     }
   }, []);
 
+  const filteredPlugins = plugins.filter((p) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      p.name.toLowerCase().includes(q) ||
+      p.id.toLowerCase().includes(q) ||
+      p.description.toLowerCase().includes(q) ||
+      p.author.toLowerCase().includes(q)
+    );
+  });
+
   useEffect(() => {
     fetchPlugins();
   }, [fetchPlugins]);
+
+  // 统计信息变化时通知父组件
+  useEffect(() => {
+    if (!loading && !error) {
+      onStatsChange?.(plugins.length, filteredPlugins.length);
+    }
+  }, [plugins.length, filteredPlugins.length, loading, error, onStatsChange]);
 
   const installPlugin = async (pluginId: string) => {
     setInstallingId(pluginId);
@@ -435,19 +399,11 @@ export const OnlinePluginStore: React.FC<{
     return 'installed';
   };
 
-  const filteredPlugins = plugins.filter((p) => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      p.name.toLowerCase().includes(q) ||
-      p.id.toLowerCase().includes(q) ||
-      p.description.toLowerCase().includes(q) ||
-      p.author.toLowerCase().includes(q)
-    );
-  });
+
 
   return (
     <div>
+
       {/* 错误提示 */}
       {error && (
         <div
@@ -477,7 +433,7 @@ export const OnlinePluginStore: React.FC<{
 
       {/* 加载中：骨架屏 */}
       {loading && !error && (
-        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+        <div className="space-y-2">
           {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
         </div>
       )}
@@ -501,10 +457,7 @@ export const OnlinePluginStore: React.FC<{
       {/* 插件列表：网格布局 */}
       {!loading && !error && filteredPlugins.length > 0 && (
         <div
-          className="grid gap-3"
-          style={{
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          }}
+          className="space-y-2"
         >
           {filteredPlugins.map((plugin) => (
             <PluginCard
@@ -519,17 +472,6 @@ export const OnlinePluginStore: React.FC<{
         </div>
       )}
 
-      {/* 底部统计 */}
-      {!loading && !error && plugins.length > 0 && (
-        <div
-          className="flex items-center justify-between mt-4 pt-3"
-          style={{ borderTop: '1px solid var(--border)' }}
-        >
-          <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
-            共 {plugins.length} 个插件{searchQuery ? `，筛选后 ${filteredPlugins.length} 个` : ''}
-          </span>
-        </div>
-      )}
       {readmePlugin && (
         <PluginReadmeDialog
           basePath={readmePlugin.baseUrl}

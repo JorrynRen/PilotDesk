@@ -20,6 +20,8 @@ export interface PluginManifest {
     panels?: PanelContribution[];
     commands?: CommandContribution[];
     hooks?: HookContribution[];
+    /** 工作流节点类型（v2.0 新增） */
+    node_types?: NodeTypeContribution[];
   };
 }
 
@@ -60,6 +62,21 @@ export interface CommandContribution {
 export interface HookContribution {
   event: string;
   handler: string;
+}
+
+/** 工作流节点类型贡献点（v2.0 新增） */
+export interface NodeTypeContribution {
+  /** 节点类型唯一标识，如 "my-plugin.sentiment" */
+  type_id: string;
+  /** 节点显示名称 */
+  name: string;
+  /** 节点配置 JSON Schema */
+  config_schema?: {
+    type: 'object';
+    properties?: Record<string, { type: string; description?: string; default?: any }>;
+  };
+  /** 执行此节点所需的权限 */
+  permissions?: PluginPermission[];
 }
 
 /** 权限检查结果 */

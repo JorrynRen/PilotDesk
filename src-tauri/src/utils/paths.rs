@@ -14,6 +14,7 @@ pub fn app_data_dir() -> PathBuf {
 ///   - 开发模式: src-tauri/resources/
 ///   - Windows MSI: %LOCALAPPDATA%\com.pilotdesk.app\resources\
 ///   - Windows NSIS: %APPDATA%\com.pilotdesk.app\resources\
+#[allow(dead_code)]
 pub fn builtin_resources_dir() -> PathBuf {
     // 开发模式使用项目目录下的 resources 文件夹
     // 生产模式通过 Tauri 的 resource_dir 解析
@@ -26,6 +27,7 @@ pub fn builtin_resources_dir() -> PathBuf {
 }
 
 /// 获取用户资源目录（自定义图标、用户上传文件等，可读写）
+#[allow(dead_code)]
 pub fn user_resources_dir() -> PathBuf {
     app_data_dir().join("resources")
 }

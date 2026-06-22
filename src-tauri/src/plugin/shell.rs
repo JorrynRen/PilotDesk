@@ -13,6 +13,7 @@ pub struct ShellResult {
 
 /// Shell 执行选项
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct ShellExecOptions {
     pub timeout_ms: Option<u64>,
     pub working_dir: Option<String>,

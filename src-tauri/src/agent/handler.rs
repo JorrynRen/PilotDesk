@@ -182,6 +182,7 @@ fn parse_json_stream(line: &str) -> Option<String> {
 //  ANSI 文本解析器
 // ──────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn strip_ansi(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut in_escape = false;
@@ -199,6 +200,7 @@ fn strip_ansi(text: &str) -> String {
     result
 }
 
+#[allow(dead_code)]
 fn is_content_line(line: &str) -> bool {
     let trimmed = line.trim();
     if trimmed.is_empty() {

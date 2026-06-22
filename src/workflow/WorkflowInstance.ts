@@ -4,6 +4,7 @@
  * 管理工作流实例的生命周期和状态转换。
  */
 
+import { globalEventBus } from '../plugin/GlobalEventBus';
 import type {
   WorkflowInstance,
   WorkflowInstanceStatus,
@@ -101,7 +102,19 @@ export function emitWorkflowEvent(
   nodeId?: string,
   data?: any,
 ): void {
+  const event = { type, instanceId, nodeId, data, timestamp: new Date().toISOString() };
+
+  // 通知内部 handler
   if (globalHandler) {
-    globalHandler({ type, instanceId, nodeId, data, timestamp: new Date().toISOString() });
+    globalHandler(event);
   }
+
+  // 通过 GlobalEventBus 广播到插件
+  // 命名空间: workflow:{type}
+  globalEventBus.emit(`workflow:${type}`, {
+    instanceId,
+    nodeId,
+    data,
+    timestamp: event.timestamp,
+  });
 }

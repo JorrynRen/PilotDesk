@@ -38,6 +38,8 @@ const NODE_TYPE_META: Record<WorkflowNodeType, NodeTypeMeta> = {
   'parallel': { label: '并行执行', color: '#6366F1', icon: '📋', canHaveInputs: true, canHaveOutputs: true, maxInputs: 1, maxOutputs: 0 },
   'delay': { label: '延迟等待', color: '#6B7280', icon: '⏳', canHaveInputs: true, canHaveOutputs: true, maxInputs: 1, maxOutputs: 1 },
   'approval': { label: '人工审批', color: '#EC4899', icon: '✅', canHaveInputs: true, canHaveOutputs: true, maxInputs: 1, maxOutputs: 2 },
+  'human_input': { label: '人工介入', color: '#F97316', icon: '✋', canHaveInputs: true, canHaveOutputs: true, maxInputs: 1, maxOutputs: 1 },
+  'plugin:node': { label: '插件节点', color: '#A855F7', icon: '🧩', canHaveInputs: true, canHaveOutputs: true, maxInputs: 1, maxOutputs: 1 },
   'subflow': { label: '子工作流', color: '#14B8A6', icon: '🔗', canHaveInputs: true, canHaveOutputs: true, maxInputs: 1, maxOutputs: 1 },
 };
 

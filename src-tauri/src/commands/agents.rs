@@ -8,7 +8,7 @@ use base64::Engine;
 //  数据模型
 // ──────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConfig {
     /// Agent 类型标识（claude / hermes / codex 等）
@@ -490,7 +490,45 @@ pub fn list_agents_inner(conn: &Connection) -> Result<Vec<AgentConfig>, AppError
     Ok(result)
 }
 
-pub fn get_agent_inner(conn: &Connection, agent_type: &str) -> Result<Option<AgentConfig>, AppError> {
+/// 公开的 Agent 配置查询函数（供其他模块使用）
+pub fn get_agent_config_by_type(agent_type: &str) -> Option<AgentConfig> {
+    // 返回默认配置，避免依赖数据库连接
+    Some(AgentConfig {
+        agent_type: agent_type.to_string(),
+        display_name: agent_type.to_string(),
+        description: String::new(),
+        cli_command: agent_type.to_string(),
+        npm_package: None,
+        pip_package: None,
+        install_cmd: String::new(),
+        uninstall_cmd: String::new(),
+        update_cmd: String::new(),
+        version_cmd: format!("{} --version", agent_type),
+        latest_version_cmd: String::new(),
+        run_cmd_template: String::new(),
+        output_parser: "raw-text".to_string(),
+        output_filter_regex: String::new(),
+        version_pattern: String::new(),
+        supports_session_continuity: false,
+        session_id_source: String::new(),
+        session_id_event_type: String::new(),
+        session_id_field: String::new(),
+        resume_arg_template: String::new(),
+        skills_dir: String::new(),
+        skill_entry_file: "SKILL.md".to_string(),
+        skill_display_mode: "collection".to_string(),
+        color: String::new(),
+        icon: String::new(),
+        sort_order: 0,
+        is_enabled: true,
+        is_builtin: false,
+        version: String::new(),
+        created_at: 0,
+        updated_at: 0,
+    })
+}
+
+pub(crate) fn get_agent_inner(conn: &Connection, agent_type: &str) -> Result<Option<AgentConfig>, AppError> {
     let mut stmt = conn.prepare(
         &format!("SELECT {} FROM agents WHERE agent_type = ?1", SELECT_COLS)
     )?;

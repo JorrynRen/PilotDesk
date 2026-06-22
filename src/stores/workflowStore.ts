@@ -5,7 +5,7 @@
  */
 
 import { create } from 'zustand';
-import { workflowEngine } from '../workflow/WorkflowEngine';
+import { invoke } from '@tauri-apps/api/core';
 import type { WorkflowDefinition, WorkflowInstance } from '../types/workflow';
 
 interface WorkflowStoreState {
@@ -24,12 +24,10 @@ interface WorkflowStoreState {
   selectDefinition: (id: string | null) => void;
 
   // 实例管理
-  loadInstances: () => Promise<void>;
+  loadInstances: (definitionId?: string) => Promise<void>;
   startWorkflow: (definitionId: string, context?: Record<string, unknown>) => Promise<string>;
-  pauseWorkflow: (instanceId: string) => Promise<void>;
-  resumeWorkflow: (instanceId: string) => Promise<void>;
-  stopWorkflow: (instanceId: string) => Promise<void>;
-  retryWorkflow: (instanceId: string, stepId?: string) => Promise<void>;
+  cancelWorkflow: (executionId: string) => Promise<void>;
+  respondHumanInput: (executionId: string, nodeId: string, response: string) => Promise<void>;
   selectInstance: (id: string | null) => void;
 }
 
@@ -44,7 +42,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   loadDefinitions: async () => {
     set({ loading: true, error: null });
     try {
-      const definitions = await workflowEngine.listDefinitions();
+      const definitions = await invoke<WorkflowDefinition[]>('workflow_list_definitions');
       set({ definitions, loading: false });
     } catch (err) {
       set({ error: String(err), loading: false });
@@ -52,18 +50,22 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   },
 
   createDefinition: async (def: WorkflowDefinition) => {
-    const id = await workflowEngine.createDefinition(def);
+    await invoke('workflow_create_definition', { definition: def });
     await get().loadDefinitions();
-    return id;
+    return def.id;
   },
 
   updateDefinition: async (id: string, updates: Partial<WorkflowDefinition>) => {
-    await workflowEngine.updateDefinition(id, updates);
+    const defs = get().definitions;
+    const existing = defs.find(d => d.id === id);
+    if (existing) {
+      await invoke('workflow_update_definition', { definition: { ...existing, ...updates } });
+    }
     await get().loadDefinitions();
   },
 
   deleteDefinition: async (id: string) => {
-    await workflowEngine.deleteDefinition(id);
+    await invoke('workflow_delete_definition', { id });
     await get().loadDefinitions();
   },
 
@@ -71,9 +73,9 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     set({ selectedDefinitionId: id });
   },
 
-  loadInstances: async () => {
+  loadInstances: async (definitionId?: string) => {
     try {
-      const instances = await workflowEngine.listInstances();
+      const instances = await invoke<WorkflowInstance[]>('workflow_list_instances', { definitionId: definitionId || null });
       set({ instances });
     } catch (err) {
       console.error('Failed to load instances:', err);
@@ -81,29 +83,22 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   },
 
   startWorkflow: async (definitionId: string, context?: Record<string, unknown>) => {
-    const instanceId = await workflowEngine.start(definitionId, context);
+    const instance = await invoke<WorkflowInstance>('start_workflow', {
+      workflowId: definitionId,
+      version: null,
+      inputData: context || null,
+    });
     await get().loadInstances();
-    return instanceId;
+    return instance.id;
   },
 
-  pauseWorkflow: async (instanceId: string) => {
-    await workflowEngine.pause(instanceId);
-    await get().loadInstances();
-  },
-
-  resumeWorkflow: async (instanceId: string) => {
-    await workflowEngine.resume(instanceId);
-    await get().loadInstances();
-  },
-
-  stopWorkflow: async (instanceId: string) => {
-    await workflowEngine.stop(instanceId);
+  cancelWorkflow: async (executionId: string) => {
+    await invoke('cancel_workflow', { executionId });
     await get().loadInstances();
   },
 
-  retryWorkflow: async (instanceId: string, stepId?: string) => {
-    await workflowEngine.retry(instanceId, stepId);
-    await get().loadInstances();
+  respondHumanInput: async (executionId: string, nodeId: string, response: string) => {
+    await invoke('respond_human_input', { executionId, nodeId, response });
   },
 
   selectInstance: (id: string | null) => {

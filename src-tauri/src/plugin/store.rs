@@ -31,7 +31,6 @@ pub struct OnlinePluginInfo {
     pub base_url: String,
     pub icon: Option<String>,
     pub size: Option<String>,
-    pub readme: Option<String>,
 }
 
 /// 插件索引
@@ -69,9 +68,7 @@ pub struct LocalPluginVersion {
 }
 
 // ── CDN / Raw URL ──
-
-const INDEX_CDN_URL: &str = "https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main/server/market/plugins/index.json";
-const INDEX_RAW_URL: &str = "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/index.json";
+// 服务器源定义见 market.rs
 
 /// 获取或创建共享的异步 HTTP 客户端（带超时）
 fn http_client() -> &'static reqwest::Client {
@@ -190,48 +187,48 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
+/// 从所有服务器源尝试获取并解析插件索引
+async fn fetch_plugin_index(force: bool) -> Result<IndexFetchResult, String> {
+    let urls = crate::market::build_urls(crate::market::PLUGINS_INDEX_PATH);
+    let mut last_err = String::new();
+    for url in &urls {
+        match fetch_url(url).await {
+            Ok(c) => {
+                let index: PluginIndex = serde_json::from_str(&c)
+                    .map_err(|e| format!("解析索引失败: {}", e))?;
+
+                if index.schema_version != INDEX_SCHEMA_VERSION {
+                    return Err(format!("索引 schema 版本不兼容: {} (期望: {})", index.schema_version, INDEX_SCHEMA_VERSION));
+                }
+
+                let source = if force {
+                    "raw"
+                } else if url.starts_with("https://cdn.jsdelivr") {
+                    "cdn"
+                } else {
+                    "raw"
+                };
+
+                return Ok(IndexFetchResult {
+                    plugins: index.plugins,
+                    updated_at: index.updated_at,
+                    source: source.to_string(),
+                });
+            }
+            Err(e) => {
+                last_err = e;
+            }
+        }
+    }
+    Err(format!("所有服务器源均不可用: {}", last_err))
+}
+
+#[tauri::command]
 pub async fn plugin_store_fetch_index(
     _host: tauri::State<'_, Mutex<PluginHost>>,
     force_refresh: Option<bool>,
 ) -> Result<IndexFetchResult, String> {
-    let force = force_refresh.unwrap_or(false);
-
-    if force {
-        let content = fetch_url(INDEX_RAW_URL).await?;
-        let index: PluginIndex = serde_json::from_str(&content)
-            .map_err(|e| format!("解析索引失败: {}", e))?;
-
-        if index.schema_version != INDEX_SCHEMA_VERSION {
-            return Err(format!("索引 schema 版本不兼容: {} (期望: {})", index.schema_version, INDEX_SCHEMA_VERSION));
-        }
-
-        Ok(IndexFetchResult {
-            plugins: index.plugins,
-            updated_at: index.updated_at,
-            source: "raw".to_string(),
-        })
-    } else {
-        let (content, source) = match fetch_url(INDEX_CDN_URL).await {
-            Ok(c) => (c, "cdn"),
-            Err(_) => {
-                let c = fetch_url(INDEX_RAW_URL).await?;
-                (c, "raw")
-            }
-        };
-
-        let index: PluginIndex = serde_json::from_str(&content)
-            .map_err(|e| format!("解析索引失败: {}", e))?;
-
-        if index.schema_version != INDEX_SCHEMA_VERSION {
-            return Err(format!("索引 schema 版本不兼容: {} (期望: {})", index.schema_version, INDEX_SCHEMA_VERSION));
-        }
-
-        Ok(IndexFetchResult {
-            plugins: index.plugins,
-            updated_at: index.updated_at,
-            source: source.to_string(),
-        })
-    }
+    fetch_plugin_index(force_refresh.unwrap_or(false)).await
 }
 
 /// 从在线商店安装插件（文件夹模式，异步）
@@ -241,15 +238,9 @@ pub async fn plugin_store_install(
     host: tauri::State<'_, Mutex<PluginHost>>,
     plugin_id: String,
 ) -> Result<InstallResult, String> {
-    // 获取索引找到插件信息（CDN 优先，raw 降级）
-    let index_content = match fetch_url(INDEX_CDN_URL).await {
-        Ok(c) => c,
-        Err(_) => fetch_url(INDEX_RAW_URL).await?,
-    };
-    let index: PluginIndex = serde_json::from_str(&index_content)
-        .map_err(|e| format!("解析索引失败: {}", e))?;
-
-    let online_plugin = index.plugins.iter()
+    // 获取索引找到插件信息（复用公共 fetch 函数）
+    let index_result = fetch_plugin_index(false).await?;
+    let online_plugin = index_result.plugins.iter()
         .find(|p| p.id == plugin_id)
         .ok_or_else(|| format!("在线商店中未找到插件: {}", plugin_id))?
         .clone();
@@ -380,18 +371,17 @@ async fn install_plugin_files(
         }
     }
 
-    // 下载 README.md（如果存在）
-    if let Some(readme) = &online_plugin.readme {
-        if !readme.is_empty() {
-            match fetch_bytes(readme).await {
-                Ok(data) => {
-                    std::fs::write(target_dir.join("README.md"), &data)
-                        .map_err(|e| format!("写入 README.md 失败: {}", e))?;
-                }
-                Err(_) => {
-                    log::info!("[PluginInstall] README.md 不存在 (可选): {}", readme);
-                }
-            }
+
+
+    // 下载 README.md（可选，硬编码路径，不依赖索引字段）
+    let readme_url = format!("{}/README.md", base_url);
+    match fetch_bytes(&readme_url).await {
+        Ok(data) => {
+            let _ = std::fs::write(target_dir.join("README.md"), &data);
+        }
+        Err(_) => {
+            // README.md 可选，下载失败不阻塞安装
+            log::info!("[PluginInstall] README.md 不存在 (可选): {}", readme_url);
         }
     }
 
@@ -411,11 +401,75 @@ async fn install_plugin_files(
 pub fn plugin_store_get_local_versions(
     host: tauri::State<'_, Mutex<PluginHost>>,
 ) -> Result<Vec<LocalPluginVersion>, String> {
-    let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+    let mut host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+    // 先刷新缓存，确保手动删除的插件不会残留
+    host.discover();
     let plugins = host.list_plugins();
 
     Ok(plugins.iter().map(|p| LocalPluginVersion {
         id: p.manifest.id.clone(),
         version: p.manifest.version.clone(),
     }).collect())
+}
+
+/// 读取插件 README.md 内容
+/// - 本地插件：从插件目录读取 README.md 文件
+/// - 远程插件：从 remote_url/README.md 下载（带超时）
+#[tauri::command]
+pub async fn read_plugin_readme(
+    host: tauri::State<'_, Mutex<PluginHost>>,
+    plugin_id: String,
+    is_remote: Option<bool>,
+    remote_url: Option<String>,
+) -> Result<String, String> {
+    if is_remote.unwrap_or(false) {
+        // 远程模式：从 remote_url 下载 README.md
+        let url = remote_url.ok_or_else(|| "远程模式需要提供 remote_url")?;
+        let readme_url = format!("{}/README.md", url.trim_end_matches('/'));
+
+        // 带超时的 HTTP 请求（10 秒超时）
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+        let resp = client
+            .get(&readme_url)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    format!("请求超时（10秒）: {}", readme_url)
+                } else if e.is_connect() {
+                    format!("连接失败: {}", readme_url)
+                } else {
+                    format!("请求失败: {} - {}", e, readme_url)
+                }
+            })?;
+
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}: {}", resp.status().as_u16(), readme_url));
+        }
+
+        let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        Ok(text)
+    } else {
+        // 本地模式：从插件目录读取 README.md 文件
+        let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+        let plugins = host.list_plugins();
+        let plugin = plugins
+            .iter()
+            .find(|p| p.manifest.id == plugin_id)
+            .ok_or_else(|| format!("插件 '{}' 未找到", plugin_id))?;
+
+        let readme_path = std::path::Path::new(&plugin.path).join("README.md");
+        if !readme_path.exists() {
+            return Err("NOT_FOUND".to_string());
+        }
+
+        let content = std::fs::read_to_string(&readme_path)
+            .map_err(|e| format!("读取 README.md 失败: {}", e))?;
+        Ok(content)
+    }
 }

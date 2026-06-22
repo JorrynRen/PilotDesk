@@ -3,6 +3,7 @@ import { Plus, Trash2, Pencil, Save, X, Loader2, Check, Palette, Download, Uploa
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { buildUrls, AGENTS_CONFIG_PATH } from '../../utils/market';
 import type { AgentConfig } from '../../types';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
 import {
@@ -122,10 +123,7 @@ export function AgentManager() {
     setSaving(false);
   };
 
-  const MARKET_URLS = [
-    'https://raw.githubusercontent.com/JorrynRen/PilotDesk/refs/heads/main/server/market/agents-config/agents-config.json',
-    'https://cdn.jsdelivr.net/gh/JorrynRen/PilotDesk@main/server/market/agents-config/agents-config.json',
-  ];
+  const MARKET_URLS = buildUrls(AGENTS_CONFIG_PATH);
 
   /** 带超时的 fetch，timeoutMs 默认 8 秒 */
   const fetchWithTimeout = (url: string, timeoutMs = 8000, extra?: RequestInit): Promise<Response> => {

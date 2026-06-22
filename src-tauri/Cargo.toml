@@ -35,4 +35,6 @@ tauri-plugin-dialog = "2.7.1"
 aes-gcm = "0.10"
 base64 = "0.22"
 semver = "1.0"
+async-trait = "0.1"
+boa_engine = "0.19"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }

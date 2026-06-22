@@ -5,7 +5,24 @@ use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-const MIGRATION_VERSION: i64 = 21;
+/// 所有迁移版本号（必须保持升序排列）
+/// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
+/// MIGRATION_VERSION 自动取数组最大值，无需手动维护
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66];
+
+/// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
+/// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
+const MIGRATION_VERSION: i64 = {
+    let mut max = 0i64;
+    let mut i = 0;
+    while i < MIGRATION_VERSIONS.len() {
+        if MIGRATION_VERSIONS[i] > max {
+            max = MIGRATION_VERSIONS[i];
+        }
+        i += 1;
+    }
+    max
+};
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -77,77 +94,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
         CREATE INDEX IF NOT EXISTS idx_inspirations_tags ON inspiration_tags(tag);"
     )?;
 
-    // Versioned migrations
+    // Versioned migrations — 由 MIGRATION_VERSIONS 数组驱动
     let current_version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap_or(0);
 
-    if current_version < 1 {
-        migrate_add_api_columns(&conn)?;
-    }
-    if current_version < 2 {
-        migrate_add_type(&conn)?;
-    }
-    if current_version < 3 {
-        migrate_add_api_providers(&conn)?;
-    }
-    if current_version < 4 {
-        migrate_add_app_settings(&conn)?;
-    }
-    if current_version < 5 {
-        migrate_add_install_logs(&conn)?;
-    }
-    if current_version < 6 {
-        migrate_add_message_extensions(&conn)?;
-    }
-    if current_version < 7 {
-        migrate_add_agent_session_id(&conn)?;
-    }
-    if current_version < 8 {
-        migrate_add_agents_table(&conn)?;
-    }
-    if current_version < 9 {
-        migrate_agents_full_schema(&conn)?;
-    }
-
-
-        if current_version < 11 {
-        migrate_add_skill_fields(&conn)?;
-    }
-
-if current_version < 12 {
-        migrate_update_agent_icons(&conn)?;
-    }
-
-if current_version < 13 {
-        migrate_remove_agent_type_check(&conn)?;
-    }
-
-if current_version < 14 {
-        migrate_add_agent_version(&conn)?;
-    }
-
-    if current_version < 15 {
-        migrate_update_builtin_skills(&conn)?;
-    }
-
-    if current_version < 16 {
-        migrate_fix_claude_skills(&conn)?;
-    }
-    if current_version < 17 {
-        migrate_fix_hermes_template(&conn)?;
-    }
-    if current_version < 18 {
-        migrate_fix_claude_codex_templates(&conn)?;
-    }
-    if current_version < 19 {
-        migrate_fix_claude_prompt_template(&conn)?;
-    }
-    if current_version < 20 {
-        migrate_fix_claude_dash_dash(&conn)?;
-    }
-
-    if current_version < 21 {
-        migrate_add_workflow_tables(&conn)?;
-    }
+    run_migrations(&conn, current_version)?;
 
 if current_version < MIGRATION_VERSION {
         conn.pragma_update(None, "user_version", MIGRATION_VERSION)?;
@@ -329,6 +279,8 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
             session_id_event_type TEXT NOT NULL DEFAULT '',
             session_id_field TEXT NOT NULL DEFAULT '',
             resume_arg_template TEXT NOT NULL DEFAULT '',
+            skills_dir TEXT NOT NULL DEFAULT '',
+            skill_display_mode TEXT NOT NULL DEFAULT 'collection',
             color TEXT NOT NULL DEFAULT '#6366F1',
             icon TEXT NOT NULL DEFAULT '\\U0001f916',
             sort_order INTEGER DEFAULT 0,
@@ -389,7 +341,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
              skills_dir, skill_display_mode,
              color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, '--version', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-             'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)', ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, 1, 1, ?26, ?26)",
+             'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)', ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, 1, 1, ?25, ?25)",
             rusqlite::params![agent_type, display_name, description, cli_command, npm_package, pip_package,
                 install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
                 output_parser, output_filter_regex, supports_session_continuity,
@@ -663,4 +615,247 @@ fn migrate_add_workflow_tables(conn: &Connection) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status, created_at);"
     )?;
     Ok(())
+}
+/// v22: 节点执行记录表
+fn migrate_add_node_execution_tables(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS node_executions (
+            id TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
+            node_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')),
+            input_data TEXT DEFAULT NULL,
+            output_data TEXT DEFAULT NULL,
+            error_message TEXT DEFAULT NULL,
+            started_at INTEGER,
+            finished_at INTEGER,
+            retry_count INTEGER DEFAULT 0,
+            duration_ms INTEGER DEFAULT 0,
+            artifacts_path TEXT DEFAULT NULL,
+            agent_session_id TEXT DEFAULT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS node_execution_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            execution_id TEXT NOT NULL,
+            node_execution_id TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug', 'info', 'warn', 'error')),
+            message TEXT NOT NULL,
+            metadata TEXT DEFAULT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_node_exec_execution ON node_executions(execution_id);
+        CREATE INDEX IF NOT EXISTS idx_node_exec_status ON node_executions(execution_id, status);
+        CREATE INDEX IF NOT EXISTS idx_node_logs_exec ON node_execution_logs(node_execution_id, timestamp);"
+    )?;
+    Ok(())
+}
+
+/// v23: 定时调度表
+fn migrate_add_workflow_schedule(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflow_schedules (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            cron_expression TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            input_data TEXT DEFAULT '{}',
+            last_run_at INTEGER,
+            next_run_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wf_schedule_next ON workflow_schedules(next_run_at, enabled);"
+    )?;
+    Ok(())
+}
+
+/// v65: 性能优化索引
+fn migrate_add_performance_indexes(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);
+         CREATE INDEX IF NOT EXISTS idx_workflow_instances_completed ON workflow_instances(completed_at, status);
+         CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+         CREATE INDEX IF NOT EXISTS idx_node_executions_node ON node_executions(node_id, execution_id);
+         CREATE INDEX IF NOT EXISTS idx_node_execution_logs_level ON node_execution_logs(node_execution_id, level, timestamp);
+         ANALYZE;"
+    )?;
+    Ok(())
+}
+
+/// v66: 缺失的工作流表和索引
+fn migrate_add_workflow_missing_tables(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workflow_versions (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            version INTEGER NOT NULL,
+            snapshot TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(workflow_id, version)
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_nodes (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            node_type TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            position_x REAL DEFAULT 0,
+            position_y REAL DEFAULT 0,
+            config TEXT NOT NULL DEFAULT '{}',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_edges (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            source_node_id TEXT NOT NULL,
+            target_node_id TEXT NOT NULL,
+            source_handle TEXT DEFAULT 'output',
+            target_handle TEXT DEFAULT 'input',
+            label TEXT DEFAULT '',
+            param_mappings TEXT DEFAULT '{}',
+            condition_expression TEXT DEFAULT NULL,
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wf_versions_workflow ON workflow_versions(workflow_id, version DESC);
+        CREATE INDEX IF NOT EXISTS idx_wf_nodes_workflow ON workflow_nodes(workflow_id);
+        CREATE INDEX IF NOT EXISTS idx_wf_edges_workflow ON workflow_edges(workflow_id);
+        CREATE INDEX IF NOT EXISTS idx_wf_exec_workflow ON workflow_instances(definition_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_wf_exec_status ON workflow_instances(status, created_at DESC);"
+    )?;
+    Ok(())
+}
+
+/// 根据 MIGRATION_VERSIONS 数组循环执行迁移
+/// 新增迁移时：在 MIGRATION_VERSIONS 末尾追加版本号，并在 match 中添加对应分支
+fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppError> {
+    for &ver in MIGRATION_VERSIONS {
+        if current_version < ver {
+            match ver {
+                1 => migrate_add_api_columns(conn)?,
+                2 => migrate_add_type(conn)?,
+                3 => migrate_add_api_providers(conn)?,
+                4 => migrate_add_app_settings(conn)?,
+                5 => migrate_add_install_logs(conn)?,
+                6 => migrate_add_message_extensions(conn)?,
+                7 => migrate_add_agent_session_id(conn)?,
+                8 => migrate_add_agents_table(conn)?,
+                9 => migrate_agents_full_schema(conn)?,
+                11 => migrate_add_skill_fields(conn)?,
+                12 => migrate_update_agent_icons(conn)?,
+                13 => migrate_remove_agent_type_check(conn)?,
+                14 => migrate_add_agent_version(conn)?,
+                15 => migrate_update_builtin_skills(conn)?,
+                16 => migrate_fix_claude_skills(conn)?,
+                17 => migrate_fix_hermes_template(conn)?,
+                18 => migrate_fix_claude_codex_templates(conn)?,
+                19 => migrate_fix_claude_prompt_template(conn)?,
+                20 => migrate_fix_claude_dash_dash(conn)?,
+                21 => migrate_add_workflow_tables(conn)?,
+                22 => migrate_add_node_execution_tables(conn)?,
+                23 => migrate_add_workflow_schedule(conn)?,
+                65 => migrate_add_performance_indexes(conn)?,
+                66 => migrate_add_workflow_missing_tables(conn)?,
+                _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 确保 MIGRATION_VERSIONS 数组是严格升序的
+    /// 新增迁移时如果忘记按升序插入，此测试会失败
+    #[test]
+    fn migration_versions_ascending() {
+        for i in 1..MIGRATION_VERSIONS.len() {
+            assert!(
+                MIGRATION_VERSIONS[i] > MIGRATION_VERSIONS[i - 1],
+                "MIGRATION_VERSIONS[{}] ({}) 必须大于 MIGRATION_VERSIONS[{}] ({})",
+                i, MIGRATION_VERSIONS[i], i - 1, MIGRATION_VERSIONS[i - 1]
+            );
+        }
+    }
+
+    /// 确保 MIGRATION_VERSIONS 中每个版本号在 run_migrations 中都有对应 match 分支
+    /// 使用空数据库运行所有迁移，验证不会 panic 且所有表正确创建
+    #[test]
+    fn migration_versions_have_handlers() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+
+        // 只创建最基础的 sessions 表（v1 迁移依赖它）
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                agent_type TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                cwd TEXT DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_message_preview TEXT DEFAULT '',
+                message_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                api_provider TEXT,
+                api_model TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                mode TEXT DEFAULT 'native',
+                timestamp INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS inspirations (
+                id TEXT PRIMARY KEY,
+                icon TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                source_agent TEXT DEFAULT 'manual',
+                is_favorite INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS inspiration_tags (
+                inspiration_id TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                PRIMARY KEY (inspiration_id, tag)
+            );"
+        ).unwrap();
+
+        // 从版本 0 开始运行所有迁移
+        let result = run_migrations(&conn, 0);
+        assert!(result.is_ok(), "迁移执行失败: {:?}", result.err());
+
+        // 验证关键工作流表已创建
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(tables.contains(&"workflow_definitions".to_string()), "workflow_definitions 表未创建");
+        assert!(tables.contains(&"workflow_instances".to_string()), "workflow_instances 表未创建");
+        assert!(tables.contains(&"node_executions".to_string()), "node_executions 表未创建");
+        assert!(tables.contains(&"node_execution_logs".to_string()), "node_execution_logs 表未创建");
+        assert!(tables.contains(&"workflow_schedules".to_string()), "workflow_schedules 表未创建");
+        assert!(tables.contains(&"workflow_versions".to_string()), "workflow_versions 表未创建");
+        assert!(tables.contains(&"workflow_nodes".to_string()), "workflow_nodes 表未创建");
+        assert!(tables.contains(&"workflow_edges".to_string()), "workflow_edges 表未创建");
+    }
 }

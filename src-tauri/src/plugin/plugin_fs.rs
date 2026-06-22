@@ -15,6 +15,7 @@ pub struct FileEntry {
 
 /// 文件状态
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct FileStat {
     pub is_dir: bool,
     pub is_file: bool,

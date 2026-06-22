@@ -7,3 +7,4 @@ pub mod inspiration;
 pub mod session;
 pub mod theme;
 pub mod update;
+pub mod workflow;

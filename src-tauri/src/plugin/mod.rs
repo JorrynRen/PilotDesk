@@ -5,6 +5,8 @@ pub mod store;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use crate::workflow::registry::{NodeTypeRegistration, NodeCategory};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -82,6 +84,8 @@ pub struct PluginContributes {
     pub panels: Option<Vec<PanelContribution>>,
     pub commands: Option<Vec<CommandContribution>>,
     pub hooks: Option<Vec<HookContribution>>,
+    #[serde(default)]
+    pub node_types: Option<Vec<NodeTypeContribution>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +105,17 @@ pub struct CommandContribution {
 pub struct HookContribution {
     pub event: String,
     pub handler: String,
+}
+
+/// 工作流节点类型贡献点
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeTypeContribution {
+    pub type_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub config_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub permissions: Vec<String>,
 }
 
 /// 插件运行时实例
@@ -132,6 +147,8 @@ pub struct PluginHost {
     max_manifest_size: usize,
     /// 是否启用沙箱
     sandbox_enabled: bool,
+    /// 工作流节点类型注册回调（由 NodeExecutor 在初始化时设置）
+    register_node_type: Option<Box<dyn Fn(NodeTypeRegistration) + Send + Sync>>,
 }
 
 impl PluginHost {
@@ -146,6 +163,7 @@ impl PluginHost {
             plugins: HashMap::new(),
             max_manifest_size: 1024 * 64, // 64KB
             sandbox_enabled: true,
+            register_node_type: None,
         }
     }
 
@@ -288,6 +306,7 @@ impl PluginHost {
     }
 
     /// 验证文件路径是否在插件目录内（防止路径遍历攻击）
+    #[allow(dead_code)]
     pub fn is_path_safe(plugin_dir: &Path, relative_path: &str) -> bool {
         let target = plugin_dir.join(relative_path);
         // 规范化路径
@@ -324,6 +343,26 @@ impl PluginHost {
                     Ok(instance) => {
                         let key = instance.path.clone();
                         self.plugins.insert(key, instance.clone());
+                        // 自动注册插件贡献的节点类型
+                        if let Some(ref contributes) = instance.manifest.contributes {
+                            if let Some(ref node_types) = contributes.node_types {
+                                if let Some(ref callback) = self.register_node_type {
+                                    for nt in node_types {
+                                        callback(NodeTypeRegistration {
+                                            type_id: nt.type_id.clone(),
+                                            name: nt.name.clone(),
+                                            category: NodeCategory::Plugin(instance.manifest.id.clone()),
+                                            executor: Arc::new(crate::workflow::agents::plugin_executor::PluginExecutor::new(
+                                                instance.manifest.id.clone(),
+                                                nt.type_id.clone(),
+                                            )),
+                                            config_schema: nt.config_schema.clone(),
+                                            permissions: nt.permissions.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
                         instances.push(instance);
                     }
                     Err(e) => {
@@ -395,7 +434,27 @@ impl PluginHost {
         };
         let has_unauthorized = permission_checks.iter().any(|c| !c.allowed);
 
-        // 7. 构建实例
+        // 7. 注册插件声明的节点类型
+        if let Some(node_types) = manifest.contributes.as_ref().and_then(|c| c.node_types.as_ref()) {
+            if let Some(ref callback) = self.register_node_type {
+                for nt in node_types {
+                    let registration = NodeTypeRegistration {
+                        type_id: nt.type_id.clone(),
+                        name: nt.name.clone(),
+                        category: NodeCategory::Plugin(manifest.id.clone()),
+                        executor: Arc::new(crate::workflow::agents::plugin_executor::PluginExecutor::new(
+                            manifest.id.clone(),
+                            nt.type_id.clone(),
+                        )),
+                        config_schema: nt.config_schema.clone(),
+                        permissions: nt.permissions.clone(),
+                    };
+                    callback(registration);
+                }
+            }
+        }
+
+        // 8. 构建实例
         let instance = PluginInstance {
             enabled: true,
             loaded: false,
@@ -420,10 +479,31 @@ impl PluginHost {
         self.plugins.values().cloned().collect()
     }
 
+    /// 获取所有插件贡献的工作流节点类型
+    pub fn get_contributed_node_types(&self) -> Vec<(String, NodeTypeContribution)> {
+        let mut result = Vec::new();
+        for (_, instance) in &self.plugins {
+            if !instance.enabled {
+                continue;
+            }
+            if let Some(node_types) = instance.manifest.contributes.as_ref().and_then(|c| c.node_types.as_ref()) {
+                for nt in node_types {
+                    result.push((instance.manifest.id.clone(), nt.clone()));
+                }
+            }
+        }
+        result
+    }
+
     /// 设置沙箱启用/禁用状态
     pub fn set_sandbox_enabled(&mut self, enabled: bool) {
         self.sandbox_enabled = enabled;
         log::info!("[PluginSandbox] 沙箱状态已切换: {}", if enabled { "启用" } else { "禁用" });
+    }
+
+    /// 设置工作流节点类型注册回调（由 NodeExecutor 在初始化时调用）
+    pub fn set_register_node_type(&mut self, callback: Box<dyn Fn(NodeTypeRegistration) + Send + Sync>) {
+        self.register_node_type = Some(callback);
     }
 
     /// 获取沙箱信息
@@ -472,6 +552,7 @@ impl PluginHost {
     }
 
     /// 获取单个插件详情
+    #[allow(dead_code)]
     pub fn get_plugin(&self, path_or_id: &str) -> Option<&PluginInstance> {
         let key = self.find_plugin_key(path_or_id)?;
         self.plugins.get(&key)

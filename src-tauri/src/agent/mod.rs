@@ -10,6 +10,7 @@ use tokio::time::{timeout, Duration};
 use tauri::Emitter;
 use crate::commands::agents::AgentConfig;
 use crate::agent::handler::ProcessHandler;
+use crate::utils::errors::AppError;
 
 pub mod handler;
 
@@ -19,6 +20,7 @@ pub mod handler;
 //  输出解析器
 // ──────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn parse_claude_output(line: &str) -> Option<String> {
     if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
         if event["type"] == "assistant" {
@@ -66,6 +68,7 @@ fn is_content_line(line: &str) -> bool {
     true
 }
 
+#[allow(dead_code)]
 fn parse_hermes_output(line: &str) -> Option<String> {
     let clean = strip_ansi(line);
     if is_content_line(&clean) {
@@ -75,6 +78,7 @@ fn parse_hermes_output(line: &str) -> Option<String> {
     }
 }
 
+#[allow(dead_code)]
 fn parse_codex_output(line: &str) -> Option<String> {
     // Codex --json mode outputs JSONL events
     if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
@@ -323,6 +327,133 @@ pub async fn send_message_with_config(
         });
 
         Ok(())
+    }
+
+    /// 单次执行模式：启动 Agent → 发送消息 → 收集输出 → 返回
+    /// 与 send_message_with_config 的区别：
+    /// - 不依赖前端 Tauri Event 流式推送，直接返回完整输出
+    /// - 每次启动新进程（不使用 --resume）
+    /// - 提取 agent_session_id 用于调试追溯
+    pub async fn execute_once(
+        &mut self,
+        agent_type: &str,
+        prompt: &str,
+        _params: &serde_json::Value,
+        cwd: &str,
+        _temp_session_id: &str,
+        on_chunk: impl Fn(String) + Send + 'static,
+    ) -> Result<(String, Option<String>), AppError> {
+        // 从 DB 读取 Agent 配置
+        let config = crate::commands::agents::get_agent_config_by_type(agent_type)
+            .unwrap_or_default();
+        let process_handler = handler::StdioHandler::from_config(config);
+        let cmd_name = process_handler.config.cli_command.clone();
+
+        let (cmd_name_from_template, args) = process_handler.build_command(prompt, None);
+        let effective_cmd = if cmd_name_from_template.is_empty() {
+            cmd_name.clone()
+        } else {
+            cmd_name_from_template
+        };
+
+        let work_dir = if cwd.is_empty() {
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
+        } else {
+            cwd.to_string()
+        };
+
+        let resolved_cmd = resolve_in_path(&effective_cmd)
+            .unwrap_or_else(|| effective_cmd.to_string());
+
+        #[cfg(target_os = "windows")]
+        let mut child = {
+            let mut cmd = tokio::process::Command::new("cmd");
+            cmd.arg("/C");
+            cmd.arg(&resolved_cmd);
+            cmd.args(&args);
+            cmd.current_dir(&work_dir);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            cmd.kill_on_drop(true);
+            cmd.env_remove("PYTHONHOME");
+            cmd.spawn()
+                .map_err(|e| AppError::External(format!("启动 {} 失败: {}", agent_type, e)))?
+        };
+        #[cfg(not(target_os = "windows"))]
+        let mut child = {
+            let mut cmd = tokio::process::Command::new(&resolved_cmd);
+            cmd.args(&args);
+            cmd.current_dir(&work_dir);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            cmd.kill_on_drop(true);
+            cmd.env_remove("PYTHONHOME");
+            cmd.spawn()
+                .map_err(|e| AppError::External(format!("启动 {} 失败: {}", agent_type, e)))?
+        };
+
+        let stdout = child.stdout.take()
+            .ok_or_else(|| AppError::External("无法获取 stdout".into()))?;
+        let stderr = child.stderr.take()
+            .ok_or_else(|| AppError::External("无法获取 stderr".into()))?;
+
+        // 收集 stderr
+        let stderr_buf = Arc::new(Mutex::new(String::new()));
+        let stderr_buf_clone = stderr_buf.clone();
+        let agent_type_clone = agent_type.to_string();
+
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(mut buf) = stderr_buf_clone.lock() {
+                    buf.push_str(&line);
+                    buf.push('\n');
+                }
+            }
+            if let Ok(buf) = stderr_buf_clone.lock() {
+                if !buf.is_empty() {
+                    log::warn!("[Agent/{}] execute_once stderr: {}", agent_type_clone, buf.trim());
+                }
+            }
+        });
+
+        // 读取 stdout
+        let reader = BufReader::new(stdout);
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = reader.lines();
+        let mut full_output = String::new();
+        let mut agent_session_id: Option<String> = None;
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            // 提取 agent_session_id
+            if let Some(sid) = process_handler.extract_session_id(&line, false) {
+                agent_session_id = Some(sid);
+            }
+            if let Some(content) = process_handler.parse_output_line(&line) {
+                on_chunk(content.clone());
+                full_output.push_str(&content);
+            }
+        }
+
+        // 等待进程退出
+        let status = child.wait().await
+            .map_err(|e| AppError::External(format!("等待进程失败: {}", e)))?;
+
+        if let Some(code) = status.code() {
+            if code != 0 {
+                let stderr_text = stderr_buf.lock()
+                    .map(|b| b.clone())
+                    .unwrap_or_default();
+                let err_msg = friendly_agent_error(agent_type, code, &stderr_text);
+                return Err(AppError::External(err_msg));
+            }
+        }
+
+        Ok((full_output.trim().to_string(), agent_session_id))
     }
 
     pub fn stop_generation(&mut self, session_id: &str) {

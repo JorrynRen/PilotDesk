@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X, Search } from 'lucide-react';
 import { usePluginStore } from '../../stores/pluginStore';
+import { PluginReadmeDialog } from './PluginReadmeDialog';
 import { OnlinePluginStore } from './OnlinePluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
 import type { PermissionCheck, PluginInstance } from '../../types/plugin';
@@ -91,6 +93,8 @@ function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
         </div>
       </div>
 
+      <div className="my-2" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
+
       <div className="space-y-1.5 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
         <div className="flex items-center gap-1.5">
           <span className="shrink-0 font-medium">插件目录:</span>
@@ -156,6 +160,71 @@ function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
   );
 }
 
+function PluginIcon({ plugin }: { plugin: PluginInstance }) {
+  const [iconSrc, setIconSrc] = useState<string | null>(null);
+  const [iconError, setIconError] = useState(false);
+
+  useEffect(() => {
+    // 尝试加载插件图标（manifest 中可能包含 icon 字段）
+    const manifestIcon = (plugin.manifest as any).icon;
+    if (manifestIcon && typeof manifestIcon === 'string') {
+      invoke<string>('plugin_read_icon_file', {
+        pluginId: plugin.manifest.id,
+        iconPath: manifestIcon,
+      })
+        .then((dataUrl) => setIconSrc(dataUrl))
+        .catch(() => setIconError(true));
+    } else {
+      // 尝试默认图标文件名
+      const candidates = ['icon.png', 'icon.svg', 'icon.ico', 'icon.jpg', 'icon.jpeg', 'icon.webp'];
+      const tryLoad = async () => {
+        for (const name of candidates) {
+          try {
+            const dataUrl = await invoke<string>('plugin_read_icon_file', {
+              pluginId: plugin.manifest.id,
+              iconPath: name,
+            });
+            setIconSrc(dataUrl);
+            return;
+          } catch {
+            // 继续尝试下一个
+          }
+        }
+        setIconError(true);
+      };
+      tryLoad();
+    }
+  }, [plugin.manifest.id, (plugin.manifest as any).icon]);
+
+  return (
+    <div
+      style={{
+        width: 20,
+        height: 20,
+        borderRadius: '4px',
+        backgroundColor: 'var(--bg-tertiary)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+        overflow: 'hidden',
+        border: '1px solid var(--border)',
+      }}
+    >
+      {iconSrc && !iconError ? (
+        <img
+          src={iconSrc}
+          alt={plugin.manifest.name}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={() => setIconError(true)}
+        />
+      ) : (
+        <Package size={14} style={{ color: 'var(--text-tertiary)' }} />
+      )}
+    </div>
+  );
+}
+
 export function PluginManager() {
   const { plugins, loading, error, discover, enable, disable, installZip, uninstall, sandboxInfo } = usePluginStore();
   const [showSandbox, setShowSandbox] = useState(false);
@@ -163,6 +232,8 @@ export function PluginManager() {
   const [installStatus, setInstallStatus] = useState<string | null>(null);
   const [storeSearchQuery, setStoreSearchQuery] = useState('');
   const [storeLoading, setStoreLoading] = useState(false);
+  const [readmePlugin, setReadmePlugin] = useState<PluginInstance | null>(null);
+  const [storeStats, setStoreStats] = useState<{ total: number; filtered: number } | null>(null);
 
   useEffect(() => {
     discover();
@@ -209,6 +280,9 @@ export function PluginManager() {
   }, []);
 
   const handleUninstall = useCallback(async (plugin: PluginInstance) => {
+    if (!window.confirm(`确定要卸载插件「${plugin.manifest.name}」吗？`)) {
+      return;
+    }
     try {
       await uninstall(plugin.manifest.id);
       await pluginRegistry.unloadPlugin(plugin.path);
@@ -246,6 +320,11 @@ export function PluginManager() {
           <div className="flex items-center gap-1.5">
             {showStore ? (
               <>
+              {storeStats && (
+                <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginRight: 4 }}>
+                  共 {storeStats.total} 个插件{storeStats.filtered !== storeStats.total ? `，筛选后 ${storeStats.filtered} 个` : ''}
+                </span>
+              )}
               <button
                 onClick={fetchStorePlugins}
                 disabled={storeLoading}
@@ -256,7 +335,7 @@ export function PluginManager() {
                 刷新
               </button>
               <button
-                onClick={() => setShowStore(false)}
+                onClick={() => { setShowStore(false); setStoreStats(null); }}
                 className="pd-btn text-[10px] px-2 py-1 rounded"
                 style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
               >
@@ -300,6 +379,8 @@ export function PluginManager() {
             )}
           </div>
         </div>
+        {/* 分隔线 */}
+        <div className="my-3" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
         {showStore && (
         <div className="relative mt-3">
           <Search
@@ -347,6 +428,7 @@ export function PluginManager() {
           onClose={() => setShowStore(false)}
           searchQuery={storeSearchQuery}
           onSearchChange={setStoreSearchQuery}
+          onStatsChange={(total, filtered) => setStoreStats({ total, filtered })}
         />
       ) : showSandbox ? (
         <div><SandboxInfoPanel onClose={() => setShowSandbox(false)} /></div>
@@ -381,23 +463,32 @@ export function PluginManager() {
 
           {/* 已安装插件标题行 */}
           {!loading && (
-            <div className="flex items-center justify-between mb-3">
+            <>
+            <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <Package size={14} style={{ color: 'var(--accent)' }} />
-                <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)', margin: 0 }}>
+                <h3 className="text-sm" style={{ color: 'var(--text-primary)', margin: 0 }}>
                   已安装插件
                 </h3>
               </div>
-              <button
-                onClick={discover}
-                className="pd-btn text-[10px] px-2 py-1 rounded transition-all flex items-center gap-1"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-                title="刷新插件列表"
-              >
-                <RefreshCw size={11} />
-                刷新
-              </button>
+              <div className="flex items-center gap-2">
+                {plugins.length > 0 && (
+                  <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
+                    共 {plugins.length} 个插件
+                  </span>
+                )}
+                <button
+                  onClick={discover}
+                  className="pd-btn text-[10px] px-2 py-1 rounded transition-all flex items-center gap-1"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                  title="刷新插件列表"
+                >
+                  <RefreshCw size={11} />
+                  刷新
+                </button>
+              </div>
             </div>
+            </>
           )}
 
           {!loading && plugins.length === 0 && (
@@ -429,18 +520,24 @@ export function PluginManager() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <PluginIcon plugin={plugin} />
                       <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
                         {plugin.manifest.name}
                       </span>
                       <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
                         v{plugin.manifest.version}
                       </span>
-                      {loadState?.loaded && (
-                        <span className="text-[9px] px-1 py-0.5 rounded shrink-0" style={{ backgroundColor: 'rgba(16,185,129,0.1)', color: '#10B981' }}>
-                          已加载
-                        </span>)}
+
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => setReadmePlugin(plugin)}
+                        className="pd-btn px-1.5 py-1 rounded text-[10px]"
+                        style={{ color: 'var(--accent)' }}
+                        title="查看 README"
+                      >
+                        📖
+                      </button>
                       <button
                         onClick={() => handleUninstall(plugin)}
                         className="pd-btn px-1.5 py-1 rounded text-[10px]"
@@ -459,6 +556,7 @@ export function PluginManager() {
                           color: plugin.enabled ? '#10B981' : 'var(--text-secondary)',
                         }}
                         disabled={!plugin.enabled && plugin.has_unauthorized_permissions}
+                        title={plugin.enabled ? '禁用插件' : '启用插件'}
                       >
                         {plugin.enabled
                           ? '已启用'
@@ -510,6 +608,13 @@ export function PluginManager() {
         </div>
       )}
       </div>
+      {readmePlugin && (
+        <PluginReadmeDialog
+          basePath={readmePlugin.manifest.id}
+          pluginName={readmePlugin.manifest.name}
+          onClose={() => setReadmePlugin(null)}
+        />
+      )}
     </div>
   );
 }
