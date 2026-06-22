@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X } from 'lucide-react';
+import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X, Search } from 'lucide-react';
 import { usePluginStore } from '../../stores/pluginStore';
 import { OnlinePluginStore } from './OnlinePluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
@@ -161,6 +161,8 @@ export function PluginManager() {
   const [showSandbox, setShowSandbox] = useState(false);
   const [showStore, setShowStore] = useState(false);
   const [installStatus, setInstallStatus] = useState<string | null>(null);
+  const [storeSearchQuery, setStoreSearchQuery] = useState('');
+  const [storeLoading, setStoreLoading] = useState(false);
 
   useEffect(() => {
     discover();
@@ -194,6 +196,18 @@ export function PluginManager() {
     }
   }, [installZip, discover]);
 
+  const fetchStorePlugins = useCallback(async () => {
+    setStoreLoading(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('plugin_store_fetch_index', { forceRefresh: true });
+    } catch (e) {
+      console.error('Refresh store failed:', e);
+    } finally {
+      setStoreLoading(false);
+    }
+  }, []);
+
   const handleUninstall = useCallback(async (plugin: PluginInstance) => {
     try {
       await uninstall(plugin.manifest.id);
@@ -204,14 +218,15 @@ export function PluginManager() {
     }
   }, [uninstall, discover]);
 
-    return (
+        return (
     <div className="h-full flex flex-col overflow-hidden">
       <div className="shrink-0 px-4 pt-4 pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
-              插件管理
+              {showStore ? '在线插件商店' : '插件管理'}
             </h3>
+            {!showStore && (
             <span
               className="text-[9px] px-1.5 py-0.5 rounded font-medium"
               style={{
@@ -225,8 +240,30 @@ export function PluginManager() {
             >
               {sandboxInfo?.sandbox_enabled ? '沙箱' : '沙箱'}
             </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5">
+            {showStore ? (
+              <>
+              <button
+                onClick={fetchStorePlugins}
+                disabled={storeLoading}
+                className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              >
+                <RefreshCw size={11} className={storeLoading ? 'pd-animate-spin' : ''} />
+                刷新
+              </button>
+              <button
+                onClick={() => setShowStore(false)}
+                className="pd-btn text-[10px] px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              >
+                <X size={11} />
+              </button>
+              </>
+            ) : (
+              <>
             <button
               onClick={handleInstallZip}
               className="pd-btn text-[10px] px-2 py-1 rounded transition-all"
@@ -258,16 +295,62 @@ export function PluginManager() {
             >
               沙箱
             </button>
+              </>
+            )}
           </div>
         </div>
+        {showStore && (
+        <div className="relative mt-3">
+          <Search
+            size={13}
+            style={{
+              position: 'absolute',
+              left: 10,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: 'var(--text-tertiary)',
+              pointerEvents: 'none',
+            }}
+          />
+          <input
+            type="text"
+            placeholder="搜索插件名称、描述、作者..."
+            value={storeSearchQuery}
+            onChange={(e) => setStoreSearchQuery(e.target.value)}
+            className="search-input w-full"
+            style={{ paddingLeft: 32 }}
+          />
+          {storeSearchQuery && (
+            <button
+              onClick={() => setStoreSearchQuery('')}
+              className="pd-btn"
+              style={{
+                position: 'absolute',
+                right: 8,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                color: 'var(--text-tertiary)',
+                padding: 2,
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+        )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 pb-4">
+      <div className="flex-1 overflow-y-auto">
       {showStore ? (
-        <OnlinePluginStore onClose={() => setShowStore(false)} />
+        <OnlinePluginStore
+          onClose={() => setShowStore(false)}
+          searchQuery={storeSearchQuery}
+          onSearchChange={setStoreSearchQuery}
+        />
       ) : showSandbox ? (
-        <SandboxInfoPanel onClose={() => setShowSandbox(false)} />
+        <div className="px-4 pb-4"><SandboxInfoPanel onClose={() => setShowSandbox(false)} /></div>
       ) : (
+        <div className="px-4 pb-4">
         <>
           {installStatus && (
             <div
@@ -343,7 +426,6 @@ export function PluginManager() {
                     opacity: plugin.enabled ? 1 : 0.5,
                   }}
                 >
-                  {/* 标题行：名称 + 版本 + 状态 + 操作按钮 */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
@@ -376,11 +458,6 @@ export function PluginManager() {
                           color: plugin.enabled ? '#10B981' : 'var(--text-secondary)',
                         }}
                         disabled={!plugin.enabled && plugin.has_unauthorized_permissions}
-                        title={
-                          !plugin.enabled && plugin.has_unauthorized_permissions
-                            ? '包含未授权权限，无法启用'
-                            : undefined
-                        }
                       >
                         {plugin.enabled
                           ? '已启用'
@@ -391,19 +468,14 @@ export function PluginManager() {
                     </div>
                   </div>
 
-                  {/* 分割线 */}
                   <div className="my-2" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
 
-                  {/* 详情区域：描述 + 作者 + 权限 + 贡献点 */}
                   <div>
                     <p className="text-[10px] line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
                       {plugin.manifest.description}
                     </p>
                     <div className="flex items-center gap-1.5 mt-1.5">
-                      <span
-                        className="text-[9px] px-1.5 py-0.5 rounded"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
-                      >
+                      <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                         {plugin.manifest.author}
                       </span>
                       {plugin.permission_checks.map((check) => (
@@ -426,23 +498,16 @@ export function PluginManager() {
                           </span>)}
                       </div>)}
                   </div>
-                  {plugin.error && (
-                    <p className="text-[10px] mt-1.5" style={{ color: '#EF4444' }}>
-                      {plugin.error}
-                    </p>)}
-                  {plugin.has_unauthorized_permissions && (
-                    <p className="text-[10px] mt-1" style={{ color: '#F59E0B' }}>
-                      包含未授权权限声明，请联系插件开发者或检查 manifest.json
-                    </p>)}
-                  {loadState?.error && (
-                    <p className="text-[10px] mt-1" style={{ color: '#EF4444' }}>
-                      加载错误: {loadState.error}
-                    </p>)}
+                  {plugin.error && (<p className="text-[10px] mt-1.5" style={{ color: '#EF4444' }}>{plugin.error}</p>)}
+                  {plugin.has_unauthorized_permissions && (<p className="text-[10px] mt-1" style={{ color: '#F59E0B' }}>包含未授权权限声明，请联系插件开发者或检查 manifest.json</p>)}
+                  {loadState?.error && (<p className="text-[10px] mt-1" style={{ color: '#EF4444' }}>加载错误: {loadState.error}</p>)}
                 </div>
               );
             })}
           </div>
-        </>)}
+        </>}
+        </div>
+      )}
       </div>
     </div>
   );
