@@ -223,6 +223,7 @@ export function PluginManager() {
       <div className="shrink-0 px-4 pt-4 pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
+            {showStore && <Store size={16} style={{ color: 'var(--accent)' }} />}
             <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
               {showStore ? '在线插件商店' : '插件管理'}
             </h3>
