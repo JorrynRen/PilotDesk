@@ -434,7 +434,7 @@ export const OnlinePluginStore: React.FC<{
   });
 
   return (
-    <div className="px-4 pb-4">
+    <div>
       {/* 错误提示 */}
       {error && (
         <div

@@ -341,7 +341,7 @@ export function PluginManager() {
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto px-4 pb-4">
       {showStore ? (
         <OnlinePluginStore
           onClose={() => setShowStore(false)}
@@ -349,9 +349,9 @@ export function PluginManager() {
           onSearchChange={setStoreSearchQuery}
         />
       ) : showSandbox ? (
-        <div className="px-4 pb-4"><SandboxInfoPanel onClose={() => setShowSandbox(false)} /></div>
+        <div><SandboxInfoPanel onClose={() => setShowSandbox(false)} /></div>
       ) : (
-        <div className="px-4 pb-4">
+        <div>
         <>
           {installStatus && (
             <div
