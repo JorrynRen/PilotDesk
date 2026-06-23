@@ -9,7 +9,7 @@ import { useWorkflowStore } from '../../stores/workflowStore';
 import { WorkflowEditor } from './WorkflowEditor';
 import { WorkflowMonitor } from './WorkflowMonitor';
 import { ExecutionStats } from './ExecutionStats';
-import { createEmptyDefinition } from '../../workflow/WorkflowDefinition';
+import { createDefaultWorkflow } from '../../workflow/WorkflowDefinition';
 
 type Tab = 'definitions' | 'instances' | 'stats';
 
@@ -29,7 +29,7 @@ export const WorkflowPanel: React.FC = () => {
   }, []);
 
   const handleCreate = async () => {
-    const def = createEmptyDefinition('新工作流');
+    const def = createDefaultWorkflow('新工作流');
     const id = await createDefinition(def);
     selectDefinition(id);
     setShowEditor(true);
@@ -82,8 +82,8 @@ export const WorkflowPanel: React.FC = () => {
                 <p className="def-description">{def.description || '无描述'}</p>
                 <div className="def-meta">
                   <span>v{def.version}</span>
-                  <span>{def.nodes.length} 个节点</span>
-                  <span>{def.edges.length} 条连接</span>
+                  <span>{def.stages.reduce((sum, s) => sum + s.nodes.length, 0)} 个节点</span>
+                  <span>{def.stages.reduce((sum, s) => sum + s.edges.length, 0)} 条连接</span>
                 </div>
                 <div className="def-actions">
                   <button onClick={() => { selectDefinition(def.id); setShowEditor(true); }}>编辑</button>

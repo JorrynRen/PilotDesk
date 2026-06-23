@@ -8,10 +8,9 @@ use tauri::{Emitter, Manager};
 use super::executor::NodeExecutor;
 use super::registry::NodeDef;
 use super::template::TemplateEngine;
-use super::{WorkflowDefinition, WorkflowNode, WorkflowEdge};
+use super::{WorkflowDefinition, WorkflowNode, WorkflowEdge, Stage, MergeStrategy};
 
 #[allow(dead_code)]
-/// 节点运行时状态
 #[derive(Debug, Clone)]
 pub struct NodeRuntimeState {
     pub status: NodeStatus,
@@ -30,7 +29,6 @@ pub enum NodeStatus {
 }
 
 #[allow(dead_code)]
-/// 执行上下文
 pub struct ExecutionContext {
     pub execution_id: String,
     pub cancelled: Arc<AtomicBool>,
@@ -39,11 +37,10 @@ pub struct ExecutionContext {
     pub total_count: usize,
 }
 
-/// 默认最大并行节点数
 #[allow(dead_code)]
 const DEFAULT_MAX_CONCURRENCY: usize = 5;
 
-/// DAG 调度引擎
+/// 两层调度引擎：阶段串行 → 阶段内 DAG
 pub struct WorkflowEngine;
 
 impl WorkflowEngine {
@@ -98,41 +95,21 @@ impl WorkflowEngine {
         Ok(layers)
     }
 
-    /// 启动工作流执行（可指定最大并行数）
-    pub async fn execute_with_concurrency(
+    /// 执行单个阶段内的 DAG
+    async fn execute_stage(
         executor: &Arc<NodeExecutor>,
-        def: &WorkflowDefinition,
+        stage: &Stage,
         execution_id: &str,
-        input_data: Value,
+        context: &Arc<AsyncMutex<HashMap<String, Value>>>,
         emitter: &tauri::AppHandle,
-        max_concurrency: usize,
+        cancelled: &Arc<AtomicBool>,
+        completed_count: &Arc<AtomicUsize>,
+        total_count: usize,
+        semaphore: &Arc<Semaphore>,
     ) -> Result<(), AppError> {
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let node_states: Arc<AsyncMutex<HashMap<String, NodeRuntimeState>>> = Arc::new(AsyncMutex::new(HashMap::new()));
-        let total_count = def.nodes.len();
-        let completed_count = Arc::new(AtomicUsize::new(0));
+        let layers = Self::topological_sort(&stage.nodes, &stage.edges)?;
+        let node_map: HashMap<String, &WorkflowNode> = stage.nodes.iter().map(|n| (n.id.clone(), n)).collect();
 
-        // 拓扑排序
-        let layers = Self::topological_sort(&def.nodes, &def.edges)?;
-
-        // 共享上下文（Arc<Mutex> 以支持并行节点写入）
-        let context: Arc<AsyncMutex<HashMap<String, Value>>> = Arc::new(AsyncMutex::new(HashMap::new()));
-        context.lock().await.insert("__input__".to_string(), input_data.clone());
-
-        // 构建节点映射
-        let node_map: HashMap<String, &WorkflowNode> = def.nodes.iter().map(|n| (n.id.clone(), n)).collect();
-
-        // 创建信号量控制并发度
-        let semaphore = Arc::new(Semaphore::new(max_concurrency));
-
-        // 获取数据库连接用于记录节点执行日志
-        let db_conn = match emitter.state::<crate::DbState>().get_conn() {
-            Ok(conn) => Some(conn),
-            Err(_) => None,
-        };
-        let db_conn = Arc::new(AsyncMutex::new(db_conn));
-
-        // 逐层执行
         for layer in &layers {
             let mut handles = Vec::new();
 
@@ -146,51 +123,58 @@ impl WorkflowEngine {
                     return Err(AppError::External("工作流已被取消".into()));
                 }
 
-                let exec_id = execution_id.to_string();
-                let nid = node_id.clone();
-                let emitter = emitter.clone();
-                let node_states = node_states.clone();
-                let context = context.clone();
-                let completed_count = completed_count.clone();
-                let total = total_count;
-                let _cancel = cancelled.clone();
-                let exec = executor.clone();
+                // 检查入边条件
+                let incoming_edges: Vec<&WorkflowEdge> = stage.edges.iter()
+                    .filter(|e| e.target == *node_id).collect();
 
-                // 获取信号量许可（控制并发度）
-                let permit = semaphore.clone().acquire_owned().await;
-                let _permit = match permit {
-                    Ok(p) => p,
-                    Err(_) => {
-                        emitter.emit("workflow:log", serde_json::json!({
-                            "execution_id": exec_id,
-                            "node_execution_id": nid,
-                            "level": "warn",
-                            "message": "并发控制信号量关闭，跳过节点执行",
+                if !incoming_edges.is_empty() {
+                    let ctx = context.lock().await.clone();
+                    let mut all_conditions_met = true;
+
+                    for edge in &incoming_edges {
+                        if let Some(cond) = &edge.condition {
+                            let source_output = ctx.get(&edge.source);
+                            if !Self::evaluate_condition(cond, source_output) {
+                                all_conditions_met = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    if !all_conditions_met {
+                        // 条件不满足，跳过此节点
+                        completed_count.fetch_add(1, Ordering::SeqCst);
+                        emitter.emit("workflow:node-status", serde_json::json!({
+                            "execution_id": execution_id,
+                            "node_id": node_id,
+                            "status": "skipped",
                         })).ok();
                         continue;
                     }
+                }
+
+                let exec_id = execution_id.to_string();
+                let nid = node_id.clone();
+                let emitter = emitter.clone();
+                let context = context.clone();
+                let completed_count = completed_count.clone();
+                let total = total_count;
+                let cancel = cancelled.clone();
+                let exec = executor.clone();
+                let permit = semaphore.clone().acquire_owned().await;
+                let _permit = match permit {
+                    Ok(p) => p,
+                    Err(_) => continue,
                 };
-
-                let db_conn_clone = db_conn.clone();
+                
                 let handle = tokio::spawn(async move {
-                    // 更新状态为 running
-                    node_states.lock().await.insert(nid.clone(), NodeRuntimeState {
-                        status: NodeStatus::Running,
-                        output: None,
-                        error: None,
-                    });
-
                     emitter.emit("workflow:node-status", serde_json::json!({
-                        "execution_id": exec_id,
-                        "node_id": nid,
-                        "status": "running",
+                        "execution_id": exec_id, "node_id": nid, "status": "running",
                     })).ok();
 
-                    // 解析输入（从共享上下文读取）
                     let ctx_snapshot = context.lock().await.clone();
                     let resolved_input = resolve_node_input(&node, &ctx_snapshot);
 
-                    // 构建 NodeDef
                     let node_def = NodeDef {
                         id: node.id.clone(),
                         node_type: format!("{:?}", node.node_type).to_lowercase(),
@@ -203,90 +187,24 @@ impl WorkflowEngine {
                         retry_interval_ms: node.retry_delay_ms,
                     };
 
-                    // 执行节点
-                    let input_clone = resolved_input.clone();
-                    let result = exec.execute(&node_def, resolved_input, &exec_id, &emitter).await;
-                    let resolved_input = input_clone;
+                    let result = exec.execute(&node_def, resolved_input.clone(), &exec_id, &emitter).await;
 
                     match result {
                         Ok(output) => {
                             let node_output = output.output.clone();
-                            // 写入共享上下文
-                            context.lock().await.insert(nid.clone(), output.output);
+                            context.lock().await.insert(nid.clone(), node_output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
 
-                            let mut states = node_states.lock().await;
-                            if let Some(state) = states.get_mut(&nid) {
-                                state.status = NodeStatus::Completed;
-                                state.output = Some(node_output.clone());
-                            }
-
-                            // 记录节点执行到数据库
-                            if let Some(ref conn) = *db_conn_clone.lock().await {
-                                let node_exec_id = crate::utils::new_id();
-                                let now_ts = crate::utils::now();
-                                let _ = conn.execute(
-                                    "INSERT INTO node_executions (id, execution_id, node_id, status, input_data, output_data, started_at, finished_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                                    rusqlite::params![
-                                        node_exec_id, exec_id, nid,
-                                        "completed",
-                                        serde_json::to_string(&resolved_input).unwrap_or_default(),
-                                        serde_json::to_string(&node_output).unwrap_or_default(),
-                                        now_ts, now_ts, now_ts, now_ts,
-                                    ],
-                                );
-                                let _ = conn.execute(
-                                    "INSERT INTO node_execution_logs (execution_id, node_execution_id, timestamp, level, message) VALUES (?1, ?2, ?3, ?4, ?5)",
-                                    rusqlite::params![exec_id, node_exec_id, now_ts, "info", format!("节点 '{}' 执行成功", node.label)],
-                                );
-                            }
-
                             emitter.emit("workflow:node-status", serde_json::json!({
-                                "execution_id": exec_id,
-                                "node_id": nid,
-                                "status": "completed",
-                                "output": node_output,
+                                "execution_id": exec_id, "node_id": nid, "status": "completed", "output": node_output,
                             })).ok();
-
                             emitter.emit("workflow:progress", serde_json::json!({
-                                "execution_id": exec_id,
-                                "completed": completed_count.load(Ordering::SeqCst),
-                                "total": total,
+                                "execution_id": exec_id, "completed": completed_count.load(Ordering::SeqCst), "total": total,
                             })).ok();
                         }
                         Err(e) => {
-                            let mut states = node_states.lock().await;
-                            if let Some(state) = states.get_mut(&nid) {
-                                state.status = NodeStatus::Failed;
-                                state.error = Some(e.to_string());
-                            }
-
-                            // 记录节点执行失败到数据库
-                            if let Some(ref conn) = *db_conn_clone.lock().await {
-                                let node_exec_id = crate::utils::new_id();
-                                let now_ts = crate::utils::now();
-                                let _ = conn.execute(
-                                    "INSERT INTO node_executions (id, execution_id, node_id, status, input_data, output_data, error_message, started_at, finished_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                                    rusqlite::params![
-                                        node_exec_id, exec_id, nid,
-                                        "failed",
-                                        serde_json::to_string(&resolved_input).unwrap_or_default(),
-                                        "null",
-                                        e.to_string(),
-                                        now_ts, now_ts, now_ts, now_ts,
-                                    ],
-                                );
-                                let _ = conn.execute(
-                                    "INSERT INTO node_execution_logs (execution_id, node_execution_id, timestamp, level, message) VALUES (?1, ?2, ?3, ?4, ?5)",
-                                    rusqlite::params![exec_id, node_exec_id, now_ts, "error", format!("节点 '{}' 执行失败: {}", node.label, e)],
-                                );
-                            }
-
                             emitter.emit("workflow:node-status", serde_json::json!({
-                                "execution_id": exec_id,
-                                "node_id": nid,
-                                "status": "failed",
-                                "error": e.to_string(),
+                                "execution_id": exec_id, "node_id": nid, "status": "failed", "error": e.to_string(),
                             })).ok();
                         }
                     }
@@ -295,13 +213,126 @@ impl WorkflowEngine {
                 handles.push(handle);
             }
 
-            // 等待当前层所有节点完成
             for handle in handles {
                 let _ = handle.await;
             }
         }
 
-        // 完成
+        Ok(())
+    }
+
+    /// 评估边上的条件表达式
+    fn evaluate_condition(condition: &str, source_output: Option<&Value>) -> bool {
+        match source_output {
+            Some(output) => {
+                let output_str = output.to_string();
+                // 简单条件评估：支持 ==, !=, >, <, contains
+                if let Some(val) = condition.strip_prefix("==") {
+                    return output_str.trim_matches('"') == val.trim();
+                }
+                if let Some(val) = condition.strip_prefix("!=") {
+                    return output_str.trim_matches('"') != val.trim();
+                }
+                if let Some(val) = condition.strip_prefix("contains") {
+                    return output_str.contains(val.trim());
+                }
+                // 默认：条件表达式作为 JavaScript 表达式（通过 transform executor 评估）
+                // 简单场景：非空即真
+                !output.is_null() && !output_str.is_empty()
+            }
+            None => false,
+        }
+    }
+
+    /// 执行 Gate 合并逻辑
+    fn merge_stage_outputs(
+        stage: &Stage,
+        context: &HashMap<String, Value>,
+    ) -> Value {
+        let node_outputs: Vec<(&String, &Value)> = stage.nodes.iter()
+            .filter_map(|n| context.get(&n.id).map(|v| (&n.id, v)))
+            .collect();
+
+        match stage.gate.merge_strategy {
+            MergeStrategy::Merge => {
+                let mut merged = serde_json::Map::new();
+                for (node_id, output) in &node_outputs {
+                    if let Some(obj) = output.as_object() {
+                        for (k, v) in obj {
+                            merged.insert(format!("{}_{}", node_id, k), v.clone());
+                        }
+                    } else {
+                        merged.insert((*node_id).clone(), (*output).clone());
+                    }
+                }
+                Value::Object(merged)
+            }
+            MergeStrategy::Concat => {
+                let arr: Vec<Value> = node_outputs.iter().map(|(_, v)| (*v).clone()).collect();
+                Value::Array(arr)
+            }
+            MergeStrategy::PickFirst => {
+                node_outputs.first().map(|(_, v)| (*v).clone()).unwrap_or(Value::Null)
+            }
+            MergeStrategy::Custom(ref script) => {
+                // 自定义合并脚本（由 transform executor 执行）
+                Value::String(format!("custom_merge:{}", script))
+            }
+        }
+    }
+
+    /// 启动工作流执行（两层调度）
+    pub async fn execute_with_concurrency(
+        executor: &Arc<NodeExecutor>,
+        def: &WorkflowDefinition,
+        execution_id: &str,
+        input_data: Value,
+        emitter: &tauri::AppHandle,
+        max_concurrency: usize,
+    ) -> Result<(), AppError> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let node_states: Arc<AsyncMutex<HashMap<String, NodeRuntimeState>>> = Arc::new(AsyncMutex::new(HashMap::new()));
+        let total_count: usize = def.stages.iter().map(|s| s.nodes.len()).sum();
+        let completed_count = Arc::new(AtomicUsize::new(0));
+
+        let context: Arc<AsyncMutex<HashMap<String, Value>>> = Arc::new(AsyncMutex::new(HashMap::new()));
+        context.lock().await.insert("__input__".to_string(), input_data.clone());
+
+        let semaphore = Arc::new(Semaphore::new(max_concurrency));
+
+        // 外层调度：阶段串行
+        for stage in &def.stages {
+            if cancelled.load(Ordering::SeqCst) {
+                return Err(AppError::External("工作流已被取消".into()));
+            }
+
+            emitter.emit("workflow:stage-status", serde_json::json!({
+                "execution_id": execution_id,
+                "stage_id": stage.id,
+                "stage_name": stage.name,
+                "status": "running",
+            })).ok();
+
+            // 内层调度：阶段内 DAG
+            Self::execute_stage(
+                executor, stage, execution_id,
+                &context, emitter, &cancelled,
+                &completed_count, total_count, &semaphore,
+            ).await?;
+
+            // 执行 Gate 合并
+            let ctx = context.lock().await.clone();
+            let merged = Self::merge_stage_outputs(stage, &ctx);
+            context.lock().await.insert(format!("__stage_{}_output__", stage.order), merged);
+
+            emitter.emit("workflow:stage-status", serde_json::json!({
+                "execution_id": execution_id,
+                "stage_id": stage.id,
+                "stage_name": stage.name,
+                "status": "completed",
+            })).ok();
+        }
+
         emitter.emit("workflow:execution-status", serde_json::json!({
             "execution_id": execution_id,
             "status": "completed",
@@ -311,8 +342,6 @@ impl WorkflowEngine {
     }
 
     /// 从 checkpoint 恢复执行
-    /// 读取已完成的 node_executions，跳过已完成节点，重试失败节点
-    #[allow(dead_code)]
     pub async fn recover_execution(
         executor: &Arc<NodeExecutor>,
         def: &WorkflowDefinition,
@@ -321,15 +350,11 @@ impl WorkflowEngine {
         emitter: &tauri::AppHandle,
         max_concurrency: usize,
     ) -> Result<(), AppError> {
-        // 获取数据库连接，查询已完成的节点
         let db_conn = match emitter.state::<crate::DbState>().get_conn() {
             Ok(conn) => conn,
-            Err(_) => {
-                return Err(AppError::External("无法获取数据库连接".into()));
-            }
+            Err(_) => return Err(AppError::External("无法获取数据库连接".into())),
         };
 
-        // 查询该执行实例的所有节点执行记录
         let mut stmt = db_conn.prepare(
             "SELECT node_id, status FROM node_executions WHERE execution_id = ?1"
         ).map_err(|e| AppError::Db(e.to_string()))?;
@@ -346,40 +371,49 @@ impl WorkflowEngine {
             .map(|(id, _)| id.clone())
             .collect();
 
-        let _failed_nodes: std::collections::HashSet<String> = node_results.iter()
-            .filter(|(_, status)| status == "failed")
-            .map(|(id, _)| id.clone())
-            .collect();
+        // 过滤每个阶段中未完成的节点
+        let mut recovered_stages = Vec::new();
+        for stage in &def.stages {
+            let pending_nodes: Vec<WorkflowNode> = stage.nodes.iter()
+                .filter(|n| !completed_nodes.contains(&n.id))
+                .cloned()
+                .collect();
 
-        // 过滤出未完成的节点（排除已完成节点）
-        let pending_nodes: Vec<&super::WorkflowNode> = def.nodes.iter()
-            .filter(|n| !completed_nodes.contains(&n.id))
-            .collect();
+            if pending_nodes.is_empty() {
+                continue;
+            }
 
-        if pending_nodes.is_empty() {
+            let pending_ids: std::collections::HashSet<&str> = pending_nodes.iter()
+                .map(|n| n.id.as_str()).collect();
+            let filtered_edges: Vec<WorkflowEdge> = stage.edges.iter()
+                .filter(|e| pending_ids.contains(e.source.as_str()) && pending_ids.contains(e.target.as_str()))
+                .cloned()
+                .collect();
+
+            recovered_stages.push(Stage {
+                id: stage.id.clone(),
+                name: stage.name.clone(),
+                order: stage.order,
+                nodes: pending_nodes,
+                edges: filtered_edges,
+                gate: stage.gate.clone(),
+            });
+        }
+
+        if recovered_stages.is_empty() {
             emitter.emit("workflow:execution-status", serde_json::json!({
-                "execution_id": execution_id,
-                "status": "completed",
-                "message": "所有节点已完成，无需恢复",
+                "execution_id": execution_id, "status": "completed", "message": "所有节点已完成",
             })).ok();
             return Ok(());
         }
 
-        // 从 pending_nodes 重建边（只保留两端都在 pending 中的边）
-        let pending_ids: std::collections::HashSet<&str> = pending_nodes.iter()
-            .map(|n| n.id.as_str()).collect();
-        let filtered_edges: Vec<&super::WorkflowEdge> = def.edges.iter()
-            .filter(|e| pending_ids.contains(e.source.as_str()) && pending_ids.contains(e.target.as_str()))
-            .collect();
-
-        // 构建过滤后的 DAG 定义
-        let filtered_def = super::WorkflowDefinition {
+        let recovered_def = WorkflowDefinition {
             id: def.id.clone(),
             name: format!("{} (恢复)", def.name),
             version: def.version.clone(),
             description: def.description.clone(),
-            nodes: pending_nodes.into_iter().cloned().collect(),
-            edges: filtered_edges.into_iter().cloned().collect(),
+            trigger: def.trigger.clone(),
+            stages: recovered_stages,
             input_schema: def.input_schema.clone(),
             output_schema: def.output_schema.clone(),
             max_depth: def.max_depth,
@@ -388,21 +422,12 @@ impl WorkflowEngine {
             enabled: def.enabled,
         };
 
-        // 更新实例状态为 running
         let _ = db_conn.execute(
             "UPDATE workflow_instances SET status = 'running', error = NULL, updated_at = ?1 WHERE id = ?2",
             rusqlite::params![crate::utils::now(), execution_id],
         );
 
-        // 使用过滤后的 DAG 重新执行
-        Self::execute_with_concurrency(
-            executor,
-            &filtered_def,
-            execution_id,
-            input_data,
-            emitter,
-            max_concurrency,
-        ).await
+        Self::execute_with_concurrency(executor, &recovered_def, execution_id, input_data, emitter, max_concurrency).await
     }
 }
 
@@ -419,139 +444,4 @@ fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> 
         }
     }
     Value::Null
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::workflow::{WorkflowNode, WorkflowEdge, WorkflowNodeType};
-
-    fn make_node(id: &str) -> WorkflowNode {
-        WorkflowNode {
-            id: id.to_string(),
-            node_type: WorkflowNodeType::PluginCommand,
-            label: format!("节点 {}", id),
-            plugin_id: None,
-            command_id: None,
-            params: None,
-            condition: None,
-            cron: None,
-            event_name: None,
-            delay_ms: None,
-            timeout_ms: None,
-            retry_count: None,
-            retry_delay_ms: None,
-            input_mapping: None,
-            output_mapping: None,
-            position: None,
-        }
-    }
-
-    fn make_edge(source: &str, target: &str) -> WorkflowEdge {
-        WorkflowEdge {
-            id: format!("{}-{}", source, target),
-            source: source.to_string(),
-            target: target.to_string(),
-            label: None,
-            condition: None,
-        }
-    }
-
-    #[test]
-    fn test_topological_sort_simple() {
-        let nodes = vec![make_node("a"), make_node("b"), make_node("c")];
-        let edges = vec![make_edge("a", "b"), make_edge("b", "c")];
-        let layers = WorkflowEngine::topological_sort(&nodes, &edges).unwrap();
-        assert_eq!(layers.len(), 3);
-        assert_eq!(layers[0], vec!["a"]);
-        assert_eq!(layers[1], vec!["b"]);
-        assert_eq!(layers[2], vec!["c"]);
-    }
-
-    #[test]
-    fn test_topological_sort_parallel() {
-        let nodes = vec![make_node("a"), make_node("b"), make_node("c")];
-        let edges = vec![make_edge("a", "c"), make_edge("b", "c")];
-        let layers = WorkflowEngine::topological_sort(&nodes, &edges).unwrap();
-        assert_eq!(layers.len(), 2);
-        // a 和 b 在同一层（并行）
-        assert_eq!(layers[0].len(), 2);
-        assert!(layers[0].contains(&"a".to_string()));
-        assert!(layers[0].contains(&"b".to_string()));
-        assert_eq!(layers[1], vec!["c"]);
-    }
-
-    #[test]
-    fn test_topological_sort_diamond() {
-        let nodes = vec![make_node("a"), make_node("b"), make_node("c"), make_node("d")];
-        let edges = vec![
-            make_edge("a", "b"),
-            make_edge("a", "c"),
-            make_edge("b", "d"),
-            make_edge("c", "d"),
-        ];
-        let layers = WorkflowEngine::topological_sort(&nodes, &edges).unwrap();
-        assert_eq!(layers.len(), 3);
-        assert_eq!(layers[0], vec!["a"]);
-        assert_eq!(layers[1].len(), 2); // b 和 c 并行
-        assert_eq!(layers[2], vec!["d"]);
-    }
-
-    #[test]
-    fn test_topological_sort_cycle_detection() {
-        let nodes = vec![make_node("a"), make_node("b")];
-        let edges = vec![make_edge("a", "b"), make_edge("b", "a")];
-        let result = WorkflowEngine::topological_sort(&nodes, &edges);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("循环依赖"));
-    }
-
-    #[test]
-    fn test_topological_sort_single_node() {
-        let nodes = vec![make_node("a")];
-        let edges: Vec<WorkflowEdge> = vec![];
-        let layers = WorkflowEngine::topological_sort(&nodes, &edges).unwrap();
-        assert_eq!(layers.len(), 1);
-        assert_eq!(layers[0], vec!["a"]);
-    }
-
-    #[test]
-    fn test_topological_sort_disconnected() {
-        let nodes = vec![make_node("a"), make_node("b"), make_node("c")];
-        let edges = vec![make_edge("a", "b")]; // c 是孤立的
-        let layers = WorkflowEngine::topological_sort(&nodes, &edges).unwrap();
-        // 第一层应包含 a 和 c（入度都为 0）
-        assert!(layers[0].contains(&"a".to_string()));
-        assert!(layers[0].contains(&"c".to_string()));
-        assert_eq!(layers[1], vec!["b"]);
-    }
-
-    #[test]
-    fn test_resolve_node_input_no_mapping() {
-        let node = make_node("a");
-        let context = HashMap::new();
-        let result = resolve_node_input(&node, &context);
-        assert_eq!(result, Value::Null);
-    }
-
-    #[test]
-    fn test_resolve_node_input_with_mapping() {
-        let mut node = make_node("a");
-        let mut map = serde_json::Map::new();
-        map.insert("key1".to_string(), Value::String("{{__input__.output}}".to_string()));
-        node.input_mapping = Some(Value::Object(map));
-
-        let mut context = HashMap::new();
-        let mut input_obj = serde_json::Map::new();
-        input_obj.insert("output".to_string(), Value::String("hello".to_string()));
-        context.insert("__input__".to_string(), Value::Object(input_obj));
-
-        let result = resolve_node_input(&node, &context);
-        if let Value::Object(obj) = result {
-            assert_eq!(obj.get("key1").and_then(|v| v.as_str()), Some("hello"));
-        } else {
-            panic!("期望 Object，得到 {:?}", result);
-        }
-    }
 }

@@ -26,8 +26,19 @@ pub fn create_workflow(
         name,
         version: "1.0.0".to_string(),
         description: description.unwrap_or_default(),
-        nodes: vec![],
-        edges: vec![],
+        trigger: workflow::TriggerConfig {
+            trigger_type: workflow::TriggerType::Manual,
+            cron: None,
+            event_name: None,
+        },
+        stages: vec![workflow::Stage {
+            id: crate::utils::new_id(),
+            name: "默认阶段".into(),
+            order: 0,
+            nodes: vec![],
+            edges: vec![],
+            gate: workflow::GateConfig::default(),
+        }],
         input_schema: None,
         output_schema: None,
         max_depth: None,
@@ -85,20 +96,18 @@ pub fn delete_workflow(
     workflow::delete_definition(&conn, &id).map_err(|e| format!("删除失败: {}", e))
 }
 
-/// 保存 DAG（节点 + 边）
+/// 保存工作流（阶段结构）
 #[tauri::command]
 pub fn save_workflow_dag(
     state: tauri::State<'_, crate::DbState>,
     id: String,
-    nodes: Vec<workflow::WorkflowNode>,
-    edges: Vec<workflow::WorkflowEdge>,
+    stages: Vec<workflow::Stage>,
 ) -> Result<(), String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
     let mut def = workflow::get_definition(&conn, &id)
         .map_err(|e| format!("查询失败: {}", e))?
         .ok_or_else(|| "工作流不存在".to_string())?;
-    def.nodes = nodes;
-    def.edges = edges;
+    def.stages = stages;
     workflow::update_definition(&conn, &def).map_err(|e| format!("保存失败: {}", e))
 }
 

@@ -1,80 +1,90 @@
 /**
- * Workflow — 工作流类型定义
+ * Workflow — 工作流类型定义（Structured Canvas 架构）
  *
- * 工作流编排系统类型体系。
- * 设计文档: docs/PilotDesk-插件系统架构设计-v2.0.md
+ * 架构设计: docs/PilotDesk-工作流-StructuredCanvas架构设计-v1.0.md
  */
 
-// ── 节点类型 ──
+// ── 实体节点类型（6种）──
 
-/** 工作流节点类型 */
+/** 实体节点类型 */
 export type WorkflowNodeType =
-  | 'trigger:cron'       // 定时触发
-  | 'trigger:event'      // 事件触发
-  | 'trigger:manual'     // 手动触发
-  | 'plugin:command'     // 插件命令
-  | 'plugin:node'        // 插件自定义节点类型（通过 node_types 贡献点注册）
-  | 'condition'          // 条件判断
-  | 'parallel'           // 并行执行
-  | 'delay'              // 延迟等待
-  | 'approval'           // 人工审批
-  | 'human_input'        // 人工介入（输入/选择/确认）
-  | 'subflow';           // 子工作流
+  | 'agent'          // AI Agent 任务
+  | 'api'            // API 调用
+  | 'transform'      // 代码/数据转换
+  | 'interact'       // 人工交互（输入 + 审批）
+  | 'plugin'         // 插件命令
+  | 'subflow';       // 子工作流
+
+/** 触发器类型 */
+export type TriggerType = 'cron' | 'event' | 'manual';
+
+/** 触发器配置 */
+export interface TriggerConfig {
+  triggerType: TriggerType;
+  cron?: string;
+  eventName?: string;
+}
 
 /** 工作流节点定义 */
 export interface WorkflowNode {
   id: string;
   type: WorkflowNodeType;
   label: string;
-  /** 插件 ID（仅 plugin:command / plugin:node 类型） */
   pluginId?: string;
-  /** 命令 ID（仅 plugin:command 类型） */
   commandId?: string;
-  /** 插件节点类型 ID（仅 plugin:node 类型，对应 manifest node_types[].type_id） */
-  nodeTypeId?: string;
-  /** 执行参数 */
   params?: Record<string, any>;
-  /** 条件表达式（仅 condition 类型） */
-  condition?: string;
-  /** cron 表达式（仅 trigger:cron 类型） */
-  cron?: string;
-  /** 事件名称（仅 trigger:event 类型） */
-  eventName?: string;
-  /** 延迟时间（毫秒，仅 delay 类型） */
+
+  // 控制属性
   delayMs?: number;
-  /** 超时时间（毫秒） */
   timeoutMs?: number;
-  /** 重试次数 */
   retryCount?: number;
-  /** 重试间隔（毫秒） */
   retryDelayMs?: number;
-  /** 输入映射（从上下文或上游输出提取） */
+
+  // 输入输出规格
+  inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
+  outputSchema?: Record<string, { type: string; description?: string }>;
   inputMapping?: Record<string, string>;
-  /** 输出映射（将结果写入上下文） */
   outputMapping?: Record<string, string>;
-  /** 人工介入配置（仅 human_input / approval 类型） */
-  humanInputConfig?: {
-    prompt: string;
-    inputType: 'text' | 'select' | 'confirm' | 'file';
-    options?: { label: string; value: string }[];
-    defaultValue?: string;
-    timeoutMinutes?: number;
-    allowCustom?: boolean;
-    placeholder?: string;
-  };
-  /** 位置信息（UI 画布） */
+
+  // 画布位置
   position?: { x: number; y: number };
+
+  // 节点特定
+  cron?: string;
+  eventName?: string;
 }
 
-/** 节点连接（边） */
+/** 节点连接（边）— 数据流 + 控制流 */
 export interface WorkflowEdge {
   id: string;
   source: string;
   target: string;
-  /** 条件分支标签（仅 condition 类型有多个分支时） */
-  label?: string;
-  /** 条件表达式（仅 condition 的分支） */
-  condition?: string;
+  label?: string;       // 条件标签（如 "score > 0.8"）
+  condition?: string;   // 条件表达式
+}
+
+// ── 门控配置 ──
+
+export type GateStrategy = 'all' | 'any' | 'count' | 'threshold';
+export type MergeStrategy = 'merge' | 'concat' | 'pick_first' | 'custom';
+
+export interface GateConfig {
+  strategy: GateStrategy;
+  mergeStrategy: MergeStrategy;
+  threshold?: number;
+  customScript?: string;
+}
+
+// ── 阶段定义 ──
+
+/** 阶段 — 工作流的基本组织单元 */
+export interface Stage {
+  id: string;
+  name: string;
+  order: number;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  gate: GateConfig;
 }
 
 // ── 工作流定义 ──
@@ -85,35 +95,27 @@ export interface WorkflowDefinition {
   name: string;
   version: string;
   description: string;
-  nodes: WorkflowNode[];
-  edges: WorkflowEdge[];
-  /** 输入 schema */
+  trigger: TriggerConfig;
+  stages: Stage[];
   inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
-  /** 输出 schema */
   outputSchema?: Record<string, { type: string; description?: string }>;
-  /** 最大执行深度（防止循环） */
   maxDepth?: number;
-  /** 创建时间 */
   createdAt: string;
-  /** 更新时间 */
   updatedAt: string;
-  /** 是否启用 */
   enabled: boolean;
 }
 
 // ── 工作流实例 ──
 
-/** 工作流实例状态 */
 export type WorkflowInstanceStatus =
-  | 'pending'       // 待触发
-  | 'running'       // 运行中
-  | 'paused'        // 已暂停
-  | 'success'       // 执行成功
-  | 'failed'        // 执行失败
-  | 'cancelled'     // 已取消
-  | 'timeout';      // 超时
+  | 'pending'
+  | 'running'
+  | 'paused'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
+  | 'timeout';
 
-/** 步骤执行状态 */
 export type StepStatus =
   | 'pending'
   | 'running'
@@ -122,7 +124,6 @@ export type StepStatus =
   | 'skipped'
   | 'retrying';
 
-/** 步骤执行记录 */
 export interface StepExecution {
   nodeId: string;
   status: StepStatus;
@@ -135,67 +136,69 @@ export interface StepExecution {
   retryCount: number;
 }
 
-/** 工作流实例 */
 export interface WorkflowInstance {
   id: string;
   definitionId: string;
   definitionName: string;
   status: WorkflowInstanceStatus;
-  /** 上下文数据 */
   context: Record<string, any>;
-  /** 步骤执行记录 */
   steps: Record<string, StepExecution>;
-  /** 当前执行的节点 ID */
   currentNodeId?: string;
-  /** 触发方式 */
-  trigger: 'manual' | 'cron' | 'event';
-  /** 触发详情 */
+  trigger: string;
   triggerDetail?: string;
-  /** 开始时间 */
   startedAt?: string;
-  /** 完成时间 */
   completedAt?: string;
-  /** 预计剩余时间（毫秒） */
   estimatedRemaining?: number;
-  /** 错误信息 */
   error?: string;
-  /** 创建时间 */
   createdAt: string;
 }
 
-// ── 工作流事件 ──
+// ── 统计 ──
 
-/** 工作流事件类型 */
-export type WorkflowEventType =
-  | 'instance:created'
-  | 'instance:started'
-  | 'instance:paused'
-  | 'instance:resumed'
-  | 'instance:completed'
-  | 'instance:failed'
-  | 'instance:cancelled'
-  | 'step:started'
-  | 'step:completed'
-  | 'step:failed'
-  | 'step:retrying';
-
-/** 工作流事件 */
-export interface WorkflowEvent {
-  type: WorkflowEventType;
-  instanceId: string;
-  nodeId?: string;
-  data?: any;
-  timestamp: string;
+export interface WorkflowStats {
+  totalExecutions: number;
+  successCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  successRate: number;
+  avgDurationMs: number;
+  maxDurationMs: number;
+  minDurationMs: number;
+  totalNodeExecutions: number;
+  nodeFailedCount: number;
+  last7DaysCount: number;
+  last30DaysCount: number;
 }
 
-// ── 工作流模板 ──
+export interface ExecutionTimelinePoint {
+  date: string;
+  total: number;
+  success: number;
+  failed: number;
+  avgDurationMs: number;
+}
 
-/** 预定义工作流模板 */
-export interface WorkflowTemplate {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  definition: Omit<WorkflowDefinition, 'id' | 'createdAt' | 'updatedAt' | 'enabled'>;
-  tags?: string[];
+export interface NodeTypeStat {
+  nodeType: string;
+  count: number;
+  failedCount: number;
+  avgDurationMs: number;
+}
+
+// ── 兼容函数 ──
+
+/** 将旧版 nodes+edges 转换为新版 stages */
+export function legacyToStages(
+  nodes: WorkflowNode[],
+  edges: WorkflowEdge[]
+): Stage[] {
+  if (nodes.length === 0) return [];
+  return [{
+    id: crypto.randomUUID?.() || `${Date.now()}-default`,
+    name: '默认阶段',
+    order: 0,
+    nodes,
+    edges,
+    gate: { strategy: 'all', mergeStrategy: 'merge' },
+  }];
 }

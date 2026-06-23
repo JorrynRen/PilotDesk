@@ -27,7 +27,7 @@ impl NodeExecutorTrait for ApiExecutor {
     ) -> Result<NodeOutput, AppError> {
         let url = node.config.get("url")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::Config("api_call 节点缺少 url 配置".into()))?;
+            .ok_or_else(|| AppError::Config("api 节点缺少 url 配置".into()))?;
 
         let method = node.config.get("method")
             .and_then(|v| v.as_str())
