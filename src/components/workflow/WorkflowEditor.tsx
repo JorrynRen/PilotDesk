@@ -5,7 +5,7 @@
  * 智能连线自动归入阶段。
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage } from '../../workflow/WorkflowDefinition';
 import { workflowNodeTypeRegistry } from '../../utils/WorkflowNodeTypeRegistry';
@@ -37,6 +37,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
   const [description, setDescription] = useState(def?.description || '');
   const [connecting, setConnecting] = useState<{ source: string; stageId: string } | null>(null);
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
+  // 阶段列宽度和折叠状态
+  const [stageWidths, setStageWidths] = useState<Record<string, number>>({});
+  const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
+  const resizeRef = useRef<{ stageId: string; startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
     if (def) {
@@ -174,6 +178,38 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
     ));
   };
 
+  const toggleCollapseStage = (stageId: string) => {
+    setCollapsedStages((prev) => {
+      const next = new Set(prev);
+      if (next.has(stageId)) next.delete(stageId);
+      else next.add(stageId);
+      return next;
+    });
+  };
+
+  const handleResizeStart = (e: React.MouseEvent, stageId: string, currentWidth: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeRef.current = { stageId, startX: e.clientX, startWidth: currentWidth };
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      const r = resizeRef.current;
+      if (!r) return;
+      const delta = ev.clientX - r.startX;
+      const newWidth = Math.max(180, r.startWidth + delta);
+      setStageWidths((prev) => ({ ...prev, [r.stageId]: newWidth }));
+    };
+
+    const handleMouseUp = () => {
+      resizeRef.current = null;
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
   const handleMoveNode = (nodeId: string, stageId: string, position: { x: number; y: number }) => {
     setStages(stages.map((s) => ({
       ...s,
@@ -234,140 +270,241 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
           </div>
         )}
 
-        {stages.map((stage) => (
-          <div key={stage.id} style={{ flex: 1, minWidth: 300, border: '1px solid #21262d', borderRadius: 8, display: 'flex', flexDirection: 'column', background: '#161b22' }}>
-            {/* 阶段标题 */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderBottom: '1px solid #21262d', background: '#0d1117', borderRadius: '8px 8px 0 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 4, background: '#1f6feb33', color: '#58a6ff', fontSize: 11, fontWeight: 700 }}>{stage.order + 1}</span>
-                <input
-                  value={stage.name}
-                  onChange={(e) => handleRenameStage(stage.id, e.target.value)}
-                  style={{ background: 'transparent', border: 'none', color: '#f0f6fc', fontSize: 13, fontWeight: 600, outline: 'none', width: 100 }}
-                />
-              </div>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <button onClick={() => handleAddNode('agent', stage.id)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#21262d', color: '#8b949e', fontSize: 10, cursor: 'pointer' }}>+ 节点</button>
-                <button onClick={() => handleDeleteStage(stage.id)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#21262d', color: '#f85149', fontSize: 10, cursor: 'pointer' }}>×</button>
-              </div>
-            </div>
-
-            {/* 画布区 */}
-            <div
-              style={{ flex: 1, minHeight: 250, padding: 12, position: 'relative' }}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                const type = e.dataTransfer.getData('text/plain') as WorkflowNodeType;
-                if (type) {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const meta = getNodeTypeMeta(type);
-                  const newNode: WorkflowNode = {
-                    id: generateId(),
-                    type,
-                    label: meta.label,
-                    position: { x: e.clientX - rect.left - 60, y: e.clientY - rect.top - 20 },
-                  };
-                  setStages(stages.map((s) =>
-                    s.id === stage.id ? { ...s, nodes: [...s.nodes, newNode] } : s
-                  ));
-                }
-              }}
-            >
-              {/* 节点 */}
-              {stage.nodes.map((node) => {
-                const meta = getNodeTypeMeta(node.type);
-                const pos = node.position as { x: number; y: number } | undefined;
-                return (
-                  <div
-                    key={node.id}
-                    onClick={() => { setSelectedNodeId(node.id); setSelectedStageId(stage.id); }}
-                    style={{
-                      position: 'absolute',
-                      left: pos?.x ?? 20,
-                      top: pos?.y ?? 20,
-                      width: 160,
-                      padding: '8px 10px',
-                      borderRadius: 8,
-                      border: selectedNodeId === node.id ? '1px solid #58a6ff' : '1px solid #30363d',
-                      background: '#1c2128',
-                      cursor: 'pointer',
-                      boxShadow: selectedNodeId === node.id ? '0 0 0 2px #1f6feb44' : 'none',
-                      zIndex: 10,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                      <div style={{ width: 24, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, background: `${meta.color}22`, color: meta.color }}>{meta.icon}</div>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#f0f6fc' }}>{node.label}</span>
-                    </div>
-                    <div style={{ marginLeft: 30, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                      {node.delayMs && <span style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#21262d', color: '#d29922', border: '1px solid #d2992244' }}>延迟 {node.delayMs}ms</span>}
-                      {node.timeoutMs && <span style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#21262d', color: '#a371f7', border: '1px solid #8957e544' }}>超时 {node.timeoutMs/1000}s</span>}
-                    </div>
-                    {/* 输入锚点 */}
-                    <div style={{ position: 'absolute', left: -5, top: '50%', marginTop: -5, width: 10, height: 10, borderRadius: '50%', background: '#30363d', border: '2px solid #0d1117', cursor: 'crosshair' }}
-                      onClick={(e) => { e.stopPropagation(); handleStartConnect(node.id, stage.id); }}
-                    />
-                    {/* 输出锚点 */}
-                    <div style={{ position: 'absolute', right: -5, top: '50%', marginTop: -5, width: 10, height: 10, borderRadius: '50%', background: '#30363d', border: '2px solid #0d1117', cursor: 'crosshair' }}
-                      onClick={(e) => { e.stopPropagation(); handleEndConnect(node.id, stage.id); }}
-                    />
-                    {/* 删除按钮 */}
-                    <div
-                      onClick={(e) => { e.stopPropagation(); handleDeleteNode(node.id); }}
-                      style={{ position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#f85149', color: '#fff', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.8 }}
-                    >×</div>
-                  </div>
-                );
-              })}
-
-              {/* 边（简化显示） */}
-              {stage.edges.map((edge) => {
-                const sourcePos = stage.nodes.find((n) => n.id === edge.source)?.position as { x: number; y: number } | undefined;
-                const targetPos = stage.nodes.find((n) => n.id === edge.target)?.position as { x: number; y: number } | undefined;
-                if (!sourcePos || !targetPos) return null;
-                return (
-                  <div key={edge.id} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-                    <svg style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%' }}>
-                      <path
-                        d={`M ${sourcePos.x + 160} ${sourcePos.y + 20} C ${sourcePos.x + 190} ${sourcePos.y + 20}, ${targetPos.x - 10} ${targetPos.y + 20}, ${targetPos.x} ${targetPos.y + 20}`}
-                        stroke={edge.condition ? '#d29922' : '#58a6ff'}
-                        strokeWidth={2}
-                        fill="none"
-                        markerEnd="url(#arrowhead)"
+        {stages.map((stage, stageIndex) => {
+          const isCollapsed = collapsedStages.has(stage.id);
+          const stageWidth = stageWidths[stage.id];
+          return (
+            <React.Fragment key={stage.id}>
+              {/* 阶段列 */}
+              <div style={{
+                flex: stageWidth ? '0 0 auto' : 1,
+                width: stageWidth || undefined,
+                minWidth: isCollapsed ? 48 : 280,
+                border: '1px solid #21262d',
+                borderRadius: 8,
+                display: 'flex',
+                flexDirection: 'column',
+                background: '#161b22',
+                transition: isCollapsed ? 'width 0.2s ease, min-width 0.2s ease' : 'none',
+                overflow: 'hidden',
+              }}>
+                {/* 阶段标题 — 折叠时垂直排列 */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: isCollapsed ? '8px 4px' : '8px 12px',
+                  borderBottom: '1px solid #21262d',
+                  background: '#0d1117',
+                  borderRadius: '8px 8px 0 0',
+                  flexDirection: isCollapsed ? 'column' : 'row',
+                  gap: isCollapsed ? 6 : 0,
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: isCollapsed ? 0 : 8,
+                    flexDirection: isCollapsed ? 'column' : 'row',
+                    writingMode: isCollapsed ? 'vertical-rl' : 'horizontal-tb',
+                  }}>
+                    <span style={{
+                      display: 'inline-flex', width: isCollapsed ? 28 : 20, height: isCollapsed ? 28 : 20,
+                      alignItems: 'center', justifyContent: 'center', borderRadius: 4,
+                      background: '#1f6feb33', color: '#58a6ff', fontSize: isCollapsed ? 10 : 11, fontWeight: 700,
+                    }}>{stage.order + 1}</span>
+                    {!isCollapsed && (
+                      <input
+                        value={stage.name}
+                        onChange={(e) => handleRenameStage(stage.id, e.target.value)}
+                        style={{ background: 'transparent', border: 'none', color: '#f0f6fc', fontSize: 13, fontWeight: 600, outline: 'none', width: 80 }}
                       />
-                      {edge.label && (
-                        <text x={(sourcePos.x + 160 + targetPos.x) / 2} y={(sourcePos.y + targetPos.y) / 2 - 8}
-                          fill="#8b949e" fontSize={10} textAnchor="middle"
-                          style={{ pointerEvents: 'auto', cursor: 'pointer' }}
-                          onClick={() => handleDeleteEdge(edge.id)}
-                        >
-                          {edge.label}
-                        </text>
-                      )}
-                    </svg>
+                    )}
+                    {isCollapsed && (
+                      <span style={{ color: '#f0f6fc', fontSize: 10, fontWeight: 600, letterSpacing: 1 }}>{stage.name.slice(0, 4)}</span>
+                    )}
                   </div>
-                );
-              })}
-            </div>
+                  <div style={{
+                    display: 'flex',
+                    gap: 2,
+                    flexDirection: isCollapsed ? 'column' : 'row',
+                  }}>
+                    {/* 折叠/展开按钮 */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }}
+                      title={isCollapsed ? '展开阶段' : '折叠阶段'}
+                      style={{ padding: '2px 6px', borderRadius: 4, border: 'none', background: 'transparent', color: '#8b949e', fontSize: 12, cursor: 'pointer', lineHeight: 1 }}
+                    >
+                      {isCollapsed ? '▶' : '◀'}
+                    </button>
+                    {!isCollapsed && (
+                      <>
+                        <button onClick={() => handleAddNode('agent', stage.id)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#21262d', color: '#8b949e', fontSize: 10, cursor: 'pointer' }}>+ 节点</button>
+                        <button onClick={() => handleDeleteStage(stage.id)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#21262d', color: '#f85149', fontSize: 10, cursor: 'pointer' }}>×</button>
+                      </>
+                    )}
+                  </div>
+                </div>
 
-            {/* Gate */}
-            <div style={{ margin: '0 8px 8px 8px', padding: '8px 12px', border: '1px solid #30363d', borderRadius: 8, background: '#0d1117', cursor: 'pointer' }}
-              onClick={() => handleUpdateGate(stage.id, {})}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 4 }}>⊞ 门控 Gate</span>
-                <span style={{ fontSize: 11, color: '#3fb950', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3fb950' }} />
-                  {stage.nodes.length}/{stage.nodes.length} 就绪
-                </span>
+                {/* 画布区 — 折叠时隐藏 */}
+                {!isCollapsed && (
+                  <>
+                    <div
+                      style={{ flex: 1, minHeight: 250, padding: 12, position: 'relative' }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const type = e.dataTransfer.getData('text/plain') as WorkflowNodeType;
+                        if (type) {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const meta = getNodeTypeMeta(type);
+                          const newNode: WorkflowNode = {
+                            id: generateId(),
+                            type,
+                            label: meta.label,
+                            position: { x: e.clientX - rect.left - 60, y: e.clientY - rect.top - 20 },
+                          };
+                          setStages(stages.map((s) =>
+                            s.id === stage.id ? { ...s, nodes: [...s.nodes, newNode] } : s
+                          ));
+                        }
+                      }}
+                    >
+                      {/* 节点 */}
+                      {stage.nodes.map((node) => {
+                        const meta = getNodeTypeMeta(node.type);
+                        const pos = node.position as { x: number; y: number } | undefined;
+                        return (
+                          <div
+                            key={node.id}
+                            onClick={() => { setSelectedNodeId(node.id); setSelectedStageId(stage.id); }}
+                            style={{
+                              position: 'absolute',
+                              left: pos?.x ?? 20,
+                              top: pos?.y ?? 20,
+                              width: 160,
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              border: selectedNodeId === node.id ? '1px solid #58a6ff' : '1px solid #30363d',
+                              background: '#1c2128',
+                              cursor: 'pointer',
+                              boxShadow: selectedNodeId === node.id ? '0 0 0 2px #1f6feb44' : 'none',
+                              zIndex: 10,
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                              <div style={{ width: 24, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, background: `${meta.color}22`, color: meta.color }}>{meta.icon}</div>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: '#f0f6fc' }}>{node.label}</span>
+                            </div>
+                            <div style={{ marginLeft: 30, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                              {node.delayMs && <span style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#21262d', color: '#d29922', border: '1px solid #d2992244' }}>延迟 {node.delayMs}ms</span>}
+                              {node.timeoutMs && <span style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#21262d', color: '#a371f7', border: '1px solid #8957e544' }}>超时 {node.timeoutMs/1000}s</span>}
+                            </div>
+                            {/* 输入锚点 */}
+                            <div style={{ position: 'absolute', left: -5, top: '50%', marginTop: -5, width: 10, height: 10, borderRadius: '50%', background: '#30363d', border: '2px solid #0d1117', cursor: 'crosshair' }}
+                              onClick={(e) => { e.stopPropagation(); handleStartConnect(node.id, stage.id); }}
+                            />
+                            {/* 输出锚点 */}
+                            <div style={{ position: 'absolute', right: -5, top: '50%', marginTop: -5, width: 10, height: 10, borderRadius: '50%', background: '#30363d', border: '2px solid #0d1117', cursor: 'crosshair' }}
+                              onClick={(e) => { e.stopPropagation(); handleEndConnect(node.id, stage.id); }}
+                            />
+                            {/* 删除按钮 */}
+                            <div
+                              onClick={(e) => { e.stopPropagation(); handleDeleteNode(node.id); }}
+                              style={{ position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#f85149', color: '#fff', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.8 }}
+                            >×</div>
+                          </div>
+                        );
+                      })}
+
+                      {/* 边（简化显示） */}
+                      {stage.edges.map((edge) => {
+                        const sourcePos = stage.nodes.find((n) => n.id === edge.source)?.position as { x: number; y: number } | undefined;
+                        const targetPos = stage.nodes.find((n) => n.id === edge.target)?.position as { x: number; y: number } | undefined;
+                        if (!sourcePos || !targetPos) return null;
+                        return (
+                          <div key={edge.id} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+                            <svg style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%' }}>
+                              <path
+                                d={`M ${sourcePos.x + 160} ${sourcePos.y + 20} C ${sourcePos.x + 190} ${sourcePos.y + 20}, ${targetPos.x - 10} ${targetPos.y + 20}, ${targetPos.x} ${targetPos.y + 20}`}
+                                stroke={edge.condition ? '#d29922' : '#58a6ff'}
+                                strokeWidth={2}
+                                fill="none"
+                                markerEnd="url(#arrowhead)"
+                              />
+                              {edge.label && (
+                                <text x={(sourcePos.x + 160 + targetPos.x) / 2} y={(sourcePos.y + targetPos.y) / 2 - 8}
+                                  fill="#8b949e" fontSize={10} textAnchor="middle"
+                                  style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+                                  onClick={() => handleDeleteEdge(edge.id)}
+                                >
+                                  {edge.label}
+                                </text>
+                              )}
+                            </svg>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Gate */}
+                    <div style={{ margin: '0 8px 8px 8px', padding: '8px 12px', border: '1px solid #30363d', borderRadius: 8, background: '#0d1117', cursor: 'pointer' }}
+                      onClick={() => handleUpdateGate(stage.id, {})}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 4 }}>⊞ 门控 Gate</span>
+                        <span style={{ fontSize: 11, color: '#3fb950', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3fb950' }} />
+                          {stage.nodes.length}/{stage.nodes.length} 就绪
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span style={{ fontSize: 11, color: '#8b949e' }}>策略: <span style={{ color: '#c9d1d9', background: '#21262d', padding: '1px 6px', borderRadius: 3, fontSize: 10 }}>{stage.gate.strategy}</span></span>
+                        <span style={{ fontSize: 11, color: '#8b949e' }}>合并: <span style={{ color: '#c9d1d9', background: '#21262d', padding: '1px 6px', borderRadius: 3, fontSize: 10 }}>{stage.gate.mergeStrategy}</span></span>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* 折叠时显示节点计数 */}
+                {isCollapsed && (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 2px', color: '#8b949e', fontSize: 10 }}>
+                    <span>{stage.nodes.length} 节点</span>
+                    <span>{stage.edges.length} 连线</span>
+                    <span style={{ fontSize: 9, color: '#3fb950' }}>{stage.gate.strategy}</span>
+                  </div>
+                )}
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={{ fontSize: 11, color: '#8b949e' }}>策略: <span style={{ color: '#c9d1d9', background: '#21262d', padding: '1px 6px', borderRadius: 3, fontSize: 10 }}>{stage.gate.strategy}</span></span>
-                <span style={{ fontSize: 11, color: '#8b949e' }}>合并: <span style={{ color: '#c9d1d9', background: '#21262d', padding: '1px 6px', borderRadius: 3, fontSize: 10 }}>{stage.gate.mergeStrategy}</span></span>
-              </div>
-            </div>
-          </div>
-        ))}
+
+              {/* 阶段间分隔线（可拖动调整大小） — 最后一个阶段之后不显示 */}
+              {stageIndex < stages.length - 1 && (
+                <div
+                  onMouseDown={(e) => {
+                    const w = stageWidths[stage.id] || 0;
+                    handleResizeStart(e, stage.id, w || 300);
+                  }}
+                  style={{
+                    width: 5,
+                    cursor: 'col-resize',
+                    background: resizeRef.current?.stageId === stage.id ? '#58a6ff' : 'transparent',
+                    borderRadius: 2,
+                    flexShrink: 0,
+                    transition: 'background 0.15s',
+                    position: 'relative',
+                  }}
+                  onMouseEnter={(e) => { if (!resizeRef.current) e.currentTarget.style.background = '#30363d'; }}
+                  onMouseLeave={(e) => { if (!resizeRef.current) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {/* 分隔线视觉指示器 */}
+                  <div style={{
+                    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                    width: 2, height: 24, borderRadius: 1,
+                    background: resizeRef.current?.stageId === stage.id ? '#58a6ff' : '#21262d',
+                    transition: 'background 0.15s',
+                  }} />
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
       </div>
 
       {/* 条件编辑弹窗 */}
