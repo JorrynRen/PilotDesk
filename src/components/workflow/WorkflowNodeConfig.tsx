@@ -4,14 +4,16 @@
  * 适配 6 种实体节点类型 + 控制属性（延迟/超时/重试）。
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { WorkflowNode, WorkflowNodeType } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
+import { useWorkflowStore } from '../../stores/workflowStore';
 
 interface Props {
   node: WorkflowNode;
   onUpdate: (updates: Partial<WorkflowNode>) => void;
   onClose: () => void;
+  onOpenSubflow?: (definitionId: string) => void;
 }
 
 const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; label: string; type: string; placeholder?: string }[] }> = {
@@ -49,15 +51,22 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
   },
   subflow: {
     fields: [
-      { key: 'definitionId', label: '子工作流 ID', type: 'text', placeholder: '工作流定义 ID' },
+      { key: 'definitionId', label: '子工作流', type: 'subflow_select', placeholder: '选择子工作流' },
     ],
   },
 };
 
-export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose }) => {
+export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow }) => {
   const meta = getNodeTypeMeta(node.type);
   const configFields = NODE_TYPE_CONFIG_MAP[node.type]?.fields || [];
   const [params, setParams] = useState<Record<string, any>>(node.params || {});
+  const { definitions, loadDefinitions } = useWorkflowStore();
+
+  useEffect(() => {
+    if (node.type === 'subflow' && definitions.length === 0) {
+      loadDefinitions();
+    }
+  }, [node.type]);
 
   const handleParamChange = (key: string, value: any) => {
     const newParams = { ...params, [key]: value };
@@ -103,6 +112,38 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose })
                   rows={4}
                   style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
                 />
+              ) : field.type === 'subflow_select' ? (
+                <div>
+                  <select
+                    value={params[field.key] || ''}
+                    onChange={(e) => handleParamChange(field.key, e.target.value)}
+                    style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none', marginBottom: 6 }}
+                  >
+                    <option value="">选择子工作流...</option>
+                    {definitions.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name} ({d.id.slice(0, 8)}...)</option>
+                    ))}
+                  </select>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {params[field.key] && (
+                      <button
+                        onClick={() => onOpenSubflow?.(params[field.key])}
+                        style={{ flex: 1, padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#1f6feb33', color: '#58a6ff', fontSize: 11, cursor: 'pointer' }}
+                      >
+                        打开子工作流
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        const newId = 'wf_' + Date.now().toString(36);
+                        handleParamChange(field.key, newId);
+                      }}
+                      style={{ flex: 1, padding: '4px 8px', borderRadius: 4, border: '1px dashed #30363d', background: 'transparent', color: '#8b949e', fontSize: 11, cursor: 'pointer' }}
+                    >
+                      新建子工作流
+                    </button>
+                  </div>
+                </div>
               ) : field.type === 'select' ? (
                 <select
                   value={params[field.key] || field.placeholder || ''}

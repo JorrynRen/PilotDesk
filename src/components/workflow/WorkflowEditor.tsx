@@ -28,7 +28,7 @@ const BUILTIN_NODE_TYPES: { type: WorkflowNodeType; label: string; icon: string;
 ];
 
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
-  const { definitions, updateDefinition } = useWorkflowStore();
+  const { definitions, updateDefinition, loadDefinitions } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
@@ -559,6 +559,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
             node={stages.find((s) => s.id === selectedStageId)?.nodes.find((n) => n.id === selectedNodeId)!}
             onUpdate={(updates) => handleUpdateNode(selectedNodeId, updates)}
             onClose={() => { setSelectedNodeId(null); setSelectedStageId(null); }}
+            onOpenSubflow={(definitionId) => {
+              // 跳转到子工作流 — 在定义列表中查找
+              const def = definitions.find(d => d.id === definitionId);
+              if (def) {
+                setSelectedNodeId(null);
+                setSelectedStageId(null);
+                // 切换到子工作流编辑
+                // 这里简单起见，直接设置 stages 为子工作流的 stages
+                if (def.stages && def.stages.length > 0) {
+                  setStages(def.stages);
+                }
+              }
+            }}
           />
         </div>
       )}
