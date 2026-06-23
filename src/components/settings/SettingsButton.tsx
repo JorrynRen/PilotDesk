@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'success' | 'warning' | 'danger';
 
 interface SettingsButtonProps {
-  children: ReactNode;
+  children?: ReactNode;
   onClick?: () => void;
   variant?: ButtonVariant;
   disabled?: boolean;

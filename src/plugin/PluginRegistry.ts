@@ -181,7 +181,7 @@ class PluginRegistry {
 
     // 2. 注销工作流节点类型
     if (runtime) {
-      workflowNodeTypeRegistry.unregisterPlugin(runtime.api.pluginId);
+      workflowNodeTypeRegistry.unregisterPlugin((runtime.api as any).pluginId);
     }
 
     // 3. 清理 API 资源（自动注销命令/事件/全局订阅）

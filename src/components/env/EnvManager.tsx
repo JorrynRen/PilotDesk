@@ -175,7 +175,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         latestVersion: latestVersions[agent.agentType]?.version ?? null,
         latestReleaseTime: latestVersions[agent.agentType]?.releaseTime ?? null,
         hasUpdate: version && latestVersions[agent.agentType]
-          ? isOlder(version, latestVersions[agent.agentType].version)
+          ? isOlder(version, latestVersions[agent.agentType]!.version)
           : false,
         updateChecking: updateChecking[agent.agentType] ?? false,
       };

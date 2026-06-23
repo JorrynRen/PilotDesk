@@ -394,7 +394,7 @@ export function AgentManager() {
             <div className="text-xs font-medium mb-3" style={{ color: 'var(--text-primary)' }}>添加自定义 Agent</div>
             <AgentForm
               form={addForm}
-              onChange={setAddForm}
+              onChange={(f) => setAddForm(f)}
               onSubmit={handleAdd}
               onCancel={() => { setShowAddForm(false); setAddForm({}); }}
               saving={saving}
@@ -826,10 +826,10 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
       {isEditing ? (
         <SettingsCard>
           <AgentForm
-            form={editForm!}
-            onChange={setEditForm}
+            form={editForm || {}}
+            onChange={(f) => setEditForm(f)}
             onSubmit={handleSave}
-            onCancel={() => { setEditingType(null); setEditForm(null); }}
+            onCancel={() => { setEditingType(null); setEditForm(null as unknown as Partial<AgentConfig>); }}
             saving={saving}
             mode="edit"
           />
@@ -894,15 +894,15 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
               <SettingsButton
                 onClick={() => handleEdit(agent)}
                 variant="secondary"
-                icon={<Pencil size={11} />}
                 title="编辑此 Agent 配置"
+                icon={<Pencil size={11} />}
               />
               {!agent.isBuiltin && (
                 <SettingsButton
                   onClick={() => setDeleteConfirm(agent.agentType)}
                   variant="danger"
-                  icon={<Trash2 size={11} />}
                   title="删除此 Agent 配置"
+                  icon={<Trash2 size={11} />}
                 />
               )}
             </div>
