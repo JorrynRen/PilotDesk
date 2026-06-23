@@ -218,7 +218,9 @@ pub struct WorkflowInstance {
     pub definition_name: String,
     pub status: WorkflowInstanceStatus,
     pub context: serde_json::Value,
-    pub steps: serde_json::Value,
+    /// @deprecated 引擎已不再写入此字段，数据源改为 node_executions 表（v68 迁移后为 NULL）
+    #[allow(dead_code)]
+    pub steps: Option<serde_json::Value>,
     pub current_node_id: Option<String>,
     pub trigger: String,
     pub trigger_detail: Option<String>,
@@ -329,8 +331,7 @@ pub(crate) fn instance_from_row(row: &rusqlite::Row) -> rusqlite::Result<Workflo
             .unwrap_or(WorkflowInstanceStatus::Pending),
         context: serde_json::from_str(&row.get::<_, String>(4)?)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
-        steps: serde_json::from_str(&row.get::<_, String>(5)?)
-            .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
+        steps: row.get::<_, Option<String>>(5)?.and_then(|s| serde_json::from_str(&s).ok()),
         current_node_id: row.get(6)?,
         trigger: row.get(7)?,
         trigger_detail: row.get(8)?,
@@ -378,7 +379,7 @@ pub fn create_instance(conn: &Connection, instance: &WorkflowInstance) -> Result
             instance.id, instance.definition_id, instance.definition_name,
             serde_json::to_string(&instance.status).map_err(|e| AppError::External(e.to_string()))?,
             instance.context.to_string(),
-            instance.steps.to_string(),
+            instance.steps.as_ref().map(|s| s.to_string()).unwrap_or_else(|| "null".to_string()),
             instance.current_node_id, instance.trigger, instance.trigger_detail,
             instance.started_at, instance.completed_at,
             instance.estimated_remaining, instance.error, now,
@@ -392,12 +393,13 @@ pub fn create_instance(conn: &Connection, instance: &WorkflowInstance) -> Result
 /// 注意：`steps` 参数已废弃（引擎已改为写入 node_executions 表），保留仅为向后兼容。
 /// 新代码应使用 `update_instance_status_minimal` 或直接更新 node_executions 表。
 #[allow(dead_code)]
+#[allow(deprecated)]
 pub fn update_instance_status(
     conn: &Connection,
     id: &str,
     status: &WorkflowInstanceStatus,
     context: Option<&serde_json::Value>,
-    #[allow(unused_variables)] steps: Option<&serde_json::Value>,
+    #[allow(unused_variables)] _steps: Option<&serde_json::Value>,
     current_node_id: Option<&str>,
     error: Option<&str>,
 ) -> Result<(), AppError> {

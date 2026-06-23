@@ -111,7 +111,7 @@ impl WorkflowScheduler {
                             definition_name: def.name.clone(),
                             status: super::WorkflowInstanceStatus::Running,
                             context: serde_json::json!({}),
-                            steps: serde_json::json!({}),
+                            steps: None,
                             current_node_id: None,
                             trigger: "cron".to_string(),
                             trigger_detail: Some(schedule.cron_expression.clone()),

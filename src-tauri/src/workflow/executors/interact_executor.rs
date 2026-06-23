@@ -27,9 +27,24 @@ pub struct InputOption {
     pub value: String,
 }
 
-/// 等待用户响应的通道管理器
+/// 带过期时间的待处理条目
+#[allow(dead_code)]
+struct PendingEntry {
+    tx: oneshot::Sender<String>,
+    registered_at: std::time::Instant,
+    ttl_secs: u64,
+}
+
+#[allow(dead_code)]
+impl PendingEntry {
+    fn is_expired(&self) -> bool {
+        self.registered_at.elapsed().as_secs() > self.ttl_secs
+    }
+}
+
+/// 等待用户响应的通道管理器（支持 TTL 自动过期清理）
 pub struct InteractManager {
-    pending: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<String>>>>,
+    pending: Arc<std::sync::Mutex<HashMap<String, PendingEntry>>>,
 }
 
 impl InteractManager {
@@ -38,22 +53,49 @@ impl InteractManager {
     }
 
     /// 注册等待通道，返回 receiver
-    pub fn register_wait(&self, execution_id: &str, node_id: &str) -> Result<oneshot::Receiver<String>, AppError> {
+    pub fn register_wait(&self, execution_id: &str, node_id: &str, ttl_secs: u64) -> Result<oneshot::Receiver<String>, AppError> {
         let key = format!("{}:{}", execution_id, node_id);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().map_err(|e| AppError::Lock(e.to_string()))?.insert(key, tx);
+        self.pending.lock().map_err(|e| AppError::Lock(e.to_string()))?.insert(key, PendingEntry {
+            tx,
+            registered_at: std::time::Instant::now(),
+            ttl_secs,
+        });
         Ok(rx)
     }
 
     /// 接收用户响应，发送到通道
     pub fn resolve(&self, execution_id: &str, node_id: &str, response: String) -> Result<(), AppError> {
         let key = format!("{}:{}", execution_id, node_id);
-        let tx = self.pending.lock()
+        let entry = self.pending.lock()
             .map_err(|e| AppError::Lock(e.to_string()))?
             .remove(&key)
             .ok_or_else(|| AppError::NotFound(format!("没有等待中的输入: {}", key)))?;
-        tx.send(response).map_err(|_| AppError::External("通道已关闭".into()))?;
+        entry.tx.send(response).map_err(|_| AppError::External("通道已关闭".into()))?;
         Ok(())
+    }
+
+    /// 清理已过期的 pending 条目（用户取消/超时后残留）
+    /// 供调度器定期调用
+    #[allow(dead_code)]
+    pub fn cleanup_expired(&self) {
+        let mut map = match self.pending.lock() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let before = map.len();
+        map.retain(|key, entry| {
+            if entry.is_expired() {
+                log::warn!("InteractManager: 清理过期 pending 条目: {}", key);
+                false
+            } else {
+                true
+            }
+        });
+        let removed = before - map.len();
+        if removed > 0 {
+            log::info!("InteractManager: 清理了 {} 个过期条目", removed);
+        }
     }
 }
 
@@ -94,7 +136,7 @@ impl NodeExecutorTrait for InteractExecutor {
         })).ok();
 
         // 挂起等待用户响应
-        let rx = self.manager.register_wait(execution_id, &node.id)?;
+        let rx = self.manager.register_wait(execution_id, &node.id, timeout * 60)?;
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout * 60),

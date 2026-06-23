@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -807,6 +807,17 @@ fn migrate_legacy_workflow_columns(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+/// v68: 废弃 workflow_instances.steps 字段
+/// 引擎已不再写入 steps 字段（改为 node_executions 表），将所有 rows 的 steps 设为 NULL，
+/// 后续版本可直接 DROP COLUMN。
+fn migrate_deprecate_steps_column(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE workflow_instances SET steps = NULL WHERE steps IS NOT NULL",
+        [],
+    )?;
+    Ok(())
+}
+
 /// 根据 MIGRATION_VERSIONS 数组循环执行迁移
 /// 新增迁移时：在 MIGRATION_VERSIONS 末尾追加版本号，并在 match 中添加对应分支
 fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppError> {
@@ -838,6 +849,7 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 65 => migrate_add_performance_indexes(conn)?,
                 66 => migrate_add_workflow_missing_tables(conn)?,
                 67 => migrate_legacy_workflow_columns(conn)?,
+                68 => migrate_deprecate_steps_column(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }

@@ -161,7 +161,7 @@ pub async fn start_workflow(
         definition_name: def.name.clone(),
         status: workflow::WorkflowInstanceStatus::Running,
         context: serde_json::json!({}),
-        steps: serde_json::json!({}),
+        steps: None,
         current_node_id: None,
         trigger: "manual".to_string(),
         trigger_detail: None,

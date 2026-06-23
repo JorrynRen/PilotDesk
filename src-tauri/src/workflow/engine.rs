@@ -237,6 +237,13 @@ impl WorkflowEngine {
                     }
                 }
 
+                // 获取并发许可（Subflow 和普通节点都受控）
+                let permit = semaphore.clone().acquire_owned().await;
+                let _permit = match permit {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+
                 // Subflow 节点：在 spawn 之外同步执行（避免 Send 约束问题）
                 if node.node_type == WorkflowNodeType::Subflow {
                     let ctx_snapshot = context.lock().await.clone();
@@ -265,6 +272,7 @@ impl WorkflowEngine {
                             return Err(e);
                         }
                     }
+                    // _permit 在此处 drop，释放并发许可
                     continue;
                 }
 
@@ -275,11 +283,6 @@ impl WorkflowEngine {
                 let completed_count = completed_count.clone();
                 let total = total_count;
                 let exec = executor.clone();
-                let permit = semaphore.clone().acquire_owned().await;
-                let _permit = match permit {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
 
                 let handle = tokio::spawn(async move {
                     let ctx_snapshot = context.lock().await.clone();
