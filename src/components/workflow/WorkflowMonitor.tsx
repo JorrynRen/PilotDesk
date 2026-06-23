@@ -50,7 +50,7 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
         <div className="monitor-list">
           {instances.map((instance) => {
             const statusInfo = STATUS_LABELS[instance.status] || { label: instance.status, color: '#6B7280' };
-            const stepEntries = Object.entries(instance.steps);
+            const stepEntries = Object.entries(instance.steps ?? {});
 
             return (
               <div key={instance.id} className="monitor-card">

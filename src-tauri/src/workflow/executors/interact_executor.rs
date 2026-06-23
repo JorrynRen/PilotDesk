@@ -52,8 +52,11 @@ impl InteractManager {
         Self { pending: Arc::new(std::sync::Mutex::new(HashMap::new())) }
     }
 
-    /// 注册等待通道，返回 receiver
+    /// 注册等待通道，返回 receiver（同时惰性清理过期条目）
     pub fn register_wait(&self, execution_id: &str, node_id: &str, ttl_secs: u64) -> Result<oneshot::Receiver<String>, AppError> {
+        // 惰性清理：每次注册时顺便清理过期条目，避免引入独立定时器
+        self.cleanup_expired();
+
         let key = format!("{}:{}", execution_id, node_id);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().map_err(|e| AppError::Lock(e.to_string()))?.insert(key, PendingEntry {
@@ -76,8 +79,6 @@ impl InteractManager {
     }
 
     /// 清理已过期的 pending 条目（用户取消/超时后残留）
-    /// 供调度器定期调用
-    #[allow(dead_code)]
     pub fn cleanup_expired(&self) {
         let mut map = match self.pending.lock() {
             Ok(m) => m,

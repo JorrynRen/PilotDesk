@@ -261,14 +261,14 @@ class WorkflowEngine {
     if (!instance) throw new Error(`工作流实例未找到: ${instanceId}`);
 
     if (stepId) {
-      const step = instance.steps[stepId];
+      const step = (instance.steps ?? {})[stepId];
       if (step) {
         step.status = 'pending';
         step.error = undefined;
         step.retryCount = 0;
       }
     } else {
-      for (const step of Object.values(instance.steps)) {
+      for (const step of Object.values(instance.steps ?? {})) {
         if (step.status === 'failed') {
           step.status = 'pending';
           step.error = undefined;

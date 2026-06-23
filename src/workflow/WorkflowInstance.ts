@@ -66,7 +66,7 @@ export function updateStepStatus(
   status: StepStatus,
   extra?: Partial<StepExecution>,
 ): WorkflowInstance {
-  const step = instance.steps[nodeId] || createStepExecution(nodeId);
+  const step = instance.steps?.[nodeId] || createStepExecution(nodeId);
   const now = new Date().toISOString();
 
   if (status === 'running' && !step.startedAt) step.startedAt = now;

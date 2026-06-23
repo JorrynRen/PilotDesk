@@ -139,7 +139,7 @@ export interface WorkflowInstance {
   definitionName: string;
   status: WorkflowInstanceStatus;
   context: Record<string, any>;
-  steps: Record<string, StepExecution>;
+  steps?: Record<string, StepExecution>;
   currentNodeId?: string;
   trigger: string;
   triggerDetail?: string;
