@@ -569,7 +569,6 @@ impl WorkflowEngine {
     }
 
     /// 从 checkpoint 恢复执行
-    #[allow(dead_code)]
     pub async fn recover_execution(
         executor: &Arc<NodeExecutor>,
         def: &WorkflowDefinition,
