@@ -79,6 +79,8 @@ impl WorkflowScheduler {
                     let input: serde_json::Value = serde_json::from_str(&schedule.input_data)
                         .unwrap_or(serde_json::Value::Null);
 
+                    let sched_id = schedule.id.clone();
+                    let cron_expr = schedule.cron_expression.clone();
                     tokio::spawn(async move {
                         // 获取工作流定义
                         let conn = match pool.get() {
@@ -123,6 +125,20 @@ impl WorkflowScheduler {
                         if let Err(e) = super::create_instance(&conn, &instance) {
                             log::error!("创建调度执行实例失败: {}", e);
                             return;
+                        }
+
+                        // 计算下次执行时间
+                        if let Ok(schedule) = <cron::Schedule as std::str::FromStr>::from_str(&cron_expr) {
+                            use chrono::DateTime;
+                            let now_ts = now();
+                            let now_dt: chrono::DateTime<chrono::Utc> = DateTime::from_timestamp(now_ts, 0).unwrap_or_default();
+                            if let Some(next) = schedule.after::<chrono::Utc>(&now_dt).next() {
+                                let next_ts = next.timestamp();
+                                let _ = conn.execute(
+                                    "UPDATE workflow_schedules SET last_run_at = ?1, next_run_at = ?2, updated_at = ?3 WHERE id = ?4",
+                                    rusqlite::params![now_ts, next_ts, now_ts, sched_id],
+                                );
+                            }
                         }
 
                         if let Err(e) = WorkflowEngine::execute_with_concurrency(

@@ -96,6 +96,25 @@ pub fn delete_workflow(
     workflow::delete_definition(&conn, &id).map_err(|e| format!("删除失败: {}", e))
 }
 
+/// 保存完整工作流定义（全量对象，匹配前端 store 调用）
+#[tauri::command]
+pub fn save_workflow_definition(
+    state: tauri::State<'_, crate::DbState>,
+    definition: crate::workflow::WorkflowDefinition,
+) -> Result<(), String> {
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+    // 检查是否存在
+    let existing = crate::workflow::get_definition(&conn, &definition.id)
+        .map_err(|e| format!("查询失败: {}", e))?;
+    if existing.is_some() {
+        crate::workflow::update_definition(&conn, &definition)
+            .map_err(|e| format!("更新失败: {}", e))
+    } else {
+        crate::workflow::create_definition(&conn, &definition)
+            .map_err(|e| format!("创建失败: {}", e))
+    }
+}
+
 /// 保存工作流（阶段结构）
 #[tauri::command]
 pub fn save_workflow_dag(

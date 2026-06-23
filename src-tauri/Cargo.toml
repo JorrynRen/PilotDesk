@@ -38,3 +38,6 @@ semver = "1.0"
 async-trait = "0.1"
 boa_engine = "0.19"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+cron = "0.15"
+async-recursion = "1.1"

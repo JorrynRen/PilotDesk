@@ -8,37 +8,53 @@ use tauri::{Emitter, Manager};
 use super::executor::NodeExecutor;
 use super::registry::NodeDef;
 use super::template::TemplateEngine;
-use super::{WorkflowDefinition, WorkflowNode, WorkflowEdge, Stage, MergeStrategy};
+use async_recursion::async_recursion;
+use super::{WorkflowDefinition, WorkflowNode, WorkflowNodeType, WorkflowEdge, Stage, MergeStrategy};
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct NodeRuntimeState {
-    pub status: NodeStatus,
-    pub output: Option<Value>,
-    pub error: Option<String>,
+/// 从 AppHandle 获取数据库连接
+fn get_db_conn(app_handle: &tauri::AppHandle) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, AppError> {
+    app_handle.state::<crate::DbState>().get_conn()
+        .map_err(|e| AppError::External(format!("数据库连接失败: {}", e)))
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq)]
-pub enum NodeStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
+/// 写入节点执行记录
+fn insert_node_execution(
+    conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+    execution_id: &str,
+    node_id: &str,
+    status: &str,
+    input_data: Option<&str>,
+) -> Result<(), AppError> {
+    let now = crate::utils::now();
+    conn.execute(
+        "INSERT OR REPLACE INTO node_executions (id, execution_id, node_id, status, input_data, started_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            format!("{}_{}", execution_id, node_id),
+            execution_id, node_id, status, input_data, now, now,
+        ],
+    )?;
+    Ok(())
 }
 
-#[allow(dead_code)]
-pub struct ExecutionContext {
-    pub execution_id: String,
-    pub cancelled: Arc<AtomicBool>,
-    pub node_states: Arc<AsyncMutex<HashMap<String, NodeRuntimeState>>>,
-    pub completed_count: Arc<AtomicUsize>,
-    pub total_count: usize,
+/// 更新节点执行状态
+fn update_node_execution(
+    conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+    execution_id: &str,
+    node_id: &str,
+    status: &str,
+    output_data: Option<&str>,
+    error_message: Option<&str>,
+) -> Result<(), AppError> {
+    let now = crate::utils::now();
+    conn.execute(
+        "UPDATE node_executions SET status = ?1, output_data = COALESCE(?2, output_data),
+         error_message = ?3, finished_at = ?4
+         WHERE execution_id = ?5 AND node_id = ?6",
+        rusqlite::params![status, output_data, error_message, now, execution_id, node_id],
+    )?;
+    Ok(())
 }
-
-#[allow(dead_code)]
-const DEFAULT_MAX_CONCURRENCY: usize = 5;
 
 /// 两层调度引擎：阶段串行 → 阶段内 DAG
 pub struct WorkflowEngine;
@@ -106,7 +122,8 @@ impl WorkflowEngine {
         completed_count: &Arc<AtomicUsize>,
         total_count: usize,
         semaphore: &Arc<Semaphore>,
-    ) -> Result<(), AppError> {
+        max_concurrency: usize,
+    ) -> Result<Value, AppError> {
         let layers = Self::topological_sort(&stage.nodes, &stage.edges)?;
         let node_map: HashMap<String, &WorkflowNode> = stage.nodes.iter().map(|n| (n.id.clone(), n)).collect();
 
@@ -142,8 +159,10 @@ impl WorkflowEngine {
                     }
 
                     if !all_conditions_met {
-                        // 条件不满足，跳过此节点
                         completed_count.fetch_add(1, Ordering::SeqCst);
+                        if let Ok(conn) = get_db_conn(emitter) {
+                            let _ = insert_node_execution(&conn, execution_id, node_id, "skipped", None);
+                        }
                         emitter.emit("workflow:node-status", serde_json::json!({
                             "execution_id": execution_id,
                             "node_id": node_id,
@@ -153,27 +172,80 @@ impl WorkflowEngine {
                     }
                 }
 
+                // Subflow 节点：在 spawn 之外同步执行（避免 Send 约束问题）
+                if node.node_type == WorkflowNodeType::Subflow {
+                    let ctx_snapshot = context.lock().await.clone();
+                    let resolved_input = resolve_node_input(&node, &ctx_snapshot);
+
+                    // 写入开始记录
+                    if let Ok(conn) = get_db_conn(emitter) {
+                        let input_str = serde_json::to_string(&resolved_input).ok();
+                        let _ = insert_node_execution(&conn, execution_id, node_id, "running", input_str.as_deref());
+                    }
+
+                    emitter.emit("workflow:node-status", serde_json::json!({
+                        "execution_id": execution_id, "node_id": node_id, "status": "running",
+                    })).ok();
+
+                    match Self::execute_subflow_node(
+                        executor, &node, resolved_input,
+                        execution_id, emitter, max_concurrency,
+                    ).await {
+                        Ok(output) => {
+                            context.lock().await.insert(node_id.clone(), output.clone());
+                            completed_count.fetch_add(1, Ordering::SeqCst);
+
+                            if let Ok(conn) = get_db_conn(emitter) {
+                                let output_str = serde_json::to_string(&output).ok();
+                                let _ = update_node_execution(&conn, execution_id, node_id, "completed", output_str.as_deref(), None);
+                            }
+
+                            emitter.emit("workflow:node-status", serde_json::json!({
+                                "execution_id": execution_id, "node_id": node_id, "status": "completed", "output": output,
+                            })).ok();
+                            emitter.emit("workflow:progress", serde_json::json!({
+                                "execution_id": execution_id, "completed": completed_count.load(Ordering::SeqCst), "total": total_count,
+                            })).ok();
+                        }
+                        Err(e) => {
+                            if let Ok(conn) = get_db_conn(emitter) {
+                                let _ = update_node_execution(&conn, execution_id, node_id, "failed", None, Some(&e.to_string()));
+                            }
+
+                            emitter.emit("workflow:node-status", serde_json::json!({
+                                "execution_id": execution_id, "node_id": node_id, "status": "failed", "error": e.to_string(),
+                            })).ok();
+                        }
+                    }
+                    continue;
+                }
+
                 let exec_id = execution_id.to_string();
                 let nid = node_id.clone();
                 let emitter = emitter.clone();
                 let context = context.clone();
                 let completed_count = completed_count.clone();
                 let total = total_count;
-                let _cancel = cancelled.clone();
                 let exec = executor.clone();
                 let permit = semaphore.clone().acquire_owned().await;
                 let _permit = match permit {
                     Ok(p) => p,
                     Err(_) => continue,
                 };
-                
+
                 let handle = tokio::spawn(async move {
+                    let ctx_snapshot = context.lock().await.clone();
+                    let resolved_input = resolve_node_input(&node, &ctx_snapshot);
+
+                    // 写入开始记录
+                    if let Ok(conn) = get_db_conn(&emitter) {
+                        let input_str = serde_json::to_string(&resolved_input).ok();
+                        let _ = insert_node_execution(&conn, &exec_id, &nid, "running", input_str.as_deref());
+                    }
+
                     emitter.emit("workflow:node-status", serde_json::json!({
                         "execution_id": exec_id, "node_id": nid, "status": "running",
                     })).ok();
-
-                    let ctx_snapshot = context.lock().await.clone();
-                    let resolved_input = resolve_node_input(&node, &ctx_snapshot);
 
                     let node_def = NodeDef {
                         id: node.id.clone(),
@@ -195,6 +267,11 @@ impl WorkflowEngine {
                             context.lock().await.insert(nid.clone(), node_output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
 
+                            if let Ok(conn) = get_db_conn(&emitter) {
+                                let output_str = serde_json::to_string(&node_output).ok();
+                                let _ = update_node_execution(&conn, &exec_id, &nid, "completed", output_str.as_deref(), None);
+                            }
+
                             emitter.emit("workflow:node-status", serde_json::json!({
                                 "execution_id": exec_id, "node_id": nid, "status": "completed", "output": node_output,
                             })).ok();
@@ -203,6 +280,10 @@ impl WorkflowEngine {
                             })).ok();
                         }
                         Err(e) => {
+                            if let Ok(conn) = get_db_conn(&emitter) {
+                                let _ = update_node_execution(&conn, &exec_id, &nid, "failed", None, Some(&e.to_string()));
+                            }
+
                             emitter.emit("workflow:node-status", serde_json::json!({
                                 "execution_id": exec_id, "node_id": nid, "status": "failed", "error": e.to_string(),
                             })).ok();
@@ -218,26 +299,50 @@ impl WorkflowEngine {
             }
         }
 
-        Ok(())
+        Ok(Value::Null)
     }
 
     /// 评估边上的条件表达式
+    /// 支持：==, !=, >, <, >=, <=, contains
     fn evaluate_condition(condition: &str, source_output: Option<&Value>) -> bool {
         match source_output {
             Some(output) => {
                 let output_str = output.to_string();
-                // 简单条件评估：支持 ==, !=, >, <, contains
+                let trimmed = output_str.trim_matches('"');
+
                 if let Some(val) = condition.strip_prefix("==") {
-                    return output_str.trim_matches('"') == val.trim();
+                    return trimmed == val.trim();
                 }
                 if let Some(val) = condition.strip_prefix("!=") {
-                    return output_str.trim_matches('"') != val.trim();
+                    return trimmed != val.trim();
+                }
+                if let Some(val) = condition.strip_prefix(">=") {
+                    if let (Ok(a), Ok(b)) = (trimmed.parse::<f64>(), val.trim().parse::<f64>()) {
+                        return a >= b;
+                    }
+                    return trimmed >= val.trim();
+                }
+                if let Some(val) = condition.strip_prefix("<=") {
+                    if let (Ok(a), Ok(b)) = (trimmed.parse::<f64>(), val.trim().parse::<f64>()) {
+                        return a <= b;
+                    }
+                    return trimmed <= val.trim();
+                }
+                if let Some(val) = condition.strip_prefix(">") {
+                    if let (Ok(a), Ok(b)) = (trimmed.parse::<f64>(), val.trim().parse::<f64>()) {
+                        return a > b;
+                    }
+                    return trimmed > val.trim();
+                }
+                if let Some(val) = condition.strip_prefix("<") {
+                    if let (Ok(a), Ok(b)) = (trimmed.parse::<f64>(), val.trim().parse::<f64>()) {
+                        return a < b;
+                    }
+                    return trimmed < val.trim();
                 }
                 if let Some(val) = condition.strip_prefix("contains") {
                     return output_str.contains(val.trim());
                 }
-                // 默认：条件表达式作为 JavaScript 表达式（通过 transform executor 评估）
-                // 简单场景：非空即真
                 !output.is_null() && !output_str.is_empty()
             }
             None => false,
@@ -275,10 +380,81 @@ impl WorkflowEngine {
                 node_outputs.first().map(|(_, v)| (*v).clone()).unwrap_or(Value::Null)
             }
             MergeStrategy::Custom(ref script) => {
-                // 自定义合并脚本（由 transform executor 执行）
                 Value::String(format!("custom_merge:{}", script))
             }
         }
+    }
+
+    /// 执行 Subflow 节点：递归加载子工作流定义并执行
+    #[async_recursion]
+    async fn execute_subflow_node(
+        executor: &Arc<NodeExecutor>,
+        node: &WorkflowNode,
+        input_data: Value,
+        execution_id: &str,
+        emitter: &tauri::AppHandle,
+        max_concurrency: usize,
+    ) -> Result<Value, AppError> {
+        // 从节点参数中获取子工作流定义 ID
+        let subflow_def_id = node.params
+            .as_ref()
+            .and_then(|p| p.get("subflow_definition_id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AppError::InvalidInput("Subflow 节点缺少 subflow_definition_id 参数".into()))?;
+
+        // 加载子工作流定义
+        let conn = get_db_conn(emitter)?;
+        let subflow_def = super::get_definition(&conn, subflow_def_id)?
+            .ok_or_else(|| AppError::InvalidInput(format!("子工作流定义不存在: {}", subflow_def_id)))?;
+
+        // 检查递归深度（防止无限递归）
+        let current_depth = node.params
+            .as_ref()
+            .and_then(|p| p.get("_depth"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if current_depth >= 5 {
+            return Err(AppError::InvalidInput("工作流递归深度超过限制（最大 5 层）".into()));
+        }
+
+        // 创建子工作流的 execution_id（使用父 execution_id + 节点 id 作为子 execution_id）
+        let sub_execution_id = format!("{}_{}", execution_id, node.id);
+
+        // 创建子工作流实例记录
+        let now = crate::utils::now();
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO workflow_instances (id, definition_id, definition_name, status, context, trigger, started_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'running', '{}', 'subflow', ?4, ?4, ?4)",
+            rusqlite::params![sub_execution_id, subflow_def_id, subflow_def.name, now],
+        );
+
+        // 递归执行子工作流
+        let result = Self::execute_with_concurrency(
+            executor,
+            &subflow_def,
+            &sub_execution_id,
+            input_data,
+            emitter,
+            max_concurrency,
+        ).await;
+
+        // 更新子工作流实例状态
+        match &result {
+            Ok(_) => {
+                let _ = conn.execute(
+                    "UPDATE workflow_instances SET status = 'success', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![crate::utils::now(), sub_execution_id],
+                );
+            }
+            Err(e) => {
+                let _ = conn.execute(
+                    "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![e.to_string(), crate::utils::now(), sub_execution_id],
+                );
+            }
+        }
+
+        result
     }
 
     /// 启动工作流执行（两层调度）
@@ -289,9 +465,8 @@ impl WorkflowEngine {
         input_data: Value,
         emitter: &tauri::AppHandle,
         max_concurrency: usize,
-    ) -> Result<(), AppError> {
+    ) -> Result<Value, AppError> {
         let cancelled = Arc::new(AtomicBool::new(false));
-        let _node_states: Arc<AsyncMutex<HashMap<String, NodeRuntimeState>>> = Arc::new(AsyncMutex::new(HashMap::new()));
         let total_count: usize = def.stages.iter().map(|s| s.nodes.len()).sum();
         let completed_count = Arc::new(AtomicUsize::new(0));
 
@@ -300,7 +475,6 @@ impl WorkflowEngine {
 
         let semaphore = Arc::new(Semaphore::new(max_concurrency));
 
-        // 外层调度：阶段串行
         for stage in &def.stages {
             if cancelled.load(Ordering::SeqCst) {
                 return Err(AppError::External("工作流已被取消".into()));
@@ -313,14 +487,13 @@ impl WorkflowEngine {
                 "status": "running",
             })).ok();
 
-            // 内层调度：阶段内 DAG
             Self::execute_stage(
                 executor, stage, execution_id,
                 &context, emitter, &cancelled,
                 &completed_count, total_count, &semaphore,
+                max_concurrency,
             ).await?;
 
-            // 执行 Gate 合并
             let ctx = context.lock().await.clone();
             let merged = Self::merge_stage_outputs(stage, &ctx);
             context.lock().await.insert(format!("__stage_{}_output__", stage.order), merged);
@@ -333,12 +506,21 @@ impl WorkflowEngine {
             })).ok();
         }
 
+        // 更新实例状态为成功
+        if let Ok(conn) = get_db_conn(emitter) {
+            let _ = conn.execute(
+                "UPDATE workflow_instances SET status = 'success', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
+                rusqlite::params![crate::utils::now(), execution_id],
+            );
+        }
+
         emitter.emit("workflow:execution-status", serde_json::json!({
             "execution_id": execution_id,
             "status": "completed",
         })).ok();
 
-        Ok(())
+        let ctx = context.lock().await.clone();
+        Ok(Value::Object(ctx.into_iter().collect()))
     }
 
     /// 从 checkpoint 恢复执行
@@ -350,11 +532,8 @@ impl WorkflowEngine {
         input_data: Value,
         emitter: &tauri::AppHandle,
         max_concurrency: usize,
-    ) -> Result<(), AppError> {
-        let db_conn = match emitter.state::<crate::DbState>().get_conn() {
-            Ok(conn) => conn,
-            Err(_) => return Err(AppError::External("无法获取数据库连接".into())),
-        };
+    ) -> Result<Value, AppError> {
+        let db_conn = get_db_conn(emitter)?;
 
         let mut stmt = db_conn.prepare(
             "SELECT node_id, status FROM node_executions WHERE execution_id = ?1"
@@ -372,7 +551,6 @@ impl WorkflowEngine {
             .map(|(id, _)| id.clone())
             .collect();
 
-        // 过滤每个阶段中未完成的节点
         let mut recovered_stages = Vec::new();
         for stage in &def.stages {
             let pending_nodes: Vec<WorkflowNode> = stage.nodes.iter()
@@ -405,7 +583,7 @@ impl WorkflowEngine {
             emitter.emit("workflow:execution-status", serde_json::json!({
                 "execution_id": execution_id, "status": "completed", "message": "所有节点已完成",
             })).ok();
-            return Ok(());
+            return Ok(Value::Null);
         }
 
         let recovered_def = WorkflowDefinition {

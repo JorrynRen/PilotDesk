@@ -11,9 +11,6 @@ import type {
   WorkflowNode,
   WorkflowEdge,
   Stage,
-  WorkflowInstanceStatus,
-  StepExecution,
-  GateConfig,
 } from '../types/workflow';
 import { validateWorkflow } from './WorkflowDefinition';
 import { createInstance, updateStepStatus, canTransition, emitWorkflowEvent } from './WorkflowInstance';
@@ -84,14 +81,36 @@ function topologicalSort(nodes: WorkflowNode[], edges: WorkflowEdge[]): string[]
 // ── 条件评估 ──
 
 function evaluateCondition(condition: string, sourceOutput: any): boolean {
+  const trimmed = String(sourceOutput ?? '').replace(/^"|"$/g, '');
+
+  if (condition.startsWith('>=')) {
+    const val = condition.slice(2).trim();
+    if (!isNaN(Number(trimmed)) && !isNaN(Number(val))) return Number(trimmed) >= Number(val);
+    return trimmed >= val;
+  }
+  if (condition.startsWith('<=')) {
+    const val = condition.slice(2).trim();
+    if (!isNaN(Number(trimmed)) && !isNaN(Number(val))) return Number(trimmed) <= Number(val);
+    return trimmed <= val;
+  }
+  if (condition.startsWith('>')) {
+    const val = condition.slice(1).trim();
+    if (!isNaN(Number(trimmed)) && !isNaN(Number(val))) return Number(trimmed) > Number(val);
+    return trimmed > val;
+  }
+  if (condition.startsWith('<')) {
+    const val = condition.slice(1).trim();
+    if (!isNaN(Number(trimmed)) && !isNaN(Number(val))) return Number(trimmed) < Number(val);
+    return trimmed < val;
+  }
   if (condition.startsWith('==')) {
-    return String(sourceOutput).replace(/^"|"$/g, '') === condition.slice(2).trim();
+    return trimmed === condition.slice(2).trim();
   }
   if (condition.startsWith('!=')) {
-    return String(sourceOutput).replace(/^"|"$/g, '') !== condition.slice(2).trim();
+    return trimmed !== condition.slice(2).trim();
   }
   if (condition.startsWith('contains')) {
-    return String(sourceOutput).includes(condition.slice(8).trim());
+    return trimmed.includes(condition.slice(8).trim());
   }
   // 默认：非空即真
   return sourceOutput !== null && sourceOutput !== undefined && sourceOutput !== '';
@@ -149,6 +168,7 @@ class WorkflowEngine {
       throw new Error(`工作流定义验证失败:\n${errors.map((e) => `  [${e.field}] ${e.message}`).join('\n')}`);
     }
     this.definitions.set(def.id, { ...def, updatedAt: new Date().toISOString() });
+    this.registerEventTriggers(def);
     return def.id;
   }
 
@@ -161,6 +181,9 @@ class WorkflowEngine {
       throw new Error(`工作流定义验证失败:\n${errors.map((e) => `  [${e.field}] ${e.message}`).join('\n')}`);
     }
     this.definitions.set(id, updated);
+    // 重新注册事件触发器（trigger 配置可能已修改）
+    this.unregisterEventTriggers(id);
+    this.registerEventTriggers(updated);
   }
 
   async deleteDefinition(id: string): Promise<void> {
@@ -272,7 +295,7 @@ class WorkflowEngine {
 
   // ── Agent 会话管理 ──
 
-  private cleanupAgentSessions(instanceId: string): void {
+  private cleanupAgentSessions(_instanceId: string): void {
     for (const [sessionId, session] of this.agentSessions.entries()) {
       try {
         session.api.deleteSession(sessionId);
@@ -286,7 +309,6 @@ class WorkflowEngine {
   // ── 事件触发器管理 ──
 
   private registerEventTriggers(def: WorkflowDefinition): void {
-    // 检查 trigger 配置
     if (def.trigger.triggerType !== 'event' || !def.trigger.eventName) return;
 
     const eventName = def.trigger.eventName;
@@ -333,7 +355,6 @@ class WorkflowEngine {
     emitWorkflowEvent('instance:started', instanceId);
 
     try {
-      // 外层调度：阶段串行
       for (const stage of def.stages) {
         if (instance.status !== 'running') break;
 
@@ -342,10 +363,8 @@ class WorkflowEngine {
           stageName: stage.name,
         });
 
-        // 内层调度：阶段内 DAG
         const nodeOutputs = await this.executeStage(instanceId, def, stage, instance);
 
-        // Gate 合并
         const merged = mergeStageOutputs(stage, nodeOutputs);
         instance.context[`__stage_${stage.order}_output__`] = merged;
 
@@ -355,7 +374,6 @@ class WorkflowEngine {
         });
       }
 
-      // 检查是否所有阶段完成
       if (instance.status === 'running') {
         instance.status = 'success';
         instance.completedAt = new Date().toISOString();
@@ -383,7 +401,6 @@ class WorkflowEngine {
     for (const layer of layers) {
       if (instance.status !== 'running') break;
 
-      // 同一层节点并行执行
       const promises = layer.map(async (nodeId) => {
         const node = stage.nodes.find((n) => n.id === nodeId);
         if (!node) return;
@@ -407,7 +424,7 @@ class WorkflowEngine {
           return;
         }
 
-        await this.executeNode(instanceId, def, stage, node, nodeOutputs, instance);
+        await this.executeNodeWithRetry(instanceId, def, stage, node, nodeOutputs, instance);
       });
 
       await Promise.all(promises);
@@ -416,7 +433,9 @@ class WorkflowEngine {
     return nodeOutputs;
   }
 
-  private async executeNode(
+  // ── 节点执行（含重试，循环而非递归）──
+
+  private async executeNodeWithRetry(
     instanceId: string,
     def: WorkflowDefinition,
     stage: Stage,
@@ -424,179 +443,235 @@ class WorkflowEngine {
     nodeOutputs: Map<string, any>,
     instance: WorkflowInstance,
   ): Promise<void> {
+    const maxRetries = node.retryCount || 0;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        const delayMs = node.retryDelayMs || 1000;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+
+      try {
+        const result = await this.executeNode(instanceId, def, stage, node, nodeOutputs, instance, attempt);
+        nodeOutputs.set(node.id, result);
+        updateStepStatus(instance, node.id, 'success', { output: result });
+        emitWorkflowEvent('step:completed', instanceId, node.id, { output: result });
+        return; // 成功则退出循环
+      } catch (err: any) {
+        const errorMsg = err.message || String(err);
+
+        if (attempt < maxRetries) {
+          updateStepStatus(instance, node.id, 'retrying', { retryCount: attempt + 1, error: errorMsg });
+          emitWorkflowEvent('step:retrying', instanceId, node.id, { retryCount: attempt + 1, error: errorMsg });
+        } else {
+          // 最后一次尝试失败
+          nodeOutputs.set(node.id, { error: errorMsg });
+          updateStepStatus(instance, node.id, 'failed', { error: errorMsg });
+          emitWorkflowEvent('step:failed', instanceId, node.id, { error: errorMsg });
+          throw err;
+        }
+      }
+    }
+  }
+
+  // ── 按节点类型执行 ──
+
+  private async executeNode(
+    instanceId: string,
+    def: WorkflowDefinition,
+    stage: Stage,
+    node: WorkflowNode,
+    nodeOutputs: Map<string, any>,
+    instance: WorkflowInstance,
+    _attempt: number,
+  ): Promise<any> {
     instance.currentNodeId = node.id;
     updateStepStatus(instance, node.id, 'running');
     emitWorkflowEvent('step:started', instanceId, node.id);
 
-    try {
-      // 延迟控制属性
-      if (node.delayMs && node.delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, node.delayMs));
-      }
-
-      let result: any;
-
-      switch (node.type) {
-        case 'agent': {
-          if (!node.pluginId) {
-            throw new Error(`Agent 节点 "${node.label}" 缺少插件 ID`);
-          }
-          const agentApi = new PluginAgentAPI(node.pluginId);
-          const agentType = node.params?.agent_type || 'claude';
-          const promptTemplate = node.params?.prompt_template || '';
-          const prompt = promptTemplate ? resolveTemplate(promptTemplate, instance.context) : '';
-
-          const sessionInfo = await agentApi.createSession(agentType, {
-            system_prompt: node.params?.system_prompt,
-          });
-          this.agentSessions.set(sessionInfo.session_id, {
-            api: agentApi,
-            sessionId: sessionInfo.session_id,
-            agentType,
-          });
-
-          const response = await agentApi.sendMessage(sessionInfo.session_id, prompt);
-          result = { session_id: sessionInfo.session_id, agent_type: agentType, content: response.content };
-
-          if (node.outputMapping) {
-            for (const [key, path] of Object.entries(node.outputMapping)) {
-              instance.context[path] = result?.[key];
-            }
-          }
-          break;
-        }
-
-        case 'api': {
-          const url = node.params?.url;
-          if (!url) throw new Error(`API 节点 "${node.label}" 缺少 URL`);
-          const method = node.params?.method || 'GET';
-          const body = node.params?.body_template ? resolveTemplate(node.params.body_template, instance.context) : undefined;
-
-          const fetchOptions: RequestInit = { method };
-          if (body && method !== 'GET') {
-            fetchOptions.body = body;
-            fetchOptions.headers = { 'Content-Type': 'application/json' };
-          }
-
-          const controller = new AbortController();
-          const timeout = node.timeoutMs || 60000;
-          const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-          try {
-            const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
-            result = await response.json();
-          } finally {
-            clearTimeout(timeoutId);
-          }
-
-          if (node.outputMapping) {
-            for (const [key, path] of Object.entries(node.outputMapping)) {
-              instance.context[path] = result?.[key];
-            }
-          }
-          break;
-        }
-
-        case 'transform': {
-          const script = node.params?.script;
-          if (!script) throw new Error(`转换节点 "${node.label}" 缺少脚本`);
-          // 在沙箱中执行脚本
-          const fn = new Function('context', 'input', script);
-          result = fn(instance.context, nodeOutputs);
-          break;
-        }
-
-        case 'interact': {
-          const config = node.params || { prompt: '请输入', inputType: 'text' };
-          result = {
-            type: 'human_input',
-            prompt: resolveTemplate(config.prompt, instance.context),
-            inputType: config.inputType,
-            options: config.options,
-            timeoutMinutes: config.timeoutMinutes || 1440,
-          };
-          globalEventBus.emit('workflow:awaiting-input', {
-            instanceId,
-            nodeId: node.id,
-            config: result,
-          });
-          break;
-        }
-
-        case 'plugin': {
-          if (!node.pluginId || !node.commandId) {
-            throw new Error(`插件节点 "${node.label}" 缺少插件 ID 或命令 ID`);
-          }
-          const params = node.params ? resolveParams(node.params, instance.context) : {};
-          const cmdResult = await commandDispatcher.execute(
-            node.pluginId,
-            node.commandId,
-            params,
-            { timeout: node.timeoutMs },
-          );
-          if (!cmdResult.success) {
-            throw new Error(cmdResult.error || '命令执行失败');
-          }
-          result = cmdResult.data;
-          if (node.outputMapping) {
-            for (const [key, path] of Object.entries(node.outputMapping)) {
-              instance.context[path] = result?.[key];
-            }
-          }
-          break;
-        }
-
-        case 'subflow': {
-          const subflowDefId = node.params?.definitionId;
-          if (!subflowDefId) {
-            throw new Error(`子工作流节点 "${node.label}" 缺少 definitionId`);
-          }
-          const subflowDef = this.definitions.get(subflowDefId);
-          if (!subflowDef) {
-            throw new Error(`子工作流定义未找到: ${subflowDefId}`);
-          }
-          const subflowInstanceId = await this.start(subflowDefId, {
-            ...instance.context,
-            ...(node.inputMapping ? resolveParams(node.inputMapping as Record<string, any>, instance.context) : {}),
-          });
-          const subflowInstance = this.instances.get(subflowInstanceId);
-          result = {
-            type: 'subflow',
-            definitionId: subflowDefId,
-            instanceId: subflowInstanceId,
-            output: subflowInstance?.context || {},
-          };
-          break;
-        }
-
-        default:
-          result = { skipped: true };
-      }
-
-      nodeOutputs.set(node.id, result);
-      updateStepStatus(instance, node.id, 'success', { output: result });
-      emitWorkflowEvent('step:completed', instanceId, node.id, { output: result });
-    } catch (err: any) {
-      const errorMsg = err.message || String(err);
-
-      // 重试逻辑
-      if (node.retryCount && node.retryCount > 0) {
-        const step = instance.steps[node.id];
-        const currentRetry = (step?.retryCount || 0) + 1;
-        if (currentRetry <= node.retryCount) {
-          updateStepStatus(instance, node.id, 'retrying', { retryCount: currentRetry, error: errorMsg });
-          emitWorkflowEvent('step:retrying', instanceId, node.id, { retryCount: currentRetry, error: errorMsg });
-          const delayMs = node.retryDelayMs || 1000;
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-          return this.executeNode(instanceId, def, stage, node, nodeOutputs, instance);
-        }
-      }
-
-      nodeOutputs.set(node.id, { error: errorMsg });
-      updateStepStatus(instance, node.id, 'failed', { error: errorMsg });
-      emitWorkflowEvent('step:failed', instanceId, node.id, { error: errorMsg });
-      throw err;
+    // 延迟控制属性
+    if (node.delayMs && node.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, node.delayMs));
     }
+
+    switch (node.type) {
+      case 'agent': return this.executeAgentNode(instanceId, node, instance);
+      case 'api': return this.executeApiNode(node, instance);
+      case 'transform': return this.executeTransformNode(node, instance, nodeOutputs);
+      case 'interact': return this.executeInteractNode(instanceId, node, instance);
+      case 'plugin': return this.executePluginNode(node, instance);
+      case 'subflow': return this.executeSubflowNode(node, instance);
+      default: return { skipped: true };
+    }
+  }
+
+  private async executeAgentNode(
+    _instanceId: string,
+    node: WorkflowNode,
+    instance: WorkflowInstance,
+  ): Promise<any> {
+    if (!node.pluginId) throw new Error(`Agent 节点 "${node.label}" 缺少插件 ID`);
+
+    const agentApi = new PluginAgentAPI(node.pluginId);
+    const agentType = node.params?.agent_type || 'claude';
+    const promptTemplate = node.params?.prompt_template || '';
+    const prompt = promptTemplate ? resolveTemplate(promptTemplate, instance.context) : '';
+
+    const sessionInfo = await agentApi.createSession(agentType, {
+      system_prompt: node.params?.system_prompt,
+    });
+    this.agentSessions.set(sessionInfo.session_id, {
+      api: agentApi,
+      sessionId: sessionInfo.session_id,
+      agentType,
+    });
+
+    const response = await agentApi.sendMessage(sessionInfo.session_id, prompt);
+    const result = { session_id: sessionInfo.session_id, agent_type: agentType, content: response.content };
+
+    if (node.outputMapping) {
+      for (const [key, path] of Object.entries(node.outputMapping)) {
+        instance.context[path] = (result as Record<string, any>)?.[key];
+      }
+    }
+    return result;
+  }
+
+  private async executeApiNode(
+    node: WorkflowNode,
+    instance: WorkflowInstance,
+  ): Promise<any> {
+    const url = node.params?.url;
+    if (!url) throw new Error(`API 节点 "${node.label}" 缺少 URL`);
+
+    const method = node.params?.method || 'GET';
+    const body = node.params?.body_template ? resolveTemplate(node.params.body_template, instance.context) : undefined;
+
+    const fetchOptions: RequestInit = { method };
+    if (body && method !== 'GET') {
+      fetchOptions.body = body;
+      fetchOptions.headers = { 'Content-Type': 'application/json' };
+    }
+
+    const controller = new AbortController();
+    const timeout = node.timeoutMs || 60000;
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
+      const result = await response.json();
+
+      if (node.outputMapping) {
+        for (const [key, path] of Object.entries(node.outputMapping)) {
+          instance.context[path] = (result as Record<string, any>)?.[key];
+        }
+      }
+      return result;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private executeTransformNode(
+    node: WorkflowNode,
+    instance: WorkflowInstance,
+    nodeOutputs: Map<string, any>,
+  ): any {
+    const script = node.params?.script;
+    if (!script) throw new Error(`转换节点 "${node.label}" 缺少脚本`);
+    const fn = new Function('context', 'input', script);
+    return fn(instance.context, Object.fromEntries(nodeOutputs));
+  }
+
+  private executeInteractNode(
+    instanceId: string,
+    node: WorkflowNode,
+    instance: WorkflowInstance,
+  ): any {
+    const config = node.params || { prompt: '请输入', inputType: 'text' };
+    const result = {
+      type: 'human_input',
+      prompt: resolveTemplate(config.prompt, instance.context),
+      inputType: config.inputType,
+      options: config.options,
+      timeoutMinutes: config.timeoutMinutes || 1440,
+    };
+    globalEventBus.emit('workflow:awaiting-input', {
+      instanceId,
+      nodeId: node.id,
+      config: result,
+    });
+    return result;
+  }
+
+  private async executePluginNode(
+    node: WorkflowNode,
+    instance: WorkflowInstance,
+  ): Promise<any> {
+    if (!node.pluginId || !node.commandId) {
+      throw new Error(`插件节点 "${node.label}" 缺少插件 ID 或命令 ID`);
+    }
+
+    const params = node.params ? resolveParams(node.params, instance.context) : {};
+    const cmdResult = await commandDispatcher.execute(
+      node.pluginId,
+      node.commandId,
+      params,
+      { timeout: node.timeoutMs },
+    );
+
+    if (!cmdResult.success) {
+      throw new Error(cmdResult.error || '命令执行失败');
+    }
+
+    const result = cmdResult.data;
+    if (node.outputMapping) {
+      for (const [key, path] of Object.entries(node.outputMapping)) {
+        instance.context[path] = (result as Record<string, any>)?.[key];
+      }
+    }
+    return result;
+  }
+
+  private async executeSubflowNode(
+    node: WorkflowNode,
+    instance: WorkflowInstance,
+  ): Promise<any> {
+    const subflowDefId = node.params?.definitionId;
+    if (!subflowDefId) throw new Error(`子工作流节点 "${node.label}" 缺少 definitionId`);
+
+    const subflowDef = this.definitions.get(subflowDefId);
+    if (!subflowDef) throw new Error(`子工作流定义未找到: ${subflowDefId}`);
+
+    // 等待子工作流完成后再返回结果
+    const subflowInstanceId = await this.start(subflowDefId, {
+      ...instance.context,
+      ...(node.inputMapping ? resolveParams(node.inputMapping as Record<string, any>, instance.context) : {}),
+    });
+
+    // 等待子工作流完成
+    const subflowInstance = await this.waitForCompletion(subflowInstanceId);
+
+    return {
+      type: 'subflow',
+      definitionId: subflowDefId,
+      instanceId: subflowInstanceId,
+      output: subflowInstance?.context || {},
+    };
+  }
+
+  private async waitForCompletion(instanceId: string): Promise<WorkflowInstance | undefined> {
+    return new Promise((resolve) => {
+      const check = () => {
+        const instance = this.instances.get(instanceId);
+        if (!instance || instance.status === 'success' || instance.status === 'failed' || instance.status === 'cancelled') {
+          resolve(instance);
+        } else {
+          setTimeout(check, 200);
+        }
+      };
+      check();
+    });
   }
 }
 
