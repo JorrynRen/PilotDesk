@@ -159,7 +159,7 @@ impl WorkflowEngine {
                 let context = context.clone();
                 let completed_count = completed_count.clone();
                 let total = total_count;
-                let cancel = cancelled.clone();
+                let _cancel = cancelled.clone();
                 let exec = executor.clone();
                 let permit = semaphore.clone().acquire_owned().await;
                 let _permit = match permit {
@@ -291,7 +291,7 @@ impl WorkflowEngine {
         max_concurrency: usize,
     ) -> Result<(), AppError> {
         let cancelled = Arc::new(AtomicBool::new(false));
-        let node_states: Arc<AsyncMutex<HashMap<String, NodeRuntimeState>>> = Arc::new(AsyncMutex::new(HashMap::new()));
+        let _node_states: Arc<AsyncMutex<HashMap<String, NodeRuntimeState>>> = Arc::new(AsyncMutex::new(HashMap::new()));
         let total_count: usize = def.stages.iter().map(|s| s.nodes.len()).sum();
         let completed_count = Arc::new(AtomicUsize::new(0));
 
@@ -342,6 +342,7 @@ impl WorkflowEngine {
     }
 
     /// 从 checkpoint 恢复执行
+    #[allow(dead_code)]
     pub async fn recover_execution(
         executor: &Arc<NodeExecutor>,
         def: &WorkflowDefinition,

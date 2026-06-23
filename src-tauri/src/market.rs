@@ -10,6 +10,7 @@ pub const SERVER_SOURCES: &[&str] = &[
 #[allow(dead_code)]
 pub const AGENTS_CONFIG_PATH: &str = "/server/market/agents-config/agents-config.json";
 pub const PLUGINS_INDEX_PATH: &str = "/server/market/plugins/index.json";
+#[allow(dead_code)]
 pub const PLUGINS_DIR_PATH: &str = "/server/market/plugins";
 
 /// 根据路径构建所有服务器源的完整 URL 列表

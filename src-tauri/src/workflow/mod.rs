@@ -253,6 +253,7 @@ pub struct WorkflowInstance {
 // ════════════════════════════════════════════════════════════
 
 /// 根据连线关系自动调整节点阶段归属
+#[allow(dead_code)]
 pub fn auto_assign_stage(stages: &mut Vec<Stage>) {
     let mut node_to_stage: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for stage in stages.iter() {
@@ -494,6 +495,7 @@ pub fn update_instance_status(
 // 兼容层
 // ════════════════════════════════════════════════════════════
 
+#[allow(dead_code)]
 pub fn legacy_to_stages(nodes: Vec<WorkflowNode>, edges: Vec<WorkflowEdge>) -> Vec<Stage> {
     if nodes.is_empty() {
         return vec![];

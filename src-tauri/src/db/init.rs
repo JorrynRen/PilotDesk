@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -753,6 +753,97 @@ fn migrate_add_workflow_missing_tables(conn: &Connection) -> Result<(), AppError
     Ok(())
 }
 
+/// v67: 迁移旧版 workflow_definitions 数据
+/// 旧版表有 nodes/edges 列，新版改为 trigger/stages 列
+/// 将旧 nodes/edges JSON 包装为默认阶段，设置默认 trigger
+fn migrate_legacy_workflow_columns(conn: &Connection) -> Result<(), AppError> {
+    // 检查旧列是否存在
+    let has_nodes_col: bool = conn.prepare("SELECT nodes FROM workflow_definitions LIMIT 1").is_ok();
+    if !has_nodes_col {
+        // 已经是新 schema，无需迁移
+        return Ok(());
+    }
+
+    // 读取所有旧数据
+    let mut stmt = conn.prepare(
+        "SELECT id, name, version, description, nodes, edges, input_schema, output_schema, max_depth, created_at, updated_at, enabled FROM workflow_definitions"
+    )?;
+    let rows: Vec<(String, String, String, String, String, String, Option<String>, Option<String>, Option<i32>, i64, i64, bool)> = stmt.query_map([], |row| {
+        Ok((
+            row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+            row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+            row.get(6)?, row.get(7)?, row.get(8)?,
+            row.get(9)?, row.get(10)?, row.get(11)?,
+        ))
+    })?.filter_map(|r| r.ok()).collect();
+
+    if rows.is_empty() {
+        // 无数据，直接重建表
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS workflow_definitions;"
+        )?;
+        // 重新创建新表（复用 v21 的建表逻辑）
+        migrate_add_workflow_tables(conn)?;
+        return Ok(());
+    }
+
+    // 重建表：旧表名 → 新表
+    conn.execute_batch(
+        "ALTER TABLE workflow_definitions RENAME TO workflow_definitions_old;"
+    )?;
+
+    // 创建新表
+    conn.execute_batch(
+        r#"CREATE TABLE IF NOT EXISTS workflow_definitions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            version TEXT NOT NULL DEFAULT '1.0.0',
+            description TEXT NOT NULL DEFAULT '',
+            trigger TEXT NOT NULL DEFAULT '{"triggerType":"manual"}',
+            stages TEXT NOT NULL DEFAULT '[]',
+            input_schema TEXT,
+            output_schema TEXT,
+            max_depth INTEGER DEFAULT 10,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1
+        );"#
+    )?;
+
+    // 逐行迁移数据
+    for (id, name, version, description, nodes_json, _edges_json, input_schema, output_schema, max_depth, created_at, updated_at, enabled) in &rows {
+        let stages_json = format!(
+            r#"[{{"id":"{}","name":"默认阶段","order":0,"nodes":{},"edges":[],"gate":{{"strategy":"all","mergeStrategy":"merge"}}}}]"#,
+            crate::utils::new_id(),
+            nodes_json,
+        );
+        let trigger_json = r#"{"triggerType":"manual"}"#.to_string();
+
+        conn.execute(
+            "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages, input_schema, output_schema, max_depth, created_at, updated_at, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            rusqlite::params![
+                id, name, version, description,
+                trigger_json, stages_json,
+                input_schema, output_schema, max_depth,
+                created_at, updated_at, enabled,
+            ],
+        )?;
+    }
+
+    // 删除旧表
+    conn.execute_batch("DROP TABLE IF EXISTS workflow_definitions_old;")?;
+
+    // 重建索引
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
+         CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
+         CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);"
+    )?;
+
+    Ok(())
+}
+
 /// 根据 MIGRATION_VERSIONS 数组循环执行迁移
 /// 新增迁移时：在 MIGRATION_VERSIONS 末尾追加版本号，并在 match 中添加对应分支
 fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppError> {
@@ -783,6 +874,7 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 23 => migrate_add_workflow_schedule(conn)?,
                 65 => migrate_add_performance_indexes(conn)?,
                 66 => migrate_add_workflow_missing_tables(conn)?,
+                67 => migrate_legacy_workflow_columns(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }
