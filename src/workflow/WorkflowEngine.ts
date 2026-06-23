@@ -633,6 +633,8 @@ class WorkflowEngine {
     return result;
   }
 
+  private _subflowChain: Set<string> = new Set();
+
   private async executeSubflowNode(
     node: WorkflowNode,
     instance: WorkflowInstance,
@@ -640,24 +642,36 @@ class WorkflowEngine {
     const subflowDefId = node.params?.definitionId;
     if (!subflowDefId) throw new Error(`子工作流节点 "${node.label}" 缺少 definitionId`);
 
+    // 循环引用检测
+    if (this._subflowChain.has(subflowDefId)) {
+      const chain = [...this._subflowChain, subflowDefId].join(' → ');
+      throw new Error(`检测到工作流循环引用：${chain}`);
+    }
+
     const subflowDef = this.definitions.get(subflowDefId);
     if (!subflowDef) throw new Error(`子工作流定义未找到: ${subflowDefId}`);
 
-    // 等待子工作流完成后再返回结果
-    const subflowInstanceId = await this.start(subflowDefId, {
-      ...instance.context,
-      ...(node.inputMapping ? resolveParams(node.inputMapping as Record<string, any>, instance.context) : {}),
-    });
+    this._subflowChain.add(subflowDefId);
 
-    // 等待子工作流完成
-    const subflowInstance = await this.waitForCompletion(subflowInstanceId);
+    try {
+      // 等待子工作流完成后再返回结果
+      const subflowInstanceId = await this.start(subflowDefId, {
+        ...instance.context,
+        ...(node.inputMapping ? resolveParams(node.inputMapping as Record<string, any>, instance.context) : {}),
+      });
 
-    return {
-      type: 'subflow',
-      definitionId: subflowDefId,
-      instanceId: subflowInstanceId,
-      output: subflowInstance?.context || {},
-    };
+      // 等待子工作流完成
+      const subflowInstance = await this.waitForCompletion(subflowInstanceId);
+
+      return {
+        type: 'subflow',
+        definitionId: subflowDefId,
+        instanceId: subflowInstanceId,
+        output: subflowInstance?.context || {},
+      };
+    } finally {
+      this._subflowChain.delete(subflowDefId);
+    }
   }
 
   private async waitForCompletion(instanceId: string): Promise<WorkflowInstance | undefined> {

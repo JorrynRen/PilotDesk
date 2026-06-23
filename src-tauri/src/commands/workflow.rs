@@ -230,9 +230,20 @@ pub fn get_execution(
     execution_id: String,
 ) -> Result<Option<workflow::WorkflowInstance>, String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
-    let instances = workflow::list_instances(&conn, None)
+    // 按 ID 直接查询，避免全量扫描
+    let mut stmt = conn.prepare(
+        "SELECT id, definition_id, definition_name, status, context, steps,
+                current_node_id, trigger, trigger_detail,
+                started_at, completed_at, estimated_remaining, error, created_at
+         FROM workflow_instances WHERE id = ?1"
+    ).map_err(|e| format!("查询失败: {}", e))?;
+    let mut rows = stmt.query_map(rusqlite::params![execution_id], |row| workflow::instance_from_row(row))
         .map_err(|e| format!("查询失败: {}", e))?;
-    Ok(instances.into_iter().find(|i| i.id == execution_id))
+    match rows.next() {
+        Some(Ok(inst)) => Ok(Some(inst)),
+        Some(Err(e)) => Err(format!("解析失败: {}", e)),
+        None => Ok(None),
+    }
 }
 
 /// 获取执行历史
@@ -252,22 +263,25 @@ pub fn get_node_executions(
     execution_id: String,
 ) -> Result<Vec<serde_json::Value>, String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
-    let instance = workflow::list_instances(&conn, None)
-        .map_err(|e| format!("查询失败: {}", e))?
-        .into_iter().find(|i| i.id == execution_id)
-        .ok_or_else(|| "执行实例不存在".to_string())?;
-
-    let steps = instance.steps.as_object().cloned().unwrap_or_default();
-    let mut result = Vec::new();
-    for (node_id, step_val) in steps {
-        result.push(serde_json::json!({
-            "node_id": node_id,
-            "status": step_val.get("status"),
-            "output": step_val.get("output"),
-            "error": step_val.get("error"),
-        }));
-    }
-    Ok(result)
+    // 从 node_executions 表查询（而非废弃的 instance.steps JSON）
+    let mut stmt = conn.prepare(
+        "SELECT node_id, status, input_data, output_data, error_message, started_at, finished_at
+         FROM node_executions WHERE execution_id = ?1 ORDER BY started_at ASC"
+    ).map_err(|e| format!("查询失败: {}", e))?;
+    let rows = stmt.query_map(rusqlite::params![execution_id], |row| {
+        Ok(serde_json::json!({
+            "nodeId": row.get::<_, String>(0)?,
+            "status": row.get::<_, String>(1)?,
+            "input": row.get::<_, Option<String>>(2)?.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+            "output": row.get::<_, Option<String>>(3)?.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+            "error": row.get::<_, Option<String>>(4)?,
+            "startedAt": row.get::<_, Option<i64>>(5)?,
+            "finishedAt": row.get::<_, Option<i64>>(6)?,
+        }))
+    }).map_err(|e| format!("查询失败: {}", e))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|e| format!("解析失败: {}", e))?;
+    Ok(rows)
 }
 
 /// 响应人工介入
@@ -552,9 +566,14 @@ pub async fn recover_execution(
 ) -> Result<serde_json::Value, String> {
     let conn = app_handle.state::<crate::DbState>().get_conn()
         .map_err(|e| format!("数据库连接失败: {}", e))?;
-    let def = crate::workflow::get_definition(&conn, &execution_id)
-        .ok()
-        .flatten()
+    // 从执行实例中获取 definition_id，而非直接用 execution_id 查定义
+    let instance = crate::workflow::list_instances(&conn, None)
+        .map_err(|e| format!("查询失败: {}", e))?
+        .into_iter()
+        .find(|i| i.id == execution_id)
+        .ok_or_else(|| "执行实例不存在".to_string())?;
+    let def = crate::workflow::get_definition(&conn, &instance.definition_id)
+        .map_err(|e| format!("查询失败: {}", e))?
         .ok_or_else(|| "工作流定义不存在".to_string())?;
     let executor = app_handle.state::<std::sync::Arc<crate::workflow::executor::NodeExecutor>>();
     crate::workflow::engine::WorkflowEngine::recover_execution(

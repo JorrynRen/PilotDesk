@@ -209,22 +209,6 @@ pub enum WorkflowInstanceStatus {
     Timeout,
 }
 
-/// 步骤执行记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-pub struct StepExecution {
-    pub node_id: String,
-    pub status: String,
-    pub started_at: Option<i64>,
-    pub completed_at: Option<i64>,
-    pub duration: Option<i64>,
-    pub input: Option<serde_json::Value>,
-    pub output: Option<serde_json::Value>,
-    pub error: Option<String>,
-    pub retry_count: u32,
-}
-
 /// 工作流实例
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -335,7 +319,7 @@ pub fn delete_definition(conn: &Connection, id: &str) -> Result<(), AppError> {
 
 // ── 实例操作 ──
 
-fn instance_from_row(row: &rusqlite::Row) -> rusqlite::Result<WorkflowInstance> {
+pub(crate) fn instance_from_row(row: &rusqlite::Row) -> rusqlite::Result<WorkflowInstance> {
     let status_str: String = row.get(3)?;
     Ok(WorkflowInstance {
         id: row.get(0)?,
@@ -403,12 +387,17 @@ pub fn create_instance(conn: &Connection, instance: &WorkflowInstance) -> Result
     Ok(())
 }
 
+/// 更新实例状态
+///
+/// 注意：`steps` 参数已废弃（引擎已改为写入 node_executions 表），保留仅为向后兼容。
+/// 新代码应使用 `update_instance_status_minimal` 或直接更新 node_executions 表。
+#[allow(dead_code)]
 pub fn update_instance_status(
     conn: &Connection,
     id: &str,
     status: &WorkflowInstanceStatus,
     context: Option<&serde_json::Value>,
-    steps: Option<&serde_json::Value>,
+    #[allow(unused_variables)] steps: Option<&serde_json::Value>,
     current_node_id: Option<&str>,
     error: Option<&str>,
 ) -> Result<(), AppError> {
@@ -416,12 +405,12 @@ pub fn update_instance_status(
     let status_str = serde_json::to_string(status).map_err(|e| AppError::External(e.to_string()))?;
     conn.execute(
         "UPDATE workflow_instances SET status = ?1, context = COALESCE(?2, context),
-         steps = COALESCE(?3, steps), current_node_id = ?4, error = ?5, updated_at = ?6
+         current_node_id = ?4, error = ?5, updated_at = ?6
          WHERE id = ?7",
         params![
             status_str,
             context.map(|c| c.to_string()),
-            steps.map(|s| s.to_string()),
+            // steps 不再写入（引擎已改为 node_executions 表）
             current_node_id, error, now, id,
         ],
     )?;

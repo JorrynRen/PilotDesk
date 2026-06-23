@@ -246,13 +246,9 @@ impl WorkflowEngine {
                                 Some(completed_count.load(Ordering::SeqCst)), Some(total_count));
                         }
                         Err(e) => {
-                            if let Ok(conn) = get_db_conn(emitter) {
-                                let _ = update_node_execution(&conn, execution_id, node_id, "failed", None, Some(&e.to_string()));
-                            }
-
-                            emitter.emit("workflow:node-status", serde_json::json!({
-                                "execution_id": execution_id, "node_id": node_id, "status": "failed", "error": e.to_string(),
-                            })).ok();
+                            record_node_execution(emitter, execution_id, node_id, "failed", None, None, Some(&e.to_string()));
+                            emit_node_status(emitter, execution_id, node_id, "failed", None, Some(&e.to_string()), None, None);
+                            return Err(e);
                         }
                     }
                     continue;
@@ -292,10 +288,13 @@ impl WorkflowEngine {
                                 serde_json::to_string(&node_output).ok().as_deref(), None);
                             emit_node_status(&emitter, &exec_id, &nid, "completed", Some(&node_output), None,
                                 Some(completed_count.load(Ordering::SeqCst)), Some(total));
+                            return Ok(());
                         }
                         Err(e) => {
                             record_node_execution(&emitter, &exec_id, &nid, "failed", None, None, Some(&e.to_string()));
-                            emit_node_status(&emitter, &exec_id, &nid, "failed", None, Some(&e.to_string()), None, None);
+                            emit_node_status(&emitter, &exec_id, &nid, "failed", None, Some(&e.to_string()),
+                                Some(completed_count.load(Ordering::SeqCst)), Some(total));
+                            return Err(e);
                         }
                     }
                 });
@@ -304,7 +303,11 @@ impl WorkflowEngine {
             }
 
             for handle in handles {
-                let _ = handle.await;
+                match handle.await {
+                    Ok(Err(e)) => return Err(e),
+                    Err(join_err) => return Err(AppError::External(format!("节点执行任务异常: {}", join_err))),
+                    _ => {}
+                }
             }
         }
 

@@ -130,8 +130,8 @@ impl WorkflowScheduler {
                         // 计算下次执行时间
                         if let Ok(schedule) = <cron::Schedule as std::str::FromStr>::from_str(&cron_expr) {
                             use chrono::DateTime;
-                            let now_ts = now();
-                            let now_dt: chrono::DateTime<chrono::Utc> = DateTime::from_timestamp(now_ts, 0).unwrap_or_default();
+                            let calc_ts = now();
+                            let now_dt: chrono::DateTime<chrono::Utc> = DateTime::from_timestamp(calc_ts, 0).unwrap_or_default();
                             if let Some(next) = schedule.after::<chrono::Utc>(&now_dt).next() {
                                 let next_ts = next.timestamp();
                                 let _ = conn.execute(

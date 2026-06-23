@@ -173,16 +173,4 @@ export function autoAssignStage(stages: Stage[]): Stage[] {
     .map((s, i) => ({ ...s, order: i }));
 }
 
-// ── 兼容 ──
 
-export function legacyToStages(nodes: WorkflowNode[], edges: WorkflowEdge[]): Stage[] {
-  if (nodes.length === 0) return [];
-  return [{
-    id: generateStageId(),
-    name: '默认阶段',
-    order: 0,
-    nodes,
-    edges,
-    gate: { strategy: 'all', mergeStrategy: 'merge' },
-  }];
-}
