@@ -84,9 +84,6 @@ pub struct WorkflowNode {
     // 画布位置
     pub position: Option<serde_json::Value>,
 
-    // 节点特定配置
-    pub cron: Option<String>,
-    pub event_name: Option<String>,
 }
 
 // ════════════════════════════════════════════════════════════
@@ -246,66 +243,6 @@ pub struct WorkflowInstance {
     pub estimated_remaining: Option<i64>,
     pub error: Option<String>,
     pub created_at: i64,
-}
-
-// ════════════════════════════════════════════════════════════
-// 智能连线 — 自动归入阶段
-// ════════════════════════════════════════════════════════════
-
-/// 根据连线关系自动调整节点阶段归属
-#[allow(dead_code)]
-pub fn auto_assign_stage(stages: &mut Vec<Stage>) {
-    let mut node_to_stage: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for stage in stages.iter() {
-        for node in &stage.nodes {
-            node_to_stage.insert(node.id.clone(), stage.order);
-        }
-    }
-
-    let mut node_leftmost: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for stage in stages.iter() {
-        for edge in &stage.edges {
-            let source_stage = node_to_stage.get(&edge.source).copied().unwrap_or(0);
-            let target_stage = node_to_stage.get(&edge.target).copied().unwrap_or(0);
-            let leftmost = source_stage.min(target_stage);
-            node_leftmost.entry(edge.source.clone())
-                .and_modify(|e| *e = (*e).min(leftmost))
-                .or_insert(leftmost);
-            node_leftmost.entry(edge.target.clone())
-                .and_modify(|e| *e = (*e).min(leftmost))
-                .or_insert(leftmost);
-        }
-    }
-
-    let moves: Vec<(String, usize)> = node_leftmost.into_iter()
-        .filter(|(node_id, target_stage)| {
-            node_to_stage.get(node_id).copied() != Some(*target_stage)
-        })
-        .collect();
-
-    if moves.is_empty() {
-        return;
-    }
-
-    for (node_id, target_order) in moves {
-        let mut node_to_move: Option<WorkflowNode> = None;
-        for stage in stages.iter_mut() {
-            if let Some(pos) = stage.nodes.iter().position(|n| n.id == node_id) {
-                node_to_move = Some(stage.nodes.remove(pos));
-                break;
-            }
-        }
-        if let Some(node) = node_to_move {
-            if let Some(target_stage) = stages.iter_mut().find(|s| s.order == target_order) {
-                target_stage.nodes.push(node);
-            }
-        }
-    }
-
-    stages.retain(|s| !s.nodes.is_empty() || !s.edges.is_empty());
-    for (i, stage) in stages.iter_mut().enumerate() {
-        stage.order = i;
-    }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -492,25 +429,6 @@ pub fn update_instance_status(
 }
 
 // ════════════════════════════════════════════════════════════
-// 兼容层
-// ════════════════════════════════════════════════════════════
-
-#[allow(dead_code)]
-pub fn legacy_to_stages(nodes: Vec<WorkflowNode>, edges: Vec<WorkflowEdge>) -> Vec<Stage> {
-    if nodes.is_empty() {
-        return vec![];
-    }
-    vec![Stage {
-        id: crate::utils::new_id(),
-        name: "默认阶段".into(),
-        order: 0,
-        nodes,
-        edges,
-        gate: GateConfig::default(),
-    }]
-}
-
-// ════════════════════════════════════════════════════════════
 // 统计查询
 // ════════════════════════════════════════════════════════════
 
@@ -529,6 +447,30 @@ pub struct WorkflowStats {
     pub node_failed_count: i64,
     pub last_7_days_count: i64,
     pub last_30_days_count: i64,
+}
+
+fn get_node_execution_count(conn: &Connection, workflow_id: Option<&str>) -> Result<i64, AppError> {
+    let (filter_clause, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match workflow_id {
+        Some(wid) => ("WHERE execution_id IN (SELECT id FROM workflow_instances WHERE definition_id = ?1)".to_string(), vec![Box::new(wid.to_string())]),
+        None => ("".to_string(), vec![]),
+    };
+    let sql = format!("SELECT COALESCE(COUNT(*), 0) FROM node_executions {}", filter_clause);
+    let mut stmt = conn.prepare(&sql)?;
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let count: i64 = stmt.query_row(params_refs.as_slice(), |row| row.get(0))?;
+    Ok(count)
+}
+
+fn get_node_failed_count(conn: &Connection, workflow_id: Option<&str>) -> Result<i64, AppError> {
+    let (filter_clause, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match workflow_id {
+        Some(wid) => ("WHERE execution_id IN (SELECT id FROM workflow_instances WHERE definition_id = ?1) AND status = 'failed'".to_string(), vec![Box::new(wid.to_string())]),
+        None => ("WHERE status = 'failed'".to_string(), vec![]),
+    };
+    let sql = format!("SELECT COALESCE(COUNT(*), 0) FROM node_executions {}", filter_clause);
+    let mut stmt = conn.prepare(&sql)?;
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let count: i64 = stmt.query_row(params_refs.as_slice(), |row| row.get(0))?;
+    Ok(count)
 }
 
 pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Result<WorkflowStats, AppError> {
@@ -591,8 +533,8 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Resul
         avg_duration_ms,
         max_duration_ms,
         min_duration_ms,
-        total_node_executions: 0,
-        node_failed_count: 0,
+        total_node_executions: get_node_execution_count(conn, workflow_id)?,
+        node_failed_count: get_node_failed_count(conn, workflow_id)?,
         last_7_days_count,
         last_30_days_count,
     })

@@ -42,7 +42,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   loadDefinitions: async () => {
     set({ loading: true, error: null });
     try {
-      const definitions = await invoke<WorkflowDefinition[]>('workflow_list_definitions');
+      const definitions = await invoke<WorkflowDefinition[]>('list_workflows');
       set({ definitions, loading: false });
     } catch (err) {
       set({ error: String(err), loading: false });
@@ -50,23 +50,42 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   },
 
   createDefinition: async (def: WorkflowDefinition) => {
-    await invoke('save_workflow_definition', { definition: def });
-    await get().loadDefinitions();
-    return def.id;
+    set({ loading: true, error: null });
+    try {
+      await invoke('save_workflow_definition', { definition: def });
+      await get().loadDefinitions();
+      set({ loading: false });
+      return def.id;
+    } catch (err) {
+      set({ error: String(err), loading: false });
+      throw err;
+    }
   },
 
   updateDefinition: async (id: string, updates: Partial<WorkflowDefinition>) => {
-    const defs = get().definitions;
-    const existing = defs.find(d => d.id === id);
-    if (existing) {
-      await invoke('save_workflow_definition', { definition: { ...existing, ...updates } });
+    set({ loading: true, error: null });
+    try {
+      const defs = get().definitions;
+      const existing = defs.find(d => d.id === id);
+      if (existing) {
+        await invoke('save_workflow_definition', { definition: { ...existing, ...updates } });
+      }
+      await get().loadDefinitions();
+      set({ loading: false });
+    } catch (err) {
+      set({ error: String(err), loading: false });
     }
-    await get().loadDefinitions();
   },
 
   deleteDefinition: async (id: string) => {
-    await invoke('delete_workflow', { id });
-    await get().loadDefinitions();
+    set({ loading: true, error: null });
+    try {
+      await invoke('delete_workflow', { id });
+      await get().loadDefinitions();
+      set({ loading: false });
+    } catch (err) {
+      set({ error: String(err), loading: false });
+    }
   },
 
   selectDefinition: (id: string | null) => {
@@ -74,11 +93,12 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   },
 
   loadInstances: async (definitionId?: string) => {
+    set({ loading: true, error: null });
     try {
       const instances = await invoke<WorkflowInstance[]>('list_executions', { definitionId: definitionId || null });
-      set({ instances });
+      set({ instances, loading: false });
     } catch (err) {
-      console.error('Failed to load instances:', err);
+      set({ error: String(err), loading: false });
     }
   },
 

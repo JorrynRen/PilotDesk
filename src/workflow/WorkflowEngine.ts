@@ -22,9 +22,9 @@ import { PluginAgentAPI } from '../plugin/PluginAPI.agent';
 // ── 模板变量替换 ──
 
 function resolveTemplate(template: string, context: Record<string, any>): string {
-  return template.replace(/\$\{([^}]+)\}/g, (_, key) => {
-    const value = key.split('.').reduce((obj: any, k: string) => obj?.[k], context);
-    return value !== undefined ? String(value) : `$\{${key}}`;
+  return template.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
+    const value = key.trim().split('.').reduce((obj: any, k: string) => obj?.[k], context);
+    return value !== undefined ? String(value) : `{{${key}}}`;
   });
 }
 

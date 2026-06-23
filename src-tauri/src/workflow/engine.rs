@@ -249,17 +249,7 @@ impl WorkflowEngine {
                         "execution_id": exec_id, "node_id": nid, "status": "running",
                     })).ok();
 
-                    let node_def = NodeDef {
-                        id: node.id.clone(),
-                        node_type: format!("{:?}", node.node_type).to_lowercase(),
-                        label: node.label.clone(),
-                        config: node.params.clone().unwrap_or(Value::Object(serde_json::Map::new())),
-                        plugin_id: node.plugin_id.clone(),
-                        command_id: node.command_id.clone(),
-                        timeout_seconds: node.timeout_ms.map(|ms| ms / 1000),
-                        retry_count: node.retry_count,
-                        retry_interval_ms: node.retry_delay_ms,
-                    };
+                    let node_def = node_to_node_def(&node);
 
                     let result = exec.execute(&node_def, resolved_input.clone(), &exec_id, &emitter).await;
 
@@ -401,9 +391,9 @@ impl WorkflowEngine {
         // 从节点参数中获取子工作流定义 ID
         let subflow_def_id = node.params
             .as_ref()
-            .and_then(|p| p.get("subflow_definition_id"))
+            .and_then(|p| p.get("definitionId"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| AppError::InvalidInput("Subflow 节点缺少 subflow_definition_id 参数".into()))?;
+            .ok_or_else(|| AppError::InvalidInput("Subflow 节点缺少 definitionId 参数".into()))?;
 
         // 加载子工作流定义
         let conn = get_db_conn(emitter)?;
@@ -631,6 +621,21 @@ impl WorkflowEngine {
     }
 }
 
+/// 将 WorkflowNode 转换为 NodeDef（执行器上下文）
+fn node_to_node_def(node: &WorkflowNode) -> NodeDef {
+    NodeDef {
+        id: node.id.clone(),
+        node_type: format!("{:?}", node.node_type).to_lowercase(),
+        label: node.label.clone(),
+        config: node.params.clone().unwrap_or(Value::Object(serde_json::Map::new())),
+        plugin_id: node.plugin_id.clone(),
+        command_id: node.command_id.clone(),
+        timeout_seconds: node.timeout_ms.map(|ms| ms / 1000),
+        retry_count: node.retry_count,
+        retry_interval_ms: node.retry_delay_ms,
+    }
+}
+
 /// 解析节点输入（模板变量替换）
 fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> Value {
     if let Some(mapping) = &node.input_mapping {
@@ -643,5 +648,5 @@ fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> 
             return Value::Object(resolved);
         }
     }
-    Value::Null
+    Value::Object(serde_json::Map::new())
 }

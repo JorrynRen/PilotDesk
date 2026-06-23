@@ -49,9 +49,6 @@ export interface WorkflowNode {
   // 画布位置
   position?: { x: number; y: number };
 
-  // 节点特定
-  cron?: string;
-  eventName?: string;
 }
 
 /** 节点连接（边）— 数据流 + 控制流 */
@@ -183,24 +180,6 @@ export interface NodeTypeStat {
   count: number;
   failedCount: number;
   avgDurationMs: number;
-}
-
-// ── 兼容函数 ──
-
-/** 将旧版 nodes+edges 转换为新版 stages */
-export function legacyToStages(
-  nodes: WorkflowNode[],
-  edges: WorkflowEdge[]
-): Stage[] {
-  if (nodes.length === 0) return [];
-  return [{
-    id: crypto.randomUUID?.() || `${Date.now()}-default`,
-    name: '默认阶段',
-    order: 0,
-    nodes,
-    edges,
-    gate: { strategy: 'all', mergeStrategy: 'merge' },
-  }];
 }
 
 // ── 工作流事件类型 ──
