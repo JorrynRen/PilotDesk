@@ -1,15 +1,16 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft } from 'lucide-react';
+import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow } from 'lucide-react';
 
 interface TitleBarProps {
   onOpenSettings?: () => void;
+  onOpenWorkflow?: () => void;
   onToggleRightPanel?: () => void;
   rightPanelOpen?: boolean;
   showBackButton?: boolean;
 }
 
-export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen, showBackButton }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const [isMaximized, setIsMaximized] = useState(false);
   const [tauriReady, setTauriReady] = useState(true);
@@ -158,6 +159,16 @@ export function TitleBar({ onOpenSettings, onToggleRightPanel, rightPanelOpen, s
 
       {/* Right: settings + panel toggle | window controls */}
       <div className="flex items-center h-full">
+        {!showBackButton && onOpenWorkflow && (
+          <button
+            onClick={onOpenWorkflow}
+            className="pd-btn p-1 rounded transition-colors hover:opacity-80"
+            style={{ color: 'var(--text-secondary)', background: 'transparent' }}
+            title="工作流管理"
+          >
+            <Workflow size={13} />
+          </button>
+        )}
         {!showBackButton && onOpenSettings && (
           <button
             onClick={onOpenSettings}

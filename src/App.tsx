@@ -6,6 +6,7 @@ import { useAgentEvent } from './hooks/useAgentEvent';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
 import { MarketPage } from './components/inspiration/MarketPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { WorkflowPage } from './pages/WorkflowPage';
 import './styles/ui.css';
 
 function MainLayout() {
@@ -28,6 +29,7 @@ function MainLayout() {
       <div className="pilotdesk-window-content flex flex-col h-full">
           <TitleBar
             onOpenSettings={() => navigate('/settings')}
+            onOpenWorkflow={() => navigate('/workflow')}
             onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
             rightPanelOpen={rightPanelOpen}
           />
@@ -54,6 +56,8 @@ function App() {
     const path = location.pathname;
     if (path === '/market') {
       document.title = `${base} - 灵感市集`;
+    } else if (path === '/workflow') {
+      document.title = `${base} - 工作流管理`;
     } else if (path === '/settings') {
       document.title = `${base} - 设置`;
     } else {
@@ -67,6 +71,7 @@ function App() {
     <Routes>
       <Route path="/" element={<MainLayout />} />
       <Route path="/market" element={<MarketPage onBack={() => window.history.back()} />} />
+      <Route path="/workflow" element={<WorkflowPage onBack={() => window.history.back()} />} />
       <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
     </Routes>
   );
