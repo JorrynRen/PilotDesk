@@ -151,7 +151,13 @@ function mergeStageOutputs(stage: Stage, nodeOutputs: Map<string, any>): Record<
   }
 }
 
-// ── 工作流引擎 ──
+// ── 工作流引擎（前端） ──
+//
+// 职责边界说明：
+// - 本引擎用于前端模拟预览和本地事件管理，definitions/instances 均为内存态
+// - 实际执行由后端 Rust engine.rs 完成，通过 Tauri command (start_workflow 等) 调用
+// - instance.steps 仅前端本地跟踪，后端以 node_executions 表为权威数据源
+// - 页面刷新后内存数据丢失，持久化数据通过 workflowStore + Tauri command 恢复
 
 class WorkflowEngine {
   private definitions: Map<string, WorkflowDefinition> = new Map();
@@ -633,25 +639,26 @@ class WorkflowEngine {
     return result;
   }
 
-  private _subflowChain: Set<string> = new Set();
 
   private async executeSubflowNode(
     node: WorkflowNode,
     instance: WorkflowInstance,
+    chain: Set<string> = new Set(),
   ): Promise<any> {
     const subflowDefId = node.params?.definitionId;
     if (!subflowDefId) throw new Error(`子工作流节点 "${node.label}" 缺少 definitionId`);
 
-    // 循环引用检测
-    if (this._subflowChain.has(subflowDefId)) {
-      const chain = [...this._subflowChain, subflowDefId].join(' → ');
-      throw new Error(`检测到工作流循环引用：${chain}`);
+    // 循环引用检测（chain 按执行链独立传递，避免并发误报）
+    if (chain.has(subflowDefId)) {
+      const chainStr = [...chain, subflowDefId].join(' → ');
+      throw new Error(`检测到工作流循环引用：${chainStr}`);
     }
 
     const subflowDef = this.definitions.get(subflowDefId);
     if (!subflowDef) throw new Error(`子工作流定义未找到: ${subflowDefId}`);
 
-    this._subflowChain.add(subflowDefId);
+    const newChain = new Set(chain);
+    newChain.add(subflowDefId);
 
     try {
       // 等待子工作流完成后再返回结果
@@ -670,7 +677,7 @@ class WorkflowEngine {
         output: subflowInstance?.context || {},
       };
     } finally {
-      this._subflowChain.delete(subflowDefId);
+      // chain 是局部变量，无需手动清理
     }
   }
 

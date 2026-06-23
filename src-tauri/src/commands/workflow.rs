@@ -141,7 +141,8 @@ pub async fn start_workflow(
     executor: tauri::State<'_, Arc<NodeExecutor>>,
     app_handle: tauri::AppHandle,
     workflow_id: String,
-    _version: Option<i64>,
+    #[allow(unused_variables)]
+    version: Option<i64>, // TODO: 版本管理支持（当前未实现版本化执行）
     input_data: Option<Value>,
 ) -> Result<workflow::WorkflowInstance, String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
@@ -566,12 +567,17 @@ pub async fn recover_execution(
 ) -> Result<serde_json::Value, String> {
     let conn = app_handle.state::<crate::DbState>().get_conn()
         .map_err(|e| format!("数据库连接失败: {}", e))?;
-    // 从执行实例中获取 definition_id，而非直接用 execution_id 查定义
-    let instance = crate::workflow::list_instances(&conn, None)
-        .map_err(|e| format!("查询失败: {}", e))?
-        .into_iter()
-        .find(|i| i.id == execution_id)
-        .ok_or_else(|| "执行实例不存在".to_string())?;
+    // 按 ID 直接查询实例，避免全量扫描（block scope 隔离 stmt，确保 Send 安全）
+    let instance = {
+        let mut stmt = conn.prepare(
+            "SELECT id, definition_id, definition_name, status, context, steps,
+                    current_node_id, trigger, trigger_detail,
+                    started_at, completed_at, estimated_remaining, error, created_at
+             FROM workflow_instances WHERE id = ?1"
+        ).map_err(|e| format!("查询失败: {}", e))?;
+        stmt.query_row(rusqlite::params![execution_id], |row| crate::workflow::instance_from_row(row))
+            .map_err(|e| format!("查询失败: {}", e))?
+    };
     let def = crate::workflow::get_definition(&conn, &instance.definition_id)
         .map_err(|e| format!("查询失败: {}", e))?
         .ok_or_else(|| "工作流定义不存在".to_string())?;

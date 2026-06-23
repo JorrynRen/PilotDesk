@@ -81,6 +81,7 @@ impl WorkflowScheduler {
 
                     let sched_id = schedule.id.clone();
                     let cron_expr = schedule.cron_expression.clone();
+                    let trigger_ts = now_ts; // 复用外层时间戳，避免闭包内重新获取
                     tokio::spawn(async move {
                         // 获取工作流定义
                         let conn = match pool.get() {
@@ -104,7 +105,6 @@ impl WorkflowScheduler {
                         };
 
                         let instance_id = crate::utils::new_id();
-                        let now_ts = now();
                         let instance = super::WorkflowInstance {
                             id: instance_id.clone(),
                             definition_id: def.id.clone(),
@@ -115,11 +115,11 @@ impl WorkflowScheduler {
                             current_node_id: None,
                             trigger: "cron".to_string(),
                             trigger_detail: Some(schedule.cron_expression.clone()),
-                            started_at: Some(now_ts),
+                            started_at: Some(trigger_ts),
                             completed_at: None,
                             estimated_remaining: None,
                             error: None,
-                            created_at: now_ts,
+                            created_at: trigger_ts,
                         };
 
                         if let Err(e) = super::create_instance(&conn, &instance) {

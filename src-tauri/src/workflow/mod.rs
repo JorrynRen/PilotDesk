@@ -405,12 +405,11 @@ pub fn update_instance_status(
     let status_str = serde_json::to_string(status).map_err(|e| AppError::External(e.to_string()))?;
     conn.execute(
         "UPDATE workflow_instances SET status = ?1, context = COALESCE(?2, context),
-         current_node_id = ?4, error = ?5, updated_at = ?6
-         WHERE id = ?7",
+         current_node_id = ?3, error = ?4, updated_at = ?5
+         WHERE id = ?6",
         params![
             status_str,
             context.map(|c| c.to_string()),
-            // steps 不再写入（引擎已改为 node_executions 表）
             current_node_id, error, now, id,
         ],
     )?;

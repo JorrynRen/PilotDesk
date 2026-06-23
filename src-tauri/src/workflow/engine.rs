@@ -18,6 +18,9 @@ fn get_db_conn(app_handle: &tauri::AppHandle) -> Result<r2d2::PooledConnection<r
 }
 
 /// 写入节点执行记录
+///
+/// ID 策略: "{execution_id}_{node_id}"，INSERT OR REPLACE 保证同一节点重试时覆盖旧记录。
+/// 如需保留重试历史，应改用独立 ID 并添加 attempt 字段。
 fn insert_node_execution(
     conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
     execution_id: &str,
@@ -90,6 +93,8 @@ fn emit_node_status(
 }
 
 /// 写入节点执行记录到 DB 并发送事件
+///
+/// 注意：写入失败仅记录日志，不中断工作流执行（节点执行不应因记录失败而中止）。
 fn record_node_execution(
     emitter: &tauri::AppHandle,
     execution_id: &str,
@@ -99,15 +104,24 @@ fn record_node_execution(
     output_data: Option<&str>,
     error_message: Option<&str>,
 ) {
-    if let Ok(conn) = get_db_conn(emitter) {
-        match status {
-            "skipped" | "running" => {
-                let _ = insert_node_execution(&conn, execution_id, node_id, status, input_data);
-            }
-            _ => {
-                let _ = update_node_execution(&conn, execution_id, node_id, status, output_data, error_message);
-            }
+    let conn = match get_db_conn(emitter) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[WorkflowEngine] 获取数据库连接失败，跳过节点执行记录: {}", e);
+            return;
         }
+    };
+    let result = match status {
+        "skipped" | "running" => {
+            insert_node_execution(&conn, execution_id, node_id, status, input_data)
+        }
+        _ => {
+            update_node_execution(&conn, execution_id, node_id, status, output_data, error_message)
+        }
+    };
+    if let Err(e) = result {
+        log::warn!("[WorkflowEngine] 写入节点执行记录失败 (execution={}, node={}, status={}): {}",
+            execution_id, node_id, status, e);
     }
 }
 
