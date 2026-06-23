@@ -28,11 +28,11 @@ pub struct InputOption {
 }
 
 /// 等待用户响应的通道管理器
-pub struct HumanInputManager {
+pub struct InteractManager {
     pending: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<String>>>>,
 }
 
-impl HumanInputManager {
+impl InteractManager {
     pub fn new() -> Self {
         Self { pending: Arc::new(std::sync::Mutex::new(HashMap::new())) }
     }
@@ -57,18 +57,18 @@ impl HumanInputManager {
     }
 }
 
-pub struct HumanInputExecutor {
-    pub manager: Arc<HumanInputManager>,
+pub struct InteractExecutor {
+    pub manager: Arc<InteractManager>,
 }
 
-impl HumanInputExecutor {
-    pub fn new(manager: Arc<HumanInputManager>) -> Self {
+impl InteractExecutor {
+    pub fn new(manager: Arc<InteractManager>) -> Self {
         Self { manager }
     }
 }
 
 #[async_trait]
-impl NodeExecutorTrait for HumanInputExecutor {
+impl NodeExecutorTrait for InteractExecutor {
     async fn execute(
         &self,
         node: &NodeDef,
@@ -77,7 +77,7 @@ impl NodeExecutorTrait for HumanInputExecutor {
         emitter: &tauri::AppHandle,
     ) -> Result<NodeOutput, AppError> {
         let config: HumanInputConfig = serde_json::from_value(node.config.clone())
-            .map_err(|e| AppError::Config(format!("human_input 配置解析失败: {}", e)))?;
+            .map_err(|e| AppError::Config(format!("interact 配置解析失败: {}", e)))?;
 
         let timeout = config.timeout_minutes.unwrap_or(30);
 

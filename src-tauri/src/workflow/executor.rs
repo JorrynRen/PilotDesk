@@ -10,14 +10,13 @@ use super::registry::{
 };
 use super::executors::agent_executor::AgentExecutor;
 use super::executors::transform_executor::TransformExecutor;
-use super::executors::human_input_executor::{HumanInputExecutor, HumanInputManager};
+use super::executors::interact_executor::{InteractExecutor, InteractManager};
 use super::executors::api_executor::ApiExecutor;
-use super::executors::approval_executor::ApprovalExecutor;
 
 /// 节点执行器分发器
 pub struct NodeExecutor {
     registry: Arc<std::sync::Mutex<WorkflowNodeTypeRegistry>>,
-    pub human_input_manager: Arc<HumanInputManager>,
+    pub human_input_manager: Arc<InteractManager>,
     plugin_host: Arc<std::sync::Mutex<PluginHost>>,
 }
 
@@ -74,13 +73,13 @@ impl NodeExecutor {
             permissions: vec!["network:http".to_string()],
         });
 
-        let human_input_manager = Arc::new(HumanInputManager::new());
+        let human_input_manager = Arc::new(InteractManager::new());
 
         registry.register(NodeTypeRegistration {
             type_id: "interact".into(),
             name: "人工交互".into(),
             category: NodeCategory::Builtin,
-            executor: Arc::new(HumanInputExecutor::new(human_input_manager.clone())),
+            executor: Arc::new(InteractExecutor::new(human_input_manager.clone())),
             config_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
