@@ -9,6 +9,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage } from '../../workflow/WorkflowDefinition';
 import { workflowNodeTypeRegistry } from '../../utils/WorkflowNodeTypeRegistry';
+import { StageBar } from './StageBar';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
 import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig } from '../../types/workflow';
 
@@ -258,9 +259,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
             <span>{nt.label}</span>
           </div>
         ))}
-        <div style={{ width: 1, height: 24, background: '#30363d', margin: '0 8px' }} />
-        <button onClick={handleAddStage} style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid #30363d', background: '#161b22', color: '#c9d1d9', fontSize: 12, cursor: 'pointer' }}>+ 添加阶段</button>
+
       </div>
+
+      {/* 阶段概览栏 */}
+      <StageBar
+        stages={stages}
+        activeStageId={selectedStageId || undefined}
+        onStageClick={(stageId) => setSelectedStageId(stageId)}
+        onStageReorder={(newStages) => setStages(newStages)}
+        onAddStage={handleAddStage}
+        onDeleteStage={handleDeleteStage}
+        onRenameStage={handleRenameStage}
+        onUpdateGate={handleUpdateGate}
+      />
 
       {/* 画布 */}
       <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', gap: 16, minHeight: 400 }}>
