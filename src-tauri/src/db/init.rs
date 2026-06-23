@@ -59,9 +59,6 @@ pub fn init_db() -> Result<DbPool, AppError> {
             api_provider TEXT,
             api_model TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
 
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
@@ -71,9 +68,6 @@ pub fn init_db() -> Result<DbPool, AppError> {
             mode TEXT DEFAULT 'native' CHECK(mode IN ('native', 'fast', 'think', 'expert')),
             timestamp INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
 
         CREATE TABLE IF NOT EXISTS inspirations (
             id TEXT PRIMARY KEY,
@@ -85,18 +79,12 @@ pub fn init_db() -> Result<DbPool, AppError> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
 
         CREATE TABLE IF NOT EXISTS inspiration_tags (
             inspiration_id TEXT NOT NULL REFERENCES inspirations(id) ON DELETE CASCADE,
             tag TEXT NOT NULL,
             PRIMARY KEY (inspiration_id, tag)
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);
         CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
@@ -208,9 +196,7 @@ fn migrate_add_type(conn: &Connection) -> Result<(), AppError> {
             api_provider TEXT,
             api_model TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
         INSERT OR IGNORE INTO sessions_new (id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model)
         SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model FROM sessions;
@@ -250,9 +236,7 @@ fn migrate_add_install_logs(conn: &Connection) -> Result<(), AppError> {
             message TEXT NOT NULL DEFAULT '',
             level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('info', 'warn', 'error', 'success'))
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
         CREATE INDEX IF NOT EXISTS idx_install_logs_time ON install_logs(timestamp);"
     )?;
@@ -307,9 +291,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);"
+        "
     )?;
 
     let now = crate::utils::now();
@@ -414,9 +396,7 @@ fn migrate_add_skill_fields(conn: &Connection) -> Result<(), AppError> {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
             INSERT OR IGNORE INTO agents_new (
                 agent_type, display_name, description, cli_command,
                 npm_package, pip_package,
@@ -487,9 +467,7 @@ fn migrate_remove_agent_type_check(conn: &Connection) -> Result<(), AppError> {
             api_model TEXT,
             agent_session_id TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
         INSERT OR IGNORE INTO sessions_v13 SELECT * FROM sessions;
         DROP TABLE sessions;
         ALTER TABLE sessions_v13 RENAME TO sessions;
@@ -619,9 +597,7 @@ fn migrate_add_workflow_tables(conn: &Connection) -> Result<(), AppError> {
             updated_at INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
         CREATE TABLE IF NOT EXISTS workflow_instances (
             id TEXT PRIMARY KEY,
@@ -640,12 +616,9 @@ fn migrate_add_workflow_tables(conn: &Connection) -> Result<(), AppError> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def ON workflow_instances(definition_id, created_at);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status, created_at);"#,
+        "#,
     )?;
     Ok(())
 }
@@ -669,9 +642,7 @@ fn migrate_add_node_execution_tables(conn: &Connection) -> Result<(), AppError> 
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
         CREATE TABLE IF NOT EXISTS node_execution_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -682,9 +653,7 @@ fn migrate_add_node_execution_tables(conn: &Connection) -> Result<(), AppError> 
             message TEXT NOT NULL,
             metadata TEXT DEFAULT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
         CREATE INDEX IF NOT EXISTS idx_node_exec_execution ON node_executions(execution_id);
         CREATE INDEX IF NOT EXISTS idx_node_exec_status ON node_executions(execution_id, status);
@@ -707,9 +676,7 @@ fn migrate_add_workflow_schedule(conn: &Connection) -> Result<(), AppError> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
         CREATE INDEX IF NOT EXISTS idx_wf_schedule_next ON workflow_schedules(next_run_at, enabled);"
     )?;
@@ -721,7 +688,6 @@ fn migrate_add_performance_indexes(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);
          CREATE INDEX IF NOT EXISTS idx_workflow_instances_completed ON workflow_instances(completed_at, status);
-         CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
          CREATE INDEX IF NOT EXISTS idx_node_executions_node ON node_executions(node_id, execution_id);
          CREATE INDEX IF NOT EXISTS idx_node_execution_logs_level ON node_execution_logs(node_execution_id, level, timestamp);
          ANALYZE;"
@@ -740,9 +706,7 @@ fn migrate_add_workflow_missing_tables(conn: &Connection) -> Result<(), AppError
             created_at INTEGER NOT NULL,
             UNIQUE(workflow_id, version)
         );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
         
         
@@ -834,13 +798,6 @@ fn migrate_legacy_workflow_columns(conn: &Connection) -> Result<(), AppError> {
     // 删除旧表
     conn.execute_batch("DROP TABLE IF EXISTS workflow_definitions_old;")?;
 
-    // 重建索引
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-         CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-         CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);"
-    )?;
-
     // 清理旧版遗留表（已不再使用）
     conn.execute_batch(
         "DROP TABLE IF EXISTS workflow_nodes;
@@ -926,9 +883,7 @@ mod tests {
                 api_provider TEXT,
                 api_model TEXT
             );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
+        
 
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY,
@@ -938,10 +893,6 @@ mod tests {
                 mode TEXT DEFAULT 'native',
                 timestamp INTEGER NOT NULL
             );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
-
             CREATE TABLE IF NOT EXISTS inspirations (
                 id TEXT PRIMARY KEY,
                 icon TEXT NOT NULL DEFAULT '',
@@ -952,18 +903,12 @@ mod tests {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
-
             CREATE TABLE IF NOT EXISTS inspiration_tags (
                 inspiration_id TEXT NOT NULL,
                 tag TEXT NOT NULL,
                 PRIMARY KEY (inspiration_id, tag)
             );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);"
+"
         ).unwrap();
 
         // 从版本 0 开始运行所有迁移
