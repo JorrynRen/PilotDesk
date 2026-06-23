@@ -1,7 +1,13 @@
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use crate::utils::errors::AppError;
+
+/// 缓存模板变量正则表达式，避免每次 resolve 调用重新编译
+static TEMPLATE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\{\{(.+?)\}\}").expect("模板正则编译失败")
+});
 
 /// 模板引擎 — 解析 {{variable}} 和 JSONPath 表达式
 pub struct TemplateEngine;
@@ -12,7 +18,7 @@ impl TemplateEngine {
         template: &str,
         context: &HashMap<String, Value>,
     ) -> Result<String, AppError> {
-        let re = Regex::new(r"\{\{(.+?)\}\}").map_err(|e| AppError::Config(e.to_string()))?;
+        let re = &*TEMPLATE_REGEX;
         let mut result = template.to_string();
 
         for cap in re.captures_iter(template) {
@@ -55,8 +61,8 @@ impl TemplateEngine {
 
     /// 解析单个表达式，支持 JSONPath
     fn resolve_expression(expr: &str, context: &HashMap<String, Value>) -> Result<String, AppError> {
-        // 支持特殊变量
-        if expr == "trigger.output" || expr == "input" {
+        // 支持特殊变量（__trigger__/__input__ 是引擎内部 key，也支持无前缀别名）
+        if expr == "trigger.output" || expr == "input" || expr == "__input__" {
             if let Some(val) = context.get("__trigger__").or_else(|| context.get("__input__")) {
                 return Ok(Self::value_to_string(val));
             }

@@ -10,13 +10,22 @@ interface WorkflowPageProps {
 
 export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const navigate = useNavigate();
-  const { definitions, instances, loading, error, loadDefinitions, loadInstances, deleteDefinition } = useWorkflowStore();
+  const { definitions, instances, loading, error, loadDefinitions, loadInstances, deleteDefinition, startWorkflow } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances'>('definitions');
 
   useEffect(() => {
     loadDefinitions();
     loadInstances();
   }, []);
+
+  const handleStart = async (e: React.MouseEvent, id: string, name: string) => {
+    e.stopPropagation();
+    try {
+      await startWorkflow(id);
+    } catch (err) {
+      console.error(`启动工作流「${name}」失败:`, err);
+    }
+  };
 
   const handleDelete = async (id: string, name: string) => {
     if (confirm(`确定删除工作流「${name}」？此操作不可撤销。`)) {
@@ -133,7 +142,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                       </div>
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={(e) => { e.stopPropagation(); /* start execution */ }}
+                          onClick={(e) => { handleStart(e, def.id, def.name); }}
                           className="pd-btn p-1.5 rounded hover:opacity-80"
                           style={{ color: 'var(--text-secondary)' }}
                           title="执行"

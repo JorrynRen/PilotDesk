@@ -565,7 +565,11 @@ impl WorkflowEngine {
         })).ok();
 
         let ctx = context.lock().await.clone();
-        Ok(Value::Object(ctx.into_iter().collect()))
+        // 过滤内部变量（__ 前缀），仅返回用户数据作为工作流输出
+        let output: serde_json::Map<String, Value> = ctx.into_iter()
+            .filter(|(k, _)| !k.starts_with("__"))
+            .collect();
+        Ok(Value::Object(output))
     }
 
     /// 从 checkpoint 恢复执行

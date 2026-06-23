@@ -141,24 +141,28 @@ impl NodeExecutor {
     }
 
     pub fn sync_plugin_node_types(&self) {
-        let plugin_host = self.plugin_host.lock().map_err(|e| e.to_string());
-        if let Ok(host) = plugin_host {
-            let contributed = host.get_contributed_node_types();
-            if let Ok(mut reg) = self.registry.lock() {
-                for (plugin_id, nt) in contributed {
-                    use crate::workflow::registry::NodeCategory;
-                    reg.register(crate::workflow::registry::NodeTypeRegistration {
-                        type_id: nt.type_id.clone(),
-                        name: nt.name.clone(),
-                        category: NodeCategory::Plugin(plugin_id.clone()),
-                        executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
-                            plugin_id.clone(),
-                            nt.type_id.clone(),
-                        )),
-                        config_schema: nt.config_schema.clone(),
-                        permissions: nt.permissions.clone(),
-                    });
-                }
+        let plugin_host = match self.plugin_host.lock() {
+            Ok(h) => h,
+            Err(e) => {
+                log::warn!("[NodeExecutor] 获取 PluginHost 锁失败: {}", e);
+                return;
+            }
+        };
+        let contributed = plugin_host.get_contributed_node_types();
+        if let Ok(mut reg) = self.registry.lock() {
+            for (plugin_id, nt) in contributed {
+                use crate::workflow::registry::NodeCategory;
+                reg.register(crate::workflow::registry::NodeTypeRegistration {
+                    type_id: nt.type_id.clone(),
+                    name: nt.name.clone(),
+                    category: NodeCategory::Plugin(plugin_id.clone()),
+                    executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
+                        plugin_id.clone(),
+                        nt.type_id.clone(),
+                    )),
+                    config_schema: nt.config_schema.clone(),
+                    permissions: nt.permissions.clone(),
+                });
             }
         }
     }
