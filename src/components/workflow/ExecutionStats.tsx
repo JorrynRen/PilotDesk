@@ -43,21 +43,12 @@ interface NodeTypeStat {
 // ── 节点类型显示名映射 ──
 
 const NODE_TYPE_LABELS: Record<string, string> = {
-  'agent': '定时触发',
-  'api': '事件触发',
-  'transform': '手动触发',
-  'plugin': '插件命令',
-  'subflow': '插件节点',
-  'interact': '条件分支',
-  'agent': '并行执行',
-  'api': '延迟等待',
-  'approval': '人工审批',
-  'interact': '人工介入',
-  'subflow': '子工作流',
   'agent': 'Agent 任务',
   'api': 'API 调用',
   'transform': '代码转换',
-  'aggregator': '聚合节点',
+  'plugin': '插件命令',
+  'subflow': '子工作流',
+  'interact': '人工介入',
 };
 
 function getNodeTypeLabel(type: string): string {

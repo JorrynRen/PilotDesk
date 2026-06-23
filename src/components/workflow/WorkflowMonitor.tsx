@@ -32,7 +32,7 @@ const STEP_STATUS_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
-  const { instances, loadInstances, pauseWorkflow, resumeWorkflow, stopWorkflow, retryWorkflow } = useWorkflowStore();
+  const { instances, loadInstances, cancelWorkflow, startWorkflow } = useWorkflowStore();
 
   useEffect(() => {
     loadInstances();
@@ -108,18 +108,18 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
                 <div className="monitor-actions">
                   {instance.status === 'running' && (
                     <>
-                      <button onClick={() => pauseWorkflow(instance.id)}>暂停</button>
-                      <button onClick={() => stopWorkflow(instance.id)} className="btn-danger">停止</button>
+                      <button onClick={() => cancelWorkflow(instance.id)}>暂停</button>
+                      <button onClick={() => cancelWorkflow(instance.id)} className="btn-danger">停止</button>
                     </>
                   )}
                   {instance.status === 'paused' && (
-                    <button onClick={() => resumeWorkflow(instance.id)} className="btn-primary">恢复</button>
+                    <button onClick={() => startWorkflow(instance.definitionId)} className="btn-primary">恢复</button>
                   )}
                   {(instance.status === 'failed' || instance.status === 'timeout') && (
-                    <button onClick={() => retryWorkflow(instance.id)} className="btn-primary">重试</button>
+                    <button onClick={() => startWorkflow(instance.definitionId)} className="btn-primary">重试</button>
                   )}
                   {instance.status === 'cancelled' && instance.error && (
-                    <button onClick={() => retryWorkflow(instance.id)} className="btn-primary">重试</button>
+                    <button onClick={() => startWorkflow(instance.definitionId)} className="btn-primary">重试</button>
                   )}
                   <button onClick={() => onViewDefinition(instance.definitionId)}>查看定义</button>
                 </div>

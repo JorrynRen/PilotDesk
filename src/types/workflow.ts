@@ -202,3 +202,23 @@ export function legacyToStages(
     gate: { strategy: 'all', mergeStrategy: 'merge' },
   }];
 }
+
+// ── 工作流事件类型 ──
+
+export type WorkflowEventType =
+  | 'instance:created'
+  | 'instance:started'
+  | 'instance:paused'
+  | 'instance:resumed'
+  | 'instance:completed'
+  | 'instance:failed'
+  | 'instance:cancelled'
+  | 'stage:started'
+  | 'stage:completed'
+  | 'step:started'
+  | 'step:completed'
+  | 'step:failed'
+  | 'step:skipped'
+  | 'step:retrying'
+  | 'human_input'
+  | 'error';

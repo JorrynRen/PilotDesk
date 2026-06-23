@@ -8,7 +8,8 @@
  */
 
 import type { ComponentType } from 'react';
-import type { NodeProps } from '@xyflow/react';
+// @xyflow/react 已移除，使用通用 React 组件类型
+import type { ReactNode } from 'react';
 import type { WorkflowNodeType, WorkflowNode } from '../types/workflow';
 import type { NodeTypeContribution } from '../types/plugin';
 
@@ -18,7 +19,7 @@ export interface RegisteredNodeType {
   name: string;
   category: 'builtin' | 'plugin';
   pluginId?: string;
-  component: ComponentType<NodeProps>;
+  component: ComponentType<{ data: any; selected?: boolean }>;
   configSchema?: Record<string, { type: string; description?: string; default?: any }>;
   permissions?: string[];
 }
@@ -58,8 +59,8 @@ class WorkflowNodeTypeRegistry {
   }
 
   /** 获取 react-flow nodeTypes 映射 */
-  getNodeComponents(): Record<string, ComponentType<NodeProps>> {
-    const components: Record<string, ComponentType<NodeProps>> = {};
+  getNodeComponents(): Record<string, ComponentType<{ data: any; selected?: boolean }>> {
+    const components: Record<string, ComponentType<{ data: any; selected?: boolean }>> = {};
     for (const [typeId, entry] of this.entries) {
       components[typeId] = entry.component;
     }
@@ -70,7 +71,7 @@ class WorkflowNodeTypeRegistry {
   registerFromPlugin(
     pluginId: string,
     nodeTypes: NodeTypeContribution[],
-    componentFactory: (typeId: string) => ComponentType<NodeProps>,
+    componentFactory: (typeId: string) => ComponentType<{ data: any; selected?: boolean }>,
   ): void {
     for (const nt of nodeTypes) {
       this.register({
