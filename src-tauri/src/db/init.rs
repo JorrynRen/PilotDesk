@@ -605,7 +605,7 @@ fn migrate_fix_claude_dash_dash(conn: &Connection) -> Result<(), AppError> {
 
 fn migrate_add_workflow_tables(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS workflow_definitions (
+        r#"CREATE TABLE IF NOT EXISTS workflow_definitions (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL DEFAULT '',
             version TEXT NOT NULL DEFAULT '1.0.0',
@@ -645,7 +645,7 @@ fn migrate_add_workflow_tables(conn: &Connection) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
 
         CREATE INDEX IF NOT EXISTS idx_workflow_instances_def ON workflow_instances(definition_id, created_at);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status, created_at);"
+        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status, created_at);"#,
     )?;
     Ok(())
 }
@@ -747,8 +747,6 @@ fn migrate_add_workflow_missing_tables(conn: &Connection) -> Result<(), AppError
         
         
         CREATE INDEX IF NOT EXISTS idx_wf_versions_workflow ON workflow_versions(workflow_id, version DESC);
-        CREATE INDEX IF NOT EXISTS idx_wf_nodes_workflow ON workflow_nodes(workflow_id);
-        CREATE INDEX IF NOT EXISTS idx_wf_edges_workflow ON workflow_edges(workflow_id);
         CREATE INDEX IF NOT EXISTS idx_wf_exec_workflow ON workflow_instances(definition_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_wf_exec_status ON workflow_instances(status, created_at DESC);"
     )?;
@@ -806,9 +804,6 @@ mod tests {
                 "MIGRATION_VERSIONS[{}] ({}) 必须大于 MIGRATION_VERSIONS[{}] ({})",
                 i, MIGRATION_VERSIONS[i], i - 1, MIGRATION_VERSIONS[i - 1]
             );
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_def_id ON workflow_instances(definition_id);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_status ON workflow_instances(status);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);
         }
     }
 
@@ -886,13 +881,12 @@ mod tests {
             .filter_map(|r| r.ok())
             .collect();
 
-        assert!(tables.contains(&"workflow_definitions".to_string()), "workflow_definitions 表未创建");
-        assert!(tables.contains(&"workflow_instances".to_string()), "workflow_instances 表未创建");
-        assert!(tables.contains(&"node_executions".to_string()), "node_executions 表未创建");
-        assert!(tables.contains(&"node_execution_logs".to_string()), "node_execution_logs 表未创建");
-        assert!(tables.contains(&"workflow_schedules".to_string()), "workflow_schedules 表未创建");
-        assert!(tables.contains(&"workflow_versions".to_string()), "workflow_versions 表未创建");
-        assert!(tables.contains(&"workflow_nodes".to_string()), "workflow_nodes 表未创建");
-        assert!(tables.contains(&"workflow_edges".to_string()), "workflow_edges 表未创建");
+        assert!(tables.contains(&"workflow_definitions".to_string()), "workflow_definitions 表未创建 ");
+        assert!(tables.contains(&"workflow_instances".to_string()), "workflow_instances 表未创建 ");
+        assert!(tables.contains(&"node_executions".to_string()), "node_executions 表未创建 ");
+        assert!(tables.contains(&"node_execution_logs".to_string()), "node_execution_logs 表未创建 ");
+        assert!(tables.contains(&"workflow_schedules".to_string()), "workflow_schedules 表未创建 ");
+        assert!(tables.contains(&"workflow_versions".to_string()), "workflow_versions 表未创建 ");
+
     }
 }

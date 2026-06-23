@@ -90,22 +90,7 @@ impl NodeExecutor {
             permissions: vec![],
         });
 
-        registry.register(NodeTypeRegistration {
-            type_id: "approval".into(),
-            name: "人工审批".into(),
-            category: NodeCategory::Builtin,
-            executor: Arc::new(ApprovalExecutor),
-            config_schema: Some(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "prompt": { "type": "string", "description": "审批提示文案" },
-                    "options": { "type": "array", "items": { "type": "object" } },
-                    "timeout_minutes": { "type": "integer", "default": 1440 },
-                    "default_value": { "type": "string", "default": "approve" },
-                }
-            })),
-            permissions: vec![],
-        });
+
 
         let registry_arc = Arc::new(std::sync::Mutex::new(registry));
 
