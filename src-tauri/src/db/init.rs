@@ -841,6 +841,12 @@ fn migrate_legacy_workflow_columns(conn: &Connection) -> Result<(), AppError> {
          CREATE INDEX IF NOT EXISTS idx_workflow_instances_created ON workflow_instances(created_at);"
     )?;
 
+    // 清理旧版遗留表（已不再使用）
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS workflow_nodes;
+         DROP TABLE IF EXISTS workflow_edges;"
+    )?;
+
     Ok(())
 }
 
