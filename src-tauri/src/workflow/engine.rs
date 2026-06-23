@@ -123,6 +123,7 @@ impl WorkflowEngine {
         total_count: usize,
         semaphore: &Arc<Semaphore>,
         max_concurrency: usize,
+        visited_def_ids: &[String],
     ) -> Result<Value, AppError> {
         let layers = Self::topological_sort(&stage.nodes, &stage.edges)?;
         let node_map: HashMap<String, &WorkflowNode> = stage.nodes.iter().map(|n| (n.id.clone(), n)).collect();
@@ -190,6 +191,7 @@ impl WorkflowEngine {
                     match Self::execute_subflow_node(
                         executor, &node, resolved_input,
                         execution_id, emitter, max_concurrency,
+                        visited_def_ids,
                     ).await {
                         Ok(output) => {
                             context.lock().await.insert(node_id.clone(), output.clone());
@@ -394,6 +396,7 @@ impl WorkflowEngine {
         execution_id: &str,
         emitter: &tauri::AppHandle,
         max_concurrency: usize,
+        visited_def_ids: &[String],
     ) -> Result<Value, AppError> {
         // 从节点参数中获取子工作流定义 ID
         let subflow_def_id = node.params
@@ -407,14 +410,13 @@ impl WorkflowEngine {
         let subflow_def = super::get_definition(&conn, subflow_def_id)?
             .ok_or_else(|| AppError::InvalidInput(format!("子工作流定义不存在: {}", subflow_def_id)))?;
 
-        // 检查递归深度（防止无限递归）
-        let current_depth = node.params
-            .as_ref()
-            .and_then(|p| p.get("_depth"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        if current_depth >= 5 {
-            return Err(AppError::InvalidInput("工作流递归深度超过限制（最大 5 层）".into()));
+        // 检查循环引用
+        if visited_def_ids.contains(&subflow_def_id.to_string()) {
+            let chain = visited_def_ids.iter().chain(std::iter::once(&subflow_def_id.to_string()))
+                .cloned().collect::<Vec<_>>().join(" → ");
+            return Err(AppError::InvalidInput(format!(
+                "检测到工作流循环引用：{}。请检查工作流定义中的 Subflow 节点配置。", chain
+            )));
         }
 
         // 创建子工作流的 execution_id（使用父 execution_id + 节点 id 作为子 execution_id）
@@ -428,14 +430,19 @@ impl WorkflowEngine {
             rusqlite::params![sub_execution_id, subflow_def_id, subflow_def.name, now],
         );
 
+        // 构建新的 visited_def_ids 链
+        let mut new_visited = visited_def_ids.to_vec();
+        new_visited.push(subflow_def_id.to_string());
+
         // 递归执行子工作流
-        let result = Self::execute_with_concurrency(
+        let result = Self::execute_with_concurrency_impl(
             executor,
             &subflow_def,
             &sub_execution_id,
             input_data,
             emitter,
             max_concurrency,
+            &new_visited,
         ).await;
 
         // 更新子工作流实例状态
@@ -466,6 +473,19 @@ impl WorkflowEngine {
         emitter: &tauri::AppHandle,
         max_concurrency: usize,
     ) -> Result<Value, AppError> {
+        Self::execute_with_concurrency_impl(executor, def, execution_id, input_data, emitter, max_concurrency, &[]).await
+    }
+
+    /// 内部实现：支持 visited_def_ids 循环引用检测
+    async fn execute_with_concurrency_impl(
+        executor: &Arc<NodeExecutor>,
+        def: &WorkflowDefinition,
+        execution_id: &str,
+        input_data: Value,
+        emitter: &tauri::AppHandle,
+        max_concurrency: usize,
+        visited_def_ids: &[String],
+    ) -> Result<Value, AppError> {
         let cancelled = Arc::new(AtomicBool::new(false));
         let total_count: usize = def.stages.iter().map(|s| s.nodes.len()).sum();
         let completed_count = Arc::new(AtomicUsize::new(0));
@@ -492,6 +512,7 @@ impl WorkflowEngine {
                 &context, emitter, &cancelled,
                 &completed_count, total_count, &semaphore,
                 max_concurrency,
+                visited_def_ids,
             ).await?;
 
             let ctx = context.lock().await.clone();
@@ -606,7 +627,7 @@ impl WorkflowEngine {
             rusqlite::params![crate::utils::now(), execution_id],
         );
 
-        Self::execute_with_concurrency(executor, &recovered_def, execution_id, input_data, emitter, max_concurrency).await
+        Self::execute_with_concurrency_impl(executor, &recovered_def, execution_id, input_data, emitter, max_concurrency, &[]).await
     }
 }
 
