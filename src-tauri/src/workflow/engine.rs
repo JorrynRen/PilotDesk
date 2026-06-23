@@ -56,6 +56,61 @@ fn update_node_execution(
     Ok(())
 }
 
+/// 写入节点执行记录并发送状态事件
+fn emit_node_status(
+    emitter: &tauri::AppHandle,
+    execution_id: &str,
+    node_id: &str,
+    status: &str,
+    output: Option<&Value>,
+    error: Option<&str>,
+    completed_count: Option<usize>,
+    total: Option<usize>,
+) {
+    let mut payload = serde_json::json!({
+        "execution_id": execution_id,
+        "node_id": node_id,
+        "status": status,
+    });
+    if let Some(out) = output {
+        payload["output"] = out.clone();
+    }
+    if let Some(err) = error {
+        payload["error"] = err.into();
+    }
+    emitter.emit("workflow:node-status", payload).ok();
+
+    if let (Some(cc), Some(t)) = (completed_count, total) {
+        emitter.emit("workflow:progress", serde_json::json!({
+            "execution_id": execution_id,
+            "completed": cc,
+            "total": t,
+        })).ok();
+    }
+}
+
+/// 写入节点执行记录到 DB 并发送事件
+fn record_node_execution(
+    emitter: &tauri::AppHandle,
+    execution_id: &str,
+    node_id: &str,
+    status: &str,
+    input_data: Option<&str>,
+    output_data: Option<&str>,
+    error_message: Option<&str>,
+) {
+    if let Ok(conn) = get_db_conn(emitter) {
+        match status {
+            "skipped" | "running" => {
+                let _ = insert_node_execution(&conn, execution_id, node_id, status, input_data);
+            }
+            _ => {
+                let _ = update_node_execution(&conn, execution_id, node_id, status, output_data, error_message);
+            }
+        }
+    }
+}
+
 /// 两层调度引擎：阶段串行 → 阶段内 DAG
 pub struct WorkflowEngine;
 
@@ -161,14 +216,9 @@ impl WorkflowEngine {
 
                     if !all_conditions_met {
                         completed_count.fetch_add(1, Ordering::SeqCst);
-                        if let Ok(conn) = get_db_conn(emitter) {
-                            let _ = insert_node_execution(&conn, execution_id, node_id, "skipped", None);
-                        }
-                        emitter.emit("workflow:node-status", serde_json::json!({
-                            "execution_id": execution_id,
-                            "node_id": node_id,
-                            "status": "skipped",
-                        })).ok();
+                        record_node_execution(emitter, execution_id, node_id, "skipped", None, None, None);
+                        emit_node_status(emitter, execution_id, node_id, "skipped", None, None,
+                            Some(completed_count.load(Ordering::SeqCst)), Some(total_count));
                         continue;
                     }
                 }
@@ -178,15 +228,9 @@ impl WorkflowEngine {
                     let ctx_snapshot = context.lock().await.clone();
                     let resolved_input = resolve_node_input(&node, &ctx_snapshot);
 
-                    // 写入开始记录
-                    if let Ok(conn) = get_db_conn(emitter) {
-                        let input_str = serde_json::to_string(&resolved_input).ok();
-                        let _ = insert_node_execution(&conn, execution_id, node_id, "running", input_str.as_deref());
-                    }
-
-                    emitter.emit("workflow:node-status", serde_json::json!({
-                        "execution_id": execution_id, "node_id": node_id, "status": "running",
-                    })).ok();
+                    record_node_execution(emitter, execution_id, node_id, "running",
+                        serde_json::to_string(&resolved_input).ok().as_deref(), None, None);
+                    emit_node_status(emitter, execution_id, node_id, "running", None, None, None, None);
 
                     match Self::execute_subflow_node(
                         executor, &node, resolved_input,
@@ -196,18 +240,10 @@ impl WorkflowEngine {
                         Ok(output) => {
                             context.lock().await.insert(node_id.clone(), output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
-
-                            if let Ok(conn) = get_db_conn(emitter) {
-                                let output_str = serde_json::to_string(&output).ok();
-                                let _ = update_node_execution(&conn, execution_id, node_id, "completed", output_str.as_deref(), None);
-                            }
-
-                            emitter.emit("workflow:node-status", serde_json::json!({
-                                "execution_id": execution_id, "node_id": node_id, "status": "completed", "output": output,
-                            })).ok();
-                            emitter.emit("workflow:progress", serde_json::json!({
-                                "execution_id": execution_id, "completed": completed_count.load(Ordering::SeqCst), "total": total_count,
-                            })).ok();
+                            record_node_execution(emitter, execution_id, node_id, "completed", None,
+                                serde_json::to_string(&output).ok().as_deref(), None);
+                            emit_node_status(emitter, execution_id, node_id, "completed", Some(&output), None,
+                                Some(completed_count.load(Ordering::SeqCst)), Some(total_count));
                         }
                         Err(e) => {
                             if let Ok(conn) = get_db_conn(emitter) {
@@ -239,15 +275,9 @@ impl WorkflowEngine {
                     let ctx_snapshot = context.lock().await.clone();
                     let resolved_input = resolve_node_input(&node, &ctx_snapshot);
 
-                    // 写入开始记录
-                    if let Ok(conn) = get_db_conn(&emitter) {
-                        let input_str = serde_json::to_string(&resolved_input).ok();
-                        let _ = insert_node_execution(&conn, &exec_id, &nid, "running", input_str.as_deref());
-                    }
-
-                    emitter.emit("workflow:node-status", serde_json::json!({
-                        "execution_id": exec_id, "node_id": nid, "status": "running",
-                    })).ok();
+                    record_node_execution(&emitter, &exec_id, &nid, "running",
+                        serde_json::to_string(&resolved_input).ok().as_deref(), None, None);
+                    emit_node_status(&emitter, &exec_id, &nid, "running", None, None, None, None);
 
                     let node_def = node_to_node_def(&node);
 
@@ -258,27 +288,14 @@ impl WorkflowEngine {
                             let node_output = output.output.clone();
                             context.lock().await.insert(nid.clone(), node_output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
-
-                            if let Ok(conn) = get_db_conn(&emitter) {
-                                let output_str = serde_json::to_string(&node_output).ok();
-                                let _ = update_node_execution(&conn, &exec_id, &nid, "completed", output_str.as_deref(), None);
-                            }
-
-                            emitter.emit("workflow:node-status", serde_json::json!({
-                                "execution_id": exec_id, "node_id": nid, "status": "completed", "output": node_output,
-                            })).ok();
-                            emitter.emit("workflow:progress", serde_json::json!({
-                                "execution_id": exec_id, "completed": completed_count.load(Ordering::SeqCst), "total": total,
-                            })).ok();
+                            record_node_execution(&emitter, &exec_id, &nid, "completed", None,
+                                serde_json::to_string(&node_output).ok().as_deref(), None);
+                            emit_node_status(&emitter, &exec_id, &nid, "completed", Some(&node_output), None,
+                                Some(completed_count.load(Ordering::SeqCst)), Some(total));
                         }
                         Err(e) => {
-                            if let Ok(conn) = get_db_conn(&emitter) {
-                                let _ = update_node_execution(&conn, &exec_id, &nid, "failed", None, Some(&e.to_string()));
-                            }
-
-                            emitter.emit("workflow:node-status", serde_json::json!({
-                                "execution_id": exec_id, "node_id": nid, "status": "failed", "error": e.to_string(),
-                            })).ok();
+                            record_node_execution(&emitter, &exec_id, &nid, "failed", None, None, Some(&e.to_string()));
+                            emit_node_status(&emitter, &exec_id, &nid, "failed", None, Some(&e.to_string()), None, None);
                         }
                     }
                 });
@@ -546,49 +563,44 @@ impl WorkflowEngine {
     ) -> Result<Value, AppError> {
         let db_conn = get_db_conn(emitter)?;
 
-        let mut stmt = db_conn.prepare(
-            "SELECT node_id, status FROM node_executions WHERE execution_id = ?1"
-        ).map_err(|e| AppError::Db(e.to_string()))?;
+        let (_completed_nodes, recovered_stages) = {
+            let mut stmt = db_conn.prepare(
+                "SELECT node_id, status FROM node_executions WHERE execution_id = ?1"
+            ).map_err(|e| AppError::Db(e.to_string()))?;
 
-        let node_results: Vec<(String, String)> = stmt.query_map(
-            rusqlite::params![execution_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        ).map_err(|e| AppError::Db(e.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| AppError::Db(e.to_string()))?;
+            let node_results: Vec<(String, String)> = stmt.query_map(
+                rusqlite::params![execution_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            ).map_err(|e| AppError::Db(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Db(e.to_string()))?;
 
-        let completed_nodes: std::collections::HashSet<String> = node_results.iter()
-            .filter(|(_, status)| status == "completed")
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        let mut recovered_stages = Vec::new();
-        for stage in &def.stages {
-            let pending_nodes: Vec<WorkflowNode> = stage.nodes.iter()
-                .filter(|n| !completed_nodes.contains(&n.id))
-                .cloned()
+            let completed_nodes: std::collections::HashSet<String> = node_results.iter()
+                .filter(|(_, status)| status == "completed")
+                .map(|(id, _)| id.clone())
                 .collect();
 
-            if pending_nodes.is_empty() {
-                continue;
+            let mut recovered_stages = Vec::new();
+            for stage in &def.stages {
+                let pending_nodes: Vec<WorkflowNode> = stage.nodes.iter()
+                    .filter(|n| !completed_nodes.contains(&n.id))
+                    .cloned()
+                    .collect();
+                if pending_nodes.is_empty() { continue; }
+                let pending_ids: std::collections::HashSet<&str> = pending_nodes.iter()
+                    .map(|n| n.id.as_str()).collect();
+                let filtered_edges: Vec<WorkflowEdge> = stage.edges.iter()
+                    .filter(|e| pending_ids.contains(e.source.as_str()) && pending_ids.contains(e.target.as_str()))
+                    .cloned()
+                    .collect();
+                recovered_stages.push(Stage {
+                    id: stage.id.clone(), name: stage.name.clone(), order: stage.order,
+                    nodes: pending_nodes, edges: filtered_edges, gate: stage.gate.clone(),
+                });
             }
+            (completed_nodes, recovered_stages)
+        };
 
-            let pending_ids: std::collections::HashSet<&str> = pending_nodes.iter()
-                .map(|n| n.id.as_str()).collect();
-            let filtered_edges: Vec<WorkflowEdge> = stage.edges.iter()
-                .filter(|e| pending_ids.contains(e.source.as_str()) && pending_ids.contains(e.target.as_str()))
-                .cloned()
-                .collect();
-
-            recovered_stages.push(Stage {
-                id: stage.id.clone(),
-                name: stage.name.clone(),
-                order: stage.order,
-                nodes: pending_nodes,
-                edges: filtered_edges,
-                gate: stage.gate.clone(),
-            });
-        }
 
         if recovered_stages.is_empty() {
             emitter.emit("workflow:execution-status", serde_json::json!({

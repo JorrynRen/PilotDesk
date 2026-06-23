@@ -726,15 +726,22 @@ pub fn list_recoverable_executions(conn: &Connection) -> Result<Vec<RecoverableE
     for inst in instances {
         let status_str = format!("{:?}", inst.status);
         if status_str != "Paused" && status_str != "Running" { continue; }
-        let steps = inst.steps.as_object().cloned().unwrap_or_default();
+        // 从 node_executions 表查询节点状态
+        let mut stmt = conn.prepare(
+            "SELECT node_id, status FROM node_executions WHERE execution_id = ?1"
+        )?;
+        let node_results: Vec<(String, String)> = stmt.query_map(
+            rusqlite::params![inst.id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?.collect::<Result<Vec<_>, _>>()?;
         let mut completed = Vec::new();
         let mut failed = Vec::new();
         let mut pending = Vec::new();
-        for (node_id, step) in &steps {
-            match step.get("status").and_then(|s| s.as_str()) {
-                Some("success") => completed.push(node_id.clone()),
-                Some("failed") => failed.push(node_id.clone()),
-                _ => pending.push(node_id.clone()),
+        for (node_id, status) in node_results {
+            match status.as_str() {
+                "completed" | "success" => completed.push(node_id),
+                "failed" => failed.push(node_id),
+                _ => pending.push(node_id),
             }
         }
         if !failed.is_empty() || !pending.is_empty() {
@@ -744,29 +751,7 @@ pub fn list_recoverable_executions(conn: &Connection) -> Result<Vec<RecoverableE
     Ok(recoverable)
 }
 
-pub fn recover_execution(conn: &Connection, execution_id: &str) -> Result<WorkflowInstance, AppError> {
-    let instances = list_instances(conn, None)?;
-    let mut instance = instances.into_iter().find(|i| i.id == execution_id)
-        .ok_or_else(|| AppError::NotFound("执行实例不存在".into()))?;
-    let status_str = format!("{:?}", instance.status);
-    if status_str != "Paused" && status_str != "Failed" {
-        return Err(AppError::InvalidInput("只能恢复已暂停或已失败的工作流".into()));
-    }
-    if let Some(steps) = instance.steps.as_object_mut() {
-        for (_, step) in steps.iter_mut() {
-            if step.get("status").and_then(|s| s.as_str()) == Some("failed") {
-                step.as_object_mut().map(|obj| {
-                    obj.insert("status".to_string(), serde_json::Value::String("pending".to_string()));
-                    obj.remove("error");
-                });
-            }
-        }
-    }
-    instance.status = WorkflowInstanceStatus::Running;
-    instance.error = None;
-    update_instance_status(conn, &instance.id, &instance.status, Some(&instance.context), Some(&instance.steps), instance.current_node_id.as_deref(), None)?;
-    Ok(instance)
-}
+
 
 // ════════════════════════════════════════════════════════════
 // 人工介入查询
@@ -784,29 +769,36 @@ pub struct PendingHumanInput {
 }
 
 pub fn get_pending_human_inputs(conn: &Connection) -> Result<Vec<PendingHumanInput>, AppError> {
-    let instances = list_instances(conn, None)?;
-    let mut pending = Vec::new();
-    for inst in instances {
-        let status_str = format!("{:?}", inst.status);
-        if status_str != "Paused" && status_str != "Running" { continue; }
-        if let Some(steps) = inst.steps.as_object() {
-            for (node_id, step) in steps {
-                if step.get("status").and_then(|s| s.as_str()) == Some("running") {
-                    if let Some(output) = step.get("output") {
-                        if output.get("type").and_then(|t| t.as_str()) == Some("human_input") {
-                            pending.push(PendingHumanInput {
-                                execution_id: inst.id.clone(),
-                                node_id: node_id.clone(),
-                                node_label: node_id.clone(),
-                                prompt: output.get("prompt").and_then(|p| p.as_str()).unwrap_or("请输入").to_string(),
-                                input_type: output.get("inputType").and_then(|t| t.as_str()).unwrap_or("text").to_string(),
-                                created_at: inst.created_at,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // 从 node_executions 表查询 running 状态的 interact 节点
+    let mut stmt = conn.prepare(
+        "SELECT ne.execution_id, ne.node_id, ne.input_data
+         FROM node_executions ne
+         JOIN workflow_instances wi ON ne.execution_id = wi.id
+         WHERE ne.status = 'running'
+           AND wi.status IN ('running', 'paused')
+         ORDER BY ne.created_at DESC"
+    )?;
+    let pending = stmt.query_map([], |row| {
+        let execution_id: String = row.get(0)?;
+        let node_id: String = row.get(1)?;
+        let input_data: Option<String> = row.get(2)?;
+        let prompt = input_data.as_ref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get("prompt").and_then(|p| p.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| "请输入".to_string());
+        let input_type = input_data.as_ref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get("inputType").and_then(|t| t.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| "text".to_string());
+        let nid = node_id.clone();
+        Ok(PendingHumanInput {
+            execution_id,
+            node_id,
+            node_label: nid,
+            prompt,
+            input_type,
+            created_at: 0,
+        })
+    })?.collect::<Result<Vec<_>, _>>()?;
     Ok(pending)
 }

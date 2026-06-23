@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use crate::workflow::registry::NodeDef;
 use crate::utils::{new_id, now};
 use crate::workflow::executor::NodeExecutor;
@@ -544,14 +544,27 @@ pub fn list_recoverable_executions(
         .map_err(|e| format!("查询可恢复执行失败: {}", e))
 }
 
-/// 恢复执行（将失败节点重置为 pending）
+/// 恢复执行（从 checkpoint 继续执行）
 #[tauri::command]
-pub fn recover_execution(
-    state: tauri::State<'_, crate::DbState>,
+pub async fn recover_execution(
+    app_handle: tauri::AppHandle,
     execution_id: String,
-) -> Result<crate::workflow::WorkflowInstance, String> {
-    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
-    crate::workflow::recover_execution(&conn, &execution_id)
+) -> Result<serde_json::Value, String> {
+    let conn = app_handle.state::<crate::DbState>().get_conn()
+        .map_err(|e| format!("数据库连接失败: {}", e))?;
+    let def = crate::workflow::get_definition(&conn, &execution_id)
+        .ok()
+        .flatten()
+        .ok_or_else(|| "工作流定义不存在".to_string())?;
+    let executor = app_handle.state::<std::sync::Arc<crate::workflow::executor::NodeExecutor>>();
+    crate::workflow::engine::WorkflowEngine::recover_execution(
+        &executor.inner(),
+        &def,
+        &execution_id,
+        serde_json::Value::Object(serde_json::Map::new()),
+        &app_handle,
+        5, // 默认并发数
+    ).await.map_err(|e| e.to_string())
         .map_err(|e| format!("恢复执行失败: {}", e))
 }
 
