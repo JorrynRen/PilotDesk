@@ -510,29 +510,48 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       mouseContentY: rel.y,
     } : null);
 
-    // 距离检测：使用内容区1:1坐标
+    // 命中检测：鼠标必须接触节点输入锚点区域才显示可连接反馈
     const stage = stages.find(s => s.id === connecting.stageId);
     if (!stage) return;
-    let closestId: string | null = null;
-    let closestDist = 40;
+    let targetId: string | null = null;
     for (const node of stage.nodes) {
       if (node.id === connecting.source) continue;
+      // Start节点只有输出锚点，不可被连线
+      if (node.type === 'start') continue;
+      // 已存在的连线对不可重复连接
+      if (stage.edges.some(e => e.source === connecting.source && e.target === node.id)) continue;
       const nPos = node.position ?? { x: 20, y: 20 };
-      const nH = node.type === 'start' || node.type === 'end' ? 44 : 60;
+      const nW = 160;
+      const nH = node.type === 'end' ? 44 : 60;
+      // 检测鼠标是否在节点输入锚点附近（节点左侧20px范围，上下包含节点高度+10px余量）
       const anchorX = nPos.x;
       const anchorY = nPos.y + nH / 2;
-      const dist = Math.sqrt((rel.x - anchorX) ** 2 + (rel.y - anchorY) ** 2);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestId = node.id;
+      if (rel.x >= anchorX - 20 && rel.x <= anchorX + nW * 0.3 &&
+          rel.y >= nPos.y - 10 && rel.y <= nPos.y + nH + 10) {
+        targetId = node.id;
+        break;
       }
     }
-    setConnectTargetId(closestId);
+    setConnectTargetId(targetId);
   }, [connecting, pan, scale, stages, canvasToContentPos]);
 
   const handleEndConnect = useCallback((nodeId: string, stageId: string) => {
     if (!connecting || connecting.source === nodeId) {
       setConnecting(null);
+      return;
+    }
+    // Start节点只有输出锚点，不可被连线
+    const targetNode = stages.find(s => s.id === stageId)?.nodes.find(n => n.id === nodeId);
+    if (targetNode?.type === 'start') {
+      setConnecting(null);
+      setConnectTargetId(null);
+      return;
+    }
+    // 不允许重复连线
+    const stage = stages.find(s => s.id === stageId);
+    if (stage && stage.edges.some(e => e.source === connecting.source && e.target === nodeId)) {
+      setConnecting(null);
+      setConnectTargetId(null);
       return;
     }
 
@@ -969,12 +988,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               className="absolute rounded-full transition-all duration-150"
               style={{
                 right: -6, top: '50%', marginTop: -6,
-                width: isHovered || connecting ? 12 : 10,
-                height: isHovered || connecting ? 12 : 10,
-                background: connecting ? 'var(--accent)' : isHovered ? 'var(--accent)' : 'var(--border)',
+                width: isHovered ? 12 : 10,
+                height: isHovered ? 12 : 10,
+                background: isHovered ? 'var(--accent)' : 'var(--border)',
                 border: '2px solid var(--bg-secondary)',
                 cursor: 'crosshair',
-                boxShadow: (isHovered || connecting) ? '0 0 8px var(--accent-light)' : 'none',
+                boxShadow: isHovered ? '0 0 8px var(--accent-light)' : 'none',
               }}
             />
           )}
@@ -1127,12 +1146,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           className="absolute rounded-full transition-all duration-150"
           style={{
             right: -5, top: '50%', marginTop: -5,
-            width: isHovered || connecting ? 12 : 10,
-            height: isHovered || connecting ? 12 : 10,
-            background: connecting ? 'var(--accent)' : isHovered ? 'var(--accent)' : 'var(--border)',
+            width: isHovered ? 12 : 10,
+            height: isHovered ? 12 : 10,
+            background: isHovered ? 'var(--accent)' : 'var(--border)',
             border: '2px solid var(--bg-primary)',
             cursor: 'crosshair',
-            boxShadow: (isHovered || connecting) ? '0 0 8px var(--accent-light)' : 'none',
+            boxShadow: isHovered ? '0 0 8px var(--accent-light)' : 'none',
           }}
         />
         {/* 删除按钮 — 仅hover时显示，点击二次确认 */}
