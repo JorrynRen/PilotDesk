@@ -81,6 +81,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const panThresholdRef = useRef<{ startX: number; startY: number; triggered: boolean } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragOverCanvasRef = useRef<boolean>(false);
+  const toolbarDragTypeRef = useRef<string | null>(null);
 
   // 节点拖拽状态
   const [draggingNode, setDraggingNode] = useState<{
@@ -543,6 +544,37 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       y: (clientY - rect.top - pan.y) / scale,
     };
   }, [pan, scale]);
+
+  const getStagePositions = useCallback(() => {
+    const STAGE_FULL_WIDTH = 500;
+    const STAGE_COLLAPSED_WIDTH = 56;
+    const STAGE_GAP = 12;
+    let leftOffset = 20;
+    const map: Record<string, number> = {};
+    for (const stage of stages) {
+      map[stage.id] = leftOffset;
+      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH + STAGE_GAP : STAGE_FULL_WIDTH;
+    }
+    return map;
+  }, [stages, collapsedStages]);
+
+  const stagePositionsMap = getStagePositions();
+
+  const getStageAtCanvasPos = useCallback((cx: number, cy: number) => {
+    const STAGE_FULL_WIDTH = 460;
+    const STAGE_COLLAPSED_WIDTH = 56;
+    const STAGE_TOP = 20;
+    for (const stage of stages) {
+      const left = stagePositionsMap[stage.id];
+      const width = collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH : STAGE_FULL_WIDTH;
+      const height = 340; // approximate content height
+      if (cx >= left && cx <= left + width && cy >= STAGE_TOP && cy <= STAGE_TOP + height) {
+        return stage.id;
+      }
+    }
+    return null;
+  }, [stages, collapsedStages, stagePositionsMap]);
+
 
   // 获取节点输出锚点的画布坐标（右侧中心）
   const getNodeOutputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
@@ -1112,7 +1144,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <div
               key={nt.type}
               draggable
-              onDragStart={(e) => e.dataTransfer.setData('text/plain', nt.type)}
+              onDragStart={(e) => {
+                toolbarDragTypeRef.current = nt.type;
+                e.dataTransfer.setData('application/x-node-type', nt.type);
+                e.dataTransfer.effectAllowed = 'copy';
+              }}
               className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
               style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
               onMouseEnter={(e) => {
@@ -1200,13 +1236,62 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         onContextMenu={(e) => e.preventDefault()}
         onDragOver={(e) => {
           e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
           dragOverCanvasRef.current = true;
+          // Highlight the stage under the cursor
+          if (toolbarDragTypeRef.current) {
+            const rect = canvasRef.current?.getBoundingClientRect();
+            if (rect) {
+              const cx = (e.clientX - rect.left - pan.x) / scale;
+              const cy = (e.clientY - rect.top - pan.y) / scale;
+              const hitStage = getStageAtCanvasPos(cx, cy);
+              setDragOverStageId(hitStage);
+            }
+          }
         }}
         onDragLeave={(e) => {
           if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
             dragOverCanvasRef.current = false;
             setDragOverStageId(null);
+            toolbarDragTypeRef.current = null;
           }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          dragOverCanvasRef.current = false;
+          const rawType = e.dataTransfer.getData('application/x-node-type') || e.dataTransfer.getData('text/plain');
+          const droppedType = rawType as WorkflowNodeType;
+          toolbarDragTypeRef.current = null;
+          if (!droppedType || !BUILTIN_NODE_TYPES.some(nt => nt.type === droppedType)) {
+            setDragOverStageId(null);
+            return;
+          }
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) { setDragOverStageId(null); return; }
+          const cx = (e.clientX - rect.left - pan.x) / scale;
+          const cy = (e.clientY - rect.top - pan.y) / scale;
+          const targetStageId = getStageAtCanvasPos(cx, cy);
+          if (!targetStageId) { setDragOverStageId(null); return; }
+          const meta = getNodeTypeMeta(droppedType);
+          const newNode: WorkflowNode = {
+            id: generateId(),
+            type: droppedType,
+            label: meta.label,
+            params: {},
+            position: {
+              x: Math.max(10, cx - stagePositionsMap[targetStageId] - 20),
+              y: Math.max(10, cy - 20 - 12),
+            },
+          };
+          setStages(prev => prev.map(s => {
+            if (s.id === targetStageId) {
+              return { ...s, nodes: [...s.nodes, newNode] };
+            }
+            return s;
+          }));
+          setSelectedNodeId(newNode.id);
+          setSelectedStageId(targetStageId);
+          setDragOverStageId(null);
         }}
       >
         {/* 背景辅助网格 */}
