@@ -127,7 +127,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 const SNAP = 20;
                 const NODE_W = 160;
                 const NODE_H = 60;
-                // 纯算术计算放置位置
+                // 纯算术计算放置位置（canvasToContentPos已考虑反向缩放）
                 const rel = canvasToContentPos(cx, cy, targetStageId);
                 const snapX = Math.floor((rel.x - NODE_W / 2) / SNAP) * SNAP;
                 const snapY = Math.floor((rel.y - NODE_H / 2) / SNAP) * SNAP;
@@ -426,17 +426,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
    */
   /** 纯算术获取节点画布坐标（零DOM查询） */
   const getStagePositions = useCallback(() => {
-    const STAGE_FULL_WIDTH = 500 / scale;
+    const STAGE_FULL_WIDTH = 480;
     const STAGE_COLLAPSED_WIDTH = 56;
-    const STAGE_GAP = 12;
     let leftOffset = 20;
     const map: Record<string, number> = {};
     for (const stage of stages) {
       map[stage.id] = leftOffset;
-      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH + STAGE_GAP : STAGE_FULL_WIDTH;
+      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH + 20 : STAGE_FULL_WIDTH;
     }
     return map;
-  }, [stages, collapsedStages, scale]);
+  }, [stages, collapsedStages]);
 
   const stagePositionsMap = getStagePositions();
 
@@ -446,12 +445,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const node = stage.nodes.find(n => n.id === nodeId);
     if (!node) return null;
     const stageLeft = stagePositionsMap[stageId];
-    const INNER_OFFSET = 14; // border:2 + padding:12
+    const CONTENT_PAD = 2; // border:2 only (absolute left:0 = padding edge)
     const TITLE_H = 30;
-    const nodeX = stageLeft + INNER_OFFSET + (node.position?.x ?? 20);
-    const nodeY = 20 + TITLE_H + INNER_OFFSET + (node.position?.y ?? 20);
-    const nodeW = 160;
-    const nodeH = node.type === 'start' || node.type === 'end' ? 44 : 60;
+    const invScale = 1 / scale; // 内容区反向缩放系数
+    const nodeX = stageLeft + CONTENT_PAD + (node.position?.x ?? 20) * invScale;
+    const nodeY = 20 + TITLE_H + CONTENT_PAD + (node.position?.y ?? 20) * invScale;
+    const nodeW = 160 * invScale;
+    const nodeH = (node.type === 'start' || node.type === 'end' ? 44 : 60) * invScale;
     return { x: nodeX, y: nodeY, w: nodeW, h: nodeH };
   }, [stages, stagePositionsMap, scale]);
 
@@ -472,32 +472,33 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   /**
    * 画布坐标 → 指定stage内容区的相对坐标（用于设置node.position）
    */
-  /** 画布坐标 → 内容区相对坐标（纯算术） */
+  /** 画布坐标 → 内容区相对坐标（纯算术，考虑内容区反向缩放） */
   const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
-    const INNER_OFFSET = 14; // border:2 + padding:12
+    const CONTENT_PAD = 14;
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
-    const contentStartX = stageLeft + INNER_OFFSET;
-    const contentStartY = 20 + TITLE_H + INNER_OFFSET;
+    const contentStartX = stageLeft + CONTENT_PAD;
+    const contentStartY = 20 + TITLE_H + CONTENT_PAD;
     return {
-      x: canvasX - contentStartX,
-      y: canvasY - contentStartY,
+      x: (canvasX - contentStartX) * scale,
+      y: (canvasY - contentStartY) * scale,
     };
-  }, [stagePositionsMap]);
+  }, [stagePositionsMap, scale]);
 
   /**
    * 内容区相对坐标 → 画布坐标（用于连线和锚点计算）
    */
-  /** 内容区相对坐标 → 画布坐标（纯算术） */
+  /** 内容区相对坐标 → 画布坐标（纯算术，考虑内容区反向缩放） */
   const contentToCanvasPos = useCallback((contentX: number, contentY: number, stageId: string) => {
-    const INNER_OFFSET = 14;
+    const CONTENT_PAD = 14;
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
+    const invScale = 1 / scale;
     return {
-      x: stageLeft + INNER_OFFSET + contentX,
-      y: 20 + TITLE_H + INNER_OFFSET + contentY,
+      x: stageLeft + CONTENT_PAD + contentX * invScale,
+      y: 20 + TITLE_H + CONTENT_PAD + contentY * invScale,
     };
-  }, [stagePositionsMap]);
+  }, [stagePositionsMap, scale]);
 
   const handleUpdateConnectingPos = useCallback((e: MouseEvent) => {
     if (!connecting) return;
@@ -757,14 +758,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     e.preventDefault();
     const node = stages.find((s) => s.id === stageId)?.nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    // 纯算术计算节点屏幕位置
+    // 纯算术计算节点屏幕位置（内容区scale(1/scale)使节点视觉位置=画布位置*1）
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const INNER_OFFSET = 14;
+    const CONTENT_PAD = 14;
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
-    const nodeScreenX = rect.left + pan.x + (stageLeft + INNER_OFFSET + (node.position?.x ?? 20)) * scale;
-    const nodeScreenY = rect.top + pan.y + (20 + TITLE_H + INNER_OFFSET + (node.position?.y ?? 20)) * scale;
+    const nodeScreenX = rect.left + pan.x + (stageLeft + CONTENT_PAD) * scale + (node.position?.x ?? 20);
+    const nodeScreenY = rect.top + pan.y + (20 + TITLE_H + CONTENT_PAD) * scale + (node.position?.y ?? 20);
     setDraggingNode({
       nodeId,
       stageId,
@@ -794,9 +795,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const newAbsY = e.clientY - d.offsetY;
       const rawCanvasX = newAbsX - rect.left;
       const rawCanvasY = newAbsY - rect.top;
-      // 画布坐标
-      const canvasX = rawCanvasX / scale - pan.x;
-      const canvasY = rawCanvasY / scale - pan.y;
+      // 画布坐标（正确公式：(screenOffset - pan) / scale）
+      const canvasX = (rawCanvasX - pan.x) / scale;
+      const canvasY = (rawCanvasY - pan.y) / scale;
       // 画布坐标 → 内容区相对坐标（用统一函数）
       const rel = canvasToContentPos(canvasX, canvasY, d.stageId);
       setStages((prev) =>
@@ -843,19 +844,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
 
   const getStageAtCanvasPos = useCallback((cx: number, cy: number) => {
-    const STAGE_FULL_WIDTH = 460 / scale;
+    const STAGE_FULL_WIDTH = 480;
     const STAGE_COLLAPSED_WIDTH = 56;
     const STAGE_TOP = 20;
+    const TITLE_H = 30;
+    const CONTENT_MIN_H = 280;
+    const GATE_H = 56;
     for (const stage of stages) {
       const left = stagePositionsMap[stage.id];
       const width = collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH : STAGE_FULL_WIDTH;
-      const height = (100 + 290) / scale;
+      const height = TITLE_H + (collapsedStages.has(stage.id) ? 0 : CONTENT_MIN_H + GATE_H);
       if (cx >= left && cx <= left + width && cy >= STAGE_TOP && cy <= STAGE_TOP + height) {
         return stage.id;
       }
     }
     return null;
-  }, [stages, collapsedStages, stagePositionsMap, scale]);
+  }, [stages, collapsedStages, stagePositionsMap]);
 
 
 
@@ -1178,15 +1182,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const isHovered = hoveredEdgeId === edge.id;
 
     // 水平段：输出/输入锚点处各加固定水平线，保证箭头始终可见
-    const H_SEG = 20;
+    const invScale = 1 / scale;
+    const H_SEG = 20 * invScale;
     const startHEndX = sx + sw + H_SEG;
     const endHStartX = tx - H_SEG;
     const dx = Math.abs(endHStartX - startHEndX);
-    const cpOffset = Math.max(20, dx * 0.4);
+    const cpOffset = Math.max(20 * invScale, dx * 0.4);
     const baseD = `M ${sx + sw} ${sy} H ${startHEndX} C ${startHEndX + cpOffset} ${sy}, ${endHStartX - cpOffset} ${ty}, ${endHStartX} ${ty} H ${tx}`;
 
-    // 手动箭头（终点朝左）
-    const arrowSize = 5;
+    // 手动箭头（终点朝左），大小/scale补偿
+    const arrowSize = 5 * invScale;
     const arrowPoints = `${tx},${ty - arrowSize} ${tx + arrowSize * 1.5},${ty} ${tx},${ty + arrowSize}`;
 
     // 连线颜色（箭头同步）
@@ -1199,7 +1204,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         <path
           d={baseD}
           stroke="transparent"
-          strokeWidth={14}
+          strokeWidth={14 * invScale}
           fill="none"
           pointerEvents="stroke"
           style={{ cursor: 'pointer' }}
@@ -1217,7 +1222,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           <path
             d={baseD}
             stroke={lineColor}
-            strokeWidth={8}
+            strokeWidth={8 * invScale}
             fill="none"
             opacity={0.15}
             style={{ pointerEvents: 'none', transition: 'opacity 0.15s ease' }}
@@ -1227,7 +1232,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         <path
           d={baseD}
           stroke={lineColor}
-          strokeWidth={isHovered ? 2.5 : edgeRunState === 'running' ? 2.5 : 2}
+          strokeWidth={(isHovered ? 2.5 : edgeRunState === 'running' ? 2.5 : 2) * invScale}
           fill="none"
           strokeDasharray={edgeRunState === 'running' ? '6 3' : 'none'}
           style={{ pointerEvents: 'none', transition: 'stroke 0.15s ease, stroke-width 0.15s ease' }}
@@ -1290,16 +1295,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!anchorPos) return null;
     const mx = connecting.mouseCanvasX;
     const my = connecting.mouseCanvasY;
-    const H_SEG = 20;
+    const invScale = 1 / scale;
+    const H_SEG = 20 * invScale;
     const hEndX = anchorPos.x + H_SEG;
     const dx = Math.abs(mx - hEndX);
-    const cpOffset = Math.max(20, dx * 0.4);
+    const cpOffset = Math.max(20 * invScale, dx * 0.4);
     const d = `M ${anchorPos.x} ${anchorPos.y} H ${hEndX} C ${hEndX + cpOffset} ${anchorPos.y}, ${mx - cpOffset} ${my}, ${mx} ${my}`;
     return (
       <path
         d={d}
         stroke="var(--accent)"
-        strokeWidth={2}
+        strokeWidth={2 * invScale}
         strokeDasharray="6 3"
         fill="none"
         opacity={0.7}
@@ -1314,6 +1320,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const renderStageLinks = () => {
     if (stages.length < 2) return null;
     const links: React.ReactNode[] = [];
+    const STAGE_W = 480;
+    const STAGE_COLLAPSED_W = 56;
+    const STAGE_TOP = 20;
+    const TITLE_H = 30;
+    const GATE_H = 56;
+    const invScale = 1 / scale;
+    const H_SEG = 20 * invScale; // 两端水平段长度
+
+    // 计算各阶段左偏移（与getStagePositions保持一致）
+    let leftOffset = 20;
+    const stagePositions: number[] = [];
+    for (let j = 0; j < stages.length; j++) {
+      stagePositions.push(leftOffset);
+      leftOffset += collapsedStages.has(stages[j].id) ? STAGE_COLLAPSED_W + 20 : STAGE_W;
+    }
 
     for (let i = 0; i < stages.length - 1; i++) {
       const srcStage = stages[i];
@@ -1321,77 +1342,70 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const srcCollapsed = collapsedStages.has(srcStage.id);
       const tgtCollapsed = collapsedStages.has(tgtStage.id);
 
-      // 计算位置（使用IIFE中的stagePositions值）
-      const STAGE_FULL_WIDTH = 500 / scale;
-      const STAGE_COLLAPSED_WIDTH = 56;
-      const STAGE_GAP = 12;
-      let leftOffset = 20;
-      const stagePositions: number[] = [];
-      for (let j = 0; j < stages.length; j++) {
-        stagePositions.push(leftOffset);
-        if (collapsedStages.has(stages[j].id)) {
-          leftOffset += STAGE_COLLAPSED_WIDTH + STAGE_GAP;
-        } else {
-          leftOffset += STAGE_FULL_WIDTH;
-        }
-      }
-
       const srcLeft = stagePositions[i];
       const tgtLeft = stagePositions[i + 1];
-      const srcWidth = srcCollapsed ? STAGE_COLLAPSED_WIDTH : 460 / scale;
-      const tgtWidth = tgtCollapsed ? STAGE_COLLAPSED_WIDTH : 460 / scale;
+      const srcWidth = srcCollapsed ? STAGE_COLLAPSED_W : STAGE_W;
 
-      // 连线端点
-      const TITLE_H = 30;
-      const CONTENT_MIN_H = 250 / scale;
+      // 源端点：从当前阶段右侧中心出发
       let srcX: number, srcY: number;
       if (srcCollapsed) {
         srcX = srcLeft + srcWidth;
-        srcY = 20 + TITLE_H / 2;
+        srcY = STAGE_TOP + 28; // 折叠阶段中部
       } else {
         srcX = srcLeft + srcWidth;
-        srcY = 20 + TITLE_H + CONTENT_MIN_H + 20; // 阶段top+标题+内容区+Gate区域中部
+        // 从Gate栏右侧中心出发
+        const contentH = 280; // 内容区高度
+        srcY = STAGE_TOP + TITLE_H + contentH + GATE_H / 2;
       }
 
-      let tgtX: number, tgtY: number;
-      tgtX = tgtLeft;
-      tgtY = 20 + TITLE_H / 2;
+      // 目标端点：到下一阶段左侧标题栏中部
+      const tgtX = tgtLeft;
+      const tgtY = STAGE_TOP + TITLE_H / 2;
 
-      // 阶段连线运行状态
+      // 贝塞尔曲线 + 两端水平段
+      const startHEndX = srcX + H_SEG;
+      const endHStartX = tgtX - H_SEG;
+      const gapDx = Math.abs(endHStartX - startHEndX);
+      const cpOffset = Math.max(30 * invScale, gapDx * 0.4);
+      const srcCpY = srcY + (tgtY - srcY) * 0.3;
+      const tgtCpY = tgtY - (tgtY - srcY) * 0.3;
+      const d = `M ${srcX} ${srcY} H ${startHEndX} C ${startHEndX + cpOffset} ${srcY}, ${endHStartX - cpOffset} ${tgtCpY}, ${endHStartX} ${tgtY} H ${tgtX}`;
+
+      // 运行状态
       const srcStageState = stepStates[`stage_${srcStage.id}`];
       const tgtStageState = stepStates[`stage_${tgtStage.id}`];
       const linkRunState = tgtStageState === 'running' ? 'running' : tgtStageState === 'success' ? 'success' : tgtStageState === 'failed' ? 'failed' : srcStageState === 'success' && !tgtStageState ? 'running' : 'idle';
-
-      const d = `M ${srcX} ${srcY} C ${srcX + 40} ${srcY}, ${tgtX - 40} ${tgtY + (srcY - tgtY) * 0.3}, ${tgtX} ${tgtY}`;
+      const linkColor = linkRunState === 'running' ? '#58a6ff' : linkRunState === 'success' ? '#3fb950' : linkRunState === 'failed' ? '#f85149' : '#484f5888';
 
       links.push(
         <g key={`stagelink-${i}`}>
           <path
             d={d}
             stroke="transparent"
-            strokeWidth={14}
+            strokeWidth={14 * invScale}
             fill="none"
             pointerEvents="stroke"
             style={{ cursor: 'pointer' }}
           />
           <path
             d={d}
-            stroke={linkRunState === 'running' ? '#58a6ff' : linkRunState === 'success' ? '#3fb950' : linkRunState === 'failed' ? '#f85149' : '#484f5888'}
-            strokeWidth={linkRunState === 'running' ? 2.5 : 2}
+            stroke={linkColor}
+            strokeWidth={(linkRunState === 'running' ? 2.5 : 2) * invScale}
             fill="none"
             strokeDasharray={linkRunState === 'running' ? '6 3' : linkRunState === 'idle' ? '6 4' : 'none'}
             style={{ transition: 'stroke 0.3s ease', pointerEvents: 'none' }}
           />
+          {/* 手动箭头（终点朝左） */}
           <polygon
-            points={`${tgtX},${tgtY - 5} ${tgtX + 7.5},${tgtY} ${tgtX},${tgtY + 5}`}
-            fill={linkRunState === 'running' ? '#58a6ff' : linkRunState === 'success' ? '#3fb950' : linkRunState === 'failed' ? '#f85149' : '#484f5888'}
+            points={`${tgtX},${tgtY - 5 * invScale} ${tgtX + 7.5 * invScale},${tgtY} ${tgtX},${tgtY + 5 * invScale}`}
+            fill={linkColor}
             style={{ pointerEvents: 'none' }}
           />
           {linkRunState === 'running' && (
             <path
               d={d}
               stroke="#58a6ff"
-              strokeWidth={4}
+              strokeWidth={4 * invScale}
               fill="none"
               strokeDasharray="8 12"
               opacity={0.3}
@@ -1401,20 +1415,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {/* 连线中间标签 */}
           <g style={{ pointerEvents: 'none' }}>
             <rect
-              x={(srcX + tgtX) / 2 - 16}
-              y={(srcY + tgtY) / 2 - 8}
-              width={32}
-              height={16}
-              rx={3}
+              x={(srcX + tgtX) / 2 - 16 * invScale}
+              y={(srcY + tgtY) / 2 - 8 * invScale}
+              width={32 * invScale}
+              height={16 * invScale}
+              rx={3 * invScale}
               fill="var(--bg-primary)"
               stroke="#484f5888"
-              strokeWidth={0.5}
+              strokeWidth={0.5 * invScale}
             />
             <text
               x={(srcX + tgtX) / 2}
-              y={(srcY + tgtY) / 2 + 3}
+              y={(srcY + tgtY) / 2 + 3 * invScale}
               fill="#8b949e"
-              fontSize={8}
+              fontSize={8 * invScale}
               textAnchor="middle"
             >
               {srcStage.order + 1} →
@@ -1425,7 +1439,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
 
     return <>{links}</>;
-  };
+  };;
 
   // ══════════════════════════════════════════
   // JSX
@@ -1769,18 +1783,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
           {/* ── 阶段列 ── */}
           {(() => {
-            const STAGE_FULL_WIDTH = 500 / scale;
+            const STAGE_FULL_WIDTH = 480;
             const STAGE_COLLAPSED_WIDTH = 56;
-            const STAGE_GAP = 12;
             let leftOffset = 20;
             const stagePositions: number[] = [];
             for (let i = 0; i < stages.length; i++) {
               stagePositions.push(leftOffset);
-              if (collapsedStages.has(stages[i].id)) {
-                leftOffset += STAGE_COLLAPSED_WIDTH + STAGE_GAP;
-              } else {
-                leftOffset += STAGE_FULL_WIDTH;
-              }
+              leftOffset += collapsedStages.has(stages[i].id) ? STAGE_COLLAPSED_WIDTH + 20 : STAGE_FULL_WIDTH;
             }
             return (
               <>
@@ -1796,8 +1805,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     position: 'absolute',
                     top: 20,
                     left: stagePositions[stageIndex],
-                    width: isCollapsed ? 56 : 460 / scale,
-                    minHeight: 100,
+                    width: isCollapsed ? 56 : 480,
+                    minHeight: isCollapsed ? 56 : 30 + 280 / scale + 56,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
                     border: 'none',
@@ -1806,9 +1815,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     boxShadow: stageRunState === 'running'
                       ? '0 0 16px #58a6ff33'
                       : 'var(--shadow-sm)',
+                    display: 'flex',
+                    flexDirection: 'column',
                   }}
                 >
-                  {/* 阶段标题栏 — 反向缩放保持恒定大小 */}
+                  {/* 阶段标题栏（正向缩放，不做反向补偿） */}
                   <div
                     className={isCollapsed ? 'flex flex-col shrink-0' : 'flex items-center justify-between shrink-0'}
                     style={{
@@ -1816,11 +1827,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       background: 'var(--bg-tertiary)',
                       borderBottom: '1px solid var(--border)',
                       borderRadius: '8px 8px 0 0',
-                      transform: `scale(${1 / scale})`,
-                      transformOrigin: 'top left',
-                      width: 460,
-                      fontSize: `${Math.max(10, 12 / scale)}px`,
-                      gap: isCollapsed ? 2 : 0,
+                      height: 30,
+                      position: 'relative',
+                      zIndex: 10,
                     }}
                   >
                     {isCollapsed && (
@@ -1857,7 +1866,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     )}
                   </div>
 
-                  {/* 阶段内容区 */}
+                  {/* 阶段内容区 — 反向缩放保持节点固定大小 */}
                   {!isCollapsed && (
                     <>
                       <div
@@ -1866,28 +1875,31 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         className="relative"
                         style={{
                           flex: 1,
-                          minHeight: 250 / scale,
+                          minHeight: 280 / scale,
                           padding: 12,
                           border: dragOverStageId === stage.id ? '2px dashed var(--accent)' : '2px dashed transparent',
                           borderRadius: 6,
                           background: dragOverStageId === stage.id ? 'var(--accent-light)' : 'transparent',
                           transition: 'border-color 0.15s ease, background 0.15s ease',
+                          transform: `scale(${1 / scale})`,
+                          transformOrigin: 'top left',
+                          zIndex: 5,
                         }}
                       >
                         {stage.nodes.map((node) => renderNode(node, stage.id))}
                       </div>
 
-                      {/* Gate 区域 — 反向缩放保持恒定大小 */}
+                      {/* Gate 区域（正向缩放，不做反向补偿） */}
                       <div
                         data-gate
                         className="mx-2 mb-2 p-2 rounded-lg cursor-pointer transition-colors duration-150"
                         style={{
+                          height: 56,
                           border: `1px solid ${stageRunState === 'running' ? '#58a6ff88' : 'var(--border)'}`,
                           background: 'var(--bg-primary)',
-                          transform: `scale(${1 / scale})`,
-                          transformOrigin: 'bottom left',
-                          width: 444,
-                          fontSize: `${Math.max(10, 10 / scale)}px`,
+                          position: 'relative',
+                          zIndex: 10,
+                          overflow: 'hidden',
                         }}
                         onClick={() => handleUpdateGate(stage.id, {})}
                       >
@@ -1921,8 +1933,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   )}
                 </div>
 
-
-              </React.Fragment>
+</React.Fragment>
             );
           })}
               </>
