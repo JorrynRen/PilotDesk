@@ -880,7 +880,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       <g key={edge.id}>
         {/* 不可见的粗命中区域 */}
         <path
-          d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20}, ${tp.x} ${tp.y + 20}`}
+          d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20 + (sp.y + 20 - tp.y - 20) * 0.3}, ${tp.x} ${tp.y + 20}`}
           stroke="transparent"
           strokeWidth={12}
           fill="none"
@@ -889,7 +889,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         />
         {/* 可见连线 */}
         <path
-          d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20}, ${tp.x} ${tp.y + 20}`}
+          d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20 + (sp.y + 20 - tp.y - 20) * 0.3}, ${tp.x} ${tp.y + 20}`}
           stroke={edge.condition ? '#d29922' : edgeRunState === 'running' ? '#58a6ff' : edgeRunState === 'success' ? '#3fb950' : edgeRunState === 'failed' ? '#f85149' : 'var(--accent)'}
           strokeWidth={edgeRunState === 'running' ? 2.5 : 2}
           fill="none"
@@ -900,7 +900,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         {/* 运行中连线动画虚线 */}
         {edgeRunState === 'running' && (
           <path
-            d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20}, ${tp.x} ${tp.y + 20}`}
+            d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20 + (sp.y + 20 - tp.y - 20) * 0.3}, ${tp.x} ${tp.y + 20}`}
             stroke="#58a6ff"
             strokeWidth={4}
             fill="none"
@@ -949,7 +949,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!anchorPos) return null;
     const mx = connecting.mouseCanvasX;
     const my = connecting.mouseCanvasY;
-    const d = `M ${anchorPos.x} ${anchorPos.y} C ${anchorPos.x + 30} ${anchorPos.y}, ${mx - 30} ${my}, ${mx} ${my}`;
+    const d = `M ${anchorPos.x} ${anchorPos.y} C ${anchorPos.x + 30} ${anchorPos.y}, ${mx - 30} ${my + (anchorPos.y - my) * 0.3}, ${mx} ${my}`;
     return (
       <path
         d={d}
@@ -1019,7 +1019,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const tgtStageState = stepStates[`stage_${tgtStage.id}`];
       const linkRunState = tgtStageState === 'running' ? 'running' : tgtStageState === 'success' ? 'success' : tgtStageState === 'failed' ? 'failed' : srcStageState === 'success' && !tgtStageState ? 'running' : 'idle';
 
-      const d = `M ${srcX} ${srcY} C ${srcX + 40} ${srcY}, ${tgtX - 40} ${tgtY}, ${tgtX} ${tgtY}`;
+      const d = `M ${srcX} ${srcY} C ${srcX + 40} ${srcY}, ${tgtX - 40} ${tgtY + (srcY - tgtY) * 0.3}, ${tgtX} ${tgtY}`;
 
       links.push(
         <g key={`stagelink-${i}`}>
