@@ -29,6 +29,10 @@ pub enum WorkflowNodeType {
     Plugin,
     #[serde(rename = "subflow")]
     Subflow,
+    #[serde(rename = "start")]
+    Start,
+    #[serde(rename = "end")]
+    End,
 }
 
 // ════════════════════════════════════════════════════════════
