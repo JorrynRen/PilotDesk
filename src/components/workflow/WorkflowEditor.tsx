@@ -1083,7 +1083,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // JSX
   // ══════════════════════════════════════════
   return (
-    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="flex flex-row h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      {/* 左侧主区域 */}
+      <div className="flex flex-col flex-1 min-w-0 relative">
       {/* CSS动画注入 */}
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -1183,6 +1185,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         onWheel={handleWheel}
         onContextMenu={(e) => e.preventDefault()}
         onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'none';
           dragOverCanvasRef.current = true;
         }}
         onDragLeave={(e) => {
@@ -1684,10 +1688,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       )}
 
-      {/* ── 节点配置面板（absolute定位，不穿越工具栏） ── */}
+      </div>{/* end left area */}
+      {/* ── 节点配置面板 ── */}
       {selectedNodeId && selectedStageId && (
         <div
-          className="absolute right-0 top-0 bottom-0 w-[360px] z-[50] overflow-auto p-5"
+          className="w-[360px] shrink-0 overflow-auto p-5 flex flex-col"
           style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}
         >
           <WorkflowNodeConfig
