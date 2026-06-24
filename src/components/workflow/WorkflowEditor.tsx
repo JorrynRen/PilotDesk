@@ -38,6 +38,9 @@ interface ConnectingPreview {
   stageId: string;
   mouseCanvasX: number;
   mouseCanvasY: number;
+  /** 内容区1:1坐标（用于内容区SVG内渲染预览线） */
+  mouseContentX: number;
+  mouseContentY: number;
 }
 
 /** 删除确认弹窗状态 */
@@ -410,7 +413,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!rect) return;
     const mouseCanvasX = (e.clientX - rect.left - pan.x) / scale;
     const mouseCanvasY = (e.clientY - rect.top - pan.y) / scale;
-    setConnecting({ source: nodeId, stageId, mouseCanvasX, mouseCanvasY });
+    setConnecting({ source: nodeId, stageId, mouseCanvasX, mouseCanvasY, mouseContentX: 0, mouseContentY: 0 });
   };
 
 
@@ -456,19 +459,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     return { x: nodeX, y: nodeY, w: nodeW, h: nodeH };
   }, [stages, stagePositionsMap, scale]);
 
-  /** 获取节点的输出锚点画布坐标（右侧中心） */
-  const getNodeOutputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
-    const rect = getNodeCanvasRect(nodeId, stageId);
-    if (!rect) return null;
-    return { x: rect.x + rect.w, y: rect.y + rect.h / 2 };
-  }, [getNodeCanvasRect]);
 
-  /** 获取节点的输入锚点画布坐标（左侧中心） */
-  const getNodeInputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
-    const rect = getNodeCanvasRect(nodeId, stageId);
-    if (!rect) return null;
-    return { x: rect.x, y: rect.y + rect.h / 2 };
-  }, [getNodeCanvasRect]);
 
   /**
    * 画布坐标 → 指定stage内容区的相对坐标（用于设置node.position）
@@ -491,7 +482,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
    */
   /** 内容区相对坐标 → 画布坐标（纯算术，考虑内容区反向缩放） */
   const contentToCanvasPos = useCallback((contentX: number, contentY: number, stageId: string) => {
-    const CONTENT_PAD = 14;
+    const CONTENT_PAD = 2;
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
     const invScale = 1 / scale;
@@ -507,29 +498,37 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!rect) return;
     const mx = (e.clientX - rect.left - pan.x) / scale;
     const my = (e.clientY - rect.top - pan.y) / scale;
+
+    // 画布坐标 → 内容区1:1坐标
+    const rel = canvasToContentPos(mx, my, connecting.stageId);
+
     setConnecting(prev => prev ? {
       ...prev,
       mouseCanvasX: mx,
       mouseCanvasY: my,
+      mouseContentX: rel.x,
+      mouseContentY: rel.y,
     } : null);
 
-    // 距离检测：只高亮鼠标靠近input anchor的节点
+    // 距离检测：使用内容区1:1坐标
     const stage = stages.find(s => s.id === connecting.stageId);
     if (!stage) return;
     let closestId: string | null = null;
-    let closestDist = 40; // 40px阈值
+    let closestDist = 40;
     for (const node of stage.nodes) {
       if (node.id === connecting.source) continue;
-      const anchorPos = getNodeInputAnchor(node.id, connecting.stageId);
-      if (!anchorPos) continue;
-      const dist = Math.sqrt((mx - anchorPos.x) ** 2 + (my - anchorPos.y) ** 2);
+      const nPos = node.position ?? { x: 20, y: 20 };
+      const nH = node.type === 'start' || node.type === 'end' ? 44 : 60;
+      const anchorX = nPos.x;
+      const anchorY = nPos.y + nH / 2;
+      const dist = Math.sqrt((rel.x - anchorX) ** 2 + (rel.y - anchorY) ** 2);
       if (dist < closestDist) {
         closestDist = dist;
         closestId = node.id;
       }
     }
     setConnectTargetId(closestId);
-  }, [connecting, pan, scale, stages, getNodeInputAnchor]);
+  }, [connecting, pan, scale, stages, canvasToContentPos]);
 
   const handleEndConnect = useCallback((nodeId: string, stageId: string) => {
     if (!connecting || connecting.source === nodeId) {
@@ -1294,25 +1293,34 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   // ══════════════════════════════════════════
-  // 渲染：连线预览（拖拽中的临时线条）
+  // 渲染：连线预览（拖拽中的临时线条）— 使用1:1内容区坐标
+  // 在内容区SVG内渲染，跟随反向缩放保持固定视觉大小
   // ══════════════════════════════════════════
-  const renderConnectingPreview = () => {
-    if (!connecting) return null;
-    const anchorPos = getNodeOutputAnchor(connecting.source, connecting.stageId);
-    if (!anchorPos) return null;
-    const mx = connecting.mouseCanvasX;
-    const my = connecting.mouseCanvasY;
-    const invScale = 1 / scale;
-    const H_SEG = 20 * invScale;
-    const hEndX = anchorPos.x + H_SEG;
+  const renderConnectingPreview = (stageId: string) => {
+    if (!connecting || connecting.stageId !== stageId) return null;
+    const stage = stages.find(s => s.id === stageId);
+    if (!stage) return null;
+    const sourceNode = stage.nodes.find(n => n.id === connecting.source);
+    if (!sourceNode) return null;
+
+    // 源锚点：1:1内容区坐标（节点右侧中心）
+    const sx = (sourceNode.position?.x ?? 20) + 160;
+    const sy = (sourceNode.position?.y ?? 20) + (sourceNode.type === 'start' || sourceNode.type === 'end' ? 22 : 30);
+
+    // 鼠标：1:1内容区坐标
+    const mx = connecting.mouseContentX;
+    const my = connecting.mouseContentY;
+
+    const H_SEG = 10;
+    const hEndX = sx + H_SEG;
     const dx = Math.abs(mx - hEndX);
-    const cpOffset = Math.max(20 * invScale, dx * 0.4);
-    const d = `M ${anchorPos.x} ${anchorPos.y} H ${hEndX} C ${hEndX + cpOffset} ${anchorPos.y}, ${mx - cpOffset} ${my}, ${mx} ${my}`;
+    const cpOffset = Math.max(20, dx * 0.4);
+    const d = `M ${sx} ${sy} H ${hEndX} C ${hEndX + cpOffset} ${sy}, ${mx - cpOffset} ${my}, ${mx} ${my}`;
     return (
       <path
         d={d}
         stroke="var(--accent)"
-        strokeWidth={2 * invScale}
+        strokeWidth={2}
         strokeDasharray="6 3"
         fill="none"
         opacity={0.7}
@@ -1768,15 +1776,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             />
           )}
 
-          {/* SVG 层：箭头标记 + 连线 + 预览线 */}
+          {/* SVG 层：阶段间连线（反向缩放，画布坐标） */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 15, pointerEvents: 'none' }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 15 }}
           >
-
             {/* 阶段间连线 */}
             {renderStageLinks()}
-            {/* 连线拖拽预览 */}
-            {connecting && renderConnectingPreview()}
           </svg>
 
           {/* 空状态 */}
@@ -1892,12 +1897,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           zIndex: 5,
                         }}
                       >
-                        {/* 阶段内连线SVG — 跟随内容区反向缩放 */}
+                        {/* 阶段内连线 + 连线预览 SVG — 1:1内容区坐标 */}
                         <svg
-                          style={{ position: 'absolute', top: -12, left: -12, width: 'calc(100% + 24px)', height: 'calc(100% + 24px)', zIndex: 1, pointerEvents: 'none', overflow: 'visible' }}
+                          style={{ position: 'absolute', top: -12, left: -12, width: 'calc(100% + 24px)', height: 'calc(100% + 24px)', zIndex: 1, overflow: 'visible' }}
                         >
                           <g transform={`translate(12, 12)`}>
                             {stage.edges.map((edge) => renderEdge(edge, stage.id))}
+                            {/* 连线拖拽预览（1:1内容区坐标） */}
+                            {renderConnectingPreview(stage.id)}
                           </g>
                         </svg>
                         {stage.nodes.map((node) => renderNode(node, stage.id))}
