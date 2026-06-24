@@ -431,7 +431,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const getStagePositions = useCallback(() => {
     const STAGE_FULL_WIDTH = 480;
     const STAGE_COLLAPSED_WIDTH = 56;
-    const STAGE_GAP = 24;
+    const STAGE_GAP = 36;
     let leftOffset = 20;
     const map: Record<string, number> = {};
     for (const stage of stages) {
@@ -1340,7 +1340,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const STAGE_TOP = 20;
     const TITLE_H = 30;
     const GATE_H = 56;
-    const CONTENT_H = 580; // 与阶段minHeight一致
+    const DYN_CONTENT_H = 494 * scale; // 动态内容区CSS高度
     const invScale = 1 / scale;
     const H_SEG = 10 * invScale; // 两端水平段（缩短一半）
 
@@ -1349,7 +1349,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const stagePositions: number[] = [];
     for (let j = 0; j < stages.length; j++) {
       stagePositions.push(leftOffset);
-      leftOffset += collapsedStages.has(stages[j].id) ? STAGE_COLLAPSED_W + 24 : STAGE_W + 24;
+      leftOffset += collapsedStages.has(stages[j].id) ? STAGE_COLLAPSED_W + 36 : STAGE_W + 36;
     }
 
     for (let i = 0; i < stages.length - 1; i++) {
@@ -1369,8 +1369,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         srcY = STAGE_TOP + 28; // 折叠阶段中部
       } else {
         srcX = srcLeft + srcWidth;
-        // 从Gate栏右侧中心出发
-        srcY = STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+        // 从Gate栏右侧中心出发（动态高度）
+        srcY = STAGE_TOP + TITLE_H + DYN_CONTENT_H + GATE_H / 2;
       }
 
       // 目标端点：到下一阶段左侧标题栏中部
@@ -1446,7 +1446,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               fontSize={8 * invScale}
               textAnchor="middle"
             >
-              {srcStage.order + 1} →
+              {`step${srcStage.order + 1}→`}
             </text>
           </g>
         </g>
@@ -1758,23 +1758,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             position: 'relative',
           }}
         >
-          {/* 背景辅助网格 — 在scale容器内，跟随画布缩放 */}
-          {showGrid && (
-            <div
-              className="absolute pointer-events-none"
-              style={{
-                top: -500,
-                left: -500,
-                width: 5000,
-                height: 4000,
-                zIndex: 1,
-                backgroundImage: `radial-gradient(circle, rgba(139,148,158,0.5) 1px, transparent 1px)`,
-                backgroundSize: '20px 20px',
-                backgroundPosition: `${pan.x / scale % 20}px ${pan.y / scale % 20}px`,
-                opacity: 0.5,
-              }}
-            />
-          )}
+
 
           {/* SVG 层：阶段间连线（反向缩放，画布坐标） */}
           <svg
@@ -1795,7 +1779,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {(() => {
             const STAGE_FULL_WIDTH = 480;
             const STAGE_COLLAPSED_WIDTH = 56;
-            const STAGE_GAP = 24;
+            const STAGE_GAP = 36;
             let leftOffset = 20;
             const stagePositions: number[] = [];
             for (let i = 0; i < stages.length; i++) {
@@ -1817,7 +1801,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     top: 20,
                     left: stagePositions[stageIndex],
                     width: isCollapsed ? 56 : 480,
-                    minHeight: isCollapsed ? 56 : 580,
+                    height: isCollapsed ? 56 : 86 + 494 * scale,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
                     border: 'none',
@@ -1831,6 +1815,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     zIndex: 2,
                   }}
                 >
+                  {/* 网格辅助线 — 在阶段背景之上、其他内容之下 */}
+                  {showGrid && (
+                    <div
+                      className="absolute inset-0 pointer-events-none"
+                      style={{
+                        zIndex: 0,
+                        backgroundImage: `radial-gradient(circle, rgba(139,148,158,0.4) 1px, transparent 1px)`,
+                        backgroundSize: '20px 20px',
+                        backgroundPosition: `${pan.x / scale % 20}px ${pan.y / scale % 20}px`,
+                        opacity: 0.6,
+                      }}
+                    />
+                  )}
                   {/* 阶段标题栏（正向缩放，不做反向补偿） */}
                   <div
                     className={isCollapsed ? 'flex flex-col shrink-0' : 'flex items-center justify-between shrink-0'}
@@ -1848,7 +1845,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       <>
                         <div className="flex items-center justify-between w-full">
                           <span className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0" style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
-                            {stage.order + 1}
+                            {`step${stage.order + 1}`}
                           </span>
                           <button onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }} className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center" style={{ width: 22, height: 22, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }} title="展开阶段">▶</button>
                         </div>
@@ -1861,7 +1858,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       <>
                         <div className="flex items-center gap-2 flex-1 min-w-0">
                           <span className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0" style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
-                            {stage.order + 1}
+                            {`step${stage.order + 1}`}
                           </span>
                           <input
                             value={stage.name}
@@ -1913,7 +1910,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       {/* Gate 区域（正向缩放，不做反向补偿） */}
                       <div
                         data-gate
-                        className="mx-2 mb-2 p-2 rounded-lg cursor-pointer transition-colors duration-150"
+                        className="mx-2 p-2 rounded-lg cursor-pointer transition-colors duration-150"
                         style={{
                           height: 56,
                           border: `1px solid ${stageRunState === 'running' ? '#58a6ff88' : 'var(--border)'}`,
