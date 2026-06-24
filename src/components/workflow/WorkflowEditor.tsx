@@ -319,39 +319,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const handleWheel = useCallback((e: React.WheelEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
+    e.preventDefault();
 
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      // 以鼠标位置为中心缩放
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+    // 滚轮始终以鼠标位置为中心缩放
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
 
-      setScale((prevScale) => {
-        const delta = -e.deltaY * 0.002;
-        const newScale = Math.min(Math.max(prevScale + delta, 0.1), 4);
-        const ratio = newScale / prevScale;
+    setScale((prevScale) => {
+      const delta = -e.deltaY * 0.002;
+      const newScale = Math.min(Math.max(prevScale + delta, 0.1), 4);
+      const ratio = newScale / prevScale;
 
-        // 调整平移使鼠标位置不变
-        setPan((prevPan) => ({
-          x: mouseX - ratio * (mouseX - prevPan.x),
-          y: mouseY - ratio * (mouseY - prevPan.y),
-        }));
-
-        return newScale;
-      });
-    } else {
-      // 非Ctrl时：水平滚轮=水平平移，垂直滚轮=垂直平移
-      setPan((prev) => ({
-        x: prev.x - e.deltaX,
-        y: prev.y - e.deltaY,
+      // 调整平移使鼠标位置不变
+      setPan((prevPan) => ({
+        x: mouseX - ratio * (mouseX - prevPan.x),
+        y: mouseY - ratio * (mouseY - prevPan.y),
       }));
-    }
+
+      return newScale;
+    });
   }, []);
 
   // ══════════════════════════════════════════
   // 节点拖拽（含 3px 防误触阈值 + 视觉反馈）
   // ══════════════════════════════════════════
   const NODE_DRAG_THRESHOLD = 3;
+  const SNAP_SIZE = 20; // 网格吸附尺寸
 
   const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string, stageId: string) => {
     // 锚点点击不触发拖拽
@@ -405,7 +398,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 ...s,
                 nodes: s.nodes.map((n) =>
                   n.id === d.nodeId
-                    ? { ...n, position: { x: Math.round(nodeX), y: Math.round(nodeY) } }
+                    ? {
+                        ...n,
+                        position: {
+                          x: Math.round(nodeX / SNAP_SIZE) * SNAP_SIZE,
+                          y: Math.round(nodeY / SNAP_SIZE) * SNAP_SIZE,
+                        },
+                      }
                     : n
                 ),
               }
@@ -475,7 +474,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           padding: '8px 10px',
           borderRadius: 8,
           border: isSelected
-            ? '2px solid var(--accent)'
+            ? '1.5px solid var(--accent)'
             : isHovered
               ? '1px solid var(--accent)'
               : '1px solid var(--border)',
@@ -485,7 +484,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           boxShadow: isDraggingThis
             ? '0 8px 24px rgba(0,0,0,0.4), 0 0 0 1px var(--accent)'
             : isSelected
-              ? '0 0 0 2px var(--accent-light), var(--shadow-md)'
+              ? '0 0 0 1px var(--accent-light), var(--shadow-sm)'
               : isHovered
                 ? 'var(--shadow-md)'
                 : 'var(--shadow-sm)',
@@ -701,15 +700,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         <button
           onClick={() => setShowGrid((v) => !v)}
-          className="pd-btn px-2 py-1 text-[11px] rounded flex items-center gap-1"
+          className="pd-btn px-2 py-1 text-[11px] rounded flex items-center justify-center"
           style={{
+            width: 28, height: 28,
             border: showGrid ? '1px solid var(--accent)' : '1px solid var(--border)',
             background: showGrid ? 'var(--accent-light)' : 'var(--bg-tertiary)',
             color: showGrid ? 'var(--accent)' : 'var(--text-secondary)',
           }}
           title={showGrid ? '隐藏辅助网格' : '显示辅助网格'}
         >
-          □
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
+            <line x1="3" y1="0" x2="3" y2="14" /><line x1="7" y1="0" x2="7" y2="14" /><line x1="11" y1="0" x2="11" y2="14" />
+            <line x1="0" y1="3" x2="14" y2="3" /><line x1="0" y1="7" x2="14" y2="7" /><line x1="0" y1="11" x2="14" y2="11" />
+          </svg>
         </button>
 
         <div className="flex items-center gap-1.5">
@@ -771,12 +774,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             className="absolute inset-0 z-0 pointer-events-none"
             style={{
               backgroundImage: `
-                linear-gradient(var(--border) 1px, transparent 1px),
-                linear-gradient(90deg, var(--border) 1px, transparent 1px)
+                radial-gradient(circle, var(--border) 1px, transparent 1px)
               `,
               backgroundSize: `${20 * scale}px ${20 * scale}px`,
               backgroundPosition: `${pan.x % (20 * scale)}px ${pan.y % (20 * scale)}px`,
-              opacity: 0.35,
+              opacity: 0.4,
             }}
           />
         )}
@@ -917,16 +919,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     background: 'var(--bg-secondary)',
                     border: 'none',
                     transition: isCollapsed ? 'width 0.25s cubic-bezier(0.4,0,0.2,1)' : 'none',
-                    overflow: 'visible',
+                    overflow: 'hidden',
                   }}
                 >
-                  {/* 阶段标题栏 */}
+                  {/* 阶段标题栏 — 反向缩放保持恒定大小 */}
                   <div
                     className="flex items-center justify-between shrink-0"
                     style={{
                       padding: '6px 10px',
                       background: 'var(--bg-tertiary)',
                       borderBottom: '1px solid var(--border)',
+                      borderRadius: '8px 8px 0 0',
+                      transform: `scale(${1 / scale})`,
+                      transformOrigin: 'top left',
+                      width: `${isCollapsed ? 56 : 460}${'px'}`,
+                      fontSize: `${Math.max(10, 12 / scale)}px`,
                     }}
                   >
                     <div className="flex items-center gap-2">
@@ -962,18 +969,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         {isCollapsed ? '\u25B6' : '\u25C0'}
                       </button>
                       {!isCollapsed && (
-                        <>
-                          <button
-                            onClick={() => handleAddNode('agent', stage.id)}
-                            className="pd-btn px-1.5 py-0.5 rounded text-[10px] transition-colors duration-150"
-                            style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-tertiary)' }}
-                          >+ 节点</button>
-                          <button
-                            onClick={() => handleDeleteStage(stage.id)}
-                            className="pd-btn p-0.5 rounded text-[10px] transition-colors duration-150"
-                            style={{ color: 'var(--status-danger)', background: 'transparent' }}
-                          >x</button>
-                        </>
+                        <button
+                          onClick={() => handleDeleteStage(stage.id)}
+                          className="pd-btn p-0.5 rounded text-[10px] transition-colors duration-150"
+                          style={{ color: 'var(--status-danger)', background: 'transparent' }}
+                        >x</button>
                       )}
                     </div>
                   </div>
@@ -1024,11 +1024,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         {stage.nodes.map((node) => renderNode(node, stage.id))}
                       </div>
 
-                      {/* Gate 区域 */}
+                      {/* Gate 区域 — 反向缩放保持恒定大小 */}
                       <div
                         data-gate
                         className="mx-2 mb-2 p-2 rounded-lg cursor-pointer transition-colors duration-150"
-                        style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)' }}
+                        style={{
+                          border: '1px solid var(--border)',
+                          background: 'var(--bg-primary)',
+                          transform: `scale(${1 / scale})`,
+                          transformOrigin: 'bottom left',
+                          width: `${isCollapsed ? 56 : 460 - 16}${'px'}`,
+                          fontSize: `${Math.max(10, 10 / scale)}px`,
+                        }}
                         onClick={() => handleUpdateGate(stage.id, {})}
                       >
                         <div className="flex items-center justify-between mb-1">
@@ -1080,7 +1087,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
       {/* ── 条件编辑弹窗 ── */}
       {conditionInput && (
-        <div className="fixed inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
+        <div className="absolute inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
           <div
             className="rounded-xl p-6 w-[90%] max-w-[400px]"
             style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
@@ -1126,10 +1133,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       )}
 
-      {/* ── 节点配置面板 ── */}
+      {/* ── 节点配置面板（absolute定位，不穿越工具栏） ── */}
       {selectedNodeId && selectedStageId && (
         <div
-          className="fixed right-0 top-0 bottom-0 w-[360px] z-[100] overflow-auto p-5"
+          className="absolute right-0 top-0 bottom-0 w-[360px] z-[50] overflow-auto p-5"
           style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}
         >
           <WorkflowNodeConfig
