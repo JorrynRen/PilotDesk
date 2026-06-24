@@ -51,6 +51,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
 
   // 画布平移和缩放状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -59,6 +60,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const panThresholdRef = useRef<{ startX: number; startY: number; triggered: boolean } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const dragOverCanvasRef = useRef<boolean>(false);
 
   // 节点拖拽状态
   const [draggingNode, setDraggingNode] = useState<{
@@ -732,11 +734,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               ? (panThresholdRef.current?.triggered ? 'grabbing' : 'default')
               : draggingNode?.started
                 ? 'default'
-                : 'grab',
+                : dragOverStageId === null ? (dragOverCanvasRef.current ? 'not-allowed' : 'grab') : 'grab',
         }}
         onMouseDown={handleCanvasMouseDown}
         onWheel={handleWheel}
         onContextMenu={(e) => e.preventDefault()}
+        onDragOver={(e) => {
+          // 标记正在拖入画布（可能在空白区）
+          dragOverCanvasRef.current = true;
+        }}
+        onDragLeave={(e) => {
+          // 离开画布根区域时清除标记
+          if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
+            dragOverCanvasRef.current = false;
+            setDragOverStageId(null);
+          }
+        }}
       >
         {/* 缩放指示器 */}
         <div
@@ -797,6 +810,28 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           >
             <span className="w-1.5 h-1.5 rounded-full inline-block animate-pulse" style={{ background: 'var(--accent)' }} />
             正在连线 — 点击目标节点的输入锚点完成连接，按 Esc 取消
+          </div>
+        )}
+
+        {/* 拖拽到画布空白区——不可放置提示 */}
+        {dragOverCanvasRef.current && dragOverStageId === null && (
+          <div
+            className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
+            style={{ background: 'rgba(248, 81, 73, 0.05)' }}
+          >
+            <div
+              className="px-4 py-2 rounded-lg flex items-center gap-2"
+              style={{
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--status-danger)',
+                color: 'var(--status-danger)',
+                boxShadow: 'var(--shadow-md)',
+                fontSize: 11,
+              }}
+            >
+              <span style={{ fontSize: 14 }}>✗</span>
+              <span>请拖入阶段内容区</span>
+            </div>
           </div>
         )}
 
@@ -918,10 +953,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     <>
                       <div
                         className="relative"
-                        style={{ flex: 1, minHeight: 250, padding: 12 }}
-                        onDragOver={(e) => e.preventDefault()}
+                        style={{
+                          flex: 1,
+                          minHeight: 250,
+                          padding: 12,
+                          border: dragOverStageId === stage.id ? '2px dashed var(--accent)' : '2px dashed transparent',
+                          borderRadius: 6,
+                          background: dragOverStageId === stage.id ? 'var(--accent-light)' : 'transparent',
+                          transition: 'border-color 0.15s ease, background 0.15s ease',
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setDragOverStageId(stage.id);
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverStageId === stage.id) setDragOverStageId(null);
+                        }}
                         onDrop={(e) => {
                           e.preventDefault();
+                          setDragOverStageId(null);
                           const type = e.dataTransfer.getData('text/plain') as WorkflowNodeType;
                           if (type) {
                             const rect = e.currentTarget.getBoundingClientRect();

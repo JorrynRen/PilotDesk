@@ -85,7 +85,7 @@ export function WorkflowEditorPage() {
       <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <TitleBar
         showBackButton={true}
-        titleText="工作流编辑器"
+        titleText="工作流任务编辑器"
         onBack={() => navigate('/workflow')}
         onOpenSettings={() => navigate('/settings')} />
         <div className="flex-1 flex items-center justify-center">
@@ -102,7 +102,7 @@ export function WorkflowEditorPage() {
       <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <TitleBar
         showBackButton={true}
-        titleText="工作流编辑器"
+        titleText="工作流任务编辑器"
         onBack={() => navigate('/workflow')}
         onOpenSettings={() => navigate('/settings')} />
         <div className="flex flex-col items-center justify-center flex-1 gap-3">
@@ -126,7 +126,8 @@ export function WorkflowEditorPage() {
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
       <TitleBar
         showBackButton={true}
-        titleText={workflowName || '工作流编辑器'}
+        titleText="工作流任务编辑器"
+        onBack={handleBack}
         onOpenSettings={() => navigate('/settings')}
       />
       <div className="flex-1 overflow-hidden">
