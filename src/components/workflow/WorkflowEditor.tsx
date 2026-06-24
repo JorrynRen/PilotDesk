@@ -127,11 +127,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 const SNAP = 20;
                 const NODE_W = 160;
                 const NODE_H = 60;
-                const stageLeft = stagePositionsMap[targetStageId];
-                const relX = cx - stageLeft;
-                const relY = cy - 20; // 阶段内容区top约20
-                const snapX = Math.floor((relX - NODE_W / 2) / SNAP) * SNAP;
-                const snapY = Math.floor((relY - NODE_H / 2) / SNAP) * SNAP;
+                // 使用canvasToContentPos精确转换为内容区相对坐标
+                const rel = canvasToContentPos(cx, cy, targetStageId);
+                const snapX = Math.floor((rel.x - NODE_W / 2) / SNAP) * SNAP;
+                const snapY = Math.floor((rel.y - NODE_H / 2) / SNAP) * SNAP;
                 const newNode: WorkflowNode = {
                   id: generateId(),
                   type: toolbarDrag.type,
@@ -253,6 +252,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   // 用于连线预览的SVG ref
   const connectingLineRef = useRef<SVGPathElement | null>(null);
+
+  // 各阶段内容区DOM引用 — 用于精确坐标计算
+  const stageContentRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // 连线拖拽时的实际目标节点（鼠标悬停的input anchor）
+  const [connectTargetId, setConnectTargetId] = useState<string | null>(null);
 
   useEffect(() => {
     if (def) {
@@ -408,16 +413,106 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setConnecting({ source: nodeId, stageId, mouseCanvasX, mouseCanvasY });
   };
 
+
+  // ══════════════════════════════════════════
+  // 统一坐标工具函数（DOM查询方案）
+  // ══════════════════════════════════════════
+  /**
+   * 通过DOM查询精确获取节点在画布坐标系中的位置和尺寸。
+   * 原理：nodeEl.getBoundingClientRect()得到屏幕坐标，
+   * canvasRef.getBoundingClientRect()得到画布屏幕坐标，
+   * 两者差值除以scale并减去pan，得到画布坐标。
+   * 比手动计算stage偏移更精确（不受标题栏高度变化影响）。
+   */
+  const getNodeCanvasRect = useCallback((nodeId: string, stageId: string) => {
+    const canvasEl = canvasRef.current;
+    const stageEl = document.querySelector(`[data-stage-id="${stageId}"] [data-node-id="${nodeId}"]`) as HTMLElement | null;
+    if (!canvasEl || !stageEl) return null;
+    const cRect = canvasEl.getBoundingClientRect();
+    const nRect = stageEl.getBoundingClientRect();
+    return {
+      x: (nRect.left - cRect.left - pan.x) / scale,
+      y: (nRect.top - cRect.top - pan.y) / scale,
+      w: nRect.width / scale,
+      h: nRect.height / scale,
+    };
+  }, [pan, scale]);
+
+  /** 获取节点的输出锚点画布坐标（右侧中心） */
+  const getNodeOutputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
+    const rect = getNodeCanvasRect(nodeId, stageId);
+    if (!rect) return null;
+    return { x: rect.x + rect.w, y: rect.y + rect.h / 2 };
+  }, [getNodeCanvasRect]);
+
+  /** 获取节点的输入锚点画布坐标（左侧中心） */
+  const getNodeInputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
+    const rect = getNodeCanvasRect(nodeId, stageId);
+    if (!rect) return null;
+    return { x: rect.x, y: rect.y + rect.h / 2 };
+  }, [getNodeCanvasRect]);
+
+  /**
+   * 画布坐标 → 指定stage内容区的相对坐标（用于设置node.position）
+   */
+  const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
+    const canvasEl = canvasRef.current;
+    const contentEl = stageContentRefs.current[stageId];
+    if (!canvasEl || !contentEl) return { x: canvasX, y: canvasY };
+    const cRect = canvasEl.getBoundingClientRect();
+    const sRect = contentEl.getBoundingClientRect();
+    // 内容区左上角在画布坐标中的位置
+    const contentX = (sRect.left - cRect.left - pan.x) / scale;
+    const contentY = (sRect.top - cRect.top - pan.y) / scale;
+    return {
+      x: canvasX - contentX,
+      y: canvasY - contentY,
+    };
+  }, [pan, scale]);
+
+  /**
+   * 内容区相对坐标 → 画布坐标（用于连线和锚点计算）
+   */
+  const contentToCanvasPos = useCallback((contentX: number, contentY: number, stageId: string) => {
+    const canvasEl = canvasRef.current;
+    const contentEl = stageContentRefs.current[stageId];
+    if (!canvasEl || !contentEl) return { x: contentX, y: contentY };
+    const cRect = canvasEl.getBoundingClientRect();
+    const sRect = contentEl.getBoundingClientRect();
+    const contentCX = (sRect.left - cRect.left - pan.x) / scale;
+    const contentCY = (sRect.top - cRect.top - pan.y) / scale;
+    return { x: contentCX + contentX, y: contentCY + contentY };
+  }, [pan, scale]);
+
   const handleUpdateConnectingPos = useCallback((e: MouseEvent) => {
     if (!connecting) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
+    const mx = (e.clientX - rect.left - pan.x) / scale;
+    const my = (e.clientY - rect.top - pan.y) / scale;
     setConnecting(prev => prev ? {
       ...prev,
-      mouseCanvasX: (e.clientX - rect.left - pan.x) / scale,
-      mouseCanvasY: (e.clientY - rect.top - pan.y) / scale,
+      mouseCanvasX: mx,
+      mouseCanvasY: my,
     } : null);
-  }, [connecting, pan, scale]);
+
+    // 距离检测：只高亮鼠标靠近input anchor的节点
+    const stage = stages.find(s => s.id === connecting.stageId);
+    if (!stage) return;
+    let closestId: string | null = null;
+    let closestDist = 40; // 40px阈值
+    for (const node of stage.nodes) {
+      if (node.id === connecting.source) continue;
+      const anchorPos = getNodeInputAnchor(node.id, connecting.stageId);
+      if (!anchorPos) continue;
+      const dist = Math.sqrt((mx - anchorPos.x) ** 2 + (my - anchorPos.y) ** 2);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestId = node.id;
+      }
+    }
+    setConnectTargetId(closestId);
+  }, [connecting, pan, scale, stages, getNodeInputAnchor]);
 
   const handleEndConnect = useCallback((nodeId: string, stageId: string) => {
     if (!connecting || connecting.source === nodeId) {
@@ -444,11 +539,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       return s;
     }));
     setConnecting(null);
+    setConnectTargetId(null);
     setStages((prev) => autoAssignStage(prev));
   }, [connecting, stages]);
 
   const handleCancelConnect = useCallback(() => {
     setConnecting(null);
+    setConnectTargetId(null);
   }, []);
 
   // 监听连线拖拽期间的鼠标移动和释放
@@ -474,6 +571,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         }
       }
       setConnecting(null);
+      setConnectTargetId(null);
     };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
@@ -644,31 +742,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     e.preventDefault();
     const node = stages.find((s) => s.id === stageId)?.nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const pos = node.position ?? { x: 0, y: 0 };
-    // 节点position是内容区相对坐标，需要加stage偏移转换为画布坐标
-    const STAGE_TOP = 20;
-    const TITLE_BAR_H = 34;
-    const CONTENT_PAD = 12;
-    const CONTENT_TOP = STAGE_TOP + TITLE_BAR_H + CONTENT_PAD;
-    const stageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
-    const canvasX = stageLeft + pos.x;
-    const canvasY = CONTENT_TOP + pos.y;
-    const nodeX = (canvasX + pan.x) * scale + rect.left;
-    const nodeY = (canvasY + pan.y) * scale + rect.top;
+    // 通过DOM精确获取节点屏幕位置
+    const nodeEl = document.querySelector(`[data-stage-id="${stageId}"] [data-node-id="${nodeId}"]`) as HTMLElement | null;
+    const canvasEl = canvasRef.current;
+    if (!nodeEl || !canvasEl) return;
+    const nRect = nodeEl.getBoundingClientRect();
+    const cRect = canvasEl.getBoundingClientRect();
+    // offsetX/Y = 鼠标相对于节点左上角的屏幕偏移
     setDraggingNode({
       nodeId,
       stageId,
-      offsetX: e.clientX - nodeX,
-      offsetY: e.clientY - nodeY,
+      offsetX: e.clientX - nRect.left,
+      offsetY: e.clientY - nRect.top,
       started: false,
       startX: e.clientX,
       startY: e.clientY,
     });
     setSelectedNodeId(nodeId);
     setSelectedStageId(stageId);
-  }, [stages, pan.x, pan.y, scale]);
+  }, [stages]);
 
   useEffect(() => {
     if (!draggingNode) return;
@@ -686,14 +778,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const newAbsY = e.clientY - d.offsetY;
       const rawCanvasX = newAbsX - rect.left;
       const rawCanvasY = newAbsY - rect.top;
-      // 画布坐标 → 内容区相对坐标（减去stage偏移）
-      const STAGE_TOP = 20;
-      const TITLE_BAR_H = 34;
-      const CONTENT_PAD = 12;
-      const CONTENT_TOP = STAGE_TOP + TITLE_BAR_H + CONTENT_PAD;
-      const stageLeft = stagePositionsMap[d.stageId] + CONTENT_PAD;
-      const nodeX = rawCanvasX / scale - pan.x - stageLeft;
-      const nodeY = rawCanvasY / scale - pan.y - CONTENT_TOP;
+      // 画布坐标
+      const canvasX = rawCanvasX / scale - pan.x;
+      const canvasY = rawCanvasY / scale - pan.y;
+      // 画布坐标 → 内容区相对坐标（用统一函数）
+      const rel = canvasToContentPos(canvasX, canvasY, d.stageId);
       setStages((prev) =>
         prev.map((s) =>
           s.id === d.stageId
@@ -704,8 +793,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     ? {
                         ...n,
                         position: {
-                          x: Math.floor(nodeX / SNAP_SIZE) * SNAP_SIZE,
-                          y: Math.floor(nodeY / SNAP_SIZE) * SNAP_SIZE,
+                          x: Math.floor(rel.x / SNAP_SIZE) * SNAP_SIZE,
+                          y: Math.floor(rel.y / SNAP_SIZE) * SNAP_SIZE,
                         },
                       }
                     : n
@@ -724,7 +813,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggingNode, scale, pan.x, pan.y]);
+  }, [draggingNode, scale, pan.x, pan.y, canvasToContentPos]);
 
   // ── 坐标转换工具 ──
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
@@ -767,39 +856,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, [stages, collapsedStages, stagePositionsMap]);
 
 
-  // 获取节点输出锚点的画布坐标（右侧中心）
-  const getNodeHeight = (node: WorkflowNode): number => {
-    if (node.type === 'start' || node.type === 'end') return 40;
-    // Normal nodes: padding(8+8) + icon row(24) + gap(4) + tags row(~16 if exists, else 0) + extra
-    const hasTags = !!(node.delayMs || node.timeoutMs);
-    return 8 + 8 + 24 + 4 + (hasTags ? 16 : 0) + 4;
-  };
-
-  const getNodeOutputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
-    const stage = stages.find(s => s.id === stageId);
-    const node = stage?.nodes.find(n => n.id === nodeId);
-    if (!node?.position) return null;
-    const pos = node.position;
-    const nodeWidth = 160;
-    const nodeHeight = getNodeHeight(node);
-    const CONTENT_PAD = 12;
-    const CONTENT_TOP = 20 + 34 + CONTENT_PAD;
-    const stageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
-    return { x: stageLeft + pos.x + nodeWidth, y: CONTENT_TOP + pos.y + nodeHeight / 2 };
-  }, [stages, stagePositionsMap]);
-
-  // 获取节点输入锚点的画布坐标（左侧中心）
-  const getNodeInputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
-    const stage = stages.find(s => s.id === stageId);
-    const node = stage?.nodes.find(n => n.id === nodeId);
-    if (!node?.position) return null;
-    const pos = node.position;
-    const nodeHeight = getNodeHeight(node);
-    const CONTENT_PAD = 12;
-    const CONTENT_TOP = 20 + 34 + CONTENT_PAD;
-    const stageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
-    return { x: stageLeft + pos.x, y: CONTENT_TOP + pos.y + nodeHeight / 2 };
-  }, [stages, stagePositionsMap]);
 
   // ══════════════════════════════════════════
   // 渲染：节点
@@ -810,7 +866,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const isSelected = selectedNodeId === node.id;
     const isDraggingThis = draggingNode?.nodeId === node.id && draggingNode?.started;
     const isHovered = hoveredNodeId === node.id;
-    const isConnectTarget = connecting?.source !== node.id;
+    const isConnectTarget = connectTargetId === node.id;
     const isBoundary = node.type === 'start' || node.type === 'end';
     const isStart = node.type === 'start';
     const isEnd = node.type === 'end';
@@ -1096,27 +1152,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const sourceNode = stage.nodes.find((n) => n.id === edge.source);
     const targetNode = stage.nodes.find((n) => n.id === edge.target);
     if (!sourceNode || !targetNode) return null;
-    const sp = sourceNode.position as { x: number; y: number } | undefined;
-    const tp = targetNode.position as { x: number; y: number } | undefined;
-    if (!sp || !tp) return null;
+    // 使用DOM查询精确获取节点画布坐标
+    const srcRect = getNodeCanvasRect(edge.source, stageId);
+    const tgtRect = getNodeCanvasRect(edge.target, stageId);
+    if (!srcRect || !tgtRect) return null;
 
-    // 节点position是相对于内容区的，需要转换为画布绝对坐标
-    const STAGE_TOP = 20;
-    const TITLE_BAR_H = 34;   // 标题栏在画布坐标中的高度
-    const CONTENT_PAD = 12;    // 内容区padding
-    const CONTENT_TOP = STAGE_TOP + TITLE_BAR_H + CONTENT_PAD;
-    const srcStageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
-    const tgtStageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
-
-    const sw = 160;
-    const tw = 160;
-    const sh = getNodeHeight(sourceNode);
-    const th = getNodeHeight(targetNode);
-    // 画布绝对坐标 = stageLeft + padding + pos
-    const sx = srcStageLeft + sp.x;
-    const tx = tgtStageLeft + tp.x;
-    const sy = CONTENT_TOP + sp.y + sh / 2;
-    const ty = CONTENT_TOP + tp.y + th / 2;
+    const sw = srcRect.w;
+    const tw = tgtRect.w;
+    const sx = srcRect.x;
+    const tx = tgtRect.x;
+    const sy = srcRect.y + srcRect.h / 2;
+    const ty = tgtRect.y + tgtRect.h / 2;
 
     // 连线运行状态
     const edgeRunState = (() => {
@@ -1801,6 +1847,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   {!isCollapsed && (
                     <>
                       <div
+                        ref={(el) => { stageContentRefs.current[stage.id] = el; }}
+                        data-stage-content={stage.id}
                         className="relative"
                         style={{
                           flex: 1,
