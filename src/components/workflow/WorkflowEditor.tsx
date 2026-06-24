@@ -601,16 +601,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               background: meta.color, color: '#fff',
             }}
           >
-            {isStart ? '\u25B6' : '\u25A0'}
+            {isStart ? '▶' : '■'}
           </div>
           <span className="text-xs font-bold" style={{ color: meta.color }}>
             {meta.label}
           </span>
           {runState === 'success' && (
-            <span className="text-[10px] ml-auto" style={{ color: '#3fb950' }}>\u2713</span>
+            <span className="text-[10px] ml-auto" style={{ color: '#3fb950' }}>✓</span>
           )}
           {runState === 'failed' && (
-            <span className="text-[10px] ml-auto" style={{ color: '#f85149' }}>\u2717</span>
+            <span className="text-[10px] ml-auto" style={{ color: '#f85149' }}>✗</span>
           )}
           {/* Start: output anchor only */}
           {isStart && (
@@ -730,21 +730,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           </div>
           <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{node.label}</span>
           {runState === 'success' && (
-            <span className="text-[10px] ml-auto shrink-0" style={{ color: '#3fb950' }}>\u2713</span>
+            <span className="text-[10px] ml-auto shrink-0" style={{ color: '#3fb950' }}>✓</span>
           )}
           {runState === 'failed' && (
-            <span className="text-[10px] ml-auto shrink-0" style={{ color: '#f85149' }}>\u2717</span>
+            <span className="text-[10px] ml-auto shrink-0" style={{ color: '#f85149' }}>✗</span>
           )}
         </div>
         <div className="flex gap-1 flex-wrap ml-[30px]">
           {node.delayMs && (
             <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'var(--bg-secondary)', color: '#d29922', border: '1px solid #d2992244' }}>
-              \u5ef6\u8fdf {node.delayMs}ms
+              延迟 {node.delayMs}ms
             </span>
           )}
           {node.timeoutMs && (
             <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'var(--bg-secondary)', color: '#a371f7', border: '1px solid #8957e544' }}>
-              \u8d85\u65f6 {node.timeoutMs / 1000}s
+              超时 {node.timeoutMs / 1000}s
             </span>
           )}
         </div>
@@ -1022,7 +1022,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               fontSize={8}
               textAnchor="middle"
             >
-              {srcStage.name} \u2192
+              {srcStage.name} →
             </text>
           </g>
         </g>
@@ -1050,7 +1050,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           onChange={(e) => handleNameChangeLocal(e.target.value)}
           className="text-sm font-semibold outline-none"
           style={{ background: 'transparent', color: 'var(--text-primary)', border: 'none' }}
-          placeholder="\u5de5\u4f5c\u6d41\u540d\u79f0"
+          placeholder="工作流名称"
         />
         <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ color: 'var(--accent)', background: 'var(--accent-light)' }}>
           {def?.version || 'v1.0.0'}
@@ -1060,7 +1060,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         {/* 节点类型拖拽区 */}
         <div className="flex items-center gap-1 flex-wrap">
-          <span className="text-[10px] mr-1" style={{ color: 'var(--text-tertiary)' }}>\u8282\u70b9:</span>
+          <span className="text-[10px] mr-1" style={{ color: 'var(--text-tertiary)' }}>节点:</span>
           {BUILTIN_NODE_TYPES.map((nt) => (
             <div
               key={nt.type}
@@ -1086,7 +1086,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             background: showGrid ? 'var(--accent-light)' : 'var(--bg-tertiary)',
             color: showGrid ? 'var(--accent)' : 'var(--text-secondary)',
           }}
-          title={showGrid ? '\u9690\u85cf\u8f85\u52a9\u7f51\u683c' : '\u663e\u793a\u8f85\u52a9\u7f51\u683c'}
+          title={showGrid ? '隐藏辅助网格' : '显示辅助网格'}
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
             <line x1="3" y1="0" x2="3" y2="14" /><line x1="7" y1="0" x2="7" y2="14" /><line x1="11" y1="0" x2="11" y2="14" />
@@ -1100,21 +1100,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             className="pd-btn px-2.5 py-1 text-[11px] rounded"
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
           >
-            + \u9636\u6bb5
+            + 阶段
           </button>
           <button
             onClick={onClose}
             className="pd-btn px-3 py-1 text-[11px] rounded"
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
           >
-            \u8fd4\u56de\u5217\u8868
+            返回列表
           </button>
           <button
             onClick={handleSave}
             className="pd-btn px-3 py-1 text-[11px] rounded"
             style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
           >
-            \u4fdd\u5b58
+            保存
           </button>
         </div>
       </div>
@@ -1169,18 +1169,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <button
               className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs"
               style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: 'none' }}
-              title="\u64cd\u4f5c\u5e2e\u52a9"
+              title="操作帮助"
             >?</button>
             <div className="absolute bottom-full right-0 mb-2 w-[280px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
-              <div className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>\u64cd\u4f5c\u5e2e\u52a9</div>
+              <div className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>操作帮助</div>
               <div className="space-y-1.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                <div className="flex justify-between"><span>\u5e73\u79fb\u753b\u5e03</span><span style={{ color: 'var(--text-tertiary)' }}>\u5de6\u952e\u62d6\u62fd / \u4e2d\u952e</span></div>
-                <div className="flex justify-between"><span>\u7f29\u653e\u753b\u5e03</span><span style={{ color: 'var(--text-tertiary)' }}>\u6eda\u8f6e</span></div>
-                <div className="flex justify-between"><span>\u6dfb\u52a0\u8282\u70b9</span><span style={{ color: 'var(--text-tertiary)' }}>\u62d6\u62fd\u5de5\u5177\u680f\u8282\u70b9\u5230\u9636\u6bb5\u533a</span></div>
-                <div className="flex justify-between"><span>\u8fde\u63a5\u8282\u70b9</span><span style={{ color: 'var(--text-tertiary)' }}>\u62d6\u62fd\u8f93\u51fa\u951a\u70b9\u2192\u8f93\u5165\u951a\u70b9</span></div>
-                <div className="flex justify-between"><span>\u5220\u9664\u8fde\u7ebf</span><span style={{ color: 'var(--text-tertiary)' }}>\u70b9\u51fb\u8fde\u7ebf</span></div>
-                <div className="flex justify-between"><span>\u5220\u9664\u8282\u70b9/\u9636\u6bb5</span><span style={{ color: 'var(--text-tertiary)' }}>\u60ac\u505c x \u6309\u94ae</span></div>
-                <div className="flex justify-between"><span>\u53d6\u6d88\u8fde\u7ebf</span><span style={{ color: 'var(--text-tertiary)' }}>Esc</span></div>
+                <div className="flex justify-between"><span>平移画布</span><span style={{ color: 'var(--text-tertiary)' }}>左键拖拽 / 中键</span></div>
+                <div className="flex justify-between"><span>缩放画布</span><span style={{ color: 'var(--text-tertiary)' }}>滚轮</span></div>
+                <div className="flex justify-between"><span>添加节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽工具栏节点到阶段区</span></div>
+                <div className="flex justify-between"><span>连接节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽输出锚点→输入锚点</span></div>
+                <div className="flex justify-between"><span>删除连线</span><span style={{ color: 'var(--text-tertiary)' }}>点击连线</span></div>
+                <div className="flex justify-between"><span>删除节点/阶段</span><span style={{ color: 'var(--text-tertiary)' }}>悬停 x 按钮</span></div>
+                <div className="flex justify-between"><span>取消连线</span><span style={{ color: 'var(--text-tertiary)' }}>Esc</span></div>
               </div>
             </div>
           </div>
@@ -1191,18 +1191,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <button
               className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs"
               style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: 'none' }}
-              title="\u5de5\u4f5c\u6d41\u7edf\u8ba1"
+              title="工作流统计"
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <rect x="1" y="6" width="2.5" height="5" rx="0.5" /><rect x="4.75" y="3" width="2.5" height="8" rx="0.5" /><rect x="8.5" y="1" width="2.5" height="10" rx="0.5" />
               </svg>
             </button>
             <div className="absolute bottom-full right-0 mb-2 w-[220px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
-              <div className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>\u5de5\u4f5c\u6d41\u7edf\u8ba1</div>
+              <div className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>工作流统计</div>
               <div className="space-y-1.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                <div className="flex justify-between"><span>\u9636\u6bb5</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalStages}</span></div>
-                <div className="flex justify-between"><span>\u8282\u70b9</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalNodes}</span></div>
-                <div className="flex justify-between"><span>\u8fde\u7ebf</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalEdges}</span></div>
+                <div className="flex justify-between"><span>阶段</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalStages}</span></div>
+                <div className="flex justify-between"><span>节点</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalNodes}</span></div>
+                <div className="flex justify-between"><span>连线</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalEdges}</span></div>
                 <div className="w-full h-px my-1" style={{ background: 'var(--border)' }} />
                 {Object.entries(stats.nodeTypeCounts).map(([type, count]) => {
                   const m = getNodeTypeMeta(type as WorkflowNodeType);
@@ -1231,11 +1231,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               border: isSimRunning ? '1px solid #58a6ff' : 'none',
             }}
             disabled={isSimRunning}
-            title="\u6267\u884c\u6a21\u62df"
+            title="执行模拟"
           >
             {isSimRunning ? (
-              <span className="inline-block" style={{ animation: 'spin 1s linear infinite' }}>\u25B6</span>
-            ) : '\u25B6'}
+              <span className="inline-block" style={{ animation: 'spin 1s linear infinite' }}>▶</span>
+            ) : '▶'}
           </button>
           <div className="w-px h-4" style={{ background: 'var(--border)' }} />
 
@@ -1280,9 +1280,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             onClick={() => { setPan({ x: 0, y: 0 }); setScale(1); }}
             className="pd-btn px-1.5 h-6 flex items-center justify-center rounded text-[10px]"
             style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: 'none' }}
-            title="\u91cd\u7f6e\u89c6\u56fe"
+            title="重置视图"
           >
-            \u91cd\u7f6e
+            重置
           </button>
         </div>
 
@@ -1293,7 +1293,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent)', color: 'var(--accent)', boxShadow: 'var(--shadow-md)' }}
           >
             <span className="w-1.5 h-1.5 rounded-full inline-block animate-pulse" style={{ background: 'var(--accent)' }} />
-            \u6b63\u5728\u8fde\u7ebf \u2014 \u70b9\u51fb\u76ee\u6807\u8282\u70b9\u7684\u8f93\u5165\u951a\u70b9\u5b8c\u6210\u8fde\u63a5\uff0c\u6309 Esc \u53d6\u6d88
+            正在连线 — 点击目标节点的输入锚点完成连接，按 Esc 取消
           </div>
         )}
 
@@ -1313,8 +1313,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 fontSize: 11,
               }}
             >
-              <span style={{ fontSize: 14 }}>\u2717</span>
-              <span>\u8bf7\u62d6\u5165\u9636\u6bb5\u5185\u5bb9\u533a</span>
+              <span style={{ fontSize: 14 }}>✗</span>
+              <span>请拖入阶段内容区</span>
             </div>
           </div>
         )}
@@ -1356,7 +1356,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {/* 空状态 */}
           {stages.length === 0 && (
             <div className="flex items-center justify-center absolute inset-0" style={{ color: 'var(--text-tertiary)', fontSize: 14 }}>
-              \u70b9\u51fb "+ \u9636\u6bb5" \u5f00\u59cb\u521b\u5efa\u5de5\u4f5c\u6d41
+              点击 "+ 阶段" 开始创建工作流
             </div>
           )}
 
@@ -1428,16 +1428,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }}
                           className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center"
                           style={{ width: 22, height: 22, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-                          title={isCollapsed ? '\u5c55\u5f00\u9636\u6bb5' : '\u6298\u53e0\u9636\u6bb5'}
+                          title={isCollapsed ? '展开阶段' : '折叠阶段'}
                         >
-                          {isCollapsed ? '\u25B6' : '\u25C0'}
+                          {isCollapsed ? '▶' : '◀'}
                         </button>
                         {!isCollapsed && (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDeleteStage(stage.id); }}
                             className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center"
                             style={{ width: 22, height: 22, color: 'var(--status-danger)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-                            title="\u5220\u9664\u9636\u6bb5"
+                            title="删除阶段"
                           >x</button>
                         )}
                       </div>
@@ -1523,19 +1523,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       >
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-[10px] font-semibold flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
-                            \u95e8\u63a7 Gate
+                            门控 Gate
                           </span>
                           <span className="text-[10px] flex items-center gap-1" style={{ color: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)' }}>
                             <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)', animation: stageRunState === 'running' ? 'spin 1s linear infinite' : 'none' }} />
-                            {stage.nodes.length}/{stage.nodes.length} \u5c31\u7eea
+                            {stage.nodes.length}/{stage.nodes.length} 就绪
                           </span>
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            \u7b56\u7565: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.strategy}</span>
+                            策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.strategy}</span>
                           </span>
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            \u5408\u5e76: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.mergeStrategy}</span>
+                            合并: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.mergeStrategy}</span>
                           </span>
                         </div>
                       </div>
@@ -1545,8 +1545,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   {/* 折叠摘要 */}
                   {isCollapsed && (
                     <div className="flex flex-col items-center justify-center gap-1 py-3" style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>
-                      <span>{stage.nodes.length} \u8282\u70b9</span>
-                      <span>{stage.edges.length} \u8fde\u7ebf</span>
+                      <span>{stage.nodes.length} 节点</span>
+                      <span>{stage.edges.length} 连线</span>
                     </div>
                   )}
                 </div>
@@ -1580,22 +1580,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
-              \u786e\u8ba4\u5220\u9664
+              确认删除
             </h3>
             <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              \u662f\u5426\u5220\u9664 <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{confirmAction.label}</span>\uff1f\u6b64\u64cd\u4f5c\u4e0d\u53ef\u64a4\u9500\u3002
+              是否删除 <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{confirmAction.label}</span>？此操作不可撤销。
             </p>
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setConfirmAction(null)}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-              >\u53d6\u6d88</button>
+              >取消</button>
               <button
                 onClick={confirmDelete}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ background: 'var(--status-danger)', color: '#fff', border: 'none' }}
-              >\u5220\u9664</button>
+              >删除</button>
             </div>
           </div>
         </div>
@@ -1609,22 +1609,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>\u7f16\u8f91\u6761\u4ef6</h3>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑条件</h3>
             <div className="mb-3">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>\u6761\u4ef6\u8868\u8fbe\u5f0f</label>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件表达式</label>
               <input
                 id="condition-expr"
-                placeholder="\u4f8b\u5982: == approve \u6216 contains \u7d27\u6025"
+                placeholder="例如: == approve 或 contains 紧急"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                 autoFocus
               />
             </div>
             <div className="mb-4">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>\u6761\u4ef6\u6807\u7b7e\uff08\u663e\u793a\u5728\u8fb9\u4e0a\uff09</label>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件标签（显示在边上）</label>
               <input
                 id="condition-label"
-                placeholder="\u4f8b\u5982: \u5ba1\u6279\u901a\u8fc7 / \u7d27\u6025"
+                placeholder="例如: 审批通过 / 紧急"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               />
@@ -1634,7 +1634,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 onClick={() => setConditionInput(null)}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-              >\u53d6\u6d88</button>
+              >取消</button>
               <button
                 onClick={() => {
                   const expr = (document.getElementById('condition-expr') as HTMLInputElement)?.value || '';
@@ -1643,7 +1643,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 }}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
-              >\u786e\u8ba4</button>
+              >确认</button>
             </div>
           </div>
         </div>
