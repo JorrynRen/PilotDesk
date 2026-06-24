@@ -63,8 +63,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
   const [showGrid, setShowGrid] = useState(false);
+  const [edgeContextMenu, setEdgeContextMenu] = useState<{ edgeId: string; x: number; y: number } | null>(null);
 
   // 删除二次确认
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
@@ -121,16 +123,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             const targetStageId = getStageAtCanvasPos(cx, cy);
             if (targetStageId) {
               const meta = getNodeTypeMeta(toolbarDrag.type);
-              const newNode: WorkflowNode = {
-                id: generateId(),
-                type: toolbarDrag.type,
-                label: meta.label,
-                params: {},
-                position: {
-                  x: Math.max(10, cx - stagePositionsMap[targetStageId] - 20),
-                  y: Math.max(10, cy - 20 - 12),
-                },
-              };
+              // 鼠标位置换算为节点左上角(减去节点宽高的一半)，再按网格吸附
+                const SNAP = 20;
+                const NODE_W = 160;
+                const NODE_H = 60;
+                const stageLeft = stagePositionsMap[targetStageId];
+                const relX = cx - stageLeft;
+                const relY = cy - 20; // 阶段内容区top约20
+                const snapX = Math.round((relX - NODE_W / 2) / SNAP) * SNAP;
+                const snapY = Math.round((relY - NODE_H / 2) / SNAP) * SNAP;
+                const newNode: WorkflowNode = {
+                  id: generateId(),
+                  type: toolbarDrag.type,
+                  label: meta.label,
+                  params: {},
+                  position: {
+                    x: Math.max(10, snapX),
+                    y: Math.max(10, snapY),
+                  },
+                };
               setStages(prev => prev.map(s => {
                 if (s.id === targetStageId) {
                   return { ...s, nodes: [...s.nodes, newNode] };
@@ -474,16 +485,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const handleConfirmCondition = (condition: string, label: string) => {
     if (!conditionInput) return;
-    const newEdge: WorkflowEdge = {
-      id: generateEdgeId(conditionInput.source, conditionInput.target),
-      source: conditionInput.source,
-      target: conditionInput.target,
-      condition,
-      label: label || condition,
-    };
+    // 检查是否已有相同source→target的edge，有则更新，无则新建
+    const edgeId = generateEdgeId(conditionInput.source, conditionInput.target);
+    const existingStage = stages.find(s => s.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target));
+    const existingEdge = existingStage?.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target);
+
     setStages(stages.map((s) => {
+      if (existingStage && s.id === existingStage.id && existingEdge) {
+        // 更新已有edge的条件
+        return { ...s, edges: s.edges.map(e => e.id === existingEdge.id ? { ...e, condition, label: label || condition } : e) };
+      }
       if (s.id === conditionInput.stageId) {
-        return { ...s, edges: [...s.edges, newEdge] };
+        // 新建edge
+        return { ...s, edges: [...s.edges, { id: edgeId, source: conditionInput.source, target: conditionInput.target, condition, label: label || condition }] };
       }
       return s;
     }));
@@ -542,6 +556,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const PAN_THRESHOLD = 3;
 
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    // 关闭连线右键菜单
+    if (edgeContextMenu) setEdgeContextMenu(null);
     if (document.activeElement && document.activeElement !== e.target) {
       (document.activeElement as HTMLElement).blur();
     }
@@ -1082,26 +1098,51 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       return 'idle';
     })();
 
+    const isHovered = hoveredEdgeId === edge.id;
+    // 贝塞尔曲线：两端水平切线匹配锚点方向，控制点距离取两点间距的30%
+    const dx = Math.abs(tp.x - (sp.x + sw));
+    const cpOffset = Math.max(30, dx * 0.35);
+    const baseD = `M ${sp.x + sw} ${sy} C ${sp.x + sw + cpOffset} ${sy}, ${tp.x - cpOffset} ${ty}, ${tp.x} ${ty}`;
+
     return (
       <g key={edge.id}>
         {/* 不可见的粗命中区域 */}
         <path
-          d={`M ${sp.x + sw} ${sy} C ${sp.x + sw + 30} ${sy}, ${tp.x - 30} ${ty + (sy - tp.y - 20) * 0.3}, ${tp.x} ${ty}`}
+          d={baseD}
           stroke="transparent"
-          strokeWidth={12}
+          strokeWidth={14}
           fill="none"
-          style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
+          pointerEvents="stroke"
+          style={{ cursor: 'pointer' }}
           onClick={() => handleDeleteEdge(edge.id)}
+          onMouseEnter={() => setHoveredEdgeId(edge.id)}
+          onMouseLeave={() => setHoveredEdgeId(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setEdgeContextMenu({ edgeId: edge.id, x: e.clientX, y: e.clientY });
+          }}
         />
+        {/* hover光晕 */}
+        {isHovered && (
+          <path
+            d={baseD}
+            stroke="var(--accent)"
+            strokeWidth={8}
+            fill="none"
+            opacity={0.15}
+            style={{ pointerEvents: 'none', transition: 'opacity 0.15s ease' }}
+          />
+        )}
         {/* 可见连线 */}
         <path
-          d={`M ${sp.x + sw} ${sy} C ${sp.x + sw + 30} ${sy}, ${tp.x - 30} ${ty + (sy - tp.y - 20) * 0.3}, ${tp.x} ${ty}`}
-          stroke={edge.condition ? '#d29922' : edgeRunState === 'running' ? '#58a6ff' : edgeRunState === 'success' ? '#3fb950' : edgeRunState === 'failed' ? '#f85149' : 'var(--accent)'}
-          strokeWidth={edgeRunState === 'running' ? 2.5 : 2}
+          d={baseD}
+          stroke={isHovered ? '#58a6ff' : edge.condition ? '#d29922' : edgeRunState === 'running' ? '#58a6ff' : edgeRunState === 'success' ? '#3fb950' : edgeRunState === 'failed' ? '#f85149' : 'var(--accent)'}
+          strokeWidth={isHovered ? 2.5 : edgeRunState === 'running' ? 2.5 : 2}
           fill="none"
           markerEnd="url(#arrowhead)"
           strokeDasharray={edgeRunState === 'running' ? '6 3' : 'none'}
-          style={{ pointerEvents: 'none', transition: 'stroke 0.3s ease' }}
+          style={{ pointerEvents: 'none', transition: 'stroke 0.15s ease, stroke-width 0.15s ease' }}
         />
         {/* 运行中连线动画虚线 */}
         {edgeRunState === 'running' && (
@@ -1120,10 +1161,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           />
         )}
         {edge.label && (
-          <g style={{ pointerEvents: 'auto', cursor: 'pointer' }} onClick={() => handleDeleteEdge(edge.id)}>
+          <g pointerEvents="all" onClick={() => handleDeleteEdge(edge.id)}>
             <rect
               x={(sp.x + sw + tp.x) / 2 - 20}
-              y={(sp.y + tp.y) / 2 - 18}
+              y={(sy + ty) / 2 - 18}
               width={40}
               height={16}
               rx={3}
@@ -1133,7 +1174,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             />
             <text
               x={(sp.x + sw + tp.x) / 2}
-              y={(sp.y + tp.y) / 2 - 8}
+              y={(sy + ty) / 2 - 8}
               fill="var(--text-secondary)"
               fontSize={9}
               textAnchor="middle"
@@ -1155,7 +1196,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!anchorPos) return null;
     const mx = connecting.mouseCanvasX;
     const my = connecting.mouseCanvasY;
-    const d = `M ${anchorPos.x} ${anchorPos.y} C ${anchorPos.x + 30} ${anchorPos.y}, ${mx - 30} ${my + (anchorPos.y - my) * 0.3}, ${mx} ${my}`;
+    const dx = Math.abs(mx - anchorPos.x);
+    const cpOffset = Math.max(30, dx * 0.35);
+    const d = `M ${anchorPos.x} ${anchorPos.y} C ${anchorPos.x + cpOffset} ${anchorPos.y}, ${mx - cpOffset} ${my}, ${mx} ${my}`;
     return (
       <path
         d={d}
@@ -1234,7 +1277,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             stroke="transparent"
             strokeWidth={14}
             fill="none"
-            style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
+            pointerEvents="stroke"
+            style={{ cursor: 'pointer' }}
           />
           <path
             d={d}
@@ -1603,7 +1647,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         >
           {/* SVG 层：箭头标记 + 连线 + 预览线 */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 5, pointerEvents: 'none' }}
           >
             <defs>
               <marker id="arrowhead" markerWidth="7" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
@@ -1804,6 +1848,75 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         />
       )}
 
+      {/* ── 连线右键菜单 ── */}
+      {edgeContextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-[999]"
+            onClick={() => setEdgeContextMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setEdgeContextMenu(null); }}
+          />
+          <div
+            className="absolute z-[1000] rounded-lg py-1 min-w-[140px]"
+            style={{
+              left: edgeContextMenu.x,
+              top: edgeContextMenu.y,
+              background: 'var(--bg-tertiary)',
+              border: '1px solid var(--border)',
+              boxShadow: 'var(--shadow-lg)',
+            }}
+          >
+            {/* 查找edge所属stage */}
+            {(() => {
+              const edgeStage = stages.find(s => s.edges.find(e => e.id === edgeContextMenu.edgeId));
+              const edge = edgeStage?.edges.find(e => e.id === edgeContextMenu.edgeId);
+              const sourceNode = edgeStage?.nodes.find(n => n.id === edge?.source);
+              const targetNode = edgeStage?.nodes.find(n => n.id === edge?.target);
+              return (
+                <>
+                  <div className="px-3 py-1.5 text-[10px] border-b" style={{ color: 'var(--text-tertiary)', borderBottomColor: 'var(--border)' }}>
+                    {sourceNode?.label || '?'} → {targetNode?.label || '?'}
+                  </div>
+                  {edge && edgeStage && (
+                    <button
+                      className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                      style={{ color: 'var(--text-primary)', background: 'transparent', border: 'none' }}
+                      onClick={() => {
+                        setEdgeContextMenu(null);
+                        setConditionInput({
+                          source: edge.source,
+                          target: edge.target,
+                          stageId: edgeStage.id,
+                        });
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-light)'; e.currentTarget.style.color = 'var(--accent)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+                    >
+                      <span>{'✎'}</span>
+                      <span>{edge.condition ? '编辑条件' : '添加条件'}</span>
+                      {edge.condition && <span className="ml-auto text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{edge.label || edge.condition}</span>}
+                    </button>
+                  )}
+                  <button
+                    className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                    style={{ color: 'var(--status-danger)', background: 'transparent', border: 'none' }}
+                    onClick={() => {
+                      setEdgeContextMenu(null);
+                      handleDeleteEdge(edgeContextMenu.edgeId);
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(248,81,73,0.1)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <span>{'✕'}</span>
+                    <span>删除连线</span>
+                  </button>
+                </>
+              );
+            })()}
+          </div>
+        </>
+      )}
+
       {/* ── 删除二次确认弹窗 ── */}
       {confirmAction && (
         <div className="absolute inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
@@ -1849,6 +1962,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 id="condition-expr"
                 placeholder="例如: == approve 或 contains 紧急"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                defaultValue={(() => {
+                  const srcStage = stages.find(s => s.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target));
+                  const existingEdge = srcStage?.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target);
+                  return existingEdge?.condition || '';
+                })()}
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                 autoFocus
               />
@@ -1859,6 +1977,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 id="condition-label"
                 placeholder="例如: 审批通过 / 紧急"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                defaultValue={(() => {
+                  const srcStage = stages.find(s => s.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target));
+                  const existingEdge = srcStage?.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target);
+                  return existingEdge?.label || '';
+                })()}
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               />
             </div>
