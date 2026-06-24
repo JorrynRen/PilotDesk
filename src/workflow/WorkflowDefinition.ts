@@ -25,6 +25,8 @@ const NODE_TYPE_META: Record<WorkflowNodeType, NodeTypeMeta> = {
   transform: { label: '代码转换', color: '#d29922', icon: '⚡', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10 },
   interact: { label: '人工交互', color: '#f85149', icon: '👤', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10 },
   plugin: { label: '插件命令', color: '#3fb950', icon: '🧩', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10 },
+  start: { label: '起始', color: '#3fb950', icon: '▶', canHaveInputs: false, canHaveOutputs: true, maxInputs: 0, maxOutputs: 10 },
+  end: { label: '结束', color: '#f85149', icon: '■', canHaveInputs: true, canHaveOutputs: false, maxInputs: 10, maxOutputs: 0 },
   subflow: { label: '子工作流', color: '#79c0ff', icon: '📦', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10 },
 };
 
@@ -51,21 +53,46 @@ export function generateStageId(): string {
 // ── 默认工作流 ──
 
 export function createDefaultWorkflow(name: string): WorkflowDefinition {
-  const stageId = generateStageId();
+  const startNodeId = generateId();
+  const startStageId = generateStageId();
+  const endNodeId = generateId();
+  const endStageId = generateStageId();
   return {
     id: generateId(),
     name,
     version: '1.0.0',
     description: '',
     trigger: { triggerType: 'manual' },
-    stages: [{
-      id: stageId,
-      name: '默认阶段',
-      order: 0,
-      nodes: [],
-      edges: [],
-      gate: { strategy: 'all', mergeStrategy: 'merge' },
-    }],
+    stages: [
+      {
+        id: startStageId,
+        name: '起始阶段',
+        order: 0,
+        nodes: [{
+          id: startNodeId,
+          type: 'start' as WorkflowNodeType,
+          label: '起始',
+          position: { x: 60, y: 40 },
+          isBoundary: true,
+        }],
+        edges: [],
+        gate: { strategy: 'all', mergeStrategy: 'merge' },
+      },
+      {
+        id: endStageId,
+        name: '结束阶段',
+        order: 1,
+        nodes: [{
+          id: endNodeId,
+          type: 'end' as WorkflowNodeType,
+          label: '结束',
+          position: { x: 60, y: 40 },
+          isBoundary: true,
+        }],
+        edges: [],
+        gate: { strategy: 'all', mergeStrategy: 'merge' },
+      },
+    ],
     createdAt: Math.floor(Date.now() / 1000),
     updatedAt: Math.floor(Date.now() / 1000),
     enabled: true,

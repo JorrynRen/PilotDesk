@@ -125,6 +125,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const handleDeleteNode = (nodeId: string) => {
+    // 边界节点不允许删除
+    for (const s of stages) {
+      const node = s.nodes.find(n => n.id === nodeId);
+      if (node?.isBoundary) return;
+    }
     setStages(stages.map((s) => ({
       ...s,
       nodes: s.nodes.filter((n) => n.id !== nodeId),
@@ -452,6 +457,104 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const isDraggingThis = draggingNode?.nodeId === node.id && draggingNode?.started;
     const isHovered = hoveredNodeId === node.id;
     const isConnectTarget = connecting?.source !== node.id;
+    const isBoundary = node.type === 'start' || node.type === 'end';
+    const isStart = node.type === 'start';
+    const isEnd = node.type === 'end';
+
+    // 边界节点特殊渲染
+    if (isBoundary) {
+      return (
+        <div
+          key={node.id}
+          data-node
+          onClick={(e) => {
+            e.stopPropagation();
+            setSelectedNodeId(node.id);
+            setSelectedStageId(stageId);
+          }}
+          onMouseDown={(e) => handleNodeMouseDown(e, node.id, stageId)}
+          onMouseEnter={() => setHoveredNodeId(node.id)}
+          onMouseLeave={() => setHoveredNodeId(null)}
+          className="cursor-default"
+          style={{
+            position: 'absolute',
+            left: pos?.x ?? 20,
+            top: pos?.y ?? 20,
+            width: 140,
+            padding: '10px 12px',
+            borderRadius: 24,
+            border: isSelected
+              ? '1.5px solid var(--accent)'
+              : isHovered
+                ? '1px solid var(--accent)'
+                : `2px solid ${meta.color}44`,
+            background: `${meta.color}15`,
+            boxShadow: isSelected
+              ? `0 0 0 1px ${meta.color}33`
+              : isHovered
+                ? `0 0 8px ${meta.color}33`
+                : 'none',
+            zIndex: 10,
+            userSelect: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <div
+            className="shrink-0"
+            style={{
+              width: 28, height: 28, borderRadius: '50%',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 14, fontWeight: 'bold',
+              background: meta.color, color: '#fff',
+            }}
+          >
+            {isStart ? '▶' : '■'}
+          </div>
+          <span className="text-xs font-bold" style={{ color: meta.color }}>
+            {meta.label}
+          </span>
+          {/* Start: output anchor only */}
+          {isStart && (
+            <div
+              data-anchor="output"
+              onMouseDown={(e) => { e.stopPropagation(); handleStartConnect(e, node.id, stageId); }}
+              className="absolute rounded-full transition-all duration-150"
+              style={{
+                right: -6, top: '50%', marginTop: -6,
+                width: isHovered || connecting ? 12 : 10,
+                height: isHovered || connecting ? 12 : 10,
+                background: connecting ? 'var(--accent)' : isHovered ? 'var(--accent)' : 'var(--border)',
+                border: '2px solid var(--bg-secondary)',
+                cursor: 'crosshair',
+                boxShadow: (isHovered || connecting) ? '0 0 8px var(--accent-light)' : 'none',
+              }}
+            />
+          )}
+          {/* End: input anchor only */}
+          {isEnd && (
+            <div
+              data-anchor="input"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (connecting) handleEndConnect(node.id, stageId);
+              }}
+              className="absolute rounded-full transition-all duration-150"
+              style={{
+                left: -6, top: '50%', marginTop: -6,
+                width: connecting ? 12 : 10, height: connecting ? 12 : 10,
+                background: (connecting && isConnectTarget) ? 'var(--accent)' : 'var(--border)',
+                border: '2px solid var(--bg-secondary)',
+                cursor: connecting ? 'cell' : 'crosshair',
+                boxShadow: (connecting && isConnectTarget) ? '0 0 8px var(--accent-light)' : 'none',
+              }}
+            />
+          )}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -771,14 +874,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         {/* 背景辅助网格 */}
         {showGrid && (
           <div
-            className="absolute inset-0 z-0 pointer-events-none"
+            className="absolute inset-0 pointer-events-none"
             style={{
-              backgroundImage: `
-                radial-gradient(circle, var(--border) 1px, transparent 1px)
-              `,
+              zIndex: 1,
+              backgroundImage: `radial-gradient(circle, rgba(139,148,158,0.5) 1px, transparent 1px)`,
               backgroundSize: `${20 * scale}px ${20 * scale}px`,
               backgroundPosition: `${pan.x % (20 * scale)}px ${pan.y % (20 * scale)}px`,
-              opacity: 0.4,
+              opacity: 0.6,
             }}
           />
         )}
@@ -903,6 +1005,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           )}
 
           {/* ── 阶段列 ── */}
+          {(() => {
+            // 计算折叠紧凑偏移：折叠阶段宽度为56px，普通阶段间距500px
+            const STAGE_FULL_WIDTH = 500;
+            const STAGE_COLLAPSED_WIDTH = 56;
+            const STAGE_GAP = 12;
+            let leftOffset = 20;
+            const stagePositions: number[] = [];
+            for (let i = 0; i < stages.length; i++) {
+              stagePositions.push(leftOffset);
+              if (collapsedStages.has(stages[i].id)) {
+                leftOffset += STAGE_COLLAPSED_WIDTH + STAGE_GAP;
+              } else {
+                leftOffset += STAGE_FULL_WIDTH;
+              }
+            }
+            return (
+              <>
           {stages.map((stage, stageIndex) => {
             const isCollapsed = collapsedStages.has(stage.id);
             return (
@@ -912,7 +1031,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   style={{
                     position: 'absolute',
                     top: 20,
-                    left: stageIndex * 500 + 20,
+                    left: stagePositions[stageIndex],
                     width: isCollapsed ? 56 : 460,
                     minHeight: 100,
                     borderRadius: 8,
@@ -924,58 +1043,63 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 >
                   {/* 阶段标题栏 — 反向缩放保持恒定大小 */}
                   <div
-                    className="flex items-center justify-between shrink-0"
+                    className={isCollapsed ? 'flex flex-col shrink-0' : 'flex items-center justify-between shrink-0'}
                     style={{
-                      padding: '6px 10px',
+                      padding: isCollapsed ? '4px 6px' : '6px 10px',
                       background: 'var(--bg-tertiary)',
                       borderBottom: '1px solid var(--border)',
                       borderRadius: '8px 8px 0 0',
                       transform: `scale(${1 / scale})`,
                       transformOrigin: 'top left',
-                      width: `${isCollapsed ? 56 : 460}${'px'}`,
+                      width: `${(isCollapsed ? 56 : 460) * scale}px`,
                       fontSize: `${Math.max(10, 12 / scale)}px`,
+                      gap: isCollapsed ? 2 : 0,
                     }}
                   >
-                    <div className="flex items-center gap-2">
+                    {/* 第一行：序号块 + 折叠操作按钮 */}
+                    <div className={isCollapsed ? 'flex items-center justify-between w-full' : 'flex items-center gap-2'}>
                       <span
                         className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0"
                         style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}
                       >
                         {stage.order + 1}
                       </span>
-                      {!isCollapsed ? (
-                        <input
-                          value={stage.name}
-                          onChange={(e) => handleRenameStage(stage.id, e.target.value)}
-                          className="text-xs font-semibold outline-none"
-                          style={{ background: 'transparent', color: 'var(--text-primary)', border: 'none', width: 100 }}
-                        />
-                      ) : (
-                        <span
-                          className="text-[10px] font-semibold"
-                          style={{ color: 'var(--text-primary)', writingMode: 'vertical-rl', letterSpacing: 1 }}
-                        >
-                          {stage.name}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }}
-                        className="pd-btn p-1 rounded text-[10px] transition-colors duration-150"
-                        style={{ color: 'var(--text-tertiary)', background: 'transparent' }}
-                        title={isCollapsed ? '展开阶段' : '折叠阶段'}
-                      >
-                        {isCollapsed ? '\u25B6' : '\u25C0'}
-                      </button>
-                      {!isCollapsed && (
+                      <div className="flex items-center gap-1">
                         <button
-                          onClick={() => handleDeleteStage(stage.id)}
-                          className="pd-btn p-0.5 rounded text-[10px] transition-colors duration-150"
-                          style={{ color: 'var(--status-danger)', background: 'transparent' }}
-                        >x</button>
-                      )}
+                          onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }}
+                          className="pd-btn p-1 rounded text-[10px] transition-colors duration-150"
+                          style={{ color: 'var(--text-tertiary)', background: 'transparent' }}
+                          title={isCollapsed ? '展开阶段' : '折叠阶段'}
+                        >
+                          {isCollapsed ? '\u25B6' : '\u25C0'}
+                        </button>
+                        {!isCollapsed && (
+                          <button
+                            onClick={() => handleDeleteStage(stage.id)}
+                            className="pd-btn p-0.5 rounded text-[10px] transition-colors duration-150"
+                            style={{ color: 'var(--status-danger)', background: 'transparent' }}
+                          >x</button>
+                        )}
+                      </div>
                     </div>
+                    {/* 第二行（折叠时）：阶段标题 */}
+                    {isCollapsed && (
+                      <span
+                        className="text-[10px] font-semibold"
+                        style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%', textAlign: 'center' }}
+                      >
+                        {stage.name}
+                      </span>
+                    )}
+                    {/* 展开时：名称输入框（与序号同行） */}
+                    {!isCollapsed && (
+                      <input
+                        value={stage.name}
+                        onChange={(e) => handleRenameStage(stage.id, e.target.value)}
+                        className="text-xs font-semibold outline-none"
+                        style={{ background: 'transparent', color: 'var(--text-primary)', border: 'none', width: 100 }}
+                      />
+                    )}
                   </div>
 
                   {/* 阶段内容区 */}
@@ -1011,8 +1135,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                               type,
                               label: meta.label,
                               position: {
-                                x: Math.round((e.clientX - rect.left - pan.x) / scale - 60),
-                                y: Math.round((e.clientY - rect.top - pan.y) / scale - 20),
+                                x: Math.round((e.clientX - rect.left) / scale - 60),
+                                y: Math.round((e.clientY - rect.top) / scale - 20),
                               },
                             };
                             setStages(stages.map((s) =>
@@ -1033,7 +1157,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           background: 'var(--bg-primary)',
                           transform: `scale(${1 / scale})`,
                           transformOrigin: 'bottom left',
-                          width: `${isCollapsed ? 56 : 460 - 16}${'px'}`,
+                          width: `${(isCollapsed ? 56 : 460 - 16) * scale}px`,
                           fontSize: `${Math.max(10, 10 / scale)}px`,
                         }}
                         onClick={() => handleUpdateGate(stage.id, {})}
@@ -1072,6 +1196,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               </React.Fragment>
             );
           })}
+              </>
+            );
+          })()}
         </div>
       </div>
 

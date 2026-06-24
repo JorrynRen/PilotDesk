@@ -6,8 +6,10 @@
 
 // ── 实体节点类型（6种）──
 
-/** 实体节点类型 */
+/** 节点类型（含边界节点） */
 export type WorkflowNodeType =
+  | 'start'          // 起始节点（系统自动创建，不可删除）
+  | 'end'            // 结束节点（系统自动创建，不可删除）
   | 'agent'          // AI Agent 任务
   | 'api'            // API 调用
   | 'transform'      // 代码/数据转换
@@ -48,6 +50,9 @@ export interface WorkflowNode {
 
   // 画布位置
   position?: { x: number; y: number };
+
+  /** 边界节点标记（Start/End 由系统自动创建，不可删除） */
+  isBoundary?: boolean;
 
 }
 

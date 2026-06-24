@@ -54,6 +54,12 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
       { key: 'definitionId', label: '子工作流', type: 'subflow_select', placeholder: '选择子工作流' },
     ],
   },
+  start: {
+    fields: [],
+  },
+  end: {
+    fields: [],
+  },
 };
 
 export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow }) => {
