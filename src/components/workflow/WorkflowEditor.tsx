@@ -140,8 +140,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   label: meta.label,
                   params: {},
                   position: {
-                    x: Math.max(10, Math.min(420, snapX)),
-                    y: Math.max(10, Math.min(340, snapY)),
+                    x: Math.max(10, Math.min(Math.floor(476 * scale - 160), snapX)),
+                    y: Math.max(10, Math.min(Math.floor(474 * scale - 64), snapY)),
                   },
                 };
               setStages(prev => prev.map(s => {
@@ -811,8 +811,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     ? {
                         ...n,
                         position: {
-                          x: Math.max(5, Math.min(420, Math.floor(rel.x / SNAP_SIZE) * SNAP_SIZE)),
-                          y: Math.max(5, Math.min(340, Math.floor(rel.y / SNAP_SIZE) * SNAP_SIZE)),
+                          x: Math.max(5, Math.min(Math.floor(476 * scale - 160), Math.floor(rel.x / SNAP_SIZE) * SNAP_SIZE)),
+                          y: Math.max(5, Math.min(Math.floor(474 * scale - 64), Math.floor(rel.y / SNAP_SIZE) * SNAP_SIZE)),
                         },
                       }
                     : n
@@ -849,18 +849,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const STAGE_COLLAPSED_WIDTH = 56;
     const STAGE_TOP = 20;
     const TITLE_H = 30;
-    const CONTENT_MIN_H = 474;
     const GATE_H = 56;
+    const DYN_CONTENT_H = Math.max(100, 474 * scale);
     for (const stage of stages) {
       const left = stagePositionsMap[stage.id];
       const width = collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH : STAGE_FULL_WIDTH;
-      const height = TITLE_H + (collapsedStages.has(stage.id) ? 0 : CONTENT_MIN_H + GATE_H);
+      const height = TITLE_H + (collapsedStages.has(stage.id) ? 0 : DYN_CONTENT_H + GATE_H);
       if (cx >= left && cx <= left + width && cy >= STAGE_TOP && cy <= STAGE_TOP + height) {
         return stage.id;
       }
     }
     return null;
-  }, [stages, collapsedStages, stagePositionsMap]);
+  }, [stages, collapsedStages, stagePositionsMap, scale]);
 
 
 
@@ -1340,7 +1340,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const STAGE_TOP = 20;
     const TITLE_H = 30;
     const GATE_H = 56;
-    const DYN_CONTENT_H = 474 * scale; // 动态内容区CSS高度
+    const DYN_CONTENT_H = Math.max(100, 474 * scale); // 动态内容区CSS高度（与DOM一致）
     const invScale = 1 / scale;
     const H_SEG = 10 * invScale; // 两端水平段（缩短一半）
 
