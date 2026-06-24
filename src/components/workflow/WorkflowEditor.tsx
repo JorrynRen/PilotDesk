@@ -52,6 +52,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
+  const [showGrid, setShowGrid] = useState(false);
 
   // 画布平移和缩放状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -698,6 +699,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         <div className="w-px h-5 mx-1" style={{ background: 'var(--border)' }} />
 
+        <button
+          onClick={() => setShowGrid((v) => !v)}
+          className="pd-btn px-2 py-1 text-[11px] rounded flex items-center gap-1"
+          style={{
+            border: showGrid ? '1px solid var(--accent)' : '1px solid var(--border)',
+            background: showGrid ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+            color: showGrid ? 'var(--accent)' : 'var(--text-secondary)',
+          }}
+          title={showGrid ? '隐藏辅助网格' : '显示辅助网格'}
+        >
+          □
+        </button>
+
         <div className="flex items-center gap-1.5">
           <button
             onClick={handleAddStage}
@@ -751,6 +765,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           }
         }}
       >
+        {/* 背景辅助网格 */}
+        {showGrid && (
+          <div
+            className="absolute inset-0 z-0 pointer-events-none"
+            style={{
+              backgroundImage: `
+                linear-gradient(var(--border) 1px, transparent 1px),
+                linear-gradient(90deg, var(--border) 1px, transparent 1px)
+              `,
+              backgroundSize: `${20 * scale}px ${20 * scale}px`,
+              backgroundPosition: `${pan.x % (20 * scale)}px ${pan.y % (20 * scale)}px`,
+              opacity: 0.35,
+            }}
+          />
+        )}
+
         {/* 缩放指示器 */}
         <div
           className="absolute bottom-3 right-3 z-30 flex items-center gap-1 rounded-lg px-1.5 py-1"
@@ -892,7 +922,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 >
                   {/* 阶段标题栏 */}
                   <div
-                    className="flex items-center justify-between shrink-0 rounded-t-lg"
+                    className="flex items-center justify-between shrink-0"
                     style={{
                       padding: '6px 10px',
                       background: 'var(--bg-tertiary)',
@@ -1031,20 +1061,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   )}
                 </div>
 
-                {/* 阶段间虚线分隔线 */}
-                {stageIndex < stages.length - 1 && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 40,
-                      left: (stageIndex + 1) * 500 - 10,
-                      width: 1,
-                      height: 'calc(100% - 60px)',
-                      minHeight: 200,
-                      borderLeft: '1px dashed var(--border)',
-                    }}
-                  />
-                )}
+
               </React.Fragment>
             );
           })}
