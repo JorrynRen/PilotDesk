@@ -723,13 +723,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
 
   // 获取节点输出锚点的画布坐标（右侧中心）
+  const getNodeHeight = (node: WorkflowNode): number => {
+    if (node.type === 'start' || node.type === 'end') return 40;
+    // Normal nodes: padding(8+8) + icon row(24) + gap(4) + tags row(~16 if exists, else 0) + extra
+    const hasTags = !!(node.delayMs || node.timeoutMs);
+    return 8 + 8 + 24 + 4 + (hasTags ? 16 : 0) + 4;
+  };
+
   const getNodeOutputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
     const stage = stages.find(s => s.id === stageId);
     const node = stage?.nodes.find(n => n.id === nodeId);
     if (!node?.position) return null;
     const pos = node.position;
-    const nodeWidth = node.type === 'start' || node.type === 'end' ? 140 : 160;
-    return { x: pos.x + nodeWidth, y: pos.y + 20 };
+    const nodeWidth = 160;
+    const nodeHeight = getNodeHeight(node);
+    return { x: pos.x + nodeWidth, y: pos.y + nodeHeight / 2 };
   }, [stages]);
 
   // 获取节点输入锚点的画布坐标（左侧中心）
@@ -738,7 +746,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const node = stage?.nodes.find(n => n.id === nodeId);
     if (!node?.position) return null;
     const pos = node.position;
-    return { x: pos.x, y: pos.y + 20 };
+    const nodeHeight = getNodeHeight(node);
+    return { x: pos.x, y: pos.y + nodeHeight / 2 };
   }, [stages]);
 
   // ══════════════════════════════════════════
@@ -775,9 +784,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             position: 'absolute',
             left: pos?.x ?? 20,
             top: pos?.y ?? 20,
-            width: 140,
-            padding: '10px 12px',
-            borderRadius: 24,
+            width: 160,
+            padding: '8px 10px',
+            borderRadius: 8,
             border: isSelected
               ? '1.5px solid var(--accent)'
               : isHovered
@@ -902,7 +911,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             ? '1.5px solid var(--accent)'
             : isHovered
               ? '1px solid var(--accent)'
-              : '1px solid var(--border)',
+              : '1.5px solid #484f58',
           background: isDraggingThis
             ? 'var(--bg-tertiary)'
             : runState === 'running'
@@ -1040,8 +1049,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const tp = targetNode.position as { x: number; y: number } | undefined;
     if (!sp || !tp) return null;
 
-    const sw = sourceNode.type === 'start' || sourceNode.type === 'end' ? 140 : 160;
-    const tw = targetNode.type === 'start' || targetNode.type === 'end' ? 140 : 160;
+    const sw = 160;
+    const tw = 160;
+    const sh = getNodeHeight(sourceNode);
+    const th = getNodeHeight(targetNode);
+    const sy = sp.y + sh / 2;
+    const ty = tp.y + th / 2;
 
     // 连线运行状态
     const edgeRunState = (() => {
@@ -1058,7 +1071,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       <g key={edge.id}>
         {/* 不可见的粗命中区域 */}
         <path
-          d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20 + (sp.y + 20 - tp.y - 20) * 0.3}, ${tp.x} ${tp.y + 20}`}
+          d={`M ${sp.x + sw} ${sy} C ${sp.x + sw + 30} ${sy}, ${tp.x - 30} ${ty + (sy - tp.y - 20) * 0.3}, ${tp.x} ${ty}`}
           stroke="transparent"
           strokeWidth={12}
           fill="none"
@@ -1067,7 +1080,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         />
         {/* 可见连线 */}
         <path
-          d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20 + (sp.y + 20 - tp.y - 20) * 0.3}, ${tp.x} ${tp.y + 20}`}
+          d={`M ${sp.x + sw} ${sy} C ${sp.x + sw + 30} ${sy}, ${tp.x - 30} ${ty + (sy - tp.y - 20) * 0.3}, ${tp.x} ${ty}`}
           stroke={edge.condition ? '#d29922' : edgeRunState === 'running' ? '#58a6ff' : edgeRunState === 'success' ? '#3fb950' : edgeRunState === 'failed' ? '#f85149' : 'var(--accent)'}
           strokeWidth={edgeRunState === 'running' ? 2.5 : 2}
           fill="none"
@@ -1078,7 +1091,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         {/* 运行中连线动画虚线 */}
         {edgeRunState === 'running' && (
           <path
-            d={`M ${sp.x + sw} ${sp.y + 20} C ${sp.x + sw + 30} ${sp.y + 20}, ${tp.x - 30} ${tp.y + 20 + (sp.y + 20 - tp.y - 20) * 0.3}, ${tp.x} ${tp.y + 20}`}
+            d={`M ${sp.x + sw} ${sy} C ${sp.x + sw + 30} ${sy}, ${tp.x - 30} ${ty + (sy - tp.y - 20) * 0.3}, ${tp.x} ${ty}`}
             stroke="#58a6ff"
             strokeWidth={4}
             fill="none"
@@ -1247,7 +1260,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               fontSize={8}
               textAnchor="middle"
             >
-              {srcStage.name} →
+              {srcStage.order + 1} →
             </text>
           </g>
         </g>

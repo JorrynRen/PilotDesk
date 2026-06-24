@@ -210,7 +210,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               whiteSpace: 'nowrap',
             }}
           >
-            {meta.label}
+            节点类型：{meta.label}
           </div>
         </div>
         {/* 关闭按钮 */}
