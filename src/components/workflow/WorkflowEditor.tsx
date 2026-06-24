@@ -1083,9 +1083,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // JSX
   // ══════════════════════════════════════════
   return (
-    <div className="flex flex-row h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* 左侧主区域 */}
-      <div className="flex flex-col flex-1 min-w-0 relative">
+    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* CSS动画注入 */}
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -1168,6 +1166,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       </div>
 
+      {/* 画布 + 配置面板 flex-row */}
+      <div className="flex flex-row flex-1 min-h-0">
       {/* ── 画布区域 ── */}
       <div
         ref={canvasRef}
@@ -1688,7 +1688,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       )}
 
-      </div>{/* end left area */}
       {/* ── 节点配置面板 ── */}
       {selectedNodeId && selectedStageId && (
         <div
@@ -1712,6 +1711,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           />
         </div>
       )}
+      </div>{/* end flex-row: canvas + panel */}
     </div>
   );
 };
