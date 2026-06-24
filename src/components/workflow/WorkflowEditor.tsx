@@ -80,8 +80,101 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const panThresholdRef = useRef<{ startX: number; startY: number; triggered: boolean } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  
   const dragOverCanvasRef = useRef<boolean>(false);
-  const toolbarDragTypeRef = useRef<string | null>(null);
+
+  // 工具栏节点模拟拖拽状态（替代HTML5 DnD，解决Tauri WebView2不触发dragstart问题）
+  const [toolbarDrag, setToolbarDrag] = useState<{
+    type: WorkflowNodeType;
+    icon: string;
+    label: string;
+    color: string;
+    ghostX: number;
+    ghostY: number;
+  } | null>(null);
+  const toolbarDragRef = useRef<WorkflowNodeType | null>(null);
+
+// Toolbar drag ghost element ref
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+
+  // Toolbar drag mouse tracking
+  useEffect(() => {
+    if (!toolbarDrag) return;
+    const handleMove = (e: MouseEvent) => {
+      setToolbarDrag(prev => prev ? { ...prev, ghostX: e.clientX, ghostY: e.clientY } : null);
+      if (ghostRef.current) {
+        ghostRef.current.style.left = e.clientX + 'px';
+        ghostRef.current.style.top = e.clientY + 'px';
+      }
+    };
+    const handleUp = (e: MouseEvent) => {
+      if (toolbarDrag) {
+        // Check if dropped over canvas
+        const canvasEl = canvasRef.current;
+        if (canvasEl) {
+          const rect = canvasEl.getBoundingClientRect();
+          if (e.clientX >= rect.left && e.clientX <= rect.right &&
+              e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            const cx = (e.clientX - rect.left - pan.x) / scale;
+            const cy = (e.clientY - rect.top - pan.y) / scale;
+            const targetStageId = getStageAtCanvasPos(cx, cy);
+            if (targetStageId) {
+              const meta = getNodeTypeMeta(toolbarDrag.type);
+              const newNode: WorkflowNode = {
+                id: generateId(),
+                type: toolbarDrag.type,
+                label: meta.label,
+                params: {},
+                position: {
+                  x: Math.max(10, cx - stagePositionsMap[targetStageId] - 20),
+                  y: Math.max(10, cy - 20 - 12),
+                },
+              };
+              setStages(prev => prev.map(s => {
+                if (s.id === targetStageId) {
+                  return { ...s, nodes: [...s.nodes, newNode] };
+                }
+                return s;
+              }));
+              setSelectedNodeId(newNode.id);
+              setSelectedStageId(targetStageId);
+            }
+          }
+        }
+      }
+      setToolbarDrag(null);
+      setDragOverStageId(null);
+      toolbarDragRef.current = null;
+      if (ghostRef.current) {
+        ghostRef.current.remove();
+        ghostRef.current = null;
+      }
+    };
+    const handleMoveHighlight = (e: MouseEvent) => {
+      if (!toolbarDrag) return;
+      const canvasEl = canvasRef.current;
+      if (canvasEl) {
+        const rect = canvasEl.getBoundingClientRect();
+        if (e.clientX >= rect.left && e.clientX <= rect.right &&
+            e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          const cx = (e.clientX - rect.left - pan.x) / scale;
+          const cy = (e.clientY - rect.top - pan.y) / scale;
+          setDragOverStageId(getStageAtCanvasPos(cx, cy));
+        } else {
+          setDragOverStageId(null);
+        }
+      }
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mousemove', handleMoveHighlight);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mousemove', handleMoveHighlight);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [toolbarDrag, pan, scale, stages, collapsedStages]);
 
   // 节点拖拽状态
   const [draggingNode, setDraggingNode] = useState<{
@@ -1143,14 +1236,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {BUILTIN_NODE_TYPES.map((nt) => (
             <div
               key={nt.type}
-              draggable
-              onDragStart={(e) => {
-                toolbarDragTypeRef.current = nt.type;
-                e.dataTransfer.setData('application/x-node-type', nt.type);
-                e.dataTransfer.effectAllowed = 'copy';
-              }}
               className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
               style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                toolbarDragRef.current = nt.type;
+                setToolbarDrag({ type: nt.type, icon: nt.icon, label: nt.label, color: nt.color, ghostX: e.clientX, ghostY: e.clientY });
+                // Create ghost element
+                const ghost = document.createElement('div');
+                ghost.textContent = nt.icon + ' ' + nt.label;
+                ghost.style.cssText = `position:fixed;pointer-events:none;z-index:99999;padding:4px 12px;border-radius:6px;font-size:12px;opacity:0.85;white-space:nowrap;border:1px solid ${nt.color};background:${nt.color}22;color:${nt.color};transform:translate(-50%,-50%)`;
+                ghost.style.left = e.clientX + 'px';
+                ghost.style.top = e.clientY + 'px';
+                document.body.appendChild(ghost);
+                ghostRef.current = ghost;
+              }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.borderColor = 'var(--accent)';
                 e.currentTarget.style.background = 'var(--accent)';
@@ -1234,65 +1334,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         onMouseDown={handleCanvasMouseDown}
         onWheel={handleWheel}
         onContextMenu={(e) => e.preventDefault()}
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'copy';
-          dragOverCanvasRef.current = true;
-          // Highlight the stage under the cursor
-          if (toolbarDragTypeRef.current) {
-            const rect = canvasRef.current?.getBoundingClientRect();
-            if (rect) {
-              const cx = (e.clientX - rect.left - pan.x) / scale;
-              const cy = (e.clientY - rect.top - pan.y) / scale;
-              const hitStage = getStageAtCanvasPos(cx, cy);
-              setDragOverStageId(hitStage);
-            }
-          }
-        }}
-        onDragLeave={(e) => {
-          if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
-            dragOverCanvasRef.current = false;
-            setDragOverStageId(null);
-            toolbarDragTypeRef.current = null;
-          }
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          dragOverCanvasRef.current = false;
-          const rawType = e.dataTransfer.getData('application/x-node-type') || e.dataTransfer.getData('text/plain');
-          const droppedType = rawType as WorkflowNodeType;
-          toolbarDragTypeRef.current = null;
-          if (!droppedType || !BUILTIN_NODE_TYPES.some(nt => nt.type === droppedType)) {
-            setDragOverStageId(null);
-            return;
-          }
-          const rect = canvasRef.current?.getBoundingClientRect();
-          if (!rect) { setDragOverStageId(null); return; }
-          const cx = (e.clientX - rect.left - pan.x) / scale;
-          const cy = (e.clientY - rect.top - pan.y) / scale;
-          const targetStageId = getStageAtCanvasPos(cx, cy);
-          if (!targetStageId) { setDragOverStageId(null); return; }
-          const meta = getNodeTypeMeta(droppedType);
-          const newNode: WorkflowNode = {
-            id: generateId(),
-            type: droppedType,
-            label: meta.label,
-            params: {},
-            position: {
-              x: Math.max(10, cx - stagePositionsMap[targetStageId] - 20),
-              y: Math.max(10, cy - 20 - 12),
-            },
-          };
-          setStages(prev => prev.map(s => {
-            if (s.id === targetStageId) {
-              return { ...s, nodes: [...s.nodes, newNode] };
-            }
-            return s;
-          }));
-          setSelectedNodeId(newNode.id);
-          setSelectedStageId(targetStageId);
-          setDragOverStageId(null);
-        }}
+        
       >
         {/* 背景辅助网格 */}
         {showGrid && (
@@ -1611,34 +1653,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           borderRadius: 6,
                           background: dragOverStageId === stage.id ? 'var(--accent-light)' : 'transparent',
                           transition: 'border-color 0.15s ease, background 0.15s ease',
-                        }}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          setDragOverStageId(stage.id);
-                        }}
-                        onDragLeave={() => {
-                          if (dragOverStageId === stage.id) setDragOverStageId(null);
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setDragOverStageId(null);
-                          const type = e.dataTransfer.getData('text/plain') as WorkflowNodeType;
-                          if (type) {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const meta = getNodeTypeMeta(type);
-                            const newNode: WorkflowNode = {
-                              id: generateId(),
-                              type,
-                              label: meta.label,
-                              position: {
-                                x: Math.round((e.clientX - rect.left) / scale - 60),
-                                y: Math.round((e.clientY - rect.top) / scale - 20),
-                              },
-                            };
-                            setStages(stages.map((s) =>
-                              s.id === stage.id ? { ...s, nodes: [...s.nodes, newNode] } : s
-                            ));
-                          }
                         }}
                       >
                         {stage.nodes.map((node) => renderNode(node, stage.id))}
