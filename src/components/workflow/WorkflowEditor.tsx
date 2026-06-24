@@ -1381,11 +1381,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
           >
             <defs>
-              <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                <path d="M 0 0.5 L 8 4 L 0 7.5" fill="none" stroke="var(--accent)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              <marker id="arrowhead" markerWidth="7" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                <path d="M 0 0.5 L 5.5 3 L 0 5.5" fill="none" stroke="var(--accent)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
               </marker>
-              <marker id="arrowhead-gray" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                <path d="M 0 0.5 L 8 4 L 0 7.5" fill="none" stroke="#484f58" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              <marker id="arrowhead-gray" markerWidth="7" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                <path d="M 0 0.5 L 5.5 3 L 0 5.5" fill="none" stroke="#484f58" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
               </marker>
             </defs>
             {/* 阶段内连线 */}
