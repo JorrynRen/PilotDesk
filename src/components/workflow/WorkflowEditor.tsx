@@ -1899,7 +1899,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       >
                         {/* 阶段内连线 + 连线预览 SVG — 1:1内容区坐标 */}
                         <svg
-                          style={{ position: 'absolute', top: -12, left: -12, width: 'calc(100% + 24px)', height: 'calc(100% + 24px)', zIndex: 1, overflow: 'visible' }}
+                          style={{ position: 'absolute', top: -12, left: -12, width: 'calc(100% + 24px)', height: 'calc(100% + 24px)', zIndex: 1, overflow: 'visible', pointerEvents: 'none' }}
                         >
                           <g transform={`translate(12, 12)`}>
                             {stage.edges.map((edge) => renderEdge(edge, stage.id))}
