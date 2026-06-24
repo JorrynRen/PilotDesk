@@ -2,14 +2,14 @@
  * WorkflowEditor — 工作流可视化编辑器（Structured Canvas）
  *
  * 自由画布 + 阶段列布局，支持：
- * - 画布拖拽平移 + 鼠标滚轮缩放
- * - 节点拖拽移动
- * - 节点连线（从输出锚点到输入锚点）
+ * - 画布拖拽平移（左键空白区/中键拖拽）+ 鼠标滚轮缩放（以光标为中心）
+ * - 节点拖拽移动（带视觉反馈：阴影+缩放+吸附辅助线）
+ * - 节点连线（从输出锚点到输入锚点，拖拽时实时预览线条）
  * - 阶段折叠/展开
  * - CSS变量主题支持
  */
 
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage } from '../../workflow/WorkflowDefinition';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
@@ -22,13 +22,21 @@ interface Props {
 }
 
 const BUILTIN_NODE_TYPES: { type: WorkflowNodeType; label: string; icon: string; color: string }[] = [
-  { type: 'agent', label: 'Agent 任务', icon: '🤖', color: '#58a6ff' },
-  { type: 'api', label: 'API 调用', icon: '🔗', color: '#a371f7' },
+  { type: 'agent', label: 'Agent 任务', icon: '\u{1F916}', color: '#58a6ff' },
+  { type: 'api', label: 'API 调用', icon: '\u{1F517}', color: '#a371f7' },
   { type: 'transform', label: '代码转换', icon: '\u{26A1}', color: '#d29922' },
   { type: 'interact', label: '人工交互', icon: '\u{1F464}', color: '#f85149' },
   { type: 'plugin', label: '插件命令', icon: '\u{1F9E9}', color: '#3fb950' },
   { type: 'subflow', label: '子工作流', icon: '\u{1F4E6}', color: '#79c0ff' },
 ];
+
+/** 连线拖拽时的实时预览状态 */
+interface ConnectingPreview {
+  source: string;
+  stageId: string;
+  mouseCanvasX: number;
+  mouseCanvasY: number;
+}
 
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange }) => {
   const { definitions, updateDefinition, loadDefinitions } = useWorkflowStore();
@@ -39,19 +47,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const [name, setName] = useState(def?.name || '');
   const [description, setDescription] = useState(def?.description || '');
-  const [connecting, setConnecting] = useState<{ source: string; stageId: string } | null>(null);
+  const [connecting, setConnecting] = useState<ConnectingPreview | null>(null);
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
   // 画布平移和缩放状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const panThresholdRef = useRef<{ startX: number; startY: number; triggered: boolean } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // 节点拖拽状态
-  const [draggingNode, setDraggingNode] = useState<{ nodeId: string; stageId: string; offsetX: number; offsetY: number } | null>(null);
+  const [draggingNode, setDraggingNode] = useState<{
+    nodeId: string;
+    stageId: string;
+    offsetX: number;
+    offsetY: number;
+    started: boolean;
+    startX: number;
+    startY: number;
+  } | null>(null);
+
+  // 用于连线预览的SVG ref
+  const connectingLineRef = useRef<SVGPathElement | null>(null);
 
   useEffect(() => {
     if (def) {
@@ -116,25 +137,41 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     })));
   };
 
-  // 连线操作
-  const handleStartConnect = (nodeId: string, stageId: string) => {
-    setConnecting({ source: nodeId, stageId });
+  // ── 连线操作（带实时预览） ──
+  const handleStartConnect = (e: React.MouseEvent, nodeId: string, stageId: string) => {
+    e.stopPropagation();
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const mouseCanvasX = (e.clientX - rect.left - pan.x) / scale;
+    const mouseCanvasY = (e.clientY - rect.top - pan.y) / scale;
+    setConnecting({ source: nodeId, stageId, mouseCanvasX, mouseCanvasY });
   };
 
-  const handleEndConnect = (targetId: string, targetStageId: string) => {
-    if (!connecting || connecting.source === targetId) {
+  const handleUpdateConnectingPos = useCallback((e: MouseEvent) => {
+    if (!connecting) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setConnecting(prev => prev ? {
+      ...prev,
+      mouseCanvasX: (e.clientX - rect.left - pan.x) / scale,
+      mouseCanvasY: (e.clientY - rect.top - pan.y) / scale,
+    } : null);
+  }, [connecting, pan, scale]);
+
+  const handleEndConnect = useCallback((nodeId: string, stageId: string) => {
+    if (!connecting || connecting.source === nodeId) {
       setConnecting(null);
       return;
     }
 
     const newEdge: WorkflowEdge = {
-      id: generateEdgeId(connecting.source, targetId),
+      id: generateEdgeId(connecting.source, nodeId),
       source: connecting.source,
-      target: targetId,
+      target: nodeId,
     };
 
-    if (connecting.stageId !== targetStageId) {
-      setConditionInput({ source: connecting.source, target: targetId, stageId: targetStageId });
+    if (connecting.stageId !== stageId) {
+      setConditionInput({ source: connecting.source, target: nodeId, stageId });
       setConnecting(null);
       return;
     }
@@ -147,7 +184,28 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }));
     setConnecting(null);
     setStages((prev) => autoAssignStage(prev));
-  };
+  }, [connecting, stages]);
+
+  const handleCancelConnect = useCallback(() => {
+    setConnecting(null);
+  }, []);
+
+  // 监听连线拖拽期间的鼠标移动和释放
+  useEffect(() => {
+    if (!connecting) return;
+    const onMouseMove = (e: MouseEvent) => {
+      handleUpdateConnectingPos(e);
+    };
+    const onMouseUp = () => {
+      setConnecting(null);
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [connecting, handleUpdateConnectingPos]);
 
   const handleConfirmCondition = (condition: string, label: string) => {
     if (!conditionInput) return;
@@ -196,20 +254,42 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     });
   };
 
-  // === 画布拖拽平移 ===
+  // ══════════════════════════════════════════
+  // 画布拖拽平移（含 3px 防误触阈值 + 中键支持）
+  // ══════════════════════════════════════════
+  const PAN_THRESHOLD = 3; // 最小像素移动量才触发平移
+
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
-    // Only pan on left click on empty canvas area (not on nodes, buttons, inputs)
+    // 中键直接开始平移，无阈值
+    if (e.button === 1) {
+      e.preventDefault();
+      setIsPanning(true);
+      panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+      panThresholdRef.current = { startX: e.clientX, startY: e.clientY, triggered: true };
+      return;
+    }
+    // 仅左键
     if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest('button, input, [data-node], [data-anchor]')) return;
+    // 不在交互元素上时才开始平移
+    if ((e.target as HTMLElement).closest('button, input, [data-node], [data-anchor], [data-gate]')) return;
+    e.preventDefault();
     setIsPanning(true);
     panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
-    e.preventDefault();
+    panThresholdRef.current = { startX: e.clientX, startY: e.clientY, triggered: false };
   }, [pan.x, pan.y]);
 
   useEffect(() => {
     if (!isPanning) return;
     const handleMouseMove = (e: MouseEvent) => {
-      if (!panStartRef.current) return;
+      if (!panStartRef.current || !panThresholdRef.current) return;
+      const th = panThresholdRef.current;
+      // 如果尚未触发，检查阈值
+      if (!th.triggered) {
+        const dx = Math.abs(e.clientX - th.startX);
+        const dy = Math.abs(e.clientY - th.startY);
+        if (dx < PAN_THRESHOLD && dy < PAN_THRESHOLD) return;
+        th.triggered = true;
+      }
       const dx = e.clientX - panStartRef.current.x;
       const dy = e.clientY - panStartRef.current.y;
       setPan({
@@ -220,6 +300,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const handleMouseUp = () => {
       setIsPanning(false);
       panStartRef.current = null;
+      panThresholdRef.current = null;
     };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
@@ -229,16 +310,34 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [isPanning]);
 
-  // === 鼠标滚轮缩放 ===
+  // ══════════════════════════════════════════
+  // 鼠标滚轮缩放（以光标位置为中心）
+  // ══════════════════════════════════════════
   const handleWheel = useCallback((e: React.WheelEvent) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
-      setScale((prev) => {
-        const next = prev - e.deltaY * 0.001;
-        return Math.min(Math.max(next, 0.25), 3);
+      // 以鼠标位置为中心缩放
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      setScale((prevScale) => {
+        const delta = -e.deltaY * 0.002;
+        const newScale = Math.min(Math.max(prevScale + delta, 0.1), 4);
+        const ratio = newScale / prevScale;
+
+        // 调整平移使鼠标位置不变
+        setPan((prevPan) => ({
+          x: mouseX - ratio * (mouseX - prevPan.x),
+          y: mouseY - ratio * (mouseY - prevPan.y),
+        }));
+
+        return newScale;
       });
     } else {
-      // 非Ctrl时滚动 = 画布平移
+      // 非Ctrl时：水平滚轮=水平平移，垂直滚轮=垂直平移
       setPan((prev) => ({
         x: prev.x - e.deltaX,
         y: prev.y - e.deltaY,
@@ -246,8 +345,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   }, []);
 
-  // === 节点拖拽 ===
+  // ══════════════════════════════════════════
+  // 节点拖拽（含 3px 防误触阈值 + 视觉反馈）
+  // ══════════════════════════════════════════
+  const NODE_DRAG_THRESHOLD = 3;
+
   const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string, stageId: string) => {
+    // 锚点点击不触发拖拽
+    if ((e.target as HTMLElement).closest('[data-anchor]')) return;
     e.stopPropagation();
     e.preventDefault();
     const node = stages.find((s) => s.id === stageId)?.nodes.find((n) => n.id === nodeId);
@@ -262,28 +367,42 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       stageId,
       offsetX: e.clientX - nodeX,
       offsetY: e.clientY - nodeY,
+      started: false,
+      startX: e.clientX,
+      startY: e.clientY,
     });
+    // 点击即选中
+    setSelectedNodeId(nodeId);
+    setSelectedStageId(stageId);
   }, [stages, pan.x, pan.y, scale]);
 
   useEffect(() => {
     if (!draggingNode) return;
     const handleMouseMove = (e: MouseEvent) => {
+      const d = draggingNode;
+      // 检查阈值
+      if (!d.started) {
+        const dx = Math.abs(e.clientX - d.startX);
+        const dy = Math.abs(e.clientY - d.startY);
+        if (dx < NODE_DRAG_THRESHOLD && dy < NODE_DRAG_THRESHOLD) return;
+        setDraggingNode(prev => prev ? { ...prev, started: true } : null);
+      }
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const newAbsX = e.clientX - draggingNode.offsetX;
-      const newAbsY = e.clientY - draggingNode.offsetY;
+      const newAbsX = e.clientX - d.offsetX;
+      const newAbsY = e.clientY - d.offsetY;
       const canvasX = newAbsX - rect.left;
       const canvasY = newAbsY - rect.top;
       const nodeX = canvasX / scale - pan.x;
       const nodeY = canvasY / scale - pan.y;
       setStages((prev) =>
         prev.map((s) =>
-          s.id === draggingNode.stageId
+          s.id === d.stageId
             ? {
                 ...s,
                 nodes: s.nodes.map((n) =>
-                  n.id === draggingNode.nodeId
-                    ? { ...n, position: { x: Math.max(0, nodeX), y: Math.max(0, nodeY) } }
+                  n.id === d.nodeId
+                    ? { ...n, position: { x: Math.round(nodeX), y: Math.round(nodeY) } }
                     : n
                 ),
               }
@@ -302,19 +421,48 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [draggingNode, scale, pan.x, pan.y]);
 
-  // 渲染节点
+  // ── 坐标转换工具 ──
+  const clientToCanvas = useCallback((clientX: number, clientY: number) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: (clientX - rect.left - pan.x) / scale,
+      y: (clientY - rect.top - pan.y) / scale,
+    };
+  }, [pan, scale]);
+
+  // 获取节点输出锚点的画布坐标（右侧中心）
+  const getNodeOutputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
+    const stage = stages.find(s => s.id === stageId);
+    const node = stage?.nodes.find(n => n.id === nodeId);
+    if (!node?.position) return null;
+    const pos = node.position;
+    return { x: pos.x + 160, y: pos.y + 20 };
+  }, [stages]);
+
+  // ══════════════════════════════════════════
+  // 渲染：节点
+  // ══════════════════════════════════════════
   const renderNode = (node: WorkflowNode, stageId: string) => {
     const meta = getNodeTypeMeta(node.type);
     const pos = node.position as { x: number; y: number } | undefined;
     const isSelected = selectedNodeId === node.id;
-    const isDraggingThis = draggingNode?.nodeId === node.id;
+    const isDraggingThis = draggingNode?.nodeId === node.id && draggingNode?.started;
+    const isHovered = hoveredNodeId === node.id;
+    const isConnectTarget = connecting?.source !== node.id;
 
     return (
       <div
         key={node.id}
         data-node
-        onClick={(e) => { e.stopPropagation(); setSelectedNodeId(node.id); setSelectedStageId(stageId); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setSelectedNodeId(node.id);
+          setSelectedStageId(stageId);
+        }}
         onMouseDown={(e) => handleNodeMouseDown(e, node.id, stageId)}
+        onMouseEnter={() => setHoveredNodeId(node.id)}
+        onMouseLeave={() => setHoveredNodeId(null)}
         className="cursor-grab active:cursor-grabbing"
         style={{
           position: 'absolute',
@@ -323,46 +471,112 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           width: 160,
           padding: '8px 10px',
           borderRadius: 8,
-          border: isSelected ? '1px solid var(--accent)' : '1px solid var(--border)',
-          background: 'var(--bg-tertiary)',
-          boxShadow: isSelected ? '0 0 0 2px var(--accent-light)' : 'var(--shadow-sm)',
+          border: isSelected
+            ? '2px solid var(--accent)'
+            : isHovered
+              ? '1px solid var(--accent)'
+              : '1px solid var(--border)',
+          background: isDraggingThis
+            ? 'var(--bg-tertiary)'
+            : 'var(--bg-tertiary)',
+          boxShadow: isDraggingThis
+            ? '0 8px 24px rgba(0,0,0,0.4), 0 0 0 1px var(--accent)'
+            : isSelected
+              ? '0 0 0 2px var(--accent-light), var(--shadow-md)'
+              : isHovered
+                ? 'var(--shadow-md)'
+                : 'var(--shadow-sm)',
           zIndex: isDraggingThis ? 20 : 10,
           userSelect: 'none',
+          transform: isDraggingThis ? 'scale(1.03)' : 'scale(1)',
+          opacity: isDraggingThis ? 0.92 : 1,
+          transition: isDraggingThis ? 'none' : 'box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease',
         }}
       >
         <div className="flex items-center gap-1.5 mb-1">
-          <div style={{ width: 24, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, background: `${meta.color}22`, color: meta.color }}>{meta.icon}</div>
+          <div
+            className="shrink-0"
+            style={{
+              width: 24, height: 24, borderRadius: 5,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 12,
+              background: `${meta.color}22`,
+              color: meta.color,
+            }}
+          >
+            {meta.icon}
+          </div>
           <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{node.label}</span>
         </div>
         <div className="flex gap-1 flex-wrap ml-[30px]">
-          {node.delayMs && <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'var(--bg-secondary)', color: '#d29922', border: '1px solid #d2992244' }}>延迟 {node.delayMs}ms</span>}
-          {node.timeoutMs && <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'var(--bg-secondary)', color: '#a371f7', border: '1px solid #8957e544' }}>超时 {node.timeoutMs/1000}s</span>}
+          {node.delayMs && (
+            <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'var(--bg-secondary)', color: '#d29922', border: '1px solid #d2992244' }}>
+              延迟 {node.delayMs}ms
+            </span>
+          )}
+          {node.timeoutMs && (
+            <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'var(--bg-secondary)', color: '#a371f7', border: '1px solid #8957e544' }}>
+              超时 {node.timeoutMs / 1000}s
+            </span>
+          )}
         </div>
-        {/* 输入锚点 */}
+
+        {/* 输入锚点 — hover时发光 */}
         <div
           data-anchor="input"
-          onClick={(e) => { e.stopPropagation(); handleStartConnect(node.id, stageId); }}
-          className="absolute rounded-full"
-          style={{ left: -5, top: '50%', marginTop: -5, width: 10, height: 10, background: 'var(--border)', border: '2px solid var(--bg-primary)', cursor: 'crosshair' }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (connecting) {
+              handleEndConnect(node.id, stageId);
+            }
+          }}
+          className="absolute rounded-full transition-all duration-150"
+          style={{
+            left: -5, top: '50%', marginTop: -5,
+            width: connecting ? 12 : 10, height: connecting ? 12 : 10,
+            background: (connecting && isConnectTarget) ? 'var(--accent)' : 'var(--border)',
+            border: '2px solid var(--bg-primary)',
+            cursor: connecting ? 'cell' : 'crosshair',
+            boxShadow: (connecting && isConnectTarget) ? '0 0 8px var(--accent-light)' : 'none',
+          }}
         />
-        {/* 输出锚点 */}
+        {/* 输出锚点 — hover时发光 */}
         <div
           data-anchor="output"
-          onClick={(e) => { e.stopPropagation(); handleEndConnect(node.id, stageId); }}
-          className="absolute rounded-full"
-          style={{ right: -5, top: '50%', marginTop: -5, width: 10, height: 10, background: 'var(--border)', border: '2px solid var(--bg-primary)', cursor: 'crosshair' }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            handleStartConnect(e, node.id, stageId);
+          }}
+          className="absolute rounded-full transition-all duration-150"
+          style={{
+            right: -5, top: '50%', marginTop: -5,
+            width: isHovered || connecting ? 12 : 10,
+            height: isHovered || connecting ? 12 : 10,
+            background: connecting ? 'var(--accent)' : isHovered ? 'var(--accent)' : 'var(--border)',
+            border: '2px solid var(--bg-primary)',
+            cursor: 'crosshair',
+            boxShadow: (isHovered || connecting) ? '0 0 8px var(--accent-light)' : 'none',
+          }}
         />
-        {/* 删除按钮 */}
+        {/* 删除按钮 — 仅hover时显示 */}
         <div
           onClick={(e) => { e.stopPropagation(); handleDeleteNode(node.id); }}
-          className="absolute flex items-center justify-center rounded-full opacity-80 cursor-pointer"
-          style={{ top: -6, right: -6, width: 16, height: 16, background: 'var(--status-danger)', color: '#fff', fontSize: 10 }}
+          className="absolute flex items-center justify-center rounded-full cursor-pointer"
+          style={{
+            top: -6, right: -6, width: 16, height: 16,
+            background: 'var(--status-danger)', color: '#fff', fontSize: 10,
+            opacity: isHovered ? 0.9 : 0,
+            transition: 'opacity 0.15s ease',
+          }}
         >x</div>
       </div>
     );
   };
 
-  // 渲染连线
+  // ══════════════════════════════════════════
+  // 渲染：连线
+  // ══════════════════════════════════════════
   const renderEdge = (edge: WorkflowEdge, stageId: string) => {
     const stage = stages.find((s) => s.id === stageId);
     if (!stage) return null;
@@ -375,35 +589,80 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
     return (
       <g key={edge.id}>
+        {/* 不可见的粗命中区域，便于点击删除 */}
+        <path
+          d={`M ${sp.x + 160} ${sp.y + 20} C ${sp.x + 190} ${sp.y + 20}, ${tp.x - 10} ${tp.y + 20}, ${tp.x} ${tp.y + 20}`}
+          stroke="transparent"
+          strokeWidth={12}
+          fill="none"
+          style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
+          onClick={() => handleDeleteEdge(edge.id)}
+        />
+        {/* 可见连线 */}
         <path
           d={`M ${sp.x + 160} ${sp.y + 20} C ${sp.x + 190} ${sp.y + 20}, ${tp.x - 10} ${tp.y + 20}, ${tp.x} ${tp.y + 20}`}
           stroke={edge.condition ? '#d29922' : 'var(--accent)'}
           strokeWidth={2}
           fill="none"
           markerEnd="url(#arrowhead)"
-          style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
-          onClick={() => handleDeleteEdge(edge.id)}
+          style={{ pointerEvents: 'none' }}
         />
         {edge.label && (
-          <text
-            x={(sp.x + 160 + tp.x) / 2}
-            y={(sp.y + tp.y) / 2 - 8}
-            fill="var(--text-secondary)"
-            fontSize={10}
-            textAnchor="middle"
-            style={{ pointerEvents: 'auto', cursor: 'pointer' }}
-            onClick={() => handleDeleteEdge(edge.id)}
-          >
-            {edge.label}
-          </text>
+          <g style={{ pointerEvents: 'auto', cursor: 'pointer' }} onClick={() => handleDeleteEdge(edge.id)}>
+            <rect
+              x={(sp.x + 160 + tp.x) / 2 - 20}
+              y={(sp.y + tp.y) / 2 - 18}
+              width={40}
+              height={16}
+              rx={3}
+              fill="var(--bg-primary)"
+              stroke="var(--border)"
+              strokeWidth={0.5}
+            />
+            <text
+              x={(sp.x + 160 + tp.x) / 2}
+              y={(sp.y + tp.y) / 2 - 8}
+              fill="var(--text-secondary)"
+              fontSize={9}
+              textAnchor="middle"
+            >
+              {edge.label}
+            </text>
+          </g>
         )}
       </g>
     );
   };
 
+  // ══════════════════════════════════════════
+  // 渲染：连线预览（拖拽中的临时线条）
+  // ══════════════════════════════════════════
+  const renderConnectingPreview = () => {
+    if (!connecting) return null;
+    const anchorPos = getNodeOutputAnchor(connecting.source, connecting.stageId);
+    if (!anchorPos) return null;
+    const mx = connecting.mouseCanvasX;
+    const my = connecting.mouseCanvasY;
+    const d = `M ${anchorPos.x} ${anchorPos.y} C ${anchorPos.x + 30} ${anchorPos.y}, ${mx - 30} ${my}, ${mx} ${my}`;
+    return (
+      <path
+        d={d}
+        stroke="var(--accent)"
+        strokeWidth={2}
+        strokeDasharray="6 3"
+        fill="none"
+        opacity={0.7}
+        style={{ pointerEvents: 'none' }}
+      />
+    );
+  };
+
+  // ══════════════════════════════════════════
+  // JSX
+  // ══════════════════════════════════════════
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* 工具栏（替代原硬编码标题栏） */}
+      {/* ── 工具栏 ── */}
       <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
         <input
           value={name}
@@ -462,38 +721,86 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       </div>
 
-      {/* 画布区域 */}
+      {/* ── 画布区域 ── */}
       <div
         ref={canvasRef}
         className="flex-1 overflow-hidden relative"
-        style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
+        style={{
+          cursor: connecting
+            ? 'crosshair'
+            : isPanning
+              ? (panThresholdRef.current?.triggered ? 'grabbing' : 'default')
+              : draggingNode?.started
+                ? 'default'
+                : 'grab',
+        }}
         onMouseDown={handleCanvasMouseDown}
         onWheel={handleWheel}
+        onContextMenu={(e) => e.preventDefault()}
       >
         {/* 缩放指示器 */}
-        <div className="absolute bottom-3 right-3 z-30 flex items-center gap-1.5">
+        <div
+          className="absolute bottom-3 right-3 z-30 flex items-center gap-1 rounded-lg px-1.5 py-1"
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
+        >
           <button
-            onClick={() => setScale((s) => Math.min(s + 0.1, 3))}
-            className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs"
-            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            onClick={() => {
+              const rect = canvasRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              const cx = rect.width / 2;
+              const cy = rect.height / 2;
+              setScale((prev) => {
+                const next = Math.min(prev + 0.15, 4);
+                const ratio = next / prev;
+                setPan(p => ({ x: cx - ratio * (cx - p.x), y: cy - ratio * (cy - p.y) }));
+                return next;
+              });
+            }}
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs font-bold"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: 'none' }}
           >+</button>
-          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}>
+          <span className="text-[10px] w-[36px] text-center" style={{ color: 'var(--text-secondary)' }}>
             {Math.round(scale * 100)}%
           </span>
           <button
-            onClick={() => setScale((s) => Math.max(s - 0.1, 0.25))}
-            className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs"
-            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            onClick={() => {
+              const rect = canvasRef.current?.getBoundingClientRect();
+              if (!rect) return;
+              const cx = rect.width / 2;
+              const cy = rect.height / 2;
+              setScale((prev) => {
+                const next = Math.max(prev - 0.15, 0.1);
+                const ratio = next / prev;
+                setPan(p => ({ x: cx - ratio * (cx - p.x), y: cy - ratio * (cy - p.y) }));
+                return next;
+              });
+            }}
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs font-bold"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: 'none' }}
           >-</button>
+          <div className="w-px h-4" style={{ background: 'var(--border)' }} />
           <button
             onClick={() => { setPan({ x: 0, y: 0 }); setScale(1); }}
-            className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
-            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
+            className="pd-btn px-1.5 h-6 flex items-center justify-center rounded text-[10px]"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: 'none' }}
+            title="重置视图"
           >
             重置
           </button>
         </div>
 
+        {/* 连线提示 */}
+        {connecting && (
+          <div
+            className="absolute top-3 left-1/2 -translate-x-1/2 z-30 px-3 py-1.5 rounded-lg text-[10px] flex items-center gap-2"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent)', color: 'var(--accent)', boxShadow: 'var(--shadow-md)' }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full inline-block animate-pulse" style={{ background: 'var(--accent)' }} />
+            正在连线 — 点击目标节点的输入锚点完成连接，按 Esc 取消
+          </div>
+        )}
+
+        {/* 内部可变换画布 */}
         <div
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
@@ -503,17 +810,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             position: 'relative',
           }}
         >
-          {/* SVG 箭头标记 */}
-          <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+          {/* SVG 层：箭头标记 + 连线 + 预览线 */}
+          <svg
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+          >
             <defs>
               <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
                 <polygon points="0 0, 8 3, 0 6" fill="var(--accent)" />
               </marker>
             </defs>
-            {/* 渲染各阶段内连线 */}
             {stages.map((stage) => (
-              <g key={`edges-${stage.id}`}>{stage.edges.map((edge) => renderEdge(edge, stage.id))}</g>
+              <g key={`edges-${stage.id}`}>
+                {stage.edges.map((edge) => renderEdge(edge, stage.id))}
+              </g>
             ))}
+            {/* 连线拖拽预览 */}
+            {connecting && renderConnectingPreview()}
           </svg>
 
           {/* 空状态 */}
@@ -523,12 +835,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </div>
           )}
 
-          {/* 阶段列 */}
+          {/* ── 阶段列 ── */}
           {stages.map((stage, stageIndex) => {
             const isCollapsed = collapsedStages.has(stage.id);
             return (
               <React.Fragment key={stage.id}>
                 <div
+                  data-stage={stage.id}
                   style={{
                     position: 'absolute',
                     top: 20,
@@ -538,11 +851,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
                     border: 'none',
-                    transition: isCollapsed ? 'width 0.2s ease' : 'none',
+                    transition: isCollapsed ? 'width 0.25s cubic-bezier(0.4,0,0.2,1)' : 'none',
                     overflow: 'visible',
                   }}
                 >
-                  {/* 阶段标题栏 — 折叠按钮集成在内 */}
+                  {/* 阶段标题栏 */}
                   <div
                     className="flex items-center justify-between shrink-0 rounded-t-lg"
                     style={{
@@ -552,20 +865,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     }}
                   >
                     <div className="flex items-center gap-2">
-                      {/* 序号块 — 始终正向显示 */}
-                      <span className="inline-flex items-center justify-center rounded text-[10px] font-bold" style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                      <span
+                        className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0"
+                        style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}
+                      >
                         {stage.order + 1}
                       </span>
-                      {!isCollapsed && (
+                      {!isCollapsed ? (
                         <input
                           value={stage.name}
                           onChange={(e) => handleRenameStage(stage.id, e.target.value)}
                           className="text-xs font-semibold outline-none"
                           style={{ background: 'transparent', color: 'var(--text-primary)', border: 'none', width: 100 }}
                         />
-                      )}
-                      {isCollapsed && (
-                        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-primary)', writingMode: 'vertical-rl', letterSpacing: 1 }}>
+                      ) : (
+                        <span
+                          className="text-[10px] font-semibold"
+                          style={{ color: 'var(--text-primary)', writingMode: 'vertical-rl', letterSpacing: 1 }}
+                        >
                           {stage.name}
                         </span>
                       )}
@@ -573,7 +890,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     <div className="flex items-center gap-1">
                       <button
                         onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }}
-                        className="pd-btn p-1 rounded text-[10px]"
+                        className="pd-btn p-1 rounded text-[10px] transition-colors duration-150"
                         style={{ color: 'var(--text-tertiary)', background: 'transparent' }}
                         title={isCollapsed ? '展开阶段' : '折叠阶段'}
                       >
@@ -583,12 +900,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         <>
                           <button
                             onClick={() => handleAddNode('agent', stage.id)}
-                            className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
+                            className="pd-btn px-1.5 py-0.5 rounded text-[10px] transition-colors duration-150"
                             style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-tertiary)' }}
                           >+ 节点</button>
                           <button
                             onClick={() => handleDeleteStage(stage.id)}
-                            className="pd-btn p-0.5 rounded text-[10px]"
+                            className="pd-btn p-0.5 rounded text-[10px] transition-colors duration-150"
                             style={{ color: 'var(--status-danger)', background: 'transparent' }}
                           >x</button>
                         </>
@@ -596,7 +913,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     </div>
                   </div>
 
-                  {/* 阶段画布内容区 — 折叠时隐藏 */}
+                  {/* 阶段内容区 */}
                   {!isCollapsed && (
                     <>
                       <div
@@ -614,8 +931,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                               type,
                               label: meta.label,
                               position: {
-                                x: (e.clientX - rect.left - pan.x) / scale - 60,
-                                y: (e.clientY - rect.top - pan.y) / scale - 20,
+                                x: Math.round((e.clientX - rect.left - pan.x) / scale - 60),
+                                y: Math.round((e.clientY - rect.top - pan.y) / scale - 20),
                               },
                             };
                             setStages(stages.map((s) =>
@@ -624,13 +941,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           }
                         }}
                       >
-                        {/* 渲染节点 */}
                         {stage.nodes.map((node) => renderNode(node, stage.id))}
                       </div>
 
                       {/* Gate 区域 */}
                       <div
-                        className="mx-2 mb-2 p-2 rounded-lg cursor-pointer"
+                        data-gate
+                        className="mx-2 mb-2 p-2 rounded-lg cursor-pointer transition-colors duration-150"
                         style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)' }}
                         onClick={() => handleUpdateGate(stage.id, {})}
                       >
@@ -644,14 +961,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           </span>
                         </div>
                         <div className="flex items-center gap-3">
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.strategy}</span></span>
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>合并: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.mergeStrategy}</span></span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                            策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.strategy}</span>
+                          </span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                            合并: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.mergeStrategy}</span>
+                          </span>
                         </div>
                       </div>
                     </>
                   )}
 
-                  {/* 折叠时显示节点计数 */}
+                  {/* 折叠摘要 */}
                   {isCollapsed && (
                     <div className="flex flex-col items-center justify-center gap-1 py-3" style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>
                       <span>{stage.nodes.length} 节点</span>
@@ -680,10 +1001,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       </div>
 
-      {/* 条件编辑弹窗 */}
+      {/* ── Esc取消连线 ── */}
+      {connecting && (
+        <div
+          tabIndex={-1}
+          ref={(el) => { if (el) el.focus(); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') handleCancelConnect(); }}
+          style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+        />
+      )}
+
+      {/* ── 条件编辑弹窗 ── */}
       {conditionInput && (
         <div className="fixed inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
-          <div className="rounded-xl p-6 w-[90%] max-w-[400px]" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+          <div
+            className="rounded-xl p-6 w-[90%] max-w-[400px]"
+            style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑条件</h3>
             <div className="mb-3">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件表达式</label>
@@ -692,6 +1027,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 placeholder="例如: == approve 或 contains 紧急"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                autoFocus
               />
             </div>
             <div className="mb-4">
@@ -723,9 +1059,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       )}
 
-      {/* 节点配置面板 */}
+      {/* ── 节点配置面板 ── */}
       {selectedNodeId && selectedStageId && (
-        <div className="fixed right-0 top-0 bottom-0 w-[360px] z-[100] overflow-auto p-5" style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}>
+        <div
+          className="fixed right-0 top-0 bottom-0 w-[360px] z-[100] overflow-auto p-5"
+          style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}
+        >
           <WorkflowNodeConfig
             node={stages.find((s) => s.id === selectedStageId)?.nodes.find((n) => n.id === selectedNodeId)!}
             onUpdate={(updates) => handleUpdateNode(selectedNodeId, updates)}
