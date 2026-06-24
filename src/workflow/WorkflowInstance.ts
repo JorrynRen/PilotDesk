@@ -46,7 +46,7 @@ export function createInstance(
     steps: {},
     trigger,
     triggerDetail,
-    createdAt: new Date().toISOString(),
+    createdAt: Math.floor(Date.now() / 1000),
   };
 }
 
@@ -67,7 +67,7 @@ export function updateStepStatus(
   extra?: Partial<StepExecution>,
 ): WorkflowInstance {
   const step = instance.steps?.[nodeId] || createStepExecution(nodeId);
-  const now = new Date().toISOString();
+  const now = Math.floor(Date.now() / 1000);
 
   if (status === 'running' && !step.startedAt) step.startedAt = now;
   if (['success', 'failed', 'skipped'].includes(status)) step.completedAt = now;

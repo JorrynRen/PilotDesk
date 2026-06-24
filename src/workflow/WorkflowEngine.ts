@@ -173,7 +173,7 @@ class WorkflowEngine {
     if (errors.some((e) => e.severity === 'error')) {
       throw new Error(`工作流定义验证失败:\n${errors.map((e) => `  [${e.field}] ${e.message}`).join('\n')}`);
     }
-    this.definitions.set(def.id, { ...def, updatedAt: new Date().toISOString() });
+    this.definitions.set(def.id, { ...def, updatedAt: Math.floor(Date.now() / 1000) });
     this.registerEventTriggers(def);
     return def.id;
   }
@@ -181,7 +181,7 @@ class WorkflowEngine {
   async updateDefinition(id: string, updates: Partial<WorkflowDefinition>): Promise<void> {
     const existing = this.definitions.get(id);
     if (!existing) throw new Error(`工作流定义未找到: ${id}`);
-    const updated = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    const updated = { ...existing, ...updates, updatedAt: Math.floor(Date.now() / 1000) };
     const errors = validateWorkflow(updated);
     if (errors.some((e) => e.severity === 'error')) {
       throw new Error(`工作流定义验证失败:\n${errors.map((e) => `  [${e.field}] ${e.message}`).join('\n')}`);
@@ -250,7 +250,7 @@ class WorkflowEngine {
       throw new Error(`无法从 ${instance.status} 状态切换到 cancelled`);
     }
     instance.status = 'cancelled';
-    instance.completedAt = new Date().toISOString();
+    instance.completedAt = Math.floor(Date.now() / 1000);
     this.running.delete(instanceId);
     emitWorkflowEvent('instance:cancelled', instanceId);
     this.cleanupAgentSessions(instanceId);
@@ -296,7 +296,7 @@ class WorkflowEngine {
     let list = Array.from(this.instances.values());
     if (filter?.status) list = list.filter((i) => i.status === filter.status);
     if (filter?.definitionId) list = list.filter((i) => i.definitionId === filter.definitionId);
-    return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return list.sort((a, b) => b.createdAt - a.createdAt);
   }
 
   // ── Agent 会话管理 ──
@@ -357,7 +357,7 @@ class WorkflowEngine {
     this.running.add(instanceId);
 
     instance.status = 'running';
-    instance.startedAt = new Date().toISOString();
+    instance.startedAt = Math.floor(Date.now() / 1000);
     emitWorkflowEvent('instance:started', instanceId);
 
     try {
@@ -382,13 +382,13 @@ class WorkflowEngine {
 
       if (instance.status === 'running') {
         instance.status = 'success';
-        instance.completedAt = new Date().toISOString();
+        instance.completedAt = Math.floor(Date.now() / 1000);
         emitWorkflowEvent('instance:completed', instanceId);
       }
     } catch (err: any) {
       instance.status = 'failed';
       instance.error = err.message || String(err);
-      instance.completedAt = new Date().toISOString();
+      instance.completedAt = Math.floor(Date.now() / 1000);
       emitWorkflowEvent('instance:failed', instanceId, undefined, { error: instance.error });
     } finally {
       this.running.delete(instanceId);

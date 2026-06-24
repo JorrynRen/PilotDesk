@@ -97,8 +97,8 @@ export interface WorkflowDefinition {
   inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
   outputSchema?: Record<string, { type: string; description?: string }>;
   maxDepth?: number;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: number;
+  updatedAt: number;
   enabled: boolean;
 }
 
@@ -124,8 +124,8 @@ export type StepStatus =
 export interface StepExecution {
   nodeId: string;
   status: StepStatus;
-  startedAt?: string;
-  completedAt?: string;
+  startedAt?: number;
+  completedAt?: number;
   duration?: number;
   input?: any;
   output?: any;
@@ -143,11 +143,11 @@ export interface WorkflowInstance {
   currentNodeId?: string;
   trigger: string;
   triggerDetail?: string;
-  startedAt?: string;
-  completedAt?: string;
+  startedAt?: number;
+  completedAt?: number;
   estimatedRemaining?: number;
   error?: string;
-  createdAt: string;
+  createdAt: number;
 }
 
 // ── 统计 ──

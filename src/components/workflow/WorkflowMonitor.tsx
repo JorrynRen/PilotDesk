@@ -67,9 +67,9 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
                 </div>
 
                 <div className="monitor-meta">
-                  <span>创建: {new Date(instance.createdAt).toLocaleString()}</span>
-                  {instance.startedAt && <span>开始: {new Date(instance.startedAt).toLocaleString()}</span>}
-                  {instance.completedAt && <span>完成: {new Date(instance.completedAt).toLocaleString()}</span>}
+                  <span>创建: {new Date(Number(instance.createdAt) * 1000).toLocaleString()}</span>
+                  {instance.startedAt && <span>开始: {new Date(Number(instance.startedAt) * 1000).toLocaleString()}</span>}
+                  {instance.completedAt && <span>完成: {new Date(Number(instance.completedAt) * 1000).toLocaleString()}</span>}
                 </div>
 
                 {instance.error && (

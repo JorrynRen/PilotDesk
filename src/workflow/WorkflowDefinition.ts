@@ -66,8 +66,8 @@ export function createDefaultWorkflow(name: string): WorkflowDefinition {
       edges: [],
       gate: { strategy: 'all', mergeStrategy: 'merge' },
     }],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: Math.floor(Date.now() / 1000),
+    updatedAt: Math.floor(Date.now() / 1000),
     enabled: true,
   };
 }
