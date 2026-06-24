@@ -1113,8 +1113,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               key={nt.type}
               draggable
               onDragStart={(e) => e.dataTransfer.setData('text/plain', nt.type)}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none"
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
               style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--accent)';
+                e.currentTarget.style.background = 'var(--accent)';
+                e.currentTarget.style.color = '#fff';
+                e.currentTarget.style.transform = 'translateY(-1px)';
+                e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--border)';
+                e.currentTarget.style.background = 'var(--bg-tertiary)';
+                e.currentTarget.style.color = 'var(--text-primary)';
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
             >
               <span>{nt.icon}</span>
               <span>{nt.label}</span>
@@ -1186,7 +1200,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         onContextMenu={(e) => e.preventDefault()}
         onDragOver={(e) => {
           e.preventDefault();
-          e.dataTransfer.dropEffect = 'none';
           dragOverCanvasRef.current = true;
         }}
         onDragLeave={(e) => {

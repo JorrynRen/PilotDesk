@@ -87,43 +87,43 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
           <div style={{ width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, background: `${meta.color}22`, color: meta.color }}>{meta.icon}</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 600, color: '#f0f6fc' }}>{node.label}</div>
-            <div style={{ fontSize: 11, color: '#8b949e' }}>{meta.label}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{meta.label}</div>
           </div>
         </div>
-        <button onClick={onClose} style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid #30363d', background: '#21262d', color: '#c9d1d9', fontSize: 11, cursor: 'pointer' }}>关闭</button>
+        <button onClick={onClose} style={{ padding: '4px 10px', borderRadius: 4, border: '1px solid var(--border)', background: '#21262d', color: 'var(--text-primary)', fontSize: 11, cursor: 'pointer' }}>关闭</button>
       </div>
 
       {/* 基本信息 */}
       <div style={{ marginBottom: 16 }}>
-        <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 4 }}>节点名称</label>
+        <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>节点名称</label>
         <input
           value={node.label}
           onChange={(e) => onUpdate({ label: e.target.value })}
-          style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none' }}
+          style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
         />
       </div>
 
       {/* 类型特定配置 */}
       {configFields.length > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>节点配置</div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>节点配置</div>
           {configFields.map((field) => (
             <div key={field.key} style={{ marginBottom: 10 }}>
-              <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 4 }}>{field.label}</label>
+              <label style={{ fontSize: 11, color: 'var(--text-tertiary)', display: 'block', marginBottom: 4 }}>{field.label}</label>
               {field.type === 'textarea' ? (
                 <textarea
                   value={params[field.key] || ''}
                   onChange={(e) => handleParamChange(field.key, e.target.value)}
                   placeholder={field.placeholder}
                   rows={4}
-                  style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
+                  style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 12, outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
                 />
               ) : field.type === 'subflow_select' ? (
                 <div>
                   <select
                     value={params[field.key] || ''}
                     onChange={(e) => handleParamChange(field.key, e.target.value)}
-                    style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none', marginBottom: 6 }}
+                    style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 12, outline: 'none', marginBottom: 6 }}
                   >
                     <option value="">选择子工作流...</option>
                     {definitions.map((d) => (
@@ -134,7 +134,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                     {params[field.key] && (
                       <button
                         onClick={() => onOpenSubflow?.(params[field.key])}
-                        style={{ flex: 1, padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#1f6feb33', color: '#58a6ff', fontSize: 11, cursor: 'pointer' }}
+                        style={{ flex: 1, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: '#1f6feb33', color: '#58a6ff', fontSize: 11, cursor: 'pointer' }}
                       >
                         打开子工作流
                       </button>
@@ -144,7 +144,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                         const newId = 'wf_' + Date.now().toString(36);
                         handleParamChange(field.key, newId);
                       }}
-                      style={{ flex: 1, padding: '4px 8px', borderRadius: 4, border: '1px dashed #30363d', background: 'transparent', color: '#8b949e', fontSize: 11, cursor: 'pointer' }}
+                      style={{ flex: 1, padding: '4px 8px', borderRadius: 4, border: '1px dashed var(--border)', background: 'transparent', color: '#8b949e', fontSize: 11, cursor: 'pointer' }}
                     >
                       新建子工作流
                     </button>
@@ -154,7 +154,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 <select
                   value={params[field.key] || field.placeholder || ''}
                   onChange={(e) => handleParamChange(field.key, e.target.value)}
-                  style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none' }}
+                  style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
                 >
                   <option value="">选择...</option>
                   {field.key === 'agent_type' && ['claude', 'hermes', 'codex'].map((v) => <option key={v} value={v}>{v}</option>)}
@@ -167,7 +167,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                   value={params[field.key] || ''}
                   onChange={(e) => handleParamChange(field.key, field.type === 'number' ? Number(e.target.value) : e.target.value)}
                   placeholder={field.placeholder}
-                  style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none' }}
+                  style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 12, outline: 'none' }}
                 />
               )}
             </div>
@@ -177,46 +177,46 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
 
       {/* 控制属性 */}
       <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>控制属性</div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>控制属性</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <div>
-            <label style={{ fontSize: 10, color: '#8b949e', display: 'block', marginBottom: 2 }}>延迟 (ms)</label>
+            <label style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'block', marginBottom: 2 }}>延迟 (ms)</label>
             <input
               type="number"
               value={node.delayMs || ''}
               onChange={(e) => onUpdate({ delayMs: e.target.value ? Number(e.target.value) : undefined })}
               placeholder="0"
-              style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 11, outline: 'none' }}
+              style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 11, outline: 'none' }}
             />
           </div>
           <div>
-            <label style={{ fontSize: 10, color: '#8b949e', display: 'block', marginBottom: 2 }}>超时 (ms)</label>
+            <label style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'block', marginBottom: 2 }}>超时 (ms)</label>
             <input
               type="number"
               value={node.timeoutMs || ''}
               onChange={(e) => onUpdate({ timeoutMs: e.target.value ? Number(e.target.value) : undefined })}
               placeholder="60000"
-              style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 11, outline: 'none' }}
+              style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 11, outline: 'none' }}
             />
           </div>
           <div>
-            <label style={{ fontSize: 10, color: '#8b949e', display: 'block', marginBottom: 2 }}>重试次数</label>
+            <label style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'block', marginBottom: 2 }}>重试次数</label>
             <input
               type="number"
               value={node.retryCount || ''}
               onChange={(e) => onUpdate({ retryCount: e.target.value ? Number(e.target.value) : undefined })}
               placeholder="0"
-              style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 11, outline: 'none' }}
+              style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 11, outline: 'none' }}
             />
           </div>
           <div>
-            <label style={{ fontSize: 10, color: '#8b949e', display: 'block', marginBottom: 2 }}>重试间隔 (ms)</label>
+            <label style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'block', marginBottom: 2 }}>重试间隔 (ms)</label>
             <input
               type="number"
               value={node.retryDelayMs || ''}
               onChange={(e) => onUpdate({ retryDelayMs: e.target.value ? Number(e.target.value) : undefined })}
               placeholder="1000"
-              style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 11, outline: 'none' }}
+              style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 11, outline: 'none' }}
             />
           </div>
         </div>
@@ -224,9 +224,9 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
 
       {/* 输入输出映射 */}
       <div>
-        <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>输入输出映射</div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>输入输出映射</div>
         <div style={{ marginBottom: 8 }}>
-          <label style={{ fontSize: 10, color: '#8b949e', display: 'block', marginBottom: 2 }}>输入映射 (JSON)</label>
+          <label style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'block', marginBottom: 2 }}>输入映射 (JSON)</label>
           <textarea
             value={node.inputMapping ? JSON.stringify(node.inputMapping, null, 2) : ''}
             onChange={(e) => {
@@ -234,11 +234,11 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             }}
             placeholder='{"key": "${context.path}"}'
             rows={3}
-            style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 11, outline: 'none', resize: 'vertical', fontFamily: 'monospace' }}
+            style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 11, outline: 'none', resize: 'vertical', fontFamily: 'monospace' }}
           />
         </div>
         <div>
-          <label style={{ fontSize: 10, color: '#8b949e', display: 'block', marginBottom: 2 }}>输出映射 (JSON)</label>
+          <label style={{ fontSize: 10, color: 'var(--text-tertiary)', display: 'block', marginBottom: 2 }}>输出映射 (JSON)</label>
           <textarea
             value={node.outputMapping ? JSON.stringify(node.outputMapping, null, 2) : ''}
             onChange={(e) => {
@@ -246,7 +246,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             }}
             placeholder='{"result": "context.path"}'
             rows={3}
-            style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 11, outline: 'none', resize: 'vertical', fontFamily: 'monospace' }}
+            style={{ width: '100%', padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 11, outline: 'none', resize: 'vertical', fontFamily: 'monospace' }}
           />
         </div>
       </div>
