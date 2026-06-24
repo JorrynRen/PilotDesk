@@ -446,10 +446,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const node = stage.nodes.find(n => n.id === nodeId);
     if (!node) return null;
     const stageLeft = stagePositionsMap[stageId];
-    const CONTENT_PAD = 12;
+    const INNER_OFFSET = 14; // border:2 + padding:12
     const TITLE_H = 30;
-    const nodeX = stageLeft + CONTENT_PAD + (node.position?.x ?? 20);
-    const nodeY = 20 + TITLE_H + CONTENT_PAD + (node.position?.y ?? 20);
+    const nodeX = stageLeft + INNER_OFFSET + (node.position?.x ?? 20);
+    const nodeY = 20 + TITLE_H + INNER_OFFSET + (node.position?.y ?? 20);
     const nodeW = 160;
     const nodeH = node.type === 'start' || node.type === 'end' ? 44 : 60;
     return { x: nodeX, y: nodeY, w: nodeW, h: nodeH };
@@ -474,11 +474,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
    */
   /** 画布坐标 → 内容区相对坐标（纯算术） */
   const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
-    const CONTENT_PAD = 12;
+    const INNER_OFFSET = 14; // border:2 + padding:12
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
-    const contentStartX = stageLeft + CONTENT_PAD;
-    const contentStartY = 20 + TITLE_H + CONTENT_PAD;
+    const contentStartX = stageLeft + INNER_OFFSET;
+    const contentStartY = 20 + TITLE_H + INNER_OFFSET;
     return {
       x: canvasX - contentStartX,
       y: canvasY - contentStartY,
@@ -490,12 +490,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
    */
   /** 内容区相对坐标 → 画布坐标（纯算术） */
   const contentToCanvasPos = useCallback((contentX: number, contentY: number, stageId: string) => {
-    const CONTENT_PAD = 12;
+    const INNER_OFFSET = 14;
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
     return {
-      x: stageLeft + CONTENT_PAD + contentX,
-      y: 20 + TITLE_H + CONTENT_PAD + contentY,
+      x: stageLeft + INNER_OFFSET + contentX,
+      y: 20 + TITLE_H + INNER_OFFSET + contentY,
     };
   }, [stagePositionsMap]);
 
@@ -760,11 +760,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     // 纯算术计算节点屏幕位置
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const CONTENT_PAD = 12;
+    const INNER_OFFSET = 14;
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
-    const nodeScreenX = rect.left + pan.x + (stageLeft + CONTENT_PAD + (node.position?.x ?? 20)) * scale;
-    const nodeScreenY = rect.top + pan.y + (20 + TITLE_H + CONTENT_PAD + (node.position?.y ?? 20)) * scale;
+    const nodeScreenX = rect.left + pan.x + (stageLeft + INNER_OFFSET + (node.position?.x ?? 20)) * scale;
+    const nodeScreenY = rect.top + pan.y + (20 + TITLE_H + INNER_OFFSET + (node.position?.y ?? 20)) * scale;
     setDraggingNode({
       nodeId,
       stageId,
@@ -1338,26 +1338,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
       const srcLeft = stagePositions[i];
       const tgtLeft = stagePositions[i + 1];
-      const srcWidth = srcCollapsed ? STAGE_COLLAPSED_WIDTH : 460;
-      const tgtWidth = tgtCollapsed ? STAGE_COLLAPSED_WIDTH : 460;
+      const srcWidth = srcCollapsed ? STAGE_COLLAPSED_WIDTH : 460 / scale;
+      const tgtWidth = tgtCollapsed ? STAGE_COLLAPSED_WIDTH : 460 / scale;
 
-      // 连线端点：
-      // 折叠时: 从标题栏右侧中点 → 下一阶段标题栏左侧中点
-      // 展开时: 从Gate区域右侧中点 → 下一阶段标题栏左侧中点
+      // 连线端点
+      const TITLE_H = 30;
+      const CONTENT_MIN_H = 250 / scale;
       let srcX: number, srcY: number;
       if (srcCollapsed) {
-        // 标题栏高度约40px（两行布局）
         srcX = srcLeft + srcWidth;
-        srcY = 20 + 20; // top:20 + 标题栏中点约20
+        srcY = 20 + TITLE_H / 2;
       } else {
-        // Gate区域在底部，内容区minHeight 250 + gate高度约50
         srcX = srcLeft + srcWidth;
-        srcY = 20 + 250 + 50 + 20; // 估算Gate区域中部
+        srcY = 20 + TITLE_H + CONTENT_MIN_H + 20; // 阶段top+标题+内容区+Gate区域中部
       }
 
       let tgtX: number, tgtY: number;
       tgtX = tgtLeft;
-      tgtY = 20 + 20; // 目标标题栏中点
+      tgtY = 20 + TITLE_H / 2;
 
       // 阶段连线运行状态
       const srcStageState = stepStates[`stage_${srcStage.id}`];
