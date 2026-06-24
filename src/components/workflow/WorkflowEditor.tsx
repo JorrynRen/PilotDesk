@@ -127,10 +127,29 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 const SNAP = 20;
                 const NODE_W = 160;
                 const NODE_H = 60;
-                // 使用canvasToContentPos精确转换为内容区相对坐标
-                const rel = canvasToContentPos(cx, cy, targetStageId);
-                const snapX = Math.floor((rel.x - NODE_W / 2) / SNAP) * SNAP;
-                const snapY = Math.floor((rel.y - NODE_H / 2) / SNAP) * SNAP;
+                // 通过ref直接查询内容区DOM，计算精确的放置位置
+                // 使用ref而非闭包中的函数，确保获取最新DOM状态
+                const _contentEl = stageContentRefs.current[targetStageId];
+                let snapX = 0, snapY = 0;
+                if (_contentEl) {
+                  const _sRect = _contentEl.getBoundingClientRect();
+                  // 内容区左上角在画布坐标中的位置
+                  const _contentCX = (_sRect.left - rect.left - pan.x) / scale;
+                  const _contentCY = (_sRect.top - rect.top - pan.y) / scale;
+                  // 减去padding（CSS left:0对应padding内部边缘，gBR对应padding外部边缘）
+                  const _pad = 12;
+                  const relX = cx - _contentCX - _pad;
+                  const relY = cy - _contentCY - _pad;
+                  snapX = Math.floor((relX - NODE_W / 2) / SNAP) * SNAP;
+                  snapY = Math.floor((relY - NODE_H / 2) / SNAP) * SNAP;
+                } else {
+                  // Fallback: 直接用stage位置计算
+                  const stageLeft = stagePositionsMap[targetStageId];
+                  const relX = cx - stageLeft - 12;
+                  const relY = cy - 20 - 30 - 12; // top + titleBar + padding
+                  snapX = Math.floor((relX - NODE_W / 2) / SNAP) * SNAP;
+                  snapY = Math.floor((relY - NODE_H / 2) / SNAP) * SNAP;
+                }
                 const newNode: WorkflowNode = {
                   id: generateId(),
                   type: toolbarDrag.type,
@@ -461,12 +480,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!canvasEl || !contentEl) return { x: canvasX, y: canvasY };
     const cRect = canvasEl.getBoundingClientRect();
     const sRect = contentEl.getBoundingClientRect();
-    // 内容区左上角在画布坐标中的位置
-    const contentX = (sRect.left - cRect.left - pan.x) / scale;
-    const contentY = (sRect.top - cRect.top - pan.y) / scale;
+    // 内容区padding外缘在画布坐标中的位置
+    const contentOuterX = (sRect.left - cRect.left - pan.x) / scale;
+    const contentOuterY = (sRect.top - cRect.top - pan.y) / scale;
+    // 减去padding: CSS left:0对应padding内缘，gBR对应padding外缘
+    const PAD = 12;
     return {
-      x: canvasX - contentX,
-      y: canvasY - contentY,
+      x: canvasX - contentOuterX - PAD,
+      y: canvasY - contentOuterY - PAD,
     };
   }, [pan, scale]);
 
@@ -479,9 +500,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!canvasEl || !contentEl) return { x: contentX, y: contentY };
     const cRect = canvasEl.getBoundingClientRect();
     const sRect = contentEl.getBoundingClientRect();
-    const contentCX = (sRect.left - cRect.left - pan.x) / scale;
-    const contentCY = (sRect.top - cRect.top - pan.y) / scale;
-    return { x: contentCX + contentX, y: contentCY + contentY };
+    const contentOuterX = (sRect.left - cRect.left - pan.x) / scale;
+    const contentOuterY = (sRect.top - cRect.top - pan.y) / scale;
+    const PAD = 12;
+    return { x: contentOuterX + PAD + contentX, y: contentOuterY + PAD + contentY };
   }, [pan, scale]);
 
   const handleUpdateConnectingPos = useCallback((e: MouseEvent) => {
@@ -1724,7 +1746,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         >
           {/* SVG 层：箭头标记 + 连线 + 预览线 */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 5, pointerEvents: 'none' }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 15, pointerEvents: 'none' }}
           >
             <defs>
               <marker id="arrowhead" markerWidth="7" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
