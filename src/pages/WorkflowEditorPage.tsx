@@ -3,10 +3,12 @@
  *
  * 独立路由页面，从 URL query 读取 definitionId。
  * 无 ID 时自动创建新工作流并跳转。
+ * 使用统一 TitleBar + StatusBar 布局。
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { TitleBar, StatusBar } from '../components/layout';
 import { WorkflowEditor } from '../components/workflow/WorkflowEditor';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -15,16 +17,29 @@ export function WorkflowEditorPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const definitionId = searchParams.get('id');
-  const { createDefinition, loadDefinitions, selectDefinition } = useWorkflowStore();
+  const { createDefinition, loadDefinitions, selectDefinition, definitions } = useWorkflowStore();
   const [readyId, setReadyId] = useState<string | null>(definitionId);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [workflowName, setWorkflowName] = useState('');
+
+  // 同步工作流名称
+  useEffect(() => {
+    if (readyId && definitions.length > 0) {
+      const def = definitions.find((d) => d.id === readyId);
+      if (def) setWorkflowName(def.name);
+    }
+  }, [readyId, definitions]);
+
+  const handleNameChange = useCallback((name: string) => {
+    setWorkflowName(name);
+  }, []);
 
   // 无 ID 时自动创建新工作流
   useEffect(() => {
-    if (definitionId) return; // 已有 ID，不需要创建
-    if (readyId) return;     // 已有 readyId，不需要创建
-    if (creating) return;     // 正在创建中
+    if (definitionId) return;
+    if (readyId) return;
+    if (creating) return;
 
     let cancelled = false;
     setCreating(true);
@@ -36,7 +51,6 @@ export function WorkflowEditorPage() {
         const id = await createDefinition(def);
         selectDefinition(id);
         if (!cancelled) {
-          // 用 replace 替换 URL，保留干净的浏览器历史
           navigate(`/workflow/editor?id=${id}`, { replace: true });
           setReadyId(id);
         }
@@ -54,18 +68,30 @@ export function WorkflowEditorPage() {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 有 ID 时加载定义列表确保 WorkflowEditor 能找到数据
+  // 有 ID 时加载定义列表
   useEffect(() => {
     if (definitionId) {
       loadDefinitions();
     }
   }, [definitionId]);
 
+  const handleBack = useCallback(() => {
+    navigate('/workflow');
+  }, [navigate]);
+
   // 加载中
   if (creating) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
-        <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>正在创建工作流...</span>
+      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+        <TitleBar
+        showBackButton={true}
+        titleText="工作流编辑器"
+        onBack={() => navigate('/workflow')}
+        onOpenSettings={() => navigate('/settings')} />
+        <div className="flex-1 flex items-center justify-center">
+          <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>正在创建工作流...</span>
+        </div>
+        <StatusBar onOpenSettings={() => navigate('/settings')} onOpenEnvSettings={() => navigate('/settings?tab=environment')} />
       </div>
     );
   }
@@ -73,26 +99,47 @@ export function WorkflowEditorPage() {
   // 创建失败
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3" style={{ backgroundColor: 'var(--bg-primary)' }}>
-        <span className="text-xs" style={{ color: 'var(--status-danger)' }}>创建工作流失败: {error}</span>
-        <button
-          onClick={() => navigate('/workflow')}
-          className="pd-btn px-3 py-1.5 text-xs rounded"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          返回工作流列表
-        </button>
+      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+        <TitleBar
+        showBackButton={true}
+        titleText="工作流编辑器"
+        onBack={() => navigate('/workflow')}
+        onOpenSettings={() => navigate('/settings')} />
+        <div className="flex flex-col items-center justify-center flex-1 gap-3">
+          <span className="text-xs" style={{ color: 'var(--status-danger)' }}>创建工作流失败: {error}</span>
+          <button
+            onClick={() => navigate('/workflow')}
+            className="pd-btn px-3 py-1.5 text-xs rounded"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            返回工作流列表
+          </button>
+        </div>
+        <StatusBar onOpenSettings={() => navigate('/settings')} onOpenEnvSettings={() => navigate('/settings?tab=environment')} />
       </div>
     );
   }
 
-  // 还没有 effectiveId（理论上不应该到这里，因为 creating 时已处理）
   if (!readyId) return null;
 
   return (
-    <WorkflowEditor
-      definitionId={readyId}
-      onClose={() => navigate('/workflow')}
-    />
+    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <TitleBar
+        showBackButton={true}
+        titleText={workflowName || '工作流编辑器'}
+        onOpenSettings={() => navigate('/settings')}
+      />
+      <div className="flex-1 overflow-hidden">
+        <WorkflowEditor
+          definitionId={readyId}
+          onClose={handleBack}
+          onNameChange={handleNameChange}
+        />
+      </div>
+      <StatusBar
+        onOpenSettings={() => navigate('/settings')}
+        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
+      />
+    </div>
   );
 }

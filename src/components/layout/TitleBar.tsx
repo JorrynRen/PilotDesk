@@ -8,9 +8,11 @@ interface TitleBarProps {
   onToggleRightPanel?: () => void;
   rightPanelOpen?: boolean;
   showBackButton?: boolean;
+  titleText?: string;
+  onBack?: () => void;
 }
 
-export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const [isMaximized, setIsMaximized] = useState(false);
   const [tauriReady, setTauriReady] = useState(true);
@@ -134,14 +136,14 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         {showBackButton ? (
           <>
             <button
-              onClick={onOpenSettings}
+              onClick={onBack || onOpenSettings}
               className="pd-btn p-1 rounded transition-colors hover:opacity-80"
               style={{ color: 'var(--text-secondary)' }}
               title="返回"
             >
               <ArrowLeft size={16} />
             </button>
-            <span className="text-xs font-medium pointer-events-none" style={{ color: 'var(--text-primary)' }}>设置</span>
+            <span className="text-xs font-medium pointer-events-none" style={{ color: 'var(--text-primary)' }}>{titleText || '设置'}</span>
           </>
         ) : (
           <>

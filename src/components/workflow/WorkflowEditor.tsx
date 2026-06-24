@@ -1,33 +1,36 @@
 /**
  * WorkflowEditor — 工作流可视化编辑器（Structured Canvas）
  *
- * 阶段栏 + 自由画布，支持拖拽节点、连线、条件标签。
- * 智能连线自动归入阶段。
+ * 自由画布 + 阶段列布局，支持：
+ * - 画布拖拽平移 + 鼠标滚轮缩放
+ * - 节点拖拽移动
+ * - 节点连线（从输出锚点到输入锚点）
+ * - 阶段折叠/展开
+ * - CSS变量主题支持
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage } from '../../workflow/WorkflowDefinition';
-import { workflowNodeTypeRegistry } from '../../utils/WorkflowNodeTypeRegistry';
-import { StageBar } from './StageBar';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
 import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig } from '../../types/workflow';
 
 interface Props {
   definitionId: string;
   onClose: () => void;
+  onNameChange?: (name: string) => void;
 }
 
 const BUILTIN_NODE_TYPES: { type: WorkflowNodeType; label: string; icon: string; color: string }[] = [
   { type: 'agent', label: 'Agent 任务', icon: '🤖', color: '#58a6ff' },
   { type: 'api', label: 'API 调用', icon: '🔗', color: '#a371f7' },
-  { type: 'transform', label: '代码转换', icon: '⚡', color: '#d29922' },
-  { type: 'interact', label: '人工交互', icon: '👤', color: '#f85149' },
-  { type: 'plugin', label: '插件命令', icon: '🧩', color: '#3fb950' },
-  { type: 'subflow', label: '子工作流', icon: '📦', color: '#79c0ff' },
+  { type: 'transform', label: '代码转换', icon: '\u{26A1}', color: '#d29922' },
+  { type: 'interact', label: '人工交互', icon: '\u{1F464}', color: '#f85149' },
+  { type: 'plugin', label: '插件命令', icon: '\u{1F9E9}', color: '#3fb950' },
+  { type: 'subflow', label: '子工作流', icon: '\u{1F4E6}', color: '#79c0ff' },
 ];
 
-export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
+export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange }) => {
   const { definitions, updateDefinition, loadDefinitions } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
@@ -38,10 +41,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
   const [description, setDescription] = useState(def?.description || '');
   const [connecting, setConnecting] = useState<{ source: string; stageId: string } | null>(null);
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
-  // 阶段列宽度和折叠状态
-  const [stageWidths, setStageWidths] = useState<Record<string, number>>({});
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
-  const resizeRef = useRef<{ stageId: string; startX: number; startWidth: number } | null>(null);
+
+  // 画布平移和缩放状态
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [scale, setScale] = useState(1);
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+
+  // 节点拖拽状态
+  const [draggingNode, setDraggingNode] = useState<{ nodeId: string; stageId: string; offsetX: number; offsetY: number } | null>(null);
 
   useEffect(() => {
     if (def) {
@@ -55,6 +65,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
     if (!def) return;
     await updateDefinition(definitionId, { name, description, stages });
   };
+
+  const handleNameChangeLocal = useCallback((newName: string) => {
+    setName(newName);
+    onNameChange?.(newName);
+  }, [onNameChange]);
 
   const handleAddStage = () => {
     const newStage: Stage = {
@@ -118,14 +133,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
       target: targetId,
     };
 
-    // 如果跨阶段连线，弹出条件编辑框
     if (connecting.stageId !== targetStageId) {
       setConditionInput({ source: connecting.source, target: targetId, stageId: targetStageId });
       setConnecting(null);
       return;
     }
 
-    // 同阶段连线
     setStages(stages.map((s) => {
       if (s.id === connecting.stageId) {
         return { ...s, edges: [...s.edges, newEdge] };
@@ -133,8 +146,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
       return s;
     }));
     setConnecting(null);
-
-    // 触发自动归入阶段
     setStages((prev) => autoAssignStage(prev));
   };
 
@@ -147,7 +158,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
       condition,
       label: label || condition,
     };
-
     setStages(stages.map((s) => {
       if (s.id === conditionInput.stageId) {
         return { ...s, edges: [...s.edges, newEdge] };
@@ -155,8 +165,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
       return s;
     }));
     setConditionInput(null);
-
-    // 触发自动归入阶段
     setStages((prev) => autoAssignStage(prev));
   };
 
@@ -188,365 +196,528 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
     });
   };
 
-  const handleResizeStart = (e: React.MouseEvent, stageId: string, currentWidth: number) => {
+  // === 画布拖拽平移 ===
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    // Only pan on left click on empty canvas area (not on nodes, buttons, inputs)
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button, input, [data-node], [data-anchor]')) return;
+    setIsPanning(true);
+    panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
     e.preventDefault();
-    e.stopPropagation();
-    resizeRef.current = { stageId, startX: e.clientX, startWidth: currentWidth };
+  }, [pan.x, pan.y]);
 
-    const handleMouseMove = (ev: MouseEvent) => {
-      const r = resizeRef.current;
-      if (!r) return;
-      const delta = ev.clientX - r.startX;
-      const newWidth = Math.max(180, r.startWidth + delta);
-      setStageWidths((prev) => ({ ...prev, [r.stageId]: newWidth }));
+  useEffect(() => {
+    if (!isPanning) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!panStartRef.current) return;
+      const dx = e.clientX - panStartRef.current.x;
+      const dy = e.clientY - panStartRef.current.y;
+      setPan({
+        x: panStartRef.current.panX + dx,
+        y: panStartRef.current.panY + dy,
+      });
     };
-
     const handleMouseUp = () => {
-      resizeRef.current = null;
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      setIsPanning(false);
+      panStartRef.current = null;
     };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isPanning]);
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+  // === 鼠标滚轮缩放 ===
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      setScale((prev) => {
+        const next = prev - e.deltaY * 0.001;
+        return Math.min(Math.max(next, 0.25), 3);
+      });
+    } else {
+      // 非Ctrl时滚动 = 画布平移
+      setPan((prev) => ({
+        x: prev.x - e.deltaX,
+        y: prev.y - e.deltaY,
+      }));
+    }
+  }, []);
+
+  // === 节点拖拽 ===
+  const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string, stageId: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const node = stages.find((s) => s.id === stageId)?.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const pos = node.position ?? { x: 0, y: 0 };
+    const nodeX = (pos.x + pan.x) * scale + rect.left;
+    const nodeY = (pos.y + pan.y) * scale + rect.top;
+    setDraggingNode({
+      nodeId,
+      stageId,
+      offsetX: e.clientX - nodeX,
+      offsetY: e.clientY - nodeY,
+    });
+  }, [stages, pan.x, pan.y, scale]);
+
+  useEffect(() => {
+    if (!draggingNode) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const newAbsX = e.clientX - draggingNode.offsetX;
+      const newAbsY = e.clientY - draggingNode.offsetY;
+      const canvasX = newAbsX - rect.left;
+      const canvasY = newAbsY - rect.top;
+      const nodeX = canvasX / scale - pan.x;
+      const nodeY = canvasY / scale - pan.y;
+      setStages((prev) =>
+        prev.map((s) =>
+          s.id === draggingNode.stageId
+            ? {
+                ...s,
+                nodes: s.nodes.map((n) =>
+                  n.id === draggingNode.nodeId
+                    ? { ...n, position: { x: Math.max(0, nodeX), y: Math.max(0, nodeY) } }
+                    : n
+                ),
+              }
+            : s
+        )
+      );
+    };
+    const handleMouseUp = () => {
+      setDraggingNode(null);
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [draggingNode, scale, pan.x, pan.y]);
+
+  // 渲染节点
+  const renderNode = (node: WorkflowNode, stageId: string) => {
+    const meta = getNodeTypeMeta(node.type);
+    const pos = node.position as { x: number; y: number } | undefined;
+    const isSelected = selectedNodeId === node.id;
+    const isDraggingThis = draggingNode?.nodeId === node.id;
+
+    return (
+      <div
+        key={node.id}
+        data-node
+        onClick={(e) => { e.stopPropagation(); setSelectedNodeId(node.id); setSelectedStageId(stageId); }}
+        onMouseDown={(e) => handleNodeMouseDown(e, node.id, stageId)}
+        className="cursor-grab active:cursor-grabbing"
+        style={{
+          position: 'absolute',
+          left: pos?.x ?? 20,
+          top: pos?.y ?? 20,
+          width: 160,
+          padding: '8px 10px',
+          borderRadius: 8,
+          border: isSelected ? '1px solid var(--accent)' : '1px solid var(--border)',
+          background: 'var(--bg-tertiary)',
+          boxShadow: isSelected ? '0 0 0 2px var(--accent-light)' : 'var(--shadow-sm)',
+          zIndex: isDraggingThis ? 20 : 10,
+          userSelect: 'none',
+        }}
+      >
+        <div className="flex items-center gap-1.5 mb-1">
+          <div style={{ width: 24, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, background: `${meta.color}22`, color: meta.color }}>{meta.icon}</div>
+          <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{node.label}</span>
+        </div>
+        <div className="flex gap-1 flex-wrap ml-[30px]">
+          {node.delayMs && <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'var(--bg-secondary)', color: '#d29922', border: '1px solid #d2992244' }}>延迟 {node.delayMs}ms</span>}
+          {node.timeoutMs && <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'var(--bg-secondary)', color: '#a371f7', border: '1px solid #8957e544' }}>超时 {node.timeoutMs/1000}s</span>}
+        </div>
+        {/* 输入锚点 */}
+        <div
+          data-anchor="input"
+          onClick={(e) => { e.stopPropagation(); handleStartConnect(node.id, stageId); }}
+          className="absolute rounded-full"
+          style={{ left: -5, top: '50%', marginTop: -5, width: 10, height: 10, background: 'var(--border)', border: '2px solid var(--bg-primary)', cursor: 'crosshair' }}
+        />
+        {/* 输出锚点 */}
+        <div
+          data-anchor="output"
+          onClick={(e) => { e.stopPropagation(); handleEndConnect(node.id, stageId); }}
+          className="absolute rounded-full"
+          style={{ right: -5, top: '50%', marginTop: -5, width: 10, height: 10, background: 'var(--border)', border: '2px solid var(--bg-primary)', cursor: 'crosshair' }}
+        />
+        {/* 删除按钮 */}
+        <div
+          onClick={(e) => { e.stopPropagation(); handleDeleteNode(node.id); }}
+          className="absolute flex items-center justify-center rounded-full opacity-80 cursor-pointer"
+          style={{ top: -6, right: -6, width: 16, height: 16, background: 'var(--status-danger)', color: '#fff', fontSize: 10 }}
+        >x</div>
+      </div>
+    );
   };
 
-  const handleMoveNode = (nodeId: string, stageId: string, position: { x: number; y: number }) => {
-    setStages(stages.map((s) => ({
-      ...s,
-      nodes: s.nodes.map((n) => n.id === nodeId ? { ...n, position } : n),
-    })));
-  };
-
-  // 获取节点在画布中的位置
-  const getNodePosition = (stageId: string, nodeId: string): { x: number; y: number } | undefined => {
+  // 渲染连线
+  const renderEdge = (edge: WorkflowEdge, stageId: string) => {
     const stage = stages.find((s) => s.id === stageId);
-    return stage?.nodes.find((n) => n.id === nodeId)?.position as { x: number; y: number } | undefined;
+    if (!stage) return null;
+    const sourceNode = stage.nodes.find((n) => n.id === edge.source);
+    const targetNode = stage.nodes.find((n) => n.id === edge.target);
+    if (!sourceNode || !targetNode) return null;
+    const sp = sourceNode.position as { x: number; y: number } | undefined;
+    const tp = targetNode.position as { x: number; y: number } | undefined;
+    if (!sp || !tp) return null;
+
+    return (
+      <g key={edge.id}>
+        <path
+          d={`M ${sp.x + 160} ${sp.y + 20} C ${sp.x + 190} ${sp.y + 20}, ${tp.x - 10} ${tp.y + 20}, ${tp.x} ${tp.y + 20}`}
+          stroke={edge.condition ? '#d29922' : 'var(--accent)'}
+          strokeWidth={2}
+          fill="none"
+          markerEnd="url(#arrowhead)"
+          style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+          onClick={() => handleDeleteEdge(edge.id)}
+        />
+        {edge.label && (
+          <text
+            x={(sp.x + 160 + tp.x) / 2}
+            y={(sp.y + tp.y) / 2 - 8}
+            fill="var(--text-secondary)"
+            fontSize={10}
+            textAnchor="middle"
+            style={{ pointerEvents: 'auto', cursor: 'pointer' }}
+            onClick={() => handleDeleteEdge(edge.id)}
+          >
+            {edge.label}
+          </text>
+        )}
+      </g>
+    );
   };
 
   return (
-    <div className="workflow-editor" style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0d1117' }}>
-      {/* 标题栏 */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px', borderBottom: '1px solid #21262d' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            style={{ background: 'transparent', border: 'none', color: '#f0f6fc', fontSize: 16, fontWeight: 600, outline: 'none' }}
-            placeholder="工作流名称"
-          />
-          <span style={{ fontSize: 11, color: '#8b949e', padding: '2px 8px', borderRadius: 10, background: '#1f6feb22', border: '1px solid #1f6feb44' }}>
-            {def?.version || 'v1.0.0'}
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={onClose} style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #30363d', background: '#21262d', color: '#c9d1d9', fontSize: 12, cursor: 'pointer' }}>关闭</button>
-          <button onClick={handleSave} style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: '#238636', color: '#fff', fontSize: 12, cursor: 'pointer' }}>保存</button>
-        </div>
-      </div>
+    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      {/* 工具栏（替代原硬编码标题栏） */}
+      <div className="flex items-center gap-2 px-4 py-2 shrink-0" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+        <input
+          value={name}
+          onChange={(e) => handleNameChangeLocal(e.target.value)}
+          className="text-sm font-semibold outline-none"
+          style={{ background: 'transparent', color: 'var(--text-primary)', border: 'none' }}
+          placeholder="工作流名称"
+        />
+        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ color: 'var(--accent)', background: 'var(--accent-light)' }}>
+          {def?.version || 'v1.0.0'}
+        </span>
 
-      {/* 工具栏 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '8px 20px', borderBottom: '1px solid #21262d', background: '#0d1117', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11, color: '#8b949e', marginRight: 4 }}>节点类型:</span>
-        {BUILTIN_NODE_TYPES.map((nt) => (
-          <div
-            key={nt.type}
-            draggable
-            onDragStart={(e) => e.dataTransfer.setData('text/plain', nt.type)}
-            style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, border: '1px solid #30363d', background: '#161b22', color: '#c9d1d9', fontSize: 12, cursor: 'grab', userSelect: 'none' }}
+        <div className="flex-1" />
+
+        {/* 节点类型拖拽区 */}
+        <div className="flex items-center gap-1 flex-wrap">
+          <span className="text-[10px] mr-1" style={{ color: 'var(--text-tertiary)' }}>节点:</span>
+          {BUILTIN_NODE_TYPES.map((nt) => (
+            <div
+              key={nt.type}
+              draggable
+              onDragStart={(e) => e.dataTransfer.setData('text/plain', nt.type)}
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none"
+              style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+            >
+              <span>{nt.icon}</span>
+              <span>{nt.label}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="w-px h-5 mx-1" style={{ background: 'var(--border)' }} />
+
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={handleAddStage}
+            className="pd-btn px-2.5 py-1 text-[11px] rounded"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
           >
-            <span>{nt.icon}</span>
-            <span>{nt.label}</span>
-          </div>
-        ))}
-
+            + 阶段
+          </button>
+          <button
+            onClick={onClose}
+            className="pd-btn px-3 py-1 text-[11px] rounded"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          >
+            返回列表
+          </button>
+          <button
+            onClick={handleSave}
+            className="pd-btn px-3 py-1 text-[11px] rounded"
+            style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
+          >
+            保存
+          </button>
+        </div>
       </div>
 
-      {/* 阶段概览栏 */}
-      <StageBar
-        stages={stages}
-        activeStageId={selectedStageId || undefined}
-        onStageClick={(stageId) => setSelectedStageId(stageId)}
-        onStageReorder={(newStages) => setStages(newStages)}
-        onAddStage={handleAddStage}
-        onDeleteStage={handleDeleteStage}
-        onRenameStage={handleRenameStage}
-        onUpdateGate={handleUpdateGate}
-      />
+      {/* 画布区域 */}
+      <div
+        ref={canvasRef}
+        className="flex-1 overflow-hidden relative"
+        style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
+        onMouseDown={handleCanvasMouseDown}
+        onWheel={handleWheel}
+      >
+        {/* 缩放指示器 */}
+        <div className="absolute bottom-3 right-3 z-30 flex items-center gap-1.5">
+          <button
+            onClick={() => setScale((s) => Math.min(s + 0.1, 3))}
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          >+</button>
+          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}>
+            {Math.round(scale * 100)}%
+          </span>
+          <button
+            onClick={() => setScale((s) => Math.max(s - 0.1, 0.25))}
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          >-</button>
+          <button
+            onClick={() => { setPan({ x: 0, y: 0 }); setScale(1); }}
+            className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: '1px solid var(--border)' }}
+          >
+            重置
+          </button>
+        </div>
 
-      {/* 画布 */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', gap: 16, minHeight: 400 }}>
-        {stages.length === 0 && (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8b949e', fontSize: 14 }}>
-            点击 "+ 添加阶段" 开始创建工作流
-          </div>
-        )}
+        <div
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+            transformOrigin: '0 0',
+            width: 4000,
+            height: 3000,
+            position: 'relative',
+          }}
+        >
+          {/* SVG 箭头标记 */}
+          <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+            <defs>
+              <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+                <polygon points="0 0, 8 3, 0 6" fill="var(--accent)" />
+              </marker>
+            </defs>
+            {/* 渲染各阶段内连线 */}
+            {stages.map((stage) => (
+              <g key={`edges-${stage.id}`}>{stage.edges.map((edge) => renderEdge(edge, stage.id))}</g>
+            ))}
+          </svg>
 
-        {stages.map((stage, stageIndex) => {
-          const isCollapsed = collapsedStages.has(stage.id);
-          const stageWidth = stageWidths[stage.id];
-          return (
-            <React.Fragment key={stage.id}>
-              {/* 阶段列 */}
-              <div style={{
-                flex: stageWidth ? '0 0 auto' : 1,
-                width: stageWidth || undefined,
-                minWidth: isCollapsed ? 48 : 280,
-                border: '1px solid #21262d',
-                borderRadius: 8,
-                display: 'flex',
-                flexDirection: 'column',
-                background: '#161b22',
-                transition: isCollapsed ? 'width 0.2s ease, min-width 0.2s ease' : 'none',
-                overflow: 'hidden',
-              }}>
-                {/* 阶段标题 — 折叠时垂直排列 */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: isCollapsed ? '8px 4px' : '8px 12px',
-                  borderBottom: '1px solid #21262d',
-                  background: '#0d1117',
-                  borderRadius: '8px 8px 0 0',
-                  flexDirection: isCollapsed ? 'column' : 'row',
-                  gap: isCollapsed ? 6 : 0,
-                }}>
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: isCollapsed ? 0 : 8,
-                    flexDirection: isCollapsed ? 'column' : 'row',
-                    writingMode: isCollapsed ? 'vertical-rl' : 'horizontal-tb',
-                  }}>
-                    <span style={{
-                      display: 'inline-flex', width: isCollapsed ? 28 : 20, height: isCollapsed ? 28 : 20,
-                      alignItems: 'center', justifyContent: 'center', borderRadius: 4,
-                      background: '#1f6feb33', color: '#58a6ff', fontSize: isCollapsed ? 10 : 11, fontWeight: 700,
-                    }}>{stage.order + 1}</span>
-                    {!isCollapsed && (
-                      <input
-                        value={stage.name}
-                        onChange={(e) => handleRenameStage(stage.id, e.target.value)}
-                        style={{ background: 'transparent', border: 'none', color: '#f0f6fc', fontSize: 13, fontWeight: 600, outline: 'none', width: 80 }}
-                      />
-                    )}
-                    {isCollapsed && (
-                      <span style={{ color: '#f0f6fc', fontSize: 10, fontWeight: 600, letterSpacing: 1 }}>{stage.name.slice(0, 4)}</span>
-                    )}
-                  </div>
-                  <div style={{
-                    display: 'flex',
-                    gap: 2,
-                    flexDirection: isCollapsed ? 'column' : 'row',
-                  }}>
-                    {/* 折叠/展开按钮 */}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }}
-                      title={isCollapsed ? '展开阶段' : '折叠阶段'}
-                      style={{ padding: '2px 6px', borderRadius: 4, border: 'none', background: 'transparent', color: '#8b949e', fontSize: 12, cursor: 'pointer', lineHeight: 1 }}
-                    >
-                      {isCollapsed ? '▶' : '◀'}
-                    </button>
-                    {!isCollapsed && (
-                      <>
-                        <button onClick={() => handleAddNode('agent', stage.id)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#21262d', color: '#8b949e', fontSize: 10, cursor: 'pointer' }}>+ 节点</button>
-                        <button onClick={() => handleDeleteStage(stage.id)} style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #30363d', background: '#21262d', color: '#f85149', fontSize: 10, cursor: 'pointer' }}>×</button>
-                      </>
-                    )}
-                  </div>
-                </div>
+          {/* 空状态 */}
+          {stages.length === 0 && (
+            <div className="flex items-center justify-center absolute inset-0" style={{ color: 'var(--text-tertiary)', fontSize: 14 }}>
+              点击 "+ 阶段" 开始创建工作流
+            </div>
+          )}
 
-                {/* 画布区 — 折叠时隐藏 */}
-                {!isCollapsed && (
-                  <>
-                    <div
-                      style={{ flex: 1, minHeight: 250, padding: 12, position: 'relative' }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const type = e.dataTransfer.getData('text/plain') as WorkflowNodeType;
-                        if (type) {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const meta = getNodeTypeMeta(type);
-                          const newNode: WorkflowNode = {
-                            id: generateId(),
-                            type,
-                            label: meta.label,
-                            position: { x: e.clientX - rect.left - 60, y: e.clientY - rect.top - 20 },
-                          };
-                          setStages(stages.map((s) =>
-                            s.id === stage.id ? { ...s, nodes: [...s.nodes, newNode] } : s
-                          ));
-                        }
-                      }}
-                    >
-                      {/* 节点 */}
-                      {stage.nodes.map((node) => {
-                        const meta = getNodeTypeMeta(node.type);
-                        const pos = node.position as { x: number; y: number } | undefined;
-                        return (
-                          <div
-                            key={node.id}
-                            onClick={() => { setSelectedNodeId(node.id); setSelectedStageId(stage.id); }}
-                            style={{
-                              position: 'absolute',
-                              left: pos?.x ?? 20,
-                              top: pos?.y ?? 20,
-                              width: 160,
-                              padding: '8px 10px',
-                              borderRadius: 8,
-                              border: selectedNodeId === node.id ? '1px solid #58a6ff' : '1px solid #30363d',
-                              background: '#1c2128',
-                              cursor: 'pointer',
-                              boxShadow: selectedNodeId === node.id ? '0 0 0 2px #1f6feb44' : 'none',
-                              zIndex: 10,
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                              <div style={{ width: 24, height: 24, borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, background: `${meta.color}22`, color: meta.color }}>{meta.icon}</div>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: '#f0f6fc' }}>{node.label}</span>
-                            </div>
-                            <div style={{ marginLeft: 30, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                              {node.delayMs && <span style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#21262d', color: '#d29922', border: '1px solid #d2992244' }}>延迟 {node.delayMs}ms</span>}
-                              {node.timeoutMs && <span style={{ fontSize: 9, padding: '1px 4px', borderRadius: 3, background: '#21262d', color: '#a371f7', border: '1px solid #8957e544' }}>超时 {node.timeoutMs/1000}s</span>}
-                            </div>
-                            {/* 输入锚点 */}
-                            <div style={{ position: 'absolute', left: -5, top: '50%', marginTop: -5, width: 10, height: 10, borderRadius: '50%', background: '#30363d', border: '2px solid #0d1117', cursor: 'crosshair' }}
-                              onClick={(e) => { e.stopPropagation(); handleStartConnect(node.id, stage.id); }}
-                            />
-                            {/* 输出锚点 */}
-                            <div style={{ position: 'absolute', right: -5, top: '50%', marginTop: -5, width: 10, height: 10, borderRadius: '50%', background: '#30363d', border: '2px solid #0d1117', cursor: 'crosshair' }}
-                              onClick={(e) => { e.stopPropagation(); handleEndConnect(node.id, stage.id); }}
-                            />
-                            {/* 删除按钮 */}
-                            <div
-                              onClick={(e) => { e.stopPropagation(); handleDeleteNode(node.id); }}
-                              style={{ position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#f85149', color: '#fff', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0.8 }}
-                            >×</div>
-                          </div>
-                        );
-                      })}
-
-                      {/* 边（简化显示） */}
-                      {stage.edges.map((edge) => {
-                        const sourcePos = stage.nodes.find((n) => n.id === edge.source)?.position as { x: number; y: number } | undefined;
-                        const targetPos = stage.nodes.find((n) => n.id === edge.target)?.position as { x: number; y: number } | undefined;
-                        if (!sourcePos || !targetPos) return null;
-                        return (
-                          <div key={edge.id} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-                            <svg style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%' }}>
-                              <path
-                                d={`M ${sourcePos.x + 160} ${sourcePos.y + 20} C ${sourcePos.x + 190} ${sourcePos.y + 20}, ${targetPos.x - 10} ${targetPos.y + 20}, ${targetPos.x} ${targetPos.y + 20}`}
-                                stroke={edge.condition ? '#d29922' : '#58a6ff'}
-                                strokeWidth={2}
-                                fill="none"
-                                markerEnd="url(#arrowhead)"
-                              />
-                              {edge.label && (
-                                <text x={(sourcePos.x + 160 + targetPos.x) / 2} y={(sourcePos.y + targetPos.y) / 2 - 8}
-                                  fill="#8b949e" fontSize={10} textAnchor="middle"
-                                  style={{ pointerEvents: 'auto', cursor: 'pointer' }}
-                                  onClick={() => handleDeleteEdge(edge.id)}
-                                >
-                                  {edge.label}
-                                </text>
-                              )}
-                            </svg>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Gate */}
-                    <div style={{ margin: '0 8px 8px 8px', padding: '8px 12px', border: '1px solid #30363d', borderRadius: 8, background: '#0d1117', cursor: 'pointer' }}
-                      onClick={() => handleUpdateGate(stage.id, {})}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 4 }}>⊞ 门控 Gate</span>
-                        <span style={{ fontSize: 11, color: '#3fb950', display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3fb950' }} />
-                          {stage.nodes.length}/{stage.nodes.length} 就绪
-                        </span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <span style={{ fontSize: 11, color: '#8b949e' }}>策略: <span style={{ color: '#c9d1d9', background: '#21262d', padding: '1px 6px', borderRadius: 3, fontSize: 10 }}>{stage.gate.strategy}</span></span>
-                        <span style={{ fontSize: 11, color: '#8b949e' }}>合并: <span style={{ color: '#c9d1d9', background: '#21262d', padding: '1px 6px', borderRadius: 3, fontSize: 10 }}>{stage.gate.mergeStrategy}</span></span>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* 折叠时显示节点计数 */}
-                {isCollapsed && (
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 2px', color: '#8b949e', fontSize: 10 }}>
-                    <span>{stage.nodes.length} 节点</span>
-                    <span>{stage.edges.length} 连线</span>
-                    <span style={{ fontSize: 9, color: '#3fb950' }}>{stage.gate.strategy}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* 阶段间分隔线（可拖动调整大小） — 最后一个阶段之后不显示 */}
-              {stageIndex < stages.length - 1 && (
+          {/* 阶段列 */}
+          {stages.map((stage, stageIndex) => {
+            const isCollapsed = collapsedStages.has(stage.id);
+            return (
+              <React.Fragment key={stage.id}>
                 <div
-                  onMouseDown={(e) => {
-                    const w = stageWidths[stage.id] || 0;
-                    handleResizeStart(e, stage.id, w || 300);
-                  }}
                   style={{
-                    width: 5,
-                    cursor: 'col-resize',
-                    background: resizeRef.current?.stageId === stage.id ? '#58a6ff' : 'transparent',
-                    borderRadius: 2,
-                    flexShrink: 0,
-                    transition: 'background 0.15s',
-                    position: 'relative',
+                    position: 'absolute',
+                    top: 20,
+                    left: stageIndex * 500 + 20,
+                    width: isCollapsed ? 56 : 460,
+                    minHeight: 100,
+                    borderRadius: 8,
+                    background: 'var(--bg-secondary)',
+                    border: 'none',
+                    transition: isCollapsed ? 'width 0.2s ease' : 'none',
+                    overflow: 'visible',
                   }}
-                  onMouseEnter={(e) => { if (!resizeRef.current) e.currentTarget.style.background = '#30363d'; }}
-                  onMouseLeave={(e) => { if (!resizeRef.current) e.currentTarget.style.background = 'transparent'; }}
                 >
-                  {/* 分隔线视觉指示器 */}
-                  <div style={{
-                    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                    width: 2, height: 24, borderRadius: 1,
-                    background: resizeRef.current?.stageId === stage.id ? '#58a6ff' : '#21262d',
-                    transition: 'background 0.15s',
-                  }} />
+                  {/* 阶段标题栏 — 折叠按钮集成在内 */}
+                  <div
+                    className="flex items-center justify-between shrink-0 rounded-t-lg"
+                    style={{
+                      padding: '6px 10px',
+                      background: 'var(--bg-tertiary)',
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      {/* 序号块 — 始终正向显示 */}
+                      <span className="inline-flex items-center justify-center rounded text-[10px] font-bold" style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                        {stage.order + 1}
+                      </span>
+                      {!isCollapsed && (
+                        <input
+                          value={stage.name}
+                          onChange={(e) => handleRenameStage(stage.id, e.target.value)}
+                          className="text-xs font-semibold outline-none"
+                          style={{ background: 'transparent', color: 'var(--text-primary)', border: 'none', width: 100 }}
+                        />
+                      )}
+                      {isCollapsed && (
+                        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-primary)', writingMode: 'vertical-rl', letterSpacing: 1 }}>
+                          {stage.name}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }}
+                        className="pd-btn p-1 rounded text-[10px]"
+                        style={{ color: 'var(--text-tertiary)', background: 'transparent' }}
+                        title={isCollapsed ? '展开阶段' : '折叠阶段'}
+                      >
+                        {isCollapsed ? '\u25B6' : '\u25C0'}
+                      </button>
+                      {!isCollapsed && (
+                        <>
+                          <button
+                            onClick={() => handleAddNode('agent', stage.id)}
+                            className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
+                            style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-tertiary)' }}
+                          >+ 节点</button>
+                          <button
+                            onClick={() => handleDeleteStage(stage.id)}
+                            className="pd-btn p-0.5 rounded text-[10px]"
+                            style={{ color: 'var(--status-danger)', background: 'transparent' }}
+                          >x</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 阶段画布内容区 — 折叠时隐藏 */}
+                  {!isCollapsed && (
+                    <>
+                      <div
+                        className="relative"
+                        style={{ flex: 1, minHeight: 250, padding: 12 }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const type = e.dataTransfer.getData('text/plain') as WorkflowNodeType;
+                          if (type) {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const meta = getNodeTypeMeta(type);
+                            const newNode: WorkflowNode = {
+                              id: generateId(),
+                              type,
+                              label: meta.label,
+                              position: {
+                                x: (e.clientX - rect.left - pan.x) / scale - 60,
+                                y: (e.clientY - rect.top - pan.y) / scale - 20,
+                              },
+                            };
+                            setStages(stages.map((s) =>
+                              s.id === stage.id ? { ...s, nodes: [...s.nodes, newNode] } : s
+                            ));
+                          }
+                        }}
+                      >
+                        {/* 渲染节点 */}
+                        {stage.nodes.map((node) => renderNode(node, stage.id))}
+                      </div>
+
+                      {/* Gate 区域 */}
+                      <div
+                        className="mx-2 mb-2 p-2 rounded-lg cursor-pointer"
+                        style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)' }}
+                        onClick={() => handleUpdateGate(stage.id, {})}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-semibold flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
+                            门控 Gate
+                          </span>
+                          <span className="text-[10px] flex items-center gap-1" style={{ color: 'var(--status-success)' }}>
+                            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: 'var(--status-success)' }} />
+                            {stage.nodes.length}/{stage.nodes.length} 就绪
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.strategy}</span></span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>合并: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.mergeStrategy}</span></span>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* 折叠时显示节点计数 */}
+                  {isCollapsed && (
+                    <div className="flex flex-col items-center justify-center gap-1 py-3" style={{ color: 'var(--text-tertiary)', fontSize: 10 }}>
+                      <span>{stage.nodes.length} 节点</span>
+                      <span>{stage.edges.length} 连线</span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </React.Fragment>
-          );
-        })}
+
+                {/* 阶段间虚线分隔线 */}
+                {stageIndex < stages.length - 1 && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 40,
+                      left: (stageIndex + 1) * 500 - 10,
+                      width: 1,
+                      height: 'calc(100% - 60px)',
+                      minHeight: 200,
+                      borderLeft: '1px dashed var(--border)',
+                    }}
+                  />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
       </div>
 
       {/* 条件编辑弹窗 */}
       {conditionInput && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div style={{ background: '#1c2128', border: '1px solid #30363d', borderRadius: 12, padding: 24, maxWidth: 400, width: '90%' }}>
-            <h3 style={{ fontSize: 14, color: '#f0f6fc', marginBottom: 12 }}>编辑条件</h3>
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 4 }}>条件表达式</label>
+        <div className="fixed inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
+          <div className="rounded-xl p-6 w-[90%] max-w-[400px]" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑条件</h3>
+            <div className="mb-3">
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件表达式</label>
               <input
                 id="condition-expr"
                 placeholder="例如: == approve 或 contains 紧急"
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none' }}
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               />
             </div>
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 4 }}>条件标签（显示在边上）</label>
+            <div className="mb-4">
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件标签（显示在边上）</label>
               <input
                 id="condition-label"
                 placeholder="例如: 审批通过 / 紧急"
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none' }}
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               />
             </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setConditionInput(null)} style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid #30363d', background: '#21262d', color: '#c9d1d9', fontSize: 12, cursor: 'pointer' }}>取消</button>
-              <button onClick={() => {
-                const expr = (document.getElementById('condition-expr') as HTMLInputElement)?.value || '';
-                const label = (document.getElementById('condition-label') as HTMLInputElement)?.value || '';
-                handleConfirmCondition(expr, label);
-              }} style={{ padding: '6px 16px', borderRadius: 6, border: 'none', background: '#238636', color: '#fff', fontSize: 12, cursor: 'pointer' }}>确认</button>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setConditionInput(null)}
+                className="pd-btn px-4 py-1.5 text-xs rounded"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+              >取消</button>
+              <button
+                onClick={() => {
+                  const expr = (document.getElementById('condition-expr') as HTMLInputElement)?.value || '';
+                  const label = (document.getElementById('condition-label') as HTMLInputElement)?.value || '';
+                  handleConfirmCondition(expr, label);
+                }}
+                className="pd-btn px-4 py-1.5 text-xs rounded"
+                style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
+              >确认</button>
             </div>
           </div>
         </div>
@@ -554,19 +725,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose }) => {
 
       {/* 节点配置面板 */}
       {selectedNodeId && selectedStageId && (
-        <div style={{ position: 'fixed', right: 0, top: 0, bottom: 0, width: 360, background: '#161b22', borderLeft: '1px solid #30363d', zIndex: 100, overflow: 'auto', padding: 20 }}>
+        <div className="fixed right-0 top-0 bottom-0 w-[360px] z-[100] overflow-auto p-5" style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}>
           <WorkflowNodeConfig
             node={stages.find((s) => s.id === selectedStageId)?.nodes.find((n) => n.id === selectedNodeId)!}
             onUpdate={(updates) => handleUpdateNode(selectedNodeId, updates)}
             onClose={() => { setSelectedNodeId(null); setSelectedStageId(null); }}
             onOpenSubflow={(definitionId) => {
-              // 跳转到子工作流 — 在定义列表中查找
               const def = definitions.find(d => d.id === definitionId);
               if (def) {
                 setSelectedNodeId(null);
                 setSelectedStageId(null);
-                // 切换到子工作流编辑
-                // 这里简单起见，直接设置 stages 为子工作流的 stages
                 if (def.stages && def.stages.length > 0) {
                   setStages(def.stages);
                 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
 import type { WorkflowDefinition, WorkflowInstance } from '../types/workflow';
@@ -57,32 +58,14 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
 
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* Header */}
-      <header
-        className="flex items-center justify-between px-4 h-12 shrink-0 select-none"
-        style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
-      >
-        <div className="flex items-center gap-3">
-          {onBack && (
-            <button onClick={onBack} className="pd-btn p-1 rounded hover:opacity-80" style={{ color: 'var(--text-secondary)' }}>
-              <ArrowLeft size={16} />
-            </button>
-          )}
-          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>工作流管理</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleCreateAndEdit}
-            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-          >
-            <Plus size={14} /> 新建工作流
-          </button>
-        </div>
-      </header>
-
+      <TitleBar
+        showBackButton={true}
+        titleText="工作流管理"
+        onBack={() => navigate('/')}
+        onOpenSettings={() => navigate('/settings')}
+      />
       {/* Tabs */}
-      <div className="flex px-4 pt-3 gap-4" style={{ borderBottom: '1px solid var(--border)' }}>
+      <div className="flex px-4 pt-3 gap-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <button
           onClick={() => setActiveTab('definitions')}
           className="pb-2 text-xs font-medium transition-colors relative"
@@ -114,7 +97,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         )}
 
         {error && (
-          <div className="p-3 mb-3 rounded text-xs" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>
+          <div className="p-3 mb-3 rounded text-xs" style={{ backgroundColor: 'var(--status-danger-bg, rgba(239,68,68,0.1))', color: 'var(--status-danger)' }}>
             {error}
           </div>
         )}
@@ -219,6 +202,23 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           </>
         )}
       </div>
+
+      {/* 底部工具栏：新建工作流按钮 */}
+      <div className="shrink-0 flex items-center justify-between px-4 py-2" style={{ borderTop: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+        <div />
+        <button
+          onClick={handleCreateAndEdit}
+          className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+          style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+        >
+          <Plus size={14} /> 新建工作流
+        </button>
+      </div>
+
+      <StatusBar
+        onOpenSettings={() => navigate('/settings')}
+        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
+      />
     </div>
   );
 }
