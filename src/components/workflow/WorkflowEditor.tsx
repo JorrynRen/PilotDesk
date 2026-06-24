@@ -380,6 +380,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const PAN_THRESHOLD = 3;
 
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    if (document.activeElement && document.activeElement !== e.target) {
+      (document.activeElement as HTMLElement).blur();
+    }
     if (e.button === 1) {
       e.preventDefault();
       setIsPanning(true);
@@ -1446,7 +1449,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 >
                   {/* 阶段标题栏 — 反向缩放保持恒定大小 */}
                   <div
-                    className="flex flex-col shrink-0"
+                    className={isCollapsed ? 'flex flex-col shrink-0' : 'flex items-center justify-between shrink-0'}
                     style={{
                       padding: isCollapsed ? '4px 6px' : '6px 10px',
                       background: 'var(--bg-tertiary)',
@@ -1456,52 +1459,40 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       transformOrigin: 'top left',
                       width: `${(isCollapsed ? 56 : 460) * scale}px`,
                       fontSize: `${Math.max(10, 12 / scale)}px`,
-                      gap: isCollapsed ? 2 : 4,
+                      gap: isCollapsed ? 2 : 0,
                     }}
                   >
-                    {/* 第一行：序号块 + 操作按钮（带背景块） */}
-                    <div className="flex items-center justify-between w-full">
-                      <span
-                        className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0"
-                        style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}
-                      >
-                        {stage.order + 1}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }}
-                          className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center"
-                          style={{ width: 22, height: 22, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-                          title={isCollapsed ? '展开阶段' : '折叠阶段'}
-                        >
-                          {isCollapsed ? '▶' : '◀'}
-                        </button>
-                        {!isCollapsed && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteStage(stage.id); }}
-                            className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center"
-                            style={{ width: 22, height: 22, color: 'var(--status-danger)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-                            title="删除阶段"
-                          >x</button>
-                        )}
-                      </div>
-                    </div>
-                    {/* 第二行：阶段标题 */}
-                    {isCollapsed ? (
-                      <span
-                        className="text-[10px] font-semibold"
-                        style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%', textAlign: 'center' }}
-                      >
-                        {stage.name}
-                      </span>
-                    ) : (
-                      <input
-                        value={stage.name}
-                        onChange={(e) => handleRenameStage(stage.id, e.target.value)}
-                        onBlur={() => {/* 自动保存已在onChange中完成 */}}
-                        className="text-xs font-semibold outline-none"
-                        style={{ background: 'transparent', color: 'var(--text-primary)', border: 'none', width: '100%' }}
-                      />
+                    {isCollapsed && (
+                      <>
+                        <div className="flex items-center justify-between w-full">
+                          <span className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0" style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                            {stage.order + 1}
+                          </span>
+                          <button onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }} className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center" style={{ width: 22, height: 22, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }} title="展开阶段">▶</button>
+                        </div>
+                        <span className="text-[10px] font-semibold" style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%', textAlign: 'center' }}>
+                          {stage.name}
+                        </span>
+                      </>
+                    )}
+                    {!isCollapsed && (
+                      <>
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0" style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                            {stage.order + 1}
+                          </span>
+                          <input
+                            value={stage.name}
+                            onChange={(e) => handleRenameStage(stage.id, e.target.value)}
+                            className="text-xs font-semibold outline-none"
+                            style={{ background: 'transparent', color: 'var(--text-primary)', border: 'none', flex: 1, minWidth: 0 }}
+                          />
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }} className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center" style={{ width: 22, height: 22, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }} title="折叠阶段">◀</button>
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteStage(stage.id); }} className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center" style={{ width: 22, height: 22, color: 'var(--status-danger)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }} title="删除阶段">x</button>
+                        </div>
+                      </>
                     )}
                   </div>
 

@@ -86,7 +86,7 @@ export function createDefaultWorkflow(name: string): WorkflowDefinition {
           id: endNodeId,
           type: 'end' as WorkflowNodeType,
           label: '结束',
-          position: { x: 60, y: 40 },
+          position: { x: 20, y: 200 },
           isBoundary: true,
         }],
         edges: [],
