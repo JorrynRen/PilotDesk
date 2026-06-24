@@ -446,7 +446,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const onMouseMove = (e: MouseEvent) => {
       handleUpdateConnectingPos(e);
     };
-    const onMouseUp = () => {
+    const onMouseUp = (e: MouseEvent) => {
+      // 检测mouseup位置是否在input anchor上，完成连线
+      const target = e.target as HTMLElement;
+      const inputAnchor = target.closest('[data-anchor="input"]') as HTMLElement | null;
+      if (inputAnchor) {
+        const nodeEl = inputAnchor.closest('[data-node]') as HTMLElement | null;
+        const stageEl = inputAnchor.closest('[data-stage]') as HTMLElement | null;
+        if (nodeEl && stageEl) {
+          const nodeId = nodeEl.getAttribute('data-node-id');
+          const stageId = stageEl.getAttribute('data-stage-id');
+          if (nodeId && stageId) {
+            handleEndConnect(nodeId, stageId);
+            return;
+          }
+        }
+      }
       setConnecting(null);
     };
     window.addEventListener('mousemove', onMouseMove);
@@ -771,6 +786,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         <div
           key={node.id}
           data-node
+          data-node-id={node.id}
           onClick={(e) => {
             e.stopPropagation();
             setSelectedNodeId(node.id);
@@ -867,8 +883,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {isEnd && (
             <div
               data-anchor="input"
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
+              onMouseDown={(e) => {
                 e.stopPropagation();
                 if (connecting) handleEndConnect(node.id, stageId);
               }}
@@ -891,6 +906,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       <div
         key={node.id}
         data-node
+        data-node-id={node.id}
         onClick={(e) => {
           e.stopPropagation();
           setSelectedNodeId(node.id);
@@ -986,8 +1002,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         {/* 输入锚点 */}
         <div
           data-anchor="input"
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
+          onMouseDown={(e) => {
             e.stopPropagation();
             if (connecting) {
               handleEndConnect(node.id, stageId);
@@ -1641,6 +1656,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               <React.Fragment key={stage.id}>
                 <div
                   data-stage={stage.id}
+                  data-stage-id={stage.id}
                   style={{
                     position: 'absolute',
                     top: 20,
