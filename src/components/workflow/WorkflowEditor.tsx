@@ -1844,7 +1844,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     {isCollapsed && (
                       <>
                         <div className="flex items-center justify-between w-full">
-                          <span className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0" style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                          <span className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0" style={{ width: 33, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
                             {`step${stage.order + 1}`}
                           </span>
                           <button onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }} className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center" style={{ width: 22, height: 22, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }} title="展开阶段">▶</button>
@@ -1857,7 +1857,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     {!isCollapsed && (
                       <>
                         <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <span className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0" style={{ width: 22, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                          <span className="inline-flex items-center justify-center rounded text-[10px] font-bold shrink-0" style={{ width: 33, height: 22, background: 'var(--accent-light)', color: 'var(--accent)' }}>
                             {`step${stage.order + 1}`}
                           </span>
                           <input
