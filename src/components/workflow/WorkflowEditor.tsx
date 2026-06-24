@@ -849,7 +849,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const STAGE_COLLAPSED_WIDTH = 56;
     const STAGE_TOP = 20;
     const TITLE_H = 30;
-    const CONTENT_MIN_H = 280;
+    const CONTENT_MIN_H = 514;
     const GATE_H = 56;
     for (const stage of stages) {
       const left = stagePositionsMap[stage.id];
@@ -1340,7 +1340,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const STAGE_TOP = 20;
     const TITLE_H = 30;
     const GATE_H = 56;
-    const CONTENT_H = 400; // 与阶段minHeight一致
+    const CONTENT_H = 600; // 与阶段minHeight一致
     const invScale = 1 / scale;
     const H_SEG = 10 * invScale; // 两端水平段（缩短一半）
 
@@ -1778,7 +1778,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
           {/* SVG 层：阶段间连线（反向缩放，画布坐标） */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 15 }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 15, pointerEvents: 'none' }}
           >
             {/* 阶段间连线 */}
             {renderStageLinks()}
@@ -1817,7 +1817,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     top: 20,
                     left: stagePositions[stageIndex],
                     width: isCollapsed ? 56 : 480,
-                    minHeight: isCollapsed ? 56 : 400,
+                    minHeight: isCollapsed ? 56 : 600,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
                     border: 'none',
@@ -1828,6 +1828,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       : 'var(--shadow-sm)',
                     display: 'flex',
                     flexDirection: 'column',
+                    zIndex: 2,
                   }}
                 >
                   {/* 阶段标题栏（正向缩放，不做反向补偿） */}
@@ -1885,8 +1886,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         data-stage-content={stage.id}
                         className="relative"
                         style={{
-                          flex: 1,
-                          minHeight: 314,
+                          height: Math.max(100, 514 * scale),
                           padding: 12,
                           border: dragOverStageId === stage.id ? '2px dashed var(--accent)' : '2px dashed transparent',
                           borderRadius: 6,
