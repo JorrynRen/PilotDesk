@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { useWorkflowStore } from '../stores/workflowStore';
+import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
 import type { WorkflowDefinition, WorkflowInstance } from '../types/workflow';
 
 interface WorkflowPageProps {
@@ -10,13 +11,24 @@ interface WorkflowPageProps {
 
 export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const navigate = useNavigate();
-  const { definitions, instances, loading, error, loadDefinitions, loadInstances, deleteDefinition, startWorkflow } = useWorkflowStore();
+  const { definitions, instances, loading, error, loadDefinitions, loadInstances, createDefinition, deleteDefinition, startWorkflow, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances'>('definitions');
 
   useEffect(() => {
     loadDefinitions();
     loadInstances();
   }, []);
+
+  const handleCreateAndEdit = async () => {
+    const def = createDefaultWorkflow('新工作流');
+    try {
+      const id = await createDefinition(def);
+      selectDefinition(id);
+      navigate(`/workflow/editor?id=${id}`);
+    } catch (err) {
+      console.error('创建工作流失败:', err);
+    }
+  };
 
   const handleStart = async (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation();
@@ -60,7 +72,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate('/workflow/editor')}
+            onClick={handleCreateAndEdit}
             className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
             style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
           >
@@ -114,7 +126,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                 <div className="text-3xl opacity-30">🔀</div>
                 <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无工作流定义</div>
                 <button
-                  onClick={() => navigate('/workflow/editor')}
+                  onClick={handleCreateAndEdit}
                   className="pd-btn px-4 py-2 text-xs rounded transition-colors"
                   style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                 >
