@@ -143,8 +143,41 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           }
         }
       }
+      // 处理无效放置（画布空白区/非canvas区域）
+      if (toolbarDrag) {
+        const canvasEl = canvasRef.current;
+        let validDrop = false;
+        if (canvasEl) {
+          const rect = canvasEl.getBoundingClientRect();
+          if (e.clientX >= rect.left && e.clientX <= rect.right &&
+              e.clientY >= rect.top && e.clientY <= rect.bottom) {
+            const cx = (e.clientX - rect.left - pan.x) / scale;
+            const cy = (e.clientY - rect.top - pan.y) / scale;
+            validDrop = !!getStageAtCanvasPos(cx, cy);
+          }
+        }
+        // ghost shake动画表示无效
+        if (!validDrop && ghostRef.current) {
+          ghostRef.current.style.transition = 'transform 0.1s ease';
+          ghostRef.current.style.transform = 'translate(-50%,-50%) rotate(-5deg)';
+          setTimeout(() => { if (ghostRef.current) ghostRef.current.style.transform = 'translate(-50%,-50%) rotate(5deg)'; }, 100);
+          setTimeout(() => {
+            if (ghostRef.current) {
+              ghostRef.current.style.transform = 'translate(-50%,-50%)';
+              ghostRef.current.remove();
+              ghostRef.current = null;
+            }
+          }, 250);
+          setToolbarDrag(null);
+          setDragOverStageId(null);
+          dragOverCanvasRef.current = false;
+          toolbarDragRef.current = null;
+          return;
+        }
+      }
       setToolbarDrag(null);
       setDragOverStageId(null);
+      dragOverCanvasRef.current = false;
       toolbarDragRef.current = null;
       if (ghostRef.current) {
         ghostRef.current.remove();
@@ -158,11 +191,31 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         const rect = canvasEl.getBoundingClientRect();
         if (e.clientX >= rect.left && e.clientX <= rect.right &&
             e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          dragOverCanvasRef.current = true;
           const cx = (e.clientX - rect.left - pan.x) / scale;
           const cy = (e.clientY - rect.top - pan.y) / scale;
-          setDragOverStageId(getStageAtCanvasPos(cx, cy));
+          const hitStage = getStageAtCanvasPos(cx, cy);
+          setDragOverStageId(hitStage);
+          // 更新ghost样式：可放置=accent色，不可放置=红色
+          if (ghostRef.current) {
+            if (hitStage) {
+              ghostRef.current.style.borderColor = 'var(--accent)';
+              ghostRef.current.style.background = 'var(--accent-light)';
+              ghostRef.current.style.color = 'var(--accent)';
+            } else {
+              ghostRef.current.style.borderColor = '#f85149';
+              ghostRef.current.style.background = '#f8514922';
+              ghostRef.current.style.color = '#f85149';
+            }
+          }
         } else {
+          dragOverCanvasRef.current = false;
           setDragOverStageId(null);
+          if (ghostRef.current) {
+            ghostRef.current.style.borderColor = 'var(--border)';
+            ghostRef.current.style.background = 'var(--bg-tertiary)';
+            ghostRef.current.style.color = 'var(--text-tertiary)';
+          }
         }
       }
     };
@@ -1522,7 +1575,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         >
           {/* SVG 层：箭头标记 + 连线 + 预览线 */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}
           >
             <defs>
               <marker id="arrowhead" markerWidth="7" markerHeight="6" refX="5.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
