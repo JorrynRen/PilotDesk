@@ -137,8 +137,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   label: meta.label,
                   params: {},
                   position: {
-                    x: Math.max(10, snapX),
-                    y: Math.max(10, snapY),
+                    x: Math.max(10, Math.min(420, snapX)),
+                    y: Math.max(10, Math.min(340, snapY)),
                   },
                 };
               setStages(prev => prev.map(s => {
@@ -428,11 +428,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const getStagePositions = useCallback(() => {
     const STAGE_FULL_WIDTH = 480;
     const STAGE_COLLAPSED_WIDTH = 56;
+    const STAGE_GAP = 24;
     let leftOffset = 20;
     const map: Record<string, number> = {};
     for (const stage of stages) {
       map[stage.id] = leftOffset;
-      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH + 20 : STAGE_FULL_WIDTH;
+      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH + STAGE_GAP : STAGE_FULL_WIDTH + STAGE_GAP;
     }
     return map;
   }, [stages, collapsedStages]);
@@ -474,7 +475,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
    */
   /** 画布坐标 → 内容区相对坐标（纯算术，考虑内容区反向缩放） */
   const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
-    const CONTENT_PAD = 14;
+    const CONTENT_PAD = 2;
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
     const contentStartX = stageLeft + CONTENT_PAD;
@@ -761,7 +762,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     // 纯算术计算节点屏幕位置（内容区scale(1/scale)使节点视觉位置=画布位置*1）
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const CONTENT_PAD = 14;
+    const CONTENT_PAD = 2;
     const TITLE_H = 30;
     const stageLeft = stagePositionsMap[stageId];
     const nodeScreenX = rect.left + pan.x + (stageLeft + CONTENT_PAD) * scale + (node.position?.x ?? 20);
@@ -810,8 +811,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     ? {
                         ...n,
                         position: {
-                          x: Math.floor(rel.x / SNAP_SIZE) * SNAP_SIZE,
-                          y: Math.floor(rel.y / SNAP_SIZE) * SNAP_SIZE,
+                          x: Math.max(5, Math.min(420, Math.floor(rel.x / SNAP_SIZE) * SNAP_SIZE)),
+                          y: Math.max(5, Math.min(340, Math.floor(rel.y / SNAP_SIZE) * SNAP_SIZE)),
                         },
                       }
                     : n
@@ -1183,7 +1184,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
     // 水平段：输出/输入锚点处各加固定水平线，保证箭头始终可见
     const invScale = 1 / scale;
-    const H_SEG = 20 * invScale;
+    const H_SEG = 10 * invScale;
     const startHEndX = sx + sw + H_SEG;
     const endHStartX = tx - H_SEG;
     const dx = Math.abs(endHStartX - startHEndX);
@@ -1325,15 +1326,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const STAGE_TOP = 20;
     const TITLE_H = 30;
     const GATE_H = 56;
+    const CONTENT_H = 400; // 与阶段minHeight一致
     const invScale = 1 / scale;
-    const H_SEG = 20 * invScale; // 两端水平段长度
+    const H_SEG = 10 * invScale; // 两端水平段（缩短一半）
 
     // 计算各阶段左偏移（与getStagePositions保持一致）
     let leftOffset = 20;
     const stagePositions: number[] = [];
     for (let j = 0; j < stages.length; j++) {
       stagePositions.push(leftOffset);
-      leftOffset += collapsedStages.has(stages[j].id) ? STAGE_COLLAPSED_W + 20 : STAGE_W;
+      leftOffset += collapsedStages.has(stages[j].id) ? STAGE_COLLAPSED_W + 24 : STAGE_W + 24;
     }
 
     for (let i = 0; i < stages.length - 1; i++) {
@@ -1354,8 +1356,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       } else {
         srcX = srcLeft + srcWidth;
         // 从Gate栏右侧中心出发
-        const contentH = 280; // 内容区高度
-        srcY = STAGE_TOP + TITLE_H + contentH + GATE_H / 2;
+        srcY = STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
       }
 
       // 目标端点：到下一阶段左侧标题栏中部
@@ -1573,20 +1574,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         onContextMenu={(e) => e.preventDefault()}
         
       >
-        {/* 背景辅助网格 */}
-        {showGrid && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              zIndex: 1,
-              backgroundImage: `radial-gradient(circle, rgba(139,148,158,0.5) 1px, transparent 1px)`,
-              backgroundSize: `${20 * scale}px ${20 * scale}px`,
-              backgroundPosition: `${pan.x % (20 * scale)}px ${pan.y % (20 * scale)}px`,
-              opacity: 0.6,
-            }}
-          />
-        )}
-
         {/* 缩放控制 + 统计 + 帮助 浮动Bar */}
         <div
           className="absolute bottom-3 right-3 z-30 flex items-center gap-1 rounded-lg px-2 py-1.5"
@@ -1757,6 +1744,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             position: 'relative',
           }}
         >
+          {/* 背景辅助网格 — 在scale容器内，跟随画布缩放 */}
+          {showGrid && (
+            <div
+              className="absolute pointer-events-none"
+              style={{
+                top: -500,
+                left: -500,
+                width: 5000,
+                height: 4000,
+                zIndex: 1,
+                backgroundImage: `radial-gradient(circle, rgba(139,148,158,0.5) 1px, transparent 1px)`,
+                backgroundSize: '20px 20px',
+                backgroundPosition: `${pan.x / scale % 20}px ${pan.y / scale % 20}px`,
+                opacity: 0.5,
+              }}
+            />
+          )}
+
           {/* SVG 层：箭头标记 + 连线 + 预览线 */}
           <svg
             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 15, pointerEvents: 'none' }}
@@ -1785,11 +1790,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {(() => {
             const STAGE_FULL_WIDTH = 480;
             const STAGE_COLLAPSED_WIDTH = 56;
+            const STAGE_GAP = 24;
             let leftOffset = 20;
             const stagePositions: number[] = [];
             for (let i = 0; i < stages.length; i++) {
               stagePositions.push(leftOffset);
-              leftOffset += collapsedStages.has(stages[i].id) ? STAGE_COLLAPSED_WIDTH + 20 : STAGE_FULL_WIDTH;
+              leftOffset += collapsedStages.has(stages[i].id) ? STAGE_COLLAPSED_WIDTH + STAGE_GAP : STAGE_FULL_WIDTH + STAGE_GAP;
             }
             return (
               <>
@@ -1806,7 +1812,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     top: 20,
                     left: stagePositions[stageIndex],
                     width: isCollapsed ? 56 : 480,
-                    minHeight: isCollapsed ? 56 : 30 + 280 / scale + 56,
+                    minHeight: isCollapsed ? 56 : 400,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
                     border: 'none',
@@ -1875,7 +1881,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         className="relative"
                         style={{
                           flex: 1,
-                          minHeight: 280 / scale,
+                          minHeight: 314,
                           padding: 12,
                           border: dragOverStageId === stage.id ? '2px dashed var(--accent)' : '2px dashed transparent',
                           borderRadius: 6,
