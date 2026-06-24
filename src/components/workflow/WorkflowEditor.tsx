@@ -849,7 +849,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const STAGE_COLLAPSED_WIDTH = 56;
     const STAGE_TOP = 20;
     const TITLE_H = 30;
-    const CONTENT_MIN_H = 494;
+    const CONTENT_MIN_H = 474;
     const GATE_H = 56;
     for (const stage of stages) {
       const left = stagePositionsMap[stage.id];
@@ -1340,7 +1340,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const STAGE_TOP = 20;
     const TITLE_H = 30;
     const GATE_H = 56;
-    const DYN_CONTENT_H = 494 * scale; // 动态内容区CSS高度
+    const DYN_CONTENT_H = 474 * scale; // 动态内容区CSS高度
     const invScale = 1 / scale;
     const H_SEG = 10 * invScale; // 两端水平段（缩短一半）
 
@@ -1801,7 +1801,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     top: 20,
                     left: stagePositions[stageIndex],
                     width: isCollapsed ? 56 : 480,
-                    height: isCollapsed ? 56 : 86 + 494 * scale,
+                    height: isCollapsed ? 56 : 86 + 474 * scale,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
                     border: 'none',
@@ -1883,7 +1883,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         data-stage-content={stage.id}
                         className="relative"
                         style={{
-                          height: Math.max(100, 494 * scale),
+                          height: Math.max(100, 474 * scale),
                           padding: 12,
                           border: dragOverStageId === stage.id ? '2px dashed var(--accent)' : '2px dashed transparent',
                           borderRadius: 6,
