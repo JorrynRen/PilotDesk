@@ -130,8 +130,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 const stageLeft = stagePositionsMap[targetStageId];
                 const relX = cx - stageLeft;
                 const relY = cy - 20; // 阶段内容区top约20
-                const snapX = Math.round((relX - NODE_W / 2) / SNAP) * SNAP;
-                const snapY = Math.round((relY - NODE_H / 2) / SNAP) * SNAP;
+                const snapX = Math.floor((relX - NODE_W / 2) / SNAP) * SNAP;
+                const snapY = Math.floor((relY - NODE_H / 2) / SNAP) * SNAP;
                 const newNode: WorkflowNode = {
                   id: generateId(),
                   type: toolbarDrag.type,
@@ -647,8 +647,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const pos = node.position ?? { x: 0, y: 0 };
-    const nodeX = (pos.x + pan.x) * scale + rect.left;
-    const nodeY = (pos.y + pan.y) * scale + rect.top;
+    // 节点position是内容区相对坐标，需要加stage偏移转换为画布坐标
+    const STAGE_TOP = 20;
+    const TITLE_BAR_H = 34;
+    const CONTENT_PAD = 12;
+    const CONTENT_TOP = STAGE_TOP + TITLE_BAR_H + CONTENT_PAD;
+    const stageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
+    const canvasX = stageLeft + pos.x;
+    const canvasY = CONTENT_TOP + pos.y;
+    const nodeX = (canvasX + pan.x) * scale + rect.left;
+    const nodeY = (canvasY + pan.y) * scale + rect.top;
     setDraggingNode({
       nodeId,
       stageId,
@@ -676,10 +684,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       if (!rect) return;
       const newAbsX = e.clientX - d.offsetX;
       const newAbsY = e.clientY - d.offsetY;
-      const canvasX = newAbsX - rect.left;
-      const canvasY = newAbsY - rect.top;
-      const nodeX = canvasX / scale - pan.x;
-      const nodeY = canvasY / scale - pan.y;
+      const rawCanvasX = newAbsX - rect.left;
+      const rawCanvasY = newAbsY - rect.top;
+      // 画布坐标 → 内容区相对坐标（减去stage偏移）
+      const STAGE_TOP = 20;
+      const TITLE_BAR_H = 34;
+      const CONTENT_PAD = 12;
+      const CONTENT_TOP = STAGE_TOP + TITLE_BAR_H + CONTENT_PAD;
+      const stageLeft = stagePositionsMap[d.stageId] + CONTENT_PAD;
+      const nodeX = rawCanvasX / scale - pan.x - stageLeft;
+      const nodeY = rawCanvasY / scale - pan.y - CONTENT_TOP;
       setStages((prev) =>
         prev.map((s) =>
           s.id === d.stageId
@@ -690,8 +704,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     ? {
                         ...n,
                         position: {
-                          x: Math.round(nodeX / SNAP_SIZE) * SNAP_SIZE,
-                          y: Math.round(nodeY / SNAP_SIZE) * SNAP_SIZE,
+                          x: Math.floor(nodeX / SNAP_SIZE) * SNAP_SIZE,
+                          y: Math.floor(nodeY / SNAP_SIZE) * SNAP_SIZE,
                         },
                       }
                     : n
@@ -768,8 +782,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const pos = node.position;
     const nodeWidth = 160;
     const nodeHeight = getNodeHeight(node);
-    return { x: pos.x + nodeWidth, y: pos.y + nodeHeight / 2 };
-  }, [stages]);
+    const CONTENT_PAD = 12;
+    const CONTENT_TOP = 20 + 34 + CONTENT_PAD;
+    const stageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
+    return { x: stageLeft + pos.x + nodeWidth, y: CONTENT_TOP + pos.y + nodeHeight / 2 };
+  }, [stages, stagePositionsMap]);
 
   // 获取节点输入锚点的画布坐标（左侧中心）
   const getNodeInputAnchor = useCallback((nodeId: string, stageId: string): { x: number; y: number } | null => {
@@ -778,8 +795,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!node?.position) return null;
     const pos = node.position;
     const nodeHeight = getNodeHeight(node);
-    return { x: pos.x, y: pos.y + nodeHeight / 2 };
-  }, [stages]);
+    const CONTENT_PAD = 12;
+    const CONTENT_TOP = 20 + 34 + CONTENT_PAD;
+    const stageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
+    return { x: stageLeft + pos.x, y: CONTENT_TOP + pos.y + nodeHeight / 2 };
+  }, [stages, stagePositionsMap]);
 
   // ══════════════════════════════════════════
   // 渲染：节点
@@ -1080,12 +1100,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const tp = targetNode.position as { x: number; y: number } | undefined;
     if (!sp || !tp) return null;
 
+    // 节点position是相对于内容区的，需要转换为画布绝对坐标
+    const STAGE_TOP = 20;
+    const TITLE_BAR_H = 34;   // 标题栏在画布坐标中的高度
+    const CONTENT_PAD = 12;    // 内容区padding
+    const CONTENT_TOP = STAGE_TOP + TITLE_BAR_H + CONTENT_PAD;
+    const srcStageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
+    const tgtStageLeft = stagePositionsMap[stageId] + CONTENT_PAD;
+
     const sw = 160;
     const tw = 160;
     const sh = getNodeHeight(sourceNode);
     const th = getNodeHeight(targetNode);
-    const sy = sp.y + sh / 2;
-    const ty = tp.y + th / 2;
+    // 画布绝对坐标 = stageLeft + padding + pos
+    const sx = srcStageLeft + sp.x;
+    const tx = tgtStageLeft + tp.x;
+    const sy = CONTENT_TOP + sp.y + sh / 2;
+    const ty = CONTENT_TOP + tp.y + th / 2;
 
     // 连线运行状态
     const edgeRunState = (() => {
@@ -1100,9 +1131,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
     const isHovered = hoveredEdgeId === edge.id;
     // 贝塞尔曲线：两端水平切线匹配锚点方向，控制点距离取两点间距的30%
-    const dx = Math.abs(tp.x - (sp.x + sw));
-    const cpOffset = Math.max(30, dx * 0.35);
-    const baseD = `M ${sp.x + sw} ${sy} C ${sp.x + sw + cpOffset} ${sy}, ${tp.x - cpOffset} ${ty}, ${tp.x} ${ty}`;
+    const dx = Math.abs(tx + tw - sx - sw);
+    const cpOffset = Math.max(30, Math.abs(dx) * 0.35);
+    const baseD = `M ${sx + sw} ${sy} C ${sx + sw + cpOffset} ${sy}, ${tx - cpOffset} ${ty}, ${tx} ${ty}`;
 
     return (
       <g key={edge.id}>
@@ -1147,7 +1178,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         {/* 运行中连线动画虚线 */}
         {edgeRunState === 'running' && (
           <path
-            d={`M ${sp.x + sw} ${sy} C ${sp.x + sw + 30} ${sy}, ${tp.x - 30} ${ty + (sy - tp.y - 20) * 0.3}, ${tp.x} ${ty}`}
+            d={baseD}
             stroke="#58a6ff"
             strokeWidth={4}
             fill="none"
@@ -1163,7 +1194,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         {edge.label && (
           <g pointerEvents="all" onClick={() => handleDeleteEdge(edge.id)}>
             <rect
-              x={(sp.x + sw + tp.x) / 2 - 20}
+              x={(sx + sw + tx) / 2 - 20}
               y={(sy + ty) / 2 - 18}
               width={40}
               height={16}
@@ -1173,7 +1204,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               strokeWidth={0.5}
             />
             <text
-              x={(sp.x + sw + tp.x) / 2}
+              x={(sx + sw + tx) / 2}
               y={(sy + ty) / 2 - 8}
               fill="var(--text-secondary)"
               fontSize={9}
