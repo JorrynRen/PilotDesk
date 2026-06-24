@@ -136,7 +136,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       edges: [],
       gate: { strategy: 'all', mergeStrategy: 'merge' },
     };
-    setStages([...stages, newStage]);
+    // 将end节点从原最后阶段迁移到新阶段
+    let updated = [...stages];
+    const endNode = updated.flatMap(s => s.nodes).find(n => n.type === 'end');
+    if (endNode) {
+      updated = updated.map(s => ({
+        ...s,
+        nodes: s.nodes.filter(n => n.type !== 'end'),
+        edges: s.edges.filter(e => e.source !== endNode.id && e.target !== endNode.id),
+      }));
+      newStage.nodes = [endNode];
+    }
+    updated.push(newStage);
+    setStages(updated.map((s, i) => ({ ...s, order: i })));
   };
 
   const handleDeleteStage = (stageId: string) => {
@@ -146,7 +158,39 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const confirmDelete = () => {
     if (!confirmAction) return;
     if (confirmAction.type === 'deleteStage') {
-      setStages(stages.filter((s) => s.id !== confirmAction.targetId).map((s, i) => ({ ...s, order: i })));
+      const deleted = stages.find(s => s.id === confirmAction.targetId);
+      const remaining = stages.filter(s => s.id !== confirmAction.targetId);
+      // 如果被删阶段含end节点，将其迁移到新的最后阶段
+      const endNode = deleted?.nodes.find(n => n.type === 'end');
+      if (endNode && remaining.length > 0) {
+        const lastIdx = remaining.length - 1;
+        const lastStage = { ...remaining[lastIdx] };
+        lastStage.nodes = [...lastStage.nodes, endNode];
+        remaining[lastIdx] = lastStage;
+      }
+      // 如果删的不是最后阶段，确保end节点在最后阶段
+      if (endNode === undefined) {
+        const end = remaining.flatMap(s => s.nodes).find(n => n.type === 'end');
+        if (end && remaining.length > 0) {
+          const lastIdx = remaining.length - 1;
+          const lastStage = remaining[lastIdx];
+          if (lastStage.nodes.find(n => n.id === end.id)) {
+            // end已在最后阶段，无需移动
+          } else {
+            remaining[lastIdx] = {
+              ...lastStage,
+              nodes: [...lastStage.nodes, end],
+            };
+            remaining.forEach(s => {
+              if (s.id !== remaining[lastIdx].id) {
+                s.nodes = s.nodes.filter(n => n.type !== 'end');
+                s.edges = s.edges.filter(e => e.source !== end.id && e.target !== end.id);
+              }
+            });
+          }
+        }
+      }
+      setStages(remaining.map((s, i) => ({ ...s, order: i })));
     } else if (confirmAction.type === 'deleteNode') {
       setStages(stages.map((s) => ({
         ...s,
@@ -1334,11 +1378,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
           >
             <defs>
-              <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill="var(--accent)" />
+              <marker id="arrowhead" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                <polygon points="0 0, 6 2.5, 0 5" fill="var(--accent)" />
               </marker>
-              <marker id="arrowhead-gray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill="#484f58" />
+              <marker id="arrowhead-gray" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                <polygon points="0 0, 6 2.5, 0 5" fill="#484f58" />
               </marker>
             </defs>
             {/* 阶段内连线 */}
