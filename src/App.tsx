@@ -7,6 +7,7 @@ import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './compo
 import { MarketPage } from './components/inspiration/MarketPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { WorkflowPage } from './pages/WorkflowPage';
+import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
 import './styles/ui.css';
 
 function MainLayout() {
@@ -56,6 +57,8 @@ function App() {
     const path = location.pathname;
     if (path === '/market') {
       document.title = `${base} - 灵感市集`;
+    } else if (path === '/workflow/editor') {
+      document.title = `${base} - 工作流编辑器`;
     } else if (path === '/workflow') {
       document.title = `${base} - 工作流管理`;
     } else if (path === '/settings') {
@@ -72,6 +75,7 @@ function App() {
       <Route path="/" element={<MainLayout />} />
       <Route path="/market" element={<MarketPage onBack={() => window.history.back()} />} />
       <Route path="/workflow" element={<WorkflowPage onBack={() => window.history.back()} />} />
+      <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
       <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
     </Routes>
   );
