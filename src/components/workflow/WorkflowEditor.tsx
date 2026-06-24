@@ -591,19 +591,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       handleUpdateConnectingPos(e);
     };
     const onMouseUp = (e: MouseEvent) => {
-      // 检测mouseup位置是否在input anchor上，完成连线
+      // 释放鼠标时，检测是否在目标节点上（节点任意位置均可完成连线）
       const target = e.target as HTMLElement;
-      const inputAnchor = target.closest('[data-anchor="input"]') as HTMLElement | null;
-      if (inputAnchor) {
-        const nodeEl = inputAnchor.closest('[data-node]') as HTMLElement | null;
-        const stageEl = inputAnchor.closest('[data-stage]') as HTMLElement | null;
-        if (nodeEl && stageEl) {
-          const nodeId = nodeEl.getAttribute('data-node-id');
-          const stageId = stageEl.getAttribute('data-stage-id');
-          if (nodeId && stageId) {
-            handleEndConnect(nodeId, stageId);
-            return;
-          }
+      const nodeEl = target.closest('[data-node]') as HTMLElement | null;
+      const stageEl = target.closest('[data-stage]') as HTMLElement | null;
+      if (nodeEl && stageEl) {
+        const nodeId = nodeEl.getAttribute('data-node-id');
+        const stageId = stageEl.getAttribute('data-stage-id');
+        if (nodeId && stageId && nodeId !== connecting.source) {
+          handleEndConnect(nodeId, stageId);
+          return;
         }
       }
       setConnecting(null);
@@ -1008,10 +1005,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               className="absolute rounded-full transition-all duration-150"
               style={{
                 left: -6, top: '50%', marginTop: -6,
-                width: connecting ? 12 : 10, height: connecting ? 12 : 10,
+                width: (connecting && isConnectTarget) ? 12 : 10, height: (connecting && isConnectTarget) ? 12 : 10,
                 background: (connecting && isConnectTarget) ? 'var(--accent)' : 'var(--border)',
                 border: '2px solid var(--bg-secondary)',
-                cursor: connecting ? 'cell' : 'crosshair',
+                cursor: (connecting && isConnectTarget) ? 'cell' : 'crosshair',
                 boxShadow: (connecting && isConnectTarget) ? '0 0 8px var(--accent-light)' : 'none',
               }}
             />
@@ -1129,10 +1126,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           className="absolute rounded-full transition-all duration-150"
           style={{
             left: -5, top: '50%', marginTop: -5,
-            width: connecting ? 12 : 10, height: connecting ? 12 : 10,
+            width: (connecting && isConnectTarget) ? 12 : 10, height: (connecting && isConnectTarget) ? 12 : 10,
             background: (connecting && isConnectTarget) ? 'var(--accent)' : 'var(--border)',
             border: '2px solid var(--bg-primary)',
-            cursor: connecting ? 'cell' : 'crosshair',
+            cursor: (connecting && isConnectTarget) ? 'cell' : 'crosshair',
             boxShadow: (connecting && isConnectTarget) ? '0 0 8px var(--accent-light)' : 'none',
           }}
         />
