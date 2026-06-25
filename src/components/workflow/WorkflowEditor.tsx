@@ -1833,7 +1833,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                             {stage.nodes.length}/{stage.nodes.length} 就绪
                           </span>
                         </div>
-                        <div style="border-top: 1px solid var(--border); margin-bottom: 6px;"></div>
+                        <div style={{borderTop: '1px solid var(--border)', marginBottom: '6px'}}></div>
                         <div className="flex items-center gap-3">
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                             策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{gateStrategyLabel(stage.gate.strategy)}</span>
