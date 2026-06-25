@@ -73,6 +73,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 多选状态 ──
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [isBoxSelecting, setIsBoxSelecting] = useState(false);
+  const [deleteConfirmPending, setDeleteConfirmPending] = useState(false);
   const [boxSelectRect, setBoxSelectRect] = useState<{ x1: number; y1: number; x2: number; y2: number; stageId: string } | null>(null);
   const boxSelectStartRef = useRef<{ x: number; y: number; stageId: string } | null>(null);
   const [name, setName] = useState(def?.name || '');
@@ -514,7 +515,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const handleBatchDelete = useCallback(() => {
     if (selectedNodeIds.size === 0) return;
-    if (!confirm(`确定要删除选中的 ${selectedNodeIds.size} 个节点吗？`)) return;
+    if (!deleteConfirmPending) {
+      setDeleteConfirmPending(true);
+      const timer = setTimeout(() => setDeleteConfirmPending(false), 3000);
+      return () => clearTimeout(timer);
+    }
+    // Confirmed: execute delete
+    setDeleteConfirmPending(false);
     // 不允许删除边界节点
     const boundaryIds = new Set<string>();
     for (const s of stages) {
@@ -532,7 +539,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setSelectedNodeIds(new Set());
     setSelectedNodeId(null);
     setSelectedStageId(null);
-  }, [selectedNodeIds, stages]);
+  }, [selectedNodeIds, stages, deleteConfirmPending]);
 
   // ── 连线操作（带实时预览） ──
   const handleStartConnect = (e: React.MouseEvent, nodeId: string, stageId: string) => {
@@ -1755,8 +1762,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               <button onClick={handleDistributeVertical} className="pd-btn w-6 h-6 flex items-center justify-center rounded" style={{ background: '#d2992222', color: '#d29922', border: 'none' }} title="垂直平均分布">
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="3.5" y="1.5" width="5" height="1.2" rx="0.3" fill="currentColor" /><rect x="3.5" y="5.4" width="5" height="1.2" rx="0.3" fill="currentColor" /><rect x="3.5" y="9.3" width="5" height="1.2" rx="0.3" fill="currentColor" /><path d="M6 3.3v1.5" strokeWidth="1" /><path d="M6 7.2v1.5" strokeWidth="1" /></svg>
               </button>
-              <button onClick={handleBatchDelete} className="pd-btn w-6 h-6 flex items-center justify-center rounded" style={{ background: '#f8514922', color: '#f85149', border: 'none' }} title="批量删除 (Delete)">
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+              <button
+                onClick={handleBatchDelete}
+                className="pd-btn h-6 flex items-center justify-center rounded text-[10px] font-medium"
+                style={{
+                  background: deleteConfirmPending ? '#f85149' : '#f8514922',
+                  color: deleteConfirmPending ? '#fff' : '#f85149',
+                  border: deleteConfirmPending ? '1px solid #f85149' : 'none',
+                  padding: deleteConfirmPending ? '0 6px' : 0,
+                  width: deleteConfirmPending ? 'auto' : '24px',
+                }}
+                title={deleteConfirmPending ? '再次点击确认删除' : '批量删除 (Delete)'}
+              >
+                {deleteConfirmPending ? '确认?' : (
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+                )}
               </button>
             </>
           )}
