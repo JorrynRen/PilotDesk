@@ -11,7 +11,7 @@
  * - CSS变量主题支持
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition } from '../../workflow/WorkflowDefinition';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
@@ -286,17 +286,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, [onNameChange]);
 
   // ── 统计信息 ──
-  const stats = {
-    totalNodes: stages.reduce((sum, s) => sum + s.nodes.length, 0),
-    totalEdges: stages.reduce((sum, s) => sum + s.edges.length, 0),
-    totalStages: stages.length,
-    nodeTypeCounts: {} as Record<string, number>,
-  };
-  for (const s of stages) {
-    for (const n of s.nodes) {
-      stats.nodeTypeCounts[n.type] = (stats.nodeTypeCounts[n.type] || 0) + 1;
+  const stats = useMemo(() => {
+    const result = {
+      totalNodes: stages.reduce((sum, s) => sum + s.nodes.length, 0),
+      totalEdges: stages.reduce((sum, s) => sum + s.edges.length, 0),
+      totalStages: stages.length,
+      nodeTypeCounts: {} as Record<string, number>,
+    };
+    for (const s of stages) {
+      for (const n of s.nodes) {
+        result.nodeTypeCounts[n.type] = (result.nodeTypeCounts[n.type] || 0) + 1;
+      }
     }
-  }
+    return result;
+  }, [stages]);
 
   const handleAddStage = () => {
     const newStage: Stage = {
@@ -578,27 +581,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const stagePositionsMap = getStagePositions();
 
-  const getNodeCanvasRect = useCallback((nodeId: string, stageId: string) => {
-    const stage = stages.find(s => s.id === stageId);
-    if (!stage) return null;
-    const node = stage.nodes.find(n => n.id === nodeId);
-    if (!node) return null;
-    const stageLeft = stagePositionsMap[stageId];
-    const pos = node.position ?? { x: 20, y: 20 };
-    const nodeX = stageLeft + pos.x / scale;
-    const nodeY = STAGE_TOP + TITLE_H + pos.y / scale;
-    return { x: nodeX, y: nodeY, w: NODE_W / scale, h: NODE_H / scale };
-  }, [stages, stagePositionsMap, scale]);
-
-
-
-  /**
-   * 画布坐标 → 指定stage内容区的相对坐标（用于设置node.position）
-   */
-  /** 画布坐标 → 内容区相对坐标（纯算术）
-   *  节点 position:absolute，定位基准 = 内容区 div 的 padding-box 左上角。
-   *  内容区 div 在阶段 div 的 flex 列中，padding-box 原点 = (stageLeft, STAGE_TOP + TITLE_H)
-   */
   const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
     const stageLeft = stagePositionsMap[stageId];
     return {
@@ -607,14 +589,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [stagePositionsMap]);
 
-  /** 内容区相对坐标 → 画布坐标（纯算术） */
-  const contentToCanvasPos = useCallback((contentX: number, contentY: number, stageId: string) => {
-    const stageLeft = stagePositionsMap[stageId];
-    return {
-      x: stageLeft + contentX,
-      y: STAGE_TOP + TITLE_H + contentY,
-    };
-  }, [stagePositionsMap]);
 
   const handleUpdateConnectingPos = useCallback((e: MouseEvent) => {
     if (!connecting) return;
@@ -1087,16 +1061,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [draggingNode, scale, pan.x, pan.y, canvasToContentPos, selectedNodeIds]);
-
-  // ── 坐标转换工具 ──
-  const clientToCanvas = useCallback((clientX: number, clientY: number) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return { x: 0, y: 0 };
-    return {
-      x: (clientX - rect.left - pan.x) / scale,
-      y: (clientY - rect.top - pan.y) / scale,
-    };
-  }, [pan, scale]);
 
 
   const getStageAtCanvasPos = useCallback((cx: number, cy: number) => {
