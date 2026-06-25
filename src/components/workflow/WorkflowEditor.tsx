@@ -1583,7 +1583,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         }}
         onMouseDown={handleCanvasMouseDown}
         onWheel={handleWheel}
-        
+        onContextMenu={(e) => {
+          // 右键在阶段内容区内：阻止默认菜单（用于框选）
+          if ((e.target as HTMLElement).closest('[data-stage-content]')) {
+            e.preventDefault();
+          }
+        }}
       >
         {/* 网格辅助线 — 画布背景，随平移缩放无限延伸 */}
         {showGrid && (
