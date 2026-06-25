@@ -31,7 +31,7 @@ const STAGE_COLLAPSED_W = 72;
 const STAGE_GAP = 36;
 const STAGE_TOP = 20;
 const TITLE_H = 36;
-const GATE_H = 56;
+const GATE_H = 64;
 const CONTENT_H = 500;
 const NODE_W = 160;
 const NODE_H = 60;
@@ -1815,7 +1815,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         data-gate
                         className="mx-2 p-2 rounded-lg cursor-pointer transition-colors duration-150"
                         style={{
-                          height: 56,
+                          height: GATE_H,
                           border: `1px solid ${stageRunState === 'running' ? '#58a6ff88' : 'var(--border)'}`,
                           background: 'var(--bg-primary)',
                           position: 'relative',
