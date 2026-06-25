@@ -861,9 +861,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         if (!rect) return;
         const cx = (e.clientX - rect.left - pan.x) / scale;
         const cy = (e.clientY - rect.top - pan.y) / scale;
+        const stageLeft = stagePositionsMap[stageId];
+        const contentX = cx - stageLeft;
+        const contentY = cy - STAGE_TOP - TITLE_H;
         setIsBoxSelecting(true);
         boxSelectStartRef.current = { x: cx, y: cy, stageId };
-        setBoxSelectRect({ x1: cx, y1: cy, x2: cx, y2: cy, stageId });
+        setBoxSelectRect({ x1: contentX, y1: contentY, x2: contentX, y2: contentY, stageId });
         handleClearSelection();
       }
       return;
@@ -1616,7 +1619,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><circle cx="6" cy="6" r="4.5" /><path d="M4.5 5a1.5 1.5 0 0 1 3 0c0 1-1.5 1-1.5 2.5" /><circle cx="6" cy="9" r="0.5" fill="currentColor" /></svg>
             </button>
             <div className="absolute bottom-full right-0 mb-2 w-[310px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
-              <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>操作帮助</div>
+              <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}><span className="inline-flex items-center gap-1"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><circle cx="6" cy="6" r="4.5" /><path d="M4.5 5a1.5 1.5 0 0 1 3 0c0 1-1.5 1-1.5 2.5" /><circle cx="6" cy="9" r="0.5" fill="currentColor" /></svg>操作帮助</span></div>
               <div className="space-y-0 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>平移画布</span><span style={{ color: 'var(--text-tertiary)' }}>空白区左键拖拽 / 中键</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>缩放画布</span><span style={{ color: 'var(--text-tertiary)' }}>鼠标滚轮</span></div>
@@ -1647,7 +1650,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               </svg>
             </button>
             <div className="absolute bottom-full right-0 mb-2 w-[220px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
-              <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>工作流统计</div>
+              <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}><span className="inline-flex items-center gap-1"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="1" y="6" width="2.5" height="5" rx="0.5" /><rect x="4.75" y="3" width="2.5" height="8" rx="0.5" /><rect x="8.5" y="1" width="2.5" height="10" rx="0.5" /></svg>工作流统计</span></div>
               <div className="space-y-0 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>阶段</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalStages}</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>节点</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalNodes}</span></div>
