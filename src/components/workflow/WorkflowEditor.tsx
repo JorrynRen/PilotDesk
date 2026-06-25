@@ -81,6 +81,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [description, setDescription] = useState(def?.description || '');
   const [connecting, setConnecting] = useState<ConnectingPreview | null>(null);
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
+  const [gateInput, setGateInput] = useState<{ stageId: string } | null>(null);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
@@ -1818,7 +1819,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           zIndex: 10,
                           overflow: 'hidden',
                         }}
-                        onClick={() => handleUpdateGate(stage.id, {})}
+                        onClick={() => setGateInput({ stageId: stage.id })}
                       >
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-[10px] font-semibold flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
@@ -2018,6 +2019,64 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   const expr = (document.getElementById('condition-expr') as HTMLInputElement)?.value || '';
                   const label = (document.getElementById('condition-label') as HTMLInputElement)?.value || '';
                   handleConfirmCondition(expr, label);
+                }}
+                className="pd-btn px-4 py-1.5 text-xs rounded"
+                style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
+              >确认</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 门控编辑弹窗 ── */}
+      {gateInput && (
+        <div className="absolute inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
+          <div
+            className="rounded-xl p-6 w-[90%] max-w-[400px]"
+            style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑门控配置</h3>
+            <div className="mb-4">
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>聚合策略</label>
+              <select
+                id="gate-strategy"
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.strategy || 'all'}
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+              >
+                <option value="all">全部完成 (all)</option>
+                <option value="any">任一完成 (any)</option>
+                <option value="count">计数完成 (count)</option>
+                <option value="threshold">阈值完成 (threshold)</option>
+              </select>
+            </div>
+            <div className="mb-4">
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>合并策略</label>
+              <select
+                id="gate-merge"
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy || 'merge'}
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+              >
+                <option value="merge">合并对象 (merge)</option>
+                <option value="concat">合并数组 (concat)</option>
+                <option value="pick_first">取第一个 (pick_first)</option>
+                <option value="custom">自定义脚本 (custom)</option>
+              </select>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setGateInput(null)}
+                className="pd-btn px-4 py-1.5 text-xs rounded"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+              >取消</button>
+              <button
+                onClick={() => {
+                  const strategy = (document.getElementById('gate-strategy') as HTMLSelectElement)?.value as 'all' | 'any' | 'count' | 'threshold';
+                  const mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'custom';
+                  handleUpdateGate(gateInput.stageId, { strategy, mergeStrategy });
+                  setGateInput(null);
                 }}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
