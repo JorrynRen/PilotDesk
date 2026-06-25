@@ -514,6 +514,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const handleBatchDelete = useCallback(() => {
     if (selectedNodeIds.size === 0) return;
+    if (!confirm(`确定要删除选中的 ${selectedNodeIds.size} 个节点吗？`)) return;
     // 不允许删除边界节点
     const boundaryIds = new Set<string>();
     for (const s of stages) {
