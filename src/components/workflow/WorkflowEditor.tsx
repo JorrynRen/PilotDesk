@@ -69,6 +69,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
+
+  // ── 多选状态 ──
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+  const [isBoxSelecting, setIsBoxSelecting] = useState(false);
+  const [boxSelectRect, setBoxSelectRect] = useState<{ x1: number; y1: number; x2: number; y2: number; stageId: string } | null>(null);
+  const boxSelectStartRef = useRef<{ x: number; y: number; stageId: string } | null>(null);
   const [name, setName] = useState(def?.name || '');
   const [description, setDescription] = useState(def?.description || '');
   const [connecting, setConnecting] = useState<ConnectingPreview | null>(null);
@@ -240,11 +246,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [draggingNode, setDraggingNode] = useState<{
     nodeId: string;
     stageId: string;
-    offsetX: number;
-    offsetY: number;
+    contentOffsetX: number;
+    contentOffsetY: number;
     started: boolean;
     startX: number;
     startY: number;
+    origPositions?: Record<string, { x: number; y: number }>;
   } | null>(null);
 
   // ── 状态初始化 ──
@@ -399,6 +406,127 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       nodes: s.nodes.map((n) => n.id === nodeId ? { ...n, ...updates } : n),
     })));
   };
+
+  // ── 多选操作 ──
+  const handleSelectNode = useCallback((nodeId: string, stageId: string, ctrlKey: boolean) => {
+    if (ctrlKey) {
+      // Ctrl+click: toggle in multi-select
+      setSelectedNodeIds(prev => {
+        const next = new Set(prev);
+        if (next.has(nodeId)) { next.delete(nodeId); if (selectedNodeId === nodeId) setSelectedNodeId(null); }
+        else { next.add(nodeId); setSelectedNodeId(nodeId); setSelectedStageId(stageId); }
+        return next;
+      });
+    } else {
+      // Normal click: if already in multi-select, keep it; otherwise single select
+      if (selectedNodeIds.has(nodeId)) {
+        setSelectedNodeId(nodeId);
+        setSelectedStageId(stageId);
+      } else {
+        setSelectedNodeIds(new Set());
+        setSelectedNodeId(nodeId);
+        setSelectedStageId(stageId);
+      }
+    }
+  }, [selectedNodeId, selectedNodeIds]);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedNodeIds(new Set());
+    setSelectedNodeId(null);
+    setSelectedStageId(null);
+  }, []);
+
+  /** 获取多选节点的位置信息（stageId -> [{nodeId, x, y}]） */
+  const getMultiSelectPositions = useCallback(() => {
+    const positions: { stageId: string; nodeId: string; x: number; y: number }[] = [];
+    for (const stage of stages) {
+      for (const node of stage.nodes) {
+        if (selectedNodeIds.has(node.id)) {
+          positions.push({ stageId: stage.id, nodeId: node.id, x: node.position?.x ?? 20, y: node.position?.y ?? 20 });
+        }
+      }
+    }
+    return positions;
+  }, [stages, selectedNodeIds]);
+
+  const handleAlignHorizontal = useCallback(() => {
+    const positions = getMultiSelectPositions();
+    if (positions.length < 2) return;
+    const avgY = positions.reduce((s, p) => s + p.y + NODE_H / 2, 0) / positions.length - NODE_H / 2;
+    setStages(prev => prev.map(s => ({
+      ...s,
+      nodes: s.nodes.map(n => positions.some(p => p.nodeId === n.id && p.stageId === s.id)
+        ? { ...n, position: { x: n.position?.x ?? 20, y: Math.round(avgY) } } : n),
+    })));
+  }, [getMultiSelectPositions]);
+
+  const handleAlignVertical = useCallback(() => {
+    const positions = getMultiSelectPositions();
+    if (positions.length < 2) return;
+    const avgX = positions.reduce((s, p) => s + p.x + NODE_W / 2, 0) / positions.length - NODE_W / 2;
+    setStages(prev => prev.map(s => ({
+      ...s,
+      nodes: s.nodes.map(n => positions.some(p => p.nodeId === n.id && p.stageId === s.id)
+        ? { ...n, position: { x: Math.round(avgX), y: n.position?.y ?? 20 } } : n),
+    })));
+  }, [getMultiSelectPositions]);
+
+  const handleDistributeHorizontal = useCallback(() => {
+    // 水平平均分布 = X轴等间距排列
+    const positions = getMultiSelectPositions();
+    if (positions.length < 3) return;
+    const sorted = [...positions].sort((a, b) => a.x - b.x);
+    const minX = sorted[0].x;
+    const maxX = sorted[sorted.length - 1].x;
+    const step = (maxX - minX) / (sorted.length - 1);
+    const targets = new Map(sorted.map((p, i) => [p.nodeId + '|' + p.stageId, Math.round(minX + step * i)]));
+    setStages(prev => prev.map(s => ({
+      ...s,
+      nodes: s.nodes.map(n => {
+        const key = n.id + '|' + s.id;
+        return targets.has(key) ? { ...n, position: { x: targets.get(key)!, y: n.position?.y ?? 20 } } : n;
+      }),
+    })));
+  }, [getMultiSelectPositions]);
+
+  const handleDistributeVertical = useCallback(() => {
+    // 垂直平均分布 = Y轴等间距排列
+    const positions = getMultiSelectPositions();
+    if (positions.length < 3) return;
+    const sorted = [...positions].sort((a, b) => a.y - b.y);
+    const minY = sorted[0].y;
+    const maxY = sorted[sorted.length - 1].y;
+    const step = (maxY - minY) / (sorted.length - 1);
+    const targets = new Map(sorted.map((p, i) => [p.nodeId + '|' + p.stageId, Math.round(minY + step * i)]));
+    setStages(prev => prev.map(s => ({
+      ...s,
+      nodes: s.nodes.map(n => {
+        const key = n.id + '|' + s.id;
+        return targets.has(key) ? { ...n, position: { x: n.position?.x ?? 20, y: targets.get(key)! } } : n;
+      }),
+    })));
+  }, [getMultiSelectPositions]);
+
+  const handleBatchDelete = useCallback(() => {
+    if (selectedNodeIds.size === 0) return;
+    // 不允许删除边界节点
+    const boundaryIds = new Set<string>();
+    for (const s of stages) {
+      for (const n of s.nodes) {
+        if (n.isBoundary && selectedNodeIds.has(n.id)) boundaryIds.add(n.id);
+      }
+    }
+    const toDelete = new Set([...selectedNodeIds].filter(id => !boundaryIds.has(id)));
+    if (toDelete.size === 0) return;
+    setStages(prev => prev.map(s => ({
+      ...s,
+      nodes: s.nodes.filter(n => !toDelete.has(n.id)),
+      edges: s.edges.filter(e => !toDelete.has(e.source) && !toDelete.has(e.target)),
+    })));
+    setSelectedNodeIds(new Set());
+    setSelectedNodeId(null);
+    setSelectedStageId(null);
+  }, [selectedNodeIds, stages]);
 
   // ── 连线操作（带实时预览） ──
   const handleStartConnect = (e: React.MouseEvent, nodeId: string, stageId: string) => {
@@ -599,6 +727,28 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [connecting, handleUpdateConnectingPos]);
 
+  // ── Delete 键：批量删除选中节点 / 删除确认 ──
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if ((e.target as HTMLElement).closest('input, textarea, [contenteditable]')) return;
+        if (selectedNodeIds.size > 0) {
+          e.preventDefault();
+          handleBatchDelete();
+        }
+      }
+      // Escape: clear multi-select
+      if (e.key === 'Escape' && !connecting) {
+        if (selectedNodeIds.size > 0) {
+          e.preventDefault();
+          handleClearSelection();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedNodeIds, connecting, handleBatchDelete, handleClearSelection]);
+
   const handleConfirmCondition = (condition: string, label: string) => {
     if (!conditionInput) return;
     // 检查是否已有相同source→target的edge，有则更新，无则新建
@@ -682,12 +832,43 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       return;
     }
     if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest('button, input, [data-node], [data-anchor], [data-gate]')) return;
+    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate]')) return;
+    // Click on a node -> handle select (not pan)
+    const nodeEl = (e.target as HTMLElement).closest('[data-node]');
+    if (nodeEl) {
+      const nodeId = nodeEl.getAttribute('data-node-id')!;
+      const stageEl = (e.target as HTMLElement).closest('[data-stage]')!;
+      const stageId = stageEl?.getAttribute('data-stage-id');
+      if (stageId) {
+        e.preventDefault();
+        handleSelectNode(nodeId, stageId, e.ctrlKey || e.metaKey);
+      }
+      return;
+    }
+    // Click on content area (stage-content) -> box-select, not pan
+    const stageContentEl = (e.target as HTMLElement).closest('[data-stage-content]');
+    if (stageContentEl && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      const stageEl = (e.target as HTMLElement).closest('[data-stage]')!;
+      const stageId = stageEl?.getAttribute('data-stage-id');
+      if (stageId) {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const cx = (e.clientX - rect.left - pan.x) / scale;
+        const cy = (e.clientY - rect.top - pan.y) / scale;
+        setIsBoxSelecting(true);
+        boxSelectStartRef.current = { x: cx, y: cy, stageId };
+        setBoxSelectRect({ x1: cx, y1: cy, x2: cx, y2: cy, stageId });
+        handleClearSelection();
+      }
+      return;
+    }
+    // Otherwise: pan
     e.preventDefault();
     setIsPanning(true);
     panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
     panThresholdRef.current = { startX: e.clientX, startY: e.clientY, triggered: false };
-  }, [pan.x, pan.y]);
+  }, [pan.x, pan.y, edgeContextMenu, handleSelectNode, handleClearSelection]);
 
   useEffect(() => {
     if (!isPanning) return;
@@ -720,6 +901,62 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [isPanning]);
 
+  // ── 框选鼠标追踪 ──
+  useEffect(() => {
+    if (!isBoxSelecting) return;
+    const handleMove = (e: MouseEvent) => {
+      if (!boxSelectStartRef.current) return;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const cx = (e.clientX - rect.left - pan.x) / scale;
+      const cy = (e.clientY - rect.top - pan.y) / scale;
+      const stageLeft = stagePositionsMap[boxSelectStartRef.current.stageId];
+      const contentX = cx - stageLeft;
+      const contentY = cy - STAGE_TOP - TITLE_H;
+      setBoxSelectRect(prev => prev ? { ...prev, x2: contentX, y2: contentY } : null);
+    };
+    const handleUp = (e: MouseEvent) => {
+      if (!boxSelectStartRef.current || !boxSelectRect) {
+        setIsBoxSelecting(false);
+        boxSelectStartRef.current = null;
+        setBoxSelectRect(null);
+        return;
+      }
+      // Find nodes inside the selection rect
+      const stageId = boxSelectStartRef.current.stageId;
+      const stage = stages.find(s => s.id === stageId);
+      if (stage) {
+        const r = boxSelectRect;
+        const x1 = Math.min(r.x1, r.x2), x2 = Math.max(r.x1, r.x2);
+        const y1 = Math.min(r.y1, r.y2), y2 = Math.max(r.y1, r.y2);
+        const hitIds = new Set<string>();
+        for (const node of stage.nodes) {
+          const nx = node.position?.x ?? 20;
+          const ny = node.position?.y ?? 20;
+          // Node box in content coords: (nx, ny, nx+NODE_W, ny+NODE_H)
+          if (nx + NODE_W > x1 && nx < x2 && ny + NODE_H > y1 && ny < y2) {
+            hitIds.add(node.id);
+          }
+        }
+        if (hitIds.size > 0) {
+          setSelectedNodeIds(hitIds);
+          const first = [...hitIds][0] ?? null;
+          setSelectedNodeId(first);
+          setSelectedStageId(stageId);
+        }
+      }
+      setIsBoxSelecting(false);
+      boxSelectStartRef.current = null;
+      setBoxSelectRect(null);
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [isBoxSelecting, boxSelectRect, pan, scale, stages, stagePositionsMap]);
+
   // ── 鼠标滚轮缩放（以光标位置为中心） ──
   const handleWheel = useCallback((e: React.WheelEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -749,23 +986,40 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if ((e.target as HTMLElement).closest('[data-anchor]')) return;
     e.stopPropagation();
     e.preventDefault();
+    // Ctrl+click: toggle multi-select (handled in handleCanvasMouseDown), don't start drag
+    if (e.ctrlKey || e.metaKey) return;
     const node = stages.find((s) => s.id === stageId)?.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     // 纯算术计算节点屏幕位置（内容区正向缩放 + 节点反向缩放）
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const stageLeft = stagePositionsMap[stageId];
+    const nodePos = node.position ?? { x: 20, y: 20 };
     // 节点布局左上角画布坐标 = stageLeft + pos.x，乘以scale得屏幕位置
-    const nodeScreenX = rect.left + pan.x + (stageLeft + (node.position?.x ?? 20)) * scale;
-    const nodeScreenY = rect.top + pan.y + (STAGE_TOP + TITLE_H + (node.position?.y ?? 20)) * scale;
+    const nodeScreenX = rect.left + pan.x + (stageLeft + nodePos.x) * scale;
+    const nodeScreenY = rect.top + pan.y + (STAGE_TOP + TITLE_H + nodePos.y) * scale;
+    // Store content-relative offset + original positions for multi-drag
+    const isMulti = selectedNodeIds.has(nodeId) && selectedNodeIds.size > 1;
+    const origPositions: Record<string, { x: number; y: number }> = {};
+    if (isMulti) {
+      const stage = stages.find(s => s.id === stageId);
+      if (stage) {
+        for (const n of stage.nodes) {
+          if (selectedNodeIds.has(n.id)) {
+            origPositions[n.id] = { ...(n.position ?? { x: 20, y: 20 }) };
+          }
+        }
+      }
+    }
     setDraggingNode({
       nodeId,
       stageId,
-      offsetX: e.clientX - nodeScreenX,
-      offsetY: e.clientY - nodeScreenY,
+      contentOffsetX: nodePos.x,
+      contentOffsetY: nodePos.y,
       started: false,
       startX: e.clientX,
       startY: e.clientY,
+      origPositions: isMulti ? origPositions : undefined,
     });
     setSelectedNodeId(nodeId);
     setSelectedStageId(stageId);
@@ -783,33 +1037,47 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const newAbsX = e.clientX - d.offsetX;
-      const newAbsY = e.clientY - d.offsetY;
-      const rawCanvasX = newAbsX - rect.left;
-      const rawCanvasY = newAbsY - rect.top;
-      // 画布坐标（正确公式：(screenOffset - pan) / scale）
+      const rawCanvasX = e.clientX - rect.left;
+      const rawCanvasY = e.clientY - rect.top;
       const canvasX = (rawCanvasX - pan.x) / scale;
       const canvasY = (rawCanvasY - pan.y) / scale;
-      // 画布坐标 → 内容区相对坐标（用统一函数）
       const rel = canvasToContentPos(canvasX, canvasY, d.stageId);
-      // 基于节点左上角坐标 clamp，确保节点不超出内容区
-      setStages((prev) =>
-        prev.map((s) =>
-          s.id === d.stageId
-            ? {
-                ...s,
-                nodes: s.nodes.map((n) => {
-                  if (n.id !== d.nodeId) return n;
-                  const meta = getNodeTypeMeta(n.type);
-                  return {
-                    ...n,
-                    position: clampNodePosition(rel.x, rel.y, meta.nodeW, meta.nodeH, scale),
-                  };
-                }),
-              }
-            : s
-        )
-      );
+      // Multi-select: if dragged node is in selection, move all selected nodes together
+      const isMultiDrag = selectedNodeIds.has(d.nodeId) && d.origPositions;
+      if (isMultiDrag) {
+        const deltaX = rel.x - d.contentOffsetX;
+        const deltaY = rel.y - d.contentOffsetY;
+        setStages((prev) => prev.map((s) => {
+          if (s.id !== d.stageId) return s;
+          return {
+            ...s,
+            nodes: s.nodes.map((n) => {
+              if (!d.origPositions || !d.origPositions[n.id]) return n;
+              const meta = getNodeTypeMeta(n.type);
+              const orig = d.origPositions[n.id];
+              return { ...n, position: clampNodePosition(orig.x + deltaX, orig.y + deltaY, meta.nodeW, meta.nodeH, scale) };
+            }),
+          };
+        }));
+      } else {
+        setStages((prev) =>
+          prev.map((s) =>
+            s.id === d.stageId
+              ? {
+                  ...s,
+                  nodes: s.nodes.map((n) => {
+                    if (n.id !== d.nodeId) return n;
+                    const meta = getNodeTypeMeta(n.type);
+                    return {
+                      ...n,
+                      position: clampNodePosition(rel.x, rel.y, meta.nodeW, meta.nodeH, scale),
+                    };
+                  }),
+                }
+              : s
+          )
+        );
+      }
     };
     const handleMouseUp = () => {
       setDraggingNode(null);
@@ -820,7 +1088,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggingNode, scale, pan.x, pan.y, canvasToContentPos]);
+  }, [draggingNode, scale, pan.x, pan.y, canvasToContentPos, selectedNodeIds]);
 
   // ── 坐标转换工具 ──
   const clientToCanvas = useCallback((clientX: number, clientY: number) => {
@@ -864,8 +1132,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         data-node-id={node.id}
         onClick={(e) => {
           e.stopPropagation();
-          setSelectedNodeId(node.id);
-          setSelectedStageId(stageId);
+          handleSelectNode(node.id, stageId, e.ctrlKey || e.metaKey);
         }}
         onMouseDown={(e) => handleNodeMouseDown(e, node.id, stageId)}
         onMouseEnter={() => setHoveredNodeId(node.id)}
@@ -880,11 +1147,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           boxSizing: 'border-box',
           padding: '12px 10px',
           borderRadius: 8,
-          border: isSelected
-            ? '1.5px solid var(--accent)'
-            : isHovered
-              ? '1px solid var(--accent)'
-              : '1.5px solid #484f58',
+          border: selectedNodeIds.has(node.id)
+            ? '2px solid var(--accent)'
+            : isSelected
+              ? '1.5px solid var(--accent)'
+              : isHovered
+                ? '1px solid var(--accent)'
+                : '1.5px solid #484f58',
           background: isDraggingThis
             ? 'var(--bg-tertiary)'
             : runState === 'running'
@@ -896,8 +1165,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   : 'var(--bg-tertiary)',
           boxShadow: isDraggingThis
             ? '0 8px 24px rgba(0,0,0,0.4), 0 0 0 1px var(--accent)'
-            : isSelected
-              ? '0 0 0 1px var(--accent-light), var(--shadow-sm)'
+            : selectedNodeIds.has(node.id) && !isSelected
+              ? '0 0 0 2px var(--accent-light), var(--shadow-md)'
+              : isSelected
+                ? '0 0 0 1px var(--accent-light), var(--shadow-sm)'
               : isHovered
                 ? 'var(--shadow-md)'
                 : runState === 'running'
@@ -1305,6 +1576,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               ? (panThresholdRef.current?.triggered ? 'grabbing' : 'default')
               : draggingNode?.started
                 ? 'default'
+                : isBoxSelecting ? 'crosshair'
                 : dragOverStageId === null ? (dragOverCanvasRef.current ? 'not-allowed' : 'grab') : 'grab',
         }}
         onMouseDown={handleCanvasMouseDown}
@@ -1345,7 +1617,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <div className="flex justify-between"><span>连接节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽输出锚点→输入锚点</span></div>
                 <div className="flex justify-between"><span>删除连线</span><span style={{ color: 'var(--text-tertiary)' }}>点击连线</span></div>
                 <div className="flex justify-between"><span>删除节点/阶段</span><span style={{ color: 'var(--text-tertiary)' }}>悬停 x 按钮</span></div>
-                <div className="flex justify-between"><span>取消连线</span><span style={{ color: 'var(--text-tertiary)' }}>Esc</span></div>
+                <div className="flex justify-between"><span>多选节点</span><span style={{ color: 'var(--text-tertiary)' }}>框选 / Ctrl+点击</span></div>
+                <div className="flex justify-between"><span>批量删除</span><span style={{ color: 'var(--text-tertiary)' }}>Delete 键</span></div>
+                <div className="flex justify-between"><span>取消连线/多选</span><span style={{ color: 'var(--text-tertiary)' }}>Esc</span></div>
               </div>
             </div>
           </div>
@@ -1404,7 +1678,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           </button>
           <div className="w-px h-4" style={{ background: 'var(--border)' }} />
 
-          {/* 缩放控制 */}
+          {/* 缩放控制（彩色图标） */}
           <button
             onClick={() => {
               const rect = canvasRef.current?.getBoundingClientRect();
@@ -1418,10 +1692,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 return next;
               });
             }}
-            className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs font-bold"
-            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: 'none' }}
-          >+</button>
-          <span className="text-[10px] w-[36px] text-center" style={{ color: 'var(--text-secondary)' }}>
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+            style={{ background: '#58a6ff22', color: '#58a6ff', border: 'none' }}
+            title="放大"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="5" cy="5" r="3.5" /><line x1="7.5" y1="7.5" x2="11" y2="11" /><line x1="3" y1="5" x2="7" y2="5" /><line x1="5" y1="3" x2="5" y2="7" /></svg>
+          </button>
+          <span className="text-[10px] w-[36px] text-center font-mono" style={{ color: 'var(--text-secondary)' }}>
             {Math.round(scale * 100)}%
           </span>
           <button
@@ -1437,19 +1714,54 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 return next;
               });
             }}
-            className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs font-bold"
-            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: 'none' }}
-          >-</button>
-          <div className="w-px h-4" style={{ background: 'var(--border)' }} />
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+            style={{ background: '#58a6ff22', color: '#58a6ff', border: 'none' }}
+            title="缩小"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="5" cy="5" r="3.5" /><line x1="7.5" y1="7.5" x2="11" y2="11" /><line x1="3" y1="5" x2="7" y2="5" /></svg>
+          </button>
           <button
             onClick={() => { setPan({ x: 0, y: 0 }); setScale(1); }}
-            className="pd-btn px-1.5 h-6 flex items-center justify-center rounded text-[10px]"
-            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', border: 'none' }}
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+            style={{ background: '#8b949e22', color: '#8b949e', border: 'none' }}
             title="重置视图"
           >
-            重置
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 1L1 3l3 1M10 11l1-2-3-1M1 3a5 5 0 0 1 9 0M11 9a5 5 0 0 1-9 0" /></svg>
           </button>
+          {/* 多选对齐工具栏 */}
+          {selectedNodeIds.size > 1 && (
+            <>
+              <div className="w-px h-4" style={{ background: 'var(--border)' }} />
+              <span className="text-[9px]" style={{ color: 'var(--accent)' }}>{selectedNodeIds.size}</span>
+              <button onClick={handleAlignVertical} className="pd-btn w-6 h-6 flex items-center justify-center rounded" style={{ background: '#3fb95022', color: '#3fb950', border: 'none' }} title="垂直对齐">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="6" y1="1" x2="6" y2="11" /><line x1="3" y1="3" x2="9" y2="3" /><line x1="3" y1="9" x2="9" y2="9" /><line x1="6" y1="3" x2="3" y2="3" strokeDasharray="1 1" /><line x1="6" y1="3" x2="9" y2="3" strokeDasharray="1 1" /><line x1="6" y1="9" x2="3" y2="9" strokeDasharray="1 1" /><line x1="6" y1="9" x2="9" y2="9" strokeDasharray="1 1" /></svg>
+              </button>
+              <button onClick={handleAlignHorizontal} className="pd-btn w-6 h-6 flex items-center justify-center rounded" style={{ background: '#3fb95022', color: '#3fb950', border: 'none' }} title="水平对齐">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="1" y1="6" x2="11" y2="6" /><line x1="3" y1="3" x2="3" y2="9" /><line x1="9" y1="3" x2="9" y2="9" /><line x1="3" y1="6" x2="3" y2="3" strokeDasharray="1 1" /><line x1="3" y1="6" x2="3" y2="9" strokeDasharray="1 1" /><line x1="9" y1="6" x2="9" y2="3" strokeDasharray="1 1" /><line x1="9" y1="6" x2="9" y2="9" strokeDasharray="1 1" /></svg>
+              </button>
+              <button onClick={handleDistributeHorizontal} className="pd-btn w-6 h-6 flex items-center justify-center rounded" style={{ background: '#d2992222', color: '#d29922', border: 'none' }} title="水平平均分布">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="1" y1="6" x2="11" y2="6" /><rect x="2" y="4.5" width="1.5" height="3" rx="0.3" fill="currentColor" /><rect x="8.5" y="4.5" width="1.5" height="3" rx="0.3" fill="currentColor" /><line x1="5" y1="5" x2="5" y2="7" /><line x1="5" y1="4" x2="5" y2="5" strokeDasharray="1 1" /><line x1="5" y1="7" x2="5" y2="8" strokeDasharray="1 1" /><line x1="7" y1="5" x2="7" y2="7" /><line x1="7" y1="4" x2="7" y2="5" strokeDasharray="1 1" /><line x1="7" y1="7" x2="7" y2="8" strokeDasharray="1 1" /></svg>
+              </button>
+              <button onClick={handleDistributeVertical} className="pd-btn w-6 h-6 flex items-center justify-center rounded" style={{ background: '#d2992222', color: '#d29922', border: 'none' }} title="垂直平均分布">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="6" y1="1" x2="6" y2="11" /><rect x="4.5" y="2" width="3" height="1.5" rx="0.3" fill="currentColor" /><rect x="4.5" y="8.5" width="3" height="1.5" rx="0.3" fill="currentColor" /><line x1="5" y1="5" x2="7" y2="5" /><line x1="4" y1="5" x2="5" y2="5" strokeDasharray="1 1" /><line x1="7" y1="5" x2="8" y2="5" strokeDasharray="1 1" /><line x1="5" y1="7" x2="7" y2="7" /><line x1="4" y1="7" x2="5" y2="7" strokeDasharray="1 1" /><line x1="7" y1="7" x2="8" y2="7" strokeDasharray="1 1" /></svg>
+              </button>
+              <button onClick={handleBatchDelete} className="pd-btn w-6 h-6 flex items-center justify-center rounded" style={{ background: '#f8514922', color: '#f85149', border: 'none' }} title="批量删除 (Delete)">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 3l6 6M9 3l-6 6" /></svg>
+              </button>
+            </>
+          )}
         </div>
+
+        {/* 多选提示 */}
+        {selectedNodeIds.size > 1 && !connecting && (
+          <div
+            className="absolute top-3 left-1/2 -translate-x-1/2 z-30 px-3 py-1.5 rounded-lg text-[10px] flex items-center gap-2"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--accent)', color: 'var(--accent)', boxShadow: 'var(--shadow-md)' }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: 'var(--accent)' }} />
+            已选中 {selectedNodeIds.size} 个节点 — 可拖拽批量移动 / Delete 删除 / Esc 取消
+          </div>
+        )}
 
         {/* 连线提示 */}
         {connecting && (
@@ -1646,6 +1958,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           {stage.edges.map((e) => renderEdge(e, stage.id))}
                           {connecting && connecting.stageId === stage.id && renderConnectingPreview(stage.id)}
                         </svg>
+                        {/* 框选矩形 */}
+                        {isBoxSelecting && boxSelectRect && boxSelectRect.stageId === stage.id && (() => {
+                          const r = boxSelectRect;
+                          const x = Math.min(r.x1, r.x2), y = Math.min(r.y1, r.y2);
+                          const w = Math.abs(r.x2 - r.x1), h = Math.abs(r.y2 - r.y1);
+                          return w > 2 && h > 2 ? (
+                            <rect x={x} y={y} width={w} height={h} rx={2}
+                              fill="var(--accent-light)" fillOpacity={0.15}
+                              stroke="var(--accent)" strokeWidth={1 / scale} strokeDasharray={`${4/scale} ${3/scale}`}
+                              style={{ pointerEvents: 'none' }} />
+                          ) : null;
+                        })()}
                         {/* 节点 zIndex:2 确保在连线之上 */}
                         {stage.nodes.map((node) => renderNode(node, stage.id))}
                       </div>
