@@ -1129,7 +1129,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const baseD = `M ${SX} ${SY} H ${startHEndX} C ${startHEndX + cpOffset} ${SY}, ${pathEndX - cpOffset} ${TY}, ${pathEndX} ${TY}`;
     const arrowPoints = `${pathEndX},${TY - arrowSize} ${TX},${TY} ${pathEndX},${TY + arrowSize}`;
 
-    const lineColor = isHovered ? '#58a6ff' : edge.condition ? '#d29922' : edgeRunState === 'running' ? '#58a6ff' : edgeRunState === 'success' ? '#3fb950'
+    const lineColor = isHovered ? '#58a6ff' : edgeRunState === 'running' ? '#58a6ff' : edgeRunState === 'success' ? '#3fb950'
       : edgeRunState === 'failed' ? '#f85149' : 'var(--border)';
 
     return (
@@ -1653,7 +1653,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     height: isCollapsed ? 123 : TITLE_H + CONTENT_H + GATE_H + 4,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
-                    border: 'none',
+                    border: '1px solid var(--border)',
                     transition: isCollapsed ? 'width 0.25s cubic-bezier(0.4,0,0.2,1)' : 'none',
                     overflow: 'hidden',
                     boxShadow: stageRunState === 'running'
