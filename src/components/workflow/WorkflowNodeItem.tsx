@@ -95,15 +95,18 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
       }}
     >
       {runState === 'running' && (
-        <div className="absolute inset-0 rounded-lg overflow-hidden pointer-events-none" style={{ zIndex: -1 }}>
-          <div className="absolute inset-0" style={{
-            border: '2px solid #58a6ff',
-            borderRadius: 8,
-            animation: 'spin 1.5s linear infinite',
-            clipPath: 'polygon(0 0, 100% 0, 100% 50%, 0 50%)',
-            opacity: 0.5,
-          }} />
-        </div>
+        <div
+          className="absolute pointer-events-none"
+          style={{
+            top: -2, left: -2, right: -2, bottom: -2,
+            borderRadius: 10,
+            overflow: 'hidden',
+            zIndex: -1,
+            background: 'conic-gradient(from 0deg, transparent 30%, #58a6ff 50%, transparent 70%)',
+            animation: 'spin 1.8s linear infinite',
+            opacity: 0.85,
+          }}
+        />
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
