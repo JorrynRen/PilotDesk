@@ -2062,21 +2062,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <option value="threshold">阈值完成 (threshold)</option>
               </select>
             </div>
-            <div className="mb-4">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>合并策略</label>
-              <select
-                id="gate-merge"
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy || 'merge'}
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-              >
-                <option value="merge">合并对象 (merge)</option>
-                <option value="concat">合并数组 (concat)</option>
-                <option value="pick_first">取第一个 (pick_first)</option>
-                <option value="pick_last">取最后一个 (pick_last)</option>
-                <option value="custom">自定义脚本 (custom)</option>
-              </select>
-            </div>
             <div className="flex gap-3 mb-4">
               <div className="flex-1">
                 <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>完成节点数 (count 策略时使用)</label>
@@ -2105,6 +2090,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 />
               </div>
             </div>
+            <div className="mb-4">
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>合并策略</label>
+              <select
+                id="gate-merge"
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy || 'merge'}
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+              >
+                <option value="merge">合并对象 (merge)</option>
+                <option value="concat">合并数组 (concat)</option>
+                <option value="pick_first">取第一个 (pick_first)</option>
+                <option value="pick_last">取最后一个 (pick_last)</option>
+                <option value="custom">自定义脚本 (custom)</option>
+              </select>
+            </div>
+
             <div className="mb-4">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>自定义脚本 (合并策略为 custom 时使用)</label>
               <textarea
