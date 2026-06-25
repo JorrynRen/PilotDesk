@@ -1252,7 +1252,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes flowDash { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -20; } }
-        @keyframes pulseGlow { 0%, 100% { box-shadow: inset 0 0 6px #00d4ff66, inset 0 0 12px #00d4ff33; } 50% { box-shadow: inset 0 0 12px #00d4ffcc, inset 0 0 24px #00d4ff66; } }
+        @keyframes pulseGlow { 0%, 100% { box-shadow: inset 0 0 6px #f59e0b66, inset 0 0 12px #f59e0b33; } 50% { box-shadow: inset 0 0 12px #f59e0bcc, inset 0 0 24px #f59e0b66; } }
       `}</style>
 
       {/* ── 工具栏 ── */}

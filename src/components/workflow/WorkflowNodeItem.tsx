@@ -67,11 +67,11 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             ? '1.5px solid var(--accent)'
             : isHovered
               ? '1px solid var(--accent)'
-              : '1.5px solid #484f58',
+              : '1.5px solid var(--border)',
         background: isDraggingThis
           ? 'var(--bg-tertiary)'
           : runState === 'running'
-            ? '#00d4ff15'
+            ? '#f59e0b15'
             : runState === 'success'
               ? '#3fb95010'
               : runState === 'failed'
@@ -86,7 +86,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             : isHovered
               ? 'var(--shadow-md)'
               : runState === 'running'
-                ? 'inset 0 0 12px #00d4ff66, inset 0 0 24px #00d4ff33'
+                ? 'inset 0 0 12px #f59e0b66, inset 0 0 24px #f59e0b33'
                 : 'var(--shadow-sm)',
         animation: runState === 'running' ? 'pulseGlow 1.5s ease-in-out infinite' : 'none',
         zIndex: isDraggingThis ? 20 : 2,
