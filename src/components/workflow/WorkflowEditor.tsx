@@ -2126,6 +2126,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               <button
                 onClick={() => {
                   const strategy = (document.getElementById('gate-strategy') as HTMLSelectElement)?.value;
+                  const mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
                   const countInput = (document.getElementById('gate-count') as HTMLInputElement)?.value;
                   const thresholdInput = (document.getElementById('gate-threshold') as HTMLInputElement)?.value;
                   const customScript = (document.getElementById('gate-script') as HTMLTextAreaElement)?.value;
