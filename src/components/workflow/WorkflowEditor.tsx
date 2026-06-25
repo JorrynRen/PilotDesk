@@ -247,8 +247,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [draggingNode, setDraggingNode] = useState<{
     nodeId: string;
     stageId: string;
-    contentOffsetX: number;
-    contentOffsetY: number;
+    /** 鼠标按下时节点在内容区的初始位置（用于计算delta） */
+    startContentX: number;
+    startContentY: number;
     started: boolean;
     startX: number;
     startY: number;
@@ -994,15 +995,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (e.ctrlKey || e.metaKey) return;
     const node = stages.find((s) => s.id === stageId)?.nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    // 纯算术计算节点屏幕位置（内容区正向缩放 + 节点反向缩放）
+    // 计算鼠标在内容区的起始位置（用于后续 delta 计算）
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const stageLeft = stagePositionsMap[stageId];
-    const nodePos = node.position ?? { x: 20, y: 20 };
-    // 节点布局左上角画布坐标 = stageLeft + pos.x，乘以scale得屏幕位置
-    const nodeScreenX = rect.left + pan.x + (stageLeft + nodePos.x) * scale;
-    const nodeScreenY = rect.top + pan.y + (STAGE_TOP + TITLE_H + nodePos.y) * scale;
-    // Store content-relative offset + original positions for multi-drag
+    const rawCanvasX = e.clientX - rect.left;
+    const rawCanvasY = e.clientY - rect.top;
+    const canvasX = (rawCanvasX - pan.x) / scale;
+    const canvasY = (rawCanvasY - pan.y) / scale;
+    const mouseContentX = canvasX - stageLeft;
+    const mouseContentY = canvasY - STAGE_TOP - TITLE_H;
+    // Store original positions for multi-drag
     const isMulti = selectedNodeIds.has(nodeId) && selectedNodeIds.size > 1;
     const origPositions: Record<string, { x: number; y: number }> = {};
     if (isMulti) {
@@ -1015,15 +1018,26 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         }
       }
     }
+    // 记录所有选中节点的原始位置（单节点也记录，避免useEffect中读stages过期）
+    const allOrigPositions: Record<string, { x: number; y: number }> = {};
+    const stage = stages.find(s => s.id === stageId);
+    if (stage) {
+      const targetIds = isMulti ? selectedNodeIds : new Set([nodeId]);
+      for (const n of stage.nodes) {
+        if (targetIds.has(n.id)) {
+          allOrigPositions[n.id] = { ...(n.position ?? { x: 20, y: 20 }) };
+        }
+      }
+    }
     setDraggingNode({
       nodeId,
       stageId,
-      contentOffsetX: nodePos.x,
-      contentOffsetY: nodePos.y,
+      startContentX: mouseContentX,
+      startContentY: mouseContentY,
       started: false,
       startX: e.clientX,
       startY: e.clientY,
-      origPositions: isMulti ? origPositions : undefined,
+      origPositions: allOrigPositions,
     });
     setSelectedNodeId(nodeId);
     setSelectedStageId(stageId);
@@ -1046,42 +1060,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const canvasX = (rawCanvasX - pan.x) / scale;
       const canvasY = (rawCanvasY - pan.y) / scale;
       const rel = canvasToContentPos(canvasX, canvasY, d.stageId);
-      // Multi-select: if dragged node is in selection, move all selected nodes together
-      const isMultiDrag = selectedNodeIds.has(d.nodeId) && d.origPositions;
-      if (isMultiDrag) {
-        const deltaX = rel.x - d.contentOffsetX;
-        const deltaY = rel.y - d.contentOffsetY;
-        setStages((prev) => prev.map((s) => {
-          if (s.id !== d.stageId) return s;
-          return {
-            ...s,
-            nodes: s.nodes.map((n) => {
-              if (!d.origPositions || !d.origPositions[n.id]) return n;
-              const meta = getNodeTypeMeta(n.type);
-              const orig = d.origPositions[n.id];
-              return { ...n, position: clampNodePosition(orig.x + deltaX, orig.y + deltaY, meta.nodeW, meta.nodeH, scale) };
-            }),
-          };
-        }));
-      } else {
-        setStages((prev) =>
-          prev.map((s) =>
-            s.id === d.stageId
-              ? {
-                  ...s,
-                  nodes: s.nodes.map((n) => {
-                    if (n.id !== d.nodeId) return n;
-                    const meta = getNodeTypeMeta(n.type);
-                    return {
-                      ...n,
-                      position: clampNodePosition(rel.x, rel.y, meta.nodeW, meta.nodeH, scale),
-                    };
-                  }),
-                }
-              : s
-          )
-        );
-      }
+      // delta = 鼠标当前位置 - 鼠标起始位置（内容区坐标）
+      const deltaX = rel.x - d.startContentX;
+      const deltaY = rel.y - d.startContentY;
+      // All dragged nodes use origPositions (stored at mousedown time)
+      setStages((prev) => prev.map((s) => {
+        if (s.id !== d.stageId) return s;
+        return {
+          ...s,
+          nodes: s.nodes.map((n) => {
+            if (!d.origPositions || !d.origPositions[n.id]) return n;
+            const meta = getNodeTypeMeta(n.type);
+            const orig = d.origPositions[n.id];
+            return { ...n, position: clampNodePosition(orig.x + deltaX, orig.y + deltaY, meta.nodeW, meta.nodeH, scale) };
+          }),
+        };
+      }));
     };
     const handleMouseUp = () => {
       setDraggingNode(null);
