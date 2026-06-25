@@ -2048,7 +2048,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑 [{stages.find(s => s.id === gateInput.stageId)?.name || gateInput.stageId}] 门控配置</h3>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑 [步骤{stages.findIndex(s => s.id === gateInput.stageId) + 1} {stages.find(s => s.id === gateInput.stageId)?.name || gateInput.stageId}] 门控配置</h3>
             {gateError && (
               <div className="mb-3 px-3 py-2 rounded-lg text-[10px]" style={{ background: 'rgba(248,81,73,0.12)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
                 {gateError}
@@ -2114,13 +2114,30 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
             <div className="mb-4">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>自定义脚本 (合并策略为 custom 时使用)</label>
+              <select
+                id="gate-script-template"
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none mb-2"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                defaultValue=""
+                onChange={(e) => {
+                  const ta = document.getElementById('gate-script') as HTMLTextAreaElement;
+                  if (ta && e.target.value) ta.value = e.target.value;
+                }}
+              >
+                <option value="">-- 选择脚本模板 --</option>
+                <option value="(results) => results.map(r => r.data)">提取所有结果数据 (map)</option>
+                <option value="(results) => results.filter(r => r.success).map(r => r.data)">过滤成功结果 (filter + map)</option>
+                <option value="(results) => results.reduce((acc, r) => ({...acc, ...r.data}), {{}})">合并所有数据对象 (reduce)</option>
+                <option value="(results) => results.flatMap(r => r.data)">展平数组 (flatMap)</option>
+                <option value="(results) => results.find(r => r.success)?.data || null">取第一个成功结果 (find)</option>
+              </select>
               <textarea
                 id="gate-script"
                 rows={3}
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none"
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none font-mono"
                 defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.customScript ?? ''}
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                placeholder="例如: (results) => results.map(r => r.data)"
+                placeholder="选择上方模板后在此编辑，或直接编写自定义脚本"
               />
             </div>
             <div className="flex gap-2 justify-end">
