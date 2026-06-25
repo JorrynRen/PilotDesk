@@ -1,7 +1,9 @@
 import React from 'react';
 import type { WorkflowNode } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
-import { NODE_W, NODE_H } from './WorkflowEditor';
+
+const NODE_W = 160;
+const NODE_H = 60;
 
 interface WorkflowNodeItemProps {
   node: WorkflowNode;
