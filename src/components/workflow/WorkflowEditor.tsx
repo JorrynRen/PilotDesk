@@ -2077,31 +2077,33 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <option value="custom">自定义脚本 (custom)</option>
               </select>
             </div>
-            <div className="mb-3">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>完成节点数 (count 策略时使用)</label>
-              <input
-                id="gate-count"
-                type="number"
-                min="1"
-                step="1"
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.threshold ?? ''}
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                placeholder="例如: 3"
-              />
-            </div>
-            <div className="mb-4">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值 (threshold 策略时使用)</label>
-              <input
-                id="gate-threshold"
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-                defaultValue={''}
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                placeholder="例如: 0.8"
-              />
+            <div className="flex gap-3 mb-4">
+              <div className="flex-1">
+                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>完成节点数 (count 策略时使用)</label>
+                <input
+                  id="gate-count"
+                  type="number"
+                  min="1"
+                  step="1"
+                  className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                  defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.threshold ?? ''}
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  placeholder="例如: 3"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值 (threshold 策略时使用)</label>
+                <input
+                  id="gate-threshold"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                  defaultValue={''}
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  placeholder="例如: 0.8"
+                />
+              </div>
             </div>
             <div className="mb-4">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>自定义脚本 (合并策略为 custom 时使用)</label>
