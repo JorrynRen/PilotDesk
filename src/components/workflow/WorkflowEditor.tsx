@@ -82,6 +82,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [connecting, setConnecting] = useState<ConnectingPreview | null>(null);
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
   const [gateInput, setGateInput] = useState<{ stageId: string } | null>(null);
+  const [gateError, setGateError] = useState<string | null>(null);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
@@ -2047,7 +2048,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑门控配置</h3>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑 [{stages.find(s => s.id === gateInput.stageId)?.name || gateInput.stageId}] 门控配置</h3>
+            {gateError && (
+              <div className="mb-3 px-3 py-2 rounded-lg text-[10px]" style={{ background: 'rgba(248,81,73,0.12)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
+                {gateError}
+              </div>
+            )}
             <div className="mb-4">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>聚合策略</label>
               <select
@@ -2119,7 +2125,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </div>
             <div className="flex gap-2 justify-end">
               <button
-                onClick={() => setGateInput(null)}
+                onClick={() => { setGateError(null); setGateInput(null); }}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
               >取消</button>
@@ -2130,9 +2136,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   const countInput = (document.getElementById('gate-count') as HTMLInputElement)?.value;
                   const thresholdInput = (document.getElementById('gate-threshold') as HTMLInputElement)?.value;
                   const customScript = (document.getElementById('gate-script') as HTMLTextAreaElement)?.value;
+                  // 校验
+                  if (strategy === 'count' && (!countInput || parseInt(countInput, 10) < 1)) {
+                    setGateError('请填写有效的完成节点数（至少为 1）');
+                    return;
+                  }
+                  if (strategy === 'threshold' && (!thresholdInput || parseFloat(thresholdInput) < 0)) {
+                    setGateError('请填写有效的阈值（必须大于等于 0）');
+                    return;
+                  }
+                  if (mergeStrategy === 'custom' && !customScript?.trim()) {
+                    setGateError('请填写自定义脚本');
+                    return;
+                  }
                   const threshold = strategy === 'count'
                     ? (countInput ? parseInt(countInput, 10) : undefined)
                     : (thresholdInput ? parseFloat(thresholdInput) : undefined);
+                  setGateError(null);
                   handleUpdateGate(gateInput.stageId, { strategy, mergeStrategy, threshold, customScript: customScript || undefined });
                   setGateInput(null);
                 }}
