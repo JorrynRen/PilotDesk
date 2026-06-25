@@ -1967,27 +1967,27 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         >
                           {stage.edges.map((e) => renderEdge(e, stage.id))}
                           {connecting && connecting.stageId === stage.id && renderConnectingPreview(stage.id)}
+                          {/* 框选矩形 */}
+                          {isBoxSelecting && boxSelectRect && boxSelectRect.stageId === stage.id && (() => {
+                            const r = boxSelectRect;
+                            const x = Math.min(r.x1, r.x2), y = Math.min(r.y1, r.y2);
+                            const w = Math.abs(r.x2 - r.x1), h = Math.abs(r.y2 - r.y1);
+                            if (w < 3 || h < 3) return null;
+                            const inv = 1 / scale;
+                            return (
+                              <g style={{ pointerEvents: 'none' }}>
+                                <rect x={x} y={y} width={w} height={h} rx={2}
+                                  fill="var(--accent)" fillOpacity={0.08}
+                                  stroke="var(--accent)" strokeWidth={1.5 * inv} />
+                                {/* Corner handles */}
+                                <circle cx={x} cy={y} r={2.5 * inv} fill="var(--accent)" />
+                                <circle cx={x + w} cy={y} r={2.5 * inv} fill="var(--accent)" />
+                                <circle cx={x} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
+                                <circle cx={x + w} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
+                              </g>
+                            );
+                          })()}
                         </svg>
-                        {/* 框选矩形 */}
-                        {isBoxSelecting && boxSelectRect && boxSelectRect.stageId === stage.id && (() => {
-                          const r = boxSelectRect;
-                          const x = Math.min(r.x1, r.x2), y = Math.min(r.y1, r.y2);
-                          const w = Math.abs(r.x2 - r.x1), h = Math.abs(r.y2 - r.y1);
-                          if (w < 3 || h < 3) return null;
-                          const inv = 1 / scale;
-                          return (
-                            <g style={{ pointerEvents: 'none' }}>
-                              <rect x={x} y={y} width={w} height={h} rx={2}
-                                fill="var(--accent)" fillOpacity={0.08}
-                                stroke="var(--accent)" strokeWidth={1.5 * inv} />
-                              {/* Corner handles */}
-                              <circle cx={x} cy={y} r={2.5 * inv} fill="var(--accent)" />
-                              <circle cx={x + w} cy={y} r={2.5 * inv} fill="var(--accent)" />
-                              <circle cx={x} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
-                              <circle cx={x + w} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
-                            </g>
-                          );
-                        })()}
                         {/* 节点 zIndex:2 确保在连线之上 */}
                         {stage.nodes.map((node) => renderNode(node, stage.id))}
                       </div>
