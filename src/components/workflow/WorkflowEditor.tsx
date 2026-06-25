@@ -1188,7 +1188,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 渲染：阶段间连线 ──
   const gateStrategyLabel = (s: string) => ({ all: '全部完成', any: '任一完成', count: '计数完成', threshold: '阈值完成' }[s] || s);
   const gateStrategyDesc = (s: string) => ({ all: '所有节点完成后继续', any: '任一节点完成后继续', count: '指定数量节点完成后继续', threshold: '达到阈值后继续' }[s] || s);
-  const mergeStrategyLabel = (s: string) => ({ merge: '合并对象', concat: '合并数组', pick_first: '取第一个', custom: '自定义脚本' }[s] || s);
+  const mergeStrategyLabel = (s: string) => ({ merge: '合并对象', concat: '合并数组', pick_first: '取第一个', pick_last: '取最后一个', custom: '自定义脚本' }[s] || s);
   const renderStageLinks = () => {
     if (stages.length < 2) return null;
     const links: React.ReactNode[] = [];
@@ -1833,13 +1833,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                             {stage.nodes.length}/{stage.nodes.length} 就绪
                           </span>
                         </div>
+                        <div style="border-top: 1px solid var(--border); margin-bottom: 6px;"></div>
                         <div className="flex items-center gap-3">
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                             策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{gateStrategyLabel(stage.gate.strategy)}</span>
                             <span className="ml-1" style={{ color: 'var(--text-tertiary)' }}>{gateStrategyDesc(stage.gate.strategy)}</span>
+                            {stage.gate.threshold !== undefined && (
+                              <span className="ml-1 text-[10px]" style={{ color: 'var(--accent)' }}>(阈值: {stage.gate.threshold})</span>
+                            )}
                           </span>
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                             合并: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
+                            {stage.gate.mergeStrategy === 'custom' && stage.gate.customScript && (
+                              <span className="ml-1 text-[10px] truncate max-w-[80px]" style={{ color: 'var(--text-tertiary)' }} title={stage.gate.customScript}>脚本</span>
+                            )}
                           </span>
                         </div>
                       </div>
@@ -2066,8 +2073,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <option value="merge">合并对象 (merge)</option>
                 <option value="concat">合并数组 (concat)</option>
                 <option value="pick_first">取第一个 (pick_first)</option>
+                <option value="pick_last">取最后一个 (pick_last)</option>
                 <option value="custom">自定义脚本 (custom)</option>
               </select>
+            </div>
+            <div className="mb-4">
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值 (count/threshold 策略时使用)</label>
+              <input
+                id="gate-threshold"
+                type="number"
+                min="1"
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.threshold ?? ''}
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                placeholder="例如: 3"
+              />
+            </div>
+            <div className="mb-4">
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>自定义脚本 (合并策略为 custom 时使用)</label>
+              <textarea
+                id="gate-script"
+                rows={3}
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none"
+                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.customScript ?? ''}
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                placeholder="例如: (results) => results.map(r => r.data)"
+              />
             </div>
             <div className="flex gap-2 justify-end">
               <button
@@ -2078,8 +2109,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               <button
                 onClick={() => {
                   const strategy = (document.getElementById('gate-strategy') as HTMLSelectElement)?.value as 'all' | 'any' | 'count' | 'threshold';
-                  const mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'custom';
-                  handleUpdateGate(gateInput.stageId, { strategy, mergeStrategy });
+                  const mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
+                  const thresholdInput = (document.getElementById('gate-threshold') as HTMLInputElement)?.value;
+                  const customScript = (document.getElementById('gate-script') as HTMLTextAreaElement)?.value;
+                  const threshold = thresholdInput ? parseInt(thresholdInput, 10) : undefined;
+                  handleUpdateGate(gateInput.stageId, { strategy, mergeStrategy, threshold, customScript: customScript || undefined });
                   setGateInput(null);
                 }}
                 className="pd-btn px-4 py-1.5 text-xs rounded"

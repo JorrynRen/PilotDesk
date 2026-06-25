@@ -68,7 +68,7 @@ export interface WorkflowEdge {
 // ── 门控配置 ──
 
 export type GateStrategy = 'all' | 'any' | 'count' | 'threshold';
-export type MergeStrategy = 'merge' | 'concat' | 'pick_first' | 'custom';
+export type MergeStrategy = 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
 
 export interface GateConfig {
   strategy: GateStrategy;
