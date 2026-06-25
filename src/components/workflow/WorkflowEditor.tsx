@@ -1186,6 +1186,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     );
   };
   // ── 渲染：阶段间连线 ──
+  const gateStrategyLabel = (s: string) => ({ all: '全部完成', any: '任一完成', count: '计数完成', threshold: '阈值完成' }[s] || s);
+  const gateStrategyDesc = (s: string) => ({ all: '所有节点完成后继续', any: '任一节点完成后继续', count: '指定数量节点完成后继续', threshold: '达到阈值后继续' }[s] || s);
+  const mergeStrategyLabel = (s: string) => ({ merge: '合并对象', concat: '合并数组', pick_first: '取第一个', custom: '自定义脚本' }[s] || s);
   const renderStageLinks = () => {
     if (stages.length < 2) return null;
     const links: React.ReactNode[] = [];
@@ -1832,10 +1835,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.strategy}</span>
+                            策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{gateStrategyLabel(stage.gate.strategy)}</span>
+                            <span className="ml-1" style={{ color: 'var(--text-tertiary)' }}>{gateStrategyDesc(stage.gate.strategy)}</span>
                           </span>
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            合并: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{stage.gate.mergeStrategy}</span>
+                            合并: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
                           </span>
                         </div>
                       </div>
@@ -1847,7 +1851,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     <div className="flex flex-col items-center justify-center px-2" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 69, gap: 2 }}>
                       <span>{stage.nodes.length} 节点</span>
                       <span>{stage.edges.length} 连线</span>
-                      <span style={{ color: 'var(--text-tertiary)', fontSize: 9 }}>{stage.gate.strategy}/{stage.gate.mergeStrategy}</span>
+                      <span style={{ color: 'var(--text-tertiary)', fontSize: 9 }}>{gateStrategyLabel(stage.gate.strategy)}/{mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
                     </div>
                   )}
                 </div>
