@@ -1205,8 +1205,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={lc} style={{ pointerEvents: 'none' }} />
           {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.8s linear infinite', pointerEvents: 'none' }} />}
           <g style={{ pointerEvents: 'none' }}>
-            <rect x={(srcX + tgtX) / 2 - 16 * invScale} y={(srcY + tgtY) / 2 - 8 * invScale} width={32 * invScale} height={16 * invScale} rx={3 * invScale} fill="var(--bg-primary)" stroke="#484f5888" strokeWidth={0.5 * invScale} />
-            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 3 * invScale} fill="#8b949e" fontSize={8 * invScale} textAnchor="middle">{`step${srcStage.order + 1}→`}</text>
+            <rect x={(srcX + tgtX) / 2 - 16 * invScale} y={(srcY + tgtY) / 2 - 22 * invScale} width={32 * invScale} height={44 * invScale} rx={4 * invScale} fill="var(--bg-primary)" stroke="#484f5888" strokeWidth={0.5 * invScale} />
+            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{`step${srcStage.order + 1}`}</text>
+            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 2 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">→</text>
+            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{`step${tgtStage.order + 1}`}</text>
           </g>
         </g>
       );
