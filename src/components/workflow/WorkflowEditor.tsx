@@ -829,54 +829,48 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (document.activeElement && document.activeElement !== e.target) {
       (document.activeElement as HTMLElement).blur();
     }
-    if (e.button === 1) {
+    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate]')) return;
+    // Left button (0) or middle button (1): pan canvas
+    if (e.button === 0 || e.button === 1) {
       e.preventDefault();
+      // Click on a node -> select first, then pan on drag
+      const nodeEl = (e.target as HTMLElement).closest('[data-node]');
+      if (nodeEl) {
+        const nodeId = nodeEl.getAttribute('data-node-id')!;
+        const stageEl = (e.target as HTMLElement).closest('[data-stage]')!;
+        const stageId = stageEl?.getAttribute('data-stage-id');
+        if (stageId) handleSelectNode(nodeId, stageId, e.ctrlKey || e.metaKey);
+      }
+      // Start panning (left or middle click anywhere pans)
       setIsPanning(true);
       panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
-      panThresholdRef.current = { startX: e.clientX, startY: e.clientY, triggered: true };
+      panThresholdRef.current = { startX: e.clientX, startY: e.clientY, triggered: e.button === 1 };
       return;
     }
-    if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate]')) return;
-    // Click on a node -> handle select (not pan)
-    const nodeEl = (e.target as HTMLElement).closest('[data-node]');
-    if (nodeEl) {
-      const nodeId = nodeEl.getAttribute('data-node-id')!;
-      const stageEl = (e.target as HTMLElement).closest('[data-stage]')!;
-      const stageId = stageEl?.getAttribute('data-stage-id');
-      if (stageId) {
+    // Right button (2): box-select in content area
+    if (e.button === 2) {
+      const stageContentEl = (e.target as HTMLElement).closest('[data-stage-content]');
+      if (stageContentEl) {
         e.preventDefault();
-        handleSelectNode(nodeId, stageId, e.ctrlKey || e.metaKey);
+        const stageEl = (e.target as HTMLElement).closest('[data-stage]')!;
+        const stageId = stageEl?.getAttribute('data-stage-id');
+        if (stageId) {
+          const rect = canvasRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const cx = (e.clientX - rect.left - pan.x) / scale;
+          const cy = (e.clientY - rect.top - pan.y) / scale;
+          const stageLeft = stagePositionsMap[stageId];
+          const contentX = cx - stageLeft;
+          const contentY = cy - STAGE_TOP - TITLE_H;
+          setIsBoxSelecting(true);
+          boxSelectStartRef.current = { x: cx, y: cy, stageId };
+          setBoxSelectRect({ x1: contentX, y1: contentY, x2: contentX, y2: contentY, stageId });
+          handleClearSelection();
+        }
       }
       return;
     }
-    // Click on content area (stage-content) -> box-select, not pan
-    const stageContentEl = (e.target as HTMLElement).closest('[data-stage-content]');
-    if (stageContentEl && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
-      const stageEl = (e.target as HTMLElement).closest('[data-stage]')!;
-      const stageId = stageEl?.getAttribute('data-stage-id');
-      if (stageId) {
-        const rect = canvasRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const cx = (e.clientX - rect.left - pan.x) / scale;
-        const cy = (e.clientY - rect.top - pan.y) / scale;
-        const stageLeft = stagePositionsMap[stageId];
-        const contentX = cx - stageLeft;
-        const contentY = cy - STAGE_TOP - TITLE_H;
-        setIsBoxSelecting(true);
-        boxSelectStartRef.current = { x: cx, y: cy, stageId };
-        setBoxSelectRect({ x1: contentX, y1: contentY, x2: contentX, y2: contentY, stageId });
-        handleClearSelection();
-      }
-      return;
-    }
-    // Otherwise: pan
-    e.preventDefault();
-    setIsPanning(true);
-    panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
-    panThresholdRef.current = { startX: e.clientX, startY: e.clientY, triggered: false };
-  }, [pan.x, pan.y, edgeContextMenu, handleSelectNode, handleClearSelection]);
+  }, [pan.x, pan.y, edgeContextMenu, handleSelectNode, handleClearSelection, scale, stagePositionsMap]);
 
   useEffect(() => {
     if (!isPanning) return;
@@ -1589,7 +1583,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         }}
         onMouseDown={handleCanvasMouseDown}
         onWheel={handleWheel}
-        onContextMenu={(e) => e.preventDefault()}
+        
       >
         {/* 网格辅助线 — 画布背景，随平移缩放无限延伸 */}
         {showGrid && (
