@@ -6,9 +6,10 @@
  * 使用统一 TitleBar + StatusBar 布局。
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { TitleBar, StatusBar } from '../components/layout';
+import type { StatusHint } from '../components/layout';
 import { WorkflowEditor } from '../components/workflow/WorkflowEditor';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -17,11 +18,13 @@ export function WorkflowEditorPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const definitionId = searchParams.get('id');
-  const { createDefinition, loadDefinitions, selectDefinition, definitions } = useWorkflowStore();
+  const { createDefinition, loadDefinitions, updateDefinition, selectDefinition, definitions } = useWorkflowStore();
   const [readyId, setReadyId] = useState<string | null>(definitionId);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workflowName, setWorkflowName] = useState('');
+  const [statusHint, setStatusHint] = useState<StatusHint | null>(null);
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 同步工作流名称
   useEffect(() => {
@@ -30,6 +33,21 @@ export function WorkflowEditorPage() {
       if (def) setWorkflowName(def.name);
     }
   }, [readyId, definitions]);
+
+  /** 更新状态提示（autoDismiss毫秒后自动清除） */
+  const updateStatusHint = useCallback((hint: StatusHint) => {
+    if (statusTimerRef.current) {
+      clearTimeout(statusTimerRef.current);
+      statusTimerRef.current = null;
+    }
+    setStatusHint(hint);
+    if (hint.autoDismiss && hint.autoDismiss > 0) {
+      statusTimerRef.current = setTimeout(() => {
+        setStatusHint(null);
+        statusTimerRef.current = null;
+      }, hint.autoDismiss);
+    }
+  }, []);
 
   const handleNameChange = useCallback((name: string) => {
     setWorkflowName(name);
@@ -53,10 +71,12 @@ export function WorkflowEditorPage() {
         if (!cancelled) {
           navigate(`/workflow/editor?id=${id}`, { replace: true });
           setReadyId(id);
+          updateStatusHint({ state: 'ready' });
         }
       } catch (err) {
         if (!cancelled) {
           setError(String(err));
+          updateStatusHint({ state: 'error' });
         }
       } finally {
         if (!cancelled) {
@@ -68,14 +88,59 @@ export function WorkflowEditorPage() {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 有 ID 时加载定义列表
+  // 组件卸载时清理定时器
+  useEffect(() => {
+    return () => {
+      if (statusTimerRef.current) {
+        clearTimeout(statusTimerRef.current);
+        statusTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  // 自动保存工作流名称修改（防抖500ms）
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!readyId || !workflowName || !definitions.length) return;
+    const def = definitions.find(d => d.id === readyId);
+    if (!def || def.name === workflowName) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    updateStatusHint({ state: 'saving', text: '自动保存名称...' });
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        await updateDefinition(readyId, { name: workflowName });
+        updateStatusHint({ state: 'saved', text: '名称已保存', autoDismiss: 5000 });
+      } catch {
+        updateStatusHint({ state: 'save-error', text: '名称保存失败', autoDismiss: 5000 });
+      }
+      autoSaveTimerRef.current = null;
+    }, 500);
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [workflowName, readyId, definitions]);
+
+  // 有 ID 时加载工作流定义
   useEffect(() => {
     if (definitionId) {
-      loadDefinitions();
+      updateStatusHint({ state: 'loading' });
+      loadDefinitions().then(() => {
+        updateStatusHint({ state: 'ready' });
+      }).catch(() => {
+        updateStatusHint({ state: 'error' });
+      });
     }
   }, [definitionId]);
 
   const handleBack = useCallback(() => {
+    if (statusTimerRef.current) {
+      clearTimeout(statusTimerRef.current);
+      statusTimerRef.current = null;
+    }
     navigate('/workflow');
   }, [navigate]);
 
@@ -86,6 +151,7 @@ export function WorkflowEditorPage() {
         <TitleBar
         showBackButton={true}
         titleText="工作流任务编辑器"
+        statusHint={statusHint}
         onBack={() => navigate('/workflow')}
         onOpenSettings={() => navigate('/settings')} />
         <div className="flex-1 flex items-center justify-center">
@@ -103,6 +169,7 @@ export function WorkflowEditorPage() {
         <TitleBar
         showBackButton={true}
         titleText="工作流任务编辑器"
+        statusHint={statusHint}
         onBack={() => navigate('/workflow')}
         onOpenSettings={() => navigate('/settings')} />
         <div className="flex flex-col items-center justify-center flex-1 gap-3">
@@ -127,6 +194,7 @@ export function WorkflowEditorPage() {
       <TitleBar
         showBackButton={true}
         titleText="工作流任务编辑器"
+        statusHint={statusHint}
         onBack={handleBack}
         onOpenSettings={() => navigate('/settings')}
       />
@@ -135,6 +203,12 @@ export function WorkflowEditorPage() {
           definitionId={readyId}
           onClose={handleBack}
           onNameChange={handleNameChange}
+          onSaveResult={(success) => {
+            updateStatusHint({
+              state: success ? 'saved' : 'save-error',
+              autoDismiss: 5000,
+            });
+          }}
         />
       </div>
       <StatusBar

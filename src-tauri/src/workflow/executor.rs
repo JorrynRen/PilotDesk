@@ -12,11 +12,14 @@ use super::executors::agent_executor::AgentExecutor;
 use super::executors::transform_executor::TransformExecutor;
 use super::executors::interact_executor::{InteractExecutor, InteractManager};
 use super::executors::api_executor::ApiExecutor;
+use super::executors::plugin_executor::PluginExecuteManager;
 
 /// 节点执行器分发器
 pub struct NodeExecutor {
     registry: Arc<std::sync::Mutex<WorkflowNodeTypeRegistry>>,
     pub human_input_manager: Arc<InteractManager>,
+    /// 插件节点执行通道管理器（前端回传结果时唤醒挂起的 oneshot）
+    pub plugin_execute_manager: Arc<PluginExecuteManager>,
     plugin_host: Arc<std::sync::Mutex<PluginHost>>,
 }
 
@@ -74,6 +77,7 @@ impl NodeExecutor {
         });
 
         let human_input_manager = Arc::new(InteractManager::new());
+        let plugin_execute_manager = Arc::new(PluginExecuteManager::new());
 
         registry.register(NodeTypeRegistration {
             type_id: "interact".into(),
@@ -94,17 +98,21 @@ impl NodeExecutor {
 
         let registry_arc = Arc::new(std::sync::Mutex::new(registry));
 
-        // 设置插件节点类型注册回调
+        // 设置插件节点类型注册回调 + 共享插件执行通道管理器
         let reg_arc = registry_arc.clone();
-        plugin_host.lock().unwrap().set_register_node_type(Box::new(move |registration: NodeTypeRegistration| {
+        let mut host_guard = plugin_host.lock().unwrap();
+        host_guard.set_plugin_execute_manager(plugin_execute_manager.clone());
+        host_guard.set_register_node_type(Box::new(move |registration: NodeTypeRegistration| {
             if let Ok(mut reg) = reg_arc.lock() {
                 reg.register(registration);
             }
         }));
+        drop(host_guard);
 
         Self {
             registry: registry_arc,
             human_input_manager,
+            plugin_execute_manager,
             plugin_host,
         }
     }
@@ -159,6 +167,7 @@ impl NodeExecutor {
                     executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
                         plugin_id.clone(),
                         nt.type_id.clone(),
+                        self.plugin_execute_manager.clone(),
                     )),
                     config_schema: nt.config_schema.clone(),
                     permissions: nt.permissions.clone(),

@@ -324,6 +324,7 @@ pub fn run() {
             commands::workflow::list_executions,
             commands::workflow::get_node_executions,
             commands::workflow::respond_human_input,
+            commands::workflow::respond_plugin_execute,
             commands::workflow::list_node_types,
             commands::workflow::create_schedule,
             commands::workflow::list_schedules,

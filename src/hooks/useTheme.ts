@@ -14,6 +14,11 @@ export function useTheme() {
   const [theme, setThemeState] = useState<Theme>('system');
   const [loaded, setLoaded] = useState(false);
 
+  // Sync localStorage cache so main.tsx applyThemeEarly() stays consistent
+  const syncToCache = (t: Theme) => {
+    try { localStorage.setItem('pilotdesk-theme', t); } catch { /* ignore */ }
+  };
+
   // Load theme from SQLite on mount
   useEffect(() => {
     (async () => {
@@ -21,6 +26,7 @@ export function useTheme() {
         const saved = await invoke<string | null>('get_app_setting', { key: 'theme' });
         if (saved && (saved === 'light' || saved === 'dark' || saved === 'system')) {
           setThemeState(saved as Theme);
+          syncToCache(saved as Theme);
         }
       } catch { /* fallback to default */ }
       setLoaded(true);
@@ -35,6 +41,7 @@ export function useTheme() {
 
   const setTheme = async (t: Theme) => {
     setThemeState(t);
+    syncToCache(t);
     try {
       await invoke('set_app_setting', { key: 'theme', value: t });
     } catch { /* ignore */ }

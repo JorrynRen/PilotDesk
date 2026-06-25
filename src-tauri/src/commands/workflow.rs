@@ -297,6 +297,18 @@ pub async fn respond_human_input(
         .map_err(|e| format!("响应失败: {}", e))
 }
 
+/// 响应插件命令执行结果（前端执行完插件命令后回传）
+#[tauri::command]
+pub async fn respond_plugin_execute(
+    executor: tauri::State<'_, Arc<NodeExecutor>>,
+    execution_id: String,
+    node_id: String,
+    result: crate::workflow::executors::plugin_executor::PluginExecuteResult,
+) -> Result<(), String> {
+    executor.plugin_execute_manager.resolve(&execution_id, &node_id, result)
+        .map_err(|e| format!("响应失败: {}", e))
+}
+
 
 
 /// 创建定时调度

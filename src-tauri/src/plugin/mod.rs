@@ -150,6 +150,8 @@ pub struct PluginHost {
     sandbox_enabled: bool,
     /// 工作流节点类型注册回调（由 NodeExecutor 在初始化时设置）
     register_node_type: Option<Box<dyn Fn(NodeTypeRegistration) + Send + Sync>>,
+    /// 插件节点执行通道管理器（由 NodeExecutor 在初始化时设置，与 respond_plugin_execute 命令共享）
+    plugin_execute_manager: Option<std::sync::Arc<crate::workflow::executors::plugin_executor::PluginExecuteManager>>,
 }
 
 impl PluginHost {
@@ -165,7 +167,16 @@ impl PluginHost {
             max_manifest_size: 1024 * 64, // 64KB
             sandbox_enabled: true,
             register_node_type: None,
+            plugin_execute_manager: None,
         }
+    }
+
+    /// 设置插件节点执行通道管理器（由 NodeExecutor 在初始化时调用）
+    pub fn set_plugin_execute_manager(
+        &mut self,
+        manager: std::sync::Arc<crate::workflow::executors::plugin_executor::PluginExecuteManager>,
+    ) {
+        self.plugin_execute_manager = Some(manager);
     }
 
     // ── 权限验证 ──
@@ -356,6 +367,7 @@ impl PluginHost {
                                             executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
                                                 instance.manifest.id.clone(),
                                                 nt.type_id.clone(),
+                                                self.plugin_execute_manager.clone().unwrap_or_else(|| std::sync::Arc::new(crate::workflow::executors::plugin_executor::PluginExecuteManager::new())),
                                             )),
                                             config_schema: nt.config_schema.clone(),
                                             permissions: nt.permissions.clone(),
@@ -446,6 +458,7 @@ impl PluginHost {
                         executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
                             manifest.id.clone(),
                             nt.type_id.clone(),
+                            self.plugin_execute_manager.clone().unwrap_or_else(|| std::sync::Arc::new(crate::workflow::executors::plugin_executor::PluginExecuteManager::new())),
                         )),
                         config_schema: nt.config_schema.clone(),
                         permissions: nt.permissions.clone(),
