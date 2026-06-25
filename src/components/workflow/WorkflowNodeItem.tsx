@@ -86,8 +86,9 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             : isHovered
               ? 'var(--shadow-md)'
               : runState === 'running'
-                ? '0 0 12px #58a6ff44'
+                ? '0 0 12px #58a6ff, 0 0 24px #58a6ff66'
                 : 'var(--shadow-sm)',
+        animation: runState === 'running' ? 'pulseGlow 1.5s ease-in-out infinite' : 'none',
         zIndex: isDraggingThis ? 20 : 2,
         userSelect: 'none',
         transformOrigin: '80px 30px',
@@ -96,21 +97,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         transition: isDraggingThis ? 'none' : 'box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease',
       }}
     >
-      {runState === 'running' && (
-        <div
-          className="absolute pointer-events-none"
-          style={{
-            top: -2, left: -2, right: -2, bottom: -2,
-            borderRadius: 10,
-            overflow: 'hidden',
-            zIndex: -1,
-            background: 'conic-gradient(from 0deg, transparent 30%, #58a6ff 50%, transparent 70%)',
-            animation: 'spin 1.8s linear infinite',
-            opacity: 0.85,
-          }}
-        />
-      )}
-
+      {/* 节点内容行：图标 + 标签 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <div
           className="shrink-0"
@@ -135,6 +122,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         )}
       </div>
 
+      {/* 输入锚点 */}
       {meta.canHaveInputs && (
         <div
           data-anchor="input"
@@ -155,6 +143,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         />
       )}
 
+      {/* 输出锚点 */}
       {meta.canHaveOutputs && (
         <div
           data-anchor="output"
@@ -175,6 +164,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         />
       )}
 
+      {/* 删除按钮 */}
       {!meta.isBoundary && (
         <div
           onClick={(e) => { e.stopPropagation(); onDeleteNode(node.id); }}
