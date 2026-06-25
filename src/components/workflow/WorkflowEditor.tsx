@@ -24,6 +24,22 @@ interface Props {
   onSaveResult?: (success: boolean) => void;
 }
 
+// ── 布局常量（画布 & 阶段 & 节点尺寸） ──
+const STAGE_W = 480;
+const STAGE_COLLAPSED_W = 72;
+const STAGE_GAP = 36;
+const STAGE_TOP = 20;
+const TITLE_H = 36;
+const GATE_H = 56;
+const CONTENT_H = 500;
+const NODE_W = 160;
+const NODE_H = 60;
+const SNAP_SIZE = 20;
+const PAN_THRESHOLD = 3;
+const NODE_DRAG_THRESHOLD = 3;
+const CANVAS_W = 4000;
+const CANVAS_H = 3000;
+
 /** 工具栏可拖拽的节点类型（从 NODE_TYPE_META 派生，排除边界节点） */
 const BUILTIN_NODE_TYPES = (['agent', 'api', 'transform', 'interact', 'plugin', 'subflow'] as WorkflowNodeType[])
   .map(type => ({ type, ...getNodeTypeMeta(type) }));
@@ -231,10 +247,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     startY: number;
   } | null>(null);
 
-  // 用于连线预览的SVG ref
-  const connectingLineRef = useRef<SVGPathElement | null>(null);
-
-  // 各阶段内容区DOM引用 — 用于精确坐标计算
+  // ── 状态初始化 ──
 
 
   // 连线拖拽时的实际目标节点（鼠标悬停的input anchor）
@@ -418,14 +431,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   /** 纯算术获取节点画布坐标（零DOM查询） */
   const getStagePositions = useCallback(() => {
-    const STAGE_FULL_WIDTH = 480;
-    const STAGE_COLLAPSED_WIDTH = 72;
-    const STAGE_GAP = 36;
     let leftOffset = 20;
     const map: Record<string, number> = {};
     for (const stage of stages) {
       map[stage.id] = leftOffset;
-      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH + STAGE_GAP : STAGE_FULL_WIDTH + STAGE_GAP;
+      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
     }
     return map;
   }, [stages, collapsedStages]);
@@ -438,10 +448,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const node = stage.nodes.find(n => n.id === nodeId);
     if (!node) return null;
     const stageLeft = stagePositionsMap[stageId];
-    const STAGE_TOP = 20;
-    const TITLE_H = 36;
-    const NODE_W = 160;
-    const NODE_H = 60;
     const pos = node.position ?? { x: 20, y: 20 };
     const nodeX = stageLeft + pos.x / scale;
     const nodeY = STAGE_TOP + TITLE_H + pos.y / scale;
@@ -458,8 +464,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
    *  内容区 div 在阶段 div 的 flex 列中，padding-box 原点 = (stageLeft, STAGE_TOP + TITLE_H)
    */
   const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
-    const STAGE_TOP = 20;
-    const TITLE_H = 36;
     const stageLeft = stagePositionsMap[stageId];
     return {
       x: canvasX - stageLeft,
@@ -469,8 +473,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   /** 内容区相对坐标 → 画布坐标（纯算术） */
   const contentToCanvasPos = useCallback((contentX: number, contentY: number, stageId: string) => {
-    const STAGE_TOP = 20;
-    const TITLE_H = 36;
     const stageLeft = stagePositionsMap[stageId];
     return {
       x: stageLeft + contentX,
@@ -495,8 +497,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const stage = stages.find(s => s.id === connecting.stageId);
     if (!stage) return;
     let targetId: string | null = null;
-    const STAGE_TOP = 20;
-    const TITLE_H = 36;
     const stageLeft = stagePositionsMap[connecting.stageId];
     for (const node of stage.nodes) {
       if (node.id === connecting.source) continue;
@@ -666,10 +666,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setIsSimRunning(false);
   };
 
-  // ══════════════════════════════════════════
-  // 画布拖拽平移（含 3px 防误触阈值 + 中键支持）
-  // ══════════════════════════════════════════
-  const PAN_THRESHOLD = 3;
+  // ── 画布拖拽平移（含防误触阈值 + 中键支持） ──
 
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
     // 关闭连线右键菜单
@@ -723,9 +720,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [isPanning]);
 
-  // ══════════════════════════════════════════
-  // 鼠标滚轮缩放（以光标位置为中心）
-  // ══════════════════════════════════════════
+  // ── 鼠标滚轮缩放（以光标位置为中心） ──
   const handleWheel = useCallback((e: React.WheelEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -748,11 +743,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     });
   }, []);
 
-  // ══════════════════════════════════════════
-  // 节点拖拽（含 3px 防误触阈值 + 视觉反馈）
-  // ══════════════════════════════════════════
-  const NODE_DRAG_THRESHOLD = 3;
-  const SNAP_SIZE = 20;
+  // ── 节点拖拽（含防误触阈值 + 视觉反馈） ──
 
   const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string, stageId: string) => {
     if ((e.target as HTMLElement).closest('[data-anchor]')) return;
@@ -763,8 +754,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     // 纯算术计算节点屏幕位置（内容区正向缩放 + 节点反向缩放）
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const STAGE_TOP = 20;
-    const TITLE_H = 36;
     const stageLeft = stagePositionsMap[stageId];
     // 节点布局左上角画布坐标 = stageLeft + pos.x，乘以scale得屏幕位置
     const nodeScreenX = rect.left + pan.x + (stageLeft + (node.position?.x ?? 20)) * scale;
@@ -845,15 +834,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
 
   const getStageAtCanvasPos = useCallback((cx: number, cy: number) => {
-    const STAGE_FULL_WIDTH = 480;
-    const STAGE_COLLAPSED_WIDTH = 72;
-    const STAGE_TOP = 20;
-    const TITLE_H = 36;
-    const GATE_H = 56;
-    const CONTENT_H = 500;
     for (const stage of stages) {
       const left = stagePositionsMap[stage.id];
-      const width = collapsedStages.has(stage.id) ? STAGE_COLLAPSED_WIDTH : STAGE_FULL_WIDTH;
+      const width = collapsedStages.has(stage.id) ? STAGE_COLLAPSED_W : STAGE_W;
       const height = collapsedStages.has(stage.id) ? 123 : TITLE_H + CONTENT_H + GATE_H + 4;
       if (cx >= left && cx <= left + width && cy >= STAGE_TOP && cy <= STAGE_TOP + height) {
         return stage.id;
@@ -864,9 +847,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
 
 
-  // ══════════════════════════════════════════
-  // 渲染：节点
-  // ══════════════════════════════════════════
+  // ── 渲染：节点 ──
   const renderNode = (node: WorkflowNode, stageId: string) => {
     const meta = getNodeTypeMeta(node.type);
     const pos = node.position as { x: number; y: number } | undefined;
@@ -1031,11 +1012,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       </div>
     );
   };
-  // ══════════════════════════════════════════
-  // 渲染：连线（纯算术坐标，无DOM查询）
-  // 坐标系：内容区 padding-box 坐标
-  // 节点 anchor = 节点 border-box 外边缘中点（scale=1时精确）
-  // ============================================================
+  // ── 渲染：连线（纯算术坐标） ──
   const renderEdge = (edge: WorkflowEdge, stageId: string) => {
     const stage = stages.find((s) => s.id === stageId);
     if (!stage) return null;
@@ -1050,8 +1027,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     // 节点 transform: scale(1/scale) 以 (80,30) 为原点
     // 视觉右边缘 = pos.x + 80 + 80/scale，视觉左边缘 = pos.x + 80 - 80/scale
     // 视觉Y中心 = pos.y + 30（反向缩放不改变Y中心位置）
-    const NODE_W = 160;
-    const NODE_H = 60;
     const halfW = NODE_W / 2;
     const halfH = NODE_H / 2;
     const srcPosX = sourceNode.position?.x ?? 20;
@@ -1113,10 +1088,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       </g>
     );
   };
-  // ══════════════════════════════════════════
-  // 渲染：连线预览（拖拽中的临时线条）— 使用1:1内容区坐标
-  // 在内容区SVG内渲染，跟随反向缩放保持固定视觉大小
-  // ══════════════════════════════════════════
+  // ── 渲染：连线预览（拖拽中的临时线条） ──
   const renderConnectingPreview = (stageId: string) => {
     if (!connecting || connecting.stageId !== stageId) return null;
     const sourceNode = stages.find(s => s.id === stageId)?.nodes.find(n => n.id === connecting.source);
@@ -1145,16 +1117,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       <path d={d} stroke="var(--accent)" strokeWidth={2 * invScale} strokeDasharray="6 3" fill="none" opacity={0.7} style={{ pointerEvents: 'none' }} />
     );
   };
-  // ══════════════════════════════════════════
-  // 渲染：阶段间连线
-  // ══════════════════════════════════════════
+  // ── 渲染：阶段间连线 ──
   const renderStageLinks = () => {
     if (stages.length < 2) return null;
     const links: React.ReactNode[] = [];
-    const STAGE_W = 480;
-    const STAGE_COLLAPSED_W = 72;
-    const STAGE_GAP = 36;
-
     let leftOffset = 20;
     const sp: number[] = [];
     for (let j = 0; j < stages.length; j++) {
@@ -1173,10 +1139,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       // 纯算术：阶段间连线锚点（画布坐标系）
       // 源阶段右边中点（门控栏中点Y或折叠中心Y）
       // 目标阶段左边中点（标题栏中点Y或折叠中心Y）
-      const STAGE_TOP = 20;
-      const TITLE_H = 36;
-      const GATE_H = 56;
-      const CONTENT_H = 500;
       const srcX = sp[i] + (srcCollapsed ? STAGE_COLLAPSED_W : STAGE_W);
       const srcY = srcCollapsed ? STAGE_TOP + 61 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
       const tgtX = sp[i + 1];
@@ -1216,9 +1178,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     return <>{links}</>;
   };
 
-  // ══════════════════════════════════════════
-  // JSX
-  // ══════════════════════════════════════════
+  // ── JSX ──
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* CSS动画注入 */}
@@ -1241,6 +1201,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </span>
 
         <div className="flex-1" />
+
+        <div className="w-px h-5" style={{ background: 'var(--border)' }} />
 
         {/* 节点类型拖拽区 */}
         <div className="flex items-center gap-1 flex-wrap">
@@ -1284,7 +1246,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           ))}
         </div>
 
-        <div className="w-px h-5 mx-1" style={{ background: 'var(--border)' }} />
+        <div className="w-px h-5" style={{ background: 'var(--border)' }} />
 
         <button
           onClick={() => setShowGrid((v) => !v)}
@@ -1302,6 +1264,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <line x1="0" y1="3" x2="14" y2="3" /><line x1="0" y1="7" x2="14" y2="7" /><line x1="0" y1="11" x2="14" y2="11" />
           </svg>
         </button>
+
+        <div className="w-px h-5" style={{ background: 'var(--border)' }} />
 
         <div className="flex items-center gap-1.5">
           <button
@@ -1525,8 +1489,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
             transformOrigin: '0 0',
-            width: 4000,
-            height: 3000,
+            width: CANVAS_W,
+            height: CANVAS_H,
             position: 'relative',
           }}
         >
@@ -1549,17 +1513,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
           {/* ── 阶段列 ── */}
           {(() => {
-            const STAGE_FULL_WIDTH = 480;
-            const STAGE_COLLAPSED_WIDTH = 72;
-            const STAGE_GAP = 36;
-            const TITLE_H = 36;
-            const GATE_H = 56;
-            const CONTENT_H = 500;
             let leftOffset = 20;
             const stagePositions: number[] = [];
             for (let i = 0; i < stages.length; i++) {
               stagePositions.push(leftOffset);
-              leftOffset += collapsedStages.has(stages[i].id) ? STAGE_COLLAPSED_WIDTH + STAGE_GAP : STAGE_FULL_WIDTH + STAGE_GAP;
+              leftOffset += collapsedStages.has(stages[i].id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
             }
             return (
               <>
@@ -1662,7 +1620,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         style={{
                           top: 36, // 标题栏高度
                           left: 2, // CONTENT_PAD
-                          width: 476, // STAGE_FULL_WIDTH - CONTENT_PAD*2
+                          width: 476, // STAGE_W - CONTENT_PAD*2
                           height: 500 + 56 + 4, // 内容区 + Gate区域 + 间距
                           border: dragOverStageId === stage.id ? '2px dashed var(--accent)' : '2px dashed transparent',
                           borderRadius: 6,
