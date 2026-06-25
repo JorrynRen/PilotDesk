@@ -14,6 +14,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition } from '../../workflow/WorkflowDefinition';
+import WorkflowNodeItem from './WorkflowNodeItem';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
 import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig } from '../../types/workflow';
 
@@ -32,8 +33,8 @@ const STAGE_TOP = 20;
 const TITLE_H = 36;
 const GATE_H = 56;
 const CONTENT_H = 500;
-const NODE_W = 160;
-const NODE_H = 60;
+export const NODE_W = 160;
+export const NODE_H = 60;
 const SNAP_SIZE = 20;
 const PAN_THRESHOLD = 3;
 const NODE_DRAG_THRESHOLD = 3;
@@ -1078,174 +1079,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
 
   // ── 渲染：节点 ──
-  const renderNode = (node: WorkflowNode, stageId: string) => {
-    const meta = getNodeTypeMeta(node.type);
-    const pos = node.position as { x: number; y: number } | undefined;
-    const isSelected = selectedNodeId === node.id;
-    const isDraggingThis = draggingNode?.nodeId === node.id && draggingNode?.started;
-    const isHovered = hoveredNodeId === node.id;
-    const isConnectTarget = connectTargetId === node.id;
-    const runState = stepStates[`node_${node.id}`];
-
-    return (
-      <div
-        key={node.id}
-        data-node
-        data-node-id={node.id}
-        onClick={(e) => {
-          e.stopPropagation();
-          handleSelectNode(node.id, stageId, e.ctrlKey || e.metaKey);
-        }}
-        onMouseDown={(e) => handleNodeMouseDown(e, node.id, stageId)}
-        onMouseEnter={() => setHoveredNodeId(node.id)}
-        onMouseLeave={() => setHoveredNodeId(null)}
-        className="cursor-grab active:cursor-grabbing"
-        style={{
-          position: 'absolute',
-          left: pos?.x ?? 20,
-          top: pos?.y ?? 20,
-          width: 160,
-          height: 60,
-          boxSizing: 'border-box',
-          padding: '12px 10px',
-          borderRadius: 8,
-          border: selectedNodeIds.has(node.id)
-            ? '2px solid var(--accent)'
-            : isSelected
-              ? '1.5px solid var(--accent)'
-              : isHovered
-                ? '1px solid var(--accent)'
-                : '1.5px solid #484f58',
-          background: isDraggingThis
-            ? 'var(--bg-tertiary)'
-            : runState === 'running'
-              ? '#58a6ff15'
-              : runState === 'success'
-                ? '#3fb95010'
-                : runState === 'failed'
-                  ? '#f8514910'
-                  : 'var(--bg-tertiary)',
-          boxShadow: isDraggingThis
-            ? '0 8px 24px rgba(0,0,0,0.4), 0 0 0 1px var(--accent)'
-            : selectedNodeIds.has(node.id) && !isSelected
-              ? '0 0 0 2px var(--accent-light), var(--shadow-md)'
-              : isSelected
-                ? '0 0 0 1px var(--accent-light), var(--shadow-sm)'
-              : isHovered
-                ? 'var(--shadow-md)'
-                : runState === 'running'
-                  ? '0 0 12px #58a6ff44'
-                  : 'var(--shadow-sm)',
-          zIndex: isDraggingThis ? 20 : 2,
-          userSelect: 'none',
-          transformOrigin: '80px 30px',  /* border-box center, avoids transform-box ambiguity */
-          transform: `scale(${isDraggingThis ? 1.03 / scale : 1 / scale})`,
-          opacity: isDraggingThis ? 0.92 : 1,
-          transition: isDraggingThis ? 'none' : 'box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease',
-        }}
-      >
-        {/* 运行中动画指示器 */}
-        {runState === 'running' && (
-          <div className="absolute inset-0 rounded-lg overflow-hidden pointer-events-none" style={{ zIndex: -1 }}>
-            <div className="absolute inset-0" style={{
-              border: '2px solid #58a6ff',
-              borderRadius: 8,
-              animation: 'spin 1.5s linear infinite',
-              clipPath: 'polygon(0 0, 100% 0, 100% 50%, 0 50%)',
-              opacity: 0.5,
-            }} />
-          </div>
-        )}
-
-        {/* 节点内容行：图标 + 标签 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {/* 图标 */}
-          <div
-            className="shrink-0"
-            style={{
-              width: 36, height: 36, borderRadius: 6,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 20,
-              background: `${meta.color}22`,
-              color: meta.color,
-            }}
-          >
-            {meta.icon}
-          </div>
-          {/* 标签 */}
-          <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
-            {node.label}
-          </span>
-          {/* 运行状态指示 */}
-          {runState === 'success' && (
-            <span className="text-[10px] ml-auto shrink-0" style={{ color: '#3fb950' }}>✓</span>
-          )}
-          {runState === 'failed' && (
-            <span className="text-[10px] ml-auto shrink-0" style={{ color: '#f85149' }}>✗</span>
-          )}
-        </div>
-
-        {/* 输入锚点 — 由 canHaveInputs 控制 */}
-        {meta.canHaveInputs && (
-          <div
-            data-anchor="input"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              if (connecting) {
-                handleEndConnect(node.id, stageId);
-              }
-            }}
-            className="absolute rounded-full transition-all duration-150"
-            style={{
-              left: -5, top: '50%', marginTop: -5,
-              width: (connecting && isConnectTarget) ? 12 : 10,
-              height: (connecting && isConnectTarget) ? 12 : 10,
-              background: (connecting && isConnectTarget) ? 'var(--accent)' : 'var(--border)',
-              border: '2px solid var(--bg-secondary)',
-              cursor: (connecting && isConnectTarget) ? 'cell' : 'crosshair',
-              boxShadow: (connecting && isConnectTarget) ? '0 0 8px var(--accent-light)' : 'none',
-            }}
-          />
-        )}
-
-        {/* 输出锚点 — 由 canHaveOutputs 控制 */}
-        {meta.canHaveOutputs && (
-          <div
-            data-anchor="output"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              handleStartConnect(e, node.id, stageId);
-            }}
-            className="absolute rounded-full transition-all duration-150"
-            style={{
-              right: -5, top: '50%', marginTop: -5,
-              width: isHovered ? 12 : 10,
-              height: isHovered ? 12 : 10,
-              background: isHovered ? 'var(--accent)' : 'var(--border)',
-              border: '2px solid var(--bg-secondary)',
-              cursor: 'crosshair',
-              boxShadow: isHovered ? '0 0 8px var(--accent-light)' : 'none',
-            }}
-          />
-        )}
-
-        {/* 删除按钮 — 由 isBoundary 控制，非边界节点 hover 时显示 */}
-        {!meta.isBoundary && (
-          <div
-            onClick={(e) => { e.stopPropagation(); handleDeleteNode(node.id); }}
-            className="absolute flex items-center justify-center rounded-full cursor-pointer"
-            style={{
-              top: -6, right: -6, width: 16, height: 16,
-              background: 'var(--status-danger)', color: '#fff', fontSize: 10,
-              opacity: isHovered ? 0.9 : 0,
-              transition: 'opacity 0.15s ease',
-            }}
-          >x</div>
-        )}
-      </div>
-    );
-  };
-  // ── 渲染：连线（纯算术坐标） ──
+    // ── 渲染：连线（纯算术坐标） ──
   const renderEdge = (edge: WorkflowEdge, stageId: string) => {
     const stage = stages.find((s) => s.id === stageId);
     if (!stage) return null;
@@ -1948,7 +1782,27 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           })()}
                         </svg>
                         {/* 节点 zIndex:2 确保在连线之上 */}
-                        {stage.nodes.map((node) => renderNode(node, stage.id))}
+                        {stage.nodes.map((node) => (
+                <WorkflowNodeItem
+                  key={node.id}
+                  node={node}
+                  stageId={stage.id}
+                  scale={scale}
+                  selectedNodeId={selectedNodeId}
+                  selectedNodeIds={selectedNodeIds}
+                  draggingNode={draggingNode}
+                  hoveredNodeId={hoveredNodeId}
+                  connectTargetId={connectTargetId}
+                  connecting={connecting}
+                  stepStates={stepStates}
+                  onSelectNode={handleSelectNode}
+                  onNodeMouseDown={handleNodeMouseDown}
+                  onDeleteNode={handleDeleteNode}
+                  onEndConnect={handleEndConnect}
+                  onStartConnect={handleStartConnect}
+                  onHoverNode={setHoveredNodeId}
+                />
+              ))}
                       </div>
 
                       {/* Gate 区域（正向缩放，不做反向补偿） */}
