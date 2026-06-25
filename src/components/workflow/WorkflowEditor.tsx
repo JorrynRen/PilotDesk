@@ -1627,7 +1627,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>删除连线</span><span style={{ color: 'var(--text-tertiary)' }}>点击连线</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>删除节点/阶段</span><span style={{ color: 'var(--text-tertiary)' }}>悬停 x 按钮</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>选中节点</span><span style={{ color: 'var(--text-tertiary)' }}>单击</span></div>
-                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>多选节点</span><span style={{ color: 'var(--text-tertiary)' }}>内容区框选 / Ctrl+点击</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>多选节点</span><span style={{ color: 'var(--text-tertiary)' }}>内容区右键框选 / Ctrl+点击</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>批量移动</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽任一选中节点</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>对齐/分布</span><span style={{ color: 'var(--text-tertiary)' }}>多选后使用浮动栏按钮</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>批量删除</span><span style={{ color: 'var(--text-tertiary)' }}>Delete / Backspace</span></div>
