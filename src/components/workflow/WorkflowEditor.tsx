@@ -2048,7 +2048,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑 [步骤{stages.findIndex(s => s.id === gateInput.stageId) + 1} {stages.find(s => s.id === gateInput.stageId)?.name || gateInput.stageId}] 门控配置</h3>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑 [step{(stages.find(s => s.id === gateInput.stageId)?.order ?? 0) + 1} {stages.find(s => s.id === gateInput.stageId)?.name || gateInput.stageId}] 门控配置</h3>
             {gateError && (
               <div className="mb-3 px-3 py-2 rounded-lg text-[10px]" style={{ background: 'rgba(248,81,73,0.12)', color: '#f85149', border: '1px solid rgba(248,81,73,0.3)' }}>
                 {gateError}
