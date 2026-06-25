@@ -410,23 +410,28 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 多选操作 ──
   const handleSelectNode = useCallback((nodeId: string, stageId: string, ctrlKey: boolean) => {
     if (ctrlKey) {
-      // Ctrl+click: toggle in multi-select
+      // Ctrl+click: toggle in multi-select (always operates on selectedNodeIds)
       setSelectedNodeIds(prev => {
         const next = new Set(prev);
-        if (next.has(nodeId)) { next.delete(nodeId); if (selectedNodeId === nodeId) setSelectedNodeId(null); }
-        else { next.add(nodeId); setSelectedNodeId(nodeId); setSelectedStageId(stageId); }
+        if (next.has(nodeId)) {
+          next.delete(nodeId);
+          // If removing the active node, update selectedNodeId to another or null
+          if (selectedNodeId === nodeId) {
+            if (next.size > 0) { setSelectedNodeId([...next][0]); setSelectedStageId(stageId); }
+            else { setSelectedNodeId(null); setSelectedStageId(null); }
+          }
+        } else {
+          next.add(nodeId);
+          setSelectedNodeId(nodeId);
+          setSelectedStageId(stageId);
+        }
         return next;
       });
     } else {
-      // Normal click: if already in multi-select, keep it; otherwise single select
-      if (selectedNodeIds.has(nodeId)) {
-        setSelectedNodeId(nodeId);
-        setSelectedStageId(stageId);
-      } else {
-        setSelectedNodeIds(new Set());
-        setSelectedNodeId(nodeId);
-        setSelectedStageId(stageId);
-      }
+      // Normal click: single select (also add to selectedNodeIds for consistency)
+      setSelectedNodeIds(new Set([nodeId]));
+      setSelectedNodeId(nodeId);
+      setSelectedStageId(stageId);
     }
   }, [selectedNodeId, selectedNodeIds]);
 
@@ -1604,22 +1609,27 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {/* 操作帮助按钮 */}
           <div className="relative group">
             <button
-              className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: 'none' }}
+              className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+              style={{ background: '#8b949e22', color: '#8b949e', border: 'none' }}
               title="操作帮助"
-            >?</button>
-            <div className="absolute bottom-full right-0 mb-2 w-[280px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
-              <div className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>操作帮助</div>
-              <div className="space-y-1.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                <div className="flex justify-between"><span>平移画布</span><span style={{ color: 'var(--text-tertiary)' }}>左键拖拽 / 中键</span></div>
-                <div className="flex justify-between"><span>缩放画布</span><span style={{ color: 'var(--text-tertiary)' }}>滚轮</span></div>
-                <div className="flex justify-between"><span>添加节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽工具栏节点到阶段区</span></div>
-                <div className="flex justify-between"><span>连接节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽输出锚点→输入锚点</span></div>
-                <div className="flex justify-between"><span>删除连线</span><span style={{ color: 'var(--text-tertiary)' }}>点击连线</span></div>
-                <div className="flex justify-between"><span>删除节点/阶段</span><span style={{ color: 'var(--text-tertiary)' }}>悬停 x 按钮</span></div>
-                <div className="flex justify-between"><span>多选节点</span><span style={{ color: 'var(--text-tertiary)' }}>框选 / Ctrl+点击</span></div>
-                <div className="flex justify-between"><span>批量删除</span><span style={{ color: 'var(--text-tertiary)' }}>Delete 键</span></div>
-                <div className="flex justify-between"><span>取消连线/多选</span><span style={{ color: 'var(--text-tertiary)' }}>Esc</span></div>
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><circle cx="6" cy="6" r="4.5" /><path d="M4.5 5a1.5 1.5 0 0 1 3 0c0 1-1.5 1-1.5 2.5" /><circle cx="6" cy="9" r="0.5" fill="currentColor" /></svg>
+            </button>
+            <div className="absolute bottom-full right-0 mb-2 w-[310px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
+              <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>操作帮助</div>
+              <div className="space-y-0 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>平移画布</span><span style={{ color: 'var(--text-tertiary)' }}>空白区左键拖拽 / 中键</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>缩放画布</span><span style={{ color: 'var(--text-tertiary)' }}>鼠标滚轮</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>添加节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽工具栏节点到阶段</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>连接节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽输出锚点→输入锚点</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>删除连线</span><span style={{ color: 'var(--text-tertiary)' }}>点击连线</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>删除节点/阶段</span><span style={{ color: 'var(--text-tertiary)' }}>悬停 x 按钮</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>选中节点</span><span style={{ color: 'var(--text-tertiary)' }}>单击</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>多选节点</span><span style={{ color: 'var(--text-tertiary)' }}>内容区框选 / Ctrl+点击</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>批量移动</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽任一选中节点</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>对齐/分布</span><span style={{ color: 'var(--text-tertiary)' }}>多选后使用浮动栏按钮</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>批量删除</span><span style={{ color: 'var(--text-tertiary)' }}>Delete / Backspace</span></div>
+                <div className="flex justify-between py-1.5"><span>取消连线/多选</span><span style={{ color: 'var(--text-tertiary)' }}>Esc</span></div>
               </div>
             </div>
           </div>
@@ -1628,25 +1638,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {/* 统计信息按钮 */}
           <div className="relative group">
             <button
-              className="pd-btn w-6 h-6 flex items-center justify-center rounded text-xs"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: 'none' }}
+              className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+              style={{ background: '#3fb95022', color: '#3fb950', border: 'none' }}
               title="工作流统计"
             >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3">
                 <rect x="1" y="6" width="2.5" height="5" rx="0.5" /><rect x="4.75" y="3" width="2.5" height="8" rx="0.5" /><rect x="8.5" y="1" width="2.5" height="10" rx="0.5" />
               </svg>
             </button>
             <div className="absolute bottom-full right-0 mb-2 w-[220px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
-              <div className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>工作流统计</div>
-              <div className="space-y-1.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                <div className="flex justify-between"><span>阶段</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalStages}</span></div>
-                <div className="flex justify-between"><span>节点</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalNodes}</span></div>
-                <div className="flex justify-between"><span>连线</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalEdges}</span></div>
-                <div className="w-full h-px my-1" style={{ background: 'var(--border)' }} />
+              <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>工作流统计</div>
+              <div className="space-y-0 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>阶段</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalStages}</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>节点</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalNodes}</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px solid var(--border)' }}><span>连线</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalEdges}</span></div>
                 {Object.entries(stats.nodeTypeCounts).map(([type, count]) => {
                   const m = getNodeTypeMeta(type as WorkflowNodeType);
                   return (
-                    <div key={type} className="flex justify-between items-center">
+                    <div key={type} className="flex justify-between items-center py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}>
                       <span className="flex items-center gap-1">
                         <span style={{ color: m.color }}>{m.icon}</span>
                         <span>{m.label}</span>
@@ -1663,18 +1672,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {/* 执行模拟按钮 */}
           <button
             onClick={runSimulation}
-            className="pd-btn px-1.5 h-6 flex items-center justify-center rounded text-[10px]"
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded"
             style={{
-              background: isSimRunning ? '#58a6ff33' : 'var(--bg-tertiary)',
-              color: isSimRunning ? '#58a6ff' : 'var(--text-secondary)',
+              background: isSimRunning ? '#58a6ff33' : '#58a6ff22',
+              color: isSimRunning ? '#58a6ff' : '#58a6ff',
               border: isSimRunning ? '1px solid #58a6ff' : 'none',
             }}
             disabled={isSimRunning}
             title="执行模拟"
           >
-            {isSimRunning ? (
-              <span className="inline-block" style={{ animation: 'spin 1s linear infinite' }}>▶</span>
-            ) : '▶'}
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><polygon points="3,1 10,6 3,11" /></svg>
           </button>
           <div className="w-px h-4" style={{ background: 'var(--border)' }} />
 
@@ -1963,12 +1970,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           const r = boxSelectRect;
                           const x = Math.min(r.x1, r.x2), y = Math.min(r.y1, r.y2);
                           const w = Math.abs(r.x2 - r.x1), h = Math.abs(r.y2 - r.y1);
-                          return w > 2 && h > 2 ? (
-                            <rect x={x} y={y} width={w} height={h} rx={2}
-                              fill="var(--accent-light)" fillOpacity={0.15}
-                              stroke="var(--accent)" strokeWidth={1 / scale} strokeDasharray={`${4/scale} ${3/scale}`}
-                              style={{ pointerEvents: 'none' }} />
-                          ) : null;
+                          if (w < 3 || h < 3) return null;
+                          const inv = 1 / scale;
+                          return (
+                            <g style={{ pointerEvents: 'none' }}>
+                              <rect x={x} y={y} width={w} height={h} rx={2}
+                                fill="var(--accent)" fillOpacity={0.08}
+                                stroke="var(--accent)" strokeWidth={1.5 * inv} />
+                              {/* Corner handles */}
+                              <circle cx={x} cy={y} r={2.5 * inv} fill="var(--accent)" />
+                              <circle cx={x + w} cy={y} r={2.5 * inv} fill="var(--accent)" />
+                              <circle cx={x} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
+                              <circle cx={x + w} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
+                            </g>
+                          );
                         })()}
                         {/* 节点 zIndex:2 确保在连线之上 */}
                         {stage.nodes.map((node) => renderNode(node, stage.id))}
