@@ -2067,10 +2067,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.strategy || 'all'}
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               >
-                <option value="all">全部完成 (all)</option>
-                <option value="any">任一完成 (any)</option>
-                <option value="count">计数完成 (count)</option>
-                <option value="threshold">阈值完成 (threshold)</option>
+                <option value="all">全部完成</option>
+                <option value="any">任一完成</option>
+                <option value="count">指定数量完成</option>
+                <option value="threshold">按条件判断</option>
               </select>
             </div>
             <div className="flex gap-3 mb-4">
@@ -2118,11 +2118,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     if (modeSelect) modeSelect.style.display = isCustom ? 'block' : 'none';
                   }}
                 >
-                  <option value="merge">合并对象 (merge)</option>
-                  <option value="concat">合并数组 (concat)</option>
-                  <option value="pick_first">取第一个 (pick_first)</option>
-                  <option value="pick_last">取最后一个 (pick_last)</option>
-                  <option value="custom">自定义脚本 (custom)</option>
+                  <option value="merge">合并为对象</option>
+                  <option value="concat">合并为数组</option>
+                  <option value="pick_first">取第一个结果</option>
+                  <option value="pick_last">取最后一个结果</option>
+                  <option value="custom">自定义处理</option>
                 </select>
                 <select
                   id="gate-custom-mode"
@@ -2144,26 +2144,26 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>过滤</label>
                     <select id="gate-script-filter" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-                      <option value="all">提取所有</option>
-                      <option value="success">过滤失败</option>
+                      <option value="all">保留全部</option>
+                      <option value="success">只保留成功</option>
                     </select>
                   </div>
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>合并为</label>
                     <select id="gate-script-merge" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-                      <option value="object">对象</option>
-                      <option value="array">数组</option>
-                      <option value="flat">扁平数组</option>
+                      <option value="object">合并成一个对象</option>
+                      <option value="array">合并成一个数组</option>
+                      <option value="flat">展开成一维数组</option>
                     </select>
                   </div>
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>取值</label>
                     <select id="gate-script-value" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-                      <option value="none">不处理</option>
-                      <option value="max">最高值</option>
-                      <option value="min">最低值</option>
-                      <option value="avg">平均值</option>
-                      <option value="sum">求和值</option>
+                      <option value="none">保留原始值</option>
+                      <option value="max">取最大值</option>
+                      <option value="min">取最小值</option>
+                      <option value="avg">取平均值</option>
+                      <option value="sum">计算总和</option>
                     </select>
                   </div>
                 </div>
