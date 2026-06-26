@@ -2114,30 +2114,44 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
             <div className="mb-4">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>自定义脚本 (合并策略为 custom 时使用)</label>
-              <select
-                id="gate-script-template"
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none mb-2"
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                defaultValue=""
-                onChange={(e) => {
-                  const ta = document.getElementById('gate-script') as HTMLTextAreaElement;
-                  if (ta && e.target.value) ta.value = e.target.value;
-                }}
-              >
-                <option value="">-- 选择脚本模板 --</option>
-                <option value="(results) => results.map(r => r.data)">提取所有结果数据 (map)</option>
-                <option value="(results) => results.filter(r => r.success).map(r => r.data)">过滤成功结果 (filter + map)</option>
-                <option value="(results) => results.reduce((acc, r) => ({...acc, ...r.data}), {{}})">合并所有数据对象 (reduce)</option>
-                <option value="(results) => results.flatMap(r => r.data)">展平数组 (flatMap)</option>
-                <option value="(results) => results.find(r => r.success)?.data || null">取第一个成功结果 (find)</option>
-              </select>
+              <div className="flex gap-2 mb-2">
+                <div className="flex-1">
+                  <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>过滤</label>
+                  <select id="gate-script-filter" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                    <option value="all">提取所有</option>
+                    <option value="success">过滤失败</option>
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>合并为</label>
+                  <select id="gate-script-merge" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                    <option value="array">数组</option>
+                    <option value="object">对象</option>
+                    <option value="flat">扁平数组</option>
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>取值</label>
+                  <select id="gate-script-value" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                    <option value="none">不处理</option>
+                    <option value="max">最高值</option>
+                    <option value="min">最低值</option>
+                    <option value="avg">平均值</option>
+                    <option value="sum">求和值</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <input id="gate-script-custom" type="checkbox" className="rounded" style={{ accentColor: 'var(--accent)' }} />
+                <label className="text-[10px]" style={{ color: 'var(--text-tertiary)' }} htmlFor="gate-script-custom">自定义编辑</label>
+              </div>
               <textarea
                 id="gate-script"
                 rows={3}
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none font-mono"
                 defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.customScript ?? ''}
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                placeholder="选择上方模板后在此编辑，或直接编写自定义脚本"
+                placeholder={'勾选「自定义编辑」后在此编写自定义脚本'}
               />
             </div>
             <div className="flex gap-2 justify-end">
@@ -2152,7 +2166,40 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   const mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
                   const countInput = (document.getElementById('gate-count') as HTMLInputElement)?.value;
                   const thresholdInput = (document.getElementById('gate-threshold') as HTMLInputElement)?.value;
-                  const customScript = (document.getElementById('gate-script') as HTMLTextAreaElement)?.value;
+                  const isCustomEdit = (document.getElementById('gate-script-custom') as HTMLInputElement)?.checked;
+                  let customScript: string | undefined;
+                  if (mergeStrategy === 'custom') {
+                    if (isCustomEdit) {
+                      customScript = (document.getElementById('gate-script') as HTMLTextAreaElement)?.value || undefined;
+                    } else {
+                      const filter = (document.getElementById('gate-script-filter') as HTMLSelectElement)?.value || 'all';
+                      const mergeAs = (document.getElementById('gate-script-merge') as HTMLSelectElement)?.value || 'array';
+                      const valueOp = (document.getElementById('gate-script-value') as HTMLSelectElement)?.value || 'none';
+                      // 自动生成脚本
+                      let lines: string[] = [];
+                      if (filter === 'success') {
+                        lines.push('  const filtered = results.filter(r => r.success);');
+                      } else {
+                        lines.push('  const filtered = results;');
+                      }
+                      if (valueOp === 'none') {
+                        if (mergeAs === 'object') {
+                          lines.push('  return filtered.reduce((acc, r) => ({...acc, ...r.data}), {});');
+                        } else if (mergeAs === 'flat') {
+                          lines.push('  return filtered.flatMap(r => r.data);');
+                        } else {
+                          lines.push('  return filtered.map(r => r.data);');
+                        }
+                      } else {
+                        lines.push('  const values = filtered.map(r => r.data).filter(v => typeof v === "number");');
+                        if (valueOp === 'max') lines.push('  return values.length > 0 ? Math.max(...values) : null;');
+                        else if (valueOp === 'min') lines.push('  return values.length > 0 ? Math.min(...values) : null;');
+                        else if (valueOp === 'avg') lines.push('  return values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : null;');
+                        else if (valueOp === 'sum') lines.push('  return values.reduce((a, b) => a + b, 0);');
+                      }
+                      customScript = '(results) => {\n' + lines.join('\n') + '\n}';
+                    }
+                  }
                   // 校验
                   if (strategy === 'count' && (!countInput || parseInt(countInput, 10) < 1)) {
                     setGateError('请填写有效的完成节点数（至少为 1）');
@@ -2163,7 +2210,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     return;
                   }
                   if (mergeStrategy === 'custom' && !customScript?.trim()) {
-                    setGateError('请填写自定义脚本');
+                    setGateError('请配置自定义脚本或勾选自定义编辑');
                     return;
                   }
                   const threshold = strategy === 'count'
