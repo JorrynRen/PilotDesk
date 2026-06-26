@@ -1846,7 +1846,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                             策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{gateStrategyLabel(stage.gate.strategy)}</span>
                             <span className="ml-1" style={{ color: 'var(--text-tertiary)' }}>{gateStrategyDesc(stage.gate.strategy)}</span>
-                            {stage.gate.threshold !== undefined && (
+                            {stage.gate.threshold !== undefined && stage.gate.strategy === 'count' && (
+                              <span className="ml-1 text-[10px]" style={{ color: 'var(--accent)' }}>(完成节点数: {stage.gate.threshold})</span>
+                            )}
+                            {stage.gate.threshold !== undefined && stage.gate.strategy === 'threshold' && (
                               <span className="ml-1 text-[10px]" style={{ color: 'var(--accent)' }}>(阈值: {stage.gate.threshold})</span>
                             )}
                           </span>
