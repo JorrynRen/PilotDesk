@@ -104,13 +104,13 @@ impl PluginExecuteManager {
 
 pub struct PluginExecutor {
     pub plugin_id: String,
-    pub type_id: String,
+    pub _type_id: String,
     pub manager: Arc<PluginExecuteManager>,
 }
 
 impl PluginExecutor {
     pub fn new(plugin_id: String, type_id: String, manager: Arc<PluginExecuteManager>) -> Self {
-        Self { plugin_id, type_id, manager }
+        Self { plugin_id, _type_id: type_id, manager }
     }
 }
 
