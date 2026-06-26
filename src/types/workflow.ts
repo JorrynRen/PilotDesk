@@ -75,6 +75,8 @@ export interface GateConfig {
   mergeStrategy: MergeStrategy;
   threshold?: number;
   customScript?: string;
+  /** 自定义脚本输入模式: 'selector' | 'editor' */
+  customMode?: 'selector' | 'editor';
 }
 
 // ── 阶段定义 ──

@@ -1829,7 +1829,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         onClick={() => {
                           setShowCustomMode(stage?.gate?.mergeStrategy === 'custom');
                           setGateStrategy(stage?.gate?.strategy || 'all');
-                          setCustomMode(stage?.gate?.customScript ? 'editor' : 'selector');
+                          setCustomMode(stage?.gate?.customMode || (stage?.gate?.customScript ? 'editor' : 'selector'));
                           setGateInput({ stageId: stage.id });
                         }}>
                         <div className="flex items-center justify-between mb-1">
@@ -2264,7 +2264,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     ? (countInput ? parseInt(countInput, 10) : undefined)
                     : (thresholdInput ? parseFloat(thresholdInput) : undefined);
                   setGateError(null);
-                  handleUpdateGate(gateInput.stageId, { strategy, mergeStrategy, threshold, customScript: customScript || undefined });
+                  handleUpdateGate(gateInput.stageId, { strategy, mergeStrategy, threshold, customScript: customScript || undefined, customMode: mergeStrategy === 'custom' ? customMode : undefined });
                   setGateInput(null);
                 }}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
