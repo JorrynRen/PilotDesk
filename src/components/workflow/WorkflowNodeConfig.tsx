@@ -169,7 +169,66 @@ const MappingEditor: React.FC<{
   };
   return (
     <div>
-      {entries.length === 0 ? (
+      {entries.length === 0 && defaultKey ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+          <div className="flex items-center" style={{ gap: 4, minWidth: 0 }}>
+            <input
+              value={defaultKey}
+              onChange={(e) => handleKeyChange(defaultKey, e.target.value)}
+              placeholder={keyPlaceholder}
+              style={{
+                flex: '0 0 100px',
+                minWidth: 0,
+                padding: '4px 8px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-primary)',
+                color: 'var(--text-primary)',
+                fontSize: 'var(--fs-11)',
+                outline: 'none',
+                fontFamily: 'var(--font-mono)',
+              }}
+            />
+            <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)', flexShrink: 0 }}>→</span>
+            <input
+              value={value?.[defaultKey] ?? ''}
+              onChange={(e) => handleValueChange(defaultKey, e.target.value)}
+              placeholder={valuePlaceholder}
+              autoFocus
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: '4px 8px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-primary)',
+                color: 'var(--text-primary)',
+                fontSize: 'var(--fs-11)',
+                outline: 'none',
+                fontFamily: 'var(--font-mono)',
+              }}
+            />
+            <button
+              onClick={() => handleRemove(defaultKey)}
+              className="flex items-center justify-center"
+              style={{
+                width: 24,
+                height: 24,
+                flexShrink: 0,
+                borderRadius: 'var(--radius-md)',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--text-tertiary)',
+                fontSize: 'var(--fs-14)',
+                cursor: 'pointer',
+              }}
+              title="删除"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      ) : entries.length === 0 ? (
         <div
           style={{
             padding: '8px 10px',
@@ -186,13 +245,14 @@ const MappingEditor: React.FC<{
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
           {entries.map(([key, val]) => (
-            <div key={key} className="flex items-center" style={{ gap: 4 }}>
+            <div key={key} className="flex items-center" style={{ gap: 4, minWidth: 0 }}>
               <input
                 value={key}
                 onChange={(e) => handleKeyChange(key, e.target.value)}
                 placeholder={keyPlaceholder}
                 style={{
-                  flex: '0 0 120px',
+                  flex: '0 0 100px',
+                  minWidth: 0,
                   padding: '4px 8px',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--border)',
@@ -210,6 +270,7 @@ const MappingEditor: React.FC<{
                 placeholder={valuePlaceholder}
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   padding: '4px 8px',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--border)',
