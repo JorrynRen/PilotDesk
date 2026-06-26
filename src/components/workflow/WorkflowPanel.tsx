@@ -46,7 +46,7 @@ const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
           { id: 'n2', type: 'transform' as WorkflowNodeType, label: '数据清洗', position: { x: 40, y: 40 }, params: { script: '// 数据清洗逻辑\nreturn input.map(item => ({ ...item, processed: true }));' } },
         ], edges: [], gate: { strategy: 'all', mergeStrategy: 'merge' } },
         { id: 's3', name: '结果输出', order: 2, nodes: [
-          { id: 'n3', type: 'agent' as WorkflowNodeType, label: '生成报告', position: { x: 40, y: 40 }, params: { prompt_template: '基于以下数据生成报告：\${input}' } },
+          { id: 'n3', type: 'agent' as WorkflowNodeType, label: '生成报告', position: { x: 40, y: 40 }, params: { prompt_template: '基于以下数据生成报告：{{input}}' } },
         ], edges: [], gate: { strategy: 'all', mergeStrategy: 'merge' } },
       ];
       def.description = '从 API 获取数据，经过转换处理后生成报告';
@@ -69,7 +69,7 @@ const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
         ], edges: [], gate: { strategy: 'all', mergeStrategy: 'merge' } },
         { id: 's2', name: '审批处理', order: 1, nodes: [
           { id: 'n2', type: 'interact' as WorkflowNodeType, label: '审批', position: { x: 40, y: 40 }, params: { prompt: '请审批该申请', inputType: 'confirm' } },
-          { id: 'n3', type: 'agent' as WorkflowNodeType, label: '通知结果', position: { x: 40, y: 120 }, params: { prompt_template: '审批结果：\${input}' } },
+          { id: 'n3', type: 'agent' as WorkflowNodeType, label: '通知结果', position: { x: 40, y: 120 }, params: { prompt_template: '审批结果：{{input}}' } },
         ], edges: [], gate: { strategy: 'all', mergeStrategy: 'merge' } },
       ];
       def.description = '提交申请后由人工审批，自动通知结果';
@@ -95,7 +95,7 @@ const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
           { id: 'n2', type: 'transform' as WorkflowNodeType, label: '判断状态', position: { x: 40, y: 40 }, params: { script: 'return input.status === \"ok\" ? { healthy: true } : { healthy: false, error: input.error };' } },
         ], edges: [], gate: { strategy: 'all', mergeStrategy: 'merge' } },
         { id: 's3', name: '告警通知', order: 2, nodes: [
-          { id: 'n3', type: 'agent' as WorkflowNodeType, label: '发送告警', position: { x: 40, y: 40 }, params: { prompt_template: '服务异常告警：\${input.error}' } },
+          { id: 'n3', type: 'agent' as WorkflowNodeType, label: '发送告警', position: { x: 40, y: 40 }, params: { prompt_template: '服务异常告警：{{input.error}}' } },
         ], edges: [], gate: { strategy: 'all', mergeStrategy: 'merge' } },
       ];
       def.description = '每30分钟检查服务状态，异常时发送告警';
@@ -114,7 +114,7 @@ const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
       const def = createDefaultWorkflow('内容发布流程');
       def.stages = [
         { id: 's1', name: '内容创作', order: 0, nodes: [
-          { id: 'n1', type: 'agent' as WorkflowNodeType, label: '生成内容', position: { x: 40, y: 40 }, params: { prompt_template: '请根据以下主题创作内容：\${input.topic}' } },
+          { id: 'n1', type: 'agent' as WorkflowNodeType, label: '生成内容', position: { x: 40, y: 40 }, params: { prompt_template: '请根据以下主题创作内容：{{input.topic}}' } },
         ], edges: [], gate: { strategy: 'all', mergeStrategy: 'merge' } },
         { id: 's2', name: '内容审核', order: 1, nodes: [
           { id: 'n2', type: 'interact' as WorkflowNodeType, label: '人工审核', position: { x: 40, y: 40 }, params: { prompt: '请审核以下内容是否适合发布', inputType: 'confirm' } },

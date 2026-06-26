@@ -21,7 +21,7 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
   agent: {
     fields: [
       { key: 'agent_type', label: 'Agent 类型', type: 'select', placeholder: 'claude' },
-      { key: 'prompt_template', label: '提示词模板', type: 'textarea', placeholder: '请输入提示词模板，支持 ${variable}' },
+      { key: 'prompt_template', label: '提示词模板', type: 'textarea', placeholder: '请输入提示词模板，支持 {{variable}}' },
       { key: 'system_prompt', label: '系统提示词', type: 'textarea', placeholder: '可选系统提示词' },
     ],
   },
@@ -575,7 +575,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             value={node.inputMapping}
             onChange={(v) => onUpdate({ inputMapping: v })}
             keyPlaceholder="参数名"
-            valuePlaceholder={'${nodes.nodeId.output.field}'}
+            valuePlaceholder={'{{nodes.nodeId.output.field}}'}
             addLabel="添加输入映射"
             defaultKey="input"
           />
@@ -586,7 +586,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             value={node.outputMapping}
             onChange={(v) => onUpdate({ outputMapping: v })}
             keyPlaceholder="输出字段名"
-            valuePlaceholder={'${context.path}'}
+            valuePlaceholder={'{{context.path}}'}
             addLabel="添加输出映射"
             defaultKey="output"
           />
