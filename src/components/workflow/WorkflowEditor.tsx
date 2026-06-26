@@ -2178,7 +2178,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                   placeholder="在此编写自定义脚本，例如: (results) =&gt; results.map(r =&gt; r.data)"
                 />
-                <div className="mt-2 p-2 rounded-lg text-[10px] leading-relaxed" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-tertiary)' }}>
+                <div className="mt-2 p-2 rounded-lg text-[10px] leading-relaxed" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-tertiary)', maxHeight: '180px', overflowY: 'auto' }}>
                   <div className="font-semibold mb-1" style={{ color: 'var(--text-secondary)' }}>参数说明</div>
                   <div><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results</code> — 上游节点输出数组，需编写完整函数: <code className="text-[10px]" style={{ color: 'var(--accent)' }}>(results) =&gt; {'{ /* 你的代码 */ }'}</code></div>
                   <div className="ml-3">每个元素: <code className="text-[10px]" style={{ color: 'var(--accent)' }}>{'{ data, success, nodeId, nodeName }'}</code></div>
@@ -2254,7 +2254,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     return;
                   }
                   if (mergeStrategy === 'custom' && !customScript?.trim()) {
-                    setGateError('请配置自定义脚本或勾选自定义编辑');
+                    setGateError('请配置自定义脚本（选择器模式或编辑器模式）');
                     return;
                   }
                   const threshold = strategy === 'count'
