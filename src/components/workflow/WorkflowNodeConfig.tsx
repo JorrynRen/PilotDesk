@@ -542,30 +542,6 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
         </div>
       )}
 
-      {/* ===== 控制属性 ===== */}
-      <div style={S.sectionGap}>
-        <div style={S.sectionTitle}>控制属性</div>
-        <div className="grid grid-cols-2" style={{ gap: 8 }}>
-          {[
-            { key: 'delayMs', label: '延迟 (ms)', ph: '0' },
-            { key: 'timeoutMs', label: '超时 (ms)', ph: '60000' },
-            { key: 'retryCount', label: '重试次数', ph: '0' },
-            { key: 'retryDelayMs', label: '重试间隔 (ms)', ph: '1000' },
-          ].map((item) => (
-            <div key={item.key}>
-              <label style={S.labelSm()}>{item.label}</label>
-              <input
-                type="number"
-                value={(node as any)[item.key] || ''}
-                onChange={(e) => onUpdate({ [item.key]: e.target.value ? Number(e.target.value) : undefined })}
-                placeholder={item.ph}
-                style={S.input('var(--fs-11)', '4px 8px')}
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* ===== 输入输出映射 ===== */}
       <div>
         <div style={S.sectionTitle}>输入输出映射</div>
@@ -590,6 +566,30 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             addLabel="添加输出映射"
             defaultKey="output"
           />
+        </div>
+      </div>
+
+      {/* ===== 控制属性 ===== */}
+      <div style={S.sectionGap}>
+        <div style={S.sectionTitle}>控制属性</div>
+        <div className="grid grid-cols-2" style={{ gap: 8 }}>
+          {[
+            { key: 'delayMs', label: '延迟 (ms)', ph: '0' },
+            { key: 'timeoutMs', label: '超时 (ms)', ph: '60000' },
+            { key: 'retryCount', label: '重试次数', ph: '0' },
+            { key: 'retryDelayMs', label: '重试间隔 (ms)', ph: '1000' },
+          ].map((item) => (
+            <div key={item.key}>
+              <label style={S.labelSm()}>{item.label}</label>
+              <input
+                type="number"
+                value={(node as any)[item.key] || ''}
+                onChange={(e) => onUpdate({ [item.key]: e.target.value ? Number(e.target.value) : undefined })}
+                placeholder={item.ph}
+                style={S.input('var(--fs-11)', '4px 8px')}
+              />
+            </div>
+          ))}
         </div>
       </div>
     </div>
