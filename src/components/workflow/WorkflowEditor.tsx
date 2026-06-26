@@ -2175,18 +2175,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none font-mono"
                   defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.customScript ?? ''}
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                  placeholder="在此编写自定义脚本"
+                  placeholder="在此编写自定义脚本，例如: (results) =&gt; results.map(r =&gt; r.data)"
                 />
                 <div className="mt-2 p-2 rounded-lg text-[10px] leading-relaxed" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-tertiary)' }}>
                   <div className="font-semibold mb-1" style={{ color: 'var(--text-secondary)' }}>参数说明</div>
-                  <div><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results</code> — 上游节点输出数组</div>
+                  <div><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results</code> — 上游节点输出数组，需编写完整函数: <code className="text-[10px]" style={{ color: 'var(--accent)' }}>(results) =&gt; {'{ /* 你的代码 */ }'}</code></div>
                   <div className="ml-3">每个元素: <code className="text-[10px]" style={{ color: 'var(--accent)' }}>{'{ data, success, nodeId, nodeName }'}</code></div>
-                  <div className="mt-1 font-semibold" style={{ color: 'var(--text-secondary)' }}>语法参考</div>
-                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.map(r =&gt; r.data)</code> — 提取所有数据</div>
-                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.filter(r =&gt; r.success)</code> — 过滤成功节点</div>
-                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.reduce((acc, r) =&gt; Object.assign(acc, r.data), {})</code> — 合并为对象</div>
-                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.flatMap(r =&gt; r.data)</code> — 展平数组</div>
-                  <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>返回值将作为下游节点的输入数据。</div>
+                  <div className="mt-1 font-semibold" style={{ color: 'var(--text-secondary)' }}>常用数组方法</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.map(r =&gt; r.data)</code> — 遍历转换，提取所有数据</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.filter(r =&gt; r.success)</code> — 过滤，只保留符合条件的元素</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.find(r =&gt; r.success)</code> — 查找，返回第一个匹配的元素</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.findIndex(r =&gt; r.success)</code> — 查找索引，返回第一个匹配的位置</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.some(r =&gt; r.success)</code> — 判断是否有任意元素满足条件</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.every(r =&gt; r.success)</code> — 判断是否所有元素满足条件</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.reduce((acc, r) =&gt; Object.assign(acc, r.data), {'{}'})</code> — 归并，累积合并为单个值/对象</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.flatMap(r =&gt; r.data)</code> — 遍历展平，将嵌套数组展开一层</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.sort((a, b) =&gt; b.data - a.data)</code> — 排序，按数值降序排列</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.includes(target)</code> — 判断数组是否包含指定值</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.slice(0, 3)</code> — 截取，取前 N 个元素</div>
+                  <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>提示: 函数体最后一行即为返回值，无需 return 关键字（箭头函数简写）。</div>
                 </div>
               </div>
             </div>
