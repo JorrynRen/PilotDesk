@@ -83,7 +83,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
   const [gateInput, setGateInput] = useState<{ stageId: string } | null>(null);
   const [gateError, setGateError] = useState<string | null>(null);
+  const [showCustomMode, setShowCustomMode] = useState(false);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
+  const [customMode, setCustomMode] = useState<string>('selector');
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
@@ -1823,8 +1825,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           zIndex: 10,
                           overflow: 'hidden',
                         }}
-                        onClick={() => setGateInput({ stageId: stage.id })}
-                      >
+                        onClick={() => {
+                          setShowCustomMode(stage?.gate?.mergeStrategy === 'custom');
+                          setCustomMode(stage?.gate?.customScript ? 'editor' : 'selector');
+                          setGateInput({ stageId: stage.id });
+                        }}>
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-[10px] font-semibold flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
                             门控 Gate
@@ -2105,8 +2110,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy || 'merge'}
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                   onChange={(e) => {
+                    const isCustom = e.target.value === 'custom';
+                    setShowCustomMode(isCustom);
                     const modeRow = document.getElementById('gate-custom-mode-row');
-                    if (modeRow) modeRow.style.display = e.target.value === 'custom' ? 'flex' : 'none';
+                    if (modeRow) modeRow.style.display = isCustom ? 'block' : 'none';
+                    const modeSelect = document.getElementById('gate-custom-mode');
+                    if (modeSelect) modeSelect.style.display = isCustom ? 'block' : 'none';
                   }}
                 >
                   <option value="merge">合并对象 (merge)</option>
@@ -2118,12 +2127,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <select
                   id="gate-custom-mode"
                   className="w-[100px] px-2 py-2 rounded-lg text-xs outline-none"
-                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', display: stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy === 'custom' ? 'block' : 'none' }}
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', display: showCustomMode ? 'block' : 'none' }}
                   onChange={(e) => {
-                    const selectorArea = document.getElementById('gate-selector-area');
-                    const editorArea = document.getElementById('gate-editor-area');
-                    if (selectorArea) selectorArea.style.display = e.target.value === 'selector' ? 'block' : 'none';
-                    if (editorArea) editorArea.style.display = e.target.value === 'editor' ? 'block' : 'none';
+                    const mode = e.target.value;
+                    setCustomMode(mode);
                   }}
                 >
                   <option value="selector">选择器</option>
@@ -2131,8 +2138,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 </select>
               </div>
             </div>
-            <div id="gate-custom-mode-row" className="mb-4" style={{ display: stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy === 'custom' ? 'block' : 'none' }}>
-              <div id="gate-selector-area" style={{ display: stages.find(s => s.id === gateInput.stageId)?.gate.customScript ? 'none' : 'block' }}>
+            <div id="gate-custom-mode-row" className="mb-4" style={{ display: showCustomMode ? 'block' : 'none' }}>
+              <div id="gate-selector-area" style={{ display: customMode === 'selector' ? 'block' : 'none' }}>
                 <div className="flex gap-2 mb-2">
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>过滤</label>
@@ -2161,7 +2168,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   </div>
                 </div>
               </div>
-              <div id="gate-editor-area" style={{ display: stages.find(s => s.id === gateInput.stageId)?.gate.customScript ? 'block' : 'none' }}>
+              <div id="gate-editor-area" style={{ display: customMode === 'editor' ? 'block' : 'none' }}>
                 <textarea
                   id="gate-script"
                   rows={3}
@@ -2170,6 +2177,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                   placeholder="在此编写自定义脚本"
                 />
+                <div className="mt-2 p-2 rounded-lg text-[10px] leading-relaxed" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-tertiary)' }}>
+                  <div className="font-semibold mb-1" style={{ color: 'var(--text-secondary)' }}>参数说明</div>
+                  <div><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results</code> — 上游节点输出数组</div>
+                  <div className="ml-3">每个元素: <code className="text-[10px]" style={{ color: 'var(--accent)' }}>{'{ data, success, nodeId, nodeName }'}</code></div>
+                  <div className="mt-1 font-semibold" style={{ color: 'var(--text-secondary)' }}>语法参考</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.map(r =&gt; r.data)</code> — 提取所有数据</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.filter(r =&gt; r.success)</code> — 过滤成功节点</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.reduce((acc, r) =&gt; Object.assign(acc, r.data), {})</code> — 合并为对象</div>
+                  <div className="ml-3"><code className="text-[10px]" style={{ color: 'var(--accent)' }}>results.flatMap(r =&gt; r.data)</code> — 展平数组</div>
+                  <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>返回值将作为下游节点的输入数据。</div>
+                </div>
               </div>
             </div>
             <div className="flex gap-2 justify-end">
