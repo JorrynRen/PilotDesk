@@ -1190,9 +1190,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     );
   };
   // ── 渲染：阶段间连线 ──
-  const gateStrategyLabel = (s: string) => ({ all: '全部完成', any: '任一完成', count: '计数完成', threshold: '阈值完成' }[s] || s);
+  const gateStrategyLabel = (s: string) => ({ all: '全部完成', any: '任一完成', count: '指定数量完成', threshold: '按条件判断' }[s] || s);
   const gateStrategyDesc = (s: string) => ({ all: '所有节点完成后继续', any: '任一节点完成后继续', count: '指定数量节点完成后继续', threshold: '达到阈值后继续' }[s] || s);
-  const mergeStrategyLabel = (s: string) => ({ merge: '合并对象', concat: '合并数组', pick_first: '取第一个', pick_last: '取最后一个', custom: '自定义脚本' }[s] || s);
+  const mergeStrategyLabel = (s: string) => ({ merge: '合并为对象', concat: '合并为数组', pick_first: '取第一个结果', pick_last: '取最后一个结果', custom: '自定义处理' }[s] || s);
   const renderStageLinks = () => {
     if (stages.length < 2) return null;
     const links: React.ReactNode[] = [];
