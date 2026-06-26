@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { Plus, Trash2, Pencil, Save, X, Loader2, Check, Palette, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen } from 'lucide-react';
+import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
@@ -305,8 +306,8 @@ export function AgentManager() {
 
   const handleExport = async () => {
     try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      const filePath = await save({
+      // 使用静态导入 saveDialog
+      const filePath = await saveDialog({
         defaultPath: 'pilotdesk-agents.json',
         filters: [{ name: 'JSON', extensions: ['json'] }],
       });
@@ -321,8 +322,8 @@ export function AgentManager() {
 
   const handleImport = async () => {
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const filePath = await open({
+      
+      const filePath = await openDialog({
         filters: [{ name: 'JSON', extensions: ['json'] }],
         multiple: false,
       });
@@ -573,8 +574,8 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
 }) {
   const handleUploadIcon = async () => {
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const filePath = await open({
+      
+      const filePath = await openDialog({
         filters: [{ name: '图片文件', extensions: ['png', 'jpg', 'jpeg', 'gif', 'ico', 'svg', 'webp'] }],
         multiple: false,
       });

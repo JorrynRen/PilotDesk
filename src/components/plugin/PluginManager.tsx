@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X, Search } from 'lucide-react';
 import { usePluginStore } from '../../stores/pluginStore';
 import { PluginReadmeDialog } from './PluginReadmeDialog';
@@ -236,8 +237,8 @@ export function PluginManager() {
   const handleInstallZip = useCallback(async () => {
     setInstallStatus(null);
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({
+      
+      const selected = await openDialog({
         multiple: false,
         filters: [{ name: '插件压缩包', extensions: ['zip'] }],
       });

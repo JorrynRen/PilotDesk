@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { Plus, Search, Archive, Key, X, Trash2, FolderOpen } from 'lucide-react';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
 import { invoke } from '@tauri-apps/api/core';
@@ -577,8 +578,8 @@ function SessionListFn() {
                     <button
                       onClick={async () => {
                         try {
-                          const { open } = await import('@tauri-apps/plugin-dialog');
-                          const selected = await open({ directory: true, multiple: false });
+                          
+                          const selected = await openDialog({ directory: true, multiple: false });
                           if (selected && typeof selected === 'string') {
                             setCustomCwd(selected);
                           }
@@ -716,8 +717,8 @@ function SessionListFn() {
                     <button
                       onClick={async () => {
                         try {
-                          const { open } = await import('@tauri-apps/plugin-dialog');
-                          const selected = await open({ directory: true, multiple: false });
+                          
+                          const selected = await openDialog({ directory: true, multiple: false });
                           if (selected && typeof selected === 'string') {
                             setCustomCwd(selected);
                           }

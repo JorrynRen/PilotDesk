@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Download, Check, RefreshCw, Loader2, ExternalLink, Rocket } from 'lucide-react';
+import { open as openUrl } from '@tauri-apps/plugin-shell';
 import { invoke } from '@tauri-apps/api/core';
 
 interface VersionCheckResult {
@@ -37,7 +38,7 @@ export function UpdateChecker() {
   const pd = updateResult?.pilotdesk;
 
   const handleOpenReleasePage = async () => {
-    const { open: openUrl } = await import('@tauri-apps/plugin-shell');
+
     try {
       await openUrl('https://github.com/jorryn/pilotdesk/releases');
     } catch {
