@@ -135,6 +135,151 @@ const S = {
   fieldGap: { marginBottom: 10 } as React.CSSProperties,
 };
 
+/* ---------- MappingEditor：键值对列表组件 ---------- */
+
+const MappingEditor: React.FC<{
+  value?: Record<string, string>;
+  onChange: (v: Record<string, string>) => void;
+  keyPlaceholder: string;
+  valuePlaceholder: string;
+  addLabel: string;
+}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, addLabel }) => {
+  const entries = Object.entries(value || {});
+  const handleKeyChange = (oldKey: string, newKey: string) => {
+    const newMap: Record<string, string> = {};
+    for (const [k, v] of Object.entries(value || {})) {
+      newMap[k === oldKey ? newKey : k] = v;
+    }
+    onChange(newMap);
+  };
+  const handleValueChange = (key: string, newValue: string) => {
+    onChange({ ...value, [key]: newValue });
+  };
+  const handleRemove = (key: string) => {
+    const newMap = { ...value };
+    delete newMap[key];
+    onChange(newMap);
+  };
+  const [newKey, setNewKey] = useState('');
+  const handleAdd = () => {
+    onChange({ ...value, [newKey]: '' });
+    setNewKey('');
+  };
+  return (
+    <div>
+      {entries.length === 0 ? (
+        <div
+          style={{
+            padding: '8px 10px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px dashed var(--border)',
+            fontSize: 'var(--fs-11)',
+            color: 'var(--text-tertiary)',
+            marginBottom: 6,
+            textAlign: 'center',
+          }}
+        >
+          暂无映射，点击下方按钮添加
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
+          {entries.map(([key, val]) => (
+            <div key={key} className="flex items-center" style={{ gap: 4 }}>
+              <input
+                value={key}
+                onChange={(e) => handleKeyChange(key, e.target.value)}
+                placeholder={keyPlaceholder}
+                style={{
+                  flex: '0 0 120px',
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-primary)',
+                  color: 'var(--text-primary)',
+                  fontSize: 'var(--fs-11)',
+                  outline: 'none',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              />
+              <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)', flexShrink: 0 }}>→</span>
+              <input
+                value={val}
+                onChange={(e) => handleValueChange(key, e.target.value)}
+                placeholder={valuePlaceholder}
+                style={{
+                  flex: 1,
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-primary)',
+                  color: 'var(--text-primary)',
+                  fontSize: 'var(--fs-11)',
+                  outline: 'none',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              />
+              <button
+                onClick={() => handleRemove(key)}
+                className="flex items-center justify-center"
+                style={{
+                  width: 24,
+                  height: 24,
+                  flexShrink: 0,
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-tertiary)',
+                  fontSize: 'var(--fs-14)',
+                  cursor: 'pointer',
+                }}
+                title="删除"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center" style={{ gap: 4 }}>
+        <input
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          placeholder="新映射键名"
+          style={{
+            flex: 1,
+            padding: '4px 8px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px dashed var(--border)',
+            background: 'var(--bg-primary)',
+            color: 'var(--text-primary)',
+            fontSize: 'var(--fs-11)',
+            outline: 'none',
+            fontFamily: 'var(--font-mono)',
+          }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && newKey.trim()) handleAdd(); }}
+        />
+        <button
+          onClick={handleAdd}
+          disabled={!newKey.trim()}
+          className="flex items-center justify-center"
+          style={{
+            padding: '4px 10px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--accent)',
+            background: 'var(--accent)',
+            color: '#fff',
+            fontSize: 'var(--fs-11)',
+            cursor: newKey.trim() ? 'pointer' : 'not-allowed',
+            opacity: newKey.trim() ? 1 : 0.5,
+          }}
+        >
+          添加
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow }) => {
   const meta = getNodeTypeMeta(node.type);
   const configFields = NODE_TYPE_CONFIG_MAP[node.type]?.fields || [];
@@ -361,28 +506,24 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
       {/* ===== 输入输出映射 ===== */}
       <div>
         <div style={S.sectionTitle}>输入输出映射</div>
-        <div style={{ marginBottom: 8 }}>
-          <label style={S.labelSm()}>输入映射 (JSON)</label>
-          <textarea
-            value={node.inputMapping ? JSON.stringify(node.inputMapping, null, 2) : ''}
-            onChange={(e) => {
-              try { onUpdate({ inputMapping: JSON.parse(e.target.value) }); } catch {}
-            }}
-            placeholder={'{ "key": "${context.path}" }'}
-            rows={3}
-            style={S.monoTextarea}
+        <div style={{ marginBottom: 12 }}>
+          <label style={S.labelSm()}>输入映射</label>
+          <MappingEditor
+            value={node.inputMapping}
+            onChange={(v) => onUpdate({ inputMapping: v })}
+            keyPlaceholder="参数名"
+            valuePlaceholder={'${nodes.nodeId.output.field}'}
+            addLabel="添加输入映射"
           />
         </div>
         <div>
-          <label style={S.labelSm()}>输出映射 (JSON)</label>
-          <textarea
-            value={node.outputMapping ? JSON.stringify(node.outputMapping, null, 2) : ''}
-            onChange={(e) => {
-              try { onUpdate({ outputMapping: JSON.parse(e.target.value) }); } catch {}
-            }}
-            placeholder={'{ "result": "context.path" }'}
-            rows={3}
-            style={S.monoTextarea}
+          <label style={S.labelSm()}>输出映射</label>
+          <MappingEditor
+            value={node.outputMapping}
+            onChange={(v) => onUpdate({ outputMapping: v })}
+            keyPlaceholder="输出字段名"
+            valuePlaceholder={'${context.path}'}
+            addLabel="添加输出映射"
           />
         </div>
       </div>
