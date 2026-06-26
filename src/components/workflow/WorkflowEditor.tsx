@@ -2098,61 +2098,79 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </div>
             <div className="mb-4">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>合并策略</label>
-              <select
-                id="gate-merge"
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy || 'merge'}
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-              >
-                <option value="merge">合并对象 (merge)</option>
-                <option value="concat">合并数组 (concat)</option>
-                <option value="pick_first">取第一个 (pick_first)</option>
-                <option value="pick_last">取最后一个 (pick_last)</option>
-                <option value="custom">自定义脚本 (custom)</option>
-              </select>
+              <div className="flex gap-2">
+                <select
+                  id="gate-merge"
+                  className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
+                  defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy || 'merge'}
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  onChange={(e) => {
+                    const modeRow = document.getElementById('gate-custom-mode-row');
+                    if (modeRow) modeRow.style.display = e.target.value === 'custom' ? 'flex' : 'none';
+                  }}
+                >
+                  <option value="merge">合并对象 (merge)</option>
+                  <option value="concat">合并数组 (concat)</option>
+                  <option value="pick_first">取第一个 (pick_first)</option>
+                  <option value="pick_last">取最后一个 (pick_last)</option>
+                  <option value="custom">自定义脚本 (custom)</option>
+                </select>
+                <select
+                  id="gate-custom-mode"
+                  className="w-[100px] px-2 py-2 rounded-lg text-xs outline-none"
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', display: stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy === 'custom' ? 'block' : 'none' }}
+                  onChange={(e) => {
+                    const selectorArea = document.getElementById('gate-selector-area');
+                    const editorArea = document.getElementById('gate-editor-area');
+                    if (selectorArea) selectorArea.style.display = e.target.value === 'selector' ? 'block' : 'none';
+                    if (editorArea) editorArea.style.display = e.target.value === 'editor' ? 'block' : 'none';
+                  }}
+                >
+                  <option value="selector">选择器</option>
+                  <option value="editor">编辑器</option>
+                </select>
+              </div>
             </div>
-
-            <div className="mb-4">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>自定义脚本 (合并策略为 custom 时使用)</label>
-              <div className="flex gap-2 mb-2">
-                <div className="flex-1">
-                  <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>过滤</label>
-                  <select id="gate-script-filter" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-                    <option value="all">提取所有</option>
-                    <option value="success">过滤失败</option>
-                  </select>
-                </div>
-                <div className="flex-1">
-                  <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>合并为</label>
-                  <select id="gate-script-merge" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-                    <option value="array">数组</option>
-                    <option value="object">对象</option>
-                    <option value="flat">扁平数组</option>
-                  </select>
-                </div>
-                <div className="flex-1">
-                  <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>取值</label>
-                  <select id="gate-script-value" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-                    <option value="none">不处理</option>
-                    <option value="max">最高值</option>
-                    <option value="min">最低值</option>
-                    <option value="avg">平均值</option>
-                    <option value="sum">求和值</option>
-                  </select>
+            <div id="gate-custom-mode-row" className="mb-4" style={{ display: stages.find(s => s.id === gateInput.stageId)?.gate.mergeStrategy === 'custom' ? 'block' : 'none' }}>
+              <div id="gate-selector-area" style={{ display: stages.find(s => s.id === gateInput.stageId)?.gate.customScript ? 'none' : 'block' }}>
+                <div className="flex gap-2 mb-2">
+                  <div className="flex-1">
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>过滤</label>
+                    <select id="gate-script-filter" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                      <option value="all">提取所有</option>
+                      <option value="success">过滤失败</option>
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>合并为</label>
+                    <select id="gate-script-merge" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                      <option value="array">数组</option>
+                      <option value="object">对象</option>
+                      <option value="flat">扁平数组</option>
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>取值</label>
+                    <select id="gate-script-value" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                      <option value="none">不处理</option>
+                      <option value="max">最高值</option>
+                      <option value="min">最低值</option>
+                      <option value="avg">平均值</option>
+                      <option value="sum">求和值</option>
+                    </select>
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2 mb-2">
-                <input id="gate-script-custom" type="checkbox" className="rounded" style={{ accentColor: 'var(--accent)' }} />
-                <label className="text-[10px]" style={{ color: 'var(--text-tertiary)' }} htmlFor="gate-script-custom">自定义编辑</label>
+              <div id="gate-editor-area" style={{ display: stages.find(s => s.id === gateInput.stageId)?.gate.customScript ? 'block' : 'none' }}>
+                <textarea
+                  id="gate-script"
+                  rows={3}
+                  className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none font-mono"
+                  defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.customScript ?? ''}
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  placeholder="在此编写自定义脚本"
+                />
               </div>
-              <textarea
-                id="gate-script"
-                rows={3}
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none font-mono"
-                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.customScript ?? ''}
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                placeholder={'勾选「自定义编辑」后在此编写自定义脚本'}
-              />
             </div>
             <div className="flex gap-2 justify-end">
               <button
@@ -2166,10 +2184,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   const mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
                   const countInput = (document.getElementById('gate-count') as HTMLInputElement)?.value;
                   const thresholdInput = (document.getElementById('gate-threshold') as HTMLInputElement)?.value;
-                  const isCustomEdit = (document.getElementById('gate-script-custom') as HTMLInputElement)?.checked;
+                  const customMode = (document.getElementById('gate-custom-mode') as HTMLSelectElement)?.value || 'selector';
                   let customScript: string | undefined;
                   if (mergeStrategy === 'custom') {
-                    if (isCustomEdit) {
+                    if (customMode === 'editor') {
                       customScript = (document.getElementById('gate-script') as HTMLTextAreaElement)?.value || undefined;
                     } else {
                       const filter = (document.getElementById('gate-script-filter') as HTMLSelectElement)?.value || 'all';
