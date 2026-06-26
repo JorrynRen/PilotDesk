@@ -2144,8 +2144,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>合并为</label>
                     <select id="gate-script-merge" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-                      <option value="array">数组</option>
                       <option value="object">对象</option>
+                      <option value="array">数组</option>
                       <option value="flat">扁平数组</option>
                     </select>
                   </div>
