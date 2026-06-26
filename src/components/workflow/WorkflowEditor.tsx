@@ -1369,7 +1369,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       </div>
 
       {/* 画布 + 配置面板 flex-row */}
-      <div className="flex flex-row flex-1 min-h-0">
+      <div className="flex flex-row flex-1 min-h-0 relative">
       {/* ── 画布区域 ── */}
       <div
         ref={canvasRef}
