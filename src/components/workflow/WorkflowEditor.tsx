@@ -83,6 +83,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
   const [gateInput, setGateInput] = useState<{ stageId: string } | null>(null);
   const [gateError, setGateError] = useState<string | null>(null);
+  const [gateStrategy, setGateStrategy] = useState<string>('all');
   const [showCustomMode, setShowCustomMode] = useState(false);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const [customMode, setCustomMode] = useState<string>('selector');
@@ -1827,6 +1828,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         }}
                         onClick={() => {
                           setShowCustomMode(stage?.gate?.mergeStrategy === 'custom');
+                          setGateStrategy(stage?.gate?.strategy || 'all');
                           setCustomMode(stage?.gate?.customScript ? 'editor' : 'selector');
                           setGateInput({ stageId: stage.id });
                         }}>
@@ -2065,6 +2067,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 id="gate-strategy"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                 defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.strategy || 'all'}
+                  onChange={ (e) => setGateStrategy(e.target.value) }
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               >
                 <option value="all">全部完成</option>
@@ -2073,9 +2076,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <option value="threshold">按条件判断</option>
               </select>
             </div>
-            <div className="flex gap-3 mb-4">
+            <div className="flex gap-3 mb-4" style={{ display: gateStrategy === 'count' || gateStrategy === 'threshold' ? 'flex' : 'none' }}>
               <div className="flex-1">
-                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>完成节点数 (count 策略时使用)</label>
+                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>完成节点数</label>
                 <input
                   id="gate-count"
                   type="number"
@@ -2088,7 +2091,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 />
               </div>
               <div className="flex-1">
-                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值 (threshold 策略时使用)</label>
+                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值</label>
                 <input
                   id="gate-threshold"
                   type="number"
