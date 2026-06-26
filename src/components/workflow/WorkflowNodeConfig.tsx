@@ -143,7 +143,8 @@ const MappingEditor: React.FC<{
   keyPlaceholder: string;
   valuePlaceholder: string;
   addLabel: string;
-}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, addLabel }) => {
+  defaultKey?: string;
+}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, addLabel, defaultKey }) => {
   const entries = Object.entries(value || {});
   const handleKeyChange = (oldKey: string, newKey: string) => {
     const newMap: Record<string, string> = {};
@@ -162,7 +163,8 @@ const MappingEditor: React.FC<{
   };
   const [newKey, setNewKey] = useState('');
   const handleAdd = () => {
-    onChange({ ...value, [newKey]: '' });
+    const key = newKey.trim() || defaultKey || 'key';
+    onChange({ ...value, [key]: '' });
     setNewKey('');
   };
   return (
@@ -256,11 +258,11 @@ const MappingEditor: React.FC<{
             outline: 'none',
             fontFamily: 'var(--font-mono)',
           }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && newKey.trim()) handleAdd(); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (newKey.trim() || defaultKey)) handleAdd(); }}
         />
         <button
           onClick={handleAdd}
-          disabled={!newKey.trim()}
+          disabled={!newKey.trim() && !defaultKey}
           className="flex items-center justify-center"
           style={{
             padding: '4px 10px',
@@ -269,8 +271,8 @@ const MappingEditor: React.FC<{
             background: 'var(--accent)',
             color: '#fff',
             fontSize: 'var(--fs-11)',
-            cursor: newKey.trim() ? 'pointer' : 'not-allowed',
-            opacity: newKey.trim() ? 1 : 0.5,
+            cursor: newKey.trim() || defaultKey ? 'pointer' : 'not-allowed',
+            opacity: newKey.trim() || defaultKey ? 1 : 0.5,
           }}
         >
           添加
@@ -514,6 +516,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="参数名"
             valuePlaceholder={'${nodes.nodeId.output.field}'}
             addLabel="添加输入映射"
+            defaultKey="input"
           />
         </div>
         <div>
@@ -524,6 +527,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="输出字段名"
             valuePlaceholder={'${context.path}'}
             addLabel="添加输出映射"
+            defaultKey="output"
           />
         </div>
       </div>
