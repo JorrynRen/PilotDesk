@@ -194,7 +194,6 @@ const MappingEditor: React.FC<{
               value={value?.[defaultKey] ?? ''}
               onChange={(e) => handleValueChange(defaultKey, e.target.value)}
               placeholder={valuePlaceholder}
-              autoFocus
               style={{
                 flex: 1,
                 minWidth: 0,
