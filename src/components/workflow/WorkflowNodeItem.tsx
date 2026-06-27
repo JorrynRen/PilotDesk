@@ -17,6 +17,8 @@ interface WorkflowNodeItemProps {
   cycleTargetId: string | null;
   connecting: unknown;
   stepStates: Record<string, string>;
+  nodeResults: Record<string, any>;
+  selectedNodeId: string | null;
   onSelectNode: (nodeId: string, stageId: string, ctrlKey: boolean) => void;
   onNodeMouseDown: (e: React.MouseEvent, nodeId: string, stageId: string) => void;
   onDeleteNode: (nodeId: string) => void;
@@ -29,7 +31,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   node, stageId, scale,
   selectedNodeId, selectedNodeIds,
   draggingNode, hoveredNodeId, connectTargetId, cycleTargetId,
-  connecting, stepStates,
+  connecting, stepStates, nodeResults,
   onSelectNode, onNodeMouseDown, onDeleteNode,
   onEndConnect, onStartConnect, onHoverNode,
 }) => {
@@ -41,6 +43,8 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   const isConnectTarget = connectTargetId === node.id;
   const isCycleTarget = cycleTargetId === node.id;
   const runState = stepStates[`node_${node.id}`];
+  const nodeResult = nodeResults[`node_${node.id}`];
+  const showResult = (selectedNodeId === node.id || selectedNodeIds.has(node.id)) && nodeResult !== undefined;
 
   return (
     <div
@@ -123,6 +127,44 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
           <span className="text-[10px] ml-auto shrink-0" style={{ color: '#f85149' }}>✗</span>
         )}
       </div>
+
+      {/* 执行结果面板（选中节点时显示） */}
+      {showResult && (
+        <div
+          className="absolute"
+          style={{
+            left: 0,
+            top: NODE_H + 4,
+            width: NODE_W,
+            maxHeight: 120,
+            overflow: 'hidden',
+            borderRadius: 6,
+            backgroundColor: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
+            padding: '6px 8px',
+            fontSize: 10,
+            lineHeight: 1.5,
+            color: 'var(--text-secondary)',
+            zIndex: 10,
+            boxShadow: 'var(--shadow-md)',
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 2, color: 'var(--text-primary)', fontSize: 9 }}>
+            {runState === 'success' ? '执行结果' : runState === 'failed' ? '错误信息' : '执行输出'}
+          </div>
+          <div style={{
+            maxHeight: 90,
+            overflowY: 'auto',
+            wordBreak: 'break-all',
+            whiteSpace: 'pre-wrap',
+            fontFamily: 'var(--font-mono)',
+          }}>
+            {typeof nodeResult === 'object'
+              ? JSON.stringify(nodeResult, null, 2)
+              : String(nodeResult)}
+          </div>
+        </div>
+      )}
 
       {/* 输入锚点 */}
       {meta.canHaveInputs && (

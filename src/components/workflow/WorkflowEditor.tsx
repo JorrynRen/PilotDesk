@@ -100,6 +100,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   // 执行状态（模拟/预览用，key: nodeId | stageId:stepIndex）
   const [stepStates, setStepStates] = useState<Record<string, StepRunState>>({});
+  const [nodeResults, setNodeResults] = useState<Record<string, any>>({});
   const [isSimRunning, setIsSimRunning] = useState(false);
 
   // 画布平移和缩放状态
@@ -855,11 +856,65 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     });
   };
 
+  /**
+   * 生成模拟节点输出数据
+   */
+  const generateMockNodeOutput = useCallback((node: WorkflowNode, success: boolean) => {
+    if (!success) {
+      return { error: '节点执行失败', message: '模拟执行中发生错误' };
+    }
+    switch (node.type) {
+      case 'start':
+        return { status: 'started', input: {}, timestamp: new Date().toISOString() };
+      case 'end':
+        return { status: 'completed', summary: '工作流执行完成', timestamp: new Date().toISOString() };
+      case 'agent':
+        return {
+          response: `[模拟] ${node.label} 执行完成`,
+          tokens: Math.floor(Math.random() * 500) + 100,
+          duration: Math.floor(Math.random() * 2000) + 500,
+        };
+      case 'api':
+        return {
+          statusCode: 200,
+          data: { result: 'ok', count: Math.floor(Math.random() * 100) },
+          duration: Math.floor(Math.random() * 1000) + 200,
+        };
+      case 'transform':
+        return {
+          transformed: true,
+          output: { processed: Math.floor(Math.random() * 50) + 1 },
+          script: node.label,
+        };
+      case 'interact':
+        return {
+          approved: Math.random() > 0.3,
+          comment: '模拟审批通过',
+          reviewer: 'system',
+        };
+      case 'plugin':
+        return {
+          plugin: node.label,
+          executed: true,
+          result: { action: 'completed', details: '模拟插件执行' },
+        };
+      case 'subflow':
+        return {
+          subflow: node.label,
+          status: 'completed',
+          output: { nested: true, items: Math.floor(Math.random() * 10) + 1 },
+        };
+      default:
+        return { status: 'completed', output: '模拟执行结果' };
+    }
+  }, []);
+
   // ── 执行模拟 ──
   const runSimulation = async () => {
     if (isSimRunning) return;
     setIsSimRunning(true);
     setStepStates({});
+    setNodeResults({});
 
     // 按阶段顺序依次执行每个节点
     for (const stage of stages) {
@@ -872,6 +927,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         // 随机成功/失败（边界节点总是成功）
         const success = node.isBoundary || Math.random() > 0.15;
         setStepStates(prev => ({ ...prev, [key]: success ? 'success' : 'failed' }));
+        // 生成模拟输出数据
+        const mockResult = generateMockNodeOutput(node, success);
+        setNodeResults(prev => ({ ...prev, [key]: mockResult }));
       }
       setStepStates(prev => ({ ...prev, [`stage_${stage.id}`]: 'success' }));
     }
@@ -1891,6 +1949,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   cycleTargetId={cycleTargetId}
                   connecting={connecting}
                   stepStates={stepStates}
+                  nodeResults={nodeResults}
+                  selectedNodeId={selectedNodeId}
                   onSelectNode={handleSelectNode}
                   onNodeMouseDown={handleNodeMouseDown}
                   onDeleteNode={handleDeleteNode}
