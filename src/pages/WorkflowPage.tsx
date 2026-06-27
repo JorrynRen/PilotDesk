@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, Layout } from 'lucide-react';
+import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, Layout, FileText, Tag, Layers, Zap } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar, StatusBar } from '../components/layout';
@@ -322,6 +322,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
+                        <FileText size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
                         <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{def.name}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded" style={{
                           backgroundColor: def.enabled ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)',
@@ -366,20 +367,30 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                       </div>
                     </div>
                     {def.description && (
-                      <div className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>{def.description}</div>
+                      <div className="mt-1 flex items-start gap-1.5 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                        <FileText size={11} style={{ flexShrink: 0, marginTop: 1 }} />
+                        <span>{def.description}</span>
+                      </div>
                     )}
-                    <div className="mt-2 flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                      <span>v{def.version}</span>
-                      <span>阶段: {def.stages?.length || 0}</span>
-                      <span>触发器: {(() => {
-                        const t = def.trigger;
-                        if (!t || t.triggerType === 'manual') return '手动';
-                        if (t.triggerType === 'cron') return `定时（${describeCron(t.cron || '')}）`;
-                        if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
-                        return t.triggerType;
-                      })()}</span>
-                    </div>
-                    <div className="mt-1.5 flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      <span className="flex items-center gap-1">
+                        <Tag size={10} />
+                        v{def.version}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Layers size={10} />
+                        {def.stages?.length || 0} 阶段
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Zap size={10} />
+                        {(() => {
+                          const t = def.trigger;
+                          if (!t || t.triggerType === 'manual') return '手动';
+                          if (t.triggerType === 'cron') return `定时（${describeCron(t.cron || '')}）`;
+                          if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
+                          return t.triggerType;
+                        })()}
+                      </span>
                       <span className="flex items-center gap-1">
                         <Clock size={10} />
                         {new Date(Number(def.createdAt) * 1000).toLocaleString()}
