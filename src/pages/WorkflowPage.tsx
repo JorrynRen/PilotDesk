@@ -322,7 +322,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <FileText size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                        <GitBranch size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                         <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{def.name}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded" style={{
                           backgroundColor: def.enabled ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)',
