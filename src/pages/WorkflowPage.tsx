@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download } from 'lucide-react';
+import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
+import { WorkflowPropertyDialog } from '../components/workflow/WorkflowPropertyDialog';
 import type { WorkflowDefinition, WorkflowInstance } from '../types/workflow';
 
 interface WorkflowPageProps {
@@ -14,8 +15,10 @@ interface WorkflowPageProps {
 
 export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const navigate = useNavigate();
-  const { definitions, instances, loading, error, loadDefinitions, loadInstances, createDefinition, deleteDefinition, startWorkflow, selectDefinition } = useWorkflowStore();
+  const { definitions, instances, loading, error, loadDefinitions, loadInstances, createDefinition, updateDefinition, deleteDefinition, startWorkflow, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances'>('definitions');
+  const [showPropertyDialog, setShowPropertyDialog] = useState<'create' | 'edit' | null>(null);
+  const [editingDef, setEditingDef] = useState<WorkflowDefinition | null>(null);
 
   useEffect(() => {
     loadDefinitions();
@@ -58,14 +61,52 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
     }
   };
 
-  const handleCreateAndEdit = async () => {
-    const def = createDefaultWorkflow('新工作流');
-    try {
-      const id = await createDefinition(def);
-      selectDefinition(id);
-      navigate(`/workflow/editor?id=${id}`);
-    } catch (err) {
-      console.error('创建工作流失败:', err);
+  const handleCreateAndEdit = () => {
+    setEditingDef(null);
+    setShowPropertyDialog('create');
+  };
+
+  const handleEditProperties = (e: React.MouseEvent, def: WorkflowDefinition) => {
+    e.stopPropagation();
+    setEditingDef(def);
+    setShowPropertyDialog('edit');
+  };
+
+  const handlePropertyConfirm = async (data: {
+    name: string;
+    description: string;
+    version: string;
+    trigger: { triggerType: 'manual' | 'cron' | 'event'; cron?: string };
+    enabled: boolean;
+  }) => {
+    setShowPropertyDialog(null);
+    if (editingDef) {
+      // Edit mode: update existing definition
+      try {
+        await updateDefinition(editingDef.id, {
+          name: data.name,
+          description: data.description,
+          version: data.version,
+          trigger: data.trigger,
+          enabled: data.enabled,
+        });
+      } catch (err) {
+        console.error('更新工作流属性失败:', err);
+      }
+    } else {
+      // Create mode: create and navigate to editor
+      const def = createDefaultWorkflow(data.name);
+      def.description = data.description;
+      def.version = data.version;
+      def.trigger = data.trigger;
+      def.enabled = data.enabled;
+      try {
+        const id = await createDefinition(def);
+        selectDefinition(id);
+        navigate(`/workflow/editor?id=${id}`);
+      } catch (err) {
+        console.error('创建工作流失败:', err);
+      }
     }
   };
 
@@ -222,6 +263,14 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                           <Play size={14} />
                         </button>
                         <button
+                          onClick={(e) => { handleEditProperties(e, def); }}
+                          className="pd-btn p-1.5 rounded hover:opacity-80"
+                          style={{ color: 'var(--text-secondary)' }}
+                          title="编辑属性"
+                        >
+                          <Settings size={14} />
+                        </button>
+                        <button
                           onClick={(e) => { handleExportSingle(e, def.id, def.name); }}
                           className="pd-btn p-1.5 rounded hover:opacity-80"
                           style={{ color: 'var(--text-secondary)' }}
@@ -287,6 +336,16 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           </>
         )}
       </div>
+
+      {/* 工作流属性对话框 */}
+      {showPropertyDialog && (
+        <WorkflowPropertyDialog
+          mode={showPropertyDialog}
+          initial={editingDef || undefined}
+          onConfirm={handlePropertyConfirm}
+          onClose={() => { setShowPropertyDialog(null); setEditingDef(null); }}
+        />
+      )}
 
       <StatusBar
         onOpenSettings={() => navigate('/settings')}
