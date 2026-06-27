@@ -356,6 +356,31 @@ pub fn delete_schedule(
     crate::workflow::scheduler::delete_schedule(&conn, &id).map_err(|e| format!("删除失败: {}", e))
 }
 
+/// 导出工作流专用结构体（过滤导入时不使用的字段）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportWorkflowDefinition {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub trigger: workflow::TriggerConfig,
+    pub stages: Vec<workflow::Stage>,
+    pub enabled: bool,
+}
+
+impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
+    fn from(def: workflow::WorkflowDefinition) -> Self {
+        Self {
+            name: def.name,
+            version: def.version,
+            description: def.description,
+            trigger: def.trigger,
+            stages: def.stages,
+            enabled: def.enabled,
+        }
+    }
+}
+
 /// 导出工作流为 JSON
 #[tauri::command]
 pub fn export_workflow(
@@ -366,7 +391,8 @@ pub fn export_workflow(
     let def = workflow::get_definition(&conn, &id)
         .map_err(|e| format!("查询失败: {}", e))?
         .ok_or_else(|| "工作流不存在".to_string())?;
-    serde_json::to_string_pretty(&def).map_err(|e| format!("序列化失败: {}", e))
+    let export_def: ExportWorkflowDefinition = def.into();
+    serde_json::to_string_pretty(&export_def).map_err(|e| format!("序列化失败: {}", e))
 }
 
 /// 从 JSON 导入工作流
@@ -376,14 +402,97 @@ pub fn import_workflow(
     json_data: String,
 ) -> Result<workflow::WorkflowDefinition, String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
-    let mut def: workflow::WorkflowDefinition = serde_json::from_str(&json_data)
+    let export_def: ExportWorkflowDefinition = serde_json::from_str(&json_data)
         .map_err(|e| format!("JSON 解析失败: {}", e))?;
-    // 重新生成 ID 和更新时间
-    def.id = crate::utils::new_id();
-    def.created_at = crate::utils::now();
-    def.updated_at = def.created_at;
+
+    // 重新生成所有 ID
+    let id_map = regenerate_all_ids(&export_def);
+    let now_ts = crate::utils::now();
+    let def = apply_id_map(export_def, &id_map, now_ts);
+
     workflow::create_definition(&conn, &def).map_err(|e| format!("导入失败: {}", e))?;
     Ok(def)
+}
+
+/// ID 映射表：old_id -> new_id
+struct IdMap {
+    workflow: String,
+    stages: std::collections::HashMap<String, String>,
+    nodes: std::collections::HashMap<String, String>,
+    edges: std::collections::HashMap<String, String>,
+}
+
+/// 为导出数据中的所有 ID 生成新 ID，返回映射表
+fn regenerate_all_ids(export: &ExportWorkflowDefinition) -> IdMap {
+    let mut stage_map = std::collections::HashMap::new();
+    let mut node_map = std::collections::HashMap::new();
+    let mut edge_map = std::collections::HashMap::new();
+
+    for stage in &export.stages {
+        stage_map.insert(stage.id.clone(), crate::utils::new_id());
+        for node in &stage.nodes {
+            node_map.insert(node.id.clone(), crate::utils::new_id());
+        }
+        for edge in &stage.edges {
+            edge_map.insert(edge.id.clone(), crate::utils::new_id());
+        }
+    }
+
+    IdMap {
+        workflow: crate::utils::new_id(),
+        stages: stage_map,
+        nodes: node_map,
+        edges: edge_map,
+    }
+}
+
+/// 根据 ID 映射表重建 WorkflowDefinition
+fn apply_id_map(export: ExportWorkflowDefinition, id_map: &IdMap, now_ts: i64) -> workflow::WorkflowDefinition {
+    let stages: Vec<workflow::Stage> = export.stages.into_iter().map(|stage| {
+        let new_stage_id = id_map.stages.get(&stage.id).cloned().unwrap_or_else(crate::utils::new_id);
+
+        let nodes: Vec<workflow::WorkflowNode> = stage.nodes.into_iter().map(|node| {
+            let new_node_id = id_map.nodes.get(&node.id).cloned().unwrap_or_else(crate::utils::new_id);
+            workflow::WorkflowNode {
+                id: new_node_id,
+                ..node
+            }
+        }).collect();
+
+        let edges: Vec<workflow::WorkflowEdge> = stage.edges.into_iter().map(|edge| {
+            let new_edge_id = id_map.edges.get(&edge.id).cloned().unwrap_or_else(crate::utils::new_id);
+            let new_source = id_map.nodes.get(&edge.source).cloned().unwrap_or_else(|| edge.source.clone());
+            let new_target = id_map.nodes.get(&edge.target).cloned().unwrap_or_else(|| edge.target.clone());
+            workflow::WorkflowEdge {
+                id: new_edge_id,
+                source: new_source,
+                target: new_target,
+                ..edge
+            }
+        }).collect();
+
+        workflow::Stage {
+            id: new_stage_id,
+            nodes,
+            edges,
+            ..stage
+        }
+    }).collect();
+
+    workflow::WorkflowDefinition {
+        id: id_map.workflow.clone(),
+        name: export.name,
+        version: export.version,
+        description: export.description,
+        trigger: export.trigger,
+        stages,
+        input_schema: None,
+        output_schema: None,
+        max_depth: Some(10),
+        created_at: now_ts,
+        updated_at: now_ts,
+        enabled: export.enabled,
+    }
 }
 
 /// 导出工作流到文件
@@ -397,7 +506,8 @@ pub fn export_workflow_to_file(
     let def = workflow::get_definition(&conn, &id)
         .map_err(|e| format!("查询失败: {}", e))?
         .ok_or_else(|| "工作流不存在".to_string())?;
-    let json = serde_json::to_string_pretty(&def)
+    let export_def: ExportWorkflowDefinition = def.into();
+    let json = serde_json::to_string_pretty(&export_def)
         .map_err(|e| format!("序列化失败: {}", e))?;
     std::fs::write(&file_path, json)
         .map_err(|e| format!("写入文件失败: {}", e))?;
