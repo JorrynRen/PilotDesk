@@ -2276,7 +2276,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       )}
 
       {/* ── 节点配置面板 ── */}
-      {selectedNodeId && selectedStageId && (
+      {selectedNodeId && selectedStageId && stages.some(s => s.id === selectedStageId && s.nodes.some(n => n.id === selectedNodeId)) && (
         <div
           className="w-[360px] shrink-0 overflow-auto p-5 flex flex-col"
           style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}
