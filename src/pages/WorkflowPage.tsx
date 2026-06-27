@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings } from 'lucide-react';
+import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, Layout } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar, StatusBar } from '../components/layout';
@@ -239,40 +239,47 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         onBack={() => navigate('/')}
         onOpenSettings={() => navigate('/settings')}
       />
-      {/* Tabs + Actions */}
-      <div className="flex items-center px-4 pt-3 gap-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setActiveTab('definitions')}
-            className="pb-2 text-xs font-medium transition-colors relative"
-            style={{
-              color: activeTab === 'definitions' ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: activeTab === 'definitions' ? '2px solid var(--accent)' : '2px solid transparent',
-            }}
-          >
-            工作流定义 ({definitions.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('instances')}
-            className="pb-2 text-xs font-medium transition-colors relative"
-            style={{
-              color: activeTab === 'instances' ? 'var(--accent)' : 'var(--text-secondary)',
-              borderBottom: activeTab === 'instances' ? '2px solid var(--accent)' : '2px solid transparent',
-            }}
-          >
-            执行记录 ({instances.length})
-          </button>
-          <button
-            className="pb-2 text-xs font-medium transition-colors relative"
-            style={{
-              color: 'var(--text-tertiary)',
-              borderBottom: '2px solid transparent',
-              cursor: 'default',
-            }}
-          >
-            模板市场
-          </button>
-        </div>
+      {/* Tab navigation — 与设置页同一套UI */}
+      <div className="shrink-0 px-4 pt-1 flex items-center gap-0.5 overflow-x-clip" style={{ borderBottom: '1px solid var(--border)' }}>
+        <button
+          onClick={() => setActiveTab('definitions')}
+          className="pd-btn px-3 py-2 text-xs rounded-t-lg whitespace-nowrap flex items-center gap-1.5"
+          style={{
+            color: activeTab === 'definitions' ? 'var(--accent)' : 'var(--text-secondary)',
+            backgroundColor: activeTab === 'definitions' ? 'var(--bg-tertiary)' : 'transparent',
+            borderBottom: activeTab === 'definitions' ? '2px solid var(--accent)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          <GitBranch size={12} />
+          工作流定义 ({definitions.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('instances')}
+          className="pd-btn px-3 py-2 text-xs rounded-t-lg whitespace-nowrap flex items-center gap-1.5"
+          style={{
+            color: activeTab === 'instances' ? 'var(--accent)' : 'var(--text-secondary)',
+            backgroundColor: activeTab === 'instances' ? 'var(--bg-tertiary)' : 'transparent',
+            borderBottom: activeTab === 'instances' ? '2px solid var(--accent)' : '2px solid transparent',
+            marginBottom: '-1px',
+          }}
+        >
+          <Activity size={12} />
+          执行记录 ({instances.length})
+        </button>
+        <button
+          className="pd-btn px-3 py-2 text-xs rounded-t-lg whitespace-nowrap flex items-center gap-1.5"
+          style={{
+            color: 'var(--text-tertiary)',
+            backgroundColor: 'transparent',
+            borderBottom: '2px solid transparent',
+            marginBottom: '-1px',
+            cursor: 'default',
+          }}
+        >
+          <Layout size={12} />
+          模板市场
+        </button>
 
         <div className="flex-1" />
 
@@ -319,16 +326,9 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         {!loading && activeTab === 'definitions' && (
           <>
             {definitions.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 gap-3">
-                <div className="text-3xl opacity-30">🔀</div>
+              <div className="flex flex-col items-center justify-center h-48 gap-2">
+                <GitBranch size={32} style={{ opacity: 0.25, color: 'var(--text-tertiary)' }} />
                 <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无工作流定义</div>
-                <button
-                  onClick={handleCreateAndEdit}
-                  className="pd-btn px-4 py-2 text-xs rounded transition-colors"
-                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                >
-                  创建第一个工作流
-                </button>
               </div>
             ) : (
               <div className="grid gap-3">
