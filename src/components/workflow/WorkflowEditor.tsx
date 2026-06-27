@@ -306,6 +306,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   };
 
+  const [isRunning, setIsRunning] = useState(false);
+
+  const handleRunWorkflow = async () => {
+    if (!definitionId || isRunning) return;
+    setIsRunning(true);
+    try {
+      // 先保存当前编辑状态
+      await updateDefinition(definitionId, { name, description, stages });
+      // 执行工作流
+      await useWorkflowStore.getState().startWorkflow(definitionId);
+      // 加载实例数据
+      await useWorkflowStore.getState().loadInstances();
+    } catch (err) {
+      console.error('执行工作流失败:', err);
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
   const handleNameChangeLocal = useCallback((newName: string) => {
     setName(newName);
     onNameChange?.(newName);
@@ -1492,6 +1511,30 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           className="absolute bottom-3 right-3 z-30 flex items-center gap-1 rounded-lg px-2 py-1.5"
           style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
         >
+          {/* 执行工作流按钮 */}
+          <button
+            onClick={handleRunWorkflow}
+            className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+            style={{
+              background: isRunning ? '#3fb95033' : '#3fb95022',
+              color: '#3fb950',
+              border: 'none',
+            }}
+            disabled={isRunning}
+            title={isRunning ? '执行中...' : '执行工作流'}
+          >
+            {isRunning ? (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="pd-animate-spin">
+                <circle cx="5" cy="5" r="4" stroke="currentColor" strokeWidth="1.5" strokeDasharray="6 6" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <polygon points="3,1 10,6 3,11" />
+              </svg>
+            )}
+          </button>
+          <div className="w-px h-4" style={{ background: 'var(--border)' }} />
+
           {/* 操作帮助按钮 */}
           <div className="relative group">
             <button
