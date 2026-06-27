@@ -9,6 +9,7 @@ import React, { useState, useEffect } from 'react';
 import type { WorkflowNode, WorkflowNodeType } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { useWorkflowStore } from '../../stores/workflowStore';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
 interface Props {
   node: WorkflowNode;
@@ -346,6 +347,8 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const meta = getNodeTypeMeta(node.type);
   const configFields = NODE_TYPE_CONFIG_MAP[node.type]?.fields || [];
   const [params, setParams] = useState<Record<string, any>>(node.params || {});
+  const { getEnabledAgentTypes } = useAgentRegistry();
+  const enabledAgentTypes = getEnabledAgentTypes();
   const { definitions, loadDefinitions } = useWorkflowStore();
 
   useEffect(() => {
@@ -523,7 +526,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                   style={S.select()}
                 >
                   <option value="">选择...</option>
-                  {field.key === 'agent_type' && ['claude', 'hermes', 'codex'].map((v) => <option key={v} value={v}>{v}</option>)}
+                  {field.key === 'agent_type' && enabledAgentTypes.map((v) => <option key={v} value={v}>{v}</option>)}
                   {field.key === 'method' && ['GET', 'POST', 'PUT', 'DELETE'].map((v) => <option key={v} value={v}>{v}</option>)}
                   {field.key === 'inputType' && ['text', 'select', 'confirm', 'file'].map((v) => <option key={v} value={v}>{v}</option>)}
                 </select>

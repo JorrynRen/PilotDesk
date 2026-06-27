@@ -519,7 +519,14 @@ class WorkflowEngine {
     if (!node.pluginId) throw new Error(`Agent 节点 "${node.label}" 缺少插件 ID`);
 
     const agentApi = new PluginAgentAPI(node.pluginId);
-    const agentType = node.params?.agent_type || 'claude';
+    // 从可用 Agent 列表中动态检查配置的 agent 是否已安装且启用
+    const availableAgents = await agentApi.listAgents();
+    const configuredAgentType = node.params?.agent_type || 'claude';
+    const isAgentAvailable = availableAgents.some(a => a.agent_type === configuredAgentType);
+    const agentType = isAgentAvailable ? configuredAgentType : (availableAgents.length > 0 ? availableAgents[0].agent_type : configuredAgentType);
+    if (!isAgentAvailable && configuredAgentType !== agentType) {
+      console.warn('[WorkflowEngine] Agent 节点 "' + node.label + '" 配置的 agent "' + configuredAgentType + '" 不可用，回退到 "' + agentType + '"');
+    }
     const promptTemplate = node.params?.prompt_template || '';
     const prompt = promptTemplate ? resolveTemplate(promptTemplate, instance.context) : '';
 
