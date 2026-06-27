@@ -26,12 +26,11 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
   const [showCronHelp, setShowCronHelp] = useState(false);
 
   const CRON_PRESETS = [
-    { label: '每天早9点', expr: '0 0 9 * * *' },
-    { label: '每天下午6点', expr: '0 0 18 * * *' },
-    { label: '工作日早9点', expr: '0 0 9 * * 1-5' },
-    { label: '每30分钟', expr: '0 */30 * * * *' },
-    { label: '每月1号早9点', expr: '0 0 9 1 * *' },
-    { label: '每周一早9点', expr: '0 0 9 * * 1' },
+    { label: '每日9点', expr: '0 0 9 * * *' },
+    { label: '工作日9点', expr: '0 0 9 * * 1-5' },
+    { label: '每30分', expr: '0 */30 * * * *' },
+    { label: '每月1日9点', expr: '0 0 9 1 * *' },
+    { label: '周一9点', expr: '0 0 9 * * 1' },
   ];
 
   const handleConfirm = () => {

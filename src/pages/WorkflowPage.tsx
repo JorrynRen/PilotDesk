@@ -294,7 +294,13 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                     <div className="mt-2 flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                       <span>v{def.version}</span>
                       <span>阶段: {def.stages?.length || 0}</span>
-                      <span>触发器: {def.trigger?.triggerType || 'manual'}</span>
+                      <span>触发器: {(() => {
+                        const t = def.trigger;
+                        if (!t || t.triggerType === 'manual') return '手动';
+                        if (t.triggerType === 'cron') return `定时 (${t.cron || ''})`;
+                        if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
+                        return t.triggerType;
+                      })()}</span>
                     </div>
                   </div>
                 ))}
