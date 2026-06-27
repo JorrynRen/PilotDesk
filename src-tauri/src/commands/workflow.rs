@@ -384,6 +384,35 @@ pub fn import_workflow(
     Ok(def)
 }
 
+/// 导出工作流到文件
+#[tauri::command]
+pub fn export_workflow_to_file(
+    state: tauri::State<'_, crate::DbState>,
+    id: String,
+    file_path: String,
+) -> Result<(), String> {
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+    let def = workflow::get_definition(&conn, &id)
+        .map_err(|e| format!("查询失败: {}", e))?
+        .ok_or_else(|| "工作流不存在".to_string())?;
+    let json = serde_json::to_string_pretty(&def)
+        .map_err(|e| format!("序列化失败: {}", e))?;
+    std::fs::write(&file_path, json)
+        .map_err(|e| format!("写入文件失败: {}", e))?;
+    Ok(())
+}
+
+/// 从文件导入工作流
+#[tauri::command]
+pub fn import_workflow_from_file(
+    state: tauri::State<'_, crate::DbState>,
+    file_path: String,
+) -> Result<workflow::WorkflowDefinition, String> {
+    let json = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("读取文件失败: {}", e))?;
+    import_workflow(state, json)
+}
+
 /// 测试单个节点执行
 #[tauri::command]
 pub async fn test_node(

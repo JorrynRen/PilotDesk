@@ -13,6 +13,8 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
+import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition } from '../../workflow/WorkflowDefinition';
 import WorkflowNodeItem from './WorkflowNodeItem';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
@@ -275,6 +277,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setDescription(def.description);
     }
   }, [def]);
+
+  const handleExportWorkflow = useCallback(async () => {
+    if (!definitionId) return;
+    try {
+      const filePath = await saveDialog({
+        defaultPath: `${name || '工作流'}.json`,
+        filters: [{ name: '工作流文件', extensions: ['json'] }],
+      });
+      if (filePath) {
+        await invoke('export_workflow_to_file', { id: definitionId, filePath });
+        onSaveResult?.(true);
+      }
+    } catch (err: any) {
+      console.error('导出工作流失败:', err);
+      onSaveResult?.(false);
+    }
+  }, [definitionId, name, onSaveResult]);
 
   const handleSave = async () => {
     if (!def) return;
@@ -1277,6 +1296,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </span>
 
         <div className="flex-1" />
+
+        <button
+          onClick={handleExportWorkflow}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded text-[11px] transition-colors"
+          style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          title="导出工作流为 JSON 文件"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 1.5v6M3.5 5L6 7.5 8.5 5M2 9.5h8" />
+          </svg>
+          导出
+        </button>
 
         <div className="w-px h-5" style={{ background: 'var(--border)' }} />
 

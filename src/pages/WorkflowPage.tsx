@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download } from 'lucide-react';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -19,6 +21,35 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
     loadDefinitions();
     loadInstances();
   }, []);
+
+  const handleExportSingle = async (e: React.MouseEvent, id: string, name: string) => {
+    e.stopPropagation();
+    try {
+      const filePath = await saveDialog({
+        defaultPath: `${name || '工作流'}.json`,
+        filters: [{ name: '工作流文件', extensions: ['json'] }],
+      });
+      if (filePath) {
+        await invoke('export_workflow_to_file', { id, filePath });
+      }
+    } catch (err: any) {
+      console.error('导出工作流失败:', err);
+    }
+  };
+
+  const handleImportWorkflow = async () => {
+    try {
+      const filePath = await openDialog({
+        filters: [{ name: '工作流文件', extensions: ['json'] }],
+        multiple: false,
+      });
+      if (!filePath) return;
+      const def = await invoke('import_workflow_from_file', { filePath: filePath as string });
+      await loadDefinitions();
+    } catch (err: any) {
+      console.error('导入工作流失败:', err);
+    }
+  };
 
   const handleCreateAndEdit = async () => {
     const def = createDefaultWorkflow('新工作流');
@@ -145,6 +176,14 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                           <Play size={14} />
                         </button>
                         <button
+                          onClick={(e) => { handleExportSingle(e, def.id, def.name); }}
+                          className="pd-btn p-1.5 rounded hover:opacity-80"
+                          style={{ color: 'var(--text-secondary)' }}
+                          title="导出"
+                        >
+                          <Download size={14} />
+                        </button>
+                        <button
                           onClick={(e) => { e.stopPropagation(); handleDelete(def.id, def.name); }}
                           className="pd-btn p-1.5 rounded hover:opacity-80"
                           style={{ color: 'var(--text-secondary)' }}
@@ -206,6 +245,13 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
       {/* 底部工具栏：新建工作流按钮 */}
       <div className="shrink-0 flex items-center justify-between px-4 py-2" style={{ borderTop: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
         <div />
+        <button
+          onClick={handleImportWorkflow}
+          className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+          style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+        >
+          <Upload size={14} /> 导入
+        </button>
         <button
           onClick={handleCreateAndEdit}
           className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"

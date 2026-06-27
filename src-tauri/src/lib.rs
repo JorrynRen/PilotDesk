@@ -331,6 +331,8 @@ pub fn run() {
             commands::workflow::delete_schedule,
             commands::workflow::export_workflow,
             commands::workflow::import_workflow,
+            commands::workflow::export_workflow_to_file,
+            commands::workflow::import_workflow_from_file,
             commands::workflow::test_node,
             commands::workflow::get_workflow_stats,
             commands::workflow::get_execution_timeline,
