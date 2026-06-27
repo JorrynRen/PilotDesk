@@ -437,6 +437,15 @@ impl WorkflowEngine {
         let subflow_def = super::get_definition(&conn, subflow_def_id)?
             .ok_or_else(|| AppError::InvalidInput(format!("子工作流定义不存在: {}", subflow_def_id)))?;
 
+        // 检查 maxDepth（默认 10）
+        let max_depth = subflow_def.max_depth.unwrap_or(10) as usize;
+        if visited_def_ids.len() >= max_depth {
+            return Err(AppError::InvalidInput(format!(
+                "子工作流嵌套深度 {} 超过最大限制 {}（maxDepth）。工作流: \"{}\" -> \"{}\"",
+                visited_def_ids.len() + 1, max_depth, subflow_def.name, subflow_def.name
+            )));
+        }
+
         // 检查循环引用
         if visited_def_ids.contains(&subflow_def_id.to_string()) {
             let chain = visited_def_ids.iter().chain(std::iter::once(&subflow_def_id.to_string()))
@@ -491,6 +500,33 @@ impl WorkflowEngine {
         result
     }
 
+    /// 根据 outputSchema 格式化输出结果
+    fn format_output(result: Value, schema: &Option<serde_json::Value>) -> Value {
+        let Some(schema_obj) = schema.as_ref().and_then(|s| s.as_object()) else {
+            return result;
+        };
+        if schema_obj.is_empty() {
+            return result;
+        }
+        if let Some(result_obj) = result.as_object() {
+            let mut formatted = serde_json::Map::new();
+            for (field, rules) in schema_obj {
+                if let Some(rules_obj) = rules.as_object() {
+                    if let Some(value) = result_obj.get(field) {
+                        formatted.insert(field.clone(), value.clone());
+                    } else if let Some(default_val) = rules_obj.get("default") {
+                        formatted.insert(field.clone(), default_val.clone());
+                    } else {
+                        formatted.insert(field.clone(), Value::Null);
+                    }
+                }
+            }
+            Value::Object(formatted)
+        } else {
+            result
+        }
+    }
+
     /// 启动工作流执行（两层调度）
     pub async fn execute_with_concurrency(
         executor: &Arc<NodeExecutor>,
@@ -513,6 +549,51 @@ impl WorkflowEngine {
         max_concurrency: usize,
         visited_def_ids: &[String],
     ) -> Result<Value, AppError> {
+        // -- inputSchema 校验 --
+        if let Some(schema) = &def.input_schema {
+            if let Some(schema_obj) = schema.as_object() {
+                for (field, rules) in schema_obj {
+                    if let Some(rules_obj) = rules.as_object() {
+                        let required = rules_obj.get("required").and_then(|v| v.as_bool()).unwrap_or(false);
+                        if required {
+                            let has_value = match input_data.get(field) {
+                                Some(v) => !v.is_null(),
+                                None => false,
+                            };
+                            if !has_value {
+                                return Err(AppError::InvalidInput(format!(
+                                    "工作流 \"{}\" 缺少必填输入参数: {}（类型: {}）",
+                                    def.name, field,
+                                    rules_obj.get("type").and_then(|v| v.as_str()).unwrap_or("unknown")
+                                )));
+                            }
+                        }
+                        if let Some(expected_type) = rules_obj.get("type").and_then(|v| v.as_str()) {
+                            if let Some(value) = input_data.get(field) {
+                                if !value.is_null() {
+                                    let type_ok = match expected_type {
+                                        "string" => value.is_string(),
+                                        "number" => value.is_number(),
+                                        "integer" => value.is_i64() || value.is_u64(),
+                                        "boolean" => value.is_boolean(),
+                                        "array" => value.is_array(),
+                                        "object" => value.is_object(),
+                                        _ => true,
+                                    };
+                                    if !type_ok {
+                                        return Err(AppError::InvalidInput(format!(
+                                            "工作流 \"{}\" 输入参数 \"{}\" 类型错误: 期望 {}",
+                                            def.name, field, expected_type
+                                        )));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let cancelled = Arc::new(AtomicBool::new(false));
         let total_count: usize = def.stages.iter().map(|s| s.nodes.len()).sum();
         let completed_count = Arc::new(AtomicUsize::new(0));
@@ -572,7 +653,9 @@ impl WorkflowEngine {
         let output: serde_json::Map<String, Value> = ctx.into_iter()
             .filter(|(k, _)| !k.starts_with("__"))
             .collect();
-        Ok(Value::Object(output))
+        let output_value = Value::Object(output);
+        // -- outputSchema 格式化 --
+        Ok(Self::format_output(output_value, &def.output_schema))
     }
 
     /// 从 checkpoint 恢复执行
