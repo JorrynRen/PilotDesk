@@ -243,39 +243,20 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
       <div className="shrink-0 px-4 pt-1 flex items-center gap-0.5 overflow-x-clip" style={{ borderBottom: '1px solid var(--border)' }}>
         <button
           onClick={() => setActiveTab('definitions')}
-          className="pd-btn px-3 py-2 text-xs rounded-t-lg whitespace-nowrap flex items-center gap-1.5"
-          style={{
-            color: activeTab === 'definitions' ? 'var(--accent)' : 'var(--text-secondary)',
-            backgroundColor: activeTab === 'definitions' ? 'var(--bg-tertiary)' : 'transparent',
-            borderBottom: activeTab === 'definitions' ? '2px solid var(--accent)' : '2px solid transparent',
-            marginBottom: '-1px',
-          }}
+          className={"pd-tab" + (activeTab === 'definitions' ? " pd-tab-active" : "")}
         >
           <GitBranch size={12} />
           工作流定义 ({definitions.length})
         </button>
         <button
           onClick={() => setActiveTab('instances')}
-          className="pd-btn px-3 py-2 text-xs rounded-t-lg whitespace-nowrap flex items-center gap-1.5"
-          style={{
-            color: activeTab === 'instances' ? 'var(--accent)' : 'var(--text-secondary)',
-            backgroundColor: activeTab === 'instances' ? 'var(--bg-tertiary)' : 'transparent',
-            borderBottom: activeTab === 'instances' ? '2px solid var(--accent)' : '2px solid transparent',
-            marginBottom: '-1px',
-          }}
+          className={"pd-tab" + (activeTab === 'instances' ? " pd-tab-active" : "")}
         >
           <Activity size={12} />
           执行记录 ({instances.length})
         </button>
         <button
-          className="pd-btn px-3 py-2 text-xs rounded-t-lg whitespace-nowrap flex items-center gap-1.5"
-          style={{
-            color: 'var(--text-tertiary)',
-            backgroundColor: 'transparent',
-            borderBottom: '2px solid transparent',
-            marginBottom: '-1px',
-            cursor: 'default',
-          }}
+          className="pd-tab pd-tab-disabled"
         >
           <Layout size={12} />
           模板市场
@@ -397,6 +378,16 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                         if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
                         return t.triggerType;
                       })()}</span>
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      <span className="flex items-center gap-1">
+                        <Clock size={10} />
+                        {new Date(Number(def.createdAt) * 1000).toLocaleString()}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Download size={10} />
+                        {new Date(Number(def.updatedAt) * 1000).toLocaleString()}
+                      </span>
                     </div>
                   </div>
                 ))}

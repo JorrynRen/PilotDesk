@@ -909,13 +909,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           <button
             key={id}
             onClick={() => setActiveTab(id)}
-            className="pd-btn px-3 py-2 text-xs rounded-t-lg whitespace-nowrap"
-            style={{
-              color: activeTab === id ? 'var(--accent)' : 'var(--text-secondary)',
-              backgroundColor: activeTab === id ? 'var(--bg-tertiary)' : 'transparent',
-              borderBottom: activeTab === id ? '2px solid var(--accent)' : '2px solid transparent',
-              marginBottom: '-1px',
-            }}
+            className={"pd-tab" + (activeTab === id ? " pd-tab-active" : "")}
           >
             <Icon size={12} />
             {label}

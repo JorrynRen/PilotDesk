@@ -304,6 +304,44 @@ button:disabled:hover {
   background-color: rgba(59, 130, 246, 0.12) !important;
 }
 
+
+/* ═══════════════════════════════════════════════════
+   Tab Navigation — 统一 Tab 样式
+   用于设置页、工作流管理页等列表页的 Tab 导航
+   ═══════════════════════════════════════════════════ */
+.pd-tab {
+  padding: 8px 12px;
+  font-size: 12px;
+  border-radius: 8px 8px 0 0;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  background-color: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+.pd-tab:hover {
+  background-color: var(--bg-hover);
+}
+.pd-tab-active {
+  color: var(--accent) !important;
+  background-color: var(--bg-tertiary) !important;
+  border-bottom-color: var(--accent) !important;
+}
+.pd-tab-disabled {
+  color: var(--text-tertiary) !important;
+  cursor: default !important;
+}
+.pd-tab-disabled:hover {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
 /* ── Button size variants ── */
 .pd-btn-sm {
   font-size: 12px;
