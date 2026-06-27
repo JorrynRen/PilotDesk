@@ -357,6 +357,7 @@ pub fn delete_schedule(
 }
 
 /// 导出工作流专用结构体（过滤导入时不使用的字段）
+/// 所有 ID 替换为短标识符（s1/s2 表示阶段，n1/n2 表示节点，e1/e2 表示边）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportWorkflowDefinition {
@@ -364,19 +365,187 @@ pub struct ExportWorkflowDefinition {
     pub version: String,
     pub description: String,
     pub trigger: workflow::TriggerConfig,
-    pub stages: Vec<workflow::Stage>,
+    pub stages: Vec<ExportStage>,
     pub enabled: bool,
+}
+
+/// 导出阶段（过滤 id）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStage {
+    pub name: String,
+    pub order: usize,
+    pub nodes: Vec<ExportNode>,
+    pub edges: Vec<ExportEdge>,
+    pub gate: workflow::GateConfig,
+}
+
+/// 导出节点（过滤 id/plugin_id/command_id/input_schema/output_schema）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportNode {
+    #[serde(rename = "type")]
+    pub node_type: workflow::WorkflowNodeType,
+    pub label: String,
+    pub params: Option<serde_json::Value>,
+    pub delay_ms: Option<u64>,
+    pub timeout_ms: Option<u64>,
+    pub retry_count: Option<u32>,
+    pub retry_delay_ms: Option<u64>,
+    pub input_mapping: Option<serde_json::Value>,
+    pub output_mapping: Option<serde_json::Value>,
+    pub position: Option<serde_json::Value>,
+}
+
+/// 导出边（过滤 id，source/target 引用导出节点短标识符）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportEdge {
+    pub source: String,
+    pub target: String,
+    pub label: Option<String>,
+    pub condition: Option<String>,
+}
+
+/// 导出时生成的短标识符映射（仅保留 node_ids 用于边引用）
+struct ExportIdMap {
+    node_ids: std::collections::HashMap<String, usize>,  // old_uuid -> index
 }
 
 impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
     fn from(def: workflow::WorkflowDefinition) -> Self {
+        // 为所有节点 ID 生成短标识符映射
+        let mut node_ids = std::collections::HashMap::new();
+
+        for stage in def.stages.iter() {
+            for node in &stage.nodes {
+                let ni = node_ids.len();
+                node_ids.entry(node.id.clone()).or_insert(ni);
+            }
+        }
+
+        let id_map = ExportIdMap { node_ids };
+
+        let stages: Vec<ExportStage> = def.stages.into_iter().enumerate().map(|(_si, stage)| {
+            let nodes: Vec<ExportNode> = stage.nodes.into_iter().map(|node| {
+                ExportNode {
+                    node_type: node.node_type,
+                    label: node.label,
+                    params: node.params,
+                    delay_ms: node.delay_ms,
+                    timeout_ms: node.timeout_ms,
+                    retry_count: node.retry_count,
+                    retry_delay_ms: node.retry_delay_ms,
+                    input_mapping: node.input_mapping,
+                    output_mapping: node.output_mapping,
+                    position: node.position,
+                }
+            }).collect();
+
+            let edges: Vec<ExportEdge> = stage.edges.into_iter().map(|edge| {
+                let src_idx = id_map.node_ids.get(&edge.source).copied().unwrap_or(0);
+                let tgt_idx = id_map.node_ids.get(&edge.target).copied().unwrap_or(0);
+                ExportEdge {
+                    source: format!("n{}", src_idx + 1),
+                    target: format!("n{}", tgt_idx + 1),
+                    label: edge.label,
+                    condition: edge.condition,
+                }
+            }).collect();
+
+            ExportStage {
+                name: stage.name,
+                order: stage.order,
+                nodes,
+                edges,
+                gate: stage.gate,
+            }
+        }).collect();
+
         Self {
             name: def.name,
             version: def.version,
             description: def.description,
             trigger: def.trigger,
-            stages: def.stages,
+            stages,
             enabled: def.enabled,
+        }
+    }
+}
+
+impl ExportWorkflowDefinition {
+    /// 导入时重建完整 WorkflowDefinition（生成新 UUID）
+    pub fn into_definition(self) -> workflow::WorkflowDefinition {
+        let now_ts = crate::utils::now();
+        let wf_id = crate::utils::new_id();
+
+        let stages: Vec<workflow::Stage> = self.stages.into_iter().map(|stage| {
+            let nodes: Vec<workflow::WorkflowNode> = stage.nodes.into_iter().map(|en| {
+                workflow::WorkflowNode {
+                    id: String::new(), // will be filled below
+                    node_type: en.node_type,
+                    label: en.label,
+                    plugin_id: None,
+                    command_id: None,
+                    params: en.params,
+                    delay_ms: en.delay_ms,
+                    timeout_ms: en.timeout_ms,
+                    retry_count: en.retry_count,
+                    retry_delay_ms: en.retry_delay_ms,
+                    input_schema: None,
+                    output_schema: None,
+                    input_mapping: en.input_mapping,
+                    output_mapping: en.output_mapping,
+                    position: en.position,
+                }
+            }).collect();
+
+            // Assign new UUIDs to nodes
+            let nodes: Vec<workflow::WorkflowNode> = nodes.into_iter().map(|mut n| {
+                n.id = crate::utils::new_id();
+                n
+            }).collect();
+
+            // Build node short_id -> new_uuid map for this stage
+            let stage_node_map: std::collections::HashMap<String, String> = nodes.iter().enumerate()
+                .map(|(i, n)| (format!("n{}", i + 1), n.id.clone()))
+                .collect();
+
+            let edges: Vec<workflow::WorkflowEdge> = stage.edges.into_iter().map(|ee| {
+                let new_source = stage_node_map.get(&ee.source).cloned().unwrap_or_else(crate::utils::new_id);
+                let new_target = stage_node_map.get(&ee.target).cloned().unwrap_or_else(crate::utils::new_id);
+                workflow::WorkflowEdge {
+                    id: crate::utils::new_id(),
+                    source: new_source,
+                    target: new_target,
+                    label: ee.label,
+                    condition: ee.condition,
+                }
+            }).collect();
+
+            workflow::Stage {
+                id: crate::utils::new_id(),
+                name: stage.name,
+                order: stage.order,
+                nodes,
+                edges,
+                gate: stage.gate,
+            }
+        }).collect();
+
+        workflow::WorkflowDefinition {
+            id: wf_id,
+            name: self.name,
+            version: self.version,
+            description: self.description,
+            trigger: self.trigger,
+            stages,
+            input_schema: None,
+            output_schema: None,
+            max_depth: Some(10),
+            created_at: now_ts,
+            updated_at: now_ts,
+            enabled: self.enabled,
         }
     }
 }
@@ -405,95 +574,13 @@ pub fn import_workflow(
     let export_def: ExportWorkflowDefinition = serde_json::from_str(&json_data)
         .map_err(|e| format!("JSON 解析失败: {}", e))?;
 
-    // 重新生成所有 ID
-    let id_map = regenerate_all_ids(&export_def);
-    let now_ts = crate::utils::now();
-    let def = apply_id_map(export_def, &id_map, now_ts);
+    let def = export_def.into_definition();
 
     workflow::create_definition(&conn, &def).map_err(|e| format!("导入失败: {}", e))?;
     Ok(def)
 }
 
-/// ID 映射表：old_id -> new_id
-struct IdMap {
-    workflow: String,
-    stages: std::collections::HashMap<String, String>,
-    nodes: std::collections::HashMap<String, String>,
-    edges: std::collections::HashMap<String, String>,
-}
 
-/// 为导出数据中的所有 ID 生成新 ID，返回映射表
-fn regenerate_all_ids(export: &ExportWorkflowDefinition) -> IdMap {
-    let mut stage_map = std::collections::HashMap::new();
-    let mut node_map = std::collections::HashMap::new();
-    let mut edge_map = std::collections::HashMap::new();
-
-    for stage in &export.stages {
-        stage_map.insert(stage.id.clone(), crate::utils::new_id());
-        for node in &stage.nodes {
-            node_map.insert(node.id.clone(), crate::utils::new_id());
-        }
-        for edge in &stage.edges {
-            edge_map.insert(edge.id.clone(), crate::utils::new_id());
-        }
-    }
-
-    IdMap {
-        workflow: crate::utils::new_id(),
-        stages: stage_map,
-        nodes: node_map,
-        edges: edge_map,
-    }
-}
-
-/// 根据 ID 映射表重建 WorkflowDefinition
-fn apply_id_map(export: ExportWorkflowDefinition, id_map: &IdMap, now_ts: i64) -> workflow::WorkflowDefinition {
-    let stages: Vec<workflow::Stage> = export.stages.into_iter().map(|stage| {
-        let new_stage_id = id_map.stages.get(&stage.id).cloned().unwrap_or_else(crate::utils::new_id);
-
-        let nodes: Vec<workflow::WorkflowNode> = stage.nodes.into_iter().map(|node| {
-            let new_node_id = id_map.nodes.get(&node.id).cloned().unwrap_or_else(crate::utils::new_id);
-            workflow::WorkflowNode {
-                id: new_node_id,
-                ..node
-            }
-        }).collect();
-
-        let edges: Vec<workflow::WorkflowEdge> = stage.edges.into_iter().map(|edge| {
-            let new_edge_id = id_map.edges.get(&edge.id).cloned().unwrap_or_else(crate::utils::new_id);
-            let new_source = id_map.nodes.get(&edge.source).cloned().unwrap_or_else(|| edge.source.clone());
-            let new_target = id_map.nodes.get(&edge.target).cloned().unwrap_or_else(|| edge.target.clone());
-            workflow::WorkflowEdge {
-                id: new_edge_id,
-                source: new_source,
-                target: new_target,
-                ..edge
-            }
-        }).collect();
-
-        workflow::Stage {
-            id: new_stage_id,
-            nodes,
-            edges,
-            ..stage
-        }
-    }).collect();
-
-    workflow::WorkflowDefinition {
-        id: id_map.workflow.clone(),
-        name: export.name,
-        version: export.version,
-        description: export.description,
-        trigger: export.trigger,
-        stages,
-        input_schema: None,
-        output_schema: None,
-        max_depth: Some(10),
-        created_at: now_ts,
-        updated_at: now_ts,
-        enabled: export.enabled,
-    }
-}
 
 /// 导出工作流到文件
 #[tauri::command]
