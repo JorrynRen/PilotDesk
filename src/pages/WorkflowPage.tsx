@@ -393,7 +393,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                       <span>触发器: {(() => {
                         const t = def.trigger;
                         if (!t || t.triggerType === 'manual') return '手动';
-                        if (t.triggerType === 'cron') return `定时: ${describeCron(t.cron || '')}`;
+                        if (t.triggerType === 'cron') return `定时（${describeCron(t.cron || '')}）`;
                         if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
                         return t.triggerType;
                       })()}</span>
