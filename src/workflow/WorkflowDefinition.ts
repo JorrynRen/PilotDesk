@@ -334,9 +334,23 @@ export function autoAssignStage(stages: Stage[]): Stage[] {
       }
     }
     if (movedNode) {
+      // 同时移动与该节点相关的边到目标阶段
+      const relatedEdges: WorkflowEdge[] = [];
+      for (const stage of newStages) {
+        const keepEdges: WorkflowEdge[] = [];
+        for (const edge of stage.edges) {
+          if (edge.source === nodeId || edge.target === nodeId) {
+            relatedEdges.push(edge);
+          } else {
+            keepEdges.push(edge);
+          }
+        }
+        stage.edges = keepEdges;
+      }
       const target = newStages.find(s => s.order === targetOrder);
       if (target) {
         target.nodes.push(movedNode);
+        target.edges.push(...relatedEdges);
       }
     }
   }

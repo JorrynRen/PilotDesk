@@ -14,6 +14,7 @@ interface WorkflowNodeItemProps {
   draggingNode: { nodeId: string; started: boolean } | null;
   hoveredNodeId: string | null;
   connectTargetId: string | null;
+  cycleTargetId: string | null;
   connecting: unknown;
   stepStates: Record<string, string>;
   onSelectNode: (nodeId: string, stageId: string, ctrlKey: boolean) => void;
@@ -38,6 +39,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   const isDraggingThis = draggingNode?.nodeId === node.id && draggingNode?.started;
   const isHovered = hoveredNodeId === node.id;
   const isConnectTarget = connectTargetId === node.id;
+  const isCycleTarget = cycleTargetId === node.id;
   const runState = stepStates[`node_${node.id}`];
 
   return (
@@ -133,12 +135,14 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
           className="absolute rounded-full transition-all duration-150"
           style={{
             left: -5, top: '50%', marginTop: -5,
-            width: (connecting && isConnectTarget) ? 12 : 10,
-            height: (connecting && isConnectTarget) ? 12 : 10,
-            background: (connecting && isConnectTarget) ? 'var(--accent)' : 'var(--border)',
+            width: (connecting && (isConnectTarget || isCycleTarget)) ? 12 : 10,
+            height: (connecting && (isConnectTarget || isCycleTarget)) ? 12 : 10,
+            background: (connecting && isCycleTarget) ? 'var(--status-danger)'
+              : (connecting && isConnectTarget) ? 'var(--accent)' : 'var(--border)',
             border: '2px solid var(--bg-secondary)',
-            cursor: (connecting && isConnectTarget) ? 'cell' : 'crosshair',
-            boxShadow: (connecting && isConnectTarget) ? '0 0 8px var(--accent-light)' : 'none',
+            cursor: (connecting && isConnectTarget) ? 'cell' : (connecting && isCycleTarget) ? 'not-allowed' : 'crosshair',
+            boxShadow: (connecting && isCycleTarget) ? '0 0 8px var(--status-danger)'
+              : (connecting && isConnectTarget) ? '0 0 8px var(--accent-light)' : 'none',
           }}
         />
       )}

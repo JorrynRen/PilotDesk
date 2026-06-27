@@ -269,6 +269,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   // 连线拖拽时的实际目标节点（鼠标悬停的input anchor）
   const [connectTargetId, setConnectTargetId] = useState<string | null>(null);
+  const [cycleTargetId, setCycleTargetId] = useState<string | null>(null);
 
   useEffect(() => {
     if (def) {
@@ -615,6 +616,41 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, [stagePositionsMap]);
 
 
+  /**
+   * 检测添加边 source->target 后是否会产生闭环
+   * 使用 DFS 从 target 出发，若能到达 source 则存在闭环
+   */
+  const hasCycle = useCallback((source: string, target: string, stage: Stage): boolean => {
+    const adj = new Map<string, string[]>();
+    for (const node of stage.nodes) {
+      adj.set(node.id, []);
+    }
+    for (const edge of stage.edges) {
+      const list = adj.get(edge.source);
+      if (list) list.push(edge.target);
+    }
+    // 添加待检测边
+    const newList = adj.get(source);
+    if (newList) newList.push(target);
+
+    // DFS 从 target 出发
+    const visited = new Set<string>();
+    const stack = [target];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (current === source) return true;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      const neighbors = adj.get(current);
+      if (neighbors) {
+        for (const n of neighbors) {
+          if (!visited.has(n)) stack.push(n);
+        }
+      }
+    }
+    return false;
+  }, []);
+
   const handleUpdateConnectingPos = useCallback((e: MouseEvent) => {
     if (!connecting) return;
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -652,12 +688,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         break;
       }
     }
-    setConnectTargetId(targetId);
+    // 检测目标节点是否会产生闭环
+    if (targetId && hasCycle(connecting.source, targetId, stage)) {
+      setCycleTargetId(targetId);
+      setConnectTargetId(null);
+    } else {
+      setCycleTargetId(null);
+      setConnectTargetId(targetId);
+    }
   }, [connecting, pan, scale, stages, canvasToContentPos]);
 
   const handleEndConnect = useCallback((nodeId: string, stageId: string) => {
     if (!connecting || connecting.source === nodeId) {
       setConnecting(null);
+      setCycleTargetId(null);
       return;
     }
     // Start节点只有输出锚点，不可被连线
@@ -665,6 +709,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (targetNode?.type === 'start') {
       setConnecting(null);
       setConnectTargetId(null);
+      setCycleTargetId(null);
       return;
     }
     // 不允许重复连线
@@ -672,6 +717,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (stage && stage.edges.some(e => e.source === connecting.source && e.target === nodeId)) {
       setConnecting(null);
       setConnectTargetId(null);
+      setCycleTargetId(null);
+      return;
+    }
+    // 闭环检测：若创建此边会产生闭环，阻止创建
+    if (stage && hasCycle(connecting.source, nodeId, stage)) {
+      setConnecting(null);
+      setConnectTargetId(null);
+      setCycleTargetId(null);
       return;
     }
 
@@ -685,6 +738,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (connecting.stageId !== stageId) {
       setConnecting(null);
       setConnectTargetId(null);
+      setCycleTargetId(null);
       return;
     }
 
@@ -696,12 +750,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }));
     setConnecting(null);
     setConnectTargetId(null);
+    setCycleTargetId(null);
     setStages((prev) => autoAssignStage(prev));
   }, [connecting, stages]);
 
   const handleCancelConnect = useCallback(() => {
     setConnecting(null);
     setConnectTargetId(null);
+    setCycleTargetId(null);
   }, []);
 
   // 监听连线拖拽期间的鼠标移动和释放
@@ -1832,6 +1888,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   draggingNode={draggingNode}
                   hoveredNodeId={hoveredNodeId}
                   connectTargetId={connectTargetId}
+                  cycleTargetId={cycleTargetId}
                   connecting={connecting}
                   stepStates={stepStates}
                   onSelectNode={handleSelectNode}
