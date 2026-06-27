@@ -13,6 +13,102 @@ interface WorkflowPageProps {
   onBack?: () => void;
 }
 
+/** 将 Cron 表达式转换为用户友好描述 */
+function describeCron(expr: string): string {
+  if (!expr) return '定时';
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length < 6) return expr;
+
+  const [sec, min, hour, day, month, week] = parts;
+
+  // 星期映射
+  const weekMap: Record<string, string> = {
+    '0': '日', '1': '一', '2': '二', '3': '三', '4': '四', '5': '五', '6': '六', '7': '日',
+    'SUN': '日', 'MON': '一', 'TUE': '二', 'WED': '三', 'THU': '四', 'FRI': '五', 'SAT': '六',
+  };
+
+  // 解析小时和分钟
+  const fmtTime = (h: string, m: string) => {
+    const hh = h.padStart(2, '0');
+    const mm = m.padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  // 解析星期范围
+  const describeWeek = (w: string): string | null => {
+    if (w === '*') return null;
+    // 1-5 → 周一至周五
+    const rangeMatch = w.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      const from = weekMap[rangeMatch[1]] || rangeMatch[1];
+      const to = weekMap[rangeMatch[2]] || rangeMatch[2];
+      return `周${from}至周${to}`;
+    }
+    // 1,3,5 → 周一、三、五
+    if (w.includes(',')) {
+      const days = w.split(',').map(d => weekMap[d.trim()] || d.trim()).filter(Boolean);
+      return `周${days.join('、')}`;
+    }
+    // 单个数字
+    if (weekMap[w]) return `周${weekMap[w]}`;
+    return null;
+  };
+
+  // 解析日
+  const describeDay = (d: string): string | null => {
+    if (d === '*' || d === '?') return null;
+    if (d === 'L') return '最后一天';
+    if (d.includes(',')) {
+      const days = d.split(',').map(x => x.trim());
+      return `每月${days.join('、')}日`;
+    }
+    const rangeMatch = d.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) return `每月${rangeMatch[1]}-${rangeMatch[2]}日`;
+    return `每月${d}日`;
+  };
+
+  // 解析步进分钟
+  const stepMinMatch = min.match(/^\*\/(\d+)$/);
+  if (stepMinMatch && hour === '*' && day === '*' && month === '*' && week === '*') {
+    return `每 ${stepMinMatch[1]} 分钟`;
+  }
+
+  // 解析步进小时
+  const stepHourMatch = hour.match(/^\*\/(\d+)$/);
+  if (stepHourMatch && min === '0' && day === '*' && month === '*' && week === '*') {
+    return `每 ${stepHourMatch[1]} 小时`;
+  }
+
+  // 小时范围 9-17
+  const hourRangeMatch = hour.match(/^(\d+)-(\d+)$/);
+  if (hourRangeMatch && min === '0') {
+    const weekDesc = describeWeek(week);
+    const base = `每天 ${fmtTime(hourRangeMatch[1], '0')}-${fmtTime(hourRangeMatch[2], '0')} 每小时`;
+    return weekDesc ? `${weekDesc} ${fmtTime(hourRangeMatch[1], '0')}-${fmtTime(hourRangeMatch[2], '0')} 每小时` : base;
+  }
+
+  // 常规：解析具体时间
+  const weekDesc = describeWeek(week);
+  const dayDesc = describeDay(day);
+
+  if (weekDesc) {
+    // 按星期调度
+    return `${weekDesc} ${fmtTime(hour, min)}`;
+  }
+  if (dayDesc) {
+    // 按日期调度
+    return `${dayDesc} ${fmtTime(hour, min)}`;
+  }
+  if (hour === '*' && min === '0') {
+    return '每小时整点';
+  }
+  if (hour === '*' && min !== '0') {
+    return `每小时 ${min.padStart(2, '0')} 分`;
+  }
+
+  return `${fmtTime(hour, min)}`;
+}
+
 export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const navigate = useNavigate();
   const { definitions, instances, loading, error, loadDefinitions, loadInstances, createDefinition, updateDefinition, deleteDefinition, startWorkflow, selectDefinition } = useWorkflowStore();
@@ -297,7 +393,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                       <span>触发器: {(() => {
                         const t = def.trigger;
                         if (!t || t.triggerType === 'manual') return '手动';
-                        if (t.triggerType === 'cron') return `定时 (${t.cron || ''})`;
+                        if (t.triggerType === 'cron') return `定时: ${describeCron(t.cron || '')}`;
                         if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
                         return t.triggerType;
                       })()}</span>
