@@ -28,7 +28,7 @@ interface WorkflowNodeItemProps {
 const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   node, stageId, scale,
   selectedNodeId, selectedNodeIds,
-  draggingNode, hoveredNodeId, connectTargetId,
+  draggingNode, hoveredNodeId, connectTargetId, cycleTargetId,
   connecting, stepStates,
   onSelectNode, onNodeMouseDown, onDeleteNode,
   onEndConnect, onStartConnect, onHoverNode,
