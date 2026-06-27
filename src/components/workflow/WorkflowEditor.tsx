@@ -1297,18 +1297,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         <div className="flex-1" />
 
-        <button
-          onClick={handleExportWorkflow}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded text-[11px] transition-colors"
-          style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-          title="导出工作流为 JSON 文件"
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6 1.5v6M3.5 5L6 7.5 8.5 5M2 9.5h8" />
-          </svg>
-          导出
-        </button>
-
         <div className="w-px h-5" style={{ background: 'var(--border)' }} />
 
         {/* 节点类型拖拽区 */}
@@ -1388,6 +1376,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
           >
             返回列表
+          </button>
+          <button
+            onClick={handleExportWorkflow}
+            className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="导出工作流为 JSON 文件"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 1.5v6M3.5 5L6 7.5 8.5 5M2 9.5h8" />
+            </svg>
+            导出
           </button>
           <button
             onClick={handleSave}

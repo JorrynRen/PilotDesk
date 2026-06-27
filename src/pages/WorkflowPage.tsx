@@ -39,12 +39,19 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
 
   const handleImportWorkflow = async () => {
     try {
-      const filePath = await openDialog({
+      const filePaths = await openDialog({
         filters: [{ name: '工作流文件', extensions: ['json'] }],
-        multiple: false,
+        multiple: true,
       });
-      if (!filePath) return;
-      const def = await invoke('import_workflow_from_file', { filePath: filePath as string });
+      if (!filePaths || (filePaths as string[]).length === 0) return;
+      const paths = filePaths as string[];
+      for (const filePath of paths) {
+        try {
+          await invoke('import_workflow_from_file', { filePath });
+        } catch (innerErr: any) {
+          console.error(`导入工作流文件失败: ${filePath}`, innerErr);
+        }
+      }
       await loadDefinitions();
     } catch (err: any) {
       console.error('导入工作流失败:', err);
@@ -95,28 +102,67 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         onBack={() => navigate('/')}
         onOpenSettings={() => navigate('/settings')}
       />
-      {/* Tabs */}
-      <div className="flex px-4 pt-3 gap-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <button
-          onClick={() => setActiveTab('definitions')}
-          className="pb-2 text-xs font-medium transition-colors relative"
-          style={{
-            color: activeTab === 'definitions' ? 'var(--accent)' : 'var(--text-secondary)',
-            borderBottom: activeTab === 'definitions' ? '2px solid var(--accent)' : '2px solid transparent',
-          }}
-        >
-          工作流定义 ({definitions.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('instances')}
-          className="pb-2 text-xs font-medium transition-colors relative"
-          style={{
-            color: activeTab === 'instances' ? 'var(--accent)' : 'var(--text-secondary)',
-            borderBottom: activeTab === 'instances' ? '2px solid var(--accent)' : '2px solid transparent',
-          }}
-        >
-          执行记录 ({instances.length})
-        </button>
+      {/* Tabs + Actions */}
+      <div className="flex items-center px-4 pt-3 gap-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => setActiveTab('definitions')}
+            className="pb-2 text-xs font-medium transition-colors relative"
+            style={{
+              color: activeTab === 'definitions' ? 'var(--accent)' : 'var(--text-secondary)',
+              borderBottom: activeTab === 'definitions' ? '2px solid var(--accent)' : '2px solid transparent',
+            }}
+          >
+            工作流定义 ({definitions.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('instances')}
+            className="pb-2 text-xs font-medium transition-colors relative"
+            style={{
+              color: activeTab === 'instances' ? 'var(--accent)' : 'var(--text-secondary)',
+              borderBottom: activeTab === 'instances' ? '2px solid var(--accent)' : '2px solid transparent',
+            }}
+          >
+            执行记录 ({instances.length})
+          </button>
+          <button
+            className="pb-2 text-xs font-medium transition-colors relative"
+            style={{
+              color: 'var(--text-tertiary)',
+              borderBottom: '2px solid transparent',
+              cursor: 'default',
+            }}
+          >
+            模板市场
+          </button>
+        </div>
+
+        <div className="flex-1" />
+
+        <div className="flex items-center gap-2 pb-2">
+          <button
+            onClick={handleCreateAndEdit}
+            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+          >
+            <Plus size={14} /> 新建工作流
+          </button>
+          <button
+            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', cursor: 'not-allowed', opacity: 0.6 }}
+            title="即将推出"
+            disabled
+          >
+            从本地模板建立
+          </button>
+          <button
+            onClick={handleImportWorkflow}
+            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          >
+            <Upload size={14} /> 从文件导入
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -240,25 +286,6 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
             )}
           </>
         )}
-      </div>
-
-      {/* 底部工具栏：新建工作流按钮 */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-2" style={{ borderTop: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-        <div />
-        <button
-          onClick={handleImportWorkflow}
-          className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-          style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-        >
-          <Upload size={14} /> 导入
-        </button>
-        <button
-          onClick={handleCreateAndEdit}
-          className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-          style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-        >
-          <Plus size={14} /> 新建工作流
-        </button>
       </div>
 
       <StatusBar
