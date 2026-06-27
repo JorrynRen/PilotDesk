@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -307,23 +308,73 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const [isRunning, setIsRunning] = useState(false);
+  const nodeStatusUnlistenRef = useRef<UnlistenFn | null>(null);
+  const executionIdRef = useRef<string | null>(null);
 
   const handleRunWorkflow = async () => {
     if (!definitionId || isRunning) return;
     setIsRunning(true);
+    setNodeResults({});
     try {
       // 先保存当前编辑状态
       await updateDefinition(definitionId, { name, description, stages });
       // 执行工作流
-      await useWorkflowStore.getState().startWorkflow(definitionId);
-      // 加载实例数据
+      const instance = await useWorkflowStore.getState().startWorkflow(definitionId);
+      executionIdRef.current = instance.id;
+      // 清理旧的事件监听
+      if (nodeStatusUnlistenRef.current) {
+        nodeStatusUnlistenRef.current();
+        nodeStatusUnlistenRef.current = null;
+      }
+      // 监听节点执行状态事件
+      const unlisten = await listen<{
+        execution_id: string;
+        node_id: string;
+        status: string;
+        output?: any;
+        error?: string;
+      }>('workflow:node-status', (event) => {
+        if (event.payload.execution_id !== executionIdRef.current) return;
+        const nodeId = event.payload.node_id;
+        const status = event.payload.status;
+        if (status === 'completed' && event.payload.output !== undefined) {
+          setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: event.payload.output }));
+        } else if (status === 'failed') {
+          setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: event.payload.error || '执行失败' } }));
+        }
+        // 更新步骤状态（用于连线动画）
+        setStepStates(prev => ({ ...prev, [nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev[nodeId] }));
+      });
+      nodeStatusUnlistenRef.current = unlisten;
+      // 监听执行完成事件
+      listen<{ execution_id: string; status: string }>('workflow:execution-status', (event) => {
+        if (event.payload.execution_id !== executionIdRef.current) return;
+        if (event.payload.status === 'completed' || event.payload.status === 'failed') {
+          setIsRunning(false);
+          // 完成后刷新实例数据
+          useWorkflowStore.getState().loadInstances();
+        }
+      }).then(fn => {
+        const prev = nodeStatusUnlistenRef.current;
+        nodeStatusUnlistenRef.current = () => { prev?.(); fn(); };
+      });
+      // 加载实例数据（初始状态）
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
       console.error('执行工作流失败:', err);
-    } finally {
       setIsRunning(false);
     }
   };
+
+  // 组件卸载时清理事件监听
+  useEffect(() => {
+    return () => {
+      if (nodeStatusUnlistenRef.current) {
+        nodeStatusUnlistenRef.current();
+        nodeStatusUnlistenRef.current = null;
+      }
+    };
+  }, []);
 
   const handleNameChangeLocal = useCallback((newName: string) => {
     setName(newName);
@@ -874,14 +925,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     });
   };
 
-  // ── 从实例中提取节点执行结果 ──
-  // 监听 instances 变化，将最新实例的步骤输出映射到 nodeResults
+  // ── 从实例中提取节点执行结果（兜底：事件监听未覆盖的场景） ──
   useEffect(() => {
     const instance = instances.find(i => i.definitionId === definitionId && i.status !== 'pending');
-    if (!instance || !instance.steps) {
-      setNodeResults({});
-      return;
-    }
+    if (!instance || !instance.steps) return;
     const results: Record<string, any> = {};
     for (const [nodeId, step] of Object.entries(instance.steps)) {
       if (step.output !== undefined) {
@@ -890,7 +937,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         results[`node_${nodeId}`] = { error: step.error };
       }
     }
-    setNodeResults(results);
+    if (Object.keys(results).length > 0) {
+      setNodeResults(prev => ({ ...prev, ...results }));
+    }
   }, [instances, definitionId]);
 
   // ── 画布拖拽平移（含防误触阈值 + 中键支持） ──
