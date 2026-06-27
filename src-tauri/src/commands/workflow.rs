@@ -407,26 +407,18 @@ pub struct ExportEdge {
     pub condition: Option<String>,
 }
 
-/// 导出时生成的短标识符映射（仅保留 node_ids 用于边引用）
-struct ExportIdMap {
-    node_ids: std::collections::HashMap<String, usize>,  // old_uuid -> index
-}
-
 impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
     fn from(def: workflow::WorkflowDefinition) -> Self {
-        // 为所有节点 ID 生成短标识符映射
-        let mut node_ids = std::collections::HashMap::new();
-
-        for stage in def.stages.iter() {
+        // 按阶段构建局部节点编号映射（每个阶段从 n1 开始）
+        // 注意：必须按阶段局部编号，与 into_definition 中的编号方式一致
+        let stages: Vec<ExportStage> = def.stages.into_iter().map(|stage| {
+            // 为该阶段内的节点构建 old_uuid -> index 映射
+            let mut stage_node_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
             for node in &stage.nodes {
-                let ni = node_ids.len();
-                node_ids.entry(node.id.clone()).or_insert(ni);
+                let ni = stage_node_ids.len();
+                stage_node_ids.entry(node.id.clone()).or_insert(ni);
             }
-        }
 
-        let id_map = ExportIdMap { node_ids };
-
-        let stages: Vec<ExportStage> = def.stages.into_iter().enumerate().map(|(_si, stage)| {
             let nodes: Vec<ExportNode> = stage.nodes.into_iter().map(|node| {
                 ExportNode {
                     node_type: node.node_type,
@@ -443,8 +435,8 @@ impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
             }).collect();
 
             let edges: Vec<ExportEdge> = stage.edges.into_iter().map(|edge| {
-                let src_idx = id_map.node_ids.get(&edge.source).copied().unwrap_or(0);
-                let tgt_idx = id_map.node_ids.get(&edge.target).copied().unwrap_or(0);
+                let src_idx = stage_node_ids.get(&edge.source).copied().unwrap_or(0);
+                let tgt_idx = stage_node_ids.get(&edge.target).copied().unwrap_or(0);
                 ExportEdge {
                     source: format!("n{}", src_idx + 1),
                     target: format!("n{}", tgt_idx + 1),
