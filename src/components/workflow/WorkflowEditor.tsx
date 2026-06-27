@@ -66,7 +66,7 @@ interface ConfirmAction {
 type StepRunState = 'idle' | 'running' | 'success' | 'failed';
 
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange, onSaveResult }) => {
-  const { definitions, updateDefinition, loadDefinitions } = useWorkflowStore();
+  const { definitions, instances, updateDefinition, loadDefinitions } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
@@ -101,7 +101,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // 执行状态（模拟/预览用，key: nodeId | stageId:stepIndex）
   const [stepStates, setStepStates] = useState<Record<string, StepRunState>>({});
   const [nodeResults, setNodeResults] = useState<Record<string, any>>({});
-  const [isSimRunning, setIsSimRunning] = useState(false);
 
   // 画布平移和缩放状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -856,86 +855,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     });
   };
 
-  /**
-   * 生成模拟节点输出数据
-   */
-  const generateMockNodeOutput = useCallback((node: WorkflowNode, success: boolean) => {
-    if (!success) {
-      return { error: '节点执行失败', message: '模拟执行中发生错误' };
+  // ── 从实例中提取节点执行结果 ──
+  // 监听 instances 变化，将最新实例的步骤输出映射到 nodeResults
+  useEffect(() => {
+    const instance = instances.find(i => i.definitionId === definitionId && i.status !== 'pending');
+    if (!instance || !instance.steps) {
+      setNodeResults({});
+      return;
     }
-    switch (node.type) {
-      case 'start':
-        return { status: 'started', input: {}, timestamp: new Date().toISOString() };
-      case 'end':
-        return { status: 'completed', summary: '工作流执行完成', timestamp: new Date().toISOString() };
-      case 'agent':
-        return {
-          response: `[模拟] ${node.label} 执行完成`,
-          tokens: Math.floor(Math.random() * 500) + 100,
-          duration: Math.floor(Math.random() * 2000) + 500,
-        };
-      case 'api':
-        return {
-          statusCode: 200,
-          data: { result: 'ok', count: Math.floor(Math.random() * 100) },
-          duration: Math.floor(Math.random() * 1000) + 200,
-        };
-      case 'transform':
-        return {
-          transformed: true,
-          output: { processed: Math.floor(Math.random() * 50) + 1 },
-          script: node.label,
-        };
-      case 'interact':
-        return {
-          approved: Math.random() > 0.3,
-          comment: '模拟审批通过',
-          reviewer: 'system',
-        };
-      case 'plugin':
-        return {
-          plugin: node.label,
-          executed: true,
-          result: { action: 'completed', details: '模拟插件执行' },
-        };
-      case 'subflow':
-        return {
-          subflow: node.label,
-          status: 'completed',
-          output: { nested: true, items: Math.floor(Math.random() * 10) + 1 },
-        };
-      default:
-        return { status: 'completed', output: '模拟执行结果' };
-    }
-  }, []);
-
-  // ── 执行模拟 ──
-  const runSimulation = async () => {
-    if (isSimRunning) return;
-    setIsSimRunning(true);
-    setStepStates({});
-    setNodeResults({});
-
-    // 按阶段顺序依次执行每个节点
-    for (const stage of stages) {
-      setStepStates(prev => ({ ...prev, [`stage_${stage.id}`]: 'running' }));
-      for (const node of stage.nodes) {
-        const key = `node_${node.id}`;
-        setStepStates(prev => ({ ...prev, [key]: 'running' }));
-        // 模拟执行延迟
-        await new Promise(r => setTimeout(r, 600 + Math.random() * 800));
-        // 随机成功/失败（边界节点总是成功）
-        const success = node.isBoundary || Math.random() > 0.15;
-        setStepStates(prev => ({ ...prev, [key]: success ? 'success' : 'failed' }));
-        // 生成模拟输出数据
-        const mockResult = generateMockNodeOutput(node, success);
-        setNodeResults(prev => ({ ...prev, [key]: mockResult }));
+    const results: Record<string, any> = {};
+    for (const [nodeId, step] of Object.entries(instance.steps)) {
+      if (step.output !== undefined) {
+        results[`node_${nodeId}`] = step.output;
+      } else if (step.error) {
+        results[`node_${nodeId}`] = { error: step.error };
       }
-      setStepStates(prev => ({ ...prev, [`stage_${stage.id}`]: 'success' }));
     }
-
-    setIsSimRunning(false);
-  };
+    setNodeResults(results);
+  }, [instances, definitionId]);
 
   // ── 画布拖拽平移（含防误触阈值 + 中键支持） ──
 
@@ -1616,22 +1553,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               </div>
             </div>
           </div>
-          <div className="w-px h-4" style={{ background: 'var(--border)' }} />
 
-          {/* 执行模拟按钮 */}
-          <button
-            onClick={runSimulation}
-            className="pd-btn w-6 h-6 flex items-center justify-center rounded"
-            style={{
-              background: isSimRunning ? '#58a6ff33' : '#58a6ff22',
-              color: isSimRunning ? '#58a6ff' : '#58a6ff',
-              border: isSimRunning ? '1px solid #58a6ff' : 'none',
-            }}
-            disabled={isSimRunning}
-            title="执行模拟"
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><polygon points="3,1 10,6 3,11" /></svg>
-          </button>
           <div className="w-px h-4" style={{ background: 'var(--border)' }} />
 
           {/* 缩放控制（彩色图标） */}
