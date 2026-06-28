@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, Layout, FileText, Tag, Layers, Zap } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -209,13 +210,46 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const handleStart = async (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation();
     try {
+      setRunningIds(prev => new Set(prev).add(id));
       await useWorkflowStore.getState().safeStartWorkflow(id);
     } catch (err) {
+      setRunningIds(prev => { const next = new Set(prev); next.delete(id); return next; });
       console.error(`启动工作流「${name}」失败:`, err);
+      setExecToast({ id: '', name, status: 'failed', error: String(err) });
     }
   };
 
   // ── 删除二次确认弹窗 ──
+  // ── 执行中状态追踪 + 结果通知 ──
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
+  const [execToast, setExecToast] = useState<{ id: string; name: string; status: string; error?: string } | null>(null);
+
+  // 监听执行状态事件（全局，组件挂载时注册）
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<{ execution_id: string; status: string; error?: string }>('workflow:execution-status', (event) => {
+      const { status } = event.payload;
+      // 查找该实例对应的工作流名
+      const inst = useWorkflowStore.getState().instances.find(i => i.id === event.payload.execution_id);
+      if (inst) {
+        setRunningIds(prev => {
+          const next = new Set(prev);
+          if (status === 'running') {
+            next.add(inst.definitionId);
+          } else {
+            next.delete(inst.definitionId);
+          }
+          return next;
+        });
+        if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+          setExecToast({ id: event.payload.execution_id, name: inst.definitionName, status, error: event.payload.error });
+          useWorkflowStore.getState().loadInstances();
+        }
+      }
+    }).then(fn => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
+
   const [confirmDelete, setConfirmDelete] = useState<{
     type: 'definition' | 'execution';
     id: string;
@@ -358,10 +392,17 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                         <button
                           onClick={(e) => { handleStart(e, def.id, def.name); }}
                           className="pd-btn p-1.5 rounded hover:opacity-80"
-                          style={{ color: 'var(--text-secondary)' }}
-                          title="执行"
+                          style={{ color: runningIds.has(def.id) ? '#3fb950' : 'var(--text-secondary)' }}
+                          title={runningIds.has(def.id) ? '执行中...' : '执行'}
+                          disabled={runningIds.has(def.id)}
                         >
-                          <Play size={14} />
+                          {runningIds.has(def.id) ? (
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="pd-animate-spin">
+                              <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="8 8" />
+                            </svg>
+                          ) : (
+                            <Play size={14} />
+                          )}
                         </button>
                         <button
                           onClick={(e) => { handleEditProperties(e, def); }}
@@ -481,6 +522,33 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           onConfirm={handlePropertyConfirm}
           onClose={() => { setShowPropertyDialog(null); setEditingDef(null); }}
         />
+      )}
+
+      {/* 执行结果通知 */}
+      {execToast && (
+        <div
+          className="fixed top-3 right-3 z-50 flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg cursor-pointer"
+          style={{
+            backgroundColor: execToast.status === 'completed'
+              ? 'var(--accent-green, #3fb950)'
+              : execToast.status === 'failed'
+              ? 'var(--accent-red, #f85149)'
+              : 'var(--accent-yellow, #d29922)',
+            color: '#fff',
+            animation: 'pd-fadeIn 0.2s ease-out',
+          }}
+          onClick={() => setExecToast(null)}
+        >
+          <span className="text-xs font-medium">
+            {execToast.status === 'completed'
+              ? `${execToast.name} 执行成功`
+              : execToast.status === 'failed'
+              ? `${execToast.name} 执行失败${execToast.error ? ': ' + execToast.error : ''}`
+              : `${execToast.name} 已取消`
+            }
+          </span>
+          <span className="text-[10px] opacity-70">点击关闭</span>
+        </div>
       )}
 
       {/* 删除二次确认弹窗 */}
