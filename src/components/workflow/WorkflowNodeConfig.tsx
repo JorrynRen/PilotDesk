@@ -505,7 +505,7 @@ const MappingEditor: React.FC<{
                                   background: 'var(--bg-tertiary)',
                                 }}
                               >
-                                [{si + 1}] {stage.group}
+                                step{si + 1} {stage.group}
                               </div>
                             )}
                             {/* 第二级：├─[node] 节点名 */}
@@ -859,7 +859,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                             <div key={si}>
                               {stage.group && (
                                 <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
-                                  [{si + 1}] {stage.group}
+                                  step{si + 1} {stage.group}
                                 </div>
                               )}
                               {stage.children && stage.children.map((nodeGroup, ni) => (
