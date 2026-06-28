@@ -374,7 +374,7 @@ const MappingEditor: React.FC<{
   };
 
   return (
-    <div>
+    <div ref={panelRef}>
       {entries.length === 0 ? (
         <div
           style={{
@@ -614,7 +614,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const outputBaseKeyRef = useRef<string>('');
   const [fieldSelectorKey, setFieldSelectorKey] = useState<string | null>(null);
   const [selectorPos, setSelectorPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const fieldSelectorRef = useRef<HTMLTextAreaElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (node.type === 'subflow' && definitions.length === 0) {
@@ -637,8 +637,9 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
     const style = getComputedStyle(textarea);
     const lineHeight = parseInt(style.lineHeight) || 20;
     const paddingTop = parseInt(style.paddingTop) || 6;
+    const panelRect = panelRef.current?.getBoundingClientRect();
     return {
-      x: rect.left + rect.width / 2,
+      x: panelRect ? panelRect.left + panelRect.width / 2 : rect.left + rect.width / 2,
       y: rect.top + paddingTop + (currentLine + 1) * lineHeight,
     };
   };
