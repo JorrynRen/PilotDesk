@@ -543,18 +543,18 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               }}
               className="flex items-center justify-center"
               style={{
-                padding: '1px 8px',
+                padding: '1px 4px',
                 borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--accent)',
-                background: 'var(--accent)',
-                color: '#fff',
-                fontSize: 'var(--fs-10)',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--accent)',
+                fontSize: 'var(--fs-11)',
                 cursor: 'pointer',
                 flexShrink: 0,
                 lineHeight: '18px',
               }}
             >
-              + 添加
+              添加
             </button>
           </div>
           <MappingEditor
@@ -580,18 +580,18 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               }}
               className="flex items-center justify-center"
               style={{
-                padding: '1px 8px',
+                padding: '1px 4px',
                 borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--accent)',
-                background: 'var(--accent)',
-                color: '#fff',
-                fontSize: 'var(--fs-10)',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--accent)',
+                fontSize: 'var(--fs-11)',
                 cursor: 'pointer',
                 flexShrink: 0,
                 lineHeight: '18px',
               }}
             >
-              + 添加
+              添加
             </button>
           </div>
           <MappingEditor
