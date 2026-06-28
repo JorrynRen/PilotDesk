@@ -67,7 +67,7 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
 /* ---------- 公共 style 对象（全部引用 CSS 变量） ---------- */
 
 const S = {
-  sectionGap: { marginBottom: 16 } as React.CSSProperties,
+  sectionGap: { marginBottom: 16, paddingTop: 16, borderTop: '1px solid var(--border)' } as React.CSSProperties,
   sectionTitle: {
     fontSize: 'var(--fs-11)',
     fontWeight: 600,
