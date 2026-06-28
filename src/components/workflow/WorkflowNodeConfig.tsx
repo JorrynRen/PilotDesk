@@ -431,7 +431,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
       </div>
 
       {/* ===== 基本信息 ===== */}
-      <div style={S.sectionGap}>
+      <div style={{ marginBottom: 16 }}>
         <label style={S.label()}>节点名称</label>
         <input
           value={node.label}
