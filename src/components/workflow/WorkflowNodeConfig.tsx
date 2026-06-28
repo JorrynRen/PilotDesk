@@ -151,6 +151,14 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string): {
       return [
         { group: '交互配置', options: [{ value: 'type', label: `${nodeLabel}.交互类型` }, { value: 'prompt', label: `${nodeLabel}.提示文案` }, { value: 'inputType', label: `${nodeLabel}.输入类型` }] },
       ];
+    case 'start':
+      return [
+        { group: '工作流输入', options: [{ value: 'input', label: `${nodeLabel}.工作流输入` }] },
+      ];
+    case 'end':
+      return [
+        { group: '工作流输出', options: [{ value: 'result', label: `${nodeLabel}.工作流结果` }] },
+      ];
     default:
       return undefined;
   }
@@ -388,7 +396,7 @@ const MappingEditor: React.FC<{
                       fontFamily: 'var(--font-mono)',
                     }}
                   />
-                  {valueOptions && valueOptions.length > 0 && (
+                  {valueOptions !== undefined && (
                     <button
                       onClick={() => setActiveDropdown(activeDropdown === key ? null : key)}
                       className="flex items-center justify-center"
