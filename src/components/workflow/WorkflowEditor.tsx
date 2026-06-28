@@ -281,6 +281,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   }, [def]);
 
+  // 组件挂载时：检查并取消该工作流旧的 running 实例
+  useEffect(() => {
+    if (!definitionId) return;
+    const runningInstances = instances.filter(
+      inst => inst.definitionId === definitionId && inst.status === 'running'
+    );
+    for (const inst of runningInstances) {
+      console.log('[WorkflowEditor] 取消旧的 running 实例:', inst.id);
+      useWorkflowStore.getState().cancelWorkflow(inst.id);
+    }
+  }, [definitionId]);
+
   const handleExportWorkflow = useCallback(async () => {
     if (!definitionId) return;
     try {
@@ -346,6 +358,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   };
 
+  const executionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleRunWorkflow = async () => {
     if (!definitionId || isRunning) return;
     // 强制立即渲染 isRunning=true，避免 React 18 自动批处理合并状态更新
@@ -384,6 +398,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const unlistenExec = await listen<{ execution_id: string; status: string }>('workflow:execution-status', (event) => {
         if (event.payload.execution_id !== executionIdRef.current) return;
         if (event.payload.status === 'completed' || event.payload.status === 'failed') {
+          // 清除超时定时器
+          if (executionTimeoutRef.current) {
+            clearTimeout(executionTimeoutRef.current);
+            executionTimeoutRef.current = null;
+          }
           setIsRunning(false);
           // 完成后刷新实例数据
           useWorkflowStore.getState().loadInstances();
@@ -400,18 +419,35 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       executionIdRef.current = await useWorkflowStore.getState().startWorkflow(definitionId);
       // 加载实例数据（初始状态）
       await useWorkflowStore.getState().loadInstances();
+      // 设置超时保护：5分钟后如果还没收到完成事件，自动重置状态
+      executionTimeoutRef.current = setTimeout(() => {
+        console.warn('[WorkflowEditor] 执行超时保护触发，自动重置执行状态');
+        setIsRunning(false);
+        executionTimeoutRef.current = null;
+      }, 5 * 60 * 1000);
     } catch (err) {
       console.error('执行工作流失败:', err);
       setIsRunning(false);
     }
   };
 
-  // 组件卸载时清理事件监听
+  // 组件卸载时清理事件监听、超时定时器并取消当前执行
   useEffect(() => {
     return () => {
       if (nodeStatusUnlistenRef.current) {
         nodeStatusUnlistenRef.current();
         nodeStatusUnlistenRef.current = null;
+      }
+      if (executionTimeoutRef.current) {
+        clearTimeout(executionTimeoutRef.current);
+        executionTimeoutRef.current = null;
+      }
+      // 取消当前正在执行的实例（fire-and-forget，不等待结果）
+      if (executionIdRef.current) {
+        const execId = executionIdRef.current;
+        console.log('[WorkflowEditor] 组件卸载，取消执行:', execId);
+        invoke('cancel_workflow', { executionId: execId }).catch(() => {});
+        executionIdRef.current = null;
       }
     };
   }, []);
