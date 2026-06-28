@@ -19,6 +19,8 @@ interface WorkflowNodeItemProps {
   stepStates: Record<string, string>;
   nodeResults: Record<string, any>;
   selectedNodeId: string | null;
+  isRestoredResult?: boolean;
+  isConfigChanged?: boolean;
   onSelectNode: (nodeId: string, stageId: string, ctrlKey: boolean) => void;
   onNodeMouseDown: (e: React.MouseEvent, nodeId: string, stageId: string) => void;
   onDeleteNode: (nodeId: string) => void;
@@ -32,6 +34,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   selectedNodeId, selectedNodeIds,
   draggingNode, hoveredNodeId, connectTargetId, cycleTargetId,
   connecting, stepStates, nodeResults,
+  isRestoredResult, isConfigChanged,
   onSelectNode, onNodeMouseDown, onDeleteNode,
   onEndConnect, onStartConnect, onHoverNode,
 }) => {
@@ -149,9 +152,19 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             boxShadow: 'var(--shadow-md)',
           }}
         >
-          <div style={{ fontWeight: 600, marginBottom: 2, color: 'var(--text-primary)', fontSize: 9 }}>
-            {runState === 'success' ? '执行结果' : runState === 'failed' ? '错误信息' : '执行输出'}
+          <div style={{ fontWeight: 600, marginBottom: 2, color: 'var(--text-primary)', fontSize: 9, display: 'flex', alignItems: 'center', gap: 4 }}>
+            {isRestoredResult ? (
+              <>
+                <span style={{ color: '#d29922' }}>&#9650;</span>
+                <span>历史执行结果</span>
+              </>
+            ) : runState === 'success' ? '执行结果' : runState === 'failed' ? '错误信息' : '执行输出'}
           </div>
+          {isRestoredResult && isConfigChanged && (
+            <div style={{ marginBottom: 2, padding: '2px 4px', borderRadius: 3, fontSize: 9, background: '#d2992222', color: '#d29922', border: '1px solid #d2992244' }}>
+              配置已变更
+            </div>
+          )}
           <div style={{
             maxHeight: 90,
             overflowY: 'auto',

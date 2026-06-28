@@ -310,6 +310,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [isRunning, setIsRunning] = useState(false);
   const nodeStatusUnlistenRef = useRef<UnlistenFn | null>(null);
   const executionIdRef = useRef<string | null>(null);
+  const [restoredExecutionId, setRestoredExecutionId] = useState<string | null>(null);
+  const restoredSnapshotRef = useRef<any>(null);
+  const restoredModCountRef = useRef<number>(0);
+  const modCountRef = useRef<number>(0);
 
   /** 恢复指定历史执行的节点状态 */
   const handleRestoreExecution = async (executionId: string) => {
@@ -330,6 +334,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           states[ne.nodeId] = 'skipped';
         }
       }
+      // 记录恢复时的工作流快照（用于后续检测配置变更）
+      restoredSnapshotRef.current = JSON.parse(JSON.stringify(stages));
+      restoredModCountRef.current = modCountRef.current;
+      setRestoredExecutionId(executionId);
       setNodeResults(results);
       setStepStates(states);
     } catch (err) {
@@ -352,6 +360,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         nodeStatusUnlistenRef.current();
         nodeStatusUnlistenRef.current = null;
       }
+      // 清除历史恢复标记（开始真实执行）
+      setRestoredExecutionId(null);
+      restoredSnapshotRef.current = null;
       // 监听节点执行状态事件
       const unlisten = await listen<{
         execution_id: string;
@@ -424,6 +435,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, [stages]);
 
   const handleAddStage = () => {
+    modCountRef.current++;
     const newStage: Stage = {
       id: generateStageId(),
       name: `阶段 ${stages.length + 1}`,
@@ -448,6 +460,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const handleDeleteStage = (stageId: string) => {
+    modCountRef.current++;
     setConfirmAction({ type: 'deleteStage', targetId: stageId, label: stages.find(s => s.id === stageId)?.name || '此阶段' });
   };
 
@@ -521,6 +534,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const handleAddNode = (type: WorkflowNodeType, stageId: string) => {
+    modCountRef.current++;
     // 收集阶段内已有节点位置，用于 findFreePosition
     const stage = stages.find(s => s.id === stageId);
     const existing = stage?.nodes.map(n => n.position ?? { x: 20, y: 20 }) ?? [];
@@ -532,6 +546,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const handleDeleteNode = (nodeId: string) => {
+    modCountRef.current++;
     // 边界节点不允许删除
     for (const s of stages) {
       const node = s.nodes.find(n => n.id === nodeId);
@@ -541,10 +556,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const handleDeleteEdge = (edgeId: string) => {
+    modCountRef.current++;
     setConfirmAction({ type: 'deleteEdge', targetId: edgeId, label: '此连线' });
   };
 
   const handleUpdateNode = (nodeId: string, updates: Partial<WorkflowNode>) => {
+    modCountRef.current++;
     setStages(stages.map((s) => ({
       ...s,
       nodes: s.nodes.map((n) => n.id === nodeId ? { ...n, ...updates } : n),
@@ -795,6 +812,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, [connecting, pan, scale, stages, canvasToContentPos]);
 
   const handleEndConnect = useCallback((nodeId: string, stageId: string) => {
+    modCountRef.current++;
     if (!connecting || connecting.source === nodeId) {
       setConnecting(null);
       setCycleTargetId(null);
@@ -2041,6 +2059,31 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   stepStates={stepStates}
                   nodeResults={nodeResults}
                   selectedNodeId={selectedNodeId}
+                  isRestoredResult={restoredExecutionId !== null}
+                  isConfigChanged={(() => {
+                    const snap = restoredSnapshotRef.current;
+                    if (!snap) return false;
+                    if (stages.length !== snap.length) return true;
+                    for (const s of snap) {
+                      const cur = stages.find((st: any) => st.id === s.id);
+                      if (!cur) return true;
+                      if (s.nodes.length !== cur.nodes.length) return true;
+                      if (s.edges.length !== cur.edges.length) return true;
+                      for (const n of s.nodes) {
+                        const curNode = cur.nodes.find((cn: any) => cn.id === n.id);
+                        if (!curNode) return true;
+                        if (JSON.stringify(n.params) !== JSON.stringify(curNode.params)) return true;
+                        if (n.type !== curNode.type) return true;
+                        if (n.label !== curNode.label) return true;
+                      }
+                      for (const e of s.edges) {
+                        const curEdge = cur.edges.find((ce: any) => ce.id === e.id);
+                        if (!curEdge) return true;
+                        if (e.source !== curEdge.source || e.target !== curEdge.target) return true;
+                      }
+                    }
+                    return false;
+                  })()}
                   onSelectNode={handleSelectNode}
                   onNodeMouseDown={handleNodeMouseDown}
                   onDeleteNode={handleDeleteNode}
