@@ -1462,7 +1462,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         {/* ── 历史执行恢复 ── */}
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>恢复:</span>
+          
           <div className="relative">
             <select
               value=""
@@ -1483,7 +1483,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               }}
               title="选择历史执行记录恢复节点执行状态"
             >
-              <option value="">选择执行记录...</option>
+              <option value="">查看历史执行记录</option>
               {instances
                 .filter(i => i.definitionId === definitionId && i.status !== 'pending')
                 .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
