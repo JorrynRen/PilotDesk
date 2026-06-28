@@ -295,7 +295,6 @@ const MappingEditor: React.FC<{
   const [invalidKeys, setInvalidKeys] = useState<Set<string>>(new Set());
   const [dupKeys, setDupKeys] = useState<Set<string>>(new Set());
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
-  const [activeFieldSelector, setActiveFieldSelector] = useState<string | null>(null);
 
   const handleKeyChange = (oldKey: string, newKey: string) => {
     if (oldKey === newKey) return;
@@ -310,26 +309,6 @@ const MappingEditor: React.FC<{
 
   const handleValueChange = (key: string, newValue: string) => {
     onChange({ ...value, [key]: newValue });
-  };
-
-  const handleValueChangeWithTrigger = (key: string, newValue: string, cursorPos: number) => {
-    // 检测光标前是否刚输入了 {{
-    const textBefore = newValue.slice(0, cursorPos);
-    if (textBefore.endsWith('{{') && valueOptions && valueOptions.length > 0) {
-      setActiveFieldSelector(key);
-    }
-    onChange({ ...value, [key]: newValue });
-  };
-
-  const insertFieldAtCursor = (key: string, fieldValue: string) => {
-    const currentVal = value?.[key] || '';
-    // 找到最后一个 {{ 的位置
-    const lastOpen = currentVal.lastIndexOf('{{');
-    if (lastOpen === -1) return;
-    // 替换 {{ 为 {{fieldValue}}
-    const newVal = currentVal.slice(0, lastOpen) + fieldValue;
-    onChange({ ...value, [key]: newVal });
-    setActiveFieldSelector(null);
   };
 
   const handleRemove = (key: string) => {
@@ -420,7 +399,7 @@ const MappingEditor: React.FC<{
                 <div className="flex items-center" style={{ gap: 2 }}>
                   <input
                     value={val}
-                    onChange={(e) => handleValueChangeWithTrigger(key, e.target.value, e.target.selectionStart || 0)}
+                    onChange={(e) => handleValueChange(key, e.target.value)}
                     placeholder={valuePlaceholder}
                     style={{
                       flex: 1,
@@ -591,87 +570,6 @@ const MappingEditor: React.FC<{
                     </div>
                   </>
                 )}
-                {/* {{ 触发选择器 */}
-                {activeFieldSelector === key && valueOptions && (
-                  <>
-                    <div
-                      onClick={() => setActiveFieldSelector(null)}
-                      style={{
-                        position: 'fixed',
-                        inset: 0,
-                        zIndex: 99,
-                      }}
-                    />
-                    <div
-                      style={{
-                        position: 'absolute',
-                        right: 0,
-                        top: '100%',
-                        zIndex: 100,
-                        minWidth: 200,
-                        maxHeight: 200,
-                        overflow: 'auto',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--border)',
-                        background: 'var(--bg-primary)',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                        fontSize: 'var(--fs-11)',
-                      }}
-                    >
-                      <div
-                        style={{
-                          padding: '6px 8px',
-                          fontSize: 'var(--fs-11)',
-                          color: 'var(--text-secondary)',
-                          fontWeight: 600,
-                          borderBottom: '1px solid var(--border)',
-                          textAlign: 'center',
-                        }}
-                      >
-                        请选择…
-                      </div>
-                      {(() => {
-                        const hasOptions = valueOptions.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
-                        if (!hasOptions) {
-                          return (
-                            <div style={{ padding: '12px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-tertiary)', textAlign: 'center' }}>
-                              暂无可用字段
-                            </div>
-                          );
-                        }
-                        return valueOptions.map((stage, si) => (
-                          <div key={si}>
-                            {stage.group && (
-                              <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
-                                {stage.group}
-                              </div>
-                            )}
-                            {stage.children && stage.children.map((nodeGroup, ni) => (
-                              <div key={ni}>
-                                <div style={{ padding: '3px 8px 3px 16px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
-                                  {nodeGroup.group}
-                                </div>
-                                {nodeGroup.options.map((opt) => (
-                                  <div
-                                    key={opt.value}
-                                    onClick={() => {
-                                      insertFieldAtCursor(key, opt.value);
-                                    }}
-                                    style={{ padding: '5px 8px 5px 28px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}
-                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                  >
-                                    {opt.label}
-                                  </div>
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        ));
-                      })()}
-                    </div>
-                  </>
-                )}
               </div>
               <button
                 onClick={() => handleRemove(key)}
@@ -714,6 +612,8 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const { definitions, loadDefinitions } = useWorkflowStore();
   const inputBaseKeyRef = useRef<string>('');
   const outputBaseKeyRef = useRef<string>('');
+  const [fieldSelectorKey, setFieldSelectorKey] = useState<string | null>(null);
+  const fieldSelectorRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (node.type === 'subflow' && definitions.length === 0) {
@@ -726,6 +626,27 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
     setParams(newParams);
     onUpdate({ params: newParams });
   };
+
+  const handleTextareaChange = (key: string, value: string, cursorPos: number) => {
+    handleParamChange(key, value);
+    // 检测光标前是否刚输入了 {{
+    const textBefore = value.slice(0, cursorPos);
+    if (textBefore.endsWith('{{') && stages) {
+      setFieldSelectorKey(key);
+    }
+  };
+
+  const insertFieldAtCursor = (key: string, fieldValue: string) => {
+    const currentVal = (params[key] as string) || '';
+    const lastOpen = currentVal.lastIndexOf('{{');
+    if (lastOpen === -1) return;
+    const newVal = currentVal.slice(0, lastOpen) + fieldValue;
+    handleParamChange(key, newVal);
+    setFieldSelectorKey(null);
+  };
+
+  /** 前序节点输出选项（用于 textarea {{ 触发选择器） */
+  const textareaFieldOptions = stages ? getPredecessorOutputOptions(node.id, stages) : undefined;
 
   return (
     <div>
@@ -895,13 +816,77 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             <div key={field.key} style={S.fieldGap}>
               <label style={S.label()}>{field.label}</label>
               {field.type === 'textarea' ? (
-                <textarea
-                  value={params[field.key] || ''}
-                  onChange={(e) => handleParamChange(field.key, e.target.value)}
-                  placeholder={field.placeholder}
-                  rows={4}
-                  style={S.textarea}
-                />
+                <div style={{ position: 'relative' }}>
+                  <textarea
+                    value={params[field.key] || ''}
+                    onChange={(e) => handleTextareaChange(field.key, e.target.value, e.target.selectionStart || 0)}
+                    placeholder={field.placeholder}
+                    rows={4}
+                    style={S.textarea}
+                  />
+                  {/* {{ 触发选择器 */}
+                  {fieldSelectorKey === field.key && textareaFieldOptions && textareaFieldOptions.length > 0 && (
+                    <>
+                      <div
+                        onClick={() => setFieldSelectorKey(null)}
+                        style={{ position: 'fixed', inset: 0, zIndex: 99 }}
+                      />
+                      <div
+                        style={{
+                          position: 'absolute',
+                          right: 0,
+                          top: '100%',
+                          zIndex: 100,
+                          minWidth: 200,
+                          maxHeight: 200,
+                          overflow: 'auto',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border)',
+                          background: 'var(--bg-primary)',
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                          fontSize: 'var(--fs-11)',
+                        }}
+                      >
+                        <div style={{ padding: '6px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-secondary)', fontWeight: 600, borderBottom: '1px solid var(--border)', textAlign: 'center' }}>
+                          请选择… (共{textareaFieldOptions.length}个阶段)
+                        </div>
+                        {(() => {
+                          const hasOptions = textareaFieldOptions.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
+                          if (!hasOptions) {
+                            return <div style={{ padding: '12px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-tertiary)', textAlign: 'center' }}>暂无可用字段</div>;
+                          }
+                          return textareaFieldOptions.map((stage, si) => (
+                            <div key={si}>
+                              {stage.group && (
+                                <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
+                                  {stage.group}
+                                </div>
+                              )}
+                              {stage.children && stage.children.map((nodeGroup, ni) => (
+                                <div key={ni}>
+                                  <div style={{ padding: '3px 8px 3px 16px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
+                                    {nodeGroup.group}
+                                  </div>
+                                  {nodeGroup.options.map((opt) => (
+                                    <div
+                                      key={opt.value}
+                                      onClick={() => { insertFieldAtCursor(field.key, opt.value); }}
+                                      style={{ padding: '5px 8px 5px 28px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}
+                                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                    >
+                                      {opt.label}
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    </>
+                  )}
+                </div>
               ) : field.type === 'subflow_select' ? (
                 <div>
                   <select
