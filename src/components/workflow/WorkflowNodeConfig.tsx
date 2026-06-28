@@ -153,11 +153,11 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string): {
       ];
     case 'start':
       return [
-        { group: '工作流输入', options: [{ value: 'input', label: `${nodeLabel}.工作流输入` }] },
+        { group: '工作流入参', options: [{ value: 'input', label: `${nodeLabel}.入参` }] },
       ];
     case 'end':
       return [
-        { group: '工作流输出', options: [{ value: 'result', label: `${nodeLabel}.工作流结果` }] },
+        { group: '工作流结果', options: [{ value: 'result', label: `${nodeLabel}.结果` }] },
       ];
     default:
       return undefined;
