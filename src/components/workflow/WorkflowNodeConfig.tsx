@@ -140,27 +140,34 @@ const S = {
 
 /* ---------- 输出字段选项（按节点类型动态获取） ---------- */
 
-function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string): { group: string; options: { value: string; label: string }[] }[] | undefined {
-  switch (nodeType) {
-    case 'agent':
-      return [
-        { group: nodeLabel, options: [{ value: 'content', label: '响应内容' }, { value: 'session_id', label: '会话ID' }, { value: 'agent_type', label: 'Agent类型' }] },
-      ];
-    case 'interact':
-      return [
-        { group: nodeLabel, options: [{ value: 'type', label: '交互类型' }, { value: 'prompt', label: '提示文案' }, { value: 'inputType', label: '输入类型' }] },
-      ];
-    case 'start':
-      return [
-        { group: nodeLabel, options: [{ value: 'input', label: '入参' }] },
-      ];
-    case 'end':
-      return [
-        { group: nodeLabel, options: [{ value: 'result', label: '结果' }] },
-      ];
-    default:
-      return undefined;
-  }
+interface OptionGroup {
+  group: string;
+  children?: OptionGroup[];
+  options: { value: string; label: string }[];
+}
+
+function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string, stageName?: string): OptionGroup[] | undefined {
+  const nodeOptions = (() => {
+    switch (nodeType) {
+      case 'agent':
+        return [{ value: 'content', label: '响应内容' }, { value: 'session_id', label: '会话ID' }, { value: 'agent_type', label: 'Agent类型' }];
+      case 'interact':
+        return [{ value: 'type', label: '交互类型' }, { value: 'prompt', label: '提示文案' }, { value: 'inputType', label: '输入类型' }];
+      case 'start':
+        return [{ value: 'input', label: '入参' }];
+      case 'end':
+        return [{ value: 'result', label: '结果' }];
+      default:
+        return undefined;
+    }
+  })();
+  if (!nodeOptions) return undefined;
+  // 三级结构：阶段 → 节点 → 字段
+  return [{
+    group: stageName || '',
+    children: [{ group: nodeLabel, options: nodeOptions }],
+    options: [],
+  }];
 }
 
 /* ---------- 前序节点输出选项（输入映射用） ---------- */
@@ -212,24 +219,33 @@ function getPredecessorOutputOptions(
 
   if (predecessorNodes.length === 0) return [];
 
-  // 3. 按节点名分组，每个节点展示其 outputMapping 的 key（即 context 路径）
-  const nodeMap = new Map<string, { value: string; label: string }[]>();
+  // 3. 三级分组：阶段 → 节点 → 字段
+  const stageMap = new Map<string, Map<string, { value: string; label: string }[]>>();
   for (const { stageName, node: pn } of predecessorNodes) {
     const outputKeys = Object.keys(pn.outputMapping || {});
     if (outputKeys.length === 0) continue;
+    let nodeMap = stageMap.get(stageName);
+    if (!nodeMap) {
+      nodeMap = new Map();
+      stageMap.set(stageName, nodeMap);
+    }
+    const fieldList: { value: string; label: string }[] = [];
     for (const key of outputKeys) {
-      const list = nodeMap.get(pn.label) || [];
-      list.push({
+      fieldList.push({
         value: `{{nodes.${pn.id}.output.${key}}}`,
         label: key,
       });
-      nodeMap.set(pn.label, list);
     }
+    nodeMap.set(pn.label, fieldList);
   }
 
-  return Array.from(nodeMap.entries()).map(([group, options]) => ({
-    group,
-    options,
+  return Array.from(stageMap.entries()).map(([stageName, nodeMap]) => ({
+    group: stageName,
+    children: Array.from(nodeMap.entries()).map(([nodeLabel, options]) => ({
+      group: nodeLabel,
+      options,
+    })),
+    options: [],
   }));
 }
 
@@ -270,7 +286,7 @@ const MappingEditor: React.FC<{
   valuePlaceholder: string;
   baseKeyRef: React.MutableRefObject<string>;
   /** 可选：输出字段选项分组，提供时 key 列渲染为级联选择器 */
-  valueOptions?: { group: string; options: { value: string; label: string; description?: string }[] }[];
+  valueOptions?: OptionGroup[];
 }> = ({ value, onChange, keyPlaceholder, valuePlaceholder, baseKeyRef, valueOptions }) => {
   const entries = Object.entries(value || {});
   const [invalidKeys, setInvalidKeys] = useState<Set<string>>(new Set());
@@ -457,7 +473,7 @@ const MappingEditor: React.FC<{
                         请选择…
                       </div>
                       {(() => {
-                        const hasOptions = valueOptions.some(g => g.options.length > 0);
+                        const hasOptions = valueOptions.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
                         if (!hasOptions) {
                           return (
                             <div
@@ -472,21 +488,61 @@ const MappingEditor: React.FC<{
                             </div>
                           );
                         }
-                        return valueOptions.map((group) => (
-                          <div key={group.group}>
-                            <div
-                              style={{
-                                padding: '4px 8px',
-                                fontSize: 'var(--fs-10)',
-                                color: 'var(--text-tertiary)',
-                                fontWeight: 600,
-                                borderBottom: '1px solid var(--border)',
-                                background: 'var(--bg-tertiary)',
-                              }}
-                            >
-                              {group.group}
-                            </div>
-                            {group.options.map((opt) => (
+                        return valueOptions.map((stage) => (
+                          <div key={stage.group}>
+                            {/* 第一级：阶段名 */}
+                            {stage.group && (
+                              <div
+                                style={{
+                                  padding: '4px 8px',
+                                  fontSize: 'var(--fs-10)',
+                                  color: 'var(--text-tertiary)',
+                                  fontWeight: 600,
+                                  borderBottom: '1px solid var(--border)',
+                                  background: 'var(--bg-tertiary)',
+                                }}
+                              >
+                                {stage.group}
+                              </div>
+                            )}
+                            {/* 第二级：节点名 */}
+                            {stage.children && stage.children.map((nodeGroup) => (
+                              <div key={nodeGroup.group}>
+                                <div
+                                  style={{
+                                    padding: '3px 8px 3px 16px',
+                                    fontSize: 'var(--fs-10)',
+                                    color: 'var(--text-secondary)',
+                                    fontWeight: 500,
+                                    borderBottom: '1px solid var(--border)',
+                                  }}
+                                >
+                                  {nodeGroup.group}
+                                </div>
+                                {/* 第三级：字段名 */}
+                                {nodeGroup.options.map((opt) => (
+                                  <div
+                                    key={opt.value}
+                                    onClick={() => {
+                                      handleValueChange(key, opt.value);
+                                      setActiveDropdown(null);
+                                    }}
+                                    style={{
+                                      padding: '5px 8px 5px 28px',
+                                      cursor: 'pointer',
+                                      color: 'var(--text-primary)',
+                                      borderBottom: '1px solid var(--border)',
+                                    }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                  >
+                                    {opt.label}
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                            {/* 没有children但有options的兼容（单级） */}
+                            {!stage.children && stage.options.map((opt) => (
                               <div
                                 key={opt.value}
                                 onClick={() => {
@@ -851,7 +907,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="输出字段名"
             valuePlaceholder={'输入文本或选择输出字段'}
             baseKeyRef={outputBaseKeyRef}
-            valueOptions={getOutputFieldOptions(node.type, node.label)} />
+            valueOptions={getOutputFieldOptions(node.type, node.label, stages?.[0]?.name)} />
       </div>
 
       {/* ===== 控制属性 ===== */}
