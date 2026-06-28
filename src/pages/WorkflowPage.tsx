@@ -4,6 +4,7 @@ import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, D
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { showToast } from '../utils/toast';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -215,14 +216,14 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
     } catch (err) {
       setRunningIds(prev => { const next = new Set(prev); next.delete(id); return next; });
       console.error(`启动工作流「${name}」失败:`, err);
-      setExecToast({ id: '', name, status: 'failed', error: String(err) });
+      showToast(`启动工作流「${name}」失败: ${err}`, 'error');
     }
   };
 
   // ── 删除二次确认弹窗 ──
   // ── 执行中状态追踪 + 结果通知 ──
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
-  const [execToast, setExecToast] = useState<{ id: string; name: string; status: string; error?: string } | null>(null);
+
 
   // 监听执行状态事件（全局，组件挂载时注册）
   useEffect(() => {
@@ -240,7 +241,13 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         return next;
       });
       if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-        setExecToast({ id: event.payload.execution_id, name: defName, status, error: event.payload.error });
+        if (status === 'completed') {
+          showToast(`${defName} 执行成功`, 'success');
+        } else if (status === 'failed') {
+          showToast(`${defName} 执行失败${event.payload.error ? ': ' + event.payload.error : ''}`, 'error');
+        } else {
+          showToast(`${defName} 已取消`, 'warning');
+        }
         useWorkflowStore.getState().loadInstances();
       }
     }).then(fn => { unlisten = fn; });
@@ -519,33 +526,6 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           onConfirm={handlePropertyConfirm}
           onClose={() => { setShowPropertyDialog(null); setEditingDef(null); }}
         />
-      )}
-
-      {/* 执行结果通知 */}
-      {execToast && (
-        <div
-          className="fixed top-3 right-3 z-50 flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg cursor-pointer"
-          style={{
-            backgroundColor: execToast.status === 'completed'
-              ? 'var(--accent-green, #3fb950)'
-              : execToast.status === 'failed'
-              ? 'var(--accent-red, #f85149)'
-              : 'var(--accent-yellow, #d29922)',
-            color: '#fff',
-            animation: 'pd-fadeIn 0.2s ease-out',
-          }}
-          onClick={() => setExecToast(null)}
-        >
-          <span className="text-xs font-medium">
-            {execToast.status === 'completed'
-              ? `${execToast.name} 执行成功`
-              : execToast.status === 'failed'
-              ? `${execToast.name} 执行失败${execToast.error ? ': ' + execToast.error : ''}`
-              : `${execToast.name} 已取消`
-            }
-          </span>
-          <span className="text-[10px] opacity-70">点击关闭</span>
-        </div>
       )}
 
       {/* 删除二次确认弹窗 */}
