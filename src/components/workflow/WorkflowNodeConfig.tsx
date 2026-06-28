@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import type { WorkflowNode, WorkflowNodeType } from '../../types/workflow';
-import { getNodeTypeMeta, NODE_OUTPUT_SCHEMA } from '../../workflow/WorkflowDefinition';
+import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
@@ -135,6 +135,24 @@ const S = {
   } as React.CSSProperties,
   fieldGap: { marginBottom: 10 } as React.CSSProperties,
 };
+
+/* ---------- 输出字段选项（按节点类型动态获取） ---------- */
+
+function getOutputFieldOptions(nodeType: WorkflowNodeType): { group: string; options: { value: string; label: string }[] }[] | undefined {
+  switch (nodeType) {
+    case 'agent':
+      return [
+        { group: '核心输出', options: [{ value: 'content', label: '响应内容' }] },
+        { group: '会话信息', options: [{ value: 'session_id', label: '会话ID' }, { value: 'agent_type', label: 'Agent类型' }] },
+      ];
+    case 'interact':
+      return [
+        { group: '交互配置', options: [{ value: 'type', label: '交互类型' }, { value: 'prompt', label: '提示文案' }, { value: 'inputType', label: '输入类型' }] },
+      ];
+    default:
+      return undefined;
+  }
+}
 
 /* ---------- 映射键名生成辅助 ---------- */
 
@@ -308,8 +326,8 @@ const MappingEditor: React.FC<{
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
-          {entries.map(([key, val]) => (
-            <div key={key} className="flex items-center" style={{ gap: 4, minWidth: 0 }}>
+          {entries.map(([key, val], idx) => (
+            <div key={idx} className="flex items-center" style={{ gap: 4, minWidth: 0 }}>
               {renderKeyColumn(key)}
               <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)', flexShrink: 0 }}>→</span>
               <input
@@ -638,18 +656,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="输出字段名"
             valuePlaceholder={'{{context.path}}'}
             baseKeyRef={outputBaseKeyRef}
-            keyOptions={(() => {
-              const schema = NODE_OUTPUT_SCHEMA[node.type];
-              if (!schema || schema.length === 0) return undefined;
-              return schema.map(g => ({
-                group: g.group,
-                options: g.fields.map(f => ({
-                  value: f.name,
-                  label: f.label,
-                  description: f.description,
-                })),
-              }));
-            })()}
+            keyOptions={getOutputFieldOptions(node.type)}
           />
         </div>
       </div>
