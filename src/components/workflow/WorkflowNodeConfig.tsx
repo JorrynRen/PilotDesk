@@ -198,6 +198,12 @@ function getPredecessorOutputOptions(
       predecessorNodes.push({ stageName: stages[i].name, node: n });
     }
   }
+  
+  // DEBUG: log what we collected
+  console.log('[getPredecessorOutputOptions] nodeId:', nodeId, 'currentStageIdx:', currentStageIdx);
+  console.log('[getPredecessorOutputOptions] stages count:', stages.length);
+  console.log('[getPredecessorOutputOptions] stages names:', stages.map(s => s.name));
+  console.log('[getPredecessorOutputOptions] predecessorNodes:', predecessorNodes.map(p => ({ stageName: p.stageName, nodeLabel: p.node.label, nodeId: p.node.id })));
 
   // 同阶段中，通过边指向当前节点的前序节点
   const currentStage = stages[currentStageIdx];
@@ -234,7 +240,7 @@ function getPredecessorOutputOptions(
     nodeMap.set(pn.label, fieldList);
   }
 
-  return Array.from(stageMap.entries()).map(([stageName, nodeMap]) => ({
+  const result = Array.from(stageMap.entries()).map(([stageName, nodeMap]) => ({
     group: stageName,
     children: Array.from(nodeMap.entries()).map(([nodeLabel, options]) => ({
       group: nodeLabel,
@@ -242,6 +248,8 @@ function getPredecessorOutputOptions(
     })),
     options: [],
   }));
+  console.log('[getPredecessorOutputOptions] result groups:', result.map(r => ({ group: r.group, children: r.children?.map(c => c.group) })));
+  return result;
 }
 
 /* ---------- 映射键名生成辅助 ---------- */
