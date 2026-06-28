@@ -353,8 +353,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       // 先保存当前编辑状态
       await updateDefinition(definitionId, { name, description, stages });
       // 执行工作流
-      const instance = await useWorkflowStore.getState().startWorkflow(definitionId);
-      executionIdRef.current = instance.id;
+      executionIdRef.current = await useWorkflowStore.getState().startWorkflow(definitionId);
       // 清理旧的事件监听
       if (nodeStatusUnlistenRef.current) {
         nodeStatusUnlistenRef.current();
