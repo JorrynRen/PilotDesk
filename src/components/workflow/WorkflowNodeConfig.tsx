@@ -673,6 +673,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
       </div>
 
       {/* ===== 输入映射 ===== */}
+      {node.type !== 'start' && (
       <div style={S.sectionGap}>
         <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
           <div style={S.sectionTitle}>输入映射</div>
@@ -710,6 +711,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
           />
       </div>
+      )}
 
       {/* ===== 节点配置 ===== */}
       {configFields.length > 0 && (
