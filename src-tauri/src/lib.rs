@@ -320,6 +320,7 @@ pub fn run() {
             commands::workflow::save_workflow_dag,
             commands::workflow::start_workflow,
             commands::workflow::cancel_workflow,
+            commands::workflow::delete_execution,
             commands::workflow::get_execution,
             commands::workflow::list_executions,
             commands::workflow::get_node_executions,

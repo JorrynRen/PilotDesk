@@ -228,6 +228,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     listen<{ execution_id: string; status: string; error?: string }>('workflow:execution-status', (event) => {
+      console.log('[WorkflowPage] global execution-status event:', JSON.stringify(event.payload));
       const { status } = event.payload;
       // 查找该实例对应的工作流名
       const inst = useWorkflowStore.getState().instances.find(i => i.id === event.payload.execution_id);

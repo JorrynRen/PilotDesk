@@ -325,7 +325,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const [isRunning, setIsRunning] = useState(false);
-  const nodeStatusUnlistenRef = useRef<UnlistenFn | null>(null);
   const executionIdRef = useRef<string | null>(null);
   const [restoredExecutionId, setRestoredExecutionId] = useState<string | null>(null);
   const restoredSnapshotRef = useRef<any>(null);
@@ -363,20 +362,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const handleRunWorkflow = async () => {
+    console.log('[WorkflowEditor] handleRunWorkflow called, isRunning:', isRunning, ', executionIdRef:', executionIdRef.current);
     if (!definitionId) return;
     // 如果已经在执行中，先重置状态再重新开始
     if (isRunning) {
       console.warn('[WorkflowEditor] 检测到残留执行状态，强制重置');
-      // 清理旧监听
-      if (nodeStatusUnlistenRef.current) {
-        nodeStatusUnlistenRef.current();
-        nodeStatusUnlistenRef.current = null;
-      }
       setIsRunning(false);
       // 给 React 一点时间处理状态更新
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     // 重置 executionIdRef
+    console.log('[WorkflowEditor] handleRunWorkflow: resetting executionIdRef');
     executionIdRef.current = null;
     // 强制立即渲染 isRunning=true，避免 React 18 自动批处理合并状态更新
     flushSync(() => {
@@ -387,47 +383,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       // 清除历史恢复标记（开始真实执行）
       setRestoredExecutionId(null);
       restoredSnapshotRef.current = null;
-      // 清理旧的事件监听
-      if (nodeStatusUnlistenRef.current) {
-        nodeStatusUnlistenRef.current();
-        nodeStatusUnlistenRef.current = null;
-      }
-      // 先注册事件监听器（避免竞态条件：引擎启动后立即发出的事件不会丢失）
-      const unlistenNode = await listen<{
-        execution_id: string;
-        node_id: string;
-        status: string;
-        output?: any;
-        error?: string;
-      }>('workflow:node-status', (event) => {
-        if (event.payload.execution_id !== executionIdRef.current) return;
-        const nodeId = event.payload.node_id;
-        const status = event.payload.status;
-        if (status === 'completed' && event.payload.output !== undefined) {
-          setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: event.payload.output }));
-        } else if (status === 'failed') {
-          setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: event.payload.error || '执行失败' } }));
-        }
-        // 更新步骤状态（用于连线动画）
-        setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev['node_' + nodeId] }));
-      });
-      const unlistenExec = await listen<{ execution_id: string; status: string }>('workflow:execution-status', (event) => {
-        if (event.payload.execution_id !== executionIdRef.current) return;
-        if (event.payload.status === 'completed' || event.payload.status === 'failed' || event.payload.status === 'cancelled') {
-          setIsRunning(false);
-          // 完成后刷新实例数据
-          useWorkflowStore.getState().loadInstances();
-        }
-      });
-      // 合并两个 unlisten 函数
-      nodeStatusUnlistenRef.current = () => {
-        unlistenNode();
-        unlistenExec();
-      };
       // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
       await invoke('save_workflow_dag', { id: definitionId, stages });
       // 执行工作流（此时监听器已就绪，不会丢失任何事件）
-      executionIdRef.current = await useWorkflowStore.getState().safeStartWorkflow(definitionId);
+      const newExecutionId = await useWorkflowStore.getState().safeStartWorkflow(definitionId);
+      console.log('[WorkflowEditor] safeStartWorkflow returned id:', newExecutionId);
+      executionIdRef.current = newExecutionId;
       // 加载实例数据（初始状态）
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
@@ -446,12 +407,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
     console.log('[WorkflowEditor] 手动终止执行:', execId);
     try {
-      // 1. 清理事件监听
-      if (nodeStatusUnlistenRef.current) {
-        nodeStatusUnlistenRef.current();
-        nodeStatusUnlistenRef.current = null;
-      }
-      // 2. 调用后端取消
+      // 1. 调用后端取消
       await invoke('cancel_workflow', { executionId: execId });
       // 3. 重置前端状态
       setIsRunning(false);
@@ -466,13 +422,58 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   };
 
-  // 组件卸载时清理事件监听并取消当前执行
+  // 组件挂载时注册事件监听器（一次性，deps=[]）
+  // 监听器通过 executionIdRef（ref）动态匹配当前执行，无需每次执行重新注册
+  useEffect(() => {
+    let unlistenNode: UnlistenFn | null = null;
+    let unlistenExec: UnlistenFn | null = null;
+
+    const setupListeners = async () => {
+      unlistenNode = await listen<{
+        execution_id: string;
+        node_id: string;
+        status: string;
+        output?: any;
+        error?: string;
+      }>('workflow:node-status', (event) => {
+        if (event.payload.execution_id !== executionIdRef.current) return;
+        const nodeId = event.payload.node_id;
+        const status = event.payload.status;
+        if (status === 'completed' && event.payload.output !== undefined) {
+          setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: event.payload.output }));
+        } else if (status === 'failed') {
+          setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: event.payload.error || '执行失败' } }));
+        }
+        // 更新步骤状态（用于连线动画）
+        setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev['node_' + nodeId] }));
+      });
+
+      unlistenExec = await listen<{ execution_id: string; status: string }>('workflow:execution-status', (event) => {
+        console.log('[WorkflowEditor] execution-status event:', JSON.stringify(event.payload), '| ref:', executionIdRef.current);
+        if (event.payload.execution_id !== executionIdRef.current) {
+          console.warn('[WorkflowEditor] execution ID mismatch! payload:', event.payload.execution_id, '!= ref:', executionIdRef.current);
+          return;
+        }
+        if (event.payload.status === 'completed' || event.payload.status === 'failed' || event.payload.status === 'cancelled') {
+          console.log('[WorkflowEditor] execution finished, calling setIsRunning(false)');
+          setIsRunning(false);
+          // 完成后刷新实例数据
+          useWorkflowStore.getState().loadInstances();
+        }
+      });
+    };
+
+    setupListeners();
+
+    return () => {
+      unlistenNode?.();
+      unlistenExec?.();
+    };
+  }, []);
+
+  // 组件卸载时取消当前执行
   useEffect(() => {
     return () => {
-      if (nodeStatusUnlistenRef.current) {
-        nodeStatusUnlistenRef.current();
-        nodeStatusUnlistenRef.current = null;
-      }
       // 取消当前正在执行的实例（fire-and-forget，不等待结果）
       if (executionIdRef.current) {
         const execId = executionIdRef.current;

@@ -128,7 +128,7 @@
       "uninstallCmd": "codex uninstall",
       "updateCmd": "codex update",
       "updatedAt": 1782065597,
-      "version": "",
+      "version": "1.1",
       "versionCmd": "codex --version",
       "versionPattern": "v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)"
     }
