@@ -325,14 +325,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       for (const ne of nodeExecs) {
         if (ne.status === 'completed' && ne.output !== undefined) {
           results['node_' + ne.nodeId] = ne.output;
-          states[ne.nodeId] = 'success';
+          states['node_' + ne.nodeId] = 'success';
         } else if (ne.status === 'failed') {
           results['node_' + ne.nodeId] = { error: ne.error || '执行失败' };
-          states[ne.nodeId] = 'failed';
+          states['node_' + ne.nodeId] = 'failed';
         } else if (ne.status === 'running') {
-          states[ne.nodeId] = 'running';
+          states['node_' + ne.nodeId] = 'running';
         } else if (ne.status === 'skipped') {
-          states[ne.nodeId] = 'skipped';
+          states['node_' + ne.nodeId] = 'skipped';
         }
       }
       // 记录恢复时的工作流快照（用于后续检测配置变更）
@@ -383,7 +383,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: event.payload.error || '执行失败' } }));
         }
         // 更新步骤状态（用于连线动画）
-        setStepStates(prev => ({ ...prev, [nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev[nodeId] }));
+        setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev['node_' + nodeId] }));
       });
       nodeStatusUnlistenRef.current = unlisten;
       // 监听执行完成事件
