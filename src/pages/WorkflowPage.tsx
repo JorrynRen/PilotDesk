@@ -209,6 +209,14 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const handleStart = async (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation();
     try {
+      // 执行前主动清理：取消该工作流所有旧的 running 实例
+      const runningInstances = instances.filter(
+        inst => inst.definitionId === id && inst.status === 'running'
+      );
+      for (const inst of runningInstances) {
+        console.log('[WorkflowPage] 执行前清理旧的 running 实例:', inst.id);
+        await useWorkflowStore.getState().cancelWorkflow(inst.id);
+      }
       await startWorkflow(id);
     } catch (err) {
       console.error(`启动工作流「${name}」失败:`, err);
