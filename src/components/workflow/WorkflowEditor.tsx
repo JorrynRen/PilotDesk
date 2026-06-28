@@ -1594,6 +1594,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 e.preventDefault();
                 toolbarDragRef.current = nt.type;
                 setToolbarDrag({ type: nt.type, icon: nt.icon, label: nt.label, color: nt.color, ghostX: e.clientX, ghostY: e.clientY });
+                // 清理可能残留的旧 ghost（防止双击时残留透明节点）
+                if (ghostRef.current) {
+                  ghostRef.current.remove();
+                  ghostRef.current = null;
+                }
                 // Create ghost element
                 const ghost = document.createElement('div');
                 ghost.textContent = nt.icon + ' ' + nt.label;
