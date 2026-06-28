@@ -660,13 +660,21 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
     const currentVal = (params[key] as string) || '';
     const lastOpen = currentVal.lastIndexOf('{{');
     if (lastOpen === -1) return;
-    const newVal = currentVal.slice(0, lastOpen) + fieldValue;
+    const newVal = currentVal.slice(0, lastOpen) + '{{' + fieldValue + '}}';
     handleParamChange(key, newVal);
     setFieldSelectorKey(null);
   };
 
-  /** 前序节点输出选项（用于 textarea {{ 触发选择器） */
-  const textareaFieldOptions = stages ? getPredecessorOutputOptions(node.id, stages) : undefined;
+  /** 输入映射参数选项（用于 textarea {{ 触发选择器） */
+  const textareaFieldOptions: OptionGroup[] | undefined = (() => {
+    const keys = Object.keys(node.inputMapping || {});
+    if (keys.length === 0) return undefined;
+    return [{
+      group: '',
+      children: [{ group: '输入参数', options: keys.map(k => ({ value: k, label: k })) }],
+      options: [],
+    }];
+  })();
 
   return (
     <div ref={panelRef}>
