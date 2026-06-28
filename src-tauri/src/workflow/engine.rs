@@ -598,12 +598,15 @@ impl WorkflowEngine {
         let total_count: usize = def.stages.iter().map(|s| s.nodes.len()).sum();
         let completed_count = Arc::new(AtomicUsize::new(0));
 
+        log::info!("[WorkflowEngine] 开始执行: id={}, stages={}, total_nodes={}", execution_id, def.stages.len(), total_count);
+
         let context: Arc<AsyncMutex<HashMap<String, Value>>> = Arc::new(AsyncMutex::new(HashMap::new()));
         context.lock().await.insert("__input__".to_string(), input_data.clone());
 
         let semaphore = Arc::new(Semaphore::new(max_concurrency));
 
         for stage in &def.stages {
+            log::info!("[WorkflowEngine] 执行阶段: id={}, name={}, nodes={}, edges={}", stage.id, stage.name, stage.nodes.len(), stage.edges.len());
             if cancelled.load(Ordering::SeqCst) {
                 return Err(AppError::External("工作流已被取消".into()));
             }

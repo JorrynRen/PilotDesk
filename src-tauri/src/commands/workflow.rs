@@ -195,19 +195,55 @@ pub async fn start_workflow(
     let app_handle_clone = app_handle.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = WorkflowEngine::execute_with_concurrency(
-            &executor,
-            &def_clone,
-            &instance_id_clone,
-            input_data.unwrap_or(Value::Null),
-            &app_handle_clone,
-            max_concurrency,
-        ).await {
-            let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
-                "execution_id": instance_id_clone,
-                "status": "failed",
-                "error": e.to_string(),
-            }));
+        log::info!("[WorkflowEngine] 开始执行工作流: id={}, name={}", instance_id_clone, def_clone.name);
+        // 克隆值供内层 spawn 使用（外层已 move）
+        let inner_executor = executor.clone();
+        let inner_def = def_clone.clone();
+        let inner_id = instance_id_clone.clone();
+        let inner_input = input_data.unwrap_or(Value::Null);
+        let inner_emitter = app_handle_clone.clone();
+        let inner_concurrency = max_concurrency;
+        // 内层 spawn：引擎在此运行，panic 会被 JoinHandle 捕获
+        let inner_handle = tokio::spawn(async move {
+            WorkflowEngine::execute_with_concurrency(
+                &inner_executor,
+                &inner_def,
+                &inner_id,
+                inner_input,
+                &inner_emitter,
+                inner_concurrency,
+            ).await
+        });
+        // 外层 await JoinHandle：捕获内层 panic
+        match inner_handle.await {
+            Ok(Ok(_output)) => {
+                log::info!("[WorkflowEngine] 工作流执行成功: id={}", instance_id_clone);
+                let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
+                    "execution_id": instance_id_clone,
+                    "status": "completed",
+                }));
+            }
+            Ok(Err(e)) => {
+                log::error!("[WorkflowEngine] 工作流执行失败: id={}, error={}", instance_id_clone, e);
+                let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
+                    "execution_id": instance_id_clone,
+                    "status": "failed",
+                    "error": e.to_string(),
+                }));
+            }
+            Err(join_err) => {
+                let msg = if join_err.is_panic() {
+                    join_err.into_panic().downcast::<String>().map(|s| *s).unwrap_or_else(|_| "未知 panic".to_string())
+                } else {
+                    "任务被取消".to_string()
+                };
+                log::error!("[WorkflowEngine] 工作流执行 panic: id={}, error={}", instance_id_clone, msg);
+                let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
+                    "execution_id": instance_id_clone,
+                    "status": "failed",
+                    "error": format!("工作流引擎内部错误: {}", msg),
+                }));
+            }
         }
     });
 
