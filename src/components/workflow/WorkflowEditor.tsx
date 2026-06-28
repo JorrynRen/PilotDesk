@@ -329,6 +329,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const definitionIdRef = useRef(definitionId);
   definitionIdRef.current = definitionId;
   const [restoredExecutionId, setRestoredExecutionId] = useState<string | null>(null);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const restoredSnapshotRef = useRef<any>(null);
   const restoredModCountRef = useRef<number>(0);
   const modCountRef = useRef<number>(0);
@@ -1536,12 +1537,15 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           
           <div className="relative">
             <select
-              value=""
+              value={selectedHistoryId || ''}
               onChange={(e) => {
                 const execId = e.target.value;
-                if (!execId) return;
+                if (!execId) {
+                  setSelectedHistoryId(null);
+                  return;
+                }
                 handleRestoreExecution(execId);
-                e.target.value = ''; // 重置选中项
+                setSelectedHistoryId(execId);
               }}
               className="text-[11px] px-2 py-1 rounded outline-none appearance-none cursor-pointer"
               style={{

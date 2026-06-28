@@ -142,14 +142,15 @@ const S = {
  * 为映射编辑器生成下一个新键名。
  * - currentKeys：当前已有的键名列表
  * - baseKeyRef：记录第一个手动输入的键名的 ref
- * - 首次添加返回空字符串（用户需手动输入）
+ * - 首次添加返回 defaultKey（预填默认键名）
  * - 后续添加返回 baseKey2、baseKey3 …（自动递增避免冲突）
  */
 function nextMappingKey(
   currentKeys: string[],
   baseKeyRef: React.MutableRefObject<string>,
+  defaultKey: string,
 ): string {
-  if (currentKeys.length === 0) return '';
+  if (currentKeys.length === 0) return defaultKey;
   const base = baseKeyRef.current || currentKeys[0];
   let suffix = 2;
   const existing = new Set(currentKeys);
@@ -537,7 +538,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             <label style={S.labelSm(0)}>输入映射</label>
             <button
               onClick={() => {
-                const k = nextMappingKey(Object.keys(node.inputMapping || {}), inputBaseKeyRef);
+                const k = nextMappingKey(Object.keys(node.inputMapping || {}), inputBaseKeyRef, 'input');
                 onUpdate({ inputMapping: { ...(node.inputMapping || {}), [k]: '' } });
               }}
               className="flex items-center justify-center"
@@ -574,7 +575,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             <label style={S.labelSm(0)}>输出映射</label>
             <button
               onClick={() => {
-                const k = nextMappingKey(Object.keys(node.outputMapping || {}), outputBaseKeyRef);
+                const k = nextMappingKey(Object.keys(node.outputMapping || {}), outputBaseKeyRef, 'output');
                 onUpdate({ outputMapping: { ...(node.outputMapping || {}), [k]: '' } });
               }}
               className="flex items-center justify-center"
