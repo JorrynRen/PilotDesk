@@ -419,6 +419,35 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   };
 
+  /** 手动终止当前执行 */
+  const handleCancelExecution = async () => {
+    const execId = executionIdRef.current;
+    if (!execId) {
+      setIsRunning(false);
+      return;
+    }
+    console.log('[WorkflowEditor] 手动终止执行:', execId);
+    try {
+      // 1. 清理事件监听
+      if (nodeStatusUnlistenRef.current) {
+        nodeStatusUnlistenRef.current();
+        nodeStatusUnlistenRef.current = null;
+      }
+      // 2. 调用后端取消
+      await invoke('cancel_workflow', { executionId: execId });
+      // 3. 重置前端状态
+      setIsRunning(false);
+      executionIdRef.current = null;
+      // 4. 刷新实例数据
+      await useWorkflowStore.getState().loadInstances();
+    } catch (err) {
+      console.error('终止执行失败:', err);
+      // 即使后端调用失败，也重置前端状态
+      setIsRunning(false);
+      executionIdRef.current = null;
+    }
+  };
+
   // 组件卸载时清理事件监听并取消当前执行
   useEffect(() => {
     return () => {
@@ -1699,6 +1728,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               </svg>
             )}
           </button>
+          {/* 终止执行按钮（仅在执行中显示） */}
+          {isRunning && (
+            <button
+              onClick={handleCancelExecution}
+              className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+              style={{
+                background: '#f8514922',
+                color: '#f85149',
+                border: 'none',
+              }}
+              title="终止执行"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                <rect x="1" y="1" width="8" height="8" rx="1" />
+              </svg>
+            </button>
+          )}
           <div className="w-px h-4" style={{ background: 'var(--border)' }} />
 
           {/* 操作帮助按钮 */}
