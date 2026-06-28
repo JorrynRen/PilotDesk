@@ -172,15 +172,10 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string, st
 
 /* ---------- 前序节点输出选项（输入映射用） ---------- */
 
-interface PredecessorOption {
-  group: string;       // 阶段名
-  options: { value: string; label: string }[];
-}
-
 function getPredecessorOutputOptions(
   nodeId: string,
   stages: Stage[],
-): PredecessorOption[] {
+): OptionGroup[] {
   // 1. 找到当前节点所在阶段
   let currentStageIdx = -1;
   let currentNode: WorkflowNode | undefined;
