@@ -326,6 +326,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const [isRunning, setIsRunning] = useState(false);
   const executionIdRef = useRef<string | null>(null);
+  const definitionIdRef = useRef(definitionId);
+  definitionIdRef.current = definitionId;
   const [restoredExecutionId, setRestoredExecutionId] = useState<string | null>(null);
   const restoredSnapshotRef = useRef<any>(null);
   const restoredModCountRef = useRef<number>(0);
@@ -449,16 +451,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev['node_' + nodeId] }));
       });
 
-      unlistenExec = await listen<{ execution_id: string; status: string }>('workflow:execution-status', (event) => {
-        console.log('[WorkflowEditor] execution-status event:', JSON.stringify(event.payload), '| ref:', executionIdRef.current);
-        if (event.payload.execution_id !== executionIdRef.current) {
-          console.warn('[WorkflowEditor] execution ID mismatch! payload:', event.payload.execution_id, '!= ref:', executionIdRef.current);
-          return;
-        }
+      unlistenExec = await listen<{ execution_id: string; definition_id: string; status: string; error?: string }>('workflow:execution-status', (event) => {
+        // 通过 definitionId 匹配，彻底消除 IPC 竞态（不依赖 executionIdRef 时序）
+        if (event.payload.definition_id !== definitionIdRef.current) return;
         if (event.payload.status === 'completed' || event.payload.status === 'failed' || event.payload.status === 'cancelled') {
-          console.log('[WorkflowEditor] execution finished, calling setIsRunning(false)');
+          console.log('[WorkflowEditor] execution', event.payload.status, ', setting isRunning=false');
           setIsRunning(false);
-          // 完成后刷新实例数据
           useWorkflowStore.getState().loadInstances();
         }
       });

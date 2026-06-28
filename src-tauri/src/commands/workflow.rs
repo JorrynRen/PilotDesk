@@ -222,6 +222,8 @@ pub async fn start_workflow(
                 log::info!("[WorkflowEngine] 工作流执行成功: id={}", instance_id_clone);
                 let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
                     "execution_id": instance_id_clone,
+                    "definition_id": def_clone.id,
+                    "definition_name": def_clone.name,
                     "status": "completed",
                 }));
             }
@@ -236,6 +238,8 @@ pub async fn start_workflow(
                 }
                 let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
                     "execution_id": instance_id_clone,
+                    "definition_id": def_clone.id,
+                    "definition_name": def_clone.name,
                     "status": "failed",
                     "error": e.to_string(),
                 }));
@@ -256,6 +260,8 @@ pub async fn start_workflow(
                 }
                 let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
                     "execution_id": instance_id_clone,
+                    "definition_id": def_clone.id,
+                    "definition_name": def_clone.name,
                     "status": "failed",
                     "error": format!("工作流引擎内部错误: {}", msg),
                 }));

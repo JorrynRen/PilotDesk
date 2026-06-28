@@ -227,25 +227,21 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
   // 监听执行状态事件（全局，组件挂载时注册）
   useEffect(() => {
     let unlisten: (() => void) | null = null;
-    listen<{ execution_id: string; status: string; error?: string }>('workflow:execution-status', (event) => {
-      console.log('[WorkflowPage] global execution-status event:', JSON.stringify(event.payload));
-      const { status } = event.payload;
-      // 查找该实例对应的工作流名
-      const inst = useWorkflowStore.getState().instances.find(i => i.id === event.payload.execution_id);
-      if (inst) {
-        setRunningIds(prev => {
-          const next = new Set(prev);
-          if (status === 'running') {
-            next.add(inst.definitionId);
-          } else {
-            next.delete(inst.definitionId);
-          }
-          return next;
-        });
-        if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-          setExecToast({ id: event.payload.execution_id, name: inst.definitionName, status, error: event.payload.error });
-          useWorkflowStore.getState().loadInstances();
+    listen<{ execution_id: string; definition_id: string; definition_name: string; status: string; error?: string }>('workflow:execution-status', (event) => {
+      const { status, definition_id: defId, definition_name: defName } = event.payload;
+      // 直接使用事件 payload 中的 definition_id，不再依赖 store 查找（消除竞态）
+      setRunningIds(prev => {
+        const next = new Set(prev);
+        if (status === 'running') {
+          next.add(defId);
+        } else {
+          next.delete(defId);
         }
+        return next;
+      });
+      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+        setExecToast({ id: event.payload.execution_id, name: defName, status, error: event.payload.error });
+        useWorkflowStore.getState().loadInstances();
       }
     }).then(fn => { unlisten = fn; });
     return () => { unlisten?.(); };

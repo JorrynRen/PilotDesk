@@ -648,6 +648,8 @@ impl WorkflowEngine {
 
         emitter.emit("workflow:execution-status", serde_json::json!({
             "execution_id": execution_id,
+            "definition_id": &def.id,
+            "definition_name": &def.name,
             "status": "completed",
         })).ok();
 
@@ -713,7 +715,8 @@ impl WorkflowEngine {
 
         if recovered_stages.is_empty() {
             emitter.emit("workflow:execution-status", serde_json::json!({
-                "execution_id": execution_id, "status": "completed", "message": "所有节点已完成",
+                "execution_id": execution_id, "definition_id": &def.id, "definition_name": &def.name,
+                "status": "completed", "message": "所有节点已完成",
             })).ok();
             return Ok(Value::Null);
         }
