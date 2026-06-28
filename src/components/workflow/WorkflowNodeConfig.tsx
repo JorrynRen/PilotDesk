@@ -140,16 +140,16 @@ const S = {
 
 /* ---------- 输出字段选项（按节点类型动态获取） ---------- */
 
-function getOutputFieldOptions(nodeType: WorkflowNodeType): { group: string; options: { value: string; label: string }[] }[] | undefined {
+function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string): { group: string; options: { value: string; label: string }[] }[] | undefined {
   switch (nodeType) {
     case 'agent':
       return [
-        { group: '核心输出', options: [{ value: 'content', label: '响应内容' }] },
-        { group: '会话信息', options: [{ value: 'session_id', label: '会话ID' }, { value: 'agent_type', label: 'Agent类型' }] },
+        { group: '核心输出', options: [{ value: 'content', label: `${nodeLabel}.响应内容` }] },
+        { group: '会话信息', options: [{ value: 'session_id', label: `${nodeLabel}.会话ID` }, { value: 'agent_type', label: `${nodeLabel}.Agent类型` }] },
       ];
     case 'interact':
       return [
-        { group: '交互配置', options: [{ value: 'type', label: '交互类型' }, { value: 'prompt', label: '提示文案' }, { value: 'inputType', label: '输入类型' }] },
+        { group: '交互配置', options: [{ value: 'type', label: `${nodeLabel}.交互类型` }, { value: 'prompt', label: `${nodeLabel}.提示文案` }, { value: 'inputType', label: `${nodeLabel}.输入类型` }] },
       ];
     default:
       return undefined;
@@ -214,7 +214,7 @@ function getPredecessorOutputOptions(
       const list = stageMap.get(stageName) || [];
       list.push({
         value: `{{nodes.${pn.id}.output.${key}}}`,
-        label: `${pn.label} → ${key}`,
+        label: `${pn.label}.${key}`,
       });
       stageMap.set(stageName, list);
     }
@@ -268,6 +268,7 @@ const MappingEditor: React.FC<{
   const entries = Object.entries(value || {});
   const [invalidKeys, setInvalidKeys] = useState<Set<string>>(new Set());
   const [dupKeys, setDupKeys] = useState<Set<string>>(new Set());
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
 
   const handleKeyChange = (oldKey: string, newKey: string) => {
     if (oldKey === newKey) return;
@@ -368,39 +369,8 @@ const MappingEditor: React.FC<{
             <div key={idx} className="flex items-center" style={{ gap: 4, minWidth: 0 }}>
               {renderKeyColumn(key)}
               <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)', flexShrink: 0 }}>→</span>
-              {(() => {
-                if (valueOptions && valueOptions.length > 0) {
-                  return (
-                    <select
-                      value={val}
-                      onChange={(e) => handleValueChange(key, e.target.value)}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        padding: '4px 6px',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--border)',
-                        background: 'var(--bg-primary)',
-                        color: 'var(--text-primary)',
-                        fontSize: 'var(--fs-11)',
-                        outline: 'none',
-                        fontFamily: 'var(--font-mono)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {valueOptions.map((group) => (
-                        <optgroup key={group.group} label={group.group}>
-                          {group.options.map((opt) => (
-                            <option key={opt.value} value={opt.value}>
-                              {opt.label} ({opt.value})
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                    </select>
-                  );
-                }
-                return (
+              <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+                <div className="flex items-center" style={{ gap: 2 }}>
                   <input
                     value={val}
                     onChange={(e) => handleValueChange(key, e.target.value)}
@@ -418,8 +388,94 @@ const MappingEditor: React.FC<{
                       fontFamily: 'var(--font-mono)',
                     }}
                   />
-                );
-              })()}
+                  {valueOptions && valueOptions.length > 0 && (
+                    <button
+                      onClick={() => setActiveDropdown(activeDropdown === key ? null : key)}
+                      className="flex items-center justify-center"
+                      style={{
+                        width: 22,
+                        height: 22,
+                        flexShrink: 0,
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-tertiary)',
+                        color: 'var(--text-secondary)',
+                        fontSize: 'var(--fs-12)',
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                      }}
+                      title="选择字段"
+                    >
+                      ▾
+                    </button>
+                  )}
+                </div>
+                {activeDropdown === key && valueOptions && (
+                  <>
+                    {/* 点击遮罩关闭下拉 */}
+                    <div
+                      onClick={() => setActiveDropdown(null)}
+                      style={{
+                        position: 'fixed',
+                        inset: 0,
+                        zIndex: 99,
+                      }}
+                    />
+                    <div
+                      style={{
+                        position: 'absolute',
+                        right: 0,
+                        top: '100%',
+                        zIndex: 100,
+                        minWidth: 200,
+                        maxHeight: 200,
+                        overflow: 'auto',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-primary)',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                        fontSize: 'var(--fs-11)',
+                      }}
+                    >
+                      {valueOptions.map((group) => (
+                        <div key={group.group}>
+                          <div
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: 'var(--fs-10)',
+                              color: 'var(--text-tertiary)',
+                              fontWeight: 600,
+                              borderBottom: '1px solid var(--border)',
+                              background: 'var(--bg-tertiary)',
+                            }}
+                          >
+                            {group.group}
+                          </div>
+                          {group.options.map((opt) => (
+                            <div
+                              key={opt.value}
+                              onClick={() => {
+                                handleValueChange(key, opt.value);
+                                setActiveDropdown(null);
+                              }}
+                              style={{
+                                padding: '6px 8px',
+                                cursor: 'pointer',
+                                color: 'var(--text-primary)',
+                                borderBottom: '1px solid var(--border)',
+                              }}
+                              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                            >
+                              {opt.label}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
               <button
                 onClick={() => handleRemove(key)}
                 className="flex items-center justify-center"
@@ -563,13 +619,77 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
           onChange={(e) => onUpdate({ label: e.target.value })}
           style={S.input()}
         />
+        {configFields.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <label style={S.label()}>{configFields[0].label}</label>
+            {configFields[0].type === 'select' ? (
+              <select
+                value={params[configFields[0].key] || configFields[0].placeholder || ''}
+                onChange={(e) => handleParamChange(configFields[0].key, e.target.value)}
+                style={S.select()}
+              >
+                <option value="">选择...</option>
+                {configFields[0].key === 'agent_type' && enabledAgentTypes.map((v) => <option key={v} value={v}>{v}</option>)}
+                {configFields[0].key === 'method' && ['GET', 'POST', 'PUT', 'DELETE'].map((v) => <option key={v} value={v}>{v}</option>)}
+                {configFields[0].key === 'inputType' && ['text', 'select', 'confirm', 'file'].map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            ) : (
+              <input
+                type={configFields[0].type || 'text'}
+                value={params[configFields[0].key] || ''}
+                onChange={(e) => handleParamChange(configFields[0].key, configFields[0].type === 'number' ? Number(e.target.value) : e.target.value)}
+                placeholder={configFields[0].placeholder}
+                style={S.input()}
+              />
+            )}
+          </div>
+        )}
       </div>
 
-      {/* ===== 类型特定配置 ===== */}
+      {/* ===== 节点配置 ===== */}
       {configFields.length > 0 && (
         <div style={S.sectionGap}>
           <div style={S.sectionTitle}>节点配置</div>
-          {configFields.map((field) => (
+          {/* 输入映射（第二分组第一项） */}
+          <div style={{ marginBottom: 12 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+              <label style={S.labelSm(0)}>输入映射</label>
+              <button
+                onClick={() => {
+                  const k = nextMappingKey(Object.keys(node.inputMapping || {}), inputBaseKeyRef, 'input');
+                  onUpdate({ inputMapping: { ...(node.inputMapping || {}), [k]: '' } });
+                }}
+                className="flex items-center justify-center"
+                style={{
+                  padding: '1px 4px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--accent)',
+                  fontSize: 'var(--fs-11)',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  lineHeight: '18px',
+                }}
+              >
+                添加
+              </button>
+            </div>
+            <MappingEditor
+              value={node.inputMapping}
+              onChange={(v) => {
+                onUpdate({ inputMapping: v });
+                const keys = Object.keys(v || {});
+                if (keys.length === 1) inputBaseKeyRef.current = keys[0];
+              }}
+              keyPlaceholder="参数名"
+              valuePlaceholder={'{{nodes.nodeId.output.field}}'}
+              baseKeyRef={inputBaseKeyRef}
+              valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
+            />
+          </div>
+          {/* 其余配置字段（跳过第一个已在基本信息中） */}
+          {configFields.slice(1).map((field) => (
             <div key={field.key} style={S.fieldGap}>
               <label style={S.label()}>{field.label}</label>
               {field.type === 'textarea' ? (
@@ -729,7 +849,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="输出字段名"
             valuePlaceholder={'{{context.path}}'}
             baseKeyRef={outputBaseKeyRef}
-            valueOptions={getOutputFieldOptions(node.type)}
+            valueOptions={getOutputFieldOptions(node.type, node.label)}
           />
         </div>
       </div>
