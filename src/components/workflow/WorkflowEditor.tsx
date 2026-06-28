@@ -311,6 +311,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const nodeStatusUnlistenRef = useRef<UnlistenFn | null>(null);
   const executionIdRef = useRef<string | null>(null);
 
+  /** 恢复指定历史执行的节点状态 */
+  const handleRestoreExecution = async (executionId: string) => {
+    try {
+      const nodeExecs = await invoke<any[]>('get_node_executions', { executionId });
+      const results: Record<string, any> = {};
+      const states: Record<string, StepRunState> = {};
+      for (const ne of nodeExecs) {
+        if (ne.status === 'completed' && ne.output !== undefined) {
+          results['node_' + ne.nodeId] = ne.output;
+          states[ne.nodeId] = 'success';
+        } else if (ne.status === 'failed') {
+          results['node_' + ne.nodeId] = { error: ne.error || '执行失败' };
+          states[ne.nodeId] = 'failed';
+        } else if (ne.status === 'running') {
+          states[ne.nodeId] = 'running';
+        } else if (ne.status === 'skipped') {
+          states[ne.nodeId] = 'skipped';
+        }
+      }
+      setNodeResults(results);
+      setStepStates(states);
+    } catch (err) {
+      console.error('恢复执行状态失败:', err);
+    }
+  };
+
   const handleRunWorkflow = async () => {
     if (!definitionId || isRunning) return;
     setIsRunning(true);
@@ -1415,6 +1441,56 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </span>
 
         <div className="flex-1" />
+
+        {/* ── 历史执行恢复 ── */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>恢复:</span>
+          <div className="relative">
+            <select
+              value=""
+              onChange={(e) => {
+                const execId = e.target.value;
+                if (!execId) return;
+                handleRestoreExecution(execId);
+                e.target.value = ''; // 重置选中项
+              }}
+              className="text-[11px] px-2 py-1 rounded outline-none appearance-none cursor-pointer"
+              style={{
+                border: '1px solid var(--border)',
+                background: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+                minWidth: 120,
+                maxWidth: 200,
+                paddingRight: 20,
+              }}
+              title="选择历史执行记录恢复节点执行状态"
+            >
+              <option value="">选择执行记录...</option>
+              {instances
+                .filter(i => i.definitionId === definitionId && i.status !== 'pending')
+                .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+                .slice(0, 20)
+                .map((inst) => {
+                  const dateStr = inst.createdAt ? new Date(inst.createdAt * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+                  const statusMap: Record<string, string> = { success: '✓', failed: '✗', running: '▶', cancelled: '○', timeout: '△' };
+                  const icon = statusMap[inst.status] || '?';
+                  return (
+                    <option key={inst.id} value={inst.id}>
+                      {icon} {dateStr} — {inst.status}
+                    </option>
+                  );
+                })}
+            </select>
+            {/* 自定义下拉箭头 */}
+            <svg
+              width="10" height="10" viewBox="0 0 10 10"
+              style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-tertiary)' }}
+              fill="none" stroke="currentColor" strokeWidth="1.3"
+            >
+              <path d="M2.5 3.5L5 6.5 7.5 3.5" />
+            </svg>
+          </div>
+        </div>
 
         <div className="w-px h-5" style={{ background: 'var(--border)' }} />
 
