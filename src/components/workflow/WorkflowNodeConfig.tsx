@@ -374,7 +374,7 @@ const MappingEditor: React.FC<{
   };
 
   return (
-    <div ref={panelRef}>
+    <div>
       {entries.length === 0 ? (
         <div
           style={{
@@ -669,7 +669,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const textareaFieldOptions = stages ? getPredecessorOutputOptions(node.id, stages) : undefined;
 
   return (
-    <div>
+    <div ref={panelRef}>
       {/* ===== 顶部标题栏 ===== */}
       <div
         className="flex items-center"
