@@ -25,9 +25,9 @@ interface WorkflowStoreState {
 
   // 实例管理
   loadInstances: (definitionId?: string) => Promise<void>;
-  startWorkflow: (definitionId: string, context?: Record<string, unknown>) => Promise<string>;
+  startWorkflow: (definitionId: string, context?: Record<string, unknown>, instanceId?: string) => Promise<string>;
   /** 安全启动工作流：自动清理旧的 running 实例后再执行 */
-  safeStartWorkflow: (definitionId: string, context?: Record<string, unknown>) => Promise<string>;
+  safeStartWorkflow: (definitionId: string, context?: Record<string, unknown>, instanceId?: string) => Promise<string>;
   cancelWorkflow: (executionId: string) => Promise<void>;
   deleteExecution: (executionId: string) => Promise<void>;
   respondHumanInput: (executionId: string, nodeId: string, response: string) => Promise<void>;
@@ -105,17 +105,18 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     }
   },
 
-  startWorkflow: async (definitionId: string, context?: Record<string, unknown>) => {
+  startWorkflow: async (definitionId: string, context?: Record<string, unknown>, instanceId?: string) => {
     const instance = await invoke<WorkflowInstance>('start_workflow', {
       workflowId: definitionId,
       version: null,
       inputData: context || null,
+      instanceId: instanceId || null,
     });
     await get().loadInstances();
     return instance.id;
   },
 
-  safeStartWorkflow: async (definitionId: string, context?: Record<string, unknown>) => {
+  safeStartWorkflow: async (definitionId: string, context?: Record<string, unknown>, instanceId?: string) => {
     // 1. 主动清理该工作流所有旧的 running 实例
     const runningInstances = get().instances.filter(
       inst => inst.definitionId === definitionId && inst.status === 'running'
@@ -129,7 +130,7 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
       }
     }
     // 2. 启动新执行
-    return get().startWorkflow(definitionId, context);
+    return get().startWorkflow(definitionId, context, instanceId);
   },
 
   cancelWorkflow: async (executionId: string) => {

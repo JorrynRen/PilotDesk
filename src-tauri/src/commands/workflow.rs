@@ -146,6 +146,8 @@ pub async fn start_workflow(
     #[allow(unused_variables)]
     version: Option<i64>, // TODO: 版本管理支持（当前未实现版本化执行）
     input_data: Option<Value>,
+    // 前端预生成的实例 ID（解决快速工作流的竞态条件）
+    instance_id: Option<String>,
 ) -> Result<workflow::WorkflowInstance, String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
 
@@ -154,8 +156,8 @@ pub async fn start_workflow(
         .map_err(|e| format!("查询失败: {}", e))?
         .ok_or_else(|| "工作流不存在".to_string())?;
 
-    // 2. 创建工作流实例
-    let instance_id = new_id();
+    // 2. 创建工作流实例（优先使用前端预生成的 ID，消除 IPC 竞态）
+    let instance_id = instance_id.unwrap_or_else(new_id);
     let now_ts = now();
     let instance = workflow::WorkflowInstance {
         id: instance_id.clone(),

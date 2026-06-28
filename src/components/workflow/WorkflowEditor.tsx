@@ -385,10 +385,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       restoredSnapshotRef.current = null;
       // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
       await invoke('save_workflow_dag', { id: definitionId, stages });
-      // 执行工作流（此时监听器已就绪，不会丢失任何事件）
-      const newExecutionId = await useWorkflowStore.getState().safeStartWorkflow(definitionId);
-      console.log('[WorkflowEditor] safeStartWorkflow returned id:', newExecutionId);
-      executionIdRef.current = newExecutionId;
+      // 预生成实例 ID 并在 invoke 前设置 ref（消除 IPC 竞态：快速工作流可能在响应返回前就完成）
+      const preGeneratedId = crypto.randomUUID();
+      executionIdRef.current = preGeneratedId;
+      await useWorkflowStore.getState().safeStartWorkflow(definitionId, undefined, preGeneratedId);
       // 加载实例数据（初始状态）
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
@@ -429,6 +429,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     let unlistenExec: UnlistenFn | null = null;
 
     const setupListeners = async () => {
+      console.log('[WorkflowEditor] setupListeners: starting listener registration...');
       unlistenNode = await listen<{
         execution_id: string;
         node_id: string;
@@ -461,6 +462,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           useWorkflowStore.getState().loadInstances();
         }
       });
+      console.log('[WorkflowEditor] setupListeners: both listeners registered successfully');
     };
 
     setupListeners();
