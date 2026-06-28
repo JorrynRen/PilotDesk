@@ -775,46 +775,9 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
         </div>
       )}
 
-      {/* ===== 输入输出映射 ===== */}
+      {/* ===== 输出映射 ===== */}
       <div style={S.sectionGap}>
-        <div style={S.sectionTitle}>输入输出映射</div>
-        <div style={{ marginBottom: 12 }}>
-          <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-            <label style={S.labelSm(0)}>输入映射</label>
-            <button
-              onClick={() => {
-                const k = nextMappingKey(Object.keys(node.inputMapping || {}), inputBaseKeyRef, 'input');
-                onUpdate({ inputMapping: { ...(node.inputMapping || {}), [k]: '' } });
-              }}
-              className="flex items-center justify-center"
-              style={{
-                padding: '1px 4px',
-                borderRadius: 'var(--radius-md)',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--accent)',
-                fontSize: 'var(--fs-11)',
-                cursor: 'pointer',
-                flexShrink: 0,
-                lineHeight: '18px',
-              }}
-            >
-              添加
-            </button>
-          </div>
-          <MappingEditor
-            value={node.inputMapping}
-            onChange={(v) => {
-              onUpdate({ inputMapping: v });
-              const keys = Object.keys(v || {});
-              if (keys.length === 1) inputBaseKeyRef.current = keys[0];
-            }}
-            keyPlaceholder="参数名"
-            valuePlaceholder={'{{nodes.nodeId.output.field}}'}
-            baseKeyRef={inputBaseKeyRef}
-            valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
-          />
-        </div>
+        <div style={S.sectionTitle}>输出映射</div>
         <div>
           <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
             <label style={S.labelSm(0)}>输出映射</label>
