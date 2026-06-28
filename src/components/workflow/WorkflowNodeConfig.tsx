@@ -705,7 +705,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               if (keys.length === 1) inputBaseKeyRef.current = keys[0];
             }}
             keyPlaceholder="参数名"
-            valuePlaceholder={'输入前序节点输出字段或模板表达式'}
+            valuePlaceholder={'输入文本或选择前序字段'}
             baseKeyRef={inputBaseKeyRef}
             valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
           />
@@ -836,7 +836,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               if (keys.length === 1) outputBaseKeyRef.current = keys[0];
             }}
             keyPlaceholder="输出字段名"
-            valuePlaceholder={'输入输出字段值或模板表达式'}
+            valuePlaceholder={'输入文本或选择输出字段'}
             baseKeyRef={outputBaseKeyRef}
             valueOptions={getOutputFieldOptions(node.type, node.label)} />
       </div>
