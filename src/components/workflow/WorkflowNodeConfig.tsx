@@ -144,20 +144,19 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string): {
   switch (nodeType) {
     case 'agent':
       return [
-        { group: '核心输出', options: [{ value: 'content', label: `${nodeLabel}.响应内容` }] },
-        { group: '会话信息', options: [{ value: 'session_id', label: `${nodeLabel}.会话ID` }, { value: 'agent_type', label: `${nodeLabel}.Agent类型` }] },
+        { group: nodeLabel, options: [{ value: 'content', label: '响应内容' }, { value: 'session_id', label: '会话ID' }, { value: 'agent_type', label: 'Agent类型' }] },
       ];
     case 'interact':
       return [
-        { group: '交互配置', options: [{ value: 'type', label: `${nodeLabel}.交互类型` }, { value: 'prompt', label: `${nodeLabel}.提示文案` }, { value: 'inputType', label: `${nodeLabel}.输入类型` }] },
+        { group: nodeLabel, options: [{ value: 'type', label: '交互类型' }, { value: 'prompt', label: '提示文案' }, { value: 'inputType', label: '输入类型' }] },
       ];
     case 'start':
       return [
-        { group: '工作流入参', options: [{ value: 'input', label: `${nodeLabel}.入参` }] },
+        { group: nodeLabel, options: [{ value: 'input', label: '入参' }] },
       ];
     case 'end':
       return [
-        { group: '工作流结果', options: [{ value: 'result', label: `${nodeLabel}.结果` }] },
+        { group: nodeLabel, options: [{ value: 'result', label: '结果' }] },
       ];
     default:
       return undefined;
@@ -213,22 +212,22 @@ function getPredecessorOutputOptions(
 
   if (predecessorNodes.length === 0) return [];
 
-  // 3. 按阶段分组，每个节点展示其 outputMapping 的 key（即 context 路径）
-  const stageMap = new Map<string, { value: string; label: string }[]>();
+  // 3. 按节点名分组，每个节点展示其 outputMapping 的 key（即 context 路径）
+  const nodeMap = new Map<string, { value: string; label: string }[]>();
   for (const { stageName, node: pn } of predecessorNodes) {
     const outputKeys = Object.keys(pn.outputMapping || {});
     if (outputKeys.length === 0) continue;
     for (const key of outputKeys) {
-      const list = stageMap.get(stageName) || [];
+      const list = nodeMap.get(pn.label) || [];
       list.push({
         value: `{{nodes.${pn.id}.output.${key}}}`,
-        label: `${pn.label}.${key}`,
+        label: key,
       });
-      stageMap.set(stageName, list);
+      nodeMap.set(pn.label, list);
     }
   }
 
-  return Array.from(stageMap.entries()).map(([group, options]) => ({
+  return Array.from(nodeMap.entries()).map(([group, options]) => ({
     group,
     options,
   }));
@@ -445,6 +444,18 @@ const MappingEditor: React.FC<{
                         fontSize: 'var(--fs-11)',
                       }}
                     >
+                      <div
+                        style={{
+                          padding: '6px 8px',
+                          fontSize: 'var(--fs-11)',
+                          color: 'var(--text-secondary)',
+                          fontWeight: 600,
+                          borderBottom: '1px solid var(--border)',
+                          textAlign: 'center',
+                        }}
+                      >
+                        请选择…
+                      </div>
                       {(() => {
                         const hasOptions = valueOptions.some(g => g.options.length > 0);
                         if (!hasOptions) {
