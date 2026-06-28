@@ -215,16 +215,33 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
     }
   };
 
+  // ── 删除二次确认弹窗 ──
+  const [confirmDelete, setConfirmDelete] = useState<{
+    type: 'definition' | 'execution';
+    id: string;
+    name: string;
+  } | null>(null);
+
   const handleDelete = async (id: string, name: string) => {
-    if (confirm(`确定删除工作流「${name}」？此操作不可撤销。`)) {
-      await deleteDefinition(id);
-    }
+    setConfirmDelete({ type: 'definition', id, name });
   };
 
   const handleDeleteExecution = async (executionId: string, name: string) => {
-    if (confirm(`确定删除执行记录「${name}」？此操作不可撤销。`)) {
-      await deleteExecution(executionId);
+    setConfirmDelete({ type: 'execution', id: executionId, name });
+  };
+
+  const confirmDeleteAction = async () => {
+    if (!confirmDelete) return;
+    try {
+      if (confirmDelete.type === 'definition') {
+        await deleteDefinition(confirmDelete.id);
+      } else {
+        await deleteExecution(confirmDelete.id);
+      }
+    } catch (err) {
+      console.error('删除失败:', err);
     }
+    setConfirmDelete(null);
   };
 
   const statusIcon = (status: string) => {
@@ -464,6 +481,47 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           onConfirm={handlePropertyConfirm}
           onClose={() => { setShowPropertyDialog(null); setEditingDef(null); }}
         />
+      )}
+
+      {/* 删除二次确认弹窗 */}
+      {confirmDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setConfirmDelete(null)}
+        >
+          <div
+            className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
+            style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+              确认删除
+            </div>
+            <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+              {confirmDelete.type === 'definition'
+                ? `确定删除工作流「${confirmDelete.name}」？此操作不可撤销，关联的执行记录也将被删除。`
+                : `确定删除执行记录「${confirmDelete.name}」？此操作不可撤销。`
+              }
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmDeleteAction}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{ backgroundColor: '#ef4444', color: '#fff' }}
+              >
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <StatusBar
