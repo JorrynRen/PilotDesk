@@ -613,6 +613,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
 
       {/* ===== 基本信息 ===== */}
       <div style={{ marginBottom: 16 }}>
+        <div style={S.sectionTitle}>基本信息</div>
         <label style={S.label()}>节点名称</label>
         <input
           value={node.label}
@@ -780,7 +781,6 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
         <div style={S.sectionTitle}>输出映射</div>
         <div>
           <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-            <label style={S.labelSm(0)}>输出映射</label>
             <button
               onClick={() => {
                 const k = nextMappingKey(Object.keys(node.outputMapping || {}), outputBaseKeyRef, 'output');
