@@ -613,6 +613,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const inputBaseKeyRef = useRef<string>('');
   const outputBaseKeyRef = useRef<string>('');
   const [fieldSelectorKey, setFieldSelectorKey] = useState<string | null>(null);
+  const [selectorPos, setSelectorPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const fieldSelectorRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -627,12 +628,34 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
     onUpdate({ params: newParams });
   };
 
-  const handleTextareaChange = (key: string, value: string, cursorPos: number) => {
+  /** 估算 textarea 中光标像素位置 */
+  const getCursorPixelPosition = (textarea: HTMLTextAreaElement): { x: number; y: number } => {
+    const rect = textarea.getBoundingClientRect();
+    const text = textarea.value.slice(0, textarea.selectionStart);
+    const lines = text.split('\n');
+    const currentLine = lines.length - 1;
+    const currentCol = lines[currentLine].length;
+    const style = getComputedStyle(textarea);
+    const lineHeight = parseInt(style.lineHeight) || 20;
+    const paddingLeft = parseInt(style.paddingLeft) || 8;
+    const paddingTop = parseInt(style.paddingTop) || 6;
+    const fontSize = parseInt(style.fontSize) || 12;
+    const charWidth = fontSize * 0.6;
+    return {
+      x: rect.left + paddingLeft + currentCol * charWidth,
+      y: rect.top + paddingTop + currentLine * lineHeight,
+    };
+  };
+
+  const handleTextareaChange = (key: string, value: string, cursorPos: number, textarea?: HTMLTextAreaElement) => {
     handleParamChange(key, value);
     // 检测光标前是否刚输入了 {{
     const textBefore = value.slice(0, cursorPos);
     if (textBefore.endsWith('{{') && stages) {
       setFieldSelectorKey(key);
+      if (textarea) {
+        setSelectorPos(getCursorPixelPosition(textarea));
+      }
     }
   };
 
@@ -819,12 +842,12 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 <div style={{ position: 'relative' }}>
                   <textarea
                     value={params[field.key] || ''}
-                    onChange={(e) => handleTextareaChange(field.key, e.target.value, e.target.selectionStart || 0)}
+                    onChange={(e) => handleTextareaChange(field.key, e.target.value, e.target.selectionStart || 0, e.target)}
                     placeholder={field.placeholder}
                     rows={4}
                     style={S.textarea}
                   />
-                  {/* {{ 触发选择器 */}
+                  {/* {{ 触发选择器 — 跟随光标 + 可拖动 */}
                   {fieldSelectorKey === field.key && textareaFieldOptions && textareaFieldOptions.length > 0 && (
                     <>
                       <div
@@ -833,13 +856,14 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                       />
                       <div
                         style={{
-                          position: 'absolute',
-                          right: 0,
-                          top: '100%',
+                          position: 'fixed',
+                          left: selectorPos.x,
+                          top: selectorPos.y,
                           zIndex: 100,
                           minWidth: 200,
-                          maxHeight: 200,
-                          overflow: 'auto',
+                          maxHeight: 250,
+                          display: 'flex',
+                          flexDirection: 'column',
                           borderRadius: 'var(--radius-md)',
                           border: '1px solid var(--border)',
                           background: 'var(--bg-primary)',
@@ -847,42 +871,76 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           fontSize: 'var(--fs-11)',
                         }}
                       >
-                        <div style={{ padding: '6px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-secondary)', fontWeight: 600, borderBottom: '1px solid var(--border)', textAlign: 'center' }}>
+                        {/* 可拖动标题栏 */}
+                        <div
+                          onMouseDown={(e) => {
+                            e.stopPropagation();
+                            const startX = e.clientX;
+                            const startY = e.clientY;
+                            const startPos = { ...selectorPos };
+                            const handleMouseMove = (ev: MouseEvent) => {
+                              setSelectorPos({
+                                x: startPos.x + (ev.clientX - startX),
+                                y: startPos.y + (ev.clientY - startY),
+                              });
+                            };
+                            const handleMouseUp = () => {
+                              document.removeEventListener('mousemove', handleMouseMove);
+                              document.removeEventListener('mouseup', handleMouseUp);
+                            };
+                            document.addEventListener('mousemove', handleMouseMove);
+                            document.addEventListener('mouseup', handleMouseUp);
+                          }}
+                          style={{
+                            padding: '6px 8px',
+                            fontSize: 'var(--fs-11)',
+                            color: 'var(--text-secondary)',
+                            fontWeight: 600,
+                            borderBottom: '1px solid var(--border)',
+                            textAlign: 'center',
+                            cursor: 'grab',
+                            userSelect: 'none',
+                            flexShrink: 0,
+                          }}
+                        >
                           请选择…
                         </div>
-                        {(() => {
-                          const hasOptions = textareaFieldOptions.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
-                          if (!hasOptions) {
-                            return <div style={{ padding: '12px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-tertiary)', textAlign: 'center' }}>暂无可用字段</div>;
-                          }
-                          return textareaFieldOptions.map((stage, si) => (
-                            <div key={si}>
-                              {stage.group && (
-                                <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
-                                  step{si + 1} {stage.group}
-                                </div>
-                              )}
-                              {stage.children && stage.children.map((nodeGroup, ni) => (
-                                <div key={ni}>
-                                  <div style={{ padding: '3px 8px 3px 16px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
-                                    ├─[node] {nodeGroup.group}
+                        {/* 可滚动内容区 */}
+                        <div style={{ overflow: 'auto', flex: 1 }}>
+                          {(() => {
+                            const hasOptions = textareaFieldOptions.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
+                            if (!hasOptions) {
+                              return <div style={{ padding: '12px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-tertiary)', textAlign: 'center' }}>暂无可用字段</div>;
+                            }
+                            return textareaFieldOptions.map((stage, si) => (
+                              <div key={si}>
+                                {stage.group && (
+                                  <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
+                                    step{si + 1} {stage.group}
                                   </div>
-                                  {nodeGroup.options.map((opt) => (
-                                    <div
-                                      key={opt.value}
-                                      onClick={() => { insertFieldAtCursor(field.key, opt.value); }}
-                                      style={{ padding: '5px 8px 5px 28px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}
-                                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                    >
-                                      ├─{opt.label}
+                                )}
+                                {stage.children && stage.children.map((nodeGroup, ni) => (
+                                  <div key={ni}>
+                                    <div style={{ padding: '3px 8px 3px 16px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
+                                      ├─[node] {nodeGroup.group}
                                     </div>
-                                  ))}
-                                </div>
-                              ))}
-                            </div>
-                          ));
-                        })()}
+                                    {nodeGroup.options.map((opt) => (
+                                      <div
+                                        key={opt.value}
+                                        onClick={() => { insertFieldAtCursor(field.key, opt.value); }}
+                                        style={{ padding: '5px 8px 5px 28px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}
+                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                      >
+                                        ├─{opt.label}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ))}
+                              </div>
+                            ));
+                          })()}
+                        </div>
                       </div>
                     </>
                   )}
