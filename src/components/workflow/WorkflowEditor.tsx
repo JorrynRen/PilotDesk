@@ -2662,6 +2662,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             node={stages.find((s) => s.id === selectedStageId)?.nodes.find((n) => n.id === selectedNodeId)!}
             onUpdate={(updates) => handleUpdateNode(selectedNodeId, updates)}
             onClose={() => { setSelectedNodeId(null); setSelectedStageId(null); }}
+            stages={stages}
             onOpenSubflow={(definitionId) => {
               const d = definitions.find(d => d.id === definitionId);
               if (d) {

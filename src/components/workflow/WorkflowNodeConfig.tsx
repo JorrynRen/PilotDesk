@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import type { WorkflowNode, WorkflowNodeType } from '../../types/workflow';
+import type { WorkflowNode, WorkflowNodeType, Stage } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
@@ -16,6 +16,8 @@ interface Props {
   onUpdate: (updates: Partial<WorkflowNode>) => void;
   onClose: () => void;
   onOpenSubflow?: (definitionId: string) => void;
+  /** 所有阶段（用于输入映射计算前序节点） */
+  stages?: Stage[];
 }
 
 const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; label: string; type: string; placeholder?: string }[] }> = {
@@ -152,6 +154,76 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType): { group: string; opt
     default:
       return undefined;
   }
+}
+
+/* ---------- 前序节点输出选项（输入映射用） ---------- */
+
+interface PredecessorOption {
+  group: string;       // 阶段名
+  options: { value: string; label: string }[];
+}
+
+function getPredecessorOutputOptions(
+  nodeId: string,
+  stages: Stage[],
+): PredecessorOption[] {
+  // 1. 找到当前节点所在阶段
+  let currentStageIdx = -1;
+  let currentNode: WorkflowNode | undefined;
+  for (let i = 0; i < stages.length; i++) {
+    const found = stages[i].nodes.find(n => n.id === nodeId);
+    if (found) {
+      currentStageIdx = i;
+      currentNode = found;
+      break;
+    }
+  }
+  if (currentStageIdx === -1) return [];
+
+  // 2. 收集前序阶段的所有节点 + 同阶段中通过边连接的前序节点
+  const predecessorNodes: { stageName: string; node: WorkflowNode }[] = [];
+
+  // 前序阶段的所有节点
+  for (let i = 0; i < currentStageIdx; i++) {
+    for (const n of stages[i].nodes) {
+      predecessorNodes.push({ stageName: stages[i].name, node: n });
+    }
+  }
+
+  // 同阶段中，通过边指向当前节点的前序节点
+  const currentStage = stages[currentStageIdx];
+  const incomingEdges = currentStage.edges.filter(e => e.target === nodeId);
+  for (const edge of incomingEdges) {
+    const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
+    if (sourceNode) {
+      // 避免重复添加（可能已被前序阶段包含）
+      if (!predecessorNodes.some(p => p.node.id === sourceNode.id)) {
+        predecessorNodes.push({ stageName: currentStage.name, node: sourceNode });
+      }
+    }
+  }
+
+  if (predecessorNodes.length === 0) return [];
+
+  // 3. 按阶段分组，每个节点展示其 outputMapping 的 key（即 context 路径）
+  const stageMap = new Map<string, { value: string; label: string }[]>();
+  for (const { stageName, node: pn } of predecessorNodes) {
+    const outputKeys = Object.keys(pn.outputMapping || {});
+    if (outputKeys.length === 0) continue;
+    for (const key of outputKeys) {
+      const list = stageMap.get(stageName) || [];
+      list.push({
+        value: `{{nodes.${pn.id}.output.${key}}}`,
+        label: `${pn.label} → ${key}`,
+      });
+      stageMap.set(stageName, list);
+    }
+  }
+
+  return Array.from(stageMap.entries()).map(([group, options]) => ({
+    group,
+    options,
+  }));
 }
 
 /* ---------- 映射键名生成辅助 ---------- */
@@ -380,7 +452,7 @@ const MappingEditor: React.FC<{
     </div>
   );
 };
-export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow }) => {
+export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow, stages }) => {
   const meta = getNodeTypeMeta(node.type);
   const configFields = NODE_TYPE_CONFIG_MAP[node.type]?.fields || [];
   const [params, setParams] = useState<Record<string, any>>(node.params || {});
@@ -614,13 +686,13 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             value={node.inputMapping}
             onChange={(v) => {
               onUpdate({ inputMapping: v });
-              // 更新 baseKeyRef
               const keys = Object.keys(v || {});
               if (keys.length === 1) inputBaseKeyRef.current = keys[0];
             }}
             keyPlaceholder="参数名"
             valuePlaceholder={'{{nodes.nodeId.output.field}}'}
             baseKeyRef={inputBaseKeyRef}
+            valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
           />
         </div>
         <div>
