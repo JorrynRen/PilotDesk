@@ -543,8 +543,8 @@ class WorkflowEngine {
     const result = { session_id: sessionInfo.session_id, agent_type: agentType, content: response.content };
 
     if (node.outputMapping) {
-      for (const [key, path] of Object.entries(node.outputMapping)) {
-        instance.context[path] = (result as Record<string, any>)?.[key];
+      for (const [contextPath, outputField] of Object.entries(node.outputMapping)) {
+        instance.context[contextPath] = (result as Record<string, any>)?.[outputField];
       }
     }
     return result;
@@ -575,8 +575,8 @@ class WorkflowEngine {
       const result = await response.json();
 
       if (node.outputMapping) {
-        for (const [key, path] of Object.entries(node.outputMapping)) {
-          instance.context[path] = (result as Record<string, any>)?.[key];
+        for (const [contextPath, outputField] of Object.entries(node.outputMapping)) {
+          instance.context[contextPath] = (result as Record<string, any>)?.[outputField];
         }
       }
       return result;
@@ -639,8 +639,8 @@ class WorkflowEngine {
 
     const result = cmdResult.data;
     if (node.outputMapping) {
-      for (const [key, path] of Object.entries(node.outputMapping)) {
-        instance.context[path] = (result as Record<string, any>)?.[key];
+      for (const [contextPath, outputField] of Object.entries(node.outputMapping)) {
+        instance.context[contextPath] = (result as Record<string, any>)?.[outputField];
       }
     }
     return result;

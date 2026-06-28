@@ -191,8 +191,8 @@ const MappingEditor: React.FC<{
   valuePlaceholder: string;
   baseKeyRef: React.MutableRefObject<string>;
   /** 可选：输出字段选项分组，提供时 key 列渲染为级联选择器 */
-  keyOptions?: { group: string; options: { value: string; label: string; description?: string }[] }[];
-}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, baseKeyRef, keyOptions }) => {
+  valueOptions?: { group: string; options: { value: string; label: string; description?: string }[] }[];
+}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, baseKeyRef, valueOptions }) => {
   const entries = Object.entries(value || {});
   const [invalidKeys, setInvalidKeys] = useState<Set<string>>(new Set());
   const [dupKeys, setDupKeys] = useState<Set<string>>(new Set());
@@ -261,42 +261,8 @@ const MappingEditor: React.FC<{
     return null;
   };
 
-  /** 渲染 key 列：有 keyOptions 时渲染为级联选择器，否则为文本输入框 */
+  /** 渲染 key 列：始终为文本输入框 */
   const renderKeyColumn = (key: string) => {
-    if (keyOptions && keyOptions.length > 0) {
-      // 级联选择器模式
-      const allOptions = keyOptions.flatMap(g => g.options);
-      return (
-        <select
-          value={key}
-          onChange={(e) => handleKeyChange(key, e.target.value)}
-          style={{
-            flex: '0 0 120px',
-            minWidth: 0,
-            padding: '4px 6px',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--border)',
-            background: 'var(--bg-primary)',
-            color: 'var(--text-primary)',
-            fontSize: 'var(--fs-11)',
-            outline: 'none',
-            fontFamily: 'var(--font-mono)',
-            cursor: 'pointer',
-          }}
-        >
-          {keyOptions.map((group) => (
-            <optgroup key={group.group} label={group.group}>
-              {group.options.map((opt) => (
-                <option key={opt.value} value={opt.value} title={opt.description}>
-                  {opt.label} ({opt.value})
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      );
-    }
-    // 文本输入模式
     return (
       <input
         value={key}
@@ -330,23 +296,58 @@ const MappingEditor: React.FC<{
             <div key={idx} className="flex items-center" style={{ gap: 4, minWidth: 0 }}>
               {renderKeyColumn(key)}
               <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)', flexShrink: 0 }}>→</span>
-              <input
-                value={val}
-                onChange={(e) => handleValueChange(key, e.target.value)}
-                placeholder={valuePlaceholder}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  padding: '4px 8px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-primary)',
-                  color: 'var(--text-primary)',
-                  fontSize: 'var(--fs-11)',
-                  outline: 'none',
-                  fontFamily: 'var(--font-mono)',
-                }}
-              />
+              {(() => {
+                if (valueOptions && valueOptions.length > 0) {
+                  return (
+                    <select
+                      value={val}
+                      onChange={(e) => handleValueChange(key, e.target.value)}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        padding: '4px 6px',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        fontSize: 'var(--fs-11)',
+                        outline: 'none',
+                        fontFamily: 'var(--font-mono)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {valueOptions.map((group) => (
+                        <optgroup key={group.group} label={group.group}>
+                          {group.options.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label} ({opt.value})
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  );
+                }
+                return (
+                  <input
+                    value={val}
+                    onChange={(e) => handleValueChange(key, e.target.value)}
+                    placeholder={valuePlaceholder}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      padding: '4px 8px',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border)',
+                      background: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      fontSize: 'var(--fs-11)',
+                      outline: 'none',
+                      fontFamily: 'var(--font-mono)',
+                    }}
+                  />
+                );
+              })()}
               <button
                 onClick={() => handleRemove(key)}
                 className="flex items-center justify-center"
@@ -656,7 +657,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="输出字段名"
             valuePlaceholder={'{{context.path}}'}
             baseKeyRef={outputBaseKeyRef}
-            keyOptions={getOutputFieldOptions(node.type)}
+            valueOptions={getOutputFieldOptions(node.type)}
           />
         </div>
       </div>
