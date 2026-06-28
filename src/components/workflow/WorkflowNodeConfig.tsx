@@ -856,6 +856,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           position: 'fixed',
                           left: selectorPos.x,
                           top: selectorPos.y,
+                          transform: 'translateX(-50%)',
                           zIndex: 100,
                           minWidth: 200,
                           maxHeight: 250,
