@@ -281,16 +281,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   }, [def]);
 
-  // 组件挂载时：检查并取消该工作流旧的 running 实例
+  // 组件挂载时：加载实例数据并取消旧的 running 实例
   useEffect(() => {
     if (!definitionId) return;
-    const runningInstances = instances.filter(
-      inst => inst.definitionId === definitionId && inst.status === 'running'
-    );
-    for (const inst of runningInstances) {
-      console.log('[WorkflowEditor] 取消旧的 running 实例:', inst.id);
-      useWorkflowStore.getState().cancelWorkflow(inst.id);
-    }
+    // 先刷新实例数据，确保拿到最新状态
+    useWorkflowStore.getState().loadInstances().then(() => {
+      const currentInstances = useWorkflowStore.getState().instances;
+      const runningInstances = currentInstances.filter(
+        inst => inst.definitionId === definitionId && inst.status === 'running'
+      );
+      for (const inst of runningInstances) {
+        console.log('[WorkflowEditor] 取消旧的 running 实例:', inst.id);
+        useWorkflowStore.getState().cancelWorkflow(inst.id);
+      }
+    });
   }, [definitionId]);
 
   const handleExportWorkflow = useCallback(async () => {
@@ -359,7 +363,34 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const handleRunWorkflow = async () => {
-    if (!definitionId || isRunning) return;
+    if (!definitionId) return;
+    // 如果已经在执行中，先重置状态再重新开始
+    if (isRunning) {
+      console.warn('[WorkflowEditor] 检测到残留执行状态，强制重置');
+      // 清理旧监听
+      if (nodeStatusUnlistenRef.current) {
+        nodeStatusUnlistenRef.current();
+        nodeStatusUnlistenRef.current = null;
+      }
+      setIsRunning(false);
+      // 给 React 一点时间处理状态更新
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    // 执行前主动清理：取消该工作流所有旧的 running 实例
+    try {
+      const currentInstances = useWorkflowStore.getState().instances;
+      const runningInstances = currentInstances.filter(
+        inst => inst.definitionId === definitionId && inst.status === 'running'
+      );
+      for (const inst of runningInstances) {
+        console.log('[WorkflowEditor] 执行前清理旧的 running 实例:', inst.id);
+        await useWorkflowStore.getState().cancelWorkflow(inst.id);
+      }
+    } catch (e) {
+      console.warn('[WorkflowEditor] 清理旧实例失败（可忽略）:', e);
+    }
+    // 重置 executionIdRef
+    executionIdRef.current = null;
     // 强制立即渲染 isRunning=true，避免 React 18 自动批处理合并状态更新
     flushSync(() => {
       setIsRunning(true);
@@ -395,7 +426,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       });
       const unlistenExec = await listen<{ execution_id: string; status: string }>('workflow:execution-status', (event) => {
         if (event.payload.execution_id !== executionIdRef.current) return;
-        if (event.payload.status === 'completed' || event.payload.status === 'failed') {
+        if (event.payload.status === 'completed' || event.payload.status === 'failed' || event.payload.status === 'cancelled') {
           setIsRunning(false);
           // 完成后刷新实例数据
           useWorkflowStore.getState().loadInstances();
@@ -412,10 +443,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       executionIdRef.current = await useWorkflowStore.getState().startWorkflow(definitionId);
       // 加载实例数据（初始状态）
       await useWorkflowStore.getState().loadInstances();
-
     } catch (err) {
       console.error('执行工作流失败:', err);
       setIsRunning(false);
+      executionIdRef.current = null;
     }
   };
 
