@@ -4,15 +4,32 @@ use crate::agent::AgentManager;
 use crate::plugin::PluginHost;
 use tokio::sync::Mutex as AsyncMutex;
 use crate::utils::errors::AppError;
+use async_trait::async_trait;
 use super::registry::{
     NodeDef, NodeOutput, NodeTypeRegistration,
-    NodeTypeRegistrationInfo, WorkflowNodeTypeRegistry, NodeCategory,
+    NodeTypeRegistrationInfo, WorkflowNodeTypeRegistry, NodeCategory, NodeExecutorTrait,
 };
 use super::executors::agent_executor::AgentExecutor;
 use super::executors::transform_executor::TransformExecutor;
 use super::executors::interact_executor::{InteractExecutor, InteractManager};
 use super::executors::api_executor::ApiExecutor;
 use super::executors::plugin_executor::PluginExecuteManager;
+
+/// 边界节点执行器（start/end）— 无操作，直接输入作为输出
+pub struct NoopExecutor;
+
+#[async_trait]
+impl NodeExecutorTrait for NoopExecutor {
+    async fn execute(
+        &self,
+        _node: &NodeDef,
+        resolved_input: Value,
+        _execution_id: &str,
+        _emitter: &tauri::AppHandle,
+    ) -> Result<NodeOutput, AppError> {
+        Ok(NodeOutput { output: resolved_input })
+    }
+}
 
 /// 节点执行器分发器
 pub struct NodeExecutor {
@@ -94,7 +111,23 @@ impl NodeExecutor {
             permissions: vec![],
         });
 
-
+        // 注册 start/end 边界节点（无操作，仅透传输入）
+        registry.register(NodeTypeRegistration {
+            type_id: "start".into(),
+            name: "开始".into(),
+            category: NodeCategory::Builtin,
+            executor: Arc::new(NoopExecutor),
+            config_schema: None,
+            permissions: vec![],
+        });
+        registry.register(NodeTypeRegistration {
+            type_id: "end".into(),
+            name: "结束".into(),
+            category: NodeCategory::Builtin,
+            executor: Arc::new(NoopExecutor),
+            config_schema: None,
+            permissions: vec![],
+        });
 
         let registry_arc = Arc::new(std::sync::Mutex::new(registry));
 

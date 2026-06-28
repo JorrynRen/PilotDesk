@@ -354,20 +354,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setNodeResults({});
     });
     try {
-      // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
-      await invoke('save_workflow_dag', { id: definitionId, stages });
-      // 执行工作流
-      executionIdRef.current = await useWorkflowStore.getState().startWorkflow(definitionId);
+      // 清除历史恢复标记（开始真实执行）
+      setRestoredExecutionId(null);
+      restoredSnapshotRef.current = null;
       // 清理旧的事件监听
       if (nodeStatusUnlistenRef.current) {
         nodeStatusUnlistenRef.current();
         nodeStatusUnlistenRef.current = null;
       }
-      // 清除历史恢复标记（开始真实执行）
-      setRestoredExecutionId(null);
-      restoredSnapshotRef.current = null;
-      // 监听节点执行状态事件
-      const unlisten = await listen<{
+      // 先注册事件监听器（避免竞态条件：引擎启动后立即发出的事件不会丢失）
+      const unlistenNode = await listen<{
         execution_id: string;
         node_id: string;
         status: string;
@@ -385,19 +381,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         // 更新步骤状态（用于连线动画）
         setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev['node_' + nodeId] }));
       });
-      nodeStatusUnlistenRef.current = unlisten;
-      // 监听执行完成事件
-      listen<{ execution_id: string; status: string }>('workflow:execution-status', (event) => {
+      const unlistenExec = await listen<{ execution_id: string; status: string }>('workflow:execution-status', (event) => {
         if (event.payload.execution_id !== executionIdRef.current) return;
         if (event.payload.status === 'completed' || event.payload.status === 'failed') {
           setIsRunning(false);
           // 完成后刷新实例数据
           useWorkflowStore.getState().loadInstances();
         }
-      }).then(fn => {
-        const prev = nodeStatusUnlistenRef.current;
-        nodeStatusUnlistenRef.current = () => { prev?.(); fn(); };
       });
+      // 合并两个 unlisten 函数
+      nodeStatusUnlistenRef.current = () => {
+        unlistenNode();
+        unlistenExec();
+      };
+      // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
+      await invoke('save_workflow_dag', { id: definitionId, stages });
+      // 执行工作流（此时监听器已就绪，不会丢失任何事件）
+      executionIdRef.current = await useWorkflowStore.getState().startWorkflow(definitionId);
       // 加载实例数据（初始状态）
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
