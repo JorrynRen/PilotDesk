@@ -22,6 +22,8 @@ import { PluginAgentAPI } from '../plugin/PluginAPI.agent';
 // ── 模板变量替换 ──
 
 function resolveTemplate(template: string, context: Record<string, any>): string {
+  // 预处理：简写格式 {{参数名.output.节点ID}} → {{nodes.节点ID.output.参数名}}
+  template = template.replace(/\{\{([a-zA-Z_]\w*)\.output\.([a-zA-Z0-9_]+)\}\}/g, '{{nodes.$2.output.$1}}');
   return template.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
     const value = key.trim().split('.').reduce((obj: any, k: string) => obj?.[k], context);
     return value !== undefined ? String(value) : `{{${key}}}`;

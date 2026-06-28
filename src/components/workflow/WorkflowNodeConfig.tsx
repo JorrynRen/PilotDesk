@@ -232,7 +232,7 @@ function getPredecessorOutputOptions(
     const fieldList: { value: string; label: string }[] = [];
     for (const key of outputKeys) {
       fieldList.push({
-        value: `{{nodes.${pn.id}.output.${key}}}`,
+        value: `{{${key}.output.${pn.id}}}`,
         label: key,
       });
     }

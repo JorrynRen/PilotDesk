@@ -14,14 +14,21 @@ pub struct TemplateEngine;
 
 impl TemplateEngine {
     /// 解析模板字符串，替换所有 {{variable}} 占位符
+    /// 预处理：简写格式 {{参数名.output.节点ID}} → {{nodes.节点ID.output.参数名}}
+    fn expand_short_format(template: &str) -> String {
+        let re = Regex::new(r"\{\{([a-zA-Z_]\w*)\.output\.([a-zA-Z0-9_]+)\}\}").unwrap();
+        re.replace_all(template, "{{nodes.$2.output.$1}}").to_string()
+    }
+
     pub fn resolve(
         template: &str,
         context: &HashMap<String, Value>,
     ) -> Result<String, AppError> {
+        let template = Self::expand_short_format(template);
         let re = &*TEMPLATE_REGEX;
         let mut result = template.to_string();
 
-        for cap in re.captures_iter(template) {
+        for cap in re.captures_iter(&template) {
             let expression = cap.get(1).unwrap().as_str().trim();
             let resolved = Self::resolve_expression(expression, context)?;
             result = result.replace(&cap[0], &resolved);
