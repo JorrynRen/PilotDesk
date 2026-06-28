@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
@@ -347,8 +348,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const handleRunWorkflow = async () => {
     if (!definitionId || isRunning) return;
-    setIsRunning(true);
-    setNodeResults({});
+    // 强制立即渲染 isRunning=true，避免 React 18 自动批处理合并状态更新
+    flushSync(() => {
+      setIsRunning(true);
+      setNodeResults({});
+    });
     try {
       // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
       await invoke('save_workflow_dag', { id: definitionId, stages });
