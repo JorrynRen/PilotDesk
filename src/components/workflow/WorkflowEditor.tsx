@@ -376,19 +376,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       // 给 React 一点时间处理状态更新
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    // 执行前主动清理：取消该工作流所有旧的 running 实例
-    try {
-      const currentInstances = useWorkflowStore.getState().instances;
-      const runningInstances = currentInstances.filter(
-        inst => inst.definitionId === definitionId && inst.status === 'running'
-      );
-      for (const inst of runningInstances) {
-        console.log('[WorkflowEditor] 执行前清理旧的 running 实例:', inst.id);
-        await useWorkflowStore.getState().cancelWorkflow(inst.id);
-      }
-    } catch (e) {
-      console.warn('[WorkflowEditor] 清理旧实例失败（可忽略）:', e);
-    }
     // 重置 executionIdRef
     executionIdRef.current = null;
     // 强制立即渲染 isRunning=true，避免 React 18 自动批处理合并状态更新
@@ -440,7 +427,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
       await invoke('save_workflow_dag', { id: definitionId, stages });
       // 执行工作流（此时监听器已就绪，不会丢失任何事件）
-      executionIdRef.current = await useWorkflowStore.getState().startWorkflow(definitionId);
+      executionIdRef.current = await useWorkflowStore.getState().safeStartWorkflow(definitionId);
       // 加载实例数据（初始状态）
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {

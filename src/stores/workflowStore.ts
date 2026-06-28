@@ -26,6 +26,8 @@ interface WorkflowStoreState {
   // 实例管理
   loadInstances: (definitionId?: string) => Promise<void>;
   startWorkflow: (definitionId: string, context?: Record<string, unknown>) => Promise<string>;
+  /** 安全启动工作流：自动清理旧的 running 实例后再执行 */
+  safeStartWorkflow: (definitionId: string, context?: Record<string, unknown>) => Promise<string>;
   cancelWorkflow: (executionId: string) => Promise<void>;
   deleteExecution: (executionId: string) => Promise<void>;
   respondHumanInput: (executionId: string, nodeId: string, response: string) => Promise<void>;
@@ -111,6 +113,23 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
     });
     await get().loadInstances();
     return instance.id;
+  },
+
+  safeStartWorkflow: async (definitionId: string, context?: Record<string, unknown>) => {
+    // 1. 主动清理该工作流所有旧的 running 实例
+    const runningInstances = get().instances.filter(
+      inst => inst.definitionId === definitionId && inst.status === 'running'
+    );
+    for (const inst of runningInstances) {
+      console.log('[workflowStore] safeStartWorkflow: 清理旧的 running 实例:', inst.id);
+      try {
+        await invoke('cancel_workflow', { executionId: inst.id });
+      } catch (e) {
+        console.warn('[workflowStore] 取消旧实例失败（可忽略）:', e);
+      }
+    }
+    // 2. 启动新执行
+    return get().startWorkflow(definitionId, context);
   },
 
   cancelWorkflow: async (executionId: string) => {
