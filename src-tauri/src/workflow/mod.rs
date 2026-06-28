@@ -381,7 +381,15 @@ pub fn create_instance(conn: &Connection, instance: &WorkflowInstance) -> Result
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             instance.id, instance.definition_id, instance.definition_name,
-            serde_json::to_string(&instance.status).map_err(|e| AppError::External(e.to_string()))?,
+            match &instance.status {
+                WorkflowInstanceStatus::Pending => "pending",
+                WorkflowInstanceStatus::Running => "running",
+                WorkflowInstanceStatus::Paused => "paused",
+                WorkflowInstanceStatus::Success => "success",
+                WorkflowInstanceStatus::Failed => "failed",
+                WorkflowInstanceStatus::Cancelled => "cancelled",
+                WorkflowInstanceStatus::Timeout => "timeout",
+            }.to_string(),
             instance.context.to_string(),
             instance.steps.as_ref().map(|s| s.to_string()).unwrap_or_else(|| "null".to_string()),
             instance.current_node_id, instance.trigger, instance.trigger_detail,
