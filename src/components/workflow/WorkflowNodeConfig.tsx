@@ -280,6 +280,7 @@ const MappingEditor: React.FC<{
 
   const handleKeyChange = (oldKey: string, newKey: string) => {
     if (oldKey === newKey) return;
+    if (newKey.trim() === '') return;
     const newMap: Record<string, string> = {};
     for (const [k, v] of Object.entries(value || {})) {
       newMap[k === oldKey ? newKey : k] = v;
