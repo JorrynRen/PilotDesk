@@ -493,7 +493,7 @@ const MappingEditor: React.FC<{
                         }
                         return valueOptions.map((stage, si) => (
                           <div key={si}>
-                            {/* 第一级：阶段名 */}
+                            {/* 第一级：[序号] 阶段名 */}
                             {stage.group && (
                               <div
                                 style={{
@@ -505,10 +505,10 @@ const MappingEditor: React.FC<{
                                   background: 'var(--bg-tertiary)',
                                 }}
                               >
-                                {stage.group}
+                                [{si + 1}] {stage.group}
                               </div>
                             )}
-                            {/* 第二级：节点名 */}
+                            {/* 第二级：├─[node] 节点名 */}
                             {stage.children && stage.children.map((nodeGroup, ni) => (
                               <div key={ni}>
                                 <div
@@ -520,9 +520,9 @@ const MappingEditor: React.FC<{
                                     borderBottom: '1px solid var(--border)',
                                   }}
                                 >
-                                  {nodeGroup.group}
+                                  ├─[node] {nodeGroup.group}
                                 </div>
-                                {/* 第三级：字段名 */}
+                                {/* 第三级：├─参数名 */}
                                 {nodeGroup.options.map((opt) => (
                                   <div
                                     key={opt.value}
@@ -539,7 +539,7 @@ const MappingEditor: React.FC<{
                                     onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                                     onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                   >
-                                    {opt.label}
+                                    ├─{opt.label}
                                   </div>
                                 ))}
                               </div>
@@ -561,7 +561,7 @@ const MappingEditor: React.FC<{
                                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                               >
-                                {opt.label}
+                                ├─{opt.label}
                               </div>
                             ))}
                           </div>
@@ -848,7 +848,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                         }}
                       >
                         <div style={{ padding: '6px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-secondary)', fontWeight: 600, borderBottom: '1px solid var(--border)', textAlign: 'center' }}>
-                          请选择… (共{textareaFieldOptions.length}个阶段)
+                          请选择…
                         </div>
                         {(() => {
                           const hasOptions = textareaFieldOptions.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
@@ -859,13 +859,13 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                             <div key={si}>
                               {stage.group && (
                                 <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
-                                  {stage.group}
+                                  [{si + 1}] {stage.group}
                                 </div>
                               )}
                               {stage.children && stage.children.map((nodeGroup, ni) => (
                                 <div key={ni}>
                                   <div style={{ padding: '3px 8px 3px 16px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
-                                    {nodeGroup.group}
+                                    ├─[node] {nodeGroup.group}
                                   </div>
                                   {nodeGroup.options.map((opt) => (
                                     <div
@@ -875,7 +875,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                     >
-                                      {opt.label}
+                                      ├─{opt.label}
                                     </div>
                                   ))}
                                 </div>
