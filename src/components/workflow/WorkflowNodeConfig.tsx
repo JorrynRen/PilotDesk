@@ -287,6 +287,7 @@ const MappingEditor: React.FC<{
   const [invalidKeys, setInvalidKeys] = useState<Set<string>>(new Set());
   const [dupKeys, setDupKeys] = useState<Set<string>>(new Set());
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [activeFieldSelector, setActiveFieldSelector] = useState<string | null>(null);
 
   const handleKeyChange = (oldKey: string, newKey: string) => {
     if (oldKey === newKey) return;
@@ -301,6 +302,26 @@ const MappingEditor: React.FC<{
 
   const handleValueChange = (key: string, newValue: string) => {
     onChange({ ...value, [key]: newValue });
+  };
+
+  const handleValueChangeWithTrigger = (key: string, newValue: string, cursorPos: number) => {
+    // 检测光标前是否刚输入了 {{
+    const textBefore = newValue.slice(0, cursorPos);
+    if (textBefore.endsWith('{{') && valueOptions && valueOptions.length > 0) {
+      setActiveFieldSelector(key);
+    }
+    onChange({ ...value, [key]: newValue });
+  };
+
+  const insertFieldAtCursor = (key: string, fieldValue: string) => {
+    const currentVal = value?.[key] || '';
+    // 找到最后一个 {{ 的位置
+    const lastOpen = currentVal.lastIndexOf('{{');
+    if (lastOpen === -1) return;
+    // 替换 {{ 为 {{fieldValue}}
+    const newVal = currentVal.slice(0, lastOpen) + fieldValue;
+    onChange({ ...value, [key]: newVal });
+    setActiveFieldSelector(null);
   };
 
   const handleRemove = (key: string) => {
@@ -391,7 +412,7 @@ const MappingEditor: React.FC<{
                 <div className="flex items-center" style={{ gap: 2 }}>
                   <input
                     value={val}
-                    onChange={(e) => handleValueChange(key, e.target.value)}
+                    onChange={(e) => handleValueChangeWithTrigger(key, e.target.value, e.target.selectionStart || 0)}
                     placeholder={valuePlaceholder}
                     style={{
                       flex: 1,
@@ -483,8 +504,8 @@ const MappingEditor: React.FC<{
                             </div>
                           );
                         }
-                        return valueOptions.map((stage) => (
-                          <div key={stage.group}>
+                        return valueOptions.map((stage, si) => (
+                          <div key={si}>
                             {/* 第一级：阶段名 */}
                             {stage.group && (
                               <div
@@ -501,8 +522,8 @@ const MappingEditor: React.FC<{
                               </div>
                             )}
                             {/* 第二级：节点名 */}
-                            {stage.children && stage.children.map((nodeGroup) => (
-                              <div key={nodeGroup.group}>
+                            {stage.children && stage.children.map((nodeGroup, ni) => (
+                              <div key={ni}>
                                 <div
                                   style={{
                                     padding: '3px 8px 3px 16px',
@@ -554,6 +575,87 @@ const MappingEditor: React.FC<{
                                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                               >
                                 {opt.label}
+                              </div>
+                            ))}
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </>
+                )}
+                {/* {{ 触发选择器 */}
+                {activeFieldSelector === key && valueOptions && (
+                  <>
+                    <div
+                      onClick={() => setActiveFieldSelector(null)}
+                      style={{
+                        position: 'fixed',
+                        inset: 0,
+                        zIndex: 99,
+                      }}
+                    />
+                    <div
+                      style={{
+                        position: 'absolute',
+                        right: 0,
+                        top: '100%',
+                        zIndex: 100,
+                        minWidth: 200,
+                        maxHeight: 200,
+                        overflow: 'auto',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-primary)',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                        fontSize: 'var(--fs-11)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: '6px 8px',
+                          fontSize: 'var(--fs-11)',
+                          color: 'var(--text-secondary)',
+                          fontWeight: 600,
+                          borderBottom: '1px solid var(--border)',
+                          textAlign: 'center',
+                        }}
+                      >
+                        请选择…
+                      </div>
+                      {(() => {
+                        const hasOptions = valueOptions.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
+                        if (!hasOptions) {
+                          return (
+                            <div style={{ padding: '12px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-tertiary)', textAlign: 'center' }}>
+                              暂无可用字段
+                            </div>
+                          );
+                        }
+                        return valueOptions.map((stage, si) => (
+                          <div key={si}>
+                            {stage.group && (
+                              <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
+                                {stage.group}
+                              </div>
+                            )}
+                            {stage.children && stage.children.map((nodeGroup, ni) => (
+                              <div key={ni}>
+                                <div style={{ padding: '3px 8px 3px 16px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
+                                  {nodeGroup.group}
+                                </div>
+                                {nodeGroup.options.map((opt) => (
+                                  <div
+                                    key={opt.value}
+                                    onClick={() => {
+                                      insertFieldAtCursor(key, opt.value);
+                                    }}
+                                    style={{ padding: '5px 8px 5px 28px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                  >
+                                    {opt.label}
+                                  </div>
+                                ))}
                               </div>
                             ))}
                           </div>
