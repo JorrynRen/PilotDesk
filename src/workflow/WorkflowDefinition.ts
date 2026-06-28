@@ -36,6 +36,46 @@ const NODE_TYPE_META: Record<WorkflowNodeType, NodeTypeMeta> = {
   subflow: { label: '子工作流', color: '#79c0ff', icon: '⧉', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
 };
 
+
+// ── 节点输出字段 Schema ──
+
+export interface OutputField {
+  name: string;
+  label: string;
+  type: string;
+  description?: string;
+}
+
+export interface OutputFieldGroup {
+  group: string;
+  fields: OutputField[];
+}
+
+/**
+ * 各节点类型的已知输出字段分组。
+ * 动态类型（api/transform/plugin/subflow）暂不定义，后续规范化。
+ */
+export const NODE_OUTPUT_SCHEMA: Partial<Record<WorkflowNodeType, OutputFieldGroup[]>> = {
+  agent: [
+    { group: '核心输出', fields: [
+      { name: 'content', label: '响应内容', type: 'string', description: 'Agent 的文本响应' },
+    ]},
+    { group: '会话信息', fields: [
+      { name: 'session_id', label: '会话ID', type: 'string', description: '当前会话的唯一标识' },
+      { name: 'agent_type', label: 'Agent类型', type: 'string', description: '使用的 Agent 类型' },
+    ]},
+  ],
+  interact: [
+    { group: '交互配置', fields: [
+      { name: 'type', label: '交互类型', type: 'string', description: '固定为 human_input' },
+      { name: 'prompt', label: '提示文案', type: 'string', description: '向用户展示的提示内容' },
+      { name: 'inputType', label: '输入类型', type: 'string', description: 'text/select/confirm/file' },
+    ]},
+  ],
+  start: [],
+  end: [],
+};
+
 export function getNodeTypeMeta(type: WorkflowNodeType): NodeTypeMeta {
   return NODE_TYPE_META[type] || { label: type, color: '#8b949e', icon: '❓', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 };
 }

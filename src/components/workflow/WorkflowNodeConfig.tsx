@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import type { WorkflowNode, WorkflowNodeType } from '../../types/workflow';
-import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
+import { getNodeTypeMeta, NODE_OUTPUT_SCHEMA } from '../../workflow/WorkflowDefinition';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
@@ -171,12 +171,10 @@ const MappingEditor: React.FC<{
   onChange: (v: Record<string, string>) => void;
   keyPlaceholder: string;
   valuePlaceholder: string;
-  /**
-   * 历史键名引用——用于自动生成后续条目的键名。
-   * 第一个手动输入的键名记为 base，后续条目自动命名为 base2、base3 …
-   */
   baseKeyRef: React.MutableRefObject<string>;
-}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, baseKeyRef }) => {
+  /** 可选：输出字段选项分组，提供时 key 列渲染为级联选择器 */
+  keyOptions?: { group: string; options: { value: string; label: string; description?: string }[] }[];
+}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, baseKeyRef, keyOptions }) => {
   const entries = Object.entries(value || {});
   const [invalidKeys, setInvalidKeys] = useState<Set<string>>(new Set());
   const [dupKeys, setDupKeys] = useState<Set<string>>(new Set());
@@ -188,7 +186,6 @@ const MappingEditor: React.FC<{
       newMap[k === oldKey ? newKey : k] = v;
     }
     onChange(newMap);
-    // 更新 baseKeyRef：始终取第一条目的键名作为 base
     const keys = Object.keys(newMap);
     if (keys.length === 1) baseKeyRef.current = keys[0];
   };
@@ -205,9 +202,6 @@ const MappingEditor: React.FC<{
     setDupKeys((prev) => { const n = new Set(prev); n.delete(key); return n; });
   };
 
-  /**
-   * 验证所有键名：非法字符 / 以数字开头 / 重复。blur 时调用。
-   */
   const validateAllKeys = () => {
     const keys = Object.keys(value || {});
     const invalid = new Set<string>();
@@ -249,6 +243,53 @@ const MappingEditor: React.FC<{
     return null;
   };
 
+  /** 渲染 key 列：有 keyOptions 时渲染为级联选择器，否则为文本输入框 */
+  const renderKeyColumn = (key: string) => {
+    if (keyOptions && keyOptions.length > 0) {
+      // 级联选择器模式
+      const allOptions = keyOptions.flatMap(g => g.options);
+      return (
+        <select
+          value={key}
+          onChange={(e) => handleKeyChange(key, e.target.value)}
+          style={{
+            flex: '0 0 120px',
+            minWidth: 0,
+            padding: '4px 6px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border)',
+            background: 'var(--bg-primary)',
+            color: 'var(--text-primary)',
+            fontSize: 'var(--fs-11)',
+            outline: 'none',
+            fontFamily: 'var(--font-mono)',
+            cursor: 'pointer',
+          }}
+        >
+          {keyOptions.map((group) => (
+            <optgroup key={group.group} label={group.group}>
+              {group.options.map((opt) => (
+                <option key={opt.value} value={opt.value} title={opt.description}>
+                  {opt.label} ({opt.value})
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      );
+    }
+    // 文本输入模式
+    return (
+      <input
+        value={key}
+        onChange={(e) => handleKeyChange(key, e.target.value)}
+        onBlur={validateAllKeys}
+        placeholder={keyPlaceholder}
+        style={getKeyInputStyle(key)}
+      />
+    );
+  };
+
   return (
     <div>
       {entries.length === 0 ? (
@@ -269,13 +310,7 @@ const MappingEditor: React.FC<{
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
           {entries.map(([key, val]) => (
             <div key={key} className="flex items-center" style={{ gap: 4, minWidth: 0 }}>
-              <input
-                value={key}
-                onChange={(e) => handleKeyChange(key, e.target.value)}
-                onBlur={validateAllKeys}
-                placeholder={keyPlaceholder}
-                style={getKeyInputStyle(key)}
-              />
+              {renderKeyColumn(key)}
               <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)', flexShrink: 0 }}>→</span>
               <input
                 value={val}
@@ -326,7 +361,6 @@ const MappingEditor: React.FC<{
     </div>
   );
 };
-
 export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow }) => {
   const meta = getNodeTypeMeta(node.type);
   const configFields = NODE_TYPE_CONFIG_MAP[node.type]?.fields || [];
@@ -604,6 +638,18 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="输出字段名"
             valuePlaceholder={'{{context.path}}'}
             baseKeyRef={outputBaseKeyRef}
+            keyOptions={(() => {
+              const schema = NODE_OUTPUT_SCHEMA[node.type];
+              if (!schema || schema.length === 0) return undefined;
+              return schema.map(g => ({
+                group: g.group,
+                options: g.fields.map(f => ({
+                  value: f.name,
+                  label: f.label,
+                  description: f.description,
+                })),
+              }));
+            })()}
           />
         </div>
       </div>
