@@ -647,48 +647,50 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
         )}
       </div>
 
+      {/* ===== 输入映射 ===== */}
+      <div style={S.sectionGap}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+          <div style={S.sectionTitle}>输入映射</div>
+          <button
+            onClick={() => {
+              const k = nextMappingKey(Object.keys(node.inputMapping || {}), inputBaseKeyRef, 'input');
+              onUpdate({ inputMapping: { ...(node.inputMapping || {}), [k]: '' } });
+            }}
+            className="flex items-center justify-center"
+            style={{
+              padding: '1px 4px',
+              borderRadius: 'var(--radius-md)',
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--accent)',
+              fontSize: 'var(--fs-11)',
+              cursor: 'pointer',
+              flexShrink: 0,
+              lineHeight: '18px',
+            }}
+          >
+            添加
+          </button>
+        </div>
+          <MappingEditor
+            value={node.inputMapping}
+            onChange={(v) => {
+              onUpdate({ inputMapping: v });
+              const keys = Object.keys(v || {});
+              if (keys.length === 1) inputBaseKeyRef.current = keys[0];
+            }}
+            keyPlaceholder="参数名"
+            valuePlaceholder={'{{nodes.nodeId.output.field}}'}
+            baseKeyRef={inputBaseKeyRef}
+            valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
+          />
+      </div>
+
       {/* ===== 节点配置 ===== */}
       {configFields.length > 0 && (
         <div style={S.sectionGap}>
           <div style={S.sectionTitle}>节点配置</div>
-          {/* 输入映射（第二分组第一项） */}
-          <div style={{ marginBottom: 12 }}>
-            <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-              <label style={S.labelSm(0)}>输入映射</label>
-              <button
-                onClick={() => {
-                  const k = nextMappingKey(Object.keys(node.inputMapping || {}), inputBaseKeyRef, 'input');
-                  onUpdate({ inputMapping: { ...(node.inputMapping || {}), [k]: '' } });
-                }}
-                className="flex items-center justify-center"
-                style={{
-                  padding: '1px 4px',
-                  borderRadius: 'var(--radius-md)',
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--accent)',
-                  fontSize: 'var(--fs-11)',
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                  lineHeight: '18px',
-                }}
-              >
-                添加
-              </button>
-            </div>
-            <MappingEditor
-              value={node.inputMapping}
-              onChange={(v) => {
-                onUpdate({ inputMapping: v });
-                const keys = Object.keys(v || {});
-                if (keys.length === 1) inputBaseKeyRef.current = keys[0];
-              }}
-              keyPlaceholder="参数名"
-              valuePlaceholder={'{{nodes.nodeId.output.field}}'}
-              baseKeyRef={inputBaseKeyRef}
-              valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
-            />
-          </div>
+
           {/* 其余配置字段（跳过第一个已在基本信息中） */}
           {configFields.slice(1).map((field) => (
             <div key={field.key} style={S.fieldGap}>
@@ -778,30 +780,29 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
 
       {/* ===== 输出映射 ===== */}
       <div style={S.sectionGap}>
-        <div style={S.sectionTitle}>输出映射</div>
-        <div>
-          <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-            <button
-              onClick={() => {
-                const k = nextMappingKey(Object.keys(node.outputMapping || {}), outputBaseKeyRef, 'output');
-                onUpdate({ outputMapping: { ...(node.outputMapping || {}), [k]: '' } });
-              }}
-              className="flex items-center justify-center"
-              style={{
-                padding: '1px 4px',
-                borderRadius: 'var(--radius-md)',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--accent)',
-                fontSize: 'var(--fs-11)',
-                cursor: 'pointer',
-                flexShrink: 0,
-                lineHeight: '18px',
-              }}
-            >
-              添加
-            </button>
-          </div>
+        <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+          <div style={S.sectionTitle}>输出映射</div>
+          <button
+            onClick={() => {
+              const k = nextMappingKey(Object.keys(node.outputMapping || {}), outputBaseKeyRef, 'output');
+              onUpdate({ outputMapping: { ...(node.outputMapping || {}), [k]: '' } });
+            }}
+            className="flex items-center justify-center"
+            style={{
+              padding: '1px 4px',
+              borderRadius: 'var(--radius-md)',
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--accent)',
+              fontSize: 'var(--fs-11)',
+              cursor: 'pointer',
+              flexShrink: 0,
+              lineHeight: '18px',
+            }}
+          >
+            添加
+          </button>
+        </div>
           <MappingEditor
             value={node.outputMapping}
             onChange={(v) => {
@@ -812,9 +813,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="输出字段名"
             valuePlaceholder={'{{context.path}}'}
             baseKeyRef={outputBaseKeyRef}
-            valueOptions={getOutputFieldOptions(node.type, node.label)}
-          />
-        </div>
+            valueOptions={getOutputFieldOptions(node.type, node.label)} />
       </div>
 
       {/* ===== 控制属性 ===== */}
