@@ -111,7 +111,7 @@ function describeCron(expr: string): string {
 
 export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const navigate = useNavigate();
-  const { definitions, instances, loading, error, loadDefinitions, loadInstances, createDefinition, updateDefinition, deleteDefinition, startWorkflow, selectDefinition } = useWorkflowStore();
+  const { definitions, instances, loading, error, loadDefinitions, loadInstances, createDefinition, updateDefinition, deleteDefinition, deleteExecution, startWorkflow, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances'>('definitions');
   const [showPropertyDialog, setShowPropertyDialog] = useState<'create' | 'edit' | null>(null);
   const [editingDef, setEditingDef] = useState<WorkflowDefinition | null>(null);
@@ -218,6 +218,12 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const handleDelete = async (id: string, name: string) => {
     if (confirm(`确定删除工作流「${name}」？此操作不可撤销。`)) {
       await deleteDefinition(id);
+    }
+  };
+
+  const handleDeleteExecution = async (executionId: string, name: string) => {
+    if (confirm(`确定删除执行记录「${name}」？此操作不可撤销。`)) {
+      await deleteExecution(executionId);
     }
   };
 
@@ -426,9 +432,18 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                         {statusIcon(inst.status)}
                         <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{inst.definitionName}</span>
                       </div>
-                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                        {new Date(Number(inst.createdAt) * 1000).toLocaleString()}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                          {new Date(Number(inst.createdAt) * 1000).toLocaleString()}
+                        </span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteExecution(inst.id, inst.definitionName); }}
+                          className="p-1 rounded hover:bg-red-500/10 transition-colors"
+                          title="删除执行记录"
+                        >
+                          <Trash2 size={12} style={{ color: 'var(--text-tertiary)' }} className="hover:text-red-500" />
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                       ID: {inst.id.slice(0, 12)}... | 触发器: {inst.trigger}

@@ -225,6 +225,13 @@ pub async fn start_workflow(
             }
             Ok(Err(e)) => {
                 log::error!("[WorkflowEngine] 工作流执行失败: id={}, error={}", instance_id_clone, e);
+                // 回滚：更新实例状态为 failed
+                if let Some(conn) = app_handle_clone.try_state::<crate::DbState>().and_then(|s| s.get_conn().ok()) {
+                    let _ = conn.execute(
+                        "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
+                        rusqlite::params![e.to_string(), crate::utils::now(), instance_id_clone],
+                    );
+                }
                 let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
                     "execution_id": instance_id_clone,
                     "status": "failed",
@@ -238,6 +245,13 @@ pub async fn start_workflow(
                     "任务被取消".to_string()
                 };
                 log::error!("[WorkflowEngine] 工作流执行 panic: id={}, error={}", instance_id_clone, msg);
+                // 回滚：更新实例状态为 failed
+                if let Some(conn) = app_handle_clone.try_state::<crate::DbState>().and_then(|s| s.get_conn().ok()) {
+                    let _ = conn.execute(
+                        "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
+                        rusqlite::params![msg, crate::utils::now(), instance_id_clone],
+                    );
+                }
                 let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
                     "execution_id": instance_id_clone,
                     "status": "failed",
@@ -260,6 +274,18 @@ pub fn cancel_workflow(
     workflow::update_instance_status(&conn, &execution_id,
         &workflow::WorkflowInstanceStatus::Cancelled, None, None, None, Some("用户中止"))
         .map_err(|e| format!("更新失败: {}", e))
+}
+
+/// 删除工作流执行记录
+#[tauri::command]
+pub fn delete_execution(
+    state: tauri::State<'_, crate::DbState>,
+    execution_id: String,
+) -> Result<(), String> {
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+    conn.execute("DELETE FROM workflow_instances WHERE id = ?1", rusqlite::params![execution_id])
+        .map_err(|e| format!("删除执行记录失败: {}", e))?;
+    Ok(())
 }
 
 /// 获取执行状态

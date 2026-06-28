@@ -27,6 +27,7 @@ interface WorkflowStoreState {
   loadInstances: (definitionId?: string) => Promise<void>;
   startWorkflow: (definitionId: string, context?: Record<string, unknown>) => Promise<string>;
   cancelWorkflow: (executionId: string) => Promise<void>;
+  deleteExecution: (executionId: string) => Promise<void>;
   respondHumanInput: (executionId: string, nodeId: string, response: string) => Promise<void>;
   selectInstance: (id: string | null) => void;
 }
@@ -114,6 +115,11 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
 
   cancelWorkflow: async (executionId: string) => {
     await invoke('cancel_workflow', { executionId });
+    await get().loadInstances();
+  },
+
+  deleteExecution: async (executionId: string) => {
+    await invoke('delete_execution', { executionId });
     await get().loadInstances();
   },
 

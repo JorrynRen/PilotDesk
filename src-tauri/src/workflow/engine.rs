@@ -30,8 +30,8 @@ fn insert_node_execution(
 ) -> Result<(), AppError> {
     let now = crate::utils::now();
     conn.execute(
-        "INSERT OR REPLACE INTO node_executions (id, execution_id, node_id, status, input_data, started_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT OR REPLACE INTO node_executions (id, execution_id, node_id, status, input_data, started_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
         rusqlite::params![
             format!("{}_{}", execution_id, node_id),
             execution_id, node_id, status, input_data, now, now,
@@ -52,7 +52,7 @@ fn update_node_execution(
     let now = crate::utils::now();
     conn.execute(
         "UPDATE node_executions SET status = ?1, output_data = COALESCE(?2, output_data),
-         error_message = ?3, finished_at = ?4
+         error_message = ?3, finished_at = ?4, updated_at = ?4
          WHERE execution_id = ?5 AND node_id = ?6",
         rusqlite::params![status, output_data, error_message, now, execution_id, node_id],
     )?;
