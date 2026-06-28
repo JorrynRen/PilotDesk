@@ -445,41 +445,58 @@ const MappingEditor: React.FC<{
                         fontSize: 'var(--fs-11)',
                       }}
                     >
-                      {valueOptions.map((group) => (
-                        <div key={group.group}>
-                          <div
-                            style={{
-                              padding: '4px 8px',
-                              fontSize: 'var(--fs-10)',
-                              color: 'var(--text-tertiary)',
-                              fontWeight: 600,
-                              borderBottom: '1px solid var(--border)',
-                              background: 'var(--bg-tertiary)',
-                            }}
-                          >
-                            {group.group}
-                          </div>
-                          {group.options.map((opt) => (
+                      {(() => {
+                        const hasOptions = valueOptions.some(g => g.options.length > 0);
+                        if (!hasOptions) {
+                          return (
                             <div
-                              key={opt.value}
-                              onClick={() => {
-                                handleValueChange(key, opt.value);
-                                setActiveDropdown(null);
-                              }}
                               style={{
-                                padding: '6px 8px',
-                                cursor: 'pointer',
-                                color: 'var(--text-primary)',
-                                borderBottom: '1px solid var(--border)',
+                                padding: '12px 8px',
+                                fontSize: 'var(--fs-11)',
+                                color: 'var(--text-tertiary)',
+                                textAlign: 'center',
                               }}
-                              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                             >
-                              {opt.label}
+                              暂无可用字段
                             </div>
-                          ))}
-                        </div>
-                      ))}
+                          );
+                        }
+                        return valueOptions.map((group) => (
+                          <div key={group.group}>
+                            <div
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: 'var(--fs-10)',
+                                color: 'var(--text-tertiary)',
+                                fontWeight: 600,
+                                borderBottom: '1px solid var(--border)',
+                                background: 'var(--bg-tertiary)',
+                              }}
+                            >
+                              {group.group}
+                            </div>
+                            {group.options.map((opt) => (
+                              <div
+                                key={opt.value}
+                                onClick={() => {
+                                  handleValueChange(key, opt.value);
+                                  setActiveDropdown(null);
+                                }}
+                                style={{
+                                  padding: '6px 8px',
+                                  cursor: 'pointer',
+                                  color: 'var(--text-primary)',
+                                  borderBottom: '1px solid var(--border)',
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                              >
+                                {opt.label}
+                              </div>
+                            ))}
+                          </div>
+                        ));
+                      })()}
                     </div>
                   </>
                 )}
@@ -688,7 +705,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               if (keys.length === 1) inputBaseKeyRef.current = keys[0];
             }}
             keyPlaceholder="参数名"
-            valuePlaceholder={'{{nodes.nodeId.output.field}}'}
+            valuePlaceholder={'输入前序节点输出字段或模板表达式'}
             baseKeyRef={inputBaseKeyRef}
             valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
           />
@@ -819,7 +836,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               if (keys.length === 1) outputBaseKeyRef.current = keys[0];
             }}
             keyPlaceholder="输出字段名"
-            valuePlaceholder={'{{context.path}}'}
+            valuePlaceholder={'输入输出字段值或模板表达式'}
             baseKeyRef={outputBaseKeyRef}
             valueOptions={getOutputFieldOptions(node.type, node.label)} />
       </div>
