@@ -505,7 +505,7 @@ const MappingEditor: React.FC<{
                                   background: 'var(--bg-tertiary)',
                                 }}
                               >
-                                step{si + 1} {stage.group}
+                                [step{si + 1}] {stage.group}
                               </div>
                             )}
                             {/* 第二级：├─[node] 节点名 */}
@@ -634,16 +634,12 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
     const text = textarea.value.slice(0, textarea.selectionStart);
     const lines = text.split('\n');
     const currentLine = lines.length - 1;
-    const currentCol = lines[currentLine].length;
     const style = getComputedStyle(textarea);
     const lineHeight = parseInt(style.lineHeight) || 20;
-    const paddingLeft = parseInt(style.paddingLeft) || 8;
     const paddingTop = parseInt(style.paddingTop) || 6;
-    const fontSize = parseInt(style.fontSize) || 12;
-    const charWidth = fontSize * 0.6;
     return {
-      x: rect.left + paddingLeft + currentCol * charWidth,
-      y: rect.top + paddingTop + currentLine * lineHeight,
+      x: rect.left + rect.width / 2,
+      y: rect.top + paddingTop + (currentLine + 1) * lineHeight,
     };
   };
 
@@ -916,7 +912,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                               <div key={si}>
                                 {stage.group && (
                                   <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
-                                    step{si + 1} {stage.group}
+                                    [step{si + 1}] {stage.group}
                                   </div>
                                 )}
                                 {stage.children && stage.children.map((nodeGroup, ni) => (
