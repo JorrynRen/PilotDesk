@@ -5,7 +5,7 @@
  * 所有样式均使用 CSS 变量，无硬编码色值。
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { WorkflowNode, WorkflowNodeType } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { useWorkflowStore } from '../../stores/workflowStore';
@@ -136,99 +136,121 @@ const S = {
   fieldGap: { marginBottom: 10 } as React.CSSProperties,
 };
 
+/* ---------- 映射键名生成辅助 ---------- */
+
+/**
+ * 为映射编辑器生成下一个新键名。
+ * - currentKeys：当前已有的键名列表
+ * - baseKeyRef：记录第一个手动输入的键名的 ref
+ * - 首次添加返回空字符串（用户需手动输入）
+ * - 后续添加返回 baseKey2、baseKey3 …（自动递增避免冲突）
+ */
+function nextMappingKey(
+  currentKeys: string[],
+  baseKeyRef: React.MutableRefObject<string>,
+): string {
+  if (currentKeys.length === 0) return '';
+  const base = baseKeyRef.current || currentKeys[0];
+  let suffix = 2;
+  const existing = new Set(currentKeys);
+  while (existing.has(base + suffix)) suffix++;
+  return base + suffix;
+}
+
 /* ---------- MappingEditor：键值对列表组件 ---------- */
+
+/**
+ * 非法键名正则：仅允许英文、数字、下划线，且不能以数字开头。
+ */
+const INVALID_KEY_RE = /[^a-zA-Z0-9_]/;
+const STARTS_WITH_DIGIT_RE = /^\d/;
 
 const MappingEditor: React.FC<{
   value?: Record<string, string>;
   onChange: (v: Record<string, string>) => void;
   keyPlaceholder: string;
   valuePlaceholder: string;
-  addLabel: string;
-  defaultKey?: string;
-}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, addLabel, defaultKey }) => {
+  /**
+   * 历史键名引用——用于自动生成后续条目的键名。
+   * 第一个手动输入的键名记为 base，后续条目自动命名为 base2、base3 …
+   */
+  baseKeyRef: React.MutableRefObject<string>;
+}> = ({ value, onChange, keyPlaceholder, valuePlaceholder, baseKeyRef }) => {
   const entries = Object.entries(value || {});
+  const [invalidKeys, setInvalidKeys] = useState<Set<string>>(new Set());
+  const [dupKeys, setDupKeys] = useState<Set<string>>(new Set());
+
   const handleKeyChange = (oldKey: string, newKey: string) => {
+    if (oldKey === newKey) return;
     const newMap: Record<string, string> = {};
     for (const [k, v] of Object.entries(value || {})) {
       newMap[k === oldKey ? newKey : k] = v;
     }
     onChange(newMap);
+    // 更新 baseKeyRef：始终取第一条目的键名作为 base
+    const keys = Object.keys(newMap);
+    if (keys.length === 1) baseKeyRef.current = keys[0];
   };
+
   const handleValueChange = (key: string, newValue: string) => {
     onChange({ ...value, [key]: newValue });
   };
+
   const handleRemove = (key: string) => {
     const newMap = { ...value };
     delete newMap[key];
     onChange(newMap);
+    setInvalidKeys((prev) => { const n = new Set(prev); n.delete(key); return n; });
+    setDupKeys((prev) => { const n = new Set(prev); n.delete(key); return n; });
   };
-  const [newKey, setNewKey] = useState('');
-  const handleAdd = () => {
-    const key = newKey.trim() || defaultKey || 'key';
-    onChange({ ...value, [key]: '' });
-    setNewKey('');
+
+  /**
+   * 验证所有键名：非法字符 / 以数字开头 / 重复。blur 时调用。
+   */
+  const validateAllKeys = () => {
+    const keys = Object.keys(value || {});
+    const invalid = new Set<string>();
+    const dup = new Set<string>();
+    for (const k of keys) {
+      if (INVALID_KEY_RE.test(k) || STARTS_WITH_DIGIT_RE.test(k) || k.trim() === '') {
+        invalid.add(k);
+      }
+    }
+    const seen = new Set<string>();
+    for (const k of keys) {
+      if (seen.has(k)) dup.add(k);
+      seen.add(k);
+    }
+    setInvalidKeys(invalid);
+    setDupKeys(dup);
+    return invalid.size === 0 && dup.size === 0;
   };
+
+  const getKeyInputStyle = (key: string): React.CSSProperties => {
+    const hasError = invalidKeys.has(key) || dupKeys.has(key);
+    return {
+      flex: '0 0 100px',
+      minWidth: 0,
+      padding: '4px 8px',
+      borderRadius: 'var(--radius-md)',
+      border: hasError ? '1px solid var(--color-error, #e53935)' : '1px solid var(--border)',
+      background: 'var(--bg-primary)',
+      color: 'var(--text-primary)',
+      fontSize: 'var(--fs-11)',
+      outline: 'none',
+      fontFamily: 'var(--font-mono)',
+    };
+  };
+
+  const getValidationHint = (key: string): string | null => {
+    if (invalidKeys.has(key)) return '仅允许英文/数字/下划线，不能以数字开头';
+    if (dupKeys.has(key)) return '键名重复';
+    return null;
+  };
+
   return (
     <div>
-      {entries.length === 0 && defaultKey ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
-          <div className="flex items-center" style={{ gap: 4, minWidth: 0 }}>
-            <input
-              value={defaultKey}
-              onChange={(e) => handleKeyChange(defaultKey, e.target.value)}
-              placeholder={keyPlaceholder}
-              style={{
-                flex: '0 0 100px',
-                minWidth: 0,
-                padding: '4px 8px',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border)',
-                background: 'var(--bg-primary)',
-                color: 'var(--text-primary)',
-                fontSize: 'var(--fs-11)',
-                outline: 'none',
-                fontFamily: 'var(--font-mono)',
-              }}
-            />
-            <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)', flexShrink: 0 }}>→</span>
-            <input
-              value={value?.[defaultKey] ?? ''}
-              onChange={(e) => handleValueChange(defaultKey, e.target.value)}
-              placeholder={valuePlaceholder}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                padding: '4px 8px',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border)',
-                background: 'var(--bg-primary)',
-                color: 'var(--text-primary)',
-                fontSize: 'var(--fs-11)',
-                outline: 'none',
-                fontFamily: 'var(--font-mono)',
-              }}
-            />
-            <button
-              onClick={() => handleRemove(defaultKey)}
-              className="flex items-center justify-center"
-              style={{
-                width: 24,
-                height: 24,
-                flexShrink: 0,
-                borderRadius: 'var(--radius-md)',
-                border: 'none',
-                background: 'transparent',
-                color: 'var(--text-tertiary)',
-                fontSize: 'var(--fs-14)',
-                cursor: 'pointer',
-              }}
-              title="删除"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-      ) : entries.length === 0 ? (
+      {entries.length === 0 ? (
         <div
           style={{
             padding: '8px 10px',
@@ -240,7 +262,7 @@ const MappingEditor: React.FC<{
             textAlign: 'center',
           }}
         >
-          暂无映射，点击下方按钮添加
+          暂无映射，点击右侧按钮添加
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 6 }}>
@@ -249,19 +271,9 @@ const MappingEditor: React.FC<{
               <input
                 value={key}
                 onChange={(e) => handleKeyChange(key, e.target.value)}
+                onBlur={validateAllKeys}
                 placeholder={keyPlaceholder}
-                style={{
-                  flex: '0 0 100px',
-                  minWidth: 0,
-                  padding: '4px 8px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-primary)',
-                  color: 'var(--text-primary)',
-                  fontSize: 'var(--fs-11)',
-                  outline: 'none',
-                  fontFamily: 'var(--font-mono)',
-                }}
+                style={getKeyInputStyle(key)}
               />
               <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)', flexShrink: 0 }}>→</span>
               <input
@@ -301,44 +313,15 @@ const MappingEditor: React.FC<{
               </button>
             </div>
           ))}
+          {(invalidKeys.size > 0 || dupKeys.size > 0) && (
+            <div style={{ fontSize: 'var(--fs-10)', color: 'var(--color-error, #e53935)', marginTop: 2 }}>
+              {Array.from(new Set([...invalidKeys, ...dupKeys])).map((k) => (
+                <div key={k}>{k}：{getValidationHint(k)}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
-      <div className="flex items-center" style={{ gap: 4 }}>
-        <input
-          value={newKey}
-          onChange={(e) => setNewKey(e.target.value)}
-          placeholder="新映射键名"
-          style={{
-            flex: 1,
-            padding: '4px 8px',
-            borderRadius: 'var(--radius-md)',
-            border: '1px dashed var(--border)',
-            background: 'var(--bg-primary)',
-            color: 'var(--text-primary)',
-            fontSize: 'var(--fs-11)',
-            outline: 'none',
-            fontFamily: 'var(--font-mono)',
-          }}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (newKey.trim() || defaultKey)) handleAdd(); }}
-        />
-        <button
-          onClick={handleAdd}
-          disabled={!newKey.trim() && !defaultKey}
-          className="flex items-center justify-center"
-          style={{
-            padding: '4px 10px',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--accent)',
-            background: 'var(--accent)',
-            color: '#fff',
-            fontSize: 'var(--fs-11)',
-            cursor: newKey.trim() || defaultKey ? 'pointer' : 'not-allowed',
-            opacity: newKey.trim() || defaultKey ? 1 : 0.5,
-          }}
-        >
-          添加
-        </button>
-      </div>
     </div>
   );
 };
@@ -350,6 +333,8 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const { getEnabledAgentTypes } = useAgentRegistry();
   const enabledAgentTypes = getEnabledAgentTypes();
   const { definitions, loadDefinitions } = useWorkflowStore();
+  const inputBaseKeyRef = useRef<string>('');
+  const outputBaseKeyRef = useRef<string>('');
 
   useEffect(() => {
     if (node.type === 'subflow' && definitions.length === 0) {
@@ -545,28 +530,79 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
       )}
 
       {/* ===== 输入输出映射 ===== */}
-      <div>
+      <div style={S.sectionGap}>
         <div style={S.sectionTitle}>输入输出映射</div>
         <div style={{ marginBottom: 12 }}>
-          <label style={S.labelSm()}>输入映射</label>
+          <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+            <label style={S.labelSm(0)}>输入映射</label>
+            <button
+              onClick={() => {
+                const k = nextMappingKey(Object.keys(node.inputMapping || {}), inputBaseKeyRef);
+                onUpdate({ inputMapping: { ...(node.inputMapping || {}), [k]: '' } });
+              }}
+              className="flex items-center justify-center"
+              style={{
+                padding: '1px 8px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--accent)',
+                background: 'var(--accent)',
+                color: '#fff',
+                fontSize: 'var(--fs-10)',
+                cursor: 'pointer',
+                flexShrink: 0,
+                lineHeight: '18px',
+              }}
+            >
+              + 添加
+            </button>
+          </div>
           <MappingEditor
             value={node.inputMapping}
-            onChange={(v) => onUpdate({ inputMapping: v })}
+            onChange={(v) => {
+              onUpdate({ inputMapping: v });
+              // 更新 baseKeyRef
+              const keys = Object.keys(v || {});
+              if (keys.length === 1) inputBaseKeyRef.current = keys[0];
+            }}
             keyPlaceholder="参数名"
             valuePlaceholder={'{{nodes.nodeId.output.field}}'}
-            addLabel="添加输入映射"
-            defaultKey="input"
+            baseKeyRef={inputBaseKeyRef}
           />
         </div>
         <div>
-          <label style={S.labelSm()}>输出映射</label>
+          <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+            <label style={S.labelSm(0)}>输出映射</label>
+            <button
+              onClick={() => {
+                const k = nextMappingKey(Object.keys(node.outputMapping || {}), outputBaseKeyRef);
+                onUpdate({ outputMapping: { ...(node.outputMapping || {}), [k]: '' } });
+              }}
+              className="flex items-center justify-center"
+              style={{
+                padding: '1px 8px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--accent)',
+                background: 'var(--accent)',
+                color: '#fff',
+                fontSize: 'var(--fs-10)',
+                cursor: 'pointer',
+                flexShrink: 0,
+                lineHeight: '18px',
+              }}
+            >
+              + 添加
+            </button>
+          </div>
           <MappingEditor
             value={node.outputMapping}
-            onChange={(v) => onUpdate({ outputMapping: v })}
+            onChange={(v) => {
+              onUpdate({ outputMapping: v });
+              const keys = Object.keys(v || {});
+              if (keys.length === 1) outputBaseKeyRef.current = keys[0];
+            }}
             keyPlaceholder="输出字段名"
             valuePlaceholder={'{{context.path}}'}
-            addLabel="添加输出映射"
-            defaultKey="output"
+            baseKeyRef={outputBaseKeyRef}
           />
         </div>
       </div>
