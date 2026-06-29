@@ -326,15 +326,14 @@ function getPredecessorOutputOptions(
     options: [],
   }));
 
-  // 5. 在每个阶段分组中注入门控合并输出子项（与节点列表平级）
+  // 5. 门控合并输出放到 stage.options（一级），先于节点分组显示
   for (let ri = 0; ri < result.length; ri++) {
-    // 通过阶段名查找对应的阶段对象（predecessorNodes 与 stages 顺序一致）
     const stageName = result[ri].group;
     const stage = stages.find(s => s.name === stageName);
     if (stage) {
       const gateChild = getGateMergeChild(stage);
       if (gateChild) {
-        result[ri].children.push(gateChild);
+        result[ri].options = gateChild.options;
       }
     }
   }
@@ -599,7 +598,42 @@ const MappingEditor: React.FC<{
                                 [step{si + 1}] {stage.group}
                               </div>
                             )}
-                            {/* 第二级：├─[node] 节点名 */}
+                            {/* 一级（优先）：门控合并输出参数列表 */}
+                            {stage.options.length > 0 && (
+                              <>
+                                <div
+                                  style={{
+                                    padding: '3px 8px 3px 16px',
+                                    fontSize: 'var(--fs-10)',
+                                    color: 'var(--text-secondary)',
+                                    fontWeight: 500,
+                                    borderBottom: '1px solid var(--border)',
+                                  }}
+                                >
+                                  ├─[gate] 门控合并输出
+                                </div>
+                                {stage.options.map((opt) => (
+                                  <div
+                                    key={opt.value}
+                                    onClick={() => {
+                                      handleValueChange(key, opt.value);
+                                      setActiveDropdown(null);
+                                    }}
+                                    style={{
+                                      padding: '5px 8px 5px 28px',
+                                      cursor: 'pointer',
+                                      color: 'var(--text-primary)',
+                                      borderBottom: '1px solid var(--border)',
+                                    }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                  >
+                                    ├─{opt.label}
+                                  </div>
+                                ))}
+                              </>
+                            )}
+                            {/* 二级：├─[node] 节点名（放在门控之后） */}
                             {stage.children && stage.children.map((nodeGroup, ni) => (
                               <div key={ni}>
                                 <div
@@ -613,7 +647,7 @@ const MappingEditor: React.FC<{
                                 >
                                   ├─{nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                 </div>
-                                {/* 第三级：├─参数名 */}
+                                {/* 三级：├─参数名 */}
                                 {nodeGroup.options.map((opt) => (
                                   <div
                                     key={opt.value}
@@ -633,26 +667,6 @@ const MappingEditor: React.FC<{
                                     ├─{opt.label}
                                   </div>
                                 ))}
-                              </div>
-                            ))}
-                            {/* 没有children但有options的兼容（单级） */}
-                            {!stage.children && stage.options.map((opt) => (
-                              <div
-                                key={opt.value}
-                                onClick={() => {
-                                  handleValueChange(key, opt.value);
-                                  setActiveDropdown(null);
-                                }}
-                                style={{
-                                  padding: '6px 8px',
-                                  cursor: 'pointer',
-                                  color: 'var(--text-primary)',
-                                  borderBottom: '1px solid var(--border)',
-                                }}
-                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                              >
-                                ├─{opt.label}
                               </div>
                             ))}
                           </div>
