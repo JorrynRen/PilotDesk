@@ -381,6 +381,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     flushSync(() => {
       setIsRunning(true);
       setNodeResults({});
+      // 执行时取消所有节点选中状态
+      setSelectedNodeId(null);
+      setSelectedNodeIds(new Set());
+      setSelectedStageId(null);
     });
     try {
       // 清除历史恢复标记（开始真实执行）
@@ -1407,7 +1411,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         <path d={baseD} stroke={lineColor} strokeWidth={(isHovered ? 2.5 : edgeRunState === 'running' ? 2.5 : 2) * invScale} fill="none"
           strokeDasharray={edgeRunState === 'running' ? '6 3' : 'none'} style={{ pointerEvents: 'none', transition: 'stroke 0.15s ease, stroke-width 0.15s ease' }} />
         <polygon points={arrowPoints} fill={lineColor} style={{ pointerEvents: 'none' }} />
-        {edgeRunState === 'running' && (<path d={baseD} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ pointerEvents: 'none', animation: 'flowDash 0.8s linear infinite' }} />)}
+        {edgeRunState === 'running' && (<path d={baseD} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ pointerEvents: 'none', animation: 'flowDash 0.3s linear infinite' }} />)}
         {edge.label && (
           <g pointerEvents="all" onClick={() => handleDeleteEdge(edge.id)}>
             <rect x={(SX + TX) / 2 - 20 * invScale} y={(SY + TY) / 2 - 18 * invScale} width={40 * invScale} height={16 * invScale} rx={3 * invScale}
@@ -1498,7 +1502,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" pointerEvents="stroke" style={{ cursor: 'pointer' }} />
           <path d={d} stroke={lc} strokeWidth={sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease', pointerEvents: 'none' }} />
           <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={lc} style={{ pointerEvents: 'none' }} />
-          {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.8s linear infinite', pointerEvents: 'none' }} />}
+          {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.3s linear infinite', pointerEvents: 'none' }} />}
           <g style={{ pointerEvents: 'none' }}>
             <rect x={(srcX + tgtX) / 2 - 16 * invScale} y={(srcY + tgtY) / 2 - 22 * invScale} width={32 * invScale} height={44 * invScale} rx={4 * invScale} fill="var(--bg-primary)" stroke="var(--border)" strokeWidth={0.5 * invScale} />
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{`step${srcStage.order + 1}`}</text>
