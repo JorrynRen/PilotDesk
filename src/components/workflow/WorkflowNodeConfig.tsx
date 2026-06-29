@@ -900,26 +900,6 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                               }
                             }
                           }
-                          // 同阶段中通过边连接的前序节点
-                          if (currentStageIdx >= 0) {
-                            const currentStage = stages[currentStageIdx];
-                            const incomingEdges = currentStage.edges.filter(e => e.target === node.id);
-                            for (const edge of incomingEdges) {
-                              const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                              if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type'] && sourceNode.outputMapping) {
-                                const sidKey = Object.entries(sourceNode.outputMapping).find(([_k, v]) => v === 'session_id');
-                                if (sidKey) {
-                                  const alreadyAdded = options.some(o => o.value.includes(sourceNode.id));
-                                  if (!alreadyAdded) {
-                                    options.push({
-                                      value: `{{${sidKey[1]}.output.${sourceNode.id}}}`,
-                                      label: `[${currentStage.name}] ${sourceNode.label || sourceNode.id}.session_id`,
-                                    });
-                                  }
-                                }
-                              }
-                            }
-                          }
                           return options;
                         })();
                         return (
@@ -953,24 +933,11 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               if (!stages) return null;
               const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
               let hasOptions = false;
-              // 前序阶段
+              // 只检查前序阶段（不含本阶段）
               for (let i = 0; i < currentStageIdx && !hasOptions; i++) {
                 for (const n of stages[i].nodes) {
                   if (n.type === 'agent' && n.params?.agent_type === params['agent_type'] && n.outputMapping) {
                     if (Object.values(n.outputMapping).some(v => v === 'session_id')) {
-                      hasOptions = true;
-                      break;
-                    }
-                  }
-                }
-              }
-              // 同阶段前序节点（通过边连接）
-              if (!hasOptions && currentStageIdx >= 0) {
-                const currentStage = stages[currentStageIdx];
-                for (const edge of currentStage.edges.filter(e => e.target === node.id)) {
-                  const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                  if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type'] && sourceNode.outputMapping) {
-                    if (Object.values(sourceNode.outputMapping).some(v => v === 'session_id')) {
                       hasOptions = true;
                       break;
                     }
