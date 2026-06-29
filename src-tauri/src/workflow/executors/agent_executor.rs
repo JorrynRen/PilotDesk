@@ -8,6 +8,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::workflow::registry::{NodeDef, NodeOutput, NodeExecutorTrait};
 use crate::db::init::DbPool;
 use crate::commands::agents::get_agent_inner;
+use crate::commands::app_settings;
 use crate::workflow::template::TemplateEngine;
 
 pub struct AgentExecutor {
@@ -66,6 +67,27 @@ impl NodeExecutorTrait for AgentExecutor {
                 })
         };
 
+        // 读取工作区目录（默认使用 app 全局工作区目录）
+        let workspace_dir: String = {
+            let conn = self.pool.get().map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
+            match app_settings::get_setting(&conn, "pilotdesk-workspace") {
+                Ok(Some(path)) if !path.is_empty() => {
+                    // 解析 ~ 为用户 home 目录
+                    if path.starts_with('~') {
+                        if let Some(home) = dirs::home_dir() {
+                            let resolved = home.join(&path[2..]); // 跳过 "~\" 或 "~/"
+                            resolved.to_string_lossy().to_string()
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        path
+                    }
+                }
+                _ => String::new(),
+            }
+        };
+
         // 读取会话延续参数
         let session_mode = node.config.get("session_mode")
             .and_then(|v| v.as_str())
@@ -85,7 +107,7 @@ impl NodeExecutorTrait for AgentExecutor {
             &agent_config,
             &context_prompt,
             &Default::default(),
-            "",
+            &workspace_dir,
             &temp_session_id,
             move |chunk| {
                 let _ = emitter_owned.emit("workflow:chunk", serde_json::json!({
