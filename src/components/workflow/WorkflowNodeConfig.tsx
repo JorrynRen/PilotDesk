@@ -249,7 +249,7 @@ function getGateMergeChild(
   if (fieldPaths.length === 0) return null;
 
   return {
-    group: '[gate] 门控合并输出',
+    group: 'stage_output',
     options: fieldPaths,
   };
 }
@@ -339,14 +339,14 @@ function getPredecessorOutputOptions(
     options: [],
   }));
 
-  // 5. 门控合并输出放到 stage.options（一级），先于节点分组显示
+  // 5. 门控合并输出作为 stage.children 中的二级分组（与节点分组同级）
   for (let ri = 0; ri < result.length; ri++) {
     const stageName = result[ri].group;
     const stage = stages.find(s => s.name === stageName);
     if (stage) {
       const gateChild = getGateMergeChild(stage);
       if (gateChild) {
-        result[ri].options = gateChild.options;
+        result[ri].children.push(gateChild);
       }
     }
   }
@@ -611,27 +611,7 @@ const MappingEditor: React.FC<{
                                 [step{si + 1}] {stage.group}
                               </div>
                             )}
-                            {/* 一级（优先）：门控合并输出参数列表项 */}
-                            {stage.options.length > 0 && stage.options.map((opt) => (
-                              <div
-                                key={opt.value}
-                                onClick={() => {
-                                  handleValueChange(key, opt.value);
-                                  setActiveDropdown(null);
-                                }}
-                                style={{
-                                  padding: '6px 8px',
-                                  cursor: 'pointer',
-                                  color: 'var(--text-primary)',
-                                  borderBottom: '1px solid var(--border)',
-                                }}
-                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                              >
-                                ├─{opt.label}
-                              </div>
-                            ))}
-                            {/* 二级：├─[node] 节点名（放在门控之后） */}
+                            {/* 二级：门控合并输出 + 节点分组 */}
                             {stage.children && stage.children.map((nodeGroup, ni) => (
                               <div key={ni}>
                                 <div
