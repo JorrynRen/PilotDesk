@@ -179,11 +179,11 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string, st
  * 计算前序阶段的门控合并输出选项（作为阶段分组的二级子项）
  * 返回 Map: stageName -> gate child group（含 options）
  */
-function getGateMergeChild(
+function getGateMergeOptions(
   predecessorNodes: { stageName: string; node: WorkflowNode }[],
   stageOrder: number,
   gateConfig: GateConfig | undefined,
-): { group: string; options: { value: string; label: string }[] } | null {
+): { value: string; label: string }[] | null {
   if (predecessorNodes.length === 0) return null;
 
   const mergeStrategy = gateConfig?.mergeStrategy || 'merge';
@@ -244,11 +244,18 @@ function getGateMergeChild(
   }
 
   if (fieldPaths.length === 0) return null;
+  return fieldPaths;
+}
 
-  return {
-    group: 'gate_output',
-    options: fieldPaths,
-  };
+/** @deprecated use getGateMergeOptions instead */
+function getGateMergeChild(
+  predecessorNodes: { stageName: string; node: WorkflowNode }[],
+  stageOrder: number,
+  gateConfig: GateConfig | undefined,
+): { group: string; options: { value: string; label: string }[] } | null {
+  const opts = getGateMergeOptions(predecessorNodes, stageOrder, gateConfig);
+  if (!opts) return null;
+  return { group: 'gate_output', options: opts };
 }
 
 function getPredecessorOutputOptions(
@@ -336,7 +343,7 @@ function getPredecessorOutputOptions(
     options: [],
   }));
 
-  // 5. 门控合并输出作为 stage.children 中的二级分组（与节点分组同级）
+  // 5. 门控合并输出作为 stage.options（二级选项），与[node]分组同级
   // 收集所有前序阶段名（包括 stageMap 中已有的 + 同阶段前序节点所在的阶段）
   const allPredecessorStageNames = new Set(result.map(r => r.group));
   for (const p of predecessorNodes) {
@@ -347,18 +354,17 @@ function getPredecessorOutputOptions(
     const stageObj = stages.find(s => s.name === stageName);
     if (stageObj) {
       const stagePredecessors = predecessorNodes.filter(p => p.stageName === stageName);
-      const gateChild = getGateMergeChild(stagePredecessors, stageObj.order, stageObj.gate);
-      if (gateChild) {
-        // 如果该阶段已在 result 中，追加到 children
+      const gateOptions = getGateMergeOptions(stagePredecessors, stageObj.order, stageObj.gate);
+      if (gateOptions) {
+        // 追加到已有阶段的 options，或创建新阶段
         const existing = result.find(r => r.group === stageName);
         if (existing) {
-          existing.children.push(gateChild);
+          existing.options.push(...gateOptions);
         } else {
-          // 该阶段没有节点输出，创建一个新的阶段分组
           result.push({
             group: stageName,
-            children: [gateChild],
-            options: [],
+            children: [],
+            options: gateOptions,
           });
         }
       }
@@ -625,7 +631,28 @@ const MappingEditor: React.FC<{
                                 [step{si + 1}] {stage.group}
                               </div>
                             )}
-                            {/* 二级：门控合并输出 + 节点分组 */}
+                            {/* 二级：gate_output 选项 + [node] 分组 */}
+                            {/* gate_output 选项（直接可点，和[node]标题同级） */}
+                            {stage.options.length > 0 && stage.options.map((opt) => (
+                              <div
+                                key={opt.value}
+                                onClick={() => {
+                                  handleValueChange(key, opt.value);
+                                  setActiveDropdown(null);
+                                }}
+                                style={{
+                                  padding: '6px 8px',
+                                  cursor: 'pointer',
+                                  color: 'var(--text-primary)',
+                                  borderBottom: '1px solid var(--border)',
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                              >
+                                ├─{opt.label}
+                              </div>
+                            ))}
+                            {/* [node] 分组（标题+嵌套字段） */}
                             {stage.children && stage.children.map((nodeGroup, ni) => (
                               <div key={ni}>
                                 <div
@@ -639,49 +666,25 @@ const MappingEditor: React.FC<{
                                 >
                                   ├─{nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                 </div>
-                                {nodeGroup.group === 'stage_output' ? (
-                                  /* stage_output 的 options 是二级选项，直接可点 */
-                                  nodeGroup.options.map((opt) => (
-                                    <div
-                                      key={opt.value}
-                                      onClick={() => {
-                                        handleValueChange(key, opt.value);
-                                        setActiveDropdown(null);
-                                      }}
-                                      style={{
-                                        padding: '6px 8px',
-                                        cursor: 'pointer',
-                                        color: 'var(--text-primary)',
-                                        borderBottom: '1px solid var(--border)',
-                                      }}
-                                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                    >
-                                      ├─{opt.label}
-                                    </div>
-                                  ))
-                                ) : (
-                                  /* [node] 的 options 是三级选项，嵌套在节点分组下 */
-                                  nodeGroup.options.map((opt) => (
-                                    <div
-                                      key={opt.value}
-                                      onClick={() => {
-                                        handleValueChange(key, opt.value);
-                                        setActiveDropdown(null);
-                                      }}
-                                      style={{
-                                        padding: '5px 8px 5px 20px',
-                                        cursor: 'pointer',
-                                        color: 'var(--text-primary)',
-                                        borderBottom: '1px solid var(--border)',
-                                      }}
-                                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                    >
-                                      ├─{opt.label}
-                                    </div>
-                                  ))
-                                )}
+                                {nodeGroup.options.map((opt) => (
+                                  <div
+                                    key={opt.value}
+                                    onClick={() => {
+                                      handleValueChange(key, opt.value);
+                                      setActiveDropdown(null);
+                                    }}
+                                    style={{
+                                      padding: '5px 8px 5px 20px',
+                                      cursor: 'pointer',
+                                      color: 'var(--text-primary)',
+                                      borderBottom: '1px solid var(--border)',
+                                    }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                  >
+                                    ├─{opt.label}
+                                  </div>
+                                ))}
                               </div>
                             ))}
                           </div>
