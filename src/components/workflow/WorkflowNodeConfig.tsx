@@ -187,64 +187,16 @@ function getGateMergeOptions(
   if (predecessorNodes.length === 0) return null;
 
   const mergeStrategy = gateConfig?.mergeStrategy || 'merge';
-  const contextKey = `__gate_merged__.${stageId}`;
-  const fieldPaths: { value: string; label: string }[] = [];
+  const value = `gate_output.${stageId}`;
 
-  if (mergeStrategy === 'merge') {
-    for (const { node } of predecessorNodes) {
-      const outputKeys = Object.keys(node.outputMapping || {});
-      for (const key of outputKeys) {
-        const semanticType = node.outputMapping![key];
-        if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
-        const mergedKey = `${node.id}_${key}`;
-        fieldPaths.push({
-          value: `{{${contextKey}.${mergedKey}}}`,
-          label: `${mergedKey}`,
-        });
-      }
-    }
-  } else if (mergeStrategy === 'concat') {
-    const filteredNodes = predecessorNodes.filter(n => n.node.type !== 'start' && n.node.type !== 'end');
-    for (let j = 0; j < filteredNodes.length; j++) {
-      const node = filteredNodes[j].node;
-      const outputKeys = Object.keys(node.outputMapping || {});
-      for (const key of outputKeys) {
-        const semanticType = node.outputMapping![key];
-        if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
-        fieldPaths.push({
-          value: `{{${contextKey}[${j}].${key}}}`,
-          label: `[${j}].${key}`,
-        });
-      }
-    }
-  } else if (mergeStrategy === 'pick_first' || mergeStrategy === 'pick_last') {
-    const targetNodes = mergeStrategy === 'pick_first' ? predecessorNodes : [...predecessorNodes].reverse();
-    for (const { node } of targetNodes) {
-      const outputKeys = Object.keys(node.outputMapping || {});
-      if (outputKeys.length === 0) continue;
-      for (const key of outputKeys) {
-        const semanticType = node.outputMapping![key];
-        if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
-        fieldPaths.push({
-          value: `{{${contextKey}.${key}}}`,
-          label: `${key}`,
-        });
-      }
-      fieldPaths.push({
-        value: `{{${contextKey}}}`,
-        label: '完整输出',
-      });
-      break;
-    }
-  } else if (mergeStrategy === 'custom') {
-    fieldPaths.push({
-      value: '',
-      label: '(自定义策略，暂不可引用)',
-    });
+  if (mergeStrategy === 'custom') {
+    return [{ value: '', label: '(自定义策略，暂不可引用)' }];
   }
 
-  if (fieldPaths.length === 0) return null;
-  return fieldPaths;
+  return [{
+    value: `{{${value}}}`,
+    label: `门控合并 (${mergeStrategy})`,
+  }];
 }
 
 /** @deprecated use getGateMergeOptions instead */
@@ -262,60 +214,71 @@ function getPredecessorOutputOptions(
   nodeId: string,
   stages: Stage[],
 ): OptionGroup[] {
-  // 1. 找到当前节点所在阶段
+  // 1. 找到当前节点所在阶段索引
   let currentStageIdx = -1;
-  let currentNode: WorkflowNode | undefined;
   for (let i = 0; i < stages.length; i++) {
-    const found = stages[i].nodes.find(n => n.id === nodeId);
-    if (found) {
+    if (stages[i].nodes.some(n => n.id === nodeId)) {
       currentStageIdx = i;
-      currentNode = found;
       break;
     }
   }
   if (currentStageIdx === -1) return [];
 
-  // 2. 收集前序阶段的所有节点 + 同阶段中通过边连接的前序节点
+  // 2. 按拓扑序收集前序节点（只能引用拓扑顺序在前面的节点）
+  //    - 前序阶段的所有节点
+  //    - 同阶段中通过边指向当前节点的源节点
   const predecessorNodes: { stageName: string; node: WorkflowNode }[] = [];
+  const seenNodeIds = new Set<string>();
 
   // 前序阶段的所有节点
   for (let i = 0; i < currentStageIdx; i++) {
     for (const n of stages[i].nodes) {
-      predecessorNodes.push({ stageName: stages[i].name, node: n });
+      if (!seenNodeIds.has(n.id)) {
+        seenNodeIds.add(n.id);
+        predecessorNodes.push({ stageName: stages[i].name, node: n });
+      }
     }
   }
-  
-  // DEBUG: log what we collected
-  console.log('[getPredecessorOutputOptions] nodeId:', nodeId, 'currentStageIdx:', currentStageIdx);
-  console.log('[getPredecessorOutputOptions] stages count:', stages.length);
-  console.log('[getPredecessorOutputOptions] stages names:', stages.map(s => s.name));
-  console.log('[getPredecessorOutputOptions] predecessorNodes:', predecessorNodes.map(p => ({ stageName: p.stageName, nodeLabel: p.node.label, nodeId: p.node.id })));
 
   // 同阶段中，通过边指向当前节点的前序节点
   const currentStage = stages[currentStageIdx];
   const incomingEdges = currentStage.edges.filter(e => e.target === nodeId);
   for (const edge of incomingEdges) {
     const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-    if (sourceNode) {
-      // 避免重复添加（可能已被前序阶段包含）
-      if (!predecessorNodes.some(p => p.node.id === sourceNode.id)) {
-        predecessorNodes.push({ stageName: currentStage.name, node: sourceNode });
-      }
+    if (sourceNode && !seenNodeIds.has(sourceNode.id)) {
+      seenNodeIds.add(sourceNode.id);
+      predecessorNodes.push({ stageName: currentStage.name, node: sourceNode });
     }
   }
 
   if (predecessorNodes.length === 0) return [];
 
-  // 3. 三级分组：阶段 → 节点 → 字段
-  const stageMap = new Map<string, Map<string, { value: string; label: string }[]>>();
+  // 3. 构建结果：阶段 → [node] 分组（节点字段） + gate_output（二级选项）
+  const result: OptionGroup[] = [];
+  const stageGroups = new Map<string, OptionGroup>();
+
+  // 3.1 收集所有前序阶段名（用于后续注入 gate_output）
+  const allPredecessorStageNames = new Set<string>();
+  for (const p of predecessorNodes) {
+    allPredecessorStageNames.add(p.stageName);
+  }
+
+  // 3.2 按阶段分组收集节点输出
   for (const { stageName, node: pn } of predecessorNodes) {
+    // 确保阶段分组存在
+    if (!stageGroups.has(stageName)) {
+      stageGroups.set(stageName, {
+        group: stageName,
+        children: [],
+        options: [],
+      });
+    }
+    const stageObj = stageGroups.get(stageName)!;
+
+    // 节点输出映射参数
     const outputKeys = Object.keys(pn.outputMapping || {});
     if (outputKeys.length === 0 && pn.type !== 'agent') continue;
-    let nodeMap = stageMap.get(stageName);
-    if (!nodeMap) {
-      nodeMap = new Map();
-      stageMap.set(stageName, nodeMap);
-    }
+
     const fieldList: { value: string; label: string }[] = [];
     for (const key of outputKeys) {
       fieldList.push({
@@ -323,55 +286,47 @@ function getPredecessorOutputOptions(
         label: key,
       });
     }
-    // Agent 节点固定输出 session_id，始终作为节点参数提供
+
+    // Agent 节点输出 session_id（排除当前节点自身的 session_id）
     if (pn.type === 'agent' && !outputKeys.some(k => k === 'session_id')) {
       fieldList.push({
         value: `{{session_id.output.${pn.id}}}`,
         label: 'session_id',
       });
     }
-    nodeMap.set(pn.label, fieldList);
-  }
 
-  // 4. 构建结果：每个阶段分组下包含节点输出 + 门控合并输出
-  const result = Array.from(stageMap.entries()).map(([stageName, nodeMap]) => ({
-    group: stageName,
-    children: Array.from(nodeMap.entries()).map(([nodeLabel, options]) => ({
-      group: nodeLabel,
-      options,
-    })),
-    options: [],
-  }));
-
-  // 5. 门控合并输出作为 stage.options（二级选项），与[node]分组同级
-  // 收集所有前序阶段名（包括 stageMap 中已有的 + 同阶段前序节点所在的阶段）
-  const allPredecessorStageNames = new Set(result.map(r => r.group));
-  for (const p of predecessorNodes) {
-    allPredecessorStageNames.add(p.stageName);
-  }
-  // 为每个前序阶段注入 gate_output
-  for (const stageName of allPredecessorStageNames) {
-    const stageObj = stages.find(s => s.name === stageName);
-    if (stageObj) {
-      const stagePredecessors = predecessorNodes.filter(p => p.stageName === stageName);
-      const gateOptions = getGateMergeOptions(stagePredecessors, stageObj.id, stageObj.gate);
-      if (gateOptions) {
-        // 追加到已有阶段的 options，或创建新阶段
-        const existing = result.find(r => r.group === stageName);
-        if (existing) {
-          existing.options.push(...gateOptions);
-        } else {
-          result.push({
-            group: stageName,
-            children: [],
-            options: gateOptions,
-          });
-        }
-      }
+    // 只有有有效字段的节点才添加到分组
+    if (fieldList.length > 0) {
+      stageObj.children!.push({
+        group: pn.label.startsWith('[') ? pn.label : `[node] ${pn.label}`,
+        options: fieldList,
+      });
     }
   }
 
-  console.log('[getPredecessorOutputOptions] result groups:', result.map(r => ({ group: r.group, children: r.children?.map(c => c.group) })));
+  // 3.3 为每个前序阶段注入 gate_output 作为二级选项
+  for (const stageName of allPredecessorStageNames) {
+    const stageObj = stages.find(s => s.name === stageName);
+    if (!stageObj || !stageObj.gate) continue;
+
+    const stagePredecessors = predecessorNodes.filter(p => p.stageName === stageName);
+    const gateOptions = getGateMergeOptions(stagePredecessors, stageObj.id, stageObj.gate);
+    if (!gateOptions) continue;
+
+    const resultStage = stageGroups.get(stageName);
+    if (resultStage) {
+      resultStage.options.push(...gateOptions);
+    }
+  }
+
+  // 4. 将阶段分组按拓扑序排列
+  for (const stageName of allPredecessorStageNames) {
+    const stageObj = stages.find(s => s.name === stageName);
+    if (stageObj && stageGroups.has(stageName)) {
+      result.push(stageGroups.get(stageName)!);
+    }
+  }
+
   return result;
 }
 
