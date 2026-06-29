@@ -958,7 +958,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               if (hasOptions) return null;
               return (
                 <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 4 }}>
-                  提示：前序阶段暂无可引用的 agent 会话ID，请确保前序 agent 节点已配置 session_id 输出映射
+                  提示：前序节点暂无可引用的 agent 会话ID，请确保前序 agent 节点已配置 session_id 输出映射
                 </div>
               );
             })()}
