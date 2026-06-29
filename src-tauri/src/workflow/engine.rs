@@ -310,6 +310,7 @@ impl WorkflowEngine {
                 };
                 let handle = tokio::spawn(async move {
                     let ctx_snapshot = context.lock().await.clone();
+                    log::info!("[WorkflowEngine] Executing node {} (type={:?}), context keys: {:?}", nid, node.node_type, context.lock().await.keys().collect::<Vec<_>>());
                     let resolved_input = resolve_node_input(&node, &ctx_snapshot);
 
                     record_node_execution(&emitter, &exec_id, &nid, "running",
@@ -328,6 +329,7 @@ impl WorkflowEngine {
                             } else {
                                 output.output.clone()
                             };
+                            log::info!("[WorkflowEngine] Start node {} output written to context: {:?}", nid, node_output);
                             context.lock().await.insert(nid.clone(), node_output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(&emitter, &exec_id, &nid, "completed", None,
@@ -652,6 +654,7 @@ impl WorkflowEngine {
         }
 
         let semaphore = Arc::new(Semaphore::new(max_concurrency));
+        log::info!("[WorkflowEngine] Context after start node pre-population: {:?}", context.lock().await.keys().collect::<Vec<_>>());
 
         for stage in &def.stages {
             log::info!("[WorkflowEngine] 执行阶段: id={}, name={}, nodes={}, edges={}", stage.id, stage.name, stage.nodes.len(), stage.edges.len());
@@ -810,11 +813,15 @@ fn node_to_node_def(node: &WorkflowNode) -> NodeDef {
 
 /// 解析节点输入（模板变量替换）
 fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> Value {
+    log::info!("[resolve_node_input] node_id={}, input_mapping={:?}", node.id, node.input_mapping);
+    log::info!("[resolve_node_input] context keys={:?}", context.keys().collect::<Vec<_>>());
     if let Some(mapping) = &node.input_mapping {
         if let Ok(map) = serde_json::from_value::<HashMap<String, String>>(mapping.clone()) {
             let mut resolved = serde_json::Map::new();
             for (key, template) in &map {
-                let value = TemplateEngine::resolve(template, context).unwrap_or_else(|_| template.clone());
+                let resolve_result = TemplateEngine::resolve(template, context);
+                log::info!("[resolve_node_input] key={}, template=\"{}\", resolve_result={:?}", key, template, resolve_result);
+                let value = resolve_result.unwrap_or_else(|_| template.clone());
                 resolved.insert(key.clone(), Value::String(value));
             }
             return Value::Object(resolved);

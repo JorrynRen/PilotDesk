@@ -360,4 +360,149 @@ export function autoAssignStage(stages: Stage[]): Stage[] {
     .map((s, i) => ({ ...s, order: i }));
 }
 
+// ── 映射引用完整性保障 ──
 
+/**
+ * 正则匹配映射值中的节点 ID 引用
+ * 匹配 node_xxx 格式的节点 ID
+ */
+const MAPPING_REF_PATTERN = /node_[a-zA-Z0-9_]+/g;
+
+/**
+ * 清理无效的映射引用
+ *
+ * 构建每个节点的有效上游节点 ID 集合（通过边遍历）。
+ * 检查每个节点的 inputMapping 中引用的节点 ID 是否存在于上游，
+ * 无效引用则清除该映射条目，强制用户重新设置。
+ *
+ * @param stages  工作流阶段列表（不会被修改，返回新的副本）
+ * @returns 清理后的阶段列表
+ */
+export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
+  // 收集所有节点 ID
+  const allNodeIds = new Set<string>();
+  for (const stage of stages) {
+    for (const node of stage.nodes) {
+      allNodeIds.add(node.id);
+    }
+  }
+
+  // 构建每个节点的上游 ID 集合（通过边 source->target）
+  const upstreamMap = new Map<string, Set<string>>();
+  for (const stage of stages) {
+    for (const edge of stage.edges) {
+      if (!upstreamMap.has(edge.target)) {
+        upstreamMap.set(edge.target, new Set());
+      }
+      upstreamMap.get(edge.target)!.add(edge.source);
+      // 传递上游：如果 source 有上游，也加到 target 的上游集合中
+      const srcUpstream = upstreamMap.get(edge.source);
+      if (srcUpstream) {
+        for (const uid of srcUpstream) {
+          upstreamMap.get(edge.target)!.add(uid);
+        }
+      }
+    }
+  }
+
+  // 检查并清理每个节点的 inputMapping
+  return stages.map(stage => {
+    let nodesChanged = false;
+    const newNodes = stage.nodes.map(node => {
+      const inputMapping = node.inputMapping;
+      if (!inputMapping || typeof inputMapping !== 'object' || Object.keys(inputMapping).length === 0) {
+        return node;
+      }
+
+      const nodeUpstream = upstreamMap.get(node.id);
+      const newMapping: Record<string, string> = {};
+      let mappingChanged = false;
+
+      for (const [key, value] of Object.entries(inputMapping)) {
+        if (typeof value !== 'string') {
+          newMapping[key] = value;
+          continue;
+        }
+        // 提取映射值中引用的所有节点 ID
+        const refs = value.match(MAPPING_REF_PATTERN) || [];
+        if (refs.length === 0) {
+          // 无节点引用，保留
+          newMapping[key] = value;
+          continue;
+        }
+        // 检查所有引用是否有效：引用的节点必须存在且为上游节点
+        const allValid = refs.every(refId =>
+          allNodeIds.has(refId) && (nodeUpstream?.has(refId) ?? false)
+        );
+        if (allValid) {
+          newMapping[key] = value;
+        } else {
+          mappingChanged = true;
+          console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 的 inputMapping[' + key + '] 引用无效，已清除: ' + value);
+        }
+      }
+
+      if (mappingChanged) {
+        nodesChanged = true;
+        return { ...node, inputMapping: Object.keys(newMapping).length > 0 ? newMapping : undefined };
+      }
+      return node;
+    });
+
+    return nodesChanged ? { ...stage, nodes: newNodes } : stage;
+  });
+}
+
+/**
+ * 为导入的工作流重新生成所有节点 ID，并更新映射引用
+ *
+ * 为所有节点生成新 ID，构建 old->new 映射表，
+ * 更新 edges、inputMapping、outputMapping 中的 ID 引用。
+ *
+ * @param stages  原始阶段列表（不会被修改，返回新的副本）
+ * @returns ID 重映射后的阶段列表
+ */
+export function remapImportedWorkflowIds(stages: Stage[]): Stage[] {
+  // 1. 收集所有节点 ID 并生成新 ID
+  const idMap = new Map<string, string>();
+  for (const stage of stages) {
+    for (const node of stage.nodes) {
+      idMap.set(node.id, generateId());
+    }
+  }
+
+  // 2. 替换字符串中所有旧 ID 为新 ID
+  const replaceIds = (str: string): string => {
+    let result = str;
+    for (const [oldId, newId] of idMap) {
+      result = result.split(oldId).join(newId);
+    }
+    return result;
+  };
+
+  // 3. 替换 mapping 对象中的 ID 引用
+  const replaceMappingIds = (mapping: Record<string, string> | undefined): Record<string, string> | undefined => {
+    if (!mapping) return mapping;
+    const newMapping: Record<string, string> = {};
+    for (const [key, value] of Object.entries(mapping)) {
+      newMapping[key] = replaceIds(value);
+    }
+    return newMapping;
+  };
+
+  // 4. 重建阶段，更新节点 ID、边引用、映射引用
+  return stages.map(stage => ({
+    ...stage,
+    nodes: stage.nodes.map(node => ({
+      ...node,
+      id: idMap.get(node.id)!,
+      inputMapping: replaceMappingIds(node.inputMapping as Record<string, string> | undefined),
+      outputMapping: replaceMappingIds(node.outputMapping as Record<string, string> | undefined),
+    })),
+    edges: stage.edges.map(edge => ({
+      ...edge,
+      source: idMap.get(edge.source) || edge.source,
+      target: idMap.get(edge.target) || edge.target,
+    })),
+  }));
+}

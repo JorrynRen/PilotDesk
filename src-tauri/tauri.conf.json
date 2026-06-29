@@ -11,9 +11,9 @@
     "windows": [
       {
         "title": "PilotDesk",
-        "width": 1404,
+        "width": 1380,
         "height": 820,
-        "minWidth": 1404,
+        "minWidth": 1380,
         "minHeight": 820,
         "decorations": false,
         "shadow": false,

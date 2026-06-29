@@ -17,7 +17,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
-import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition } from '../../workflow/WorkflowDefinition';
+import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition, sanitizeMappingReferences } from '../../workflow/WorkflowDefinition';
 import WorkflowNodeItem from './WorkflowNodeItem';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
 import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig } from '../../types/workflow';
@@ -275,7 +275,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   useEffect(() => {
     if (def) {
-      setStages(def.stages);
+      setStages(sanitizeMappingReferences(def.stages));
       setName(def.name);
       setDescription(def.description);
     }
@@ -571,19 +571,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           }
         }
       }
-      setStages(remaining.map((s, i) => ({ ...s, order: i })));
+      const cleaned = sanitizeMappingReferences(remaining.map((s, i) => ({ ...s, order: i })));
+      setStages(cleaned);
     } else if (confirmAction.type === 'deleteNode') {
-      setStages(stages.map((s) => ({
+      const afterDeleteNode = stages.map((s) => ({
         ...s,
         nodes: s.nodes.filter((n) => n.id !== confirmAction.targetId),
         edges: s.edges.filter((e) => e.source !== confirmAction.targetId && e.target !== confirmAction.targetId),
-      })));
+      }));
+      setStages(sanitizeMappingReferences(afterDeleteNode));
       if (selectedNodeId === confirmAction.targetId) { setSelectedNodeId(null); setSelectedStageId(null); }
     } else if (confirmAction.type === 'deleteEdge') {
-      setStages(stages.map((s) => ({
+      const afterDeleteEdge = stages.map((s) => ({
         ...s,
         edges: s.edges.filter((e) => e.id !== confirmAction.targetId),
-      })));
+      }));
+      setStages(sanitizeMappingReferences(afterDeleteEdge));
     } else if (confirmAction.type === 'deleteNodes') {
       // 批量删除选中节点（排除边界节点）
       const boundaryIds = new Set<string>();
@@ -593,11 +596,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         }
       }
       const toDelete = new Set([...selectedNodeIds].filter(id => !boundaryIds.has(id)));
-      setStages(stages.map(s => ({
+      const afterDeleteNodes = stages.map(s => ({
         ...s,
         nodes: s.nodes.filter(n => !toDelete.has(n.id)),
         edges: s.edges.filter(e => !toDelete.has(e.source) && !toDelete.has(e.target)),
-      })));
+      }));
+      setStages(sanitizeMappingReferences(afterDeleteNodes));
       setSelectedNodeIds(new Set());
       setSelectedNodeId(null);
       setSelectedStageId(null);

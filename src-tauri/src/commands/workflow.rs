@@ -490,6 +490,9 @@ impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
             }
 
             let nodes: Vec<ExportNode> = stage.nodes.into_iter().map(|node| {
+                // Replace UUIDs in input_mapping/output_mapping with short IDs (n1, n2, ...)
+                let input_mapping = Self::remap_mapping_short_ids(&node.input_mapping, &stage_node_ids);
+                let output_mapping = Self::remap_mapping_short_ids(&node.output_mapping, &stage_node_ids);
                 ExportNode {
                     node_type: node.node_type,
                     label: node.label,
@@ -498,8 +501,8 @@ impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
                     timeout_ms: node.timeout_ms,
                     retry_count: node.retry_count,
                     retry_delay_ms: node.retry_delay_ms,
-                    input_mapping: node.input_mapping,
-                    output_mapping: node.output_mapping,
+                    input_mapping,
+                    output_mapping,
                     position: node.position,
                 }
             }).collect();
@@ -585,6 +588,45 @@ impl ExportWorkflowDefinition {
                 }
             }).collect();
 
+            // Update input_mapping/output_mapping: replace short IDs (n1, n2) with new UUIDs
+            let nodes: Vec<workflow::WorkflowNode> = nodes.into_iter().map(|mut n| {
+                if let Some(ref mapping) = n.input_mapping {
+                    if let Some(val) = mapping.as_object() {
+                        let new_mapping = val.iter()
+                            .map(|(k, v)| {
+                                let new_v = if let Some(s) = v.as_str() {
+                                    Self::remap_mapping_value_uuids(s, &stage_node_map)
+                                        .map(serde_json::Value::String)
+                                        .unwrap_or_else(|| v.clone())
+                                } else {
+                                    v.clone()
+                                };
+                                (k.clone(), new_v)
+                            })
+                            .collect();
+                        n.input_mapping = Some(serde_json::Value::Object(new_mapping));
+                    }
+                }
+                if let Some(ref mapping) = n.output_mapping {
+                    if let Some(val) = mapping.as_object() {
+                        let new_mapping = val.iter()
+                            .map(|(k, v)| {
+                                let new_v = if let Some(s) = v.as_str() {
+                                    Self::remap_mapping_value_uuids(s, &stage_node_map)
+                                        .map(serde_json::Value::String)
+                                        .unwrap_or_else(|| v.clone())
+                                } else {
+                                    v.clone()
+                                };
+                                (k.clone(), new_v)
+                            })
+                            .collect();
+                        n.output_mapping = Some(serde_json::Value::Object(new_mapping));
+                    }
+                }
+                n
+            }).collect();
+
             workflow::Stage {
                 id: crate::utils::new_id(),
                 name: stage.name,
@@ -609,6 +651,46 @@ impl ExportWorkflowDefinition {
             updated_at: now_ts,
             enabled: self.enabled,
         }
+    }
+
+    /// Replace node UUIDs in mapping values with short IDs (n1, n2, ...)
+    /// Used during export to ensure mapping references are in short ID format
+    fn remap_mapping_short_ids(
+        mapping: &Option<serde_json::Value>,
+        uuid_to_short: &std::collections::HashMap<String, usize>,
+    ) -> Option<serde_json::Value> {
+        mapping.as_ref().and_then(|m| m.as_object()).map(|obj| {
+            let new_obj: serde_json::Map<String, serde_json::Value> = obj.iter()
+                .map(|(k, v)| {
+                    let new_v = if let Some(s) = v.as_str() {
+                        let mut result = s.to_string();
+                        // Replace all node UUIDs with their short ID counterparts
+                        for (uuid, &idx) in uuid_to_short {
+                            let short_id = format!("n{}", idx + 1);
+                            result = result.replace(uuid, &short_id);
+                        }
+                        serde_json::Value::String(result)
+                    } else {
+                        v.clone()
+                    };
+                    (k.clone(), new_v)
+                })
+                .collect();
+            serde_json::Value::Object(new_obj)
+        })
+    }
+
+    /// Replace short IDs (n1, n2) in mapping values with new UUIDs
+    /// Used during import to restore mapping references to actual node UUIDs
+    fn remap_mapping_value_uuids(
+        value: &str,
+        short_to_uuid: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
+        let mut result = value.to_string();
+        for (short_id, new_uuid) in short_to_uuid {
+            result = result.replace(short_id, new_uuid);
+        }
+        Some(result)
     }
 }
 
