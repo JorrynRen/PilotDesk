@@ -1097,6 +1097,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         const stageEl = (e.target as HTMLElement).closest('[data-stage]')!;
         const stageId = stageEl?.getAttribute('data-stage-id');
         if (stageId) handleSelectNode(nodeId, stageId, e.ctrlKey || e.metaKey);
+      } else {
+        handleClearSelection();
       }
       // Start panning (left or middle click anywhere pans)
       setIsPanning(true);
