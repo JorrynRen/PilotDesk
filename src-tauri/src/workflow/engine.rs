@@ -519,7 +519,7 @@ impl WorkflowEngine {
         match stage.gate.merge_strategy {
             MergeStrategy::Merge => {
                 let mut merged = serde_json::Map::new();
-                for (_node_id, output) in &node_outputs {
+                for (node_id, output) in &node_outputs {
                     if let Some(obj) = output.as_object() {
                         for (k, v) in obj {
                             merged.insert(format!("{}_{}", node_id, k), v.clone());
