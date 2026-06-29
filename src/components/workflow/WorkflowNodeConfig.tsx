@@ -902,11 +902,11 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           for (let i = 0; i < currentStageIdx; i++) {
                             const stage = stages[i];
                             for (const n of stage.nodes) {
-                              if (n.type === 'agent' && n.outputMapping) {
+                              if (n.type === 'agent' && n.params?.agent_type === params['agent_type'] && n.outputMapping) {
                                 const sidKey = Object.entries(n.outputMapping).find(([_k, v]) => v === 'session_id');
                                 if (sidKey) {
                                   options.push({
-                                    value: `{{${sidKey[0]}.output.${n.id}}}`,
+                                    value: `{{${sidKey[1]}.output.${n.id}}}`,
                                     label: `[${stage.name}] ${n.label || n.id}.session_id`,
                                   });
                                 }
@@ -919,13 +919,13 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                             const incomingEdges = currentStage.edges.filter(e => e.target === node.id);
                             for (const edge of incomingEdges) {
                               const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                              if (sourceNode && sourceNode.type === 'agent' && sourceNode.outputMapping) {
+                              if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type'] && sourceNode.outputMapping) {
                                 const sidKey = Object.entries(sourceNode.outputMapping).find(([_k, v]) => v === 'session_id');
                                 if (sidKey) {
                                   const alreadyAdded = options.some(o => o.value.includes(sourceNode.id));
                                   if (!alreadyAdded) {
                                     options.push({
-                                      value: `{{${sidKey[0]}.output.${sourceNode.id}}}`,
+                                      value: `{{${sidKey[1]}.output.${sourceNode.id}}}`,
                                       label: `[${currentStage.name}] ${sourceNode.label || sourceNode.id}.session_id`,
                                     });
                                   }
@@ -969,7 +969,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               // 前序阶段
               for (let i = 0; i < currentStageIdx && !hasOptions; i++) {
                 for (const n of stages[i].nodes) {
-                  if (n.type === 'agent' && n.outputMapping) {
+                  if (n.type === 'agent' && n.params?.agent_type === params['agent_type'] && n.outputMapping) {
                     if (Object.values(n.outputMapping).some(v => v === 'session_id')) {
                       hasOptions = true;
                       break;
@@ -982,7 +982,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 const currentStage = stages[currentStageIdx];
                 for (const edge of currentStage.edges.filter(e => e.target === node.id)) {
                   const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                  if (sourceNode && sourceNode.type === 'agent' && sourceNode.outputMapping) {
+                  if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type'] && sourceNode.outputMapping) {
                     if (Object.values(sourceNode.outputMapping).some(v => v === 'session_id')) {
                       hasOptions = true;
                       break;
