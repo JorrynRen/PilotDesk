@@ -16,7 +16,7 @@ impl TemplateEngine {
     /// 解析模板字符串，替换所有 {{variable}} 占位符
     /// 预处理：简写格式 {{参数名.output.节点ID}} → {{nodes.节点ID.output.参数名}}
     fn expand_short_format(template: &str) -> String {
-        let re = Regex::new(r"\{\{([a-zA-Z_]\w*)\.output\.([a-zA-Z0-9_]+)\}\}").unwrap();
+        let re = Regex::new(r"\{\{([a-zA-Z_]\w*)\.output\.([^}]+)\}\}").unwrap();
         re.replace_all(template, "{{$2.$1}}").to_string()
     }
 
