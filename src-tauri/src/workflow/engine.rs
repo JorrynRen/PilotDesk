@@ -327,7 +327,29 @@ impl WorkflowEngine {
                         serde_json::to_string(&resolved_input).ok().as_deref(), None, None);
                     emit_node_status(&emitter, &exec_id, &nid, "running", None, None, None, None);
 
-                    let node_def = node_to_node_def(&node);
+                    let mut node_def = node_to_node_def(&node);
+
+                    // Agent 节点：解析 resume_session_ref 模板（从 context 获取实际 session_id）
+                    if node_def.node_type == "agent" {
+                        if let Some(ref_mode) = node_def.config.get("session_mode").and_then(|v| v.as_str()) {
+                            if ref_mode == "resume" {
+                                if let Some(ref_tmpl) = node_def.config.get("resume_session_ref").and_then(|v| v.as_str()) {
+                                    if !ref_tmpl.is_empty() {
+                                        match TemplateEngine::resolve(ref_tmpl, &ctx_snapshot) {
+                                            Ok(resolved_sid) => {
+                                                log::info!("[WorkflowEngine] Agent node {} resume session resolved: {} -> {}", nid, ref_tmpl, resolved_sid);
+                                                node_def.config.as_object_mut()
+                                                    .map(|map| map.insert("resume_session_id".to_string(), Value::String(resolved_sid)));
+                                            }
+                                            Err(e) => {
+                                                log::warn!("[WorkflowEngine] Agent node {} resume session_ref template resolve failed: {}", nid, e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     let result = exec.execute(&node_def, resolved_input.clone(), &exec_id, &emitter).await;
 
@@ -339,7 +361,7 @@ impl WorkflowEngine {
                             } else {
                                 output.output.clone()
                             };
-                            log::info!("[WorkflowEngine] Start node {} output written to context: {:?}", nid, node_output);
+                            log::info!("[WorkflowEngine] Node {} output written to context: {:?}", nid, node_output);
                             context.lock().await.insert(nid.clone(), node_output.clone());
                             node_statuses_clone.lock().await.insert(nid.clone(), "completed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);

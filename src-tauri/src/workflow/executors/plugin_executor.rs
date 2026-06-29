@@ -167,7 +167,7 @@ impl NodeExecutorTrait for PluginExecutor {
         match result {
             Ok(Ok(res)) => {
                 if res.success {
-                    Ok(NodeOutput { output: res.data })
+                    Ok(NodeOutput { output: res.data, session_id: None })
                 } else {
                     Err(AppError::External(
                         res.error.unwrap_or_else(|| "插件命令执行失败".to_string()),

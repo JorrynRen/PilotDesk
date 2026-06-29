@@ -96,6 +96,6 @@ impl NodeExecutorTrait for ApiExecutor {
         let output = serde_json::from_str::<Value>(&body)
             .unwrap_or(Value::String(body));
 
-        Ok(NodeOutput { output })
+        Ok(NodeOutput { output, session_id: None })
     }
 }

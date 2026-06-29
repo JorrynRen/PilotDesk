@@ -28,7 +28,7 @@ impl NodeExecutorTrait for NoopExecutor {
         _execution_id: &str,
         _emitter: &tauri::AppHandle,
     ) -> Result<NodeOutput, AppError> {
-        Ok(NodeOutput { output: resolved_input })
+        Ok(NodeOutput { output: resolved_input, session_id: None })
     }
 }
 

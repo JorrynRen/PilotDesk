@@ -66,7 +66,22 @@ impl NodeExecutorTrait for AgentExecutor {
                 })
         };
 
-        let (output, _agent_session_id) = self.agent_manager.lock().await.execute_once(
+        // 读取会话延续参数
+        let session_mode = node.config.get("session_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("new");
+        // resume_session_ref 已由 engine.rs 通过 TemplateEngine 从 context 中解析为实际 session_id 值
+        let resume_session_id = node.config.get("resume_session_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+
+        let agent_session_id_param = if session_mode == "resume" {
+            resume_session_id
+        } else {
+            None
+        };
+
+        let (output, agent_session_id) = self.agent_manager.lock().await.execute_once(
             &agent_config,
             &context_prompt,
             &Default::default(),
@@ -79,10 +94,23 @@ impl NodeExecutorTrait for AgentExecutor {
                     "content": chunk,
                 }));
             },
+            agent_session_id_param,
         ).await?;
 
+        // 构建结构化输出：{ content: "response", session_id?: "abc" }
+        // 使 outputMapping 的值（content / session_id）可被 {{key.output.nodeId}} 引用
+        let structured_output = if let Some(ref sid) = agent_session_id {
+            Value::Object(serde_json::json!({
+                "content": output,
+                "session_id": sid,
+            }).as_object().unwrap().clone())
+        } else {
+            Value::String(output.clone())
+        };
+
         Ok(NodeOutput {
-            output: Value::String(output),
+            output: structured_output,
+            session_id: agent_session_id,
         })
     }
 }

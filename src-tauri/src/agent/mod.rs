@@ -361,11 +361,12 @@ impl AgentManager {
         cwd: &str,
         _temp_session_id: &str,
         on_chunk: impl Fn(String) + Send + 'static,
+        agent_session_id: Option<&str>,
     ) -> Result<(String, Option<String>), AppError> {
         let process_handler = handler::StdioHandler::from_config(config.clone());
 
         let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type } =
-            Self::spawn_agent_process(config, prompt, None, cwd)
+            Self::spawn_agent_process(config, prompt, agent_session_id, cwd)
                 .map_err(|e| AppError::External(e))?;
 
         // 后台收集 stderr（含 session_id 提取）

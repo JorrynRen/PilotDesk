@@ -25,6 +25,9 @@ pub struct NodeDef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeOutput {
     pub output: Value,
+    /// Agent 节点的会话 session_id（用于后续节点延续会话）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// 节点执行器 trait — 所有节点类型实现此接口
