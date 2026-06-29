@@ -898,6 +898,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           if (!stages) return [];
                           const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
                           const options: { value: string; label: string }[] = [];
+                          // 前序阶段中的所有节点
                           for (let i = 0; i < currentStageIdx; i++) {
                             const stage = stages[i];
                             for (const n of stage.nodes) {
@@ -908,6 +909,26 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                     value: `{{${sidKey[0]}.output.${n.id}}}`,
                                     label: `[${stage.name}] ${n.label || n.id}.session_id`,
                                   });
+                                }
+                              }
+                            }
+                          }
+                          // 同阶段中通过边连接的前序节点
+                          if (currentStageIdx >= 0) {
+                            const currentStage = stages[currentStageIdx];
+                            const incomingEdges = currentStage.edges.filter(e => e.target === node.id);
+                            for (const edge of incomingEdges) {
+                              const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
+                              if (sourceNode && sourceNode.type === 'agent' && sourceNode.outputMapping) {
+                                const sidKey = Object.entries(sourceNode.outputMapping).find(([_k, v]) => v === 'session_id');
+                                if (sidKey) {
+                                  const alreadyAdded = options.some(o => o.value.includes(sourceNode.id));
+                                  if (!alreadyAdded) {
+                                    options.push({
+                                      value: `{{${sidKey[0]}.output.${sourceNode.id}}}`,
+                                      label: `[${currentStage.name}] ${sourceNode.label || sourceNode.id}.session_id`,
+                                    });
+                                  }
                                 }
                               }
                             }
@@ -945,10 +966,24 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               if (!stages) return null;
               const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
               let hasOptions = false;
+              // 前序阶段
               for (let i = 0; i < currentStageIdx && !hasOptions; i++) {
                 for (const n of stages[i].nodes) {
                   if (n.type === 'agent' && n.outputMapping) {
                     if (Object.values(n.outputMapping).some(v => v === 'session_id')) {
+                      hasOptions = true;
+                      break;
+                    }
+                  }
+                }
+              }
+              // 同阶段前序节点（通过边连接）
+              if (!hasOptions && currentStageIdx >= 0) {
+                const currentStage = stages[currentStageIdx];
+                for (const edge of currentStage.edges.filter(e => e.target === node.id)) {
+                  const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
+                  if (sourceNode && sourceNode.type === 'agent' && sourceNode.outputMapping) {
+                    if (Object.values(sourceNode.outputMapping).some(v => v === 'session_id')) {
                       hasOptions = true;
                       break;
                     }
