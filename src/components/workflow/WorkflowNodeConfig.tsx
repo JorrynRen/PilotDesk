@@ -920,7 +920,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                             onChange={(e) => handleParamChange('resume_session_ref', e.target.value)}
                             style={S.select()}
                           >
-                            <option value="">请选择延续会话ID</option>
+                            <option value="">请选项会话ID</option>
                             {prevAgentOptions.map((opt) => (
                               <option key={opt.value} value={opt.value}>{opt.label}</option>
                             ))}
