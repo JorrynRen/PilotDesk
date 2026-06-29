@@ -813,16 +813,24 @@ fn node_to_node_def(node: &WorkflowNode) -> NodeDef {
 
 /// 解析节点输入（模板变量替换）
 fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> Value {
-    log::info!("[resolve_node_input] node_id={}, input_mapping={:?}", node.id, node.input_mapping);
-    log::info!("[resolve_node_input] context keys={:?}", context.keys().collect::<Vec<_>>());
     if let Some(mapping) = &node.input_mapping {
         if let Ok(map) = serde_json::from_value::<HashMap<String, String>>(mapping.clone()) {
             let mut resolved = serde_json::Map::new();
             for (key, template) in &map {
                 let resolve_result = TemplateEngine::resolve(template, context);
-                log::info!("[resolve_node_input] key={}, template=\"{}\", resolve_result={:?}", key, template, resolve_result);
-                let value = resolve_result.unwrap_or_else(|_| template.clone());
-                resolved.insert(key.clone(), Value::String(value));
+                match resolve_result {
+                    Ok(value) => {
+                        resolved.insert(key.clone(), Value::String(value));
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[resolve_node_input] 节点 {} 的 inputMapping[{}] 模板解析失败: {} (模板=\"{}\")",
+                            node.id, key, e, template
+                        );
+                        // 解析失败时保留原始模板字符串，便于排查
+                        resolved.insert(key.clone(), Value::String(template.clone()));
+                    }
+                }
             }
             return Value::Object(resolved);
         }

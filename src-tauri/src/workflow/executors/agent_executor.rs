@@ -33,32 +33,23 @@ impl NodeExecutorTrait for AgentExecutor {
         let agent_type = node.config.get("agent_type")
             .and_then(|v| v.as_str())
             .unwrap_or("claude");
-        let prompt = node.config.get("prompt_template")
+        let prompt_template = node.config.get("prompt_template")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        // 解析 prompt_template 中的 {{variable}} 占位符
         // 将 resolved_input 转为 HashMap 作为模板上下文
+        // resolved_input 已经是 engine.rs 中 resolve_node_input 解析后的确定值
         let prompt = if let Value::Object(map) = &resolved_input {
             let ctx: std::collections::HashMap<String, serde_json::Value> = map.iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
-            TemplateEngine::resolve(prompt, &ctx).unwrap_or_else(|_| prompt.to_string())
+            TemplateEngine::resolve(prompt_template, &ctx).unwrap_or_else(|_| prompt_template.to_string())
         } else {
-            prompt.to_string()
+            prompt_template.to_string()
         };
 
-        // 将上游输入注入到 prompt 上下文中
-        let raw_prompt = if !resolved_input.is_null() {
-            format!("{}
-
-上游输入:
-{}", prompt, serde_json::to_string_pretty(&resolved_input).unwrap_or_default())
-        } else {
-            prompt.to_string()
-        };
         // 换行转义：CLI 参数中的实际换行会导致 cmd.exe 截断，转义为 \n 字面量
-        let context_prompt = raw_prompt.replace('\n', "\\n");
+        let context_prompt = prompt.replace('\n', "\\n");
 
         let temp_session_id = format!("wf_{}_{}", execution_id, node.id);
         let exec_id = execution_id.to_string();
@@ -75,7 +66,7 @@ impl NodeExecutorTrait for AgentExecutor {
                 })
         };
 
-        let (output, agent_session_id) = self.agent_manager.lock().await.execute_once(
+        let (output, _agent_session_id) = self.agent_manager.lock().await.execute_once(
             &agent_config,
             &context_prompt,
             &Default::default(),
@@ -93,7 +84,6 @@ impl NodeExecutorTrait for AgentExecutor {
         Ok(NodeOutput {
             output: serde_json::json!({
                 "text": output,
-                "agent_session_id": agent_session_id,
             }),
         })
     }
