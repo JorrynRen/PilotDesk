@@ -883,55 +883,54 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 {configFields[0].key === 'agent_type' && (() => {
                   const sessionMode = params['session_mode'] || 'new';
                   return (
-                    <select
-                      value={sessionMode}
-                      onChange={(e) => handleParamChange('session_mode', e.target.value)}
-                      style={S.select({ minWidth: 90 })}
-                    >
-                      <option value="new">新会话</option>
-                      <option value="resume">延续会话</option>
-                    </select>
+                    <>
+                      <select
+                        value={sessionMode}
+                        onChange={(e) => handleParamChange('session_mode', e.target.value)}
+                        style={S.select({ minWidth: 90 })}
+                      >
+                        <option value="new">新会话</option>
+                        <option value="resume">延续会话</option>
+                      </select>
+                      {sessionMode === 'resume' && (() => {
+                        const resumeRef = params['resume_session_ref'] || '';
+                        const prevAgentOptions = (() => {
+                          if (!stages) return [];
+                          const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
+                          const options: { value: string; label: string }[] = [];
+                          for (let i = 0; i < currentStageIdx; i++) {
+                            const stage = stages[i];
+                            for (const n of stage.nodes) {
+                              if (n.type === 'agent' && n.outputMapping) {
+                                const sidKey = Object.entries(n.outputMapping).find(([_k, v]) => v === 'session_id');
+                                if (sidKey) {
+                                  options.push({
+                                    value: `{{${sidKey[0]}.output.${n.id}}}`,
+                                    label: `[${stage.name}] ${n.label || n.id}.session_id`,
+                                  });
+                                }
+                              }
+                            }
+                          }
+                          return options;
+                        })();
+                        return (
+                          <select
+                            value={resumeRef}
+                            onChange={(e) => handleParamChange('resume_session_ref', e.target.value)}
+                            style={S.select()}
+                          >
+                            <option value="">请选择延续会话ID</option>
+                            {prevAgentOptions.map((opt) => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        );
+                      })()}
+                    </>
                   );
                 })()}
               </div>
-              {/* 延续会话ID选择器 — 显示在下一行 */}
-              {configFields[0].key === 'agent_type' && params['session_mode'] === 'resume' && (() => {
-                const resumeRef = params['resume_session_ref'] || '';
-                const prevAgentOptions = (() => {
-                  if (!stages) return [];
-                  const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
-                  const options: { value: string; label: string }[] = [];
-                  for (let i = 0; i < currentStageIdx; i++) {
-                    const stage = stages[i];
-                    for (const n of stage.nodes) {
-                      if (n.type === 'agent' && n.outputMapping) {
-                        const sidKey = Object.entries(n.outputMapping).find(([_k, v]) => v === 'session_id');
-                        if (sidKey) {
-                          options.push({
-                            value: `{{${sidKey[0]}.output.${n.id}}}`,
-                            label: `[${stage.name}] ${n.label || n.id}.session_id`,
-                          });
-                        }
-                      }
-                    }
-                  }
-                  return options;
-                })();
-                return (
-                  <div style={{ marginTop: 6 }}>
-                    <select
-                      value={resumeRef}
-                      onChange={(e) => handleParamChange('resume_session_ref', e.target.value)}
-                      style={S.select()}
-                    >
-                      <option value="">请选择前序会话ID</option>
-                      {prevAgentOptions.map((opt) => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                );
-              })()}
             ) : (
               <input
                 type={configFields[0].type || 'text'}
