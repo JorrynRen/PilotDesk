@@ -198,7 +198,7 @@ function getGateMergeChild(
         const mergedKey = `${node.id}_${key}`;
         fieldPaths.push({
           value: `{{${contextKey}.${mergedKey}}}`,
-          label: `[${node.label || node.id}] ${node.outputMapping![key]}`,
+          label: `${node.outputMapping![key]}`,
         });
       }
     }
@@ -211,7 +211,7 @@ function getGateMergeChild(
       for (const key of outputKeys) {
         fieldPaths.push({
           value: `{{${contextKey}[${j}].${key}}}`,
-          label: `[${node.label || node.id}] ${node.outputMapping![key]}`,
+          label: `${node.outputMapping![key]}`,
         });
       }
     }
@@ -224,12 +224,12 @@ function getGateMergeChild(
       for (const key of outputKeys) {
         fieldPaths.push({
           value: `{{${contextKey}.${key}}}`,
-          label: `[${node.label || node.id}] ${node.outputMapping![key]}`,
+          label: `${node.outputMapping![key]}`,
         });
       }
       fieldPaths.push({
         value: `{{${contextKey}}}`,
-        label: `[${node.label || node.id}] 完整输出`,
+        label: '完整输出',
       });
       break;
     }
