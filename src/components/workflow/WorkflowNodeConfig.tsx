@@ -305,9 +305,13 @@ function getPredecessorOutputOptions(
   }
 
   // 3.3 为每个前序阶段注入 gate_output 作为二级选项
+  // 注意：本阶段节点不能引用本阶段门控合并变量（门控合并在本阶段所有节点执行完后才产生）
+  // 只注入前序阶段的 gate_output，排除当前阶段
   for (const stageName of allPredecessorStageNames) {
     const stageObj = stages.find(s => s.name === stageName);
     if (!stageObj || !stageObj.gate) continue;
+    // 跳过当前阶段
+    if (stageObj.order === currentStageIdx) continue;
 
     const stagePredecessors = predecessorNodes.filter(p => p.stageName === stageName);
     const gateOptions = getGateMergeOptions(stagePredecessors, stageObj.id, stageObj.gate);
@@ -885,16 +889,36 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           if (!stages) return [];
                           const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
                           const options: { value: string; label: string }[] = [];
-                          // 前序阶段中的所有节点
+                          const seenNodeIds = new Set<string>();
+                          // 前序阶段中的所有同类型 agent 节点
                           for (let i = 0; i < currentStageIdx; i++) {
                             const stage = stages[i];
                             for (const n of stage.nodes) {
                               if (n.type === 'agent' && n.params?.agent_type === params['agent_type'] && n.outputMapping) {
                                 const sidKey = Object.entries(n.outputMapping).find(([_k, v]) => v === 'session_id');
-                                if (sidKey) {
+                                if (sidKey && !seenNodeIds.has(n.id)) {
+                                  seenNodeIds.add(n.id);
                                   options.push({
                                     value: `{{${sidKey[1]}.output.${n.id}}}`,
                                     label: `[${stage.name}] ${n.label || n.id}.session_id`,
+                                  });
+                                }
+                              }
+                            }
+                          }
+                          // 同阶段中通过边连接的前序同类型 agent 节点
+                          if (currentStageIdx >= 0) {
+                            const currentStage = stages[currentStageIdx];
+                            const incomingEdges = currentStage.edges.filter(e => e.target === node.id);
+                            for (const edge of incomingEdges) {
+                              const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
+                              if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type'] && sourceNode.outputMapping) {
+                                const sidKey = Object.entries(sourceNode.outputMapping).find(([_k, v]) => v === 'session_id');
+                                if (sidKey && !seenNodeIds.has(sourceNode.id)) {
+                                  seenNodeIds.add(sourceNode.id);
+                                  options.push({
+                                    value: `{{${sidKey[1]}.output.${sourceNode.id}}}`,
+                                    label: `[${currentStage.name}] ${sourceNode.label || sourceNode.id}.session_id`,
                                   });
                                 }
                               }
@@ -933,11 +957,24 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               if (!stages) return null;
               const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
               let hasOptions = false;
-              // 只检查前序阶段（不含本阶段）
+              // 检查前序阶段
               for (let i = 0; i < currentStageIdx && !hasOptions; i++) {
                 for (const n of stages[i].nodes) {
                   if (n.type === 'agent' && n.params?.agent_type === params['agent_type'] && n.outputMapping) {
                     if (Object.values(n.outputMapping).some(v => v === 'session_id')) {
+                      hasOptions = true;
+                      break;
+                    }
+                  }
+                }
+              }
+              // 检查同阶段前序节点（通过边连接）
+              if (!hasOptions && currentStageIdx >= 0) {
+                const currentStage = stages[currentStageIdx];
+                for (const edge of currentStage.edges.filter(e => e.target === node.id)) {
+                  const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
+                  if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type'] && sourceNode.outputMapping) {
+                    if (Object.values(sourceNode.outputMapping).some(v => v === 'session_id')) {
                       hasOptions = true;
                       break;
                     }
