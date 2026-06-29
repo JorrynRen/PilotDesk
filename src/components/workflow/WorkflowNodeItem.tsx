@@ -109,7 +109,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
                 ? 'inset 0 0 12px #f59e0b66, inset 0 0 24px #f59e0b33'
                 : 'var(--shadow-sm)',
         animation: runState === 'running' ? 'pulseGlow 1.5s ease-in-out infinite' : 'none',
-        zIndex: isDraggingThis ? 20 : 2,
+        zIndex: isDraggingThis ? 20 : showResult ? 30 : 2,
         userSelect: 'none',
         transformOrigin: '80px 30px',
         transform: `scale(${isDraggingThis ? 1.03 / scale : 1 / scale})`,
@@ -134,11 +134,30 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
           {node.label}
         </span>
-        {runState === 'success' && (
-          <span className="text-[10px] ml-auto shrink-0" style={{ color: '#3fb950' }}>✓</span>
-        )}
-        {runState === 'failed' && (
-          <span className="text-[10px] ml-auto shrink-0" style={{ color: '#f85149' }}>✗</span>
+        {(runState === 'success' || runState === 'failed') && (
+          <span
+            className="ml-auto shrink-0"
+            style={{
+              width: 16,
+              height: 16,
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 9,
+              lineHeight: 1,
+              fontWeight: 700,
+              color: '#fff',
+              background: runState === 'success'
+                ? 'linear-gradient(135deg, #3fb950, #2ea043)'
+                : 'linear-gradient(135deg, #f85149, #da3633)',
+              boxShadow: runState === 'success'
+                ? '0 1px 3px rgba(63,185,80,0.4)'
+                : '0 1px 3px rgba(248,81,73,0.4)',
+            }}
+          >
+            {runState === 'success' ? '✓' : '✗'}
+          </span>
         )}
       </div>
 
@@ -159,7 +178,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             fontSize: 10,
             lineHeight: 1.5,
             color: 'var(--text-secondary)',
-            zIndex: 10,
+            zIndex: 50,
             boxShadow: 'var(--shadow-md)',
           }}
         >

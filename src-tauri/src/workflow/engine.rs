@@ -361,8 +361,21 @@ impl WorkflowEngine {
                             } else {
                                 output.output.clone()
                             };
+                            // Agent 节点：将 content 和 session_id 组装为对象存入 context
+                            // 使模板 {{key.output.nodeId}} 可解析 content / session_id 字段
+                            // 同时保留 session_id 到独立 key 供直接引用
+                            if let Some(ref sid) = output.session_id {
+                                let ctx_value = serde_json::json!({
+                                    "content": node_output,
+                                    "session_id": sid,
+                                });
+                                context.lock().await.insert(nid.clone(), ctx_value);
+                                context.lock().await.insert(format!("__session_id__{}", nid), Value::String(sid.clone()));
+                                log::info!("[WorkflowEngine] Agent node {} context: content + session_id({})", nid, sid);
+                            } else {
+                                context.lock().await.insert(nid.clone(), node_output.clone());
+                            }
                             log::info!("[WorkflowEngine] Node {} output written to context: {:?}", nid, node_output);
-                            context.lock().await.insert(nid.clone(), node_output.clone());
                             node_statuses_clone.lock().await.insert(nid.clone(), "completed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(&emitter, &exec_id, &nid, "completed", None,

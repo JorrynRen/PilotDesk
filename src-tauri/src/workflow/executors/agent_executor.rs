@@ -97,19 +97,9 @@ impl NodeExecutorTrait for AgentExecutor {
             agent_session_id_param,
         ).await?;
 
-        // 构建结构化输出：{ content: "response", session_id?: "abc" }
-        // 使 outputMapping 的值（content / session_id）可被 {{key.output.nodeId}} 引用
-        let structured_output = if let Some(ref sid) = agent_session_id {
-            Value::Object(serde_json::json!({
-                "content": output,
-                "session_id": sid,
-            }).as_object().unwrap().clone())
-        } else {
-            Value::String(output.clone())
-        };
-
+        // output 只存 agent 原始返回文本，session_id 放 NodeOutput.session_id 字段
         Ok(NodeOutput {
-            output: structured_output,
+            output: Value::String(output),
             session_id: agent_session_id,
         })
     }

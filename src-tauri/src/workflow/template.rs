@@ -75,6 +75,13 @@ impl TemplateEngine {
             }
         }
 
+        // 支持 __session_id__{nodeId} 直接获取 agent session_id
+        if expr.starts_with("__session_id__") {
+            if let Some(val) = context.get(expr) {
+                return Ok(Self::value_to_string(val));
+            }
+        }
+
         let parts: Vec<&str> = expr.splitn(2, '.').collect();
         if parts.len() < 2 {
             // 简单变量名（无点号），直接查 context

@@ -90,6 +90,11 @@ impl ProcessHandler for StdioHandler {
             } else {
                 args.extend(resume_parts);
             }
+
+            // 恢复会话时，移除 -p/--print 标志
+            // Claude CLI 限制：--print 模式下 --resume 只接受 UUID session ID
+            // 移除后使用交互模式恢复，支持任意格式 session ID
+            args.retain(|a| a != "-p" && a != "--print");
         }
 
         // 消息内容作为单个原子参数（关键修复！）
