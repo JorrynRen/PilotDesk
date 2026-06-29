@@ -133,6 +133,8 @@ pub enum MergeStrategy {
     Concat,
     #[serde(rename = "pick_first")]
     PickFirst,
+    #[serde(rename = "pick_last")]
+    PickLast,
     #[serde(rename = "custom")]
     Custom(String),
 }

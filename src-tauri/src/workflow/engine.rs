@@ -439,8 +439,79 @@ impl WorkflowEngine {
             MergeStrategy::PickFirst => {
                 node_outputs.first().map(|(_, v)| (*v).clone()).unwrap_or(Value::Null)
             }
+            MergeStrategy::PickLast => {
+                node_outputs.last().map(|(_, v)| (*v).clone()).unwrap_or(Value::Null)
+            }
             MergeStrategy::Custom(ref script) => {
-                Value::String(format!("custom_merge:{}", script))
+                // Helper: 从 Value 中按路径提取字段
+                fn extract_by_path(val: &Value, path: &str) -> Value {
+                    if path.is_empty() {
+                        return val.clone();
+                    }
+                    let parts: Vec<&str> = path.split('.').collect();
+                    let mut current: Value = val.clone();
+                    for part in &parts {
+                        if let Some(obj) = current.as_object() {
+                            current = obj.get(*part).cloned().unwrap_or(Value::Null);
+                        } else {
+                            return Value::Null;
+                        }
+                    }
+                    current
+                }
+
+                if let Some(rest) = script.strip_prefix("merge:") {
+                    let mut merged = serde_json::Map::new();
+                    for item in rest.split(',') {
+                        let item = item.trim();
+                        if let Some(dot_pos) = item.find('.') {
+                            let node_id = &item[..dot_pos];
+                            let field_path = &item[dot_pos + 1..];
+                            if let Some((_, node_val)) = node_outputs.iter()
+                                .find(|(id, _)| id.as_str() == node_id)
+                            {
+                                let extracted = extract_by_path(node_val, field_path);
+                                if extracted != Value::Null {
+                                    let key = field_path.split('.').last().map(|s| s.to_string()).unwrap_or_default();
+                                    merged.insert(key, extracted);
+                                }
+                            }
+                        }
+                    }
+                    Value::Object(merged)
+                } else if let Some(rest) = script.strip_prefix("pick:") {
+                    let rest = rest.trim();
+                    if let Some(dot_pos) = rest.find('.') {
+                        let node_id = &rest[..dot_pos];
+                        let field_path = &rest[dot_pos + 1..];
+                        if let Some((_, val)) = node_outputs.iter()
+                            .find(|(id, _)| id.as_str() == node_id)
+                        {
+                            extract_by_path(val, field_path)
+                        } else {
+                            Value::Null
+                        }
+                    } else {
+                        node_outputs.iter()
+                            .find(|(id, _)| id.as_str() == rest)
+                            .map(|(_, v)| (*v).clone())
+                            .unwrap_or(Value::Null)
+                    }
+                } else if let Some(rest) = script.strip_prefix("wrap:") {
+                    let mut parts = rest.splitn(3, ':');
+                    let prefix = parts.next().unwrap_or("");
+                    let suffix = parts.next().unwrap_or("");
+                    let key = format!("{}{}{}", prefix, "output", suffix);
+                    if let Some((_, val)) = node_outputs.first() {
+                        let mut wrapped = serde_json::Map::new();
+                        wrapped.insert(key, (*val).clone());
+                        Value::Object(wrapped)
+                    } else {
+                        Value::Object(serde_json::Map::new())
+                    }
+                } else {
+                    Value::Object(serde_json::Map::new())
+                }
             }
         }
     }

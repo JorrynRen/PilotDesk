@@ -171,6 +171,91 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string, st
 
 /* ---------- 前序节点输出选项（输入映射用） ---------- */
 
+/**
+ * 计算前序阶段的门控合并输出键名
+ * 根据阶段配置和节点 outputMapping 推导 gate merge 后的可用字段
+ */
+function getGateMergeOutputOptions(
+  currentStageIdx: number,
+  stages: Stage[],
+): OptionGroup[] {
+  const gateGroups: OptionGroup[] = [];
+
+  for (let i = 0; i < currentStageIdx; i++) {
+    const stage = stages[i];
+    if (!stage) continue;
+
+    const mergeStrategy = stage.gate?.mergeStrategy || 'merge';
+    const stageOrder = stage.order ?? i;
+    const contextKey = `__stage_${stageOrder}_output__`;
+    const fieldPaths: { value: string; label: string }[] = [];
+
+    if (mergeStrategy === 'merge') {
+      for (const node of stage.nodes) {
+        if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+        const outputKeys = Object.keys(node.outputMapping || {});
+        if (outputKeys.length === 0) continue;
+        for (const key of outputKeys) {
+          const mergedKey = `${node.id}_${key}`;
+          fieldPaths.push({
+            value: `{{${contextKey}.${mergedKey}}}`,
+            label: `[${node.label || node.id}] ${key}`,
+          });
+        }
+      }
+    } else if (mergeStrategy === 'concat') {
+      for (let j = 0; j < stage.nodes.length; j++) {
+        const node = stage.nodes[j];
+        if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+        const outputKeys = Object.keys(node.outputMapping || {});
+        if (outputKeys.length === 0) continue;
+        for (const key of outputKeys) {
+          fieldPaths.push({
+            value: `{{${contextKey}[${j}].${key}}}`,
+            label: `[${node.label || node.id}] ${key}`,
+          });
+        }
+      }
+    } else if (mergeStrategy === 'pick_first' || mergeStrategy === 'pick_last') {
+      const targetNodes = mergeStrategy === 'pick_first' ? stage.nodes : [...stage.nodes].reverse();
+      for (const node of targetNodes) {
+        if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+        const outputKeys = Object.keys(node.outputMapping || {});
+        if (outputKeys.length === 0) continue;
+        for (const key of outputKeys) {
+          fieldPaths.push({
+            value: `{{${contextKey}.${key}}}`,
+            label: `[${node.label || node.id}] ${key}`,
+          });
+        }
+        fieldPaths.push({
+          value: `{{${contextKey}}}`,
+          label: `[${node.label || node.id}] 完整输出`,
+        });
+        break;
+      }
+    } else if (mergeStrategy === 'custom') {
+      fieldPaths.push({
+        value: '',
+        label: '(自定义策略，暂不可引用)',
+      });
+    }
+
+    if (fieldPaths.length > 0) {
+      gateGroups.push({
+        group: `[gate] ${stage.name}`,
+        children: [{
+          group: '门控合并输出',
+          options: fieldPaths,
+        }],
+        options: [],
+      });
+    }
+  }
+
+  return gateGroups;
+}
+
 function getPredecessorOutputOptions(
   nodeId: string,
   stages: Stage[],
@@ -239,6 +324,9 @@ function getPredecessorOutputOptions(
     nodeMap.set(pn.label, fieldList);
   }
 
+  // 4. 添加门控合并输出选项（前序阶段的 gate merge 结果）
+  const gateMergeOptions = getGateMergeOutputOptions(currentStageIdx, stages);
+
   const result = Array.from(stageMap.entries()).map(([stageName, nodeMap]) => ({
     group: stageName,
     children: Array.from(nodeMap.entries()).map(([nodeLabel, options]) => ({
@@ -247,6 +335,12 @@ function getPredecessorOutputOptions(
     })),
     options: [],
   }));
+
+  // 将 gate merge 选项插入到结果最前面
+  if (gateMergeOptions.length > 0) {
+    result.unshift(...gateMergeOptions);
+  }
+
   console.log('[getPredecessorOutputOptions] result groups:', result.map(r => ({ group: r.group, children: r.children?.map(c => c.group) })));
   return result;
 }
