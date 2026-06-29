@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use crate::db::models::SkillInfo;
 use crate::utils::paths::resolve_in_path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,11 +13,9 @@ use crate::utils::errors::AppError;
 
 pub mod handler;
 
-
-
-// ──────────────────────────────────────────────
+// ------------------------------------------------------------------
 //  输出解析器
-// ──────────────────────────────────────────────
+// ------------------------------------------------------------------
 
 #[allow(dead_code)]
 fn parse_claude_output(line: &str) -> Option<String> {
@@ -80,9 +77,7 @@ fn parse_hermes_output(line: &str) -> Option<String> {
 
 #[allow(dead_code)]
 fn parse_codex_output(line: &str) -> Option<String> {
-    // Codex --json mode outputs JSONL events
     if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
-        // Extract text from item.completed events
         if event["type"] == "item.completed" {
             if let Some(text) = event["item"]["text"].as_str() {
                 let trimmed = text.trim();
@@ -93,7 +88,6 @@ fn parse_codex_output(line: &str) -> Option<String> {
         }
         None
     } else {
-        // Fallback: plain text output
         let trimmed = line.trim();
         if !trimmed.is_empty() {
             Some(trimmed.to_string() + "\n")
@@ -103,9 +97,9 @@ fn parse_codex_output(line: &str) -> Option<String> {
     }
 }
 
-// ──────────────────────────────────────────────
+// ------------------------------------------------------------------
 //  统一错误映射
-// ──────────────────────────────────────────────
+// ------------------------------------------------------------------
 
 fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> String {
     let d = stderr.to_lowercase();
@@ -130,13 +124,22 @@ fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> Strin
     if detail.is_empty() { prefix } else { format!("{}：{}", prefix, detail) }
 }
 
-// ──────────────────────────────────────────────
+// ------------------------------------------------------------------
 //  进程管理
-// ──────────────────────────────────────────────
+// ------------------------------------------------------------------
 
 struct AgentProcess {
     pid: Option<u32>,
     aborted: Arc<AtomicBool>,
+}
+
+/// 共享的进程启动结果
+struct SpawnedProcess {
+    child: tokio::process::Child,
+    stdout: tokio::process::ChildStdout,
+    stderr: tokio::process::ChildStderr,
+    stderr_buf: Arc<Mutex<String>>,
+    agent_type: String,
 }
 
 pub struct AgentManager {
@@ -148,43 +151,36 @@ impl AgentManager {
         Self { processes: HashMap::new() }
     }
 
-pub async fn send_message_with_config(
-        &mut self,
-        app_handle: tauri::AppHandle,
-        session_id: String,
-        config: AgentConfig,
-        message: String,
-        _mode: String,
-        cwd: Option<String>,
-        _system_prompt: Option<String>,
-        agent_session_id: Option<String>,
-    ) -> Result<(), String> {
-        let process_handler = handler::StdioHandler::from_config(config);
-        let agent_type = process_handler.config.agent_type.clone();
-        let cmd_name = process_handler.config.cli_command.clone();
+    // -- 共享方法：构建命令 -> 启动进程 -> 返回管道 --
 
-        let aborted = Arc::new(AtomicBool::new(false));
-        let aborted_clone = aborted.clone();
+    fn spawn_agent_process(
+        config: &AgentConfig,
+        message: &str,
+        agent_session_id: Option<&str>,
+        cwd: &str,
+    ) -> Result<SpawnedProcess, String> {
+        let process_handler = handler::StdioHandler::from_config(config.clone());
+        let agent_type = config.agent_type.clone();
+        let cmd_name = config.cli_command.clone();
 
-        let (cmd_name_from_template, args) = process_handler.build_command(&message, agent_session_id.as_deref());
-        // Use the command name from template if available, otherwise fallback to cli_command
+        let (cmd_name_from_template, args) = process_handler.build_command(message, agent_session_id);
         let effective_cmd = if cmd_name_from_template.is_empty() {
-            cmd_name.clone()
+            cmd_name
         } else {
             cmd_name_from_template
         };
 
-        let work_dir = cwd.unwrap_or_else(|| {
+        let work_dir = if cwd.is_empty() {
             std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default()
-        });
+        } else {
+            cwd.to_string()
+        };
 
-        // 使用 resolve_in_path 解析完整路径（PATH 解析）
         let resolved_cmd = resolve_in_path(&effective_cmd)
             .unwrap_or_else(|| effective_cmd.to_string());
 
-        // Windows: .cmd/.bat 文件需要 cmd /C 包装
         #[cfg(target_os = "windows")]
         let mut child = {
             let mut cmd = Command::new("cmd");
@@ -212,31 +208,83 @@ pub async fn send_message_with_config(
                 .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?
         };
 
-        let pid = child.id().unwrap_or(0);
         let stdout = child.stdout.take()
             .ok_or_else(|| format!("无法获取 {} stdout", agent_type))?;
         let stderr = child.stderr.take()
             .ok_or_else(|| format!("无法获取 {} stderr", agent_type))?;
 
-        // 共享 stderr 缓冲区
         let stderr_buf = Arc::new(Mutex::new(String::new()));
-        let stderr_buf_for_reader = stderr_buf.clone();
+
+        Ok(SpawnedProcess {
+            child,
+            stdout,
+            stderr,
+            stderr_buf,
+            agent_type,
+        })
+    }
+
+    // -- 前端会话模式：Event 推送 --
+
+    pub async fn send_message_with_config(
+        &mut self,
+        app_handle: tauri::AppHandle,
+        session_id: String,
+        config: AgentConfig,
+        message: String,
+        _mode: String,
+        cwd: Option<String>,
+        _system_prompt: Option<String>,
+        agent_session_id: Option<String>,
+    ) -> Result<(), String> {
+        let process_handler = handler::StdioHandler::from_config(config.clone());
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_clone = aborted.clone();
+
+        let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type } =
+            Self::spawn_agent_process(&config, &message, agent_session_id.as_deref(), cwd.as_deref().unwrap_or(""))?;
+
+        let pid = child.id().unwrap_or(0);
 
         self.processes.insert(session_id.clone(), AgentProcess {
             pid: Some(pid),
             aborted: aborted_clone,
         });
 
+        // 后台收集 stderr（含 session_id 提取）
         let handler_for_stderr = process_handler.clone();
-        let app_clone = app_handle.clone();
-        let sid = session_id.clone();
-        let agent_type_name = agent_type.clone();
-
-        let agent_type_name_for_stderr = agent_type_name.clone();
         let app_clone_for_stderr = app_handle.clone();
         let sid_for_stderr = session_id.clone();
+        let stderr_buf_for_reader = stderr_buf.clone();
+        let agent_type_name_for_stderr = agent_type.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(sid_agent) = handler_for_stderr.extract_session_id(&line, true) {
+                    let _ = app_clone_for_stderr.emit("agent-session", serde_json::json!({
+                        "sessionId": sid_for_stderr,
+                        "agentSessionId": sid_agent,
+                    }));
+                }
+                if let Ok(mut buf) = stderr_buf_for_reader.lock() {
+                    buf.push_str(&line);
+                    buf.push('\n');
+                }
+            }
+            if let Ok(buf) = stderr_buf_for_reader.lock() {
+                if !buf.is_empty() {
+                    log::warn!("[Agent/{}] send_message stderr: {}", agent_type_name_for_stderr, buf.trim());
+                }
+            }
+        });
 
         // 主任务：读取 stdout（带 300s 超时）+ 等待子进程 + 检查退出码
+        let app_clone = app_handle.clone();
+        let sid = session_id.clone();
+        let agent_type_name2 = agent_type.clone();
+
         tokio::spawn(async move {
             let timeout_duration = Duration::from_secs(300);
 
@@ -248,7 +296,6 @@ pub async fn send_message_with_config(
                 while let Ok(Some(line)) = lines.next_line().await {
                     if aborted.load(Ordering::Relaxed) { break; }
 
-                    // 使用 handler 提取 session_id（从 stdout）
                     if let Some(sid_agent) = process_handler.extract_session_id(&line, false) {
                         let _ = app_clone.emit("agent-session", serde_json::json!({
                             "sessionId": sid,
@@ -283,7 +330,7 @@ pub async fn send_message_with_config(
                             let stderr_text = stderr_buf.lock()
                                 .map(|b| b.clone())
                                 .unwrap_or_default();
-                            let err_msg = friendly_agent_error(&agent_type_name, code, &stderr_text);
+                            let err_msg = friendly_agent_error(&agent_type_name2, code, &stderr_text);
                             let _ = app_clone.emit("agent-error", serde_json::json!({
                                 "sessionId": sid,
                                 "error": err_msg,
@@ -292,7 +339,7 @@ pub async fn send_message_with_config(
                     }
                 }
                 Err(e) => {
-                    log::warn!("[Agent/{}] wait() failed: {}", agent_type_name, e);
+                    log::warn!("[Agent/{}] wait() failed: {}", agent_type_name2, e);
                 }
             }
 
@@ -301,114 +348,42 @@ pub async fn send_message_with_config(
             }));
         });
 
-        // 后台收集 stderr
-        tokio::spawn(async move {
-            let reader = BufReader::new(stderr);
-            use tokio::io::AsyncBufReadExt;
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                // 使用 handler 提取 session_id（从 stderr）
-                if let Some(sid_agent) = handler_for_stderr.extract_session_id(&line, true) {
-                    let _ = app_clone_for_stderr.emit("agent-session", serde_json::json!({
-                        "sessionId": sid_for_stderr,
-                        "agentSessionId": sid_agent,
-                    }));
-                }
-                if let Ok(mut buf) = stderr_buf_for_reader.lock() {
-                    buf.push_str(&line);
-                    buf.push('\n');
-                }
-            }
-            if let Ok(buf) = stderr_buf_for_reader.lock() {
-                if !buf.is_empty() {
-                    log::warn!("[Agent/{}] stderr: {}", agent_type_name_for_stderr, buf.trim());
-                }
-            }
-        });
-
         Ok(())
     }
 
-    /// 单次执行模式：启动 Agent → 发送消息 → 收集输出 → 返回
-    /// 与 send_message_with_config 的区别：
-    /// - 不依赖前端 Tauri Event 流式推送，直接返回完整输出
-    /// - 每次启动新进程（不使用 --resume）
-    /// - 提取 agent_session_id 用于调试追溯
+    // -- 单次执行模式：直接返回完整输出 --
+
     pub async fn execute_once(
         &mut self,
-        agent_type: &str,
+        config: &AgentConfig,
         prompt: &str,
         _params: &serde_json::Value,
         cwd: &str,
         _temp_session_id: &str,
         on_chunk: impl Fn(String) + Send + 'static,
     ) -> Result<(String, Option<String>), AppError> {
-        // 从 DB 读取 Agent 配置
-        let config = crate::commands::agents::get_agent_config_by_type(agent_type)
-            .unwrap_or_default();
-        let process_handler = handler::StdioHandler::from_config(config);
-        let cmd_name = process_handler.config.cli_command.clone();
+        let process_handler = handler::StdioHandler::from_config(config.clone());
 
-        let (cmd_name_from_template, args) = process_handler.build_command(prompt, None);
-        let effective_cmd = if cmd_name_from_template.is_empty() {
-            cmd_name.clone()
-        } else {
-            cmd_name_from_template
-        };
+        let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type } =
+            Self::spawn_agent_process(config, prompt, None, cwd)
+                .map_err(|e| AppError::External(e))?;
 
-        let work_dir = if cwd.is_empty() {
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default()
-        } else {
-            cwd.to_string()
-        };
-
-        let resolved_cmd = resolve_in_path(&effective_cmd)
-            .unwrap_or_else(|| effective_cmd.to_string());
-
-        #[cfg(target_os = "windows")]
-        let mut child = {
-            let mut cmd = tokio::process::Command::new("cmd");
-            cmd.arg("/C");
-            cmd.arg(&resolved_cmd);
-            cmd.args(&args);
-            cmd.current_dir(&work_dir);
-            cmd.stdout(std::process::Stdio::piped());
-            cmd.stderr(std::process::Stdio::piped());
-            cmd.kill_on_drop(true);
-            cmd.env_remove("PYTHONHOME");
-            cmd.spawn()
-                .map_err(|e| AppError::External(format!("启动 {} 失败: {}", agent_type, e)))?
-        };
-        #[cfg(not(target_os = "windows"))]
-        let mut child = {
-            let mut cmd = tokio::process::Command::new(&resolved_cmd);
-            cmd.args(&args);
-            cmd.current_dir(&work_dir);
-            cmd.stdout(std::process::Stdio::piped());
-            cmd.stderr(std::process::Stdio::piped());
-            cmd.kill_on_drop(true);
-            cmd.env_remove("PYTHONHOME");
-            cmd.spawn()
-                .map_err(|e| AppError::External(format!("启动 {} 失败: {}", agent_type, e)))?
-        };
-
-        let stdout = child.stdout.take()
-            .ok_or_else(|| AppError::External("无法获取 stdout".into()))?;
-        let stderr = child.stderr.take()
-            .ok_or_else(|| AppError::External("无法获取 stderr".into()))?;
-
-        // 收集 stderr
-        let stderr_buf = Arc::new(Mutex::new(String::new()));
+        // 后台收集 stderr（含 session_id 提取）
         let stderr_buf_clone = stderr_buf.clone();
-        let agent_type_clone = agent_type.to_string();
-
+        let agent_type_clone = agent_type.clone();
+        let process_handler_for_stderr = process_handler.clone();
+        let agent_session_id_shared: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let sid_shared = agent_session_id_shared.clone();
         tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             use tokio::io::AsyncBufReadExt;
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(sid) = process_handler_for_stderr.extract_session_id(&line, true) {
+                    if let Ok(mut s) = sid_shared.lock() {
+                        *s = Some(sid);
+                    }
+                }
                 if let Ok(mut buf) = stderr_buf_clone.lock() {
                     buf.push_str(&line);
                     buf.push('\n');
@@ -429,7 +404,6 @@ pub async fn send_message_with_config(
         let mut agent_session_id: Option<String> = None;
 
         while let Ok(Some(line)) = lines.next_line().await {
-            // 提取 agent_session_id
             if let Some(sid) = process_handler.extract_session_id(&line, false) {
                 agent_session_id = Some(sid);
             }
@@ -439,7 +413,13 @@ pub async fn send_message_with_config(
             }
         }
 
-        // 等待进程退出
+        // 合并 stderr 中提取的 session_id（hermes 的 session_id 来自 stderr）
+        if agent_session_id.is_none() {
+            if let Ok(sid) = agent_session_id_shared.lock() {
+                agent_session_id = sid.clone();
+            }
+        }
+
         let status = child.wait().await
             .map_err(|e| AppError::External(format!("等待进程失败: {}", e)))?;
 
@@ -448,7 +428,7 @@ pub async fn send_message_with_config(
                 let stderr_text = stderr_buf.lock()
                     .map(|b| b.clone())
                     .unwrap_or_default();
-                let err_msg = friendly_agent_error(agent_type, code, &stderr_text);
+                let err_msg = friendly_agent_error(&agent_type, code, &stderr_text);
                 return Err(AppError::External(err_msg));
             }
         }
@@ -462,7 +442,6 @@ pub async fn send_message_with_config(
         }
         if let Some(process) = self.processes.get_mut(session_id) {
             if let Some(pid) = process.pid {
-                // 通过 PID 强制终止进程
                 #[cfg(target_os = "windows")]
                 {
                     let _ = std::process::Command::new("taskkill")
@@ -496,13 +475,10 @@ pub async fn send_message_with_config(
     }
 
     pub async fn list_skills(_agent_type: &str, config: Option<&crate::commands::agents::AgentConfig>) -> Vec<crate::db::models::SkillInfo> {
-        // 仅使用 DB 中配置的技能目录，无硬编码 fallback
         if let Some(cfg) = config {
             if !cfg.skills_dir.is_empty() {
-                // 有明确定义的技能目录路径（支持 {agent_type} 占位符和 ~ 扩展）
                 let resolved = cfg.skills_dir.replace("{agent_type}", &cfg.agent_type);
                 let skills_dir = if resolved.starts_with("~/") {
-                    // 展开 ~ 为用户 home 目录
                     if let Some(home) = home_dir() {
                         home.join(&resolved[2..])
                     } else {
@@ -520,7 +496,7 @@ pub async fn send_message_with_config(
 
 impl Drop for AgentManager {
     fn drop(&mut self) {
-        for (sid, process) in self.processes.drain() {
+        for (_, process) in self.processes.drain() {
             process.aborted.store(true, Ordering::Relaxed);
             if let Some(pid) = process.pid {
                 #[cfg(target_os = "windows")]
@@ -541,17 +517,19 @@ impl Drop for AgentManager {
                         .spawn();
                 }
             }
-            log::info!("[Agent] Cleaned up session: {}", sid);
         }
     }
 }
 
-// ──────────────────────────────────────────────
-//  已安装 Agent 检测
-// ──────────────────────────────────────────────
+/// 获取用户 home 目录（跨平台）
+fn home_dir() -> Option<std::path::PathBuf> {
+    dirs::home_dir()
+}
 
-/// 检测系统上已安装的 Agent（通过 PATH 查找 CLI 命令）
-/// 从 DB 读取 agents 列表，动态检测
+// ------------------------------------------------------------------
+//  已安装 Agent 检测
+// ------------------------------------------------------------------
+
 pub fn detect_installed_agents(agents: &[crate::commands::agents::AgentConfig]) -> Vec<String> {
     let mut installed = Vec::new();
     for agent in agents {
@@ -566,28 +544,26 @@ pub fn detect_installed_agents(agents: &[crate::commands::agents::AgentConfig]) 
 }
 
 fn which(name: &str) -> bool {
-    // Check PATH
     if let Ok(paths) = std::env::var("PATH") {
         for dir in std::env::split_paths(&paths) {
             let exe = dir.join(name);
             if exe.with_extension("exe").exists() || exe.with_extension("cmd").exists() || exe.exists() {
                 return true;
             }
-            // Also check with .CMD on Windows
             if exe.with_extension("CMD").exists() {
                 return true;
             }
         }
     }
     false
+ 
 }
 
-// ──────────────────────────────────────────────
-//  技能列表 — 从 SKILL.md 文件解析
-// ──────────────────────────────────────────────
+// ------------------------------------------------------------------
+//  Skill 解析与扫描
+// ------------------------------------------------------------------
 
-/// 从 SKILL.md 文件的 YAML frontmatter 中解析 name 和 description
-fn parse_skill_md(path: &std::path::Path) -> Option<SkillInfo> {
+fn parse_skill_md(path: &std::path::Path) -> Option<crate::db::models::SkillInfo> {
     let raw = std::fs::read_to_string(path).ok()?;
     let raw = raw.trim();
     if !raw.starts_with("---") {
@@ -606,12 +582,12 @@ fn parse_skill_md(path: &std::path::Path) -> Option<SkillInfo> {
     let description = mapping.get(&serde_yaml::Value::String("description".into()))?
         .as_str()?.trim_matches('"').to_string();
 
-    Some(SkillInfo::new(&name, &description, ""))
+        Some(crate::db::models::SkillInfo::new(&name, &description, ""))
 }
 
 /// 扫描技能目录
 /// display_mode: recursive（递归显示全部）或 collection（只显示集合名）
-fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode: &str) -> Vec<SkillInfo> {
+fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode: &str) -> Vec<crate::db::models::SkillInfo> {
     if !skills_dir.exists() || !skills_dir.is_dir() {
         return vec![];
     }
@@ -648,13 +624,3 @@ fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode:
     }
     skills
 }
-
-/// 获取用户主目录
-fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .ok()
-        .map(std::path::PathBuf::from)
-}
-
-

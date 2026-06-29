@@ -50,11 +50,29 @@ fn update_node_execution(
     error_message: Option<&str>,
 ) -> Result<(), AppError> {
     let now = crate::utils::now();
+    // 从 output_data 中提取 agent_session_id
+    let agent_session_id = output_data.and_then(|s| {
+        serde_json::from_str::<serde_json::Value>(s).ok()
+            .and_then(|v| v.get("agent_session_id").and_then(|v| v.as_str().map(|s| s.to_string())))
+    });
+    // 计算 duration_ms = finished_at - started_at
+    let duration_ms: Option<i64> = conn.query_row(
+        "SELECT started_at FROM node_executions WHERE execution_id = ?1 AND node_id = ?2",
+        rusqlite::params![execution_id, node_id],
+        |row| row.get::<_, Option<i64>>(0),
+    ).ok().flatten().map(|started| now - started);
+
     conn.execute(
         "UPDATE node_executions SET status = ?1, output_data = COALESCE(?2, output_data),
-         error_message = ?3, finished_at = ?4, updated_at = ?4
-         WHERE execution_id = ?5 AND node_id = ?6",
-        rusqlite::params![status, output_data, error_message, now, execution_id, node_id],
+         error_message = ?3, finished_at = ?4, updated_at = ?4,
+         duration_ms = COALESCE(?5, duration_ms),
+         agent_session_id = COALESCE(?6, agent_session_id)
+         WHERE execution_id = ?7 AND node_id = ?8",
+        rusqlite::params![
+            status, output_data, error_message, now,
+            duration_ms, agent_session_id,
+            execution_id, node_id,
+        ],
     )?;
     Ok(())
 }
@@ -284,6 +302,12 @@ impl WorkflowEngine {
                 let total = total_count;
                 let exec = executor.clone();
 
+                // 开始节点：提前提取 output_mapping，执行后用它替代空结果
+                let start_output_mapping = if node.node_type == WorkflowNodeType::Start {
+                    node.output_mapping.as_ref().and_then(|m| m.as_object().cloned())
+                } else {
+                    None
+                };
                 let handle = tokio::spawn(async move {
                     let ctx_snapshot = context.lock().await.clone();
                     let resolved_input = resolve_node_input(&node, &ctx_snapshot);
@@ -298,7 +322,12 @@ impl WorkflowEngine {
 
                     match result {
                         Ok(output) => {
-                            let node_output = output.output.clone();
+                            // 开始节点使用 output_mapping 作为输出，而非空执行结果
+                            let node_output = if let Some(mapping) = &start_output_mapping {
+                                Value::Object(mapping.clone())
+                            } else {
+                                output.output.clone()
+                            };
                             context.lock().await.insert(nid.clone(), node_output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(&emitter, &exec_id, &nid, "completed", None,
@@ -602,6 +631,25 @@ impl WorkflowEngine {
 
         let context: Arc<AsyncMutex<HashMap<String, Value>>> = Arc::new(AsyncMutex::new(HashMap::new()));
         context.lock().await.insert("__input__".to_string(), input_data.clone());
+
+        // 开始节点：将输出映射作为初始上下文值
+        for stage in &def.stages {
+            for node in &stage.nodes {
+                if node.node_type == WorkflowNodeType::Start {
+                    if let Some(mapping) = &node.output_mapping {
+                        if let Some(obj) = mapping.as_object() {
+                            // 按节点ID存储，支持 {{变量名.output.节点ID}} 格式
+                            context.lock().await.insert(node.id.clone(), Value::Object(obj.clone()));
+                            // 也设置扁平键，支持 {{变量名}} 简单格式
+                            for (k, v) in obj {
+                                context.lock().await.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
 
         let semaphore = Arc::new(Semaphore::new(max_concurrency));
 

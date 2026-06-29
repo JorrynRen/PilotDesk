@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { WorkflowNode } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 
@@ -47,6 +48,16 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   const isCycleTarget = cycleTargetId === node.id;
   const runState = stepStates[`node_${node.id}`];
   const nodeResult = nodeResults[`node_${node.id}`];
+  const [expanded, setExpanded] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // 监听全屏状态变化
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
   const showResult = (selectedNodeId === node.id || selectedNodeIds.has(node.id)) && nodeResult !== undefined;
 
   return (
@@ -120,7 +131,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         >
           {meta.icon}
         </div>
-        <span className="text-xs font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+        <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
           {node.label}
         </span>
         {runState === 'success' && (
@@ -173,9 +184,36 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             fontFamily: 'var(--font-mono)',
           }}>
             {typeof nodeResult === 'object'
-              ? JSON.stringify(nodeResult, null, 2)
+              ? JSON.stringify(Object.fromEntries(
+                  Object.entries(nodeResult).filter(([k]) => k !== 'agent_session_id')
+                ), null, 2)
               : String(nodeResult)}
           </div>
+          {/* 放大查看按钮 */}
+          <div
+            onClick={(e) => { e.stopPropagation(); setExpanded(true); }}
+            title="放大查看"
+            style={{
+              position: 'absolute',
+              bottom: 2,
+              right: 2,
+              width: 14,
+              height: 14,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 3,
+              fontSize: 9,
+              lineHeight: 1,
+              color: 'var(--text-tertiary)',
+              cursor: 'pointer',
+              opacity: 0.5,
+              transition: 'opacity 0.15s',
+              userSelect: 'none',
+            }}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = '1'; }}
+            onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = '0.5'; }}
+          >⤢</div>
         </div>
       )}
 
@@ -235,6 +273,140 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             transition: 'opacity 0.15s ease',
           }}
         >x</div>
+      )}
+      {/* 放大查看弹窗 — 通过 Portal 渲染到 body 层级，避免画布 transform 影响 */}
+      {expanded && createPortal(
+        <div
+          onClick={() => setExpanded(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0,0,0,0.4)',
+          }}
+        >
+          <div
+            ref={modalRef}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'relative',
+              width: 640,
+              height: 480,
+              minWidth: 320,
+              minHeight: 200,
+              maxWidth: '90vw',
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              borderRadius: 8,
+              background: 'var(--bg-primary)',
+              border: '1px solid var(--border)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+              resize: 'both',
+              overflow: 'hidden',
+            }}
+          >
+            {/* 标题栏 */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                padding: '6px 10px',
+                borderBottom: '1px solid var(--border)',
+                background: 'var(--bg-secondary)',
+                borderRadius: '8px 8px 0 0',
+                flexShrink: 0,
+                userSelect: 'none',
+              }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {node.label} - 执行结果
+              </span>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 2 }}>
+                {/* 全屏/还原按钮 */}
+                <button
+                  onClick={() => {
+                    if (isFullscreen) {
+                      document.exitFullscreen();
+                    } else {
+                      modalRef.current?.requestFullscreen?.();
+                    }
+                  }}
+                  title={isFullscreen ? '还原窗口' : '全屏'}
+                  style={{
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--text-tertiary)',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    lineHeight: 1,
+                  }}
+                >{isFullscreen ? '[X]' : '[ ]'}</button>
+                {/* 关闭按钮 */}
+                <button
+                  onClick={() => setExpanded(false)}
+                  title="关闭"
+                  style={{
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--text-tertiary)',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    lineHeight: 1,
+                  }}
+                >x</button>
+              </div>
+            </div>
+            {/* 内容区 — HTML 渲染 */}
+            <div
+              onWheel={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onMouseUp={(e) => e.stopPropagation()}
+              style={{
+                flex: 1,
+                padding: 10,
+                overflow: 'auto',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 13,
+                lineHeight: 1.6,
+                color: 'var(--text-primary)',
+              }}
+              dangerouslySetInnerHTML={{
+                __html: (typeof nodeResult === 'object'
+                  ? JSON.stringify(Object.fromEntries(
+                      Object.entries(nodeResult).filter(([k]) => k !== 'agent_session_id')
+                    ), null, 2)
+                  : String(nodeResult)
+                )
+                  .replace(/\\n/g, '\n')
+                  .replace(/\\r/g, '')
+                  .replace(/\\"/g, '"')
+                  .replace(/\\'/g, "'")
+                  .replace(/\\t/g, '  ')
+                  .split('\n').join('<br>')
+                  .replace(/  /g, '&nbsp;&nbsp;')
+              }}
+            />
+            {/* 右下角缩放提示 */}
+            <div style={{
+                position: 'absolute',
+                bottom: 2,
+                right: 2,
+                fontSize: 9,
+                color: 'var(--text-tertiary)',
+                userSelect: 'none',
+                pointerEvents: 'none',
+              }}>~</div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

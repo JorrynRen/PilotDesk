@@ -11,10 +11,10 @@
     "windows": [
       {
         "title": "PilotDesk",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1024,
-        "minHeight": 680,
+        "width": 1404,
+        "height": 820,
+        "minWidth": 1404,
+        "minHeight": 820,
         "decorations": false,
         "shadow": false,
         "transparent": false,

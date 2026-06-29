@@ -373,7 +373,7 @@ pub fn run() {
             // 创建独立的 AgentManager 和 PluginHost 实例供工作流使用
             let agent_manager = Arc::new(AsyncMutex::new(AgentManager::new()));
             let plugin_host = Arc::new(std::sync::Mutex::new(plugin::PluginHost::new()));
-            let node_executor = Arc::new(NodeExecutor::new(agent_manager, plugin_host));
+            let node_executor = Arc::new(NodeExecutor::new(agent_manager, plugin_host, pool.clone()));
             // 同步插件贡献的节点类型到工作流注册表
             node_executor.sync_plugin_node_types();
             app.manage(node_executor.clone());

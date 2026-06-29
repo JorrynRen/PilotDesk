@@ -9,6 +9,7 @@ use super::registry::{
     NodeDef, NodeOutput, NodeTypeRegistration,
     NodeTypeRegistrationInfo, WorkflowNodeTypeRegistry, NodeCategory, NodeExecutorTrait,
 };
+use crate::db::init::DbPool;
 use super::executors::agent_executor::AgentExecutor;
 use super::executors::transform_executor::TransformExecutor;
 use super::executors::interact_executor::{InteractExecutor, InteractManager};
@@ -38,10 +39,11 @@ pub struct NodeExecutor {
     /// 插件节点执行通道管理器（前端回传结果时唤醒挂起的 oneshot）
     pub plugin_execute_manager: Arc<PluginExecuteManager>,
     plugin_host: Arc<std::sync::Mutex<PluginHost>>,
+    pool: DbPool,
 }
 
 impl NodeExecutor {
-    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, plugin_host: Arc<std::sync::Mutex<PluginHost>>) -> Self {
+    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, plugin_host: Arc<std::sync::Mutex<PluginHost>>, pool: DbPool) -> Self {
         let mut registry = WorkflowNodeTypeRegistry::new();
 
         // 注册 6 种实体节点类型
@@ -51,7 +53,7 @@ impl NodeExecutor {
             type_id: "agent".into(),
             name: "Agent 任务".into(),
             category: NodeCategory::Builtin,
-            executor: Arc::new(AgentExecutor::new(agent_manager.clone())),
+            executor: Arc::new(AgentExecutor::new(agent_manager.clone(), pool.clone())),
             config_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -147,6 +149,7 @@ impl NodeExecutor {
             human_input_manager,
             plugin_execute_manager,
             plugin_host,
+            pool,
         }
     }
 

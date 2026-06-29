@@ -25,7 +25,6 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
     fields: [
       { key: 'agent_type', label: 'Agent 类型', type: 'select', placeholder: 'claude' },
       { key: 'prompt_template', label: '提示词模板', type: 'textarea', placeholder: '请输入提示词模板，支持 {{variable}}' },
-      { key: 'system_prompt', label: '系统提示词', type: 'textarea', placeholder: '可选系统提示词' },
     ],
   },
   api: {
@@ -614,6 +613,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const outputBaseKeyRef = useRef<string>('');
   const [fieldSelectorKey, setFieldSelectorKey] = useState<string | null>(null);
   const [selectorPos, setSelectorPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const triggerCursorPosRef = useRef<number>(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -621,6 +621,11 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
       loadDefinitions();
     }
   }, [node.type]);
+
+  // 切换节点时同步 params 状态，避免状态串扰
+  useEffect(() => {
+    setParams(node.params || {});
+  }, [node.id]);
 
   const handleParamChange = (key: string, value: any) => {
     const newParams = { ...params, [key]: value };
@@ -650,6 +655,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
     const textBefore = value.slice(0, cursorPos);
     if (textBefore.endsWith('{{') && stages) {
       setFieldSelectorKey(key);
+      triggerCursorPosRef.current = cursorPos;
       if (textarea) {
         setSelectorPos(getCursorPixelPosition(textarea));
       }
@@ -658,9 +664,9 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
 
   const insertFieldAtCursor = (key: string, fieldValue: string) => {
     const currentVal = (params[key] as string) || '';
-    const lastOpen = currentVal.lastIndexOf('{{');
-    if (lastOpen === -1) return;
-    const newVal = currentVal.slice(0, lastOpen) + '{{' + fieldValue + '}}';
+    const pos = triggerCursorPosRef.current;
+    if (pos <= 0) return;
+    const newVal = currentVal.slice(0, pos - 2) + '{{' + fieldValue + '}}' + currentVal.slice(pos);
     handleParamChange(key, newVal);
     setFieldSelectorKey(null);
   };
@@ -920,21 +926,16 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                             }
                             return textareaFieldOptions.map((stage, si) => (
                               <div key={si}>
-                                {stage.group && (
-                                  <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
-                                    [step{si + 1}] {stage.group}
-                                  </div>
-                                )}
                                 {stage.children && stage.children.map((nodeGroup, ni) => (
                                   <div key={ni}>
-                                    <div style={{ padding: '3px 8px 3px 16px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
-                                      ├─[node] {nodeGroup.group}
+                                    <div style={{ padding: '3px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
+                                      [node] {nodeGroup.group}
                                     </div>
                                     {nodeGroup.options.map((opt) => (
                                       <div
                                         key={opt.value}
                                         onClick={() => { insertFieldAtCursor(field.key, opt.value); }}
-                                        style={{ padding: '5px 8px 5px 28px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}
+                                        style={{ padding: '5px 8px 5px 20px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}
                                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                       >

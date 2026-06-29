@@ -113,7 +113,7 @@ export const StageBar: React.FC<Props> = ({
                 <span style={{
                   display: 'inline-flex', width: 20, height: 20, alignItems: 'center',
                   justifyContent: 'center', borderRadius: 4, background: '#1f6feb33',
-                  color: '#58a6ff', fontSize: 11, fontWeight: 700,
+                  color: '#58a6ff', fontSize: 11,
                 }}>
                   {stage.order + 1}
                 </span>
@@ -123,7 +123,7 @@ export const StageBar: React.FC<Props> = ({
                   onChange={(e) => onRenameStage(stage.id, e.target.value)}
                   style={{
                     background: 'transparent', border: 'none', color: '#f0f6fc',
-                    fontSize: 13, fontWeight: 600, outline: 'none', width: 80,
+                    fontSize: 13, fontWeight: 400, outline: 'none', width: 80,
                   }}
                 />
               </div>

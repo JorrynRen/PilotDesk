@@ -1522,7 +1522,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         <input
           value={name}
           onChange={(e) => handleNameChangeLocal(e.target.value)}
-          className="text-xs font-semibold outline-none px-2.5 py-1.5 rounded-lg"
+          className="text-xs outline-none px-2.5 py-1.5 rounded-lg"
           style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)', minWidth: 120, maxWidth: 280 }}
           placeholder="工作流名称"
         />
@@ -1542,6 +1542,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 const execId = e.target.value;
                 if (!execId) {
                   setSelectedHistoryId(null);
+                  setRestoredExecutionId(null);
+                  setNodeResults({});
+                  setStepStates({});
+                  restoredSnapshotRef.current = null;
                   return;
                 }
                 handleRestoreExecution(execId);
@@ -1589,7 +1593,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         {/* 节点类型拖拽区 */}
         <div className="flex items-center gap-1 flex-wrap">
-          <span className="text-[10px] mr-1" style={{ color: 'var(--text-tertiary)' }}>节点:</span>
           {BUILTIN_NODE_TYPES.map((nt) => (
             <div
               key={nt.type}
@@ -1665,21 +1668,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           </button>
           <button
             onClick={onClose}
-            className="pd-btn px-3 py-1 text-[11px] rounded"
+            className="pd-btn px-1.5 py-1 text-[11px] rounded"
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="返回列表"
           >
-            返回列表
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 3L5 7l4 4" />
+            </svg>
           </button>
           <button
             onClick={handleExportWorkflow}
-            className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] transition-colors"
+            className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             title="导出工作流为 JSON 文件"
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 1.5v6M3.5 5L6 7.5 8.5 5M2 9.5h8" />
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 2v7M4.5 6L7 8.5 9.5 6M2 11h10" />
             </svg>
-            导出
           </button>
           <button
             onClick={handleSave}
@@ -2058,7 +2063,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           </span>
                           <button onClick={(e) => { e.stopPropagation(); toggleCollapseStage(stage.id); }} className="pd-btn rounded text-[10px] transition-colors duration-150 flex items-center justify-center" style={{ width: 22, height: 22, color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', border: '1px solid var(--border)' }} title="展开阶段">▶</button>
                         </div>
-                        <span className="text-[10px] font-semibold truncate" style={{ color: 'var(--text-primary)', width: '100%', textAlign: 'center', display: 'block' }}>
+                        <span className="text-[10px] truncate" style={{ color: 'var(--text-primary)', width: '100%', textAlign: 'center', display: 'block' }}>
                           {stage.name}
                         </span>
                       </>
@@ -2072,7 +2077,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           <input
                             value={stage.name}
                             onChange={(e) => handleRenameStage(stage.id, e.target.value)}
-                            className="text-xs font-semibold outline-none px-2 py-1 rounded"
+                            className="text-xs outline-none px-2 py-1 rounded"
                             style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)', flex: 1, minWidth: 0, maxWidth: 'calc(100% - 100px)' }}
                           />
                         </div>

@@ -6,14 +6,18 @@ use crate::utils::errors::AppError;
 use tauri::Emitter;
 use tokio::sync::Mutex as AsyncMutex;
 use crate::workflow::registry::{NodeDef, NodeOutput, NodeExecutorTrait};
+use crate::db::init::DbPool;
+use crate::commands::agents::get_agent_inner;
+use crate::workflow::template::TemplateEngine;
 
 pub struct AgentExecutor {
     agent_manager: Arc<AsyncMutex<AgentManager>>,
+    pool: DbPool,
 }
 
 impl AgentExecutor {
-    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>) -> Self {
-        Self { agent_manager }
+    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, pool: DbPool) -> Self {
+        Self { agent_manager, pool }
     }
 }
 
@@ -33,8 +37,19 @@ impl NodeExecutorTrait for AgentExecutor {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
+        // 解析 prompt_template 中的 {{variable}} 占位符
+        // 将 resolved_input 转为 HashMap 作为模板上下文
+        let prompt = if let Value::Object(map) = &resolved_input {
+            let ctx: std::collections::HashMap<String, serde_json::Value> = map.iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            TemplateEngine::resolve(prompt, &ctx).unwrap_or_else(|_| prompt.to_string())
+        } else {
+            prompt.to_string()
+        };
+
         // 将上游输入注入到 prompt 上下文中
-        let context_prompt = if !resolved_input.is_null() {
+        let raw_prompt = if !resolved_input.is_null() {
             format!("{}
 
 上游输入:
@@ -42,14 +57,26 @@ impl NodeExecutorTrait for AgentExecutor {
         } else {
             prompt.to_string()
         };
+        // 换行转义：CLI 参数中的实际换行会导致 cmd.exe 截断，转义为 \n 字面量
+        let context_prompt = raw_prompt.replace('\n', "\\n");
 
         let temp_session_id = format!("wf_{}_{}", execution_id, node.id);
         let exec_id = execution_id.to_string();
         let node_id = node.id.clone();
         let emitter_owned = emitter.clone();
 
+        // 从 DB 查询 Agent 配置（复用 agent 会话已实现的方法）
+        let agent_config = {
+            let conn = self.pool.get().map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
+            get_agent_inner(&conn, agent_type)
+                .map_err(|e| AppError::Db(e.to_string()))?
+                .unwrap_or_else(|| {
+                    crate::commands::agents::get_agent_config_by_type(agent_type).unwrap_or_default()
+                })
+        };
+
         let (output, agent_session_id) = self.agent_manager.lock().await.execute_once(
-            agent_type,
+            &agent_config,
             &context_prompt,
             &Default::default(),
             "",

@@ -248,7 +248,7 @@ export const WorkflowPanel: React.FC = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                   <span style={{ fontSize: 24 }}>{tmpl.icon}</span>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: '#f0f6fc' }}>{tmpl.name}</div>
+                    <div style={{ fontSize: 12, color: '#f0f6fc' }}>{tmpl.name}</div>
                     <div style={{ fontSize: 11, color: '#8b949e' }}>{tmpl.category}</div>
                   </div>
                 </div>

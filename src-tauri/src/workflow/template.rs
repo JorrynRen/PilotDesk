@@ -17,7 +17,7 @@ impl TemplateEngine {
     /// 预处理：简写格式 {{参数名.output.节点ID}} → {{nodes.节点ID.output.参数名}}
     fn expand_short_format(template: &str) -> String {
         let re = Regex::new(r"\{\{([a-zA-Z_]\w*)\.output\.([a-zA-Z0-9_]+)\}\}").unwrap();
-        re.replace_all(template, "{{nodes.$2.output.$1}}").to_string()
+        re.replace_all(template, "{{$2.$1}}").to_string()
     }
 
     pub fn resolve(
@@ -77,6 +77,10 @@ impl TemplateEngine {
 
         let parts: Vec<&str> = expr.splitn(2, '.').collect();
         if parts.len() < 2 {
+            // 简单变量名（无点号），直接查 context
+            if let Some(val) = context.get(expr) {
+                return Ok(Self::value_to_string(val));
+            }
             return Err(AppError::InvalidInput(format!("无效的模板变量: {}", expr)));
         }
 
