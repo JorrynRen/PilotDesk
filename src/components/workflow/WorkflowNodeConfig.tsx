@@ -181,13 +181,13 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string, st
  */
 function getGateMergeOptions(
   predecessorNodes: { stageName: string; node: WorkflowNode }[],
-  
-  gateConfig: GateConfig | undefined
+  stageId: string,
+  gateConfig: GateConfig | undefined,
 ): { value: string; label: string }[] | null {
   if (predecessorNodes.length === 0) return null;
 
   const mergeStrategy = gateConfig?.mergeStrategy || 'merge';
-  const contextKey = '__gate_merged__';
+  const contextKey = `__gate_merged__.${stageId}`;
   const fieldPaths: { value: string; label: string }[] = [];
 
   if (mergeStrategy === 'merge') {
@@ -250,8 +250,10 @@ function getGateMergeOptions(
 /** @deprecated use getGateMergeOptions instead */
 function getGateMergeChild(
   predecessorNodes: { stageName: string; node: WorkflowNode }[],
+  stageId: string,
+  gateConfig: GateConfig | undefined,
 ): { group: string; options: { value: string; label: string }[] } | null {
-  const opts = getGateMergeOptions(predecessorNodes, gateConfig);
+  const opts = getGateMergeOptions(predecessorNodes, stageId, gateConfig);
   if (!opts) return null;
   return { group: 'gate_output', options: opts };
 }
@@ -352,7 +354,7 @@ function getPredecessorOutputOptions(
     const stageObj = stages.find(s => s.name === stageName);
     if (stageObj) {
       const stagePredecessors = predecessorNodes.filter(p => p.stageName === stageName);
-      const gateOptions = getGateMergeOptions(stagePredecessors, stageObj.gate);
+      const gateOptions = getGateMergeOptions(stagePredecessors, stageObj.id, stageObj.gate);
       if (gateOptions) {
         // 追加到已有阶段的 options，或创建新阶段
         const existing = result.find(r => r.group === stageName);
