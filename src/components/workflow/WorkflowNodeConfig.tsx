@@ -313,6 +313,13 @@ function getPredecessorOutputOptions(
         label: key,
       });
     }
+    // Agent 节点固定输出 session_id，始终作为节点参数提供
+    if (pn.type === 'agent' && !outputKeys.some(k => k === 'session_id')) {
+      fieldList.push({
+        value: `{{session_id.output.${pn.id}}}`,
+        label: 'session_id',
+      });
+    }
     nodeMap.set(pn.label, fieldList);
   }
 
@@ -598,41 +605,26 @@ const MappingEditor: React.FC<{
                                 [step{si + 1}] {stage.group}
                               </div>
                             )}
-                            {/* 一级（优先）：门控合并输出参数列表 */}
-                            {stage.options.length > 0 && (
-                              <>
-                                <div
-                                  style={{
-                                    padding: '3px 8px 3px 16px',
-                                    fontSize: 'var(--fs-10)',
-                                    color: 'var(--text-secondary)',
-                                    fontWeight: 500,
-                                    borderBottom: '1px solid var(--border)',
-                                  }}
-                                >
-                                  ├─[gate] 门控合并输出
-                                </div>
-                                {stage.options.map((opt) => (
-                                  <div
-                                    key={opt.value}
-                                    onClick={() => {
-                                      handleValueChange(key, opt.value);
-                                      setActiveDropdown(null);
-                                    }}
-                                    style={{
-                                      padding: '5px 8px 5px 28px',
-                                      cursor: 'pointer',
-                                      color: 'var(--text-primary)',
-                                      borderBottom: '1px solid var(--border)',
-                                    }}
-                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                  >
-                                    ├─{opt.label}
-                                  </div>
-                                ))}
-                              </>
-                            )}
+                            {/* 一级（优先）：门控合并输出参数列表项 */}
+                            {stage.options.length > 0 && stage.options.map((opt) => (
+                              <div
+                                key={opt.value}
+                                onClick={() => {
+                                  handleValueChange(key, opt.value);
+                                  setActiveDropdown(null);
+                                }}
+                                style={{
+                                  padding: '6px 8px',
+                                  cursor: 'pointer',
+                                  color: 'var(--text-primary)',
+                                  borderBottom: '1px solid var(--border)',
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                              >
+                                ├─{opt.label}
+                              </div>
+                            ))}
                             {/* 二级：├─[node] 节点名（放在门控之后） */}
                             {stage.children && stage.children.map((nodeGroup, ni) => (
                               <div key={ni}>
