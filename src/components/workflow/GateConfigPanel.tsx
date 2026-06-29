@@ -18,10 +18,9 @@ interface Props {
 }
 
 const GATE_STRATEGIES: { value: GateStrategy; label: string; desc: string }[] = [
-  { value: 'all', label: '全部完成', desc: '所有上游节点完成后才进入下一阶段' },
-  { value: 'any', label: '任一完成', desc: '任一上游节点完成后即进入下一阶段' },
-  { value: 'count', label: '计数', desc: '指定数量的上游节点完成后进入下一阶段' },
-  { value: 'threshold', label: '阈值', desc: '根据输出数据的阈值判断' },
+  { value: 'all', label: '全部执行成功', desc: '所有上游节点执行成功后才进入下一阶段' },
+  { value: 'count', label: '指定数量执行成功', desc: '指定数量的上游节点执行成功后进入下一阶段' },
+  { value: 'threshold', label: '按合并运算值判断', desc: '根据合并运算值是否满足条件判断' },
 ];
 
 const MERGE_STRATEGIES: { value: MergeStrategy; label: string; desc: string }[] = [
@@ -120,17 +119,57 @@ export const GateConfigPanel: React.FC<Props> = ({ gate, stageName, nodeCount, o
       )}
 
       {/* 阈值配置 */}
-      {gate.strategy === 'threshold' && (
-        <div style={{ marginBottom: 24, padding: '12px 16px', borderRadius: 8, border: '1px solid #21262d', background: '#0d1117' }}>
-          <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 6 }}>阈值表达式</label>
-          <input
-            value={gate.threshold ? String(gate.threshold) : ''}
-            onChange={(e) => onUpdate({ threshold: Number(e.target.value) || undefined })}
-            placeholder="例如: score > 0.8"
-            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none' }}
-          />
-        </div>
-      )}
+      {gate.strategy === 'threshold' && (() => {
+        const THRESHOLD_OPS = [
+          { value: '>=', label: '大于等于' },
+          { value: '>',  label: '大于' },
+          { value: '==',  label: '等于' },
+          { value: '<=', label: '小于等于' },
+          { value: '<',  label: '小于' },
+        ];
+        // 从现有 threshold 字符串中解析运算符和数值，格式: "op value"（如 ">= 60"）
+        const parts = (gate.threshold ?? '>= ').trim().split(/\s+/);
+        const currentOp = THRESHOLD_OPS.find(o => o.value === parts[0]) ? parts[0] : '>=';
+        const currentValue = parts.length > 1 ? parts.slice(1).join(' ') : (parts[0] in THRESHOLD_OPS ? '' : parts[0]);
+        const handleOpChange = (op: string) => {
+          onUpdate({ threshold: `${op} ${currentValue || ''}`.trim() });
+        };
+        const handleValueChange = (val: string) => {
+          onUpdate({ threshold: `${currentOp} ${val}`.trim() });
+        };
+        return (
+          <div style={{ marginBottom: 24, padding: '12px 16px', borderRadius: 8, border: '1px solid #21262d', background: '#0d1117' }}>
+            <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 6 }}>阈值表达式</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <select
+                value={currentOp}
+                onChange={(e) => handleOpChange(e.target.value)}
+                style={{
+                  padding: '8px 10px', borderRadius: 6, border: '1px solid #30363d',
+                  background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none',
+                  minWidth: 88, cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                {THRESHOLD_OPS.map(op => (
+                  <option key={op.value} value={op.value}>{op.label}</option>
+                ))}
+              </select>
+              <input
+                value={currentValue}
+                onChange={(e) => handleValueChange(e.target.value)}
+                placeholder="输入阈值，如 60"
+                style={{
+                  flex: 1, padding: '8px 12px', borderRadius: 6, border: '1px solid #30363d',
+                  background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none',
+                }}
+              />
+            </div>
+            <div style={{ fontSize: 10, color: '#8b949e', marginTop: 4 }}>
+              合并值 {currentOp} {currentValue || '…'} 时通过
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 合并策略 */}
       <div style={{ marginBottom: 24 }}>
@@ -184,7 +223,7 @@ export const GateConfigPanel: React.FC<Props> = ({ gate, stageName, nodeCount, o
         <div style={{ fontSize: 11, color: '#8b949e', lineHeight: 1.6 }}>
           1. 阶段内节点按 DAG 拓扑排序执行<br />
           2. 边上的条件决定节点是否执行<br />
-          3. 所有节点完成后，Gate 检查门控策略<br />
+          3. 所有节点执行完成后，检查门控策略<br />
           4. 满足条件后执行合并策略<br />
           5. 合并结果传递到下一阶段
         </div>

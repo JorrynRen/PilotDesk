@@ -67,13 +67,13 @@ export interface WorkflowEdge {
 
 // ── 门控配置 ──
 
-export type GateStrategy = 'all' | 'any' | 'count' | 'threshold';
+export type GateStrategy = 'all' | 'count' | 'threshold';
 export type MergeStrategy = 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
 
 export interface GateConfig {
   strategy: GateStrategy;
   mergeStrategy: MergeStrategy;
-  threshold?: number;
+  threshold?: string;
   customScript?: string;
   /** 自定义脚本输入模式: 'selector' | 'editor' */
   customMode?: 'selector' | 'editor';

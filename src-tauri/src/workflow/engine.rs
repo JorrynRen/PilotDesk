@@ -9,7 +9,7 @@ use super::executor::NodeExecutor;
 use super::registry::NodeDef;
 use super::template::TemplateEngine;
 use async_recursion::async_recursion;
-use super::{WorkflowDefinition, WorkflowNode, WorkflowNodeType, WorkflowEdge, Stage, MergeStrategy};
+use super::{WorkflowDefinition, WorkflowNode, WorkflowNodeType, WorkflowEdge, Stage, MergeStrategy, GateStrategy};
 
 /// 从 AppHandle 获取数据库连接
 fn get_db_conn(app_handle: &tauri::AppHandle) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, AppError> {
@@ -199,6 +199,9 @@ impl WorkflowEngine {
     }
 
     /// 执行单个阶段内的 DAG
+    /// 执行单个阶段内的 DAG
+    /// 返回 (节点状态映射, 阶段值)
+    /// 节点状态映射: node_id -> "completed" | "failed" | "skipped" | "running"
     async fn execute_stage(
         executor: &Arc<NodeExecutor>,
         stage: &Stage,
@@ -211,12 +214,14 @@ impl WorkflowEngine {
         semaphore: &Arc<Semaphore>,
         max_concurrency: usize,
         visited_def_ids: &[String],
-    ) -> Result<Value, AppError> {
+    ) -> Result<(HashMap<String, String>, Value), AppError> {
         let layers = Self::topological_sort(&stage.nodes, &stage.edges)?;
         let node_map: HashMap<String, &WorkflowNode> = stage.nodes.iter().map(|n| (n.id.clone(), n)).collect();
+        // 节点执行状态追踪（用于门控策略判断），Arc<AsyncMutex> 支持跨 spawn 共享
+        let node_statuses: Arc<AsyncMutex<HashMap<String, String>>> = Arc::new(AsyncMutex::new(HashMap::new()));
 
         for layer in &layers {
-            let mut handles = Vec::new();
+            let mut handles: Vec<tokio::task::JoinHandle<Result<(), AppError>>> = Vec::new();
 
             for node_id in layer {
                 let node = match node_map.get(node_id) {
@@ -247,6 +252,7 @@ impl WorkflowEngine {
                     }
 
                     if !all_conditions_met {
+                        node_statuses.lock().await.insert(node_id.clone(), "skipped".to_string());
                         completed_count.fetch_add(1, Ordering::SeqCst);
                         record_node_execution(emitter, execution_id, node_id, "skipped", None, None, None);
                         emit_node_status(emitter, execution_id, node_id, "skipped", None, None,
@@ -277,6 +283,7 @@ impl WorkflowEngine {
                         visited_def_ids,
                     ).await {
                         Ok(output) => {
+                            node_statuses.lock().await.insert(node_id.clone(), "completed".to_string());
                             context.lock().await.insert(node_id.clone(), output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(emitter, execution_id, node_id, "completed", None,
@@ -285,9 +292,11 @@ impl WorkflowEngine {
                                 Some(completed_count.load(Ordering::SeqCst)), Some(total_count));
                         }
                         Err(e) => {
+                            node_statuses.lock().await.insert(node_id.clone(), "failed".to_string());
+                            completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(emitter, execution_id, node_id, "failed", None, None, Some(&e.to_string()));
                             emit_node_status(emitter, execution_id, node_id, "failed", None, Some(&e.to_string()), None, None);
-                            return Err(e);
+                            // 不再 return Err，让后续节点继续执行
                         }
                     }
                     // _permit 在此处 drop，释放并发许可
@@ -308,6 +317,7 @@ impl WorkflowEngine {
                 } else {
                     None
                 };
+                let node_statuses_clone = node_statuses.clone();
                 let handle = tokio::spawn(async move {
                     let ctx_snapshot = context.lock().await.clone();
                     log::info!("[WorkflowEngine] Executing node {} (type={:?}), context keys: {:?}", nid, node.node_type, context.lock().await.keys().collect::<Vec<_>>());
@@ -331,6 +341,7 @@ impl WorkflowEngine {
                             };
                             log::info!("[WorkflowEngine] Start node {} output written to context: {:?}", nid, node_output);
                             context.lock().await.insert(nid.clone(), node_output.clone());
+                            node_statuses_clone.lock().await.insert(nid.clone(), "completed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(&emitter, &exec_id, &nid, "completed", None,
                                 serde_json::to_string(&node_output).ok().as_deref(), None);
@@ -339,10 +350,13 @@ impl WorkflowEngine {
                             return Ok(());
                         }
                         Err(e) => {
+                            node_statuses_clone.lock().await.insert(nid.clone(), "failed".to_string());
+                            completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(&emitter, &exec_id, &nid, "failed", None, None, Some(&e.to_string()));
                             emit_node_status(&emitter, &exec_id, &nid, "failed", None, Some(&e.to_string()),
                                 Some(completed_count.load(Ordering::SeqCst)), Some(total));
-                            return Err(e);
+                            // 不再 return Err，让同层其他节点继续执行
+                            return Ok(());
                         }
                     }
                 });
@@ -352,14 +366,20 @@ impl WorkflowEngine {
 
             for handle in handles {
                 match handle.await {
-                    Ok(Err(e)) => return Err(e),
-                    Err(join_err) => return Err(AppError::External(format!("节点执行任务异常: {}", join_err))),
+                    Ok(Err(e)) => {
+                        // 节点执行失败，状态已记录在 node_statuses 中，不终止阶段
+                        log::warn!("[WorkflowEngine] 节点执行失败(已容忍): {}", e);
+                    }
+                    Err(join_err) => {
+                        log::warn!("[WorkflowEngine] 节点执行任务异常(已容忍): {}", join_err);
+                    }
                     _ => {}
                 }
             }
         }
 
-        Ok(Value::Null)
+        let statuses = node_statuses.lock().await.clone();
+        Ok((statuses, Value::Null))
     }
 
     /// 评估边上的条件表达式
@@ -408,6 +428,78 @@ impl WorkflowEngine {
             None => false,
         }
     }
+
+    /// 检查门控策略是否满足进入下一阶段的条件
+    ///
+    /// 统一流程：先执行 merge，再检查策略。
+    /// - All: 阶段内所有非边界节点均成功完成 → 放行；任一失败 → 中止
+    /// - Count(n): 至少 n 个非边界节点成功完成 → 放行；不足 → 中止
+    /// - Threshold(expr): 基于 merge 后的值做条件判断（如 "avg_score >= 60"）
+    ///   不满足 → 中止
+    fn check_gate_strategy(
+        stage: &Stage,
+        node_statuses: &HashMap<String, String>,
+        merged_value: &Value,
+    ) -> Result<bool, AppError> {
+        // 收集阶段内非边界节点的执行状态
+        let non_boundary_statuses: Vec<(&String, &String)> = stage.nodes.iter()
+            .filter(|n| n.node_type != WorkflowNodeType::Start && n.node_type != WorkflowNodeType::End)
+            .filter_map(|n| node_statuses.get(&n.id).map(|s| (&n.id, s)))
+            .collect();
+
+        let total = non_boundary_statuses.len();
+        let success_count = non_boundary_statuses.iter()
+            .filter(|(_, s)| *s == "completed")
+            .count();
+        let failed_count = non_boundary_statuses.iter()
+            .filter(|(_, s)| *s == "failed")
+            .count();
+
+        log::info!(
+            "[check_gate_strategy] stage={}, strategy={:?}, total={}, success={}, failed={}",
+            stage.name, stage.gate.strategy, total, success_count, failed_count
+        );
+
+        match &stage.gate.strategy {
+            GateStrategy::All => {
+                // 全部完成：所有非边界节点必须成功
+                if failed_count > 0 {
+                    Err(AppError::External(format!(
+                        "阶段 '{}' 门控策略 All 不满足: {}/{} 个节点失败",
+                        stage.name, failed_count, total
+                    )))
+                } else {
+                    Ok(true)
+                }
+            }
+            GateStrategy::Count(n) => {
+                // 指定数量完成：至少 n 个节点成功
+                if success_count >= *n {
+                    Ok(true)
+                } else {
+                    Err(AppError::External(format!(
+                        "阶段 '{}' 门控策略 Count({}) 不满足: 仅 {}/{} 个节点成功",
+                        stage.name, n, success_count, total
+                    )))
+                }
+            }
+            GateStrategy::Threshold(expr) => {
+                // 按条件判断：基于 merge 后的值做条件判断
+                // 复用 evaluate_condition 逻辑，将 merged_value 作为 source_output
+                let passed = Self::evaluate_condition(expr, Some(merged_value));
+                if passed {
+                    Ok(true)
+                } else {
+                    Err(AppError::External(format!(
+                        "阶段 '{}' 门控策略 Threshold 不满足: 合并值未满足条件 '{}'",
+                        stage.name, expr
+                    )))
+                }
+            }
+        }
+    }
+
+
 
     /// 执行 Gate 合并逻辑
     fn merge_stage_outputs(
@@ -740,7 +832,7 @@ impl WorkflowEngine {
                 "status": "running",
             })).ok();
 
-            Self::execute_stage(
+            let (node_statuses, _) = Self::execute_stage(
                 executor, stage, execution_id,
                 &context, emitter, &cancelled,
                 &completed_count, total_count, &semaphore,
@@ -748,9 +840,48 @@ impl WorkflowEngine {
                 visited_def_ids,
             ).await?;
 
+            // ── 步骤 1: 执行合并策略（始终执行） ──
             let ctx = context.lock().await.clone();
             let merged = Self::merge_stage_outputs(stage, &ctx);
-            context.lock().await.insert(format!("__stage_{}_output__", stage.order), merged);
+
+            // ── 步骤 2: 门控策略检查（合并完成后检查） ──
+            //  - All: 全部非边界节点成功 → 放行；任一失败 → 中止
+            //  - Count(n): 成功数 >= n → 放行；成功数 < n → 中止
+            //  - Threshold: 合并后的值满足条件 → 放行；不满足 → 中止
+            match Self::check_gate_strategy(stage, &node_statuses, &merged) {
+                Ok(true) => {
+                    log::info!("[WorkflowEngine] 阶段 '{}' 门控策略检查通过，合并结果已写入", stage.name);
+                    context.lock().await.insert(format!("__stage_{}_output__", stage.order), merged);
+                }
+                Ok(false) => {
+                    // 策略不满足（Count 成功数不足 / Threshold 条件不满足），中止工作流
+                    let msg = format!(
+                        "阶段 '{}' 门控策略未通过（strategy={:?}），工作流中止",
+                        stage.name, stage.gate.strategy
+                    );
+                    log::warn!("[WorkflowEngine] {}", msg);
+                    emitter.emit("workflow:stage-status", serde_json::json!({
+                        "execution_id": execution_id,
+                        "stage_id": stage.id,
+                        "stage_name": stage.name,
+                        "status": "gate_failed",
+                        "reason": msg.clone(),
+                    })).ok();
+                    return Err(AppError::External(msg));
+                }
+                Err(e) => {
+                    // 策略判定失败（如 All 策略下有节点失败），中止工作流
+                    log::error!("[WorkflowEngine] 阶段 '{}' 门控策略检查失败: {}", stage.name, e);
+                    emitter.emit("workflow:stage-status", serde_json::json!({
+                        "execution_id": execution_id,
+                        "stage_id": stage.id,
+                        "stage_name": stage.name,
+                        "status": "gate_failed",
+                        "error": e.to_string(),
+                    })).ok();
+                    return Err(e);
+                }
+            }
 
             emitter.emit("workflow:stage-status", serde_json::json!({
                 "execution_id": execution_id,

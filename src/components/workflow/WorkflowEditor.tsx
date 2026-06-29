@@ -1452,8 +1452,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     );
   };
   // ── 渲染：阶段间连线 ──
-  const gateStrategyLabel = (s: string) => ({ all: '全部完成', any: '任一完成', count: '指定数量完成', threshold: '按条件判断' }[s] || s);
-  const gateStrategyDesc = (s: string) => ({ all: '所有节点完成后继续', any: '任一节点完成后继续', count: '指定数量节点完成后继续', threshold: '达到阈值后继续' }[s] || s);
+  const gateStrategyLabel = (s: string) => ({ all: '全部执行成功', count: '指定数量执行成功', threshold: '按合并运算值判断' }[s] || s);
+  const gateStrategyDesc = (s: string) => ({ all: '所有节点执行成功后继续', count: '指定数量节点执行成功后继续', threshold: '合并运算值满足条件后继续' }[s] || s);
   const mergeStrategyLabel = (s: string) => ({ merge: '合并为对象', concat: '合并为数组', pick_first: '取第一个结果', pick_last: '取最后一个结果', custom: '自定义处理' }[s] || s);
   const renderStageLinks = () => {
     if (stages.length < 2) return null;
@@ -2463,10 +2463,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   onChange={ (e) => setGateStrategy(e.target.value) }
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               >
-                <option value="all">全部完成</option>
-                <option value="any">任一完成</option>
-                <option value="count">指定数量完成</option>
-                <option value="threshold">按条件判断</option>
+                <option value="all">全部执行成功</option>
+                <option value="count">指定数量执行成功</option>
+                <option value="threshold">按合并运算值判断</option>
               </select>
             </div>
             <div className="mb-4" style={{ display: gateStrategy === 'count' ? 'block' : 'none' }}>
@@ -2476,6 +2475,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 type="number"
                 min="1"
                 step="1"
+                pattern="[0-9]*"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                 defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.threshold ?? ''}
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
@@ -2483,17 +2483,28 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               />
             </div>
             <div className="mb-4" style={{ display: gateStrategy === 'threshold' ? 'block' : 'none' }}>
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值（按条件判断策略）</label>
-              <input
-                id="gate-threshold"
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-                defaultValue={''}
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                placeholder="例如: 0.8"
-              />
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值（按合并运算值判断策略）</label>
+              <div className="flex gap-2 items-center">
+                <select
+                  id="gate-threshold-op"
+                  className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                >
+                  <option value=">=">大于等于</option>
+                  <option value=">">大于</option>
+                  <option value="==">等于</option>
+                  <option value="<=">小于等于</option>
+                  <option value="<">小于</option>
+                </select>
+                <input
+                  id="gate-threshold"
+                  type="text"
+                  className="flex-1 px-3 py-1.5 rounded-lg text-xs outline-none"
+                  defaultValue={''}
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  placeholder="输入阈值，如 60"
+                />
+              </div>
             </div>
             <div className="mb-4">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>合并策略</label>
@@ -2602,6 +2613,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   const strategy = (document.getElementById('gate-strategy') as HTMLSelectElement)?.value;
                   const mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
                   const countInput = (document.getElementById('gate-count') as HTMLInputElement)?.value;
+                  const thresholdOp = (document.getElementById('gate-threshold-op') as HTMLSelectElement)?.value || '>=';
                   const thresholdInput = (document.getElementById('gate-threshold') as HTMLInputElement)?.value;
                   const customMode = (document.getElementById('gate-custom-mode') as HTMLSelectElement)?.value || 'selector';
                   let customScript: string | undefined;
@@ -2638,12 +2650,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     }
                   }
                   // 校验
-                  if (strategy === 'count' && (!countInput || parseInt(countInput, 10) < 1)) {
-                    setGateError('请填写有效的完成节点数（至少为 1）');
+                  if (strategy === 'count' && (!countInput || !Number.isInteger(Number(countInput)) || parseInt(countInput, 10) < 1)) {
+                    setGateError('请填写有效的完成节点数（正整数，至少为 1）');
                     return;
                   }
-                  if (strategy === 'threshold' && (!thresholdInput || parseFloat(thresholdInput) < 0)) {
-                    setGateError('请填写有效的阈值（必须大于等于 0）');
+                  if (strategy === 'threshold' && (!thresholdInput || isNaN(Number(thresholdInput)))) {
+                    setGateError('请填写有效的阈值');
                     return;
                   }
                   if (mergeStrategy === 'custom' && !customScript?.trim()) {
@@ -2652,7 +2664,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   }
                   const threshold = strategy === 'count'
                     ? (countInput ? parseInt(countInput, 10) : undefined)
-                    : (thresholdInput ? parseFloat(thresholdInput) : undefined);
+                    : (thresholdInput ? `${thresholdOp} ${thresholdInput}`.trim() : undefined);
                   setGateError(null);
                   handleUpdateGate(gateInput.stageId, { strategy, mergeStrategy, threshold, customScript: customScript || undefined, customMode: mergeStrategy === 'custom' ? customMode : undefined });
                   setGateInput(null);

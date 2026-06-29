@@ -191,7 +191,7 @@ function getGateMergeChild(
 
   if (mergeStrategy === 'merge') {
     for (const node of stage.nodes) {
-      if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+      if (node.type === 'start' || node.type === 'end') continue;
       const outputKeys = Object.keys(node.outputMapping || {});
       if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {
@@ -205,7 +205,7 @@ function getGateMergeChild(
   } else if (mergeStrategy === 'concat') {
     for (let j = 0; j < stage.nodes.length; j++) {
       const node = stage.nodes[j];
-      if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+      if (node.type === 'start' || node.type === 'end') continue;
       const outputKeys = Object.keys(node.outputMapping || {});
       if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {
@@ -218,7 +218,7 @@ function getGateMergeChild(
   } else if (mergeStrategy === 'pick_first' || mergeStrategy === 'pick_last') {
     const targetNodes = mergeStrategy === 'pick_first' ? stage.nodes : [...stage.nodes].reverse();
     for (const node of targetNodes) {
-      if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+      if (node.type === 'start' || node.type === 'end') continue;
       const outputKeys = Object.keys(node.outputMapping || {});
       if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {

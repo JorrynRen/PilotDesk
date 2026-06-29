@@ -115,8 +115,6 @@ pub struct WorkflowEdge {
 pub enum GateStrategy {
     #[serde(rename = "all")]
     All,
-    #[serde(rename = "any")]
-    Any,
     #[serde(rename = "count")]
     Count(usize),
     #[serde(rename = "threshold")]
@@ -145,7 +143,7 @@ pub enum MergeStrategy {
 pub struct GateConfig {
     pub strategy: GateStrategy,
     pub merge_strategy: MergeStrategy,
-    pub threshold: Option<usize>,
+    pub threshold: Option<String>,
     pub custom_script: Option<String>,
 }
 
