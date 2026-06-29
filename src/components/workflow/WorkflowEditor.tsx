@@ -14,6 +14,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { flushSync } from 'react-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { showToast } from '../../utils/toast';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -434,6 +435,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   useEffect(() => {
     let unlistenNode: UnlistenFn | null = null;
     let unlistenExec: UnlistenFn | null = null;
+    let unlistenStage: UnlistenFn | null = null;
 
     const setupListeners = async () => {
       console.log('[WorkflowEditor] setupListeners: starting listener registration...');
@@ -465,6 +467,15 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           useWorkflowStore.getState().loadInstances();
         }
       });
+
+      // 监听阶段门控失败事件
+      unlistenStage = await listen<{ execution_id: string; stage_id: string; stage_name: string; status: string; reason?: string; error?: string }>('workflow:stage-status', (event) => {
+        if (event.payload.status === 'gate_failed') {
+          const detail = event.payload.reason || event.payload.error || '';
+          showToast(`${event.payload.stage_name} 门控策略未通过${detail ? ': ' + detail : ''}`, 'error');
+        }
+      });
+
       console.log('[WorkflowEditor] setupListeners: both listeners registered successfully');
     };
 
@@ -473,6 +484,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     return () => {
       unlistenNode?.();
       unlistenExec?.();
+      unlistenStage?.();
     };
   }, []);
 

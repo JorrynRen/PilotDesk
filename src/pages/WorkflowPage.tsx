@@ -251,6 +251,16 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         useWorkflowStore.getState().loadInstances();
       }
     }).then(fn => { unlisten = fn; });
+
+    // 监听阶段门控失败事件
+    listen<{ execution_id: string; stage_id: string; stage_name: string; status: string; reason?: string; error?: string }>('workflow:stage-status', (event) => {
+      const { status, stage_name: stageName, reason, error } = event.payload;
+      if (status === 'gate_failed') {
+        const detail = reason || error || '';
+        showToast(`${stageName} 门控策略未通过${detail ? ': ' + detail : ''}`, 'error');
+      }
+    });
+
     return () => { unlisten?.(); };
   }, []);
 

@@ -551,7 +551,7 @@ class WorkflowEngine {
     });
 
     const response = await agentApi.sendMessage(sessionInfo.session_id, prompt);
-    const result = { session_id: sessionInfo.session_id, agent_type: agentType, content: response.content };
+    const result = response.content;
 
     if (node.outputMapping) {
       for (const [contextPath, outputField] of Object.entries(node.outputMapping)) {

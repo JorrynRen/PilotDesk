@@ -10,7 +10,7 @@ function getContainer(): HTMLDivElement {
   return toastContainer;
 }
 
-export function showToast(message: string, type: 'error' | 'success' | 'info' | 'warning' = 'error', duration = 3000) {
+export function showToast(message: string, type: 'error' | 'success' | 'info' | 'warning' = 'error', duration = 8000) {
   const container = getContainer();
   const toast = document.createElement('div');
   toast.className = `pilotdesk-toast pilotdesk-toast-${type}`;

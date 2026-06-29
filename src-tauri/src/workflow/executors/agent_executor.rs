@@ -82,9 +82,7 @@ impl NodeExecutorTrait for AgentExecutor {
         ).await?;
 
         Ok(NodeOutput {
-            output: serde_json::json!({
-                "text": output,
-            }),
+            output: Value::String(output),
         })
     }
 }
