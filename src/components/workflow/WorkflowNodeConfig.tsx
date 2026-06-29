@@ -180,20 +180,19 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string, st
  * 返回 Map: stageName -> gate child group（含 options）
  */
 function getGateMergeChild(
-  stage: Stage,
+  predecessorNodes: { stageName: string; node: WorkflowNode }[],
+  stageOrder: number,
+  gateConfig: GateConfig | undefined,
 ): { group: string; options: { value: string; label: string }[] } | null {
-  if (!stage) return null;
+  if (predecessorNodes.length === 0) return null;
 
-  const mergeStrategy = stage.gate?.mergeStrategy || 'merge';
-  const stageOrder = stage.order;
+  const mergeStrategy = gateConfig?.mergeStrategy || 'merge';
   const contextKey = `__stage_${stageOrder}_output__`;
   const fieldPaths: { value: string; label: string }[] = [];
 
   if (mergeStrategy === 'merge') {
-    for (const node of stage.nodes) {
-      if (node.type === 'start' || node.type === 'end') continue;
+    for (const { node } of predecessorNodes) {
       const outputKeys = Object.keys(node.outputMapping || {});
-      if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {
         const semanticType = node.outputMapping![key];
         if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
@@ -205,11 +204,10 @@ function getGateMergeChild(
       }
     }
   } else if (mergeStrategy === 'concat') {
-    for (let j = 0; j < stage.nodes.length; j++) {
-      const node = stage.nodes[j];
-      if (node.type === 'start' || node.type === 'end') continue;
+    const filteredNodes = predecessorNodes.filter(n => n.node.type !== 'start' && n.node.type !== 'end');
+    for (let j = 0; j < filteredNodes.length; j++) {
+      const node = filteredNodes[j].node;
       const outputKeys = Object.keys(node.outputMapping || {});
-      if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {
         const semanticType = node.outputMapping![key];
         if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
@@ -220,9 +218,8 @@ function getGateMergeChild(
       }
     }
   } else if (mergeStrategy === 'pick_first' || mergeStrategy === 'pick_last') {
-    const targetNodes = mergeStrategy === 'pick_first' ? stage.nodes : [...stage.nodes].reverse();
-    for (const node of targetNodes) {
-      if (node.type === 'start' || node.type === 'end') continue;
+    const targetNodes = mergeStrategy === 'pick_first' ? predecessorNodes : [...predecessorNodes].reverse();
+    for (const { node } of targetNodes) {
       const outputKeys = Object.keys(node.outputMapping || {});
       if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {
@@ -249,7 +246,7 @@ function getGateMergeChild(
   if (fieldPaths.length === 0) return null;
 
   return {
-    group: 'stage_output',
+    group: 'gate_output',
     options: fieldPaths,
   };
 }
@@ -340,13 +337,30 @@ function getPredecessorOutputOptions(
   }));
 
   // 5. 门控合并输出作为 stage.children 中的二级分组（与节点分组同级）
-  for (let ri = 0; ri < result.length; ri++) {
-    const stageName = result[ri].group;
-    const stage = stages.find(s => s.name === stageName);
-    if (stage) {
-      const gateChild = getGateMergeChild(stage);
+  // 收集所有前序阶段名（包括 stageMap 中已有的 + 同阶段前序节点所在的阶段）
+  const allPredecessorStageNames = new Set(result.map(r => r.group));
+  for (const p of predecessorNodes) {
+    allPredecessorStageNames.add(p.stageName);
+  }
+  // 为每个前序阶段注入 gate_output
+  for (const stageName of allPredecessorStageNames) {
+    const stageObj = stages.find(s => s.name === stageName);
+    if (stageObj) {
+      const stagePredecessors = predecessorNodes.filter(p => p.stageName === stageName);
+      const gateChild = getGateMergeChild(stagePredecessors, stageObj.order, stageObj.gate);
       if (gateChild) {
-        result[ri].children.push(gateChild);
+        // 如果该阶段已在 result 中，追加到 children
+        const existing = result.find(r => r.group === stageName);
+        if (existing) {
+          existing.children.push(gateChild);
+        } else {
+          // 该阶段没有节点输出，创建一个新的阶段分组
+          result.push({
+            group: stageName,
+            children: [gateChild],
+            options: [],
+          });
+        }
       }
     }
   }
