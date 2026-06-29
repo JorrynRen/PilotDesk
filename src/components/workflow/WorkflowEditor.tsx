@@ -2562,7 +2562,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   }}
                 >
                   <option value="selector">选择器</option>
-                  <option value="editor">编辑器</option>
+                  <option value="editor" disabled={gateStrategy === 'threshold'}>编辑器</option>
                 </select>
               </div>
             </div>
