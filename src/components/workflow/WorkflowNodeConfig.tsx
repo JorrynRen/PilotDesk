@@ -625,26 +625,49 @@ const MappingEditor: React.FC<{
                                 >
                                   ├─{nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                 </div>
-                                {/* 二级：├─参数名 */}
-                                {nodeGroup.options.map((opt) => (
-                                  <div
-                                    key={opt.value}
-                                    onClick={() => {
-                                      handleValueChange(key, opt.value);
-                                      setActiveDropdown(null);
-                                    }}
-                                    style={{
-                                      padding: '5px 8px 5px 20px',
-                                      cursor: 'pointer',
-                                      color: 'var(--text-primary)',
-                                      borderBottom: '1px solid var(--border)',
-                                    }}
-                                    onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                  >
-                                    ├─{opt.label}
-                                  </div>
-                                ))}
+                                {nodeGroup.group === 'stage_output' ? (
+                                  /* stage_output 的 options 是二级选项，直接可点 */
+                                  nodeGroup.options.map((opt) => (
+                                    <div
+                                      key={opt.value}
+                                      onClick={() => {
+                                        handleValueChange(key, opt.value);
+                                        setActiveDropdown(null);
+                                      }}
+                                      style={{
+                                        padding: '6px 8px',
+                                        cursor: 'pointer',
+                                        color: 'var(--text-primary)',
+                                        borderBottom: '1px solid var(--border)',
+                                      }}
+                                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                    >
+                                      ├─{opt.label}
+                                    </div>
+                                  ))
+                                ) : (
+                                  /* [node] 的 options 是三级选项，嵌套在节点分组下 */
+                                  nodeGroup.options.map((opt) => (
+                                    <div
+                                      key={opt.value}
+                                      onClick={() => {
+                                        handleValueChange(key, opt.value);
+                                        setActiveDropdown(null);
+                                      }}
+                                      style={{
+                                        padding: '5px 8px 5px 20px',
+                                        cursor: 'pointer',
+                                        color: 'var(--text-primary)',
+                                        borderBottom: '1px solid var(--border)',
+                                      }}
+                                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                    >
+                                      ├─{opt.label}
+                                    </div>
+                                  ))
+                                )}
                               </div>
                             ))}
                           </div>
