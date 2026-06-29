@@ -2546,10 +2546,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     if (modeSelect) modeSelect.style.display = isCustom ? 'block' : 'none';
                   }}
                 >
-                  <option value="merge" disabled={gateStrategy === 'threshold'}>合并为对象</option>
-                  <option value="concat" disabled={gateStrategy === 'threshold'}>合并为数组</option>
-                  <option value="pick_first" disabled={gateStrategy === 'threshold'}>取第一个结果</option>
-                  <option value="pick_last" disabled={gateStrategy === 'threshold'}>取最后一个结果</option>
+                  {gateStrategy !== 'threshold' && <option value="merge">合并为对象</option>}
+                  {gateStrategy !== 'threshold' && <option value="concat">合并为数组</option>}
+                  {gateStrategy !== 'threshold' && <option value="pick_first">取第一个结果</option>}
+                  {gateStrategy !== 'threshold' && <option value="pick_last">取最后一个结果</option>}
                   <option value="custom">自定义处理</option>
                 </select>
                 <select
@@ -2562,7 +2562,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   }}
                 >
                   <option value="selector">选择器</option>
-                  <option value="editor" disabled={gateStrategy === 'threshold'}>编辑器</option>
+                  {gateStrategy !== 'threshold' && <option value="editor">编辑器</option>}
                 </select>
               </div>
             </div>
