@@ -148,6 +148,38 @@ function mergeStageOutputs(stage: Stage, nodeOutputs: Map<string, any>): Record<
       const first = Object.values(outputs)[0];
       return first ?? null;
     }
+    case 'pick_last': {
+      const vals = Object.values(outputs);
+      return vals.length > 0 ? vals[vals.length - 1] : null;
+    }
+    case 'custom': {
+      const customScript = stage.gate.customScript;
+      if (!customScript) return outputs;
+      // calc: 前缀格式: calc:<filter>:<merge_as>:<value_op>
+      if (customScript.startsWith('calc:')) {
+        const parts = customScript.slice(5).split(':');
+        const _filter = parts[0] || 'all';
+        const _mergeAs = parts[1] || 'none';
+        const valueOp = parts[2] || 'none';
+        const values: Record<string, any> = Object.values(outputs);
+        const nums: number[] = [];
+        for (const v of values) {
+          if (typeof v === 'number') { nums.push(v); }
+          else if (typeof v === 'string') { const n = parseFloat(v); if (!isNaN(n)) nums.push(n); }
+        }
+        switch (valueOp) {
+          case 'max': return nums.length > 0 ? Math.max(...nums) : null;
+          case 'min': return nums.length > 0 ? Math.min(...nums) : null;
+          case 'avg': return nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+          case 'sum': return nums.reduce((a, b) => a + b, 0);
+          case 'count': return nums.length;
+          case 'first': return values[0] ?? null;
+          case 'last': return values.length > 0 ? values[values.length - 1] : null;
+          default: return values;
+        }
+      }
+      return outputs;
+    }
     default:
       return outputs;
   }

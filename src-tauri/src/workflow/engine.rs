@@ -387,7 +387,13 @@ impl WorkflowEngine {
     fn evaluate_condition(condition: &str, source_output: Option<&Value>) -> bool {
         match source_output {
             Some(output) => {
-                let output_str = output.to_string();
+                // 对 Array 取第一个元素，对 Object 取第一个 value
+                let resolved = match output {
+                    Value::Array(arr) => arr.first().cloned().unwrap_or(Value::Null),
+                    Value::Object(map) => map.values().next().cloned().unwrap_or(Value::Null),
+                    other => other.clone(),
+                };
+                let output_str = resolved.to_string();
                 let trimmed = output_str.trim_matches('"');
 
                 if let Some(val) = condition.strip_prefix("==") {
@@ -513,7 +519,7 @@ impl WorkflowEngine {
         match stage.gate.merge_strategy {
             MergeStrategy::Merge => {
                 let mut merged = serde_json::Map::new();
-                for (node_id, output) in &node_outputs {
+                for (_node_id, output) in &node_outputs {
                     if let Some(obj) = output.as_object() {
                         for (k, v) in obj {
                             merged.insert(format!("{}_{}", node_id, k), v.clone());
@@ -600,6 +606,86 @@ impl WorkflowEngine {
                         Value::Object(wrapped)
                     } else {
                         Value::Object(serde_json::Map::new())
+                    }
+                } else if let Some(rest) = script.strip_prefix("calc:") {
+                    // 内置聚合运算，格式: calc:<filter>:<merge_as>:<value_op>
+                    // filter: all | success（只保留成功节点）
+                    // merge_as: none | object | array | flat
+                    // value_op: none | max | min | avg | sum | first | last | count
+                    let parts: Vec<&str> = rest.splitn(4, ':').collect();
+                    let filter = parts.get(0).unwrap_or(&"all");
+                    let _merge_as = parts.get(1).unwrap_or(&"none");
+                    let value_op = parts.get(2).unwrap_or(&"none");
+
+                    // 从 node_outputs 中提取可运算的数值列表
+                    let mut numeric_values: Vec<f64> = Vec::new();
+                    let mut string_values: Vec<String> = Vec::new();
+                    let mut all_values: Vec<Value> = Vec::new();
+
+                    for (_node_id, output) in &node_outputs {
+                        // 过滤：只保留成功节点（此处所有 node_outputs 中的值均为已完成节点的输出）
+                        let include = match *filter {
+                            "success" => true,  // node_outputs 已是已完成节点
+                            _ => true,
+                        };
+                        if !include { continue; }
+
+                        // 尝试提取数值
+                        if let Some(num) = output.as_f64() {
+                            numeric_values.push(num);
+                            all_values.push((*output).clone());
+                        } else if let Some(s) = output.as_str() {
+                            if let Ok(num) = s.trim().parse::<f64>() {
+                                numeric_values.push(num);
+                            } else {
+                                string_values.push(s.to_string());
+                            }
+                            all_values.push((*output).clone());
+                        } else {
+                            all_values.push((*output).clone());
+                        }
+                    }
+
+                    match *value_op {
+                        "max" => {
+                            if let Some(&max_val) = numeric_values.iter().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)) {
+                                Value::Number(serde_json::Number::from_f64(max_val).unwrap_or(serde_json::Number::from(0)))
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        "min" => {
+                            if let Some(&min_val) = numeric_values.iter().min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)) {
+                                Value::Number(serde_json::Number::from_f64(min_val).unwrap_or(serde_json::Number::from(0)))
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        "avg" => {
+                            if !numeric_values.is_empty() {
+                                let avg = numeric_values.iter().sum::<f64>() / numeric_values.len() as f64;
+                                Value::Number(serde_json::Number::from_f64(avg).unwrap_or(serde_json::Number::from(0)))
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        "sum" => {
+                            let sum = numeric_values.iter().sum::<f64>();
+                            Value::Number(serde_json::Number::from_f64(sum).unwrap_or(serde_json::Number::from(0)))
+                        }
+                        "count" => {
+                            Value::Number(serde_json::Number::from(numeric_values.len()))
+                        }
+                        "first" => {
+                            all_values.first().cloned().unwrap_or(Value::Null)
+                        }
+                        "last" => {
+                            all_values.last().cloned().unwrap_or(Value::Null)
+                        }
+                        _ => {
+                            // none: 保留原始值数组（默认行为）
+                            Value::Array(all_values)
+                        }
                     }
                 } else {
                     Value::Object(serde_json::Map::new())

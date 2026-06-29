@@ -90,7 +90,13 @@ export const GateConfigPanel: React.FC<Props> = ({ gate, stageName, nodeCount, o
                 type="radio"
                 name="gate-strategy"
                 checked={gate.strategy === s.value}
-                onChange={() => onUpdate({ strategy: s.value })}
+                onChange={() => {
+                onUpdate({ strategy: s.value });
+                // 阈值策略强制使用自定义合并
+                if (s.value === 'threshold') {
+                  onUpdate({ mergeStrategy: 'custom' });
+                }
+              }}
                 style={{ marginTop: 2, accentColor: '#58a6ff' }}
               />
               <div>
@@ -177,7 +183,9 @@ export const GateConfigPanel: React.FC<Props> = ({ gate, stageName, nodeCount, o
           <span>⊕</span> 合并策略
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {MERGE_STRATEGIES.map((s) => (
+          {MERGE_STRATEGIES
+            .filter(s => gate.strategy !== 'threshold' || s.value === 'custom')
+            .map((s) => (
             <label
               key={s.value}
               style={{

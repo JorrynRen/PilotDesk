@@ -2472,7 +2472,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 id="gate-strategy"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
                 defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.strategy || 'all'}
-                  onChange={ (e) => setGateStrategy(e.target.value) }
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setGateStrategy(val);
+                    if (val === 'threshold') {
+                      // 阈值策略强制使用自定义合并，自动切换
+                      const mergeSelect = document.getElementById('gate-merge') as HTMLSelectElement;
+                      if (mergeSelect && mergeSelect.value !== 'custom') {
+                        mergeSelect.value = 'custom';
+                        mergeSelect.dispatchEvent(new Event('change'));
+                      }
+                    }
+                  }}
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               >
                 <option value="all">全部执行成功</option>
@@ -2555,8 +2566,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 </select>
               </div>
             </div>
-            <div id="gate-custom-mode-row" className="mb-4" style={{ display: showCustomMode ? 'block' : 'none' }}>
-              <div id="gate-selector-area" style={{ display: customMode === 'selector' ? 'block' : 'none' }}>
+            <div id="gate-custom-mode-row" className="mb-4" style={{ display: (showCustomMode || gateStrategy === 'threshold') ? 'block' : 'none' }}>
+              <div id="gate-selector-area" style={{ display: (customMode === 'selector' || gateStrategy === 'threshold') ? 'block' : 'none' }}>
                 <div className="flex gap-2 mb-2">
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>过滤</label>
@@ -2623,7 +2634,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               <button
                 onClick={() => {
                   const strategy = (document.getElementById('gate-strategy') as HTMLSelectElement)?.value;
-                  const mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
+                  let mergeStrategy = (document.getElementById('gate-merge') as HTMLSelectElement)?.value as 'merge' | 'concat' | 'pick_first' | 'pick_last' | 'custom';
+                  // 阈值策略强制使用自定义合并
+                  if (strategy === 'threshold') {
+                    mergeStrategy = 'custom';
+                  }
                   const countInput = (document.getElementById('gate-count') as HTMLInputElement)?.value;
                   const thresholdOp = (document.getElementById('gate-threshold-op') as HTMLSelectElement)?.value || '>=';
                   const thresholdInput = (document.getElementById('gate-threshold') as HTMLInputElement)?.value;
@@ -2643,22 +2658,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       } else {
                         lines.push('  const filtered = results;');
                       }
-                      if (valueOp === 'none') {
-                        if (mergeAs === 'object') {
-                          lines.push('  return filtered.reduce((acc, r) => ({...acc, ...r.data}), {});');
-                        } else if (mergeAs === 'flat') {
-                          lines.push('  return filtered.flatMap(r => r.data);');
-                        } else {
-                          lines.push('  return filtered.map(r => r.data);');
-                        }
-                      } else {
-                        lines.push('  const values = filtered.map(r => r.data).filter(v => typeof v === "number");');
-                        if (valueOp === 'max') lines.push('  return values.length > 0 ? Math.max(...values) : null;');
-                        else if (valueOp === 'min') lines.push('  return values.length > 0 ? Math.min(...values) : null;');
-                        else if (valueOp === 'avg') lines.push('  return values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : null;');
-                        else if (valueOp === 'sum') lines.push('  return values.reduce((a, b) => a + b, 0);');
-                      }
-                      customScript = '(results) => {\n' + lines.join('\n') + '\n}';
+                      // 生成 calc: 前缀格式（Rust 后端可直接解析执行）
+                      // 格式: calc:<filter>:<merge_as>:<value_op>
+                      customScript = `calc:${filter}:${mergeAs}:${valueOp}`;
                     }
                   }
                   // 校验
