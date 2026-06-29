@@ -300,7 +300,7 @@ function getPredecessorOutputOptions(
   const stageMap = new Map<string, Map<string, { value: string; label: string }[]>>();
   for (const { stageName, node: pn } of predecessorNodes) {
     const outputKeys = Object.keys(pn.outputMapping || {});
-    if (outputKeys.length === 0) continue;
+    if (outputKeys.length === 0 && pn.type !== 'agent') continue;
     let nodeMap = stageMap.get(stageName);
     if (!nodeMap) {
       nodeMap = new Map();
