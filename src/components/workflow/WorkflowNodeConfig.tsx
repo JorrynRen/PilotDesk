@@ -887,6 +887,71 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 style={S.input()}
               />
             )}
+            {/* 会话方式选择器 — 仅 agent 类型 */}
+            {configFields[0].key === 'agent_type' && (() => {
+              const sessionMode = params['session_mode'] || 'new';
+              const resumeRef = params['resume_session_ref'] || '';
+              const prevAgentOptions = (() => {
+                if (!stages) return [];
+                // 收集前序阶段中所有 agent 节点的 session_id 输出
+                const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
+                const options: { value: string; label: string }[] = [];
+                for (let i = 0; i < currentStageIdx; i++) {
+                  const stage = stages[i];
+                  for (const n of stage.nodes) {
+                    if (n.type === 'agent' && n.outputMapping) {
+                      const sidKey = Object.entries(n.outputMapping).find(([_k, v]) => v === 'session_id');
+                      if (sidKey) {
+                        options.push({
+                          value: `{{${sidKey[0]}.output.${n.id}}}`,
+                          label: `[${stage.name}] ${n.label || n.id}.session_id`,
+                        });
+                      }
+                    }
+                  }
+                }
+                return options;
+              })();
+              return (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ flex: '0 0 auto' }}>
+                      <label style={S.labelSm(1)}>会话方式</label>
+                      <select
+                        value={sessionMode}
+                        onChange={(e) => handleParamChange('session_mode', e.target.value)}
+                        style={S.select({ minWidth: 100 })}
+                      >
+                        <option value="new">新会话</option>
+                        <option value="resume">延续会话</option>
+                      </select>
+                    </div>
+                    {sessionMode === 'resume' && (
+                      <>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <label style={S.labelSm(1)}>延续会话ID</label>
+                          <select
+                            value={resumeRef}
+                            onChange={(e) => handleParamChange('resume_session_ref', e.target.value)}
+                            style={S.select()}
+                          >
+                            <option value="">请选择延续会话ID</option>
+                            {prevAgentOptions.map((opt) => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {sessionMode === 'resume' && prevAgentOptions.length === 0 && (
+                    <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 4 }}>
+                      提示：前序阶段暂无可引用的 agent 会话ID，请确保前序 agent 节点已配置 session_id 输出映射
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
