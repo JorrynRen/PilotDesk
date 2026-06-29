@@ -195,6 +195,8 @@ function getGateMergeChild(
       const outputKeys = Object.keys(node.outputMapping || {});
       if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {
+        const semanticType = node.outputMapping![key];
+        if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
         const mergedKey = `${node.id}_${key}`;
         fieldPaths.push({
           value: `{{${contextKey}.${mergedKey}}}`,
@@ -209,6 +211,8 @@ function getGateMergeChild(
       const outputKeys = Object.keys(node.outputMapping || {});
       if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {
+        const semanticType = node.outputMapping![key];
+        if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
         fieldPaths.push({
           value: `{{${contextKey}[${j}].${key}}}`,
           label: `${node.outputMapping![key]}`,
@@ -222,6 +226,8 @@ function getGateMergeChild(
       const outputKeys = Object.keys(node.outputMapping || {});
       if (outputKeys.length === 0) continue;
       for (const key of outputKeys) {
+        const semanticType = node.outputMapping![key];
+        if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
         fieldPaths.push({
           value: `{{${contextKey}.${key}}}`,
           label: `${node.outputMapping![key]}`,
