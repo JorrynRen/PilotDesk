@@ -200,7 +200,7 @@ function getGateMergeChild(
         const mergedKey = `${node.id}_${key}`;
         fieldPaths.push({
           value: `{{${contextKey}.${mergedKey}}}`,
-          label: `${node.outputMapping![key]}`,
+          label: `${mergedKey}`,
         });
       }
     }
@@ -215,7 +215,7 @@ function getGateMergeChild(
         if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
         fieldPaths.push({
           value: `{{${contextKey}[${j}].${key}}}`,
-          label: `${node.outputMapping![key]}`,
+          label: `[${j}].${key}`,
         });
       }
     }
@@ -230,7 +230,7 @@ function getGateMergeChild(
         if (semanticType === 'session_id' || semanticType === 'agent_type') continue;
         fieldPaths.push({
           value: `{{${contextKey}.${key}}}`,
-          label: `${node.outputMapping![key]}`,
+          label: `${key}`,
         });
       }
       fieldPaths.push({
