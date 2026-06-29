@@ -175,85 +175,77 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string, st
  * 计算前序阶段的门控合并输出键名
  * 根据阶段配置和节点 outputMapping 推导 gate merge 后的可用字段
  */
-function getGateMergeOutputOptions(
-  currentStageIdx: number,
-  stages: Stage[],
-): OptionGroup[] {
-  const gateGroups: OptionGroup[] = [];
+/**
+ * 计算前序阶段的门控合并输出选项（作为阶段分组的二级子项）
+ * 返回 Map: stageName -> gate child group（含 options）
+ */
+function getGateMergeChild(
+  stage: Stage,
+): { group: string; options: { value: string; label: string }[] } | null {
+  if (!stage) return null;
 
-  for (let i = 0; i < currentStageIdx; i++) {
-    const stage = stages[i];
-    if (!stage) continue;
+  const mergeStrategy = stage.gate?.mergeStrategy || 'merge';
+  const stageOrder = stage.order;
+  const contextKey = `__stage_${stageOrder}_output__`;
+  const fieldPaths: { value: string; label: string }[] = [];
 
-    const mergeStrategy = stage.gate?.mergeStrategy || 'merge';
-    const stageOrder = stage.order ?? i;
-    const contextKey = `__stage_${stageOrder}_output__`;
-    const fieldPaths: { value: string; label: string }[] = [];
-
-    if (mergeStrategy === 'merge') {
-      for (const node of stage.nodes) {
-        if (node.nodeType === 'start' || node.nodeType === 'end') continue;
-        const outputKeys = Object.keys(node.outputMapping || {});
-        if (outputKeys.length === 0) continue;
-        for (const key of outputKeys) {
-          const mergedKey = `${node.id}_${key}`;
-          fieldPaths.push({
-            value: `{{${contextKey}.${mergedKey}}}`,
-            label: `[${node.label || node.id}] ${key}`,
-          });
-        }
-      }
-    } else if (mergeStrategy === 'concat') {
-      for (let j = 0; j < stage.nodes.length; j++) {
-        const node = stage.nodes[j];
-        if (node.nodeType === 'start' || node.nodeType === 'end') continue;
-        const outputKeys = Object.keys(node.outputMapping || {});
-        if (outputKeys.length === 0) continue;
-        for (const key of outputKeys) {
-          fieldPaths.push({
-            value: `{{${contextKey}[${j}].${key}}}`,
-            label: `[${node.label || node.id}] ${key}`,
-          });
-        }
-      }
-    } else if (mergeStrategy === 'pick_first' || mergeStrategy === 'pick_last') {
-      const targetNodes = mergeStrategy === 'pick_first' ? stage.nodes : [...stage.nodes].reverse();
-      for (const node of targetNodes) {
-        if (node.nodeType === 'start' || node.nodeType === 'end') continue;
-        const outputKeys = Object.keys(node.outputMapping || {});
-        if (outputKeys.length === 0) continue;
-        for (const key of outputKeys) {
-          fieldPaths.push({
-            value: `{{${contextKey}.${key}}}`,
-            label: `[${node.label || node.id}] ${key}`,
-          });
-        }
+  if (mergeStrategy === 'merge') {
+    for (const node of stage.nodes) {
+      if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+      const outputKeys = Object.keys(node.outputMapping || {});
+      if (outputKeys.length === 0) continue;
+      for (const key of outputKeys) {
+        const mergedKey = `${node.id}_${key}`;
         fieldPaths.push({
-          value: `{{${contextKey}}}`,
-          label: `[${node.label || node.id}] 完整输出`,
+          value: `{{${contextKey}.${mergedKey}}}`,
+          label: `[${node.label || node.id}] ${key}`,
         });
-        break;
       }
-    } else if (mergeStrategy === 'custom') {
+    }
+  } else if (mergeStrategy === 'concat') {
+    for (let j = 0; j < stage.nodes.length; j++) {
+      const node = stage.nodes[j];
+      if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+      const outputKeys = Object.keys(node.outputMapping || {});
+      if (outputKeys.length === 0) continue;
+      for (const key of outputKeys) {
+        fieldPaths.push({
+          value: `{{${contextKey}[${j}].${key}}}`,
+          label: `[${node.label || node.id}] ${key}`,
+        });
+      }
+    }
+  } else if (mergeStrategy === 'pick_first' || mergeStrategy === 'pick_last') {
+    const targetNodes = mergeStrategy === 'pick_first' ? stage.nodes : [...stage.nodes].reverse();
+    for (const node of targetNodes) {
+      if (node.nodeType === 'start' || node.nodeType === 'end') continue;
+      const outputKeys = Object.keys(node.outputMapping || {});
+      if (outputKeys.length === 0) continue;
+      for (const key of outputKeys) {
+        fieldPaths.push({
+          value: `{{${contextKey}.${key}}}`,
+          label: `[${node.label || node.id}] ${key}`,
+        });
+      }
       fieldPaths.push({
-        value: '',
-        label: '(自定义策略，暂不可引用)',
+        value: `{{${contextKey}}}`,
+        label: `[${node.label || node.id}] 完整输出`,
       });
+      break;
     }
-
-    if (fieldPaths.length > 0) {
-      gateGroups.push({
-        group: `[gate] ${stage.name}`,
-        children: [{
-          group: '门控合并输出',
-          options: fieldPaths,
-        }],
-        options: [],
-      });
-    }
+  } else if (mergeStrategy === 'custom') {
+    fieldPaths.push({
+      value: '',
+      label: '(自定义策略，暂不可引用)',
+    });
   }
 
-  return gateGroups;
+  if (fieldPaths.length === 0) return null;
+
+  return {
+    group: '[gate] 门控合并输出',
+    options: fieldPaths,
+  };
 }
 
 function getPredecessorOutputOptions(
@@ -324,9 +316,7 @@ function getPredecessorOutputOptions(
     nodeMap.set(pn.label, fieldList);
   }
 
-  // 4. 添加门控合并输出选项（前序阶段的 gate merge 结果）
-  const gateMergeOptions = getGateMergeOutputOptions(currentStageIdx, stages);
-
+  // 4. 构建结果：每个阶段分组下包含节点输出 + 门控合并输出
   const result = Array.from(stageMap.entries()).map(([stageName, nodeMap]) => ({
     group: stageName,
     children: Array.from(nodeMap.entries()).map(([nodeLabel, options]) => ({
@@ -336,9 +326,17 @@ function getPredecessorOutputOptions(
     options: [],
   }));
 
-  // 将 gate merge 选项插入到结果最前面
-  if (gateMergeOptions.length > 0) {
-    result.unshift(...gateMergeOptions);
+  // 5. 在每个阶段分组中注入门控合并输出子项（与节点列表平级）
+  for (let ri = 0; ri < result.length; ri++) {
+    // 通过阶段名查找对应的阶段对象（predecessorNodes 与 stages 顺序一致）
+    const stageName = result[ri].group;
+    const stage = stages.find(s => s.name === stageName);
+    if (stage) {
+      const gateChild = getGateMergeChild(stage);
+      if (gateChild) {
+        result[ri].children.push(gateChild);
+      }
+    }
   }
 
   console.log('[getPredecessorOutputOptions] result groups:', result.map(r => ({ group: r.group, children: r.children?.map(c => c.group) })));
@@ -613,7 +611,7 @@ const MappingEditor: React.FC<{
                                     borderBottom: '1px solid var(--border)',
                                   }}
                                 >
-                                  ├─[node] {nodeGroup.group}
+                                  ├─{nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                 </div>
                                 {/* 第三级：├─参数名 */}
                                 {nodeGroup.options.map((opt) => (
@@ -1023,7 +1021,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                 {stage.children && stage.children.map((nodeGroup, ni) => (
                                   <div key={ni}>
                                     <div style={{ padding: '3px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
-                                      [node] {nodeGroup.group}
+                                      {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                     </div>
                                     {nodeGroup.options.map((opt) => (
                                       <div
