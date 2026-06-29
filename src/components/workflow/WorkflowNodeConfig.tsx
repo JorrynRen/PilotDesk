@@ -198,7 +198,7 @@ function getGateMergeChild(
         const mergedKey = `${node.id}_${key}`;
         fieldPaths.push({
           value: `{{${contextKey}.${mergedKey}}}`,
-          label: `[${node.label || node.id}] ${key}`,
+          label: `[${node.label || node.id}] ${node.outputMapping![key]}`,
         });
       }
     }
@@ -211,7 +211,7 @@ function getGateMergeChild(
       for (const key of outputKeys) {
         fieldPaths.push({
           value: `{{${contextKey}[${j}].${key}}}`,
-          label: `[${node.label || node.id}] ${key}`,
+          label: `[${node.label || node.id}] ${node.outputMapping![key]}`,
         });
       }
     }
@@ -224,7 +224,7 @@ function getGateMergeChild(
       for (const key of outputKeys) {
         fieldPaths.push({
           value: `{{${contextKey}.${key}}}`,
-          label: `[${node.label || node.id}] ${key}`,
+          label: `[${node.label || node.id}] ${node.outputMapping![key]}`,
         });
       }
       fieldPaths.push({
@@ -630,7 +630,7 @@ const MappingEditor: React.FC<{
                               <div key={ni}>
                                 <div
                                   style={{
-                                    padding: '3px 8px 3px 16px',
+                                    padding: '6px 8px',
                                     fontSize: 'var(--fs-10)',
                                     color: 'var(--text-secondary)',
                                     fontWeight: 500,
@@ -639,7 +639,7 @@ const MappingEditor: React.FC<{
                                 >
                                   ├─{nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                 </div>
-                                {/* 三级：├─参数名 */}
+                                {/* 二级：├─参数名 */}
                                 {nodeGroup.options.map((opt) => (
                                   <div
                                     key={opt.value}
@@ -648,7 +648,7 @@ const MappingEditor: React.FC<{
                                       setActiveDropdown(null);
                                     }}
                                     style={{
-                                      padding: '5px 8px 5px 28px',
+                                      padding: '5px 8px 5px 20px',
                                       cursor: 'pointer',
                                       color: 'var(--text-primary)',
                                       borderBottom: '1px solid var(--border)',
