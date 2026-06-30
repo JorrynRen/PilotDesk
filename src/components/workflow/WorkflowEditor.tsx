@@ -1600,22 +1600,26 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const as = 5 * invScale;
 
       links.push(
-        <g key={`sl-${edge.id}`} data-edge={edge.id}>
-          <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" style={{ cursor: 'pointer' }} pointerEvents="stroke" />
-          <path d={d} stroke="var(--accent)" strokeWidth={8 * invScale} fill="none" opacity={0} style={{ transition: 'opacity 0.15s' }} pointerEvents="none" />
-          <g style={{ cursor: "pointer", pointerEvents: "all" }} onMouseEnter={() => setHoveredStageEdge(edge.id)} onMouseLeave={() => setHoveredStageEdge(null)}>
-            <path d={d} stroke={lc} strokeWidth={hoveredStageEdge === edge.id ? sw + 2 * invScale : sw} fill="none" strokeDasharray={rs === "running" ? "6 3" : rs === "idle" ? "6 4" : "none"} style={{ transition: "stroke 0.3s ease, stroke-width 0.15s" }} pointerEvents="none" />
-          </g>
-          <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={lc} pointerEvents="none" />
+        <g key={`sl-${edge.id}`} data-edge={edge.id}
+          onMouseEnter={() => setHoveredStageEdge(edge.id)}
+          onMouseLeave={() => setHoveredStageEdge(null)}
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteStageEdge(edge.id); }}
+          style={{ cursor: 'pointer' }}
+        >
+          {/* Wide invisible hit area for click detection */}
+          <rect x={Math.min(srcX, tgtX) - 50 * invScale} y={Math.min(srcY, tgtY) - 30 * invScale} width={Math.abs(srcX - tgtX) + 100 * invScale} height={60 * invScale} fill="transparent" pointerEvents="all" />
+          {/* Main visible path - thicker and brighter on hover */}
+          <path d={d} stroke={hoveredStageEdge === edge.id ? '#58a6ff' : lc} strokeWidth={hoveredStageEdge === edge.id ? sw + 3 * invScale : sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease, stroke-width 0.15s' }} pointerEvents="none" />
+          {/* Arrow polygon */}
+          <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={hoveredStageEdge === edge.id ? '#58a6ff' : lc} pointerEvents="none" />
+          {/* Running animation */}
           {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.3s linear infinite' }} pointerEvents="none" />}
+          {/* Label box */}
           <g pointerEvents="none">
             <rect x={(srcX + tgtX) / 2 - 16 * invScale} y={(srcY + tgtY) / 2 - 22 * invScale} width={32 * invScale} height={44 * invScale} rx={4 * invScale} fill="var(--bg-primary)" stroke="var(--border)" strokeWidth={0.5 * invScale} />
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{srcStage.name.slice(0, 6)}</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 2 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">→</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{tgtStage.name.slice(0, 6)}</text>
-          </g>
-          <g onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteStageEdge(edge.id); }} style={{ cursor: 'pointer', pointerEvents: 'all' }}>
-            <rect x={Math.min(srcX, tgtX) - 50 * invScale} y={Math.min(srcY, tgtY) - 30 * invScale} width={100 * invScale} height={60 * invScale} fill="transparent" />
           </g>
         </g>
       );
