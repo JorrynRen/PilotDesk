@@ -145,27 +145,29 @@ interface OptionGroup {
   options: { value: string; label: string }[];
 }
 
-function getOutputFieldOptions(nodeType: WorkflowNodeType, nodeLabel: string, stageName?: string): OptionGroup[] | undefined {
-  const nodeOptions = (() => {
-    switch (nodeType) {
-      case 'agent':
-        return [{ value: 'content', label: '响应内容' }, { value: 'session_id', label: '会话ID' }, { value: 'agent_type', label: 'Agent类型' }];
-      case 'interact':
-        return [{ value: 'type', label: '交互类型' }, { value: 'prompt', label: '提示文案' }, { value: 'inputType', label: '输入类型' }];
-      case 'start':
-        return [{ value: 'input', label: '入参' }];
-      case 'end':
-        return [{ value: 'result', label: '结果' }];
-      default:
-        return undefined;
-    }
-  })();
-  if (!nodeOptions) return undefined;
-  // 三级结构：阶段 → 节点 → 字段
+function getOutputFieldOptions(nodeType: WorkflowNodeType): OptionGroup[] | undefined {
+  // 新架构：所有节点类型的输出统一为 content 体系
+  // 输出映射的 value（引用路径）可选项：
+  //   content          → 节点执行结果（全部）
+  //   session_id       → agent 节点会话ID
+  //   xxx.content      → content 对象的 xxx 属性
+  //   content[N]        → content 数组的第 N 个元素
+  // 用户也可直接输入自定义路径
+  if (nodeType === 'start') return undefined; // 开始节点无输出映射
+
+  const baseOptions: { value: string; label: string }[] = [
+    { value: 'content', label: 'content（执行结果）' },
+  ];
+
+  // agent 类型节点额外提供 session_id
+  if (nodeType === 'agent') {
+    baseOptions.push({ value: 'session_id', label: 'session_id（会话ID）' });
+  }
+
   return [{
-    group: stageName || '',
-    children: [{ group: nodeLabel, options: nodeOptions }],
-    options: [],
+    group: '本节点输出',
+    children: [],
+    options: baseOptions,
   }];
 }
 
@@ -199,16 +201,7 @@ function getGateMergeOptions(
   }];
 }
 
-/** @deprecated use getGateMergeOptions instead */
-function getGateMergeChild(
-  predecessorNodes: { stageName: string; node: WorkflowNode }[],
-  stageId: string,
-  gateConfig: GateConfig | undefined,
-): { group: string; options: { value: string; label: string }[] } | null {
-  const opts = getGateMergeOptions(predecessorNodes, stageId, gateConfig);
-  if (!opts) return null;
-  return { group: 'gate_output', options: opts };
-}
+
 
 function getPredecessorOutputOptions(
   nodeId: string,
@@ -227,7 +220,7 @@ function getPredecessorOutputOptions(
   // 2. 按拓扑序收集前序节点（只能引用拓扑顺序在前面的节点）
   //    - 前序阶段的所有节点
   //    - 同阶段中通过边指向当前节点的源节点
-  const predecessorNodes: { stageName: string; node: WorkflowNode }[] = [];
+  const predecessorNodes: { stageName: string; stageId: string; node: WorkflowNode }[] = [];
   const seenNodeIds = new Set<string>();
 
   // 前序阶段的所有节点
@@ -235,7 +228,7 @@ function getPredecessorOutputOptions(
     for (const n of stages[i].nodes) {
       if (!seenNodeIds.has(n.id)) {
         seenNodeIds.add(n.id);
-        predecessorNodes.push({ stageName: stages[i].name, node: n });
+        predecessorNodes.push({ stageName: stages[i].name, stageId: stages[i].id, node: n });
       }
     }
   }
@@ -247,13 +240,16 @@ function getPredecessorOutputOptions(
     const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
     if (sourceNode && !seenNodeIds.has(sourceNode.id)) {
       seenNodeIds.add(sourceNode.id);
-      predecessorNodes.push({ stageName: currentStage.name, node: sourceNode });
+      predecessorNodes.push({ stageName: currentStage.name, stageId: currentStage.id, node: sourceNode });
     }
   }
 
   if (predecessorNodes.length === 0) return [];
 
   // 3. 构建结果：阶段 → [node] 分组（节点字段） + gate_output（二级选项）
+  //    新架构引用格式：{{key.节点ID.阶段ID}}
+  //    outputMapping 的 key 是用户自定义参数名，value 是引用路径
+  //    前序节点通过 outputMapping 的 key 暴露数据
   const result: OptionGroup[] = [];
   const stageGroups = new Map<string, OptionGroup>();
 
@@ -264,7 +260,7 @@ function getPredecessorOutputOptions(
   }
 
   // 3.2 按阶段分组收集节点输出
-  for (const { stageName, node: pn } of predecessorNodes) {
+  for (const { stageName, stageId, node: pn } of predecessorNodes) {
     // 确保阶段分组存在
     if (!stageGroups.has(stageName)) {
       stageGroups.set(stageName, {
@@ -273,31 +269,36 @@ function getPredecessorOutputOptions(
         options: [],
       });
     }
-    const stageObj = stageGroups.get(stageName)!;
+    const stageGroup = stageGroups.get(stageName)!;
 
-    // 节点输出映射参数
-    const outputKeys = Object.keys(pn.outputMapping || {});
+    // 节点输出映射：key 是用户自定义参数名，value 是引用路径（如 content, session_id 等）
+    const outputMapping = pn.outputMapping || {};
+    const outputKeys = Object.keys(outputMapping);
+
     if (outputKeys.length === 0 && pn.type !== 'agent') continue;
 
     const fieldList: { value: string; label: string }[] = [];
+
+    // outputMapping 中已声明的 key（用户自定义参数名）
     for (const key of outputKeys) {
+      // 引用格式：{{用户参数名.节点ID.阶段ID}}
       fieldList.push({
-        value: `{{${key}.output.${pn.id}}}`,
+        value: `{{${key}.${pn.id}.${stageId}}}`,
         label: key,
       });
     }
 
-    // Agent 节点输出 session_id（排除当前节点自身的 session_id）
+    // Agent 节点自动提供 session_id（排除当前节点自身的 session_id）
     if (pn.type === 'agent' && !outputKeys.some(k => k === 'session_id')) {
       fieldList.push({
-        value: `{{session_id.output.${pn.id}}}`,
+        value: `{{session_id.${pn.id}.${stageId}}}`,
         label: 'session_id',
       });
     }
 
     // 只有有有效字段的节点才添加到分组
     if (fieldList.length > 0) {
-      stageObj.children!.push({
+      stageGroup.children!.push({
         group: pn.label.startsWith('[') ? pn.label : `[node] ${pn.label}`,
         options: fieldList,
       });
@@ -305,8 +306,7 @@ function getPredecessorOutputOptions(
   }
 
   // 3.3 为每个前序阶段注入 gate_output 作为二级选项
-  // 注意：本阶段节点不能引用本阶段门控合并变量（门控合并在本阶段所有节点执行完后才产生）
-  // 只注入前序阶段的 gate_output，排除当前阶段
+  //    本阶段节点不能引用本阶段门控合并变量（门控合并在本阶段所有节点执行完后才产生）
   for (const stageName of allPredecessorStageNames) {
     const stageObj = stages.find(s => s.name === stageName);
     if (!stageObj || !stageObj.gate) continue;
@@ -328,18 +328,6 @@ function getPredecessorOutputOptions(
     const stageObj = stages.find(s => s.name === stageName);
     if (stageObj && stageGroups.has(stageName)) {
       result.push(stageGroups.get(stageName)!);
-    }
-  }
-
-  // 特殊处理：开始节点没有入参
-  if (result.length === 0 && currentStageIdx === 0) {
-    const currentNode = stages[currentStageIdx]?.nodes.find(n => n.id === nodeId);
-    if (currentNode?.type === 'start') {
-      return [{
-        group: '' ,
-        children: [],
-        options: [{ value: '' , label: '开始节点没有入参源' }],
-      }];
     }
   }
 
@@ -906,12 +894,11 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           for (let i = 0; i < currentStageIdx; i++) {
                             const stage = stages[i];
                             for (const n of stage.nodes) {
-                              if (n.type === 'agent' && n.params?.agent_type === params['agent_type'] && n.outputMapping) {
-                                const sidKey = Object.entries(n.outputMapping).find(([_k, v]) => v === 'session_id');
-                                if (sidKey && !seenNodeIds.has(n.id)) {
+                              if (n.type === 'agent' && n.params?.agent_type === params['agent_type']) {
+                                if (!seenNodeIds.has(n.id)) {
                                   seenNodeIds.add(n.id);
                                   options.push({
-                                    value: `{{${sidKey[1]}.output.${n.id}}}`,
+                                    value: `{{session_id.${n.id}.${stage.id}}}`,
                                     label: `[${stage.name}] ${n.label || n.id}.session_id`,
                                   });
                                 }
@@ -924,12 +911,11 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                             const incomingEdges = currentStage.edges.filter(e => e.target === node.id);
                             for (const edge of incomingEdges) {
                               const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                              if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type'] && sourceNode.outputMapping) {
-                                const sidKey = Object.entries(sourceNode.outputMapping).find(([_k, v]) => v === 'session_id');
-                                if (sidKey && !seenNodeIds.has(sourceNode.id)) {
+                              if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type']) {
+                                if (!seenNodeIds.has(sourceNode.id)) {
                                   seenNodeIds.add(sourceNode.id);
                                   options.push({
-                                    value: `{{${sidKey[1]}.output.${sourceNode.id}}}`,
+                                    value: `{{session_id.${sourceNode.id}.${currentStage.id}}}`,
                                     label: `[${currentStage.name}] ${sourceNode.label || sourceNode.id}.session_id`,
                                   });
                                 }
@@ -972,11 +958,9 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               // 检查前序阶段
               for (let i = 0; i < currentStageIdx && !hasOptions; i++) {
                 for (const n of stages[i].nodes) {
-                  if (n.type === 'agent' && n.params?.agent_type === params['agent_type'] && n.outputMapping) {
-                    if (Object.values(n.outputMapping).some(v => v === 'session_id')) {
-                      hasOptions = true;
-                      break;
-                    }
+                  if (n.type === 'agent' && n.params?.agent_type === params['agent_type']) {
+                    hasOptions = true;
+                    break;
                   }
                 }
               }
@@ -985,11 +969,9 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 const currentStage = stages[currentStageIdx];
                 for (const edge of currentStage.edges.filter(e => e.target === node.id)) {
                   const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                  if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type'] && sourceNode.outputMapping) {
-                    if (Object.values(sourceNode.outputMapping).some(v => v === 'session_id')) {
-                      hasOptions = true;
-                      break;
-                    }
+                  if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type']) {
+                    hasOptions = true;
+                    break;
                   }
                 }
               }
@@ -1267,7 +1249,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="输出字段名"
             valuePlaceholder={'输入文本或选择输出字段'}
             baseKeyRef={outputBaseKeyRef}
-            valueOptions={getOutputFieldOptions(node.type, node.label, stages?.[0]?.name)} />
+            valueOptions={getOutputFieldOptions(node.type)} />
       </div>
 
       {/* ===== 控制属性 ===== */}
