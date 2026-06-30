@@ -292,6 +292,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setStages(sanitizeMappingReferences(def.stages));
       setName(def.name);
       setDescription(def.description);
+      // Auto-create stage edges for sequential stages
+      const sorted = [...def.stages].sort((a, b) => a.order - b.order);
+      const edges: WorkflowEdge[] = [];
+      for (let idx = 0; idx < sorted.length - 1; idx++) {
+        edges.push({
+          id: generateEdgeId(sorted[idx].id, sorted[idx + 1].id),
+          source: sorted[idx].id,
+          target: sorted[idx + 1].id,
+        });
+      }
+      setStageEdges(edges);
     }
   }, [def]);
 
@@ -571,6 +582,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       newStage.nodes = [endNode];
     }
     updated.push(newStage);
+    // Auto-connect: create stage edge from previous stage to new stage
+    if (updated.length > 1) {
+      const prevStage = updated[updated.length - 2];
+      const newEdge: WorkflowEdge = {
+        id: generateEdgeId(prevStage.id, newStage.id),
+        source: prevStage.id,
+        target: newStage.id,
+      };
+      setStageEdges(prev => [...prev, newEdge]);
+    }
     setStages(updated.map((s, i) => ({ ...s, order: i })));
   };
 
@@ -2615,7 +2636,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               确认删除
             </h3>
             <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              是否删除 <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{confirmAction.label}</span>？此操作不可撤销。
+              是否删除 <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{confirmAction.label}</span>连线？此操作不可撤销。
             </p>
             <div className="flex gap-2 justify-end">
               <button
