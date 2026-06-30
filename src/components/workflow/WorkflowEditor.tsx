@@ -69,7 +69,7 @@ interface StageConnectingPreview {
 
 /** 删除确认弹窗状态 */
 interface ConfirmAction {
-  type: 'deleteStage' | 'deleteNode' | 'deleteEdge' | 'deleteNodes';
+  type: 'deleteStage' | 'deleteNode' | 'deleteEdge' | 'deleteNodes' | 'deleteStageEdge';
   targetId: string;
   label: string;
 }
@@ -629,6 +629,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         edges: s.edges.filter((e) => e.id !== confirmAction.targetId),
       }));
       setStages(sanitizeMappingReferences(afterDeleteEdge));
+    } else if (confirmAction.type === 'deleteStageEdge') {
+      const edge = stageEdges.find(e => e.id === confirmAction.targetId);
+      setStageEdges(stageEdges.filter(e => e.id !== confirmAction.targetId));
+      showToast(`已删除阶段连线「${edge?.source} → ${edge?.target}」`, 'success');
+      setConfirmAction(null);
     } else if (confirmAction.type === 'deleteNodes') {
       // 批量删除选中节点（排除边界节点）
       const boundaryIds = new Set<string>();
@@ -685,6 +690,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const handleDeleteEdge = (edgeId: string) => {
     modCountRef.current++;
     setConfirmAction({ type: 'deleteEdge', targetId: edgeId, label: '此连线' });
+  };
+
+  const handleDeleteStageEdge = (edgeId: string) => {
+    modCountRef.current++;
+    setConfirmAction({ type: 'deleteStageEdge', targetId: edgeId, label: '此阶段连线' });
   };
 
   const handleUpdateNode = (nodeId: string, updates: Partial<WorkflowNode>) => {
@@ -1563,10 +1573,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       // 目标阶段左边中点（标题栏中点Y或折叠中心Y）
       const srcIdx = stages.findIndex(s => s.id === srcStage.id);
       const tgtIdx = stages.findIndex(s => s.id === tgtStage.id);
-      if (srcIdx < 0 || tgtIdx < 0) return;
-      const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W - 1 : STAGE_W - 9);
-      const srcY = srcCollapsed ? STAGE_TOP + 104 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
-      const tgtX = sp[tgtIdx] + 1;
+      if (srcIdx < 0 || tgtIdx < 0) continue;
+      const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W - 6 : STAGE_W - 6);
+      const srcY = srcCollapsed ? STAGE_TOP + 54 + 44 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+      const tgtX = sp[tgtIdx] - 6;
       const tgtY = tgtCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2;
 
       // 箭头尖端对齐：路径终点前移箭头长度，让箭头尖端恰好到达 tgtX
@@ -1596,6 +1606,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{srcStage.name.slice(0, 6)}</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 2 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">→</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{tgtStage.name.slice(0, 6)}</text>
+          </g>
+          <g onClick={() => handleDeleteStageEdge(edge.id)} style={{ cursor: 'pointer', pointerEvents: 'all' }}>
+            <rect x={Math.min(srcX, tgtX) - 40 * invScale} y={Math.min(srcY, tgtY) - 20 * invScale} width={80 * invScale} height={40 * invScale} fill="transparent" />
           </g>
         </g>
       );
@@ -2432,6 +2445,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         source: stageConnecting.sourceStageId,
                         target: targetStageId,
                       }]);
+                      showToast('阶段连线已创建', 'success');
                       setStageConnecting(null);
                     }}
                   />
@@ -2452,7 +2466,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       width: 24, height: 24, borderRadius: '50%',
                       background: '#58a6ff',
                       border: '2px solid var(--bg-primary)',
-                      cursor: stageConnecting ? 'crosshair' : 'pointer', zIndex: 20,
+                      cursor: stageConnecting || hoveredAnchor === 'exit-' + stage.id ? 'crosshair' : 'pointer', zIndex: 20,
                       opacity: stageConnecting || hoveredAnchor === 'exit-' + stage.id ? 1 : 0.4,
                       transition: 'opacity 0.15s, cursor 0.15s',
                     }}
