@@ -1624,7 +1624,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 计算不可达节点（用于标记红色虚线边框） ──
   const reachableNodeIds = useMemo(() => getReachableNodes(stages, stageEdges), [stages, stageEdges]);
   const unreachableNodeIds = useMemo(
-    () => new Set(stages.flatMap(s => s.nodes.map(n => n.id)).filter(nid => !reachableNodeIds.has(nid))),
+    () => new Set(stages.flatMap(s => s.nodes).filter(n => n.type !== "start" && n.type !== "end").map(n => n.id).filter(nid => !reachableNodeIds.has(nid))),
     [stages, reachableNodeIds]
   );
   // ── JSX ──

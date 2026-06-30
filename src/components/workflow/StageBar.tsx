@@ -155,8 +155,10 @@ export const StageBar: React.FC<Props> = ({
                   <span style={{ fontSize: 10, color: '#3fb950', display: 'flex', alignItems: 'center', gap: 3 }}>
                     <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#3fb950' }} />
                     {(() => {
-                      const reachableCount = nodeCount - (unreachableNodeIds ? stage.nodes.filter(n => unreachableNodeIds.has(n.id)).length : 0);
-                      return `${reachableCount}/${nodeCount}`;
+                      const runnableNodes = stage.nodes.filter(n => n.type !== 'start' && n.type !== 'end');
+                      const runnableCount = runnableNodes.length;
+                      const unreachableCount = unreachableNodeIds ? runnableNodes.filter(n => unreachableNodeIds.has(n.id)).length : 0;
+                      return `${runnableCount - unreachableCount}/${runnableCount}`;
                     })()}
                   </span>
                 </div>
