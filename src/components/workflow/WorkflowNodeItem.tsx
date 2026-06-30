@@ -91,7 +91,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
               ? '1.5px solid var(--accent)'
               : isHovered
                 ? '1px solid var(--accent)'
-                : '1.5px solid var(--border)',
+                : '1.5px solid var(--text-tertiary)',
         background: isDraggingThis
           ? 'var(--bg-tertiary)'
           : runState === 'running'
