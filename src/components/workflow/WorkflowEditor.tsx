@@ -2390,7 +2390,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           </span>
                           <span className="text-[10px] flex items-center gap-1" style={{ color: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)' }}>
                             <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)', animation: stageRunState === 'running' ? 'spin 1s linear infinite' : 'none' }} />
-                            {stage.nodes.length}/{stage.nodes.length} 就绪
+                            {(() => { const r = stage.nodes.filter(n => n.type !== 'start' && n.type !== 'end'); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; return `${r.length - u}/${r.length}`; })()} 就绪
                           </span>
                         </div>
                         <div style={{borderTop: '1px solid var(--border)', marginBottom: '6px'}}></div>
