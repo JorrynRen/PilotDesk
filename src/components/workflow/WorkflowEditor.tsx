@@ -1529,9 +1529,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     );
   };
   // ── 渲染：阶段间连线 ──
-  const gateStrategyLabel = (s: string) => ({ all: '全部执行成功', count: '指定数量执行成功', threshold: '按合并运算值判断' }[s] || s);
+  const gateStrategyLabel = (s: string) => ({ all: '全部执行成功', count: '指定数量成功', threshold: '合并运算判断' }[s] || s);
   const gateStrategyDesc = (s: string) => ({ all: '所有节点执行成功后继续', count: '指定数量节点执行成功后继续', threshold: '合并运算值满足条件后继续' }[s] || s);
-  const mergeStrategyLabel = (s: string) => ({ merge: '合并为对象', concat: '合并为数组', pick_first: '取第一个结果', pick_last: '取最后一个结果', custom: '自定义处理' }[s] || s);
+  const mergeStrategyLabel = (s: string) => ({ merge: '合并为对象', concat: '合并为数组', pick_first: '取第一个结果', pick_last: '取最后个结果', custom: '自定义处理' }[s] || s);
   const renderStageLinks = () => {
     // 从 stageEdges 渲染（而非按 order 自动生成）
     if (stageEdges.length === 0) return null;
@@ -2132,7 +2132,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     top: 20,
                     left: stagePositions[stageIndex],
                     width: isCollapsed ? 72 : 480,
-                    height: isCollapsed ? 154 : TITLE_H + CONTENT_H + GATE_H + 4,
+                    height: isCollapsed ? 134 : TITLE_H + CONTENT_H + GATE_H + 4,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
                     border: '1px solid var(--border)',
@@ -2439,7 +2439,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   )}
                   {/* 折叠摘要 — 四行显示 */}
                   {isCollapsed && (
-                    <div className="flex flex-col items-center justify-center px-1" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 100, gap: 3, lineHeight: '16px', paddingTop: 10 }}>
+                    <div className="flex flex-col items-center justify-center px-1" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 80, gap: 3, lineHeight: '16px', paddingTop: 10 }}>
                       <span>{stage.nodes.length} 节点</span>
                       <span>{stage.edges.length} 连线</span>
                       <span>{gateStrategyLabel(stage.gate.strategy)}</span>
@@ -2659,8 +2659,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               >
                 <option value="all">全部执行成功</option>
-                <option value="count">指定数量执行成功</option>
-                <option value="threshold">按合并运算值判断</option>
+                <option value="count">指定数量成功</option>
+                <option value="threshold">合并运算判断</option>
               </select>
             </div>
             <div className="mb-4" style={{ display: gateStrategy === 'count' ? 'block' : 'none' }}>
@@ -2678,7 +2678,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               />
             </div>
             <div className="mb-4" style={{ display: gateStrategy === 'threshold' ? 'block' : 'none' }}>
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值（按合并运算值判断策略）</label>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值（合并运算判断策略）</label>
               <div className="flex gap-2 items-center">
                 <select
                   id="gate-threshold-op"
@@ -2721,7 +2721,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   {gateStrategy !== 'threshold' && <option value="merge">合并为对象</option>}
                   {gateStrategy !== 'threshold' && <option value="concat">合并为数组</option>}
                   {gateStrategy !== 'threshold' && <option value="pick_first">取第一个结果</option>}
-                  {gateStrategy !== 'threshold' && <option value="pick_last">取最后一个结果</option>}
+                  {gateStrategy !== 'threshold' && <option value="pick_last">取最后个结果</option>}
                   <option value="custom">自定义处理</option>
                 </select>
                 <select
