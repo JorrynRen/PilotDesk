@@ -2456,6 +2456,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   />
                   )}
 
+              </div>
 </React.Fragment>
             );
           })}
