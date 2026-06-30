@@ -1575,9 +1575,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const srcIdx = stages.findIndex(s => s.id === srcStage.id);
       const tgtIdx = stages.findIndex(s => s.id === tgtStage.id);
       if (srcIdx < 0 || tgtIdx < 0) continue;
-      const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W - 6 : STAGE_W - 6);
+      const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W : STAGE_W);
       const srcY = srcCollapsed ? STAGE_TOP + 54 + 50 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
-      const tgtX = sp[tgtIdx] + 6;
+      const tgtX = sp[tgtIdx];
       const tgtY = tgtCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2;
 
       // 箭头尖端对齐：路径终点前移箭头长度，让箭头尖端恰好到达 tgtX
@@ -1628,7 +1628,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         const srcCollapsed = collapsedStages.has(srcStage.id);
         const srcIdx = stages.findIndex(s => s.id === srcStage.id);
         if (srcIdx >= 0) {
-          const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W - 6 : STAGE_W - 6);
+          const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W : STAGE_W);
           const srcY = srcCollapsed ? STAGE_TOP + 54 + 50 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
           const tgtX = stageConnecting.mouseCanvasX;
           const tgtY = stageConnecting.mouseCanvasY;
