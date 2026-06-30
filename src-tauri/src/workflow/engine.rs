@@ -223,6 +223,7 @@ impl WorkflowEngine {
         for layer in &layers {
             let mut handles: Vec<tokio::task::JoinHandle<Result<(), AppError>>> = Vec::new();
 
+            let stage_id = stage.id.clone(); // 用于 async move 闭包
             for node_id in layer {
                 let node = match node_map.get(node_id) {
                     Some(n) => (*n).clone(),
@@ -370,7 +371,10 @@ impl WorkflowEngine {
                                     "session_id": sid,
                                 });
                                 context.lock().await.insert(nid.clone(), ctx_value);
+                                // 旧格式兼容
                                 context.lock().await.insert(format!("__session_id__{}", nid), Value::String(sid.clone()));
+                                // 新格式：session_id.{nodeId}.{stageId}
+                                context.lock().await.insert(format!("session_id.{}.{}", nid, stage_id), Value::String(sid.clone()));
                                 log::info!("[WorkflowEngine] Agent node {} context: content + session_id({})", nid, sid);
                             } else {
                                 context.lock().await.insert(nid.clone(), node_output.clone());
@@ -924,9 +928,14 @@ impl WorkflowEngine {
                 if node.node_type == WorkflowNodeType::Start {
                     if let Some(mapping) = &node.output_mapping {
                         if let Some(obj) = mapping.as_object() {
-                            // 按节点ID存储，支持 {{变量名.output.节点ID}} 格式
-                            context.lock().await.insert(node.id.clone(), Value::Object(obj.clone()));
-                            // 也设置扁平键，支持 {{变量名}} 简单格式
+                            // 新架构：outputMapping 的 key 是用户自定义参数名，value 是 content（用户输入值）
+                            // 以 nodeId 为 key 存储全部输出，支持 {{参数名.节点ID.阶段ID}} 格式
+                            // 开始节点直接将 outputMapping 的 key-value 作为输出数据
+                            let output_obj: serde_json::Map<String, Value> = obj.iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            context.lock().await.insert(node.id.clone(), Value::Object(output_obj));
+                            // 也设置扁平键，支持简单 {{参数名}} 格式
                             for (k, v) in obj {
                                 context.lock().await.insert(k.clone(), v.clone());
                             }
@@ -972,7 +981,7 @@ impl WorkflowEngine {
             match Self::check_gate_strategy(stage, &node_statuses, &merged) {
                 Ok(true) => {
                     log::info!("[WorkflowEngine] 阶段 '{}' 门控策略检查通过，合并结果已写入", stage.name);
-                    context.lock().await.insert(format!("__stage_{}_output__", stage.order), merged);
+                    context.lock().await.insert(format!("gate_output.{}", stage.id), merged);
                 }
                 Ok(false) => {
                     // 策略不满足（Count 成功数不足 / Threshold 条件不满足），中止工作流

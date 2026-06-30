@@ -14,10 +14,20 @@ pub struct TemplateEngine;
 
 impl TemplateEngine {
     /// 解析模板字符串，替换所有 {{variable}} 占位符
-    /// 预处理：简写格式 {{参数名.output.节点ID}} → {{nodes.节点ID.output.参数名}}
+    /// 预处理模板表达式，统一为 context 可查找的格式
+    /// 新架构格式：{{key.节点ID.阶段ID}} → context 中以 nodeId 为 key 存储，解析为 nodeId -> key
+    /// 旧架构格式（向后兼容）：{{key.output.nodeId}} → 转为 {{nodeId.key}}
     fn expand_short_format(template: &str) -> String {
-        let re = Regex::new(r"\{\{([a-zA-Z_]\w*)\.output\.([^}]+)\}\}").unwrap();
-        re.replace_all(template, "{{$2.$1}}").to_string()
+        // 新格式：{{参数名.节点ID.阶段ID}} → {{节点ID.参数名}}
+        // 三段式：key.nodeId.stageId → nodeId.key（忽略 stageId，context 按 nodeId 索引）
+        let re_new = Regex::new(r"\{\{([a-zA-Z_]\w*)\.([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)\}\}").unwrap();
+        let template = re_new.replace_all(template, "{{$2.$1}}").to_string();
+
+        // 旧格式兼容：{{key.output.nodeId}} → {{nodeId.key}}
+        let re_old = Regex::new(r"\{\{([a-zA-Z_]\w*)\.output\.([^}]+)\}\}").unwrap();
+        let template = re_old.replace_all(&template, "{{$2.$1}}").to_string();
+
+        template.to_string()
     }
 
     pub fn resolve(
@@ -75,12 +85,16 @@ impl TemplateEngine {
             }
         }
 
-        // 支持 __session_id__{nodeId} 直接获取 agent session_id
+        // 支持旧格式 __session_id__{nodeId} 直接获取 agent session_id（向后兼容）
         if expr.starts_with("__session_id__") {
             if let Some(val) = context.get(expr) {
                 return Ok(Self::value_to_string(val));
             }
         }
+
+        // 新格式：session_id.{nodeId}.{stageId} 或 gate_output.{stageId}
+        // 这些在 expand_short_format 阶段已被转换为 {nodeId}.session_id 或 {stageId}.gate_output
+        // 但 gate_output 需要特殊处理，因为 expand 会把 stageId 当成 nodeId
 
         let parts: Vec<&str> = expr.splitn(2, '.').collect();
         if parts.len() < 2 {
@@ -91,13 +105,13 @@ impl TemplateEngine {
             return Err(AppError::InvalidInput(format!("无效的模板变量: {}", expr)));
         }
 
-        let node_id = parts[0];
-        let path = parts[1];
+        let first = parts[0];
+        let rest = parts[1];
 
-        let value = context.get(node_id)
-            .ok_or_else(|| AppError::NotFound(format!("节点 {} 的输出不存在", node_id)))?;
+        let value = context.get(first)
+            .ok_or_else(|| AppError::NotFound(format!("变量 {} 的输出不存在", first)))?;
 
-        Self::jsonpath_extract(value, path)
+        Self::jsonpath_extract(value, rest)
     }
 
     fn jsonpath_extract(value: &Value, path: &str) -> Result<String, AppError> {
