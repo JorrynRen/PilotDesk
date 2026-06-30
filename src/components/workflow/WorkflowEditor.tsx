@@ -1116,6 +1116,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 画布拖拽平移（含防误触阈值 + 中键支持） ──
 
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    console.log('[CANVAS-MDOWN] handleCanvasMouseDown called, target:', (e.target as HTMLElement).tagName, e.target.className);
+    if ((e.target as HTMLElement).closest('[data-stage-gate-output]')) {
+      return;
+    }
     // 关闭连线右键菜单
     if (edgeContextMenu) setEdgeContextMenu(null);
     if (document.activeElement && document.activeElement !== e.target) {
@@ -1392,7 +1396,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const onMouseUp = () => {
       // 延迟取消：让入口锚点的 React onMouseUp 有机会先处理连线
       setTimeout(() => {
-        setStageConnecting(prev => prev !== null ? null : prev);
+        setStageConnecting(prev => {
+          return prev !== null ? null : prev;
+        });
       }, 0);
     };
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1535,7 +1541,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const mergeStrategyLabel = (s: string) => ({ merge: '合并为对象', concat: '合并为数组', pick_first: '取第一个结果', pick_last: '取最后个结果', custom: '自定义处理' }[s] || s);
   const renderStageLinks = () => {
     // 从 stageEdges 渲染（而非按 order 自动生成）
-    if (stageEdges.length === 0) return null;
     const links: React.ReactNode[] = [];
     let leftOffset = 20;
     const sp: number[] = [];
@@ -2454,14 +2459,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     onMouseLeave={() => setHoveredAnchor(null)}
                     onMouseDown={(e) => {
                       e.stopPropagation();
-                      e.preventDefault();
                       const rect = canvasRef.current?.getBoundingClientRect();
                       if (!rect) return;
                       const mx = (e.clientX - rect.left - pan.x) / scale;
                       const my = (e.clientY - rect.top - pan.y) / scale;
                       setStageConnecting({ sourceStageId: stage.id, mouseCanvasX: mx, mouseCanvasY: my });
                     }}
-                    onMouseEnter={() => { if (!stageConnecting) return; }}
                   />
                   )}
 
