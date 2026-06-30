@@ -1595,7 +1595,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const srcState = stepStates[`stage_${srcStage.id}`];
       const tgtState = stepStates[`stage_${tgtStage.id}`];
       const rs = tgtState === 'running' ? 'running' : tgtState === 'success' ? 'success' : tgtState === 'failed' ? 'failed' : srcState === 'success' && !tgtState ? 'running' : 'idle';
-      const lc = rs === 'running' ? '#58a6ff' : rs === 'success' ? '#3fb950' : rs === 'failed' ? '#f85149' : '#888';
+      const lc = rs === 'running' ? '#58a6ff' : rs === 'success' ? '#3fb950' : rs === 'failed' ? '#f85149' : 'var(--border)';
       const sw = (rs === 'running' ? 2.5 : 2) * invScale;
       const as = 5 * invScale;
 
