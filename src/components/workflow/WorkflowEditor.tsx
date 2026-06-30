@@ -296,18 +296,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (def) {
       setStages(sanitizeMappingReferences(def.stages));
       setName(def.name);
-      setDescription(def.description);
-      // Auto-create stage edges for sequential stages
-      const sorted = [...def.stages].sort((a, b) => a.order - b.order);
-      const edges: WorkflowEdge[] = [];
-      for (let idx = 0; idx < sorted.length - 1; idx++) {
-        edges.push({
-          id: generateEdgeId(sorted[idx].id, sorted[idx + 1].id),
-          source: sorted[idx].id,
-          target: sorted[idx + 1].id,
-        });
+      // Auto-create stage edges only when none exist (new workflow / migration)
+      if (def.stageEdges && def.stageEdges.length > 0) {
+        setStageEdges(def.stageEdges);
+      } else {
+        const sorted = [...def.stages].sort((a, b) => a.order - b.order);
+        const edges: WorkflowEdge[] = [];
+        for (let idx = 0; idx < sorted.length - 1; idx++) {
+          edges.push({
+            id: generateEdgeId(sorted[idx].id, sorted[idx + 1].id),
+            source: sorted[idx].id,
+            target: sorted[idx + 1].id,
+          });
+        }
+        setStageEdges(edges);
       }
-      setStageEdges(edges);
     }
   }, [def]);
 
