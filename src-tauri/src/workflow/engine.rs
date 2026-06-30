@@ -1112,6 +1112,7 @@ impl WorkflowEngine {
             description: def.description.clone(),
             trigger: def.trigger.clone(),
             stages: recovered_stages,
+            stage_edges: vec![],
             input_schema: def.input_schema.clone(),
             output_schema: def.output_schema.clone(),
             max_depth: def.max_depth,

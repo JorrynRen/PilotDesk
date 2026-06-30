@@ -188,6 +188,8 @@ pub struct WorkflowDefinition {
     pub description: String,
     pub trigger: TriggerConfig,
     pub stages: Vec<Stage>,
+    #[serde(default)]
+    pub stage_edges: Vec<WorkflowEdge>,
     pub input_schema: Option<serde_json::Value>,
     pub output_schema: Option<serde_json::Value>,
     pub max_depth: Option<u32>,
@@ -249,18 +251,20 @@ fn def_from_row(row: &rusqlite::Row) -> rusqlite::Result<WorkflowDefinition> {
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
         stages: serde_json::from_str(&row.get::<_, String>(5)?)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
-        input_schema: row.get::<_, Option<String>>(6)?
+        stage_edges: serde_json::from_str::<Vec<WorkflowEdge>>(&row.get::<_, String>(6)?)
+            .unwrap_or_default(),
+        input_schema: row.get::<_, Option<String>>(7)?
             .and_then(|s| serde_json::from_str(&s).ok()),
-        output_schema: row.get::<_, Option<String>>(7)?
+        output_schema: row.get::<_, Option<String>>(8)?
             .and_then(|s| serde_json::from_str(&s).ok()),
-        max_depth: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
-        enabled: row.get(11)?,
+        max_depth: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        enabled: row.get(12)?,
     })
 }
 
-const DEF_COLUMNS: &str = "id, name, version, description, trigger, stages, input_schema, output_schema, max_depth, created_at, updated_at, enabled";
+const DEF_COLUMNS: &str = "id, name, version, description, trigger, stages, stage_edges, input_schema, output_schema, max_depth, created_at, updated_at, enabled";
 
 pub fn list_definitions(conn: &Connection) -> Result<Vec<WorkflowDefinition>, AppError> {
     let sql = format!("SELECT {} FROM workflow_definitions ORDER BY updated_at DESC", DEF_COLUMNS);
@@ -285,12 +289,13 @@ pub fn create_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
     let now = crate::utils::now();
     conn.execute(
         "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages,
-         input_schema, output_schema, max_depth, created_at, updated_at, enabled)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         stage_edges, input_schema, output_schema, max_depth, created_at, updated_at, enabled)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             def.id, def.name, def.version, def.description,
             serde_json::to_string(&def.trigger).map_err(|e| AppError::External(e.to_string()))?,
             serde_json::to_string(&def.stages).map_err(|e| AppError::External(e.to_string()))?,
+            serde_json::to_string(&def.stage_edges).map_err(|e| AppError::External(e.to_string()))?,
             def.input_schema.as_ref().map(|v| v.to_string()),
             def.output_schema.as_ref().map(|v| v.to_string()),
             def.max_depth, now, now, def.enabled,
@@ -303,13 +308,14 @@ pub fn update_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
     let now = crate::utils::now();
     conn.execute(
         "UPDATE workflow_definitions SET name = ?1, version = ?2, description = ?3,
-         trigger = ?4, stages = ?5, input_schema = ?6, output_schema = ?7,
-         max_depth = ?8, updated_at = ?9, enabled = ?10
-         WHERE id = ?11",
+         trigger = ?4, stages = ?5, stage_edges = ?6, input_schema = ?7, output_schema = ?8,
+         max_depth = ?9, updated_at = ?10, enabled = ?11
+         WHERE id = ?12",
         params![
             def.name, def.version, def.description,
             serde_json::to_string(&def.trigger).map_err(|e| AppError::External(e.to_string()))?,
             serde_json::to_string(&def.stages).map_err(|e| AppError::External(e.to_string()))?,
+            serde_json::to_string(&def.stage_edges).map_err(|e| AppError::External(e.to_string()))?,
             def.input_schema.as_ref().map(|v| v.to_string()),
             def.output_schema.as_ref().map(|v| v.to_string()),
             def.max_depth, now, def.enabled, def.id,
