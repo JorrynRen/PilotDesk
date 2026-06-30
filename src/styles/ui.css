@@ -31,6 +31,24 @@
   border: 1px solid #BFDBFE;
 }
 
+.pilotdesk-toast-warning {
+  background-color: #FEF3C7;
+  color: #D97706;
+  border: 1px solid #FDE68A;
+}
+
+[data-theme="dark"] .pilotdesk-toast-info {
+  background-color: #172554;
+  color: #93C5FD;
+  border-color: #1E3A5F;
+}
+
+[data-theme="dark"] .pilotdesk-toast-warning {
+  background-color: #451A03;
+  color: #FCD34D;
+  border-color: #78350F;
+}
+
 [data-theme="dark"] .pilotdesk-toast-error {
   background-color: #450A0A;
   color: #FCA5A5;
