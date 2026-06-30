@@ -20,7 +20,7 @@ interface Props {
 const GATE_STRATEGIES: { value: GateStrategy; label: string; desc: string }[] = [
   { value: 'all', label: '全部执行成功', desc: '所有上游节点执行成功后才进入下一阶段' },
   { value: 'count', label: '指定数量执行成功', desc: '指定数量的上游节点执行成功后进入下一阶段' },
-  { value: 'threshold', label: '按合并运算值判断', desc: '根据合并运算值是否满足条件判断' },
+  { value: 'threshold', label: '合并运算判断', desc: '根据合并运算值是否满足条件判断' },
 ];
 
 const MERGE_STRATEGIES: { value: MergeStrategy; label: string; desc: string }[] = [

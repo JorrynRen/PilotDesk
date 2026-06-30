@@ -23,7 +23,7 @@ interface Props {
 const GATE_STRATEGY_LABELS: Record<string, string> = {
   all: '全部执行成功',
   count: '指定数量执行成功',
-  threshold: '按合并运算值判断',
+  threshold: '合并运算判断',
 };
 
 const MERGE_STRATEGY_LABELS: Record<string, string> = {
