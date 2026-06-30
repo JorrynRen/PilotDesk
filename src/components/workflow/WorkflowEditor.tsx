@@ -2439,7 +2439,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   )}
                   {/* 折叠摘要 — 四行显示 */}
                   {isCollapsed && (
-                    <div className="flex flex-col items-center justify-center px-1" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 100, gap: 3, lineHeight: '16px' }}>
+                    <div className="flex flex-col items-center justify-center px-1" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 100, gap: 3, lineHeight: '16px', paddingTop: 10 }}>
                       <span>{stage.nodes.length} 节点</span>
                       <span>{stage.edges.length} 连线</span>
                       <span>{gateStrategyLabel(stage.gate.strategy)}</span>
