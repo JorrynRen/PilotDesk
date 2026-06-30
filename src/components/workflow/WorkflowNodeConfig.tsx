@@ -233,11 +233,31 @@ function getPredecessorOutputOptions(
     }
   }
 
-  // 同阶段中，通过边指向当前节点的前序节点
+  // 同阶段中，通过边指向当前节点的拓扑前序节点（传递上游搜索）
+  //    与 sanitizeMappingReferences 的 upstreamMap 逻辑一致
   const currentStage = stages[currentStageIdx];
-  const incomingEdges = currentStage.edges.filter(e => e.target === nodeId);
-  for (const edge of incomingEdges) {
-    const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
+  // BFS 传递上游搜索：从直接入边节点开始，递归收集所有上游节点
+  const sameStageUpstream = new Set<string>();
+  const queue: string[] = [];
+  const directIncoming = currentStage.edges.filter(e => e.target === nodeId);
+  for (const edge of directIncoming) {
+    if (!sameStageUpstream.has(edge.source)) {
+      sameStageUpstream.add(edge.source);
+      queue.push(edge.source);
+    }
+  }
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const incomingToCurrent = currentStage.edges.filter(e => e.target === current);
+    for (const edge of incomingToCurrent) {
+      if (!sameStageUpstream.has(edge.source)) {
+        sameStageUpstream.add(edge.source);
+        queue.push(edge.source);
+      }
+    }
+  }
+  for (const upstreamId of sameStageUpstream) {
+    const sourceNode = currentStage.nodes.find(n => n.id === upstreamId);
     if (sourceNode && !seenNodeIds.has(sourceNode.id)) {
       seenNodeIds.add(sourceNode.id);
       predecessorNodes.push({ stageName: currentStage.name, stageId: currentStage.id, node: sourceNode });

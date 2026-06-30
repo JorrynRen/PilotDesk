@@ -374,6 +374,8 @@ const MAPPING_REF_PATTERN = /\{\{[\w.]+?\.(node_[a-zA-Z0-9_]+)\.stage_[a-zA-Z0-9
 const MAPPING_REF_PATTERN_LEGACY = /\{\{[\w.]+?\.output\.(node_[a-zA-Z0-9_]+)\}\}/g;
 /** 门控合并输出引用: {{gate_output.stageId}} */
 const MAPPING_GATE_REF_PATTERN = /\{\{gate_output\.(stage_[a-zA-Z0-9_]+)\}\}/g;
+/** session_id 引用: {{session_id.nodeId.stageId}}，需校验 agent 类型一致性 */
+const MAPPING_SESSION_REF_PATTERN = /\{\{session_id\.(node_[a-zA-Z0-9_]+)\.stage_[a-zA-Z0-9_]+\}\}/g;
 
 /**
  * 清理无效的映射引用
@@ -388,15 +390,17 @@ const MAPPING_GATE_REF_PATTERN = /\{\{gate_output\.(stage_[a-zA-Z0-9_]+)\}\}/g;
  * @returns 清理后的阶段列表
  */
 export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
-  // 收集所有节点 ID
+  // 收集所有节点信息
   const allNodeIds = new Set<string>();
+  const allNodes = new Map<string, WorkflowNode>();
   for (const stage of stages) {
     for (const node of stage.nodes) {
       allNodeIds.add(node.id);
+      allNodes.set(node.id, node);
     }
   }
 
-  // 构建每个节点的上游 ID 集合（通过边 source->target）
+  // 构建每个节点的上游 ID 集合（通过边 source→target 传递）
   const upstreamMap = new Map<string, Set<string>>();
   for (const stage of stages) {
     for (const edge of stage.edges) {
@@ -414,19 +418,9 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
     }
   }
 
-  // 构建每个节点的所属阶段映射
-  const nodeToStage = new Map<string, Stage>();
-  for (const stage of stages) {
-    for (const node of stage.nodes) {
-      nodeToStage.set(node.id, stage);
-    }
-  }
-
-  // 收集所有阶段 ID，并按 order 建立前序阶段集合（order 小于当前阶段即为前序）
-  const allStageIds = new Set<string>();
+  // 收集阶段 order 映射
   const stageOrders = new Map<string, number>();
   for (const stage of stages) {
-    allStageIds.add(stage.id);
     stageOrders.set(stage.id, stage.order);
   }
 
@@ -441,6 +435,7 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
 
       const nodeUpstream = upstreamMap.get(node.id);
       const currentStageOrder = stageOrders.get(stage.id) ?? stage.order;
+      const currentAgentType = node.type === 'agent' ? node.params?.agent_type : undefined;
       const newMapping: Record<string, string> = {};
       let mappingChanged = false;
 
@@ -450,17 +445,20 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
           continue;
         }
 
-        // 提取新格式引用中的所有节点 ID（第二段捕获组）
+        // 提取各类引用
+        // 新格式: {{key.nodeId.stageId}}，捕获组 1 = nodeId
         const newRefs = value.match(MAPPING_REF_PATTERN) || [];
-        // 提取旧格式兼容引用中的所有节点 ID
+        // 旧格式兼容: {{key.output.nodeId}}，捕获组 1 = nodeId
         const legacyRefs = value.match(MAPPING_REF_PATTERN_LEGACY) || [];
-        // 提取 gate_output 引用中的阶段 ID
+        // gate_output: {{gate_output.stageId}}，捕获组 1 = stageId
         const gateRefs = value.match(MAPPING_GATE_REF_PATTERN) || [];
+        // session_id: {{session_id.nodeId.stageId}}，捕获组 1 = nodeId
+        const sessionRefs = value.match(MAPPING_SESSION_REF_PATTERN) || [];
 
+        // 合并所有节点级引用（排除 session_id，session_id 单独校验）
         const nodeRefs = [...newRefs, ...legacyRefs];
-        const allRefs = [...nodeRefs, ...gateRefs];
 
-        if (allRefs.length === 0) {
+        if (nodeRefs.length === 0 && gateRefs.length === 0 && sessionRefs.length === 0) {
           // 无引用，保留
           newMapping[key] = value;
           continue;
@@ -468,25 +466,50 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
 
         let allValid = true;
 
-        // 校验节点引用：引用的节点必须存在且为上游节点
+        // ── 校验 1：节点引用必须为拓扑前序 ──
         for (const refId of nodeRefs) {
           if (!allNodeIds.has(refId) || !(nodeUpstream?.has(refId) ?? false)) {
+            console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用节点 ' + refId + ' 不是拓扑前序节点');
             allValid = false;
             break;
           }
         }
 
-        // 校验 gate_output 引用：引用的阶段必须存在且为前序阶段（不含本阶段）
+        // ── 校验 2：gate_output 引用必须为前序阶段（阶段间线性 order） ──
         if (allValid) {
           for (const gateRefId of gateRefs) {
-            if (!allStageIds.has(gateRefId)) {
+            const refOrder = stageOrders.get(gateRefId);
+            if (refOrder === undefined || refOrder >= currentStageOrder) {
+              console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 gate_output.' + gateRefId + ' 不是前序阶段');
               allValid = false;
               break;
             }
-            const refOrder = stageOrders.get(gateRefId);
-            if (refOrder === undefined || refOrder >= currentStageOrder) {
+          }
+        }
+
+        // ── 校验 3：session_id 引用必须为拓扑前序 + agent 类型一致 ──
+        if (allValid) {
+          for (const sessionId of sessionRefs) {
+            const refNode = allNodes.get(sessionId);
+            // 必须存在且为拓扑前序
+            if (!refNode || !(nodeUpstream?.has(sessionId) ?? false)) {
+              console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + sessionId + ' 不是拓扑前序节点');
               allValid = false;
               break;
+            }
+            // 被引用节点必须是 agent 类型
+            if (refNode.type !== 'agent') {
+              console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + sessionId + ' 不是 agent 类型');
+              allValid = false;
+              break;
+            }
+            // agent_type 必须与当前节点一致（仅当当前节点也是 agent 类型时）
+            if (currentAgentType !== undefined) {
+              if (refNode.params?.agent_type !== currentAgentType) {
+                console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + sessionId + ' agent_type 不一致（当前: ' + currentAgentType + ', 引用: ' + refNode.params?.agent_type + '）');
+                allValid = false;
+                break;
+              }
             }
           }
         }
