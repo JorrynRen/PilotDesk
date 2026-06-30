@@ -331,6 +331,18 @@ function getPredecessorOutputOptions(
     }
   }
 
+  // 特殊处理：开始节点没有入参
+  if (result.length === 0 && currentStageIdx === 0) {
+    const currentNode = stages[currentStageIdx]?.nodes.find(n => n.id === nodeId);
+    if (currentNode?.type === 'start') {
+      return [{
+        group: '' ,
+        children: [],
+        options: [{ value: '' , label: '开始节点没有入参源' }],
+      }];
+    }
+  }
+
   return result;
 }
 
