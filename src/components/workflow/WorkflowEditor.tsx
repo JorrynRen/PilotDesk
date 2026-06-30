@@ -1600,18 +1600,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const as = 5 * invScale;
 
       links.push(
-        <g key={`sl-${edge.id}`} data-edge={edge.id}
-          onMouseEnter={() => setHoveredStageEdge(edge.id)}
-          onMouseLeave={() => setHoveredStageEdge(null)}
-          onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteStageEdge(edge.id); }}
-          style={{ cursor: 'pointer' }}
-        >
-          {/* Wide invisible hit area for click detection */}
-          <rect x={Math.min(srcX, tgtX) - 50 * invScale} y={Math.min(srcY, tgtY) - 30 * invScale} width={Math.abs(srcX - tgtX) + 100 * invScale} height={60 * invScale} fill="transparent" pointerEvents="all" />
-          {/* Main visible path - thicker and brighter on hover */}
-          <path d={d} stroke={hoveredStageEdge === edge.id ? '#58a6ff' : lc} strokeWidth={hoveredStageEdge === edge.id ? sw + 3 * invScale : sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease, stroke-width 0.15s' }} pointerEvents="none" />
+        <g key={`sl-${edge.id}`} data-edge={edge.id}>
+          {/* Hit area: transparent path along the curve */}
+          <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" pointerEvents="stroke" style={{ cursor: 'pointer' }}
+            onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteStageEdge(edge.id); }}
+            onMouseEnter={() => setHoveredStageEdge(edge.id)}
+            onMouseLeave={() => setHoveredStageEdge(null)}
+          />
+          {/* Hover glow: semi-transparent thick overlay */}
+          {hoveredStageEdge === edge.id && (
+            <path d={d} stroke="#58a6ff" strokeWidth={8 * invScale} fill="none" opacity={0.15} style={{ pointerEvents: 'none', transition: 'opacity 0.15s ease' }} />
+          )}
+          {/* Main visible path */}
+          <path d={d} stroke={lc} strokeWidth={sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease' }} pointerEvents="none" />
           {/* Arrow polygon */}
-          <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={hoveredStageEdge === edge.id ? '#58a6ff' : lc} pointerEvents="none" />
+          <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={lc} pointerEvents="none" />
           {/* Running animation */}
           {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.3s linear infinite' }} pointerEvents="none" />}
           {/* Label box */}
