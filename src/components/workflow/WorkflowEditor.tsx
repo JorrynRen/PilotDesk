@@ -84,6 +84,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
   const [stageEdges, setStageEdges] = useState<WorkflowEdge[]>(def?.stageEdges || []);
   const [stageConnecting, setStageConnecting] = useState<StageConnectingPreview | null>(null);
+  const [hoveredAnchor, setHoveredAnchor] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
 
@@ -2387,12 +2388,15 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       left: stagePositions[stageIndex] - 6,
                       top: isCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2 - 6,
                       width: 12, height: 12, borderRadius: '50%',
-                      background: stageConnecting && stageConnecting.sourceStageId !== stage.id ? '#58a6ff' : 'var(--border)',
+                      background: '#58a6ff',
                       border: '2px solid var(--bg-primary)',
-                      cursor: stageConnecting ? 'cell' : 'default',
+                      cursor: 'pointer',
                       zIndex: 20,
-                      transition: 'background 0.15s',
+                      opacity: (stageConnecting && stageConnecting.sourceStageId !== stage.id) || hoveredAnchor === 'entrance-' + stage.id ? 1 : 0.4,
+                      transition: 'opacity 0.15s, background 0.15s',
                     }}
+                    onMouseEnter={() => setHoveredAnchor('entrance-' + stage.id)}
+                    onMouseLeave={() => setHoveredAnchor(null)}
                     onMouseUp={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
@@ -2440,10 +2444,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         ? STAGE_TOP + 54 + 50 - 6
                         : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2 - 6,
                       width: 12, height: 12, borderRadius: '50%',
-                      background: stageConnecting ? '#58a6ff' : 'var(--border)',
+                      background: '#58a6ff',
                       border: '2px solid var(--bg-primary)',
                       cursor: 'pointer', zIndex: 20,
+                      opacity: stageConnecting || hoveredAnchor === 'exit-' + stage.id ? 1 : 0.4,
+                      transition: 'opacity 0.15s',
                     }}
+                    onMouseEnter={() => setHoveredAnchor('exit-' + stage.id)}
+                    onMouseLeave={() => setHoveredAnchor(null)}
                     onMouseDown={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
