@@ -1600,9 +1600,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
       links.push(
         <g key={`sl-${edge.id}`}>
-          <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" pointerEvents="stroke" style={{ cursor: 'pointer' }} />
+          <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" style={{ cursor: 'pointer', pointerEvents: 'stroke' }} />
           <path d={d} stroke="var(--accent)" strokeWidth={8 * invScale} fill="none" opacity={0} style={{ transition: 'opacity 0.15s', pointerEvents: 'none' }} />
-          <g style={{ cursor: 'pointer' }} onMouseEnter={() => setHoveredStageEdge(edge.id)} onMouseLeave={() => setHoveredStageEdge(null)}>
+          <g style={{ cursor: 'pointer', pointerEvents: 'all' }} onMouseEnter={() => setHoveredStageEdge(edge.id)} onMouseLeave={() => setHoveredStageEdge(null)}>
             <path d={d} stroke="var(--accent)" strokeWidth={14 * invScale} fill="none" opacity={hoveredStageEdge === edge.id ? 0.15 : 0} style={{ transition: 'opacity 0.15s', pointerEvents: 'none' }} />
           </g>
           <path d={d} stroke={lc} strokeWidth={sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease', pointerEvents: 'none' }} />
@@ -1614,8 +1614,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 2 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">→</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{tgtStage.name.slice(0, 6)}</text>
           </g>
-          <g onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteStageEdge(edge.id); }} style={{ cursor: 'pointer' }} pointerEvents="all">
-            <rect x={Math.min(srcX, tgtX) - 50 * invScale} y={Math.min(srcY, tgtY) - 30 * invScale} width={100 * invScale} height={60 * invScale} fill="transparent" style={{ transition: 'fill 0.15s' }} />
+          <g onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteStageEdge(edge.id); }} style={{ cursor: 'pointer', pointerEvents: 'all' }}>
+            <rect x={Math.min(srcX, tgtX) - 50 * invScale} y={Math.min(srcY, tgtY) - 30 * invScale} width={100 * invScale} height={60 * invScale} fill="transparent" />
           </g>
         </g>
       );
@@ -2124,7 +2124,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
           {/* SVG 层：阶段间连线（画布坐标，pointer-events:none） */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 3 }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, pointerEvents: 'none' }}
           >
             {renderStageLinks()}
           </svg>
