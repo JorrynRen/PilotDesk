@@ -2209,7 +2209,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       </>
                     )}
 
-                    {!stage.nodes.some(n => n.type === 'start') && (<>
+                    {!stage.nodes.some(n => n.type === 'start') && (<React.Fragment>
                     {/* 阶段入口锚点（接收阶段连线） */}
                     <div
                       data-stage-entrance
@@ -2255,7 +2255,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         setStageConnecting(null);
                       }}
                     />
-                                        </> )}
+                                        </React.Fragment> )}
 
                   {/* 阶段内容区 — 反向缩放保持节点固定大小 */}
                   {!isCollapsed && (
@@ -2410,8 +2410,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                               <span className="ml-1 text-[10px] truncate max-w-[80px]" style={{ color: 'var(--text-tertiary)' }} title={stage.gate.customScript}>脚本</span>
                             )}
                           </span>
-                      {!stage.nodes.some(n => n.type === 'end') && (<>
+                      {!stage.nodes.some(n => n.type === 'end') && (<React.Fragment>
                       {/* 阶段出口锚点（拖拽创建阶段连线） */}
+                      <div
                         data-stage-gate-output
                         data-stage-id={stage.id}
                         style={{
@@ -2432,7 +2433,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         }}
                         onMouseEnter={() => { if (!stageConnecting) return; }}
                       />
-                      </> )}
+                      </React.Fragment> )}
                         </div>                    </div>
                     </>
                   )}
