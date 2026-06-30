@@ -2209,53 +2209,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       </>
                     )}
 
-                    {!stage.nodes.some(n => n.type === 'start') && (<React.Fragment>
-                    {/* 阶段入口锚点（接收阶段连线） */}
-                    <div
-                      data-stage-entrance
-                      data-stage-id={stage.id}
-                      style={{
-                        position: 'absolute', left: -6, top: '50%', transform: 'translateY(-50%)',
-                        width: 12, height: 12, borderRadius: '50%',
-                        background: stageConnecting && stageConnecting.sourceStageId !== stage.id ? '#58a6ff' : 'var(--border)',
-                        border: '2px solid var(--bg-primary)',
-                        cursor: stageConnecting ? 'cell' : 'default',
-                        zIndex: 20,
-                        transition: 'background 0.15s',
-                      }}
-                      onMouseUp={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        if (!stageConnecting) return;
-                        const targetStageId = stage.id;
-                        if (stageConnecting.sourceStageId === targetStageId) return;
-                        const visited = new Set<string>();
-                        const checkCycle = (sid: string) => {
-                          if (visited.has(sid)) return;
-                          visited.add(sid);
-                          for (const se of stageEdges) {
-                            if (se.source === sid) checkCycle(se.target);
-                          }
-                        };
-                        checkCycle(targetStageId);
-                        if (visited.has(stageConnecting.sourceStageId)) {
-                          showToast('不允许创建闭环连线', 'error');
-                          return;
-                        }
-                        if (stageEdges.some(se => se.source === stageConnecting.sourceStageId && se.target === targetStageId)) {
-                          showToast('该阶段连线已存在', 'warning');
-                          setStageConnecting(null);
-                          return;
-                        }
-                        setStageEdges(prev => [...prev, {
-                          id: generateEdgeId(stageConnecting.sourceStageId, targetStageId),
-                          source: stageConnecting.sourceStageId,
-                          target: targetStageId,
-                        }]);
-                        setStageConnecting(null);
-                      }}
-                    />
-                                        </React.Fragment> )}
 
                   {/* 阶段内容区 — 反向缩放保持节点固定大小 */}
                   {!isCollapsed && (
@@ -2410,30 +2363,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                               <span className="ml-1 text-[10px] truncate max-w-[80px]" style={{ color: 'var(--text-tertiary)' }} title={stage.gate.customScript}>脚本</span>
                             )}
                           </span>
-                      {!stage.nodes.some(n => n.type === 'end') && (<React.Fragment>
-                      {/* 阶段出口锚点（拖拽创建阶段连线） */}
-                      <div
-                        data-stage-gate-output
-                        data-stage-id={stage.id}
-                        style={{
-                          position: 'absolute', right: -6, top: '50%', transform: 'translateY(-50%)',
-                          width: 12, height: 12, borderRadius: '50%',
-                          background: stageConnecting ? '#58a6ff' : 'var(--border)',
-                          border: '2px solid var(--bg-primary)',
-                          cursor: 'pointer', zIndex: 20,
-                        }}
-                        onMouseDown={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          const rect = canvasRef.current?.getBoundingClientRect();
-                          if (!rect) return;
-                          const mx = (e.clientX - rect.left - pan.x) / scale;
-                          const my = (e.clientY - rect.top - pan.y) / scale;
-                          setStageConnecting({ sourceStageId: stage.id, mouseCanvasX: mx, mouseCanvasY: my });
-                        }}
-                        onMouseEnter={() => { if (!stageConnecting) return; }}
-                      />
-                      </React.Fragment> )}
                         </div>                    </div>
                     </>
                   )}
@@ -2446,7 +2375,88 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       <span>{mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
                     </div>
                   )}
-              </React.Fragment>
+                </div>
+                  {/* 阶段入口锚点（接收阶段连线） */}
+                  {!stage.nodes.some(n => n.type === 'start') && (
+                  <div
+                    data-stage-entrance
+                    data-stage-id={stage.id}
+                    style={{
+                      position: 'absolute',
+                      left: stagePositions[stageIndex] - 6,
+                      top: isCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2 - 6,
+                      width: 12, height: 12, borderRadius: '50%',
+                      background: stageConnecting && stageConnecting.sourceStageId !== stage.id ? '#58a6ff' : 'var(--border)',
+                      border: '2px solid var(--bg-primary)',
+                      cursor: stageConnecting ? 'cell' : 'default',
+                      zIndex: 20,
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseUp={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      if (!stageConnecting) return;
+                      const targetStageId = stage.id;
+                      if (stageConnecting.sourceStageId === targetStageId) return;
+                      const visited = new Set<string>();
+                      const checkCycle = (sid: string) => {
+                        if (visited.has(sid)) return;
+                        visited.add(sid);
+                        for (const se of stageEdges) {
+                          if (se.source === sid) checkCycle(se.target);
+                        }
+                      };
+                      checkCycle(targetStageId);
+                      if (visited.has(stageConnecting.sourceStageId)) {
+                        showToast('不允许创建闭环连线', 'error');
+                        return;
+                      }
+                      if (stageEdges.some(se => se.source === stageConnecting.sourceStageId && se.target === targetStageId)) {
+                        showToast('该阶段连线已存在', 'warning');
+                        setStageConnecting(null);
+                        return;
+                      }
+                      setStageEdges(prev => [...prev, {
+                        id: generateEdgeId(stageConnecting.sourceStageId, targetStageId),
+                        source: stageConnecting.sourceStageId,
+                        target: targetStageId,
+                      }]);
+                      setStageConnecting(null);
+                    }}
+                  />
+                  )}
+                  {/* 阶段出口锚点（拖拽创建阶段连线） */}
+                  {!stage.nodes.some(n => n.type === 'end') && (
+                  <div
+                    data-stage-gate-output
+                    data-stage-id={stage.id}
+                    style={{
+                      position: 'absolute',
+                      left: isCollapsed
+                        ? stagePositions[stageIndex] + STAGE_COLLAPSED_W - 6
+                        : stagePositions[stageIndex] + STAGE_W - 6,
+                      top: isCollapsed
+                        ? STAGE_TOP + 54 + 50 - 6
+                        : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2 - 6,
+                      width: 12, height: 12, borderRadius: '50%',
+                      background: stageConnecting ? '#58a6ff' : 'var(--border)',
+                      border: '2px solid var(--bg-primary)',
+                      cursor: 'pointer', zIndex: 20,
+                    }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      const rect = canvasRef.current?.getBoundingClientRect();
+                      if (!rect) return;
+                      const mx = (e.clientX - rect.left - pan.x) / scale;
+                      const my = (e.clientY - rect.top - pan.y) / scale;
+                      setStageConnecting({ sourceStageId: stage.id, mouseCanvasX: mx, mouseCanvasY: my });
+                    }}
+                    onMouseEnter={() => { if (!stageConnecting) return; }}
+                  />
+                  )}
+
+</React.Fragment>
             );
           })}
               </>
