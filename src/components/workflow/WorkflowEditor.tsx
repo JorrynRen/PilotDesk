@@ -1607,8 +1607,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         const srcCollapsed = collapsedStages.has(srcStage.id);
         const srcIdx = stages.findIndex(s => s.id === srcStage.id);
         if (srcIdx >= 0) {
-          const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W - 1 : STAGE_W - 9);
-          const srcY = srcCollapsed ? STAGE_TOP + 104 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+          const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W - 6 : STAGE_W - 6);
+          const srcY = srcCollapsed ? STAGE_TOP + 54 + 44 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
           const tgtX = stageConnecting.mouseCanvasX;
           const tgtY = stageConnecting.mouseCanvasY;
           const invScale = 1 / scale;
@@ -2392,13 +2392,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       position: 'absolute',
                       left: stagePositions[stageIndex] - 6,
                       top: isCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2 - 6,
-                      width: 12, height: 12, borderRadius: '50%',
+                      width: 24, height: 24, borderRadius: '50%',
                       background: '#58a6ff',
                       border: '2px solid var(--bg-primary)',
                       cursor: 'pointer',
                       zIndex: 20,
                       opacity: (stageConnecting && stageConnecting.sourceStageId !== stage.id) || hoveredAnchor === 'entrance-' + stage.id ? 1 : 0.4,
-                      transition: 'opacity 0.15s, background 0.15s',
+                      transform: (stageConnecting && stageConnecting.sourceStageId !== stage.id && hoveredAnchor === 'entrance-' + stage.id) ? 'scale(1.5)' : 'scale(1)',
+                      transition: 'opacity 0.15s, background 0.15s, transform 0.15s',
                     }}
                     onMouseEnter={() => setHoveredAnchor('entrance-' + stage.id)}
                     onMouseLeave={() => setHoveredAnchor(null)}
@@ -2448,12 +2449,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       top: isCollapsed
                         ? STAGE_TOP + 54 + 50 - 6
                         : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2 - 6,
-                      width: 12, height: 12, borderRadius: '50%',
+                      width: 24, height: 24, borderRadius: '50%',
                       background: '#58a6ff',
                       border: '2px solid var(--bg-primary)',
-                      cursor: 'pointer', zIndex: 20,
+                      cursor: stageConnecting ? 'crosshair' : 'pointer', zIndex: 20,
                       opacity: stageConnecting || hoveredAnchor === 'exit-' + stage.id ? 1 : 0.4,
-                      transition: 'opacity 0.15s',
+                      transition: 'opacity 0.15s, cursor 0.15s',
                     }}
                     onMouseEnter={() => setHoveredAnchor('exit-' + stage.id)}
                     onMouseLeave={() => setHoveredAnchor(null)}
