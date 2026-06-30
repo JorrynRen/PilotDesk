@@ -364,15 +364,24 @@ export function autoAssignStage(stages: Stage[]): Stage[] {
 
 /**
  * 正则匹配映射值中的节点 ID 引用
- * 匹配 node_xxx 格式的节点 ID
+ *
+ * 新引用格式: {{key.节点ID.阶段ID}}，从中提取第二段（节点ID）
+ * 旧引用格式: {{key.output.nodeId}}，向后兼容
+ * 门控引用格式: {{gate_output.阶段ID}}，需特殊处理（不匹配节点ID模式）
  */
-const MAPPING_REF_PATTERN = /node_[a-zA-Z0-9_]+/g;
+const MAPPING_REF_PATTERN = /\{\{[\w.]+?\.(node_[a-zA-Z0-9_]+)\.stage_[a-zA-Z0-9_]+\}\}/g;
+/** 旧格式向后兼容: {{key.output.nodeId}} */
+const MAPPING_REF_PATTERN_LEGACY = /\{\{[\w.]+?\.output\.(node_[a-zA-Z0-9_]+)\}\}/g;
+/** 门控合并输出引用: {{gate_output.stageId}} */
+const MAPPING_GATE_REF_PATTERN = /\{\{gate_output\.(stage_[a-zA-Z0-9_]+)\}\}/g;
 
 /**
  * 清理无效的映射引用
  *
- * 构建每个节点的有效上游节点 ID 集合（通过边遍历）。
+ * 构建每个节点的有效上游节点 ID 集合（通过边遍历），
+ * 构建每个阶段的有效前序阶段集合（通过阶段间连线 + order 判断）。
  * 检查每个节点的 inputMapping 中引用的节点 ID 是否存在于上游，
+ * 检查 gate_output 引用的阶段 ID 是否为前序阶段（不含本阶段）。
  * 无效引用则清除该映射条目，强制用户重新设置。
  *
  * @param stages  工作流阶段列表（不会被修改，返回新的副本）
@@ -405,6 +414,22 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
     }
   }
 
+  // 构建每个节点的所属阶段映射
+  const nodeToStage = new Map<string, Stage>();
+  for (const stage of stages) {
+    for (const node of stage.nodes) {
+      nodeToStage.set(node.id, stage);
+    }
+  }
+
+  // 收集所有阶段 ID，并按 order 建立前序阶段集合（order 小于当前阶段即为前序）
+  const allStageIds = new Set<string>();
+  const stageOrders = new Map<string, number>();
+  for (const stage of stages) {
+    allStageIds.add(stage.id);
+    stageOrders.set(stage.id, stage.order);
+  }
+
   // 检查并清理每个节点的 inputMapping
   return stages.map(stage => {
     let nodesChanged = false;
@@ -415,6 +440,7 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
       }
 
       const nodeUpstream = upstreamMap.get(node.id);
+      const currentStageOrder = stageOrders.get(stage.id) ?? stage.order;
       const newMapping: Record<string, string> = {};
       let mappingChanged = false;
 
@@ -423,17 +449,48 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
           newMapping[key] = value;
           continue;
         }
-        // 提取映射值中引用的所有节点 ID
-        const refs = value.match(MAPPING_REF_PATTERN) || [];
-        if (refs.length === 0) {
-          // 无节点引用，保留
+
+        // 提取新格式引用中的所有节点 ID（第二段捕获组）
+        const newRefs = value.match(MAPPING_REF_PATTERN) || [];
+        // 提取旧格式兼容引用中的所有节点 ID
+        const legacyRefs = value.match(MAPPING_REF_PATTERN_LEGACY) || [];
+        // 提取 gate_output 引用中的阶段 ID
+        const gateRefs = value.match(MAPPING_GATE_REF_PATTERN) || [];
+
+        const nodeRefs = [...newRefs, ...legacyRefs];
+        const allRefs = [...nodeRefs, ...gateRefs];
+
+        if (allRefs.length === 0) {
+          // 无引用，保留
           newMapping[key] = value;
           continue;
         }
-        // 检查所有引用是否有效：引用的节点必须存在且为上游节点
-        const allValid = refs.every(refId =>
-          allNodeIds.has(refId) && (nodeUpstream?.has(refId) ?? false)
-        );
+
+        let allValid = true;
+
+        // 校验节点引用：引用的节点必须存在且为上游节点
+        for (const refId of nodeRefs) {
+          if (!allNodeIds.has(refId) || !(nodeUpstream?.has(refId) ?? false)) {
+            allValid = false;
+            break;
+          }
+        }
+
+        // 校验 gate_output 引用：引用的阶段必须存在且为前序阶段（不含本阶段）
+        if (allValid) {
+          for (const gateRefId of gateRefs) {
+            if (!allStageIds.has(gateRefId)) {
+              allValid = false;
+              break;
+            }
+            const refOrder = stageOrders.get(gateRefId);
+            if (refOrder === undefined || refOrder >= currentStageOrder) {
+              allValid = false;
+              break;
+            }
+          }
+        }
+
         if (allValid) {
           newMapping[key] = value;
         } else {
@@ -472,6 +529,10 @@ export function remapImportedWorkflowIds(stages: Stage[]): Stage[] {
   }
 
   // 2. 替换字符串中所有旧 ID 为新 ID
+  //    新格式 {{key.nodeId.stageId}} 中 nodeId 在第二段
+  //    旧格式 {{key.output.nodeId}} 中 nodeId 在第三段
+  //    gate_output 引用中无 nodeId，不替换
+  //    直接全局替换所有 nodeId 出现即可（阶段 ID 也会被替换，但 idMap 仅含节点 ID）
   const replaceIds = (str: string): string => {
     let result = str;
     for (const [oldId, newId] of idMap) {
@@ -480,24 +541,41 @@ export function remapImportedWorkflowIds(stages: Stage[]): Stage[] {
     return result;
   };
 
-  // 3. 替换 mapping 对象中的 ID 引用
-  const replaceMappingIds = (mapping: Record<string, string> | undefined): Record<string, string> | undefined => {
+  // 3. 替换 mapping 对象中的 ID 引用（节点 ID + 阶段 ID）
+  //    新引用格式: {{key.nodeId.stageId}}，两者都需要替换
+  const replaceMappingIds = (mapping: Record<string, string> | undefined, stageIdMap: Map<string, string>): Record<string, string> | undefined => {
     if (!mapping) return mapping;
+    const replaceAllIds = (str: string): string => {
+      let result = str;
+      for (const [oldId, newId] of idMap) {
+        result = result.split(oldId).join(newId);
+      }
+      for (const [oldId, newId] of stageIdMap) {
+        result = result.split(oldId).join(newId);
+      }
+      return result;
+    };
     const newMapping: Record<string, string> = {};
     for (const [key, value] of Object.entries(mapping)) {
-      newMapping[key] = replaceIds(value);
+      newMapping[key] = replaceAllIds(value);
     }
     return newMapping;
   };
 
-  // 4. 重建阶段，更新节点 ID、边引用、映射引用
+  // 4. 统一生成阶段 ID 映射，重建阶段、节点、边和映射引用
+  const stageIdMap = new Map<string, string>();
+  for (const stage of stages) {
+    stageIdMap.set(stage.id, generateStageId());
+  }
+
   return stages.map(stage => ({
     ...stage,
+    id: stageIdMap.get(stage.id) || stage.id,
     nodes: stage.nodes.map(node => ({
       ...node,
       id: idMap.get(node.id)!,
-      inputMapping: replaceMappingIds(node.inputMapping as Record<string, string> | undefined),
-      outputMapping: replaceMappingIds(node.outputMapping as Record<string, string> | undefined),
+      inputMapping: replaceMappingIds(node.inputMapping as Record<string, string> | undefined, stageIdMap),
+      outputMapping: replaceMappingIds(node.outputMapping as Record<string, string> | undefined, stageIdMap),
     })),
     edges: stage.edges.map(edge => ({
       ...edge,
