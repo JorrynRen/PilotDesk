@@ -2438,12 +2438,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     </>
                   )}
 
-                  {/* 折叠摘要 — 三行显示 */}
+                  {/* 折叠摘要 — 两行显示 */}
                   {isCollapsed && (
-                    <div className="flex flex-col items-center justify-center px-2" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 69, gap: 2 }}>
-                      <span>{stage.nodes.length} 节点</span>
-                      <span>{stage.edges.length} 连线</span>
-                      <span style={{ color: 'var(--text-tertiary)', fontSize: 9 }}>{gateStrategyLabel(stage.gate.strategy)}/{mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
+                    <div className="flex flex-col items-center justify-center px-1" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 69, gap: 4 }}>
+                      <span>{stage.nodes.length} 节点 · {stage.edges.length} 连线</span>
+                      <span style={{ fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 56, textAlign: 'center' }}>{gateStrategyLabel(stage.gate.strategy)} / {mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
                     </div>
                   )}
                 </div>
