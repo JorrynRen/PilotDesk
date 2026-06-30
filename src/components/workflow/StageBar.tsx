@@ -17,6 +17,7 @@ interface Props {
   onDeleteStage: (stageId: string) => void;
   onRenameStage: (stageId: string, name: string) => void;
   onUpdateGate: (stageId: string, gate: Partial<GateConfig>) => void;
+  unreachableNodeIds?: Set<string>;
 }
 
 const GATE_STRATEGY_LABELS: Record<string, string> = {
@@ -41,6 +42,7 @@ export const StageBar: React.FC<Props> = ({
   onDeleteStage,
   onRenameStage,
   onUpdateGate,
+  unreachableNodeIds,
 }) => {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -152,7 +154,10 @@ export const StageBar: React.FC<Props> = ({
                   </span>
                   <span style={{ fontSize: 10, color: '#3fb950', display: 'flex', alignItems: 'center', gap: 3 }}>
                     <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#3fb950' }} />
-                    {nodeCount}/{nodeCount}
+                    {(() => {
+                      const reachableCount = nodeCount - (unreachableNodeIds ? stage.nodes.filter(n => unreachableNodeIds.has(n.id)).length : 0);
+                      return `${reachableCount}/${nodeCount}`;
+                    })()}
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: 8, fontSize: 10, color: '#8b949e' }}>

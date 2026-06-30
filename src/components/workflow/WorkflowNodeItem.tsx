@@ -20,6 +20,7 @@ interface WorkflowNodeItemProps {
   stepStates: Record<string, string>;
   nodeResults: Record<string, any>;
   selectedNodeId: string | null;
+  isUnreachable?: boolean;
   isRestoredResult?: boolean;
   isConfigChanged?: boolean;
   onSelectNode: (nodeId: string, stageId: string, ctrlKey: boolean) => void;
@@ -35,6 +36,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   selectedNodeId, selectedNodeIds,
   draggingNode, hoveredNodeId, connectTargetId, cycleTargetId,
   connecting, stepStates, nodeResults,
+  isUnreachable,
   isRestoredResult, isConfigChanged,
   onSelectNode, onNodeMouseDown, onDeleteNode,
   onEndConnect, onStartConnect, onHoverNode,
@@ -81,13 +83,15 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         boxSizing: 'border-box',
         padding: '12px 10px',
         borderRadius: 8,
-        border: selectedNodeIds.has(node.id)
-          ? '2px solid var(--accent)'
-          : isSelected
-            ? '1.5px solid var(--accent)'
-            : isHovered
-              ? '1px solid var(--accent)'
-              : '1.5px solid var(--border)',
+        border: isUnreachable
+          ? '2px dashed #f85149'
+          : selectedNodeIds.has(node.id)
+            ? '2px solid var(--accent)'
+            : isSelected
+              ? '1.5px solid var(--accent)'
+              : isHovered
+                ? '1px solid var(--accent)'
+                : '1.5px solid var(--border)',
         background: isDraggingThis
           ? 'var(--bg-tertiary)'
           : runState === 'running'
@@ -440,6 +444,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   if (prev.draggingNode?.started !== next.draggingNode?.started) return false;
   if (prev.stepStates[`node_${prev.node.id}`] !== next.stepStates[`node_${next.node.id}`]) return false;
   if (prev.selectedNodeIds.has(prev.node.id) !== next.selectedNodeIds.has(next.node.id)) return false;
+  if (!!prev.isUnreachable !== !!next.isUnreachable) return false;
   if (!!prev.connecting !== !!next.connecting) return false;
   return true;
 });
