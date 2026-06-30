@@ -2208,6 +2208,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         </div>
                       </>
                     )}
+                  </div>
 
 
                   {/* 阶段内容区 — 反向缩放保持节点固定大小 */}
@@ -2456,7 +2457,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   />
                   )}
 
-              </div>
 </React.Fragment>
             );
           })}
