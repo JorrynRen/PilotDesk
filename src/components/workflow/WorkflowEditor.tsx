@@ -1120,7 +1120,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (document.activeElement && document.activeElement !== e.target) {
       (document.activeElement as HTMLElement).blur();
     }
-    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate]')) return;
+    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate], [data-stage-entrance], [data-stage-gate-output]')) return;
     // Left button (0) or middle button (1): pan canvas
     if (e.button === 0 || e.button === 1) {
       e.preventDefault();
