@@ -1589,7 +1589,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const cpOff = Math.max(30 * invScale, gapDx * 0.4);
       // 2px horizontal segments at both ends
       const horiz = 2;
-      const d = `M ${Number(srcX).toFixed(2)} ${Number(srcY).toFixed(2)} L ${Number(srcX + horiz).toFixed(2)} ${Number(srcY).toFixed(2)} C ${Number(srcX + horiz + cpOff).toFixed(2)} ${Number(srcY).toFixed(2)}, ${Number(slPathEndX - cpOff - horiz).toFixed(2)} ${Number(tgtY).toFixed(2)} L ${Number(slPathEndX - horiz).toFixed(2)} ${Number(tgtY).toFixed(2)} L ${Number(slPathEndX).toFixed(2)} ${Number(tgtY).toFixed(2)}`;
+      const d = `M ${srcX} ${srcY} L ${srcX + horiz} ${srcY} C ${srcX + horiz + cpOff} ${srcY}, ${slPathEndX - cpOff - horiz} ${tgtY} L ${slPathEndX - horiz} ${tgtY} L ${slPathEndX} ${tgtY}`;
 
 
       const srcState = stepStates[`stage_${srcStage.id}`];
@@ -1636,7 +1636,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           const gapDx = Math.abs(tgtX - srcX);
           const cpOff = Math.max(30 * invScale, gapDx * 0.4);
           const horiz = 2;
-          const d = `M ${Number(srcX).toFixed(2)} ${Number(srcY).toFixed(2)} L ${Number(srcX + horiz).toFixed(2)} ${Number(srcY).toFixed(2)} C ${Number(srcX + horiz + cpOff).toFixed(2)} ${Number(srcY).toFixed(2)}, ${Number(tgtX - cpOff - horiz).toFixed(2)} ${Number(tgtY).toFixed(2)} L ${Number(tgtX - horiz).toFixed(2)} ${Number(tgtY).toFixed(2)} L ${Number(tgtX).toFixed(2)} ${Number(tgtY).toFixed(2)}`;
+          const d = `M ${srcX} ${srcY} L ${srcX + horiz} ${srcY} C ${srcX + horiz + cpOff} ${srcY}, ${tgtX - cpOff - horiz} ${tgtY} L ${tgtX - horiz} ${tgtY} L ${tgtX} ${tgtY}`;
           links.push(
             <g key="stage-connecting-preview">
               <path d={d} stroke="#58a6ff" strokeWidth={2 * invScale} fill="none" strokeDasharray="6 4" opacity={0.6} pointerEvents="none" />
