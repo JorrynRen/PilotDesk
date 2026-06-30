@@ -1136,7 +1136,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (document.activeElement && document.activeElement !== e.target) {
       (document.activeElement as HTMLElement).blur();
     }
-    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate], [data-stage-entrance], [data-stage-gate-output]')) return;
+    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate], [data-stage-entrance], [data-stage-gate-output], [data-edge]')) return;
     // Left button (0) or middle button (1): pan canvas
     if (e.button === 0 || e.button === 1) {
       e.preventDefault();
@@ -1600,13 +1600,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const as = 5 * invScale;
 
       links.push(
-        <g key={`sl-${edge.id}`}>
+        <g key={`sl-${edge.id}`} data-edge={edge.id}>
           <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" style={{ cursor: 'pointer' }} pointerEvents="stroke" />
           <path d={d} stroke="var(--accent)" strokeWidth={8 * invScale} fill="none" opacity={0} style={{ transition: 'opacity 0.15s' }} pointerEvents="none" />
-          <g style={{ cursor: 'pointer', pointerEvents: 'all' }} onMouseEnter={() => setHoveredStageEdge(edge.id)} onMouseLeave={() => setHoveredStageEdge(null)}>
-            <path d={d} stroke="var(--accent)" strokeWidth={14 * invScale} fill="none" opacity={hoveredStageEdge === edge.id ? 0.15 : 0} style={{ transition: 'opacity 0.15s' }} pointerEvents="none" />
+          <g style={{ cursor: "pointer", pointerEvents: "all" }} onMouseEnter={() => setHoveredStageEdge(edge.id)} onMouseLeave={() => setHoveredStageEdge(null)}>
+            <path d={d} stroke={lc} strokeWidth={hoveredStageEdge === edge.id ? sw + 2 * invScale : sw} fill="none" strokeDasharray={rs === "running" ? "6 3" : rs === "idle" ? "6 4" : "none"} style={{ transition: "stroke 0.3s ease, stroke-width 0.15s" }} pointerEvents="none" />
           </g>
-          <path d={d} stroke={lc} strokeWidth={sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease' }} pointerEvents="none" />
           <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={lc} pointerEvents="none" />
           {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.3s linear infinite' }} pointerEvents="none" />}
           <g pointerEvents="none">
