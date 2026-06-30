@@ -319,6 +319,7 @@ impl WorkflowEngine {
                     None
                 };
                 let node_statuses_clone = node_statuses.clone();
+                let stage_id_clone = stage_id.clone();
                 let handle = tokio::spawn(async move {
                     let ctx_snapshot = context.lock().await.clone();
                     log::info!("[WorkflowEngine] Executing node {} (type={:?}), context keys: {:?}", nid, node.node_type, context.lock().await.keys().collect::<Vec<_>>());
@@ -374,7 +375,7 @@ impl WorkflowEngine {
                                 // 旧格式兼容
                                 context.lock().await.insert(format!("__session_id__{}", nid), Value::String(sid.clone()));
                                 // 新格式：session_id.{nodeId}.{stageId}
-                                context.lock().await.insert(format!("session_id.{}.{}", nid, stage_id), Value::String(sid.clone()));
+                                context.lock().await.insert(format!("session_id.{}.{}", nid, stage_id_clone), Value::String(sid.clone()));
                                 log::info!("[WorkflowEngine] Agent node {} context: content + session_id({})", nid, sid);
                             } else {
                                 context.lock().await.insert(nid.clone(), node_output.clone());

@@ -329,7 +329,7 @@ function getPredecessorOutputOptions(
   //    本阶段节点不能引用本阶段门控合并变量（门控合并在本阶段所有节点执行完后才产生）
   //    使用阶段拓扑前序关系（stageEdges）判断，而非简单的 order 比较
   //    兼容无 stageEdges 的旧数据：回退到 order 比较
-  const currentStage = stages[currentStageIdx];
+  //    currentStage 已在第238行声明
   // 构建当前阶段的上游阶段集合（简化版，仅用于展示）
   //    TODO: 当 WorkflowEditor 将 stageEdges 传入后，可改用 getStageUpstreamMap
   const stageUpstreamSet = new Set<string>();
