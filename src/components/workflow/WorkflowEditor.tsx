@@ -1589,7 +1589,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const cpOff = Math.max(30 * invScale, gapDx * 0.4);
       // 2px horizontal segments at both ends
       const horiz = 2;
-      const d = `M ${srcX} ${srcY} L ${srcX + horiz} ${srcY} C ${srcX + horiz + cpOff} ${srcY}, ${slPathEndX - cpOff - horiz} ${tgtY} L ${slPathEndX - horiz} ${tgtY} L ${slPathEndX} ${tgtY}`;
+      const d = `M ${Number(srcX).toFixed(2)} ${Number(srcY).toFixed(2)} L ${Number(srcX + horiz).toFixed(2)} ${Number(srcY).toFixed(2)} C ${Number(srcX + horiz + cpOff).toFixed(2)} ${Number(srcY).toFixed(2)}, ${Number(slPathEndX - cpOff - horiz).toFixed(2)} ${Number(tgtY).toFixed(2)} L ${Number(slPathEndX - horiz).toFixed(2)} ${Number(tgtY).toFixed(2)} L ${Number(slPathEndX).toFixed(2)} ${Number(tgtY).toFixed(2)}`;
+
 
       const srcState = stepStates[`stage_${srcStage.id}`];
       const tgtState = stepStates[`stage_${tgtStage.id}`];
@@ -1600,15 +1601,15 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
       links.push(
         <g key={`sl-${edge.id}`}>
-          <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" style={{ cursor: 'pointer' }} pointer-events="stroke" />
-          <path d={d} stroke="var(--accent)" strokeWidth={8 * invScale} fill="none" opacity={0} style={{ transition: 'opacity 0.15s' }} pointer-events="none" />
+          <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" style={{ cursor: 'pointer' }} pointerEvents="stroke" />
+          <path d={d} stroke="var(--accent)" strokeWidth={8 * invScale} fill="none" opacity={0} style={{ transition: 'opacity 0.15s' }} pointerEvents="none" />
           <g style={{ cursor: 'pointer', pointerEvents: 'all' }} onMouseEnter={() => setHoveredStageEdge(edge.id)} onMouseLeave={() => setHoveredStageEdge(null)}>
-            <path d={d} stroke="var(--accent)" strokeWidth={14 * invScale} fill="none" opacity={hoveredStageEdge === edge.id ? 0.15 : 0} style={{ transition: 'opacity 0.15s' }} pointer-events="none" />
+            <path d={d} stroke="var(--accent)" strokeWidth={14 * invScale} fill="none" opacity={hoveredStageEdge === edge.id ? 0.15 : 0} style={{ transition: 'opacity 0.15s' }} pointerEvents="none" />
           </g>
-          <path d={d} stroke={lc} strokeWidth={sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease' }} pointer-events="none" />
-          <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={lc} pointer-events="none" />
-          {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.3s linear infinite' }} pointer-events="none" />}
-          <g pointer-events="none">
+          <path d={d} stroke={lc} strokeWidth={sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease' }} pointerEvents="none" />
+          <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={lc} pointerEvents="none" />
+          {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.3s linear infinite' }} pointerEvents="none" />}
+          <g pointerEvents="none">
             <rect x={(srcX + tgtX) / 2 - 16 * invScale} y={(srcY + tgtY) / 2 - 22 * invScale} width={32 * invScale} height={44 * invScale} rx={4 * invScale} fill="var(--bg-primary)" stroke="var(--border)" strokeWidth={0.5 * invScale} />
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{srcStage.name.slice(0, 6)}</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 2 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">→</text>
@@ -1635,10 +1636,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           const gapDx = Math.abs(tgtX - srcX);
           const cpOff = Math.max(30 * invScale, gapDx * 0.4);
           const horiz = 2;
-          const d = `M ${srcX} ${srcY} L ${srcX + horiz} ${srcY} C ${srcX + horiz + cpOff} ${srcY}, ${tgtX - cpOff - horiz} ${tgtY} L ${tgtX - horiz} ${tgtY} L ${tgtX} ${tgtY}`;
+          const d = `M ${Number(srcX).toFixed(2)} ${Number(srcY).toFixed(2)} L ${Number(srcX + horiz).toFixed(2)} ${Number(srcY).toFixed(2)} C ${Number(srcX + horiz + cpOff).toFixed(2)} ${Number(srcY).toFixed(2)}, ${Number(tgtX - cpOff - horiz).toFixed(2)} ${Number(tgtY).toFixed(2)} L ${Number(tgtX - horiz).toFixed(2)} ${Number(tgtY).toFixed(2)} L ${Number(tgtX).toFixed(2)} ${Number(tgtY).toFixed(2)}`;
           links.push(
             <g key="stage-connecting-preview">
-              <path d={d} stroke="#58a6ff" strokeWidth={2 * invScale} fill="none" strokeDasharray="6 4" opacity={0.6} pointer-events="none" />
+              <path d={d} stroke="#58a6ff" strokeWidth={2 * invScale} fill="none" strokeDasharray="6 4" opacity={0.6} pointerEvents="none" />
             </g>
           );
         }
@@ -2124,8 +2125,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
           {/* SVG 层：阶段间连线（画布坐标，pointer-events:none） */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, pointerEvents: 'none' }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1 }}
           >
+
             {renderStageLinks()}
           </svg>
 
