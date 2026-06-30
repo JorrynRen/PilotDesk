@@ -1574,9 +1574,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const srcIdx = stages.findIndex(s => s.id === srcStage.id);
       const tgtIdx = stages.findIndex(s => s.id === tgtStage.id);
       if (srcIdx < 0 || tgtIdx < 0) continue;
-      const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W - 6 : STAGE_W - 6);
-      const srcY = srcCollapsed ? STAGE_TOP + 54 + 44 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
-      const tgtX = sp[tgtIdx] - 6;
+      const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W : STAGE_W);
+      const srcY = srcCollapsed ? STAGE_TOP + 54 + 50 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+      const tgtX = sp[tgtIdx];
       const tgtY = tgtCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2;
 
       // 箭头尖端对齐：路径终点前移箭头长度，让箭头尖端恰好到达 tgtX
@@ -1598,6 +1598,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       links.push(
         <g key={`sl-${edge.id}`}>
           <path d={d} stroke="transparent" strokeWidth={14 * invScale} fill="none" pointerEvents="stroke" style={{ cursor: 'pointer' }} />
+          <path d={d} stroke="var(--accent)" strokeWidth={8 * invScale} fill="none" opacity={0} style={{ transition: 'opacity 0.15s', pointerEvents: 'none' }} />
+          <g style={{ cursor: 'pointer' }} onMouseEnter={(e) => { (e.currentTarget.querySelector('path:nth-child(3)') as SVGPathElement).style.opacity = '0.15'; }} onMouseLeave={(e) => { (e.currentTarget.querySelector('path:nth-child(3)') as SVGPathElement).style.opacity = '0'; }}>
+            <path d={d} stroke="var(--accent)" strokeWidth={14 * invScale} fill="none" opacity={0} style={{ transition: 'opacity 0.15s', pointerEvents: 'none' }} />
+          </g>
           <path d={d} stroke={lc} strokeWidth={sw} fill="none" strokeDasharray={rs === 'running' ? '6 3' : rs === 'idle' ? '6 4' : 'none'} style={{ transition: 'stroke 0.3s ease', pointerEvents: 'none' }} />
           <polygon points={`${slPathEndX},${tgtY - as} ${tgtX},${tgtY} ${slPathEndX},${tgtY + as}`} fill={lc} style={{ pointerEvents: 'none' }} />
           {rs === 'running' && <path d={d} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ animation: 'flowDash 0.3s linear infinite', pointerEvents: 'none' }} />}
@@ -1607,7 +1611,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 2 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">→</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{tgtStage.name.slice(0, 6)}</text>
           </g>
-          <g onClick={() => handleDeleteStageEdge(edge.id)} style={{ cursor: 'pointer', pointerEvents: 'all' }}>
+          <g onClick={(e) => { e.stopPropagation(); handleDeleteStageEdge(edge.id); }} style={{ cursor: 'pointer' }} pointerEvents="all">
             <rect x={Math.min(srcX, tgtX) - 40 * invScale} y={Math.min(srcY, tgtY) - 20 * invScale} width={80 * invScale} height={40 * invScale} fill="transparent" />
           </g>
         </g>
@@ -1620,8 +1624,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         const srcCollapsed = collapsedStages.has(srcStage.id);
         const srcIdx = stages.findIndex(s => s.id === srcStage.id);
         if (srcIdx >= 0) {
-          const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W - 6 : STAGE_W - 6);
-          const srcY = srcCollapsed ? STAGE_TOP + 54 + 44 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+          const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W : STAGE_W);
+          const srcY = srcCollapsed ? STAGE_TOP + 54 + 50 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
           const tgtX = stageConnecting.mouseCanvasX;
           const tgtY = stageConnecting.mouseCanvasY;
           const invScale = 1 / scale;
@@ -2405,7 +2409,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       position: 'absolute',
                       left: stagePositions[stageIndex] - 6,
                       top: isCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2 - 6,
-                      width: 24, height: 24, borderRadius: '50%',
+                      width: 12, height: 12, borderRadius: '50%',
                       background: '#58a6ff',
                       border: '2px solid var(--bg-primary)',
                       cursor: 'pointer',
@@ -2463,7 +2467,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       top: isCollapsed
                         ? STAGE_TOP + 54 + 50 - 6
                         : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2 - 6,
-                      width: 24, height: 24, borderRadius: '50%',
+                      width: 12, height: 12, borderRadius: '50%',
                       background: '#58a6ff',
                       border: '2px solid var(--bg-primary)',
                       cursor: stageConnecting || hoveredAnchor === 'exit-' + stage.id ? 'crosshair' : 'pointer', zIndex: 20,
