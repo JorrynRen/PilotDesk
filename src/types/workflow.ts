@@ -101,6 +101,8 @@ export interface WorkflowDefinition {
   description: string;
   trigger: TriggerConfig;
   stages: Stage[];
+  /** 阶段间连线（source/target 指向 stage.id），定义阶段拓扑顺序 */
+  stageEdges?: WorkflowEdge[];
   inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
   outputSchema?: Record<string, { type: string; description?: string }>;
   maxDepth?: number;

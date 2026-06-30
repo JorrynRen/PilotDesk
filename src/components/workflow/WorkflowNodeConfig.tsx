@@ -327,11 +327,30 @@ function getPredecessorOutputOptions(
 
   // 3.3 为每个前序阶段注入 gate_output 作为二级选项
   //    本阶段节点不能引用本阶段门控合并变量（门控合并在本阶段所有节点执行完后才产生）
+  //    使用阶段拓扑前序关系（stageEdges）判断，而非简单的 order 比较
+  //    兼容无 stageEdges 的旧数据：回退到 order 比较
+  const currentStage = stages[currentStageIdx];
+  // 构建当前阶段的上游阶段集合（简化版，仅用于展示）
+  //    TODO: 当 WorkflowEditor 将 stageEdges 传入后，可改用 getStageUpstreamMap
+  const stageUpstreamSet = new Set<string>();
+  if (stages.length > 0 && currentStage) {
+    // 尝试基于 order 的简单前序判断（向后兼容）
+    // 如果有显式的阶段拓扑信息，优先使用
+    const currentOrder = currentStage.order;
+    for (const s of stages) {
+      if (s.order < currentOrder) {
+        stageUpstreamSet.add(s.id);
+      }
+    }
+  }
+
   for (const stageName of allPredecessorStageNames) {
     const stageObj = stages.find(s => s.name === stageName);
     if (!stageObj || !stageObj.gate) continue;
-    // 跳过当前阶段
-    if (stageObj.order === currentStageIdx) continue;
+    // 跳过当前阶段（本阶段门控合并在本阶段所有节点执行完后才产生）
+    if (stageObj.id === currentStage.id) continue;
+    // 必须为阶段拓扑前序
+    if (!stageUpstreamSet.has(stageObj.id)) continue;
 
     const stagePredecessors = predecessorNodes.filter(p => p.stageName === stageName);
     const gateOptions = getGateMergeOptions(stagePredecessors, stageObj.id, stageObj.gate);

@@ -215,12 +215,17 @@ export function createDefaultWorkflow(name: string): WorkflowDefinition {
   const endNode = createWorkflowNode('end');
   const startStageId = generateStageId();
   const endStageId = generateStageId();
+  const stageEdges: WorkflowEdge[] = [
+    { id: generateEdgeId(startStageId, endStageId), source: startStageId, target: endStageId },
+  ];
+
   return {
     id: generateId(),
     name,
     version: '1.0.0',
     description: '',
     trigger: { triggerType: 'manual' },
+    stageEdges,
     stages: [
       {
         id: startStageId,
@@ -289,7 +294,25 @@ export function validateWorkflow(def: WorkflowDefinition): ValidationError[] {
     }
   }
 
-  return errors;
+  
+  // 检查 start/end 节点约束
+  const flatNodes = def.stages.flatMap(s => s.nodes);
+  const startNodes = flatNodes.filter(n => n.type === 'start');
+  const endNodes = flatNodes.filter(n => n.type === 'end');
+
+  if (startNodes.length === 0) {
+    errors.push({ field: 'nodes', message: '工作流缺少起始节点（Start）', severity: 'error' });
+  } else if (startNodes.length > 1) {
+    errors.push({ field: 'nodes', message: '工作流只能有一个起始节点（Start）', severity: 'error' });
+  }
+
+  if (endNodes.length === 0) {
+    errors.push({ field: 'nodes', message: '工作流缺少结束节点（End）', severity: 'error' });
+  } else if (endNodes.length > 1) {
+    errors.push({ field: 'nodes', message: '工作流只能有一个结束节点（End）', severity: 'error' });
+  }
+
+return errors;
 }
 
 // ── 智能连线 — 自动归入阶段 ──
@@ -360,6 +383,225 @@ export function autoAssignStage(stages: Stage[]): Stage[] {
     .map((s, i) => ({ ...s, order: i }));
 }
 
+// ── 阶段拓扑工具函数 ──
+
+/**
+ * 构建每个阶段的上游阶段 ID 集合（通过 stageEdges 传递搜索）
+ *
+ * 与节点级 upstreamMap 逻辑一致，但作用于阶段间连线。
+ * source→target 表示数据流方向。
+ *
+ * @param stages  工作流阶段列表
+ * @param stageEdges  阶段间连线列表（source/target 为 stage.id）
+ * @returns Map<stageId, Set<上游stageId>>
+ */
+export function getStageUpstreamMap(
+  stages: Stage[],
+  stageEdges?: WorkflowEdge[],
+): Map<string, Set<string>> {
+  const stageIds = new Set(stages.map(s => s.id));
+  const upstreamMap = new Map<string, Set<string>>();
+  for (const stage of stages) {
+    upstreamMap.set(stage.id, new Set());
+  }
+
+  // 确保 stageEdges 不为空
+  const edges = stageEdges ?? [];
+
+  // 遍历边构建上游关系
+  for (const edge of edges) {
+    // 跳过无效边（source/target 不是合法阶段 ID）
+    if (!stageIds.has(edge.source) || !stageIds.has(edge.target)) continue;
+    if (!upstreamMap.has(edge.target)) {
+      upstreamMap.set(edge.target, new Set());
+    }
+    upstreamMap.get(edge.target)!.add(edge.source);
+  }
+
+  // 传递上游（BFS）
+  const changed = true;
+  let stable = false;
+  while (!stable) {
+    stable = true;
+    for (const edge of edges) {
+      if (!stageIds.has(edge.source) || !stageIds.has(edge.target)) continue;
+      const srcUpstream = upstreamMap.get(edge.source);
+      const tgtUpstream = upstreamMap.get(edge.target);
+      if (srcUpstream && tgtUpstream) {
+        for (const uid of srcUpstream) {
+          if (!tgtUpstream.has(uid)) {
+            tgtUpstream.add(uid);
+            stable = false;
+          }
+        }
+      }
+    }
+  }
+
+  return upstreamMap;
+}
+
+/**
+ * 获取从 start 节点出发通过边可达的所有节点 ID 集合
+ *
+ * 在阶段内通过 edges BFS，跨阶段通过 stageEdges BFS。
+ * 跨阶段时，目标阶段的所有节点均视为可达（阶段按拓扑顺序执行，
+ * 每个阶段的 start 节点可被隐式视为阶段的入口）。
+ *
+ * @param stages  工作流阶段列表
+ * @param stageEdges  阶段间连线列表
+ * @returns 从 start 节点可达的节点 ID 集合
+ */
+export function getReachableNodes(
+  stages: Stage[],
+  stageEdges?: WorkflowEdge[],
+): Set<string> {
+  // 1. 找到 start 节点所在阶段
+  let startStageId: string | null = null;
+  let startNodeId: string | null = null;
+  for (const stage of stages) {
+    for (const node of stage.nodes) {
+      if (node.type === 'start') {
+        startStageId = stage.id;
+        startNodeId = node.id;
+        break;
+      }
+    }
+    if (startStageId) break;
+  }
+  if (!startStageId || !startNodeId) return new Set();
+
+  // 2. 构建阶段拓扑前序（反向：从某阶段可到达哪些下游阶段）
+  const stageIds = new Set(stages.map(s => s.id));
+  const downstreamMap = new Map<string, Set<string>>();
+  for (const stage of stages) {
+    downstreamMap.set(stage.id, new Set());
+  }
+  const edges = stageEdges ?? [];
+  for (const edge of edges) {
+    if (!stageIds.has(edge.source) || !stageIds.has(edge.target)) continue;
+    downstreamMap.get(edge.source)!.add(edge.target);
+  }
+  // 传递下游
+  let stable = false;
+  while (!stable) {
+    stable = true;
+    for (const edge of edges) {
+      if (!stageIds.has(edge.source) || !stageIds.has(edge.target)) continue;
+      const srcDown = downstreamMap.get(edge.source);
+      const tgtDown = downstreamMap.get(edge.target);
+      if (srcDown && tgtDown) {
+        for (const did of srcDown) {
+          if (!tgtDown.has(did)) {
+            tgtDown.add(did);
+            stable = false;
+          }
+        }
+      }
+    }
+  }
+
+  // 3. 收集 start 所在阶段的可达节点（阶段内 BFS）
+  const reachable = new Set<string>();
+  const startStage = stages.find(s => s.id === startStageId)!;
+
+  // 阶段内 BFS
+  const visited = new Set<string>();
+  const queue = [startNodeId];
+  visited.add(startNodeId);
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    reachable.add(current);
+    // 找当前节点的直接下游
+    for (const edge of startStage.edges) {
+      if (edge.source === current && !visited.has(edge.target)) {
+        visited.add(edge.target);
+        queue.push(edge.target);
+      }
+    }
+  }
+
+  // 4. 对 start 阶段的下游阶段，收集其中所有节点
+  const downstreamStages = downstreamMap.get(startStageId) ?? new Set();
+  for (const dsId of downstreamStages) {
+    const ds = stages.find(s => s.id === dsId);
+    if (ds) {
+      for (const node of ds.nodes) {
+        reachable.add(node.id);
+      }
+    }
+  }
+
+  return reachable;
+}
+
+/**
+ * 执行前验证：检查工作流是否满足执行条件
+ *
+ * 校验规则：
+ * 1. 必须有且仅有一个 start 节点和一个 end 节点
+ * 2. 至少存在一条从 start 到 end 的拓扑路径
+ * 3. 所有节点必须与 start 建立拓扑连通（否则为"未就绪"节点）
+ *
+ * @param stages  工作流阶段列表
+ * @param stageEdges  阶段间连线列表
+ * @returns 验证错误列表（空数组表示可执行）
+ */
+export function validateWorkflowForExecution(
+  stages: Stage[],
+  stageEdges?: WorkflowEdge[],
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  // 1. 检查 start 和 end 节点
+  const allNodes = stages.flatMap(s => s.nodes);
+  const startNodes = allNodes.filter(n => n.type === 'start');
+  const endNodes = allNodes.filter(n => n.type === 'end');
+
+  if (startNodes.length === 0) {
+    errors.push({ field: 'nodes', message: '工作流缺少起始节点（Start）', severity: 'error' });
+  } else if (startNodes.length > 1) {
+    errors.push({ field: 'nodes', message: '工作流只能有一个起始节点（Start）', severity: 'error' });
+  }
+
+  if (endNodes.length === 0) {
+    errors.push({ field: 'nodes', message: '工作流缺少结束节点（End）', severity: 'error' });
+  } else if (endNodes.length > 1) {
+    errors.push({ field: 'nodes', message: '工作流只能有一个结束节点（End）', severity: 'error' });
+  }
+
+  if (startNodes.length === 0 || endNodes.length === 0) return errors;
+
+  // 2. 检查从 start 到 end 的连通性
+  const reachable = getReachableNodes(stages, stageEdges);
+  const endNodeId = endNodes[0].id;
+  if (!reachable.has(endNodeId)) {
+    errors.push({
+      field: 'topology',
+      message: '不存在从起始节点到结束节点的完整路径',
+      severity: 'error',
+    });
+  }
+
+  // 3. 检查未就绪节点（不在 start 可达路径上的节点）
+  const unreachableNodes = allNodes.filter(n => !reachable.has(n.id));
+  if (unreachableNodes.length > 0) {
+    for (const node of unreachableNodes) {
+      // start 和 end 不算未就绪（即使暂时不连通，可能通过阶段拓扑连通）
+      if (node.type === 'start' || node.type === 'end') continue;
+      errors.push({
+        field: 'topology',
+        message: `节点 "${node.label}"(${node.id}) 未与起始节点建立拓扑关系`,
+        severity: 'warning',
+        nodeId: node.id,
+        stageId: stages.find(s => s.nodes.some(n => n.id === node.id))?.id,
+      });
+    }
+  }
+
+  return errors;
+}
+
 // ── 映射引用完整性保障 ──
 
 /**
@@ -380,16 +622,20 @@ const MAPPING_SESSION_REF_PATTERN = /\{\{session_id\.(node_[a-zA-Z0-9_]+)\.stage
 /**
  * 清理无效的映射引用
  *
- * 构建每个节点的有效上游节点 ID 集合（通过边遍历），
- * 构建每个阶段的有效前序阶段集合（通过阶段间连线 + order 判断）。
- * 检查每个节点的 inputMapping 中引用的节点 ID 是否存在于上游，
- * 检查 gate_output 引用的阶段 ID 是否为前序阶段（不含本阶段）。
+ * 校验规则：
+ * 1. 节点引用（content/session_id 等）：被引用节点必须存在且为当前节点的拓扑前序
+ * 2. gate_output 引用：被引用阶段必须为当前阶段的阶段拓扑前序（通过 stageEdges 传递搜索）
+ * 3. session_id 引用：被引用节点必须是 agent 类型且 agent_type 与当前节点一致
+ *
+ * 拓扑前序的定义：
+ * - 节点级：通过边的 source→target 传递可达的上游节点
+ * - 阶段级：通过 stageEdges 的 source→target 传递可达的上游阶段
  * 无效引用则清除该映射条目，强制用户重新设置。
  *
  * @param stages  工作流阶段列表（不会被修改，返回新的副本）
  * @returns 清理后的阶段列表
  */
-export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
+export function sanitizeMappingReferences(stages: Stage[], stageEdges?: WorkflowEdge[]): Stage[] {
   // 收集所有节点信息
   const allNodeIds = new Set<string>();
   const allNodes = new Map<string, WorkflowNode>();
@@ -408,7 +654,6 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
         upstreamMap.set(edge.target, new Set());
       }
       upstreamMap.get(edge.target)!.add(edge.source);
-      // 传递上游：如果 source 有上游，也加到 target 的上游集合中
       const srcUpstream = upstreamMap.get(edge.source);
       if (srcUpstream) {
         for (const uid of srcUpstream) {
@@ -417,6 +662,9 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
       }
     }
   }
+
+  // 构建阶段上游映射（通过 stageEdges 传递搜索）
+  const stageUpstreamMap = getStageUpstreamMap(stages, stageEdges);
 
   // 收集阶段 order 映射
   const stageOrders = new Map<string, number>();
@@ -434,8 +682,8 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
       }
 
       const nodeUpstream = upstreamMap.get(node.id);
-      const currentStageOrder = stageOrders.get(stage.id) ?? stage.order;
       const currentAgentType = node.type === 'agent' ? node.params?.agent_type : undefined;
+      const stageUpstream = stageUpstreamMap.get(stage.id);
       const newMapping: Record<string, string> = {};
       let mappingChanged = false;
 
@@ -446,20 +694,14 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
         }
 
         // 提取各类引用
-        // 新格式: {{key.nodeId.stageId}}，捕获组 1 = nodeId
         const newRefs = value.match(MAPPING_REF_PATTERN) || [];
-        // 旧格式兼容: {{key.output.nodeId}}，捕获组 1 = nodeId
         const legacyRefs = value.match(MAPPING_REF_PATTERN_LEGACY) || [];
-        // gate_output: {{gate_output.stageId}}，捕获组 1 = stageId
         const gateRefs = value.match(MAPPING_GATE_REF_PATTERN) || [];
-        // session_id: {{session_id.nodeId.stageId}}，捕获组 1 = nodeId
         const sessionRefs = value.match(MAPPING_SESSION_REF_PATTERN) || [];
 
-        // 合并所有节点级引用（排除 session_id，session_id 单独校验）
         const nodeRefs = [...newRefs, ...legacyRefs];
 
         if (nodeRefs.length === 0 && gateRefs.length === 0 && sessionRefs.length === 0) {
-          // 无引用，保留
           newMapping[key] = value;
           continue;
         }
@@ -475,12 +717,12 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
           }
         }
 
-        // ── 校验 2：gate_output 引用必须为前序阶段（阶段间线性 order） ──
+        // ── 校验 2：gate_output 引用必须为阶段拓扑前序 ──
+        //    使用 stageEdges 构建的上游关系，而非简单的 order 比较
         if (allValid) {
           for (const gateRefId of gateRefs) {
-            const refOrder = stageOrders.get(gateRefId);
-            if (refOrder === undefined || refOrder >= currentStageOrder) {
-              console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 gate_output.' + gateRefId + ' 不是前序阶段');
+            if (!stageUpstream?.has(gateRefId)) {
+              console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 gate_output.' + gateRefId + ' 不是阶段拓扑前序');
               allValid = false;
               break;
             }
@@ -491,19 +733,16 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
         if (allValid) {
           for (const sessionId of sessionRefs) {
             const refNode = allNodes.get(sessionId);
-            // 必须存在且为拓扑前序
             if (!refNode || !(nodeUpstream?.has(sessionId) ?? false)) {
               console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + sessionId + ' 不是拓扑前序节点');
               allValid = false;
               break;
             }
-            // 被引用节点必须是 agent 类型
             if (refNode.type !== 'agent') {
               console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + sessionId + ' 不是 agent 类型');
               allValid = false;
               break;
             }
-            // agent_type 必须与当前节点一致（仅当当前节点也是 agent 类型时）
             if (currentAgentType !== undefined) {
               if (refNode.params?.agent_type !== currentAgentType) {
                 console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + sessionId + ' agent_type 不一致（当前: ' + currentAgentType + ', 引用: ' + refNode.params?.agent_type + '）');
@@ -542,7 +781,7 @@ export function sanitizeMappingReferences(stages: Stage[]): Stage[] {
  * @param stages  原始阶段列表（不会被修改，返回新的副本）
  * @returns ID 重映射后的阶段列表
  */
-export function remapImportedWorkflowIds(stages: Stage[]): Stage[] {
+export function remapImportedWorkflowIds(stages: Stage[], stageEdges?: WorkflowEdge[]): { stages: Stage[]; stageEdges: WorkflowEdge[] } {
   // 1. 收集所有节点 ID 并生成新 ID
   const idMap = new Map<string, string>();
   for (const stage of stages) {
@@ -550,6 +789,15 @@ export function remapImportedWorkflowIds(stages: Stage[]): Stage[] {
       idMap.set(node.id, generateId());
     }
   }
+
+  // 1.5 统一生成阶段 ID 映射（供 stageEdges 和 mapping 引用替换使用）
+  const stageIdMap = new Map<string, string>();
+  for (const stage of stages) {
+    stageIdMap.set(stage.id, generateStageId());
+  }
+
+  // 捕获原始阶段连线（在 generateId 产生副作用前）
+  const originalStageEdges = stageEdges;
 
   // 2. 替换字符串中所有旧 ID 为新 ID
   //    新格式 {{key.nodeId.stageId}} 中 nodeId 在第二段
@@ -585,25 +833,29 @@ export function remapImportedWorkflowIds(stages: Stage[]): Stage[] {
     return newMapping;
   };
 
-  // 4. 统一生成阶段 ID 映射，重建阶段、节点、边和映射引用
-  const stageIdMap = new Map<string, string>();
-  for (const stage of stages) {
-    stageIdMap.set(stage.id, generateStageId());
-  }
+  // 4. 重建阶段、节点、边、映射引用和阶段连线
 
-  return stages.map(stage => ({
-    ...stage,
-    id: stageIdMap.get(stage.id) || stage.id,
-    nodes: stage.nodes.map(node => ({
-      ...node,
-      id: idMap.get(node.id)!,
-      inputMapping: replaceMappingIds(node.inputMapping as Record<string, string> | undefined, stageIdMap),
-      outputMapping: replaceMappingIds(node.outputMapping as Record<string, string> | undefined, stageIdMap),
-    })),
-    edges: stage.edges.map(edge => ({
+  return {
+    stageEdges: (originalStageEdges ?? []).map(edge => ({
       ...edge,
-      source: idMap.get(edge.source) || edge.source,
-      target: idMap.get(edge.target) || edge.target,
+      id: generateEdgeId(stageIdMap.get(edge.source) || edge.source, stageIdMap.get(edge.target) || edge.target),
+      source: stageIdMap.get(edge.source) || edge.source,
+      target: stageIdMap.get(edge.target) || edge.target,
     })),
-  }));
+    stages: stages.map(stage => ({
+      ...stage,
+      id: stageIdMap.get(stage.id) || stage.id,
+      nodes: stage.nodes.map(node => ({
+        ...node,
+        id: idMap.get(node.id)!,
+        inputMapping: replaceMappingIds(node.inputMapping as Record<string, string> | undefined, stageIdMap),
+        outputMapping: replaceMappingIds(node.outputMapping as Record<string, string> | undefined, stageIdMap),
+      })),
+      edges: stage.edges.map(edge => ({
+        ...edge,
+        source: idMap.get(edge.source) || edge.source,
+        target: idMap.get(edge.target) || edge.target,
+      })),
+    })),
+  };
 }
