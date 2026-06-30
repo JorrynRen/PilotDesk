@@ -2446,7 +2446,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       <span>{mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
                     </div>
                   )}
-</React.Fragment>
             );
           })}
               </>
