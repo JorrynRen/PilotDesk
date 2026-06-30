@@ -633,7 +633,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     } else if (confirmAction.type === 'deleteStageEdge') {
       const edge = stageEdges.find(e => e.id === confirmAction.targetId);
       setStageEdges(stageEdges.filter(e => e.id !== confirmAction.targetId));
-      showToast(`已删除阶段连线「${edge?.source} → ${edge?.target}」`, 'success');
+      const srcStage = edge ? stages.find(s => s.id === edge.source) : null;
+      const tgtStage = edge ? stages.find(s => s.id === edge.target) : null;
+      const srcLabel = srcStage ? `step${srcStage.order + 1} ${srcStage.name}` : edge?.source || '';
+      const tgtLabel = tgtStage ? `step${tgtStage.order + 1} ${tgtStage.name}` : edge?.target || '';
+      showToast(`已删除阶段连线「${srcLabel} → ${tgtLabel}」`, 'success');
       setConfirmAction(null);
     } else if (confirmAction.type === 'deleteNodes') {
       // 批量删除选中节点（排除边界节点）
@@ -695,8 +699,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const handleDeleteStageEdge = (edgeId: string) => {
     modCountRef.current++;
-    setConfirmAction({ type: 'deleteStageEdge', targetId: edgeId, label: '此阶段连线' });
+    setConfirmAction({ type: 'deleteStageEdge', targetId: edgeId, label: getStageEdgeLabel(edgeId) });
   };
+  // Helper: get readable stage edge label for delete confirmation
+  const getStageEdgeLabel = (edgeId: string) => {
+    const edge = stageEdges.find(e => e.id === edgeId);
+    if (!edge) return '此阶段连线';
+    const srcStage = stages.find(s => s.id === edge.source);
+    const tgtStage = stages.find(s => s.id === edge.target);
+    const srcLabel = srcStage ? `step${srcStage.order + 1} ${srcStage.name}` : edge.source;
+    const tgtLabel = tgtStage ? `step${tgtStage.order + 1} ${tgtStage.name}` : edge.target;
+    return `${srcLabel} → ${tgtLabel}`;
+  };
+
 
   const handleUpdateNode = (nodeId: string, updates: Partial<WorkflowNode>) => {
     modCountRef.current++;
@@ -1620,9 +1635,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {/* Label box */}
           <g pointerEvents="none">
             <rect x={(srcX + tgtX) / 2 - 16 * invScale} y={(srcY + tgtY) / 2 - 22 * invScale} width={32 * invScale} height={44 * invScale} rx={4 * invScale} fill="var(--bg-primary)" stroke="var(--border)" strokeWidth={0.5 * invScale} />
-            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{srcStage.name.slice(0, 6)}</text>
+            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={9 * invScale} textAnchor="middle">{srcStage.name.slice(0, 6)}</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 2 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">→</text>
-            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">{tgtStage.name.slice(0, 6)}</text>
+            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={9 * invScale} textAnchor="middle">{tgtStage.name.slice(0, 6)}</text>
           </g>
         </g>
       );
@@ -1865,6 +1880,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 ? 'default'
                 : isBoxSelecting ? 'crosshair'
                 : dragOverStageId === null ? (dragOverCanvasRef.current ? 'not-allowed' : 'grab') : 'grab',
+          userSelect: stageConnecting ? 'none' : undefined,
         }}
         onMouseDown={handleCanvasMouseDown}
         onWheel={handleWheel}
