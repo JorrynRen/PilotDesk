@@ -2442,7 +2442,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   {isCollapsed && (
                     <div className="flex flex-col items-center justify-center px-1" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 69, gap: 4 }}>
                       <span>{stage.nodes.length} 节点 · {stage.edges.length} 连线</span>
-                      <span style={{ fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 56, textAlign: 'center' }}>{gateStrategyLabel(stage.gate.strategy)} / {mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
+                      <span style={{ fontSize: 9, textAlign: 'center' }}>{stage.gate.strategy}/{stage.gate.mergeStrategy}</span>
                     </div>
                   )}
                 </div>
