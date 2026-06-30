@@ -1,0 +1,1 @@
+{"rustc":1562763049001146449,"features":"[]","declared_features":"[\"profiler\"]","target":17783981920299564480,"profile":15356994510855089413,"path":14133482525148518978,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"debug\\.fingerprint\\boa_profiler-007a0e59b11595f4\\dep-lib-boa_profiler","checksum":false}}],"rustflags":[],"config":8247474407144887393,"compile_kind":0}

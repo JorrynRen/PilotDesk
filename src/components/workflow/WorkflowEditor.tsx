@@ -86,6 +86,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [stageConnecting, setStageConnecting] = useState<StageConnectingPreview | null>(null);
   const [hoveredStageEdge, setHoveredStageEdge] = useState<string | null>(null);
   const [hoveredAnchor, setHoveredAnchor] = useState<string | null>(null);
+  const [stageOffsets, setStageOffsets] = useState<Record<string, number>>({});
+  const [draggingStageId, setDraggingStageId] = useState<string | null>(null);
+  const dragStartXRef = useRef<number>(0);
+  const dragStartOffsetRef = useRef<number>(0);
+
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
 
@@ -882,15 +887,30 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   
 
   /** 纯算术获取节点画布坐标（零DOM查询） */
+  const wouldCreateCycle = useCallback((targetStageId: string): boolean => {
+    const visited = new Set<string>();
+    const queue = [targetStageId];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      for (const se of stageEdges) {
+        if (se.source === cur) queue.push(se.target);
+      }
+    }
+    return visited.has(stageConnecting?.sourceStageId ?? '');
+  }, [stageEdges, stageConnecting?.sourceStageId]);
+
+
   const getStagePositions = useCallback(() => {
     let leftOffset = 20;
     const map: Record<string, number> = {};
     for (const stage of stages) {
-      map[stage.id] = leftOffset;
+      map[stage.id] = leftOffset + (stageOffsets[stage.id] ?? 0);
       leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
     }
     return map;
-  }, [stages, collapsedStages]);
+  }, [stages, collapsedStages, stageOffsets]);
 
   const stagePositionsMap = getStagePositions();
 
@@ -1172,7 +1192,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (document.activeElement && document.activeElement !== e.target) {
       (document.activeElement as HTMLElement).blur();
     }
-    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate], [data-stage-entrance], [data-stage-gate-output], [data-edge]')) return;
+    if ((e.target as HTMLElement).closest('button, input, [data-anchor], [data-gate], [data-stage-entrance], [data-stage-gate-output], [data-edge], [data-stage-title]')) return;
     // Left button (0) or middle button (1): pan canvas
     if (e.button === 0 || e.button === 1) {
       e.preventDefault();
@@ -1461,6 +1481,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [stageConnecting, scale, pan.x, pan.y]);
 
+  // ── 阶段拖拽：拖动标题栏移动阶段位置 ──
+  useEffect(() => {
+    if (!draggingStageId) return;
+    const onMouseMove = (e: MouseEvent) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const currentX = (e.clientX - rect.left - pan.x) / scale;
+      const deltaX = currentX - dragStartXRef.current;
+      setStageOffsets(prev => ({
+        ...prev,
+        [draggingStageId]: Math.max(-400, Math.min(2000, dragStartOffsetRef.current + deltaX)),
+      }));
+    };
+    const onMouseUp = () => {
+      setDraggingStageId(null);
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [draggingStageId, scale, pan.x]);
+
+
+
 
   const getStageAtCanvasPos = useCallback((cx: number, cy: number) => {
     for (const stage of stages) {
@@ -1592,7 +1638,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     let leftOffset = 20;
     const sp: number[] = [];
     for (let j = 0; j < stages.length; j++) {
-      sp.push(leftOffset);
+      sp.push(leftOffset + (stageOffsets[stages[j].id] ?? 0));
       leftOffset += collapsedStages.has(stages[j].id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
     }
 
@@ -1656,9 +1702,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {/* Label box */}
           <g pointerEvents="none">
             <rect x={(srcX + tgtX) / 2 - 16 * invScale} y={(srcY + tgtY) / 2 - 22 * invScale} width={32 * invScale} height={44 * invScale} rx={4 * invScale} fill="var(--bg-primary)" stroke="var(--border)" strokeWidth={0.5 * invScale} />
-            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={9 * invScale} textAnchor="middle">{srcStage.name.slice(0, 6)}</text>
+            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 - 10 * invScale} fill="#8b949e" fontSize={9 * invScale} textAnchor="middle">{`step${srcStage.order + 1}`}</text>
             <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 2 * invScale} fill="#8b949e" fontSize={10 * invScale} textAnchor="middle">→</text>
-            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={9 * invScale} textAnchor="middle">{tgtStage.name.slice(0, 6)}</text>
+            <text x={(srcX + tgtX) / 2} y={(srcY + tgtY) / 2 + 14 * invScale} fill="#8b949e" fontSize={9 * invScale} textAnchor="middle">{`step${tgtStage.order + 1}`}</text>
           </g>
         </g>
       );
@@ -2186,7 +2232,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             let leftOffset = 20;
             const stagePositions: number[] = [];
             for (let i = 0; i < stages.length; i++) {
-              stagePositions.push(leftOffset);
+              stagePositions.push(leftOffset + (stageOffsets[stages[i].id] ?? 0));
               leftOffset += collapsedStages.has(stages[i].id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
             }
             return (
@@ -2234,7 +2280,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   )}
 
                   {/* 阶段标题栏（正向缩放，不做反向补偿） */}
-                  <div
+                  <div data-stage-title={stage.id}
                     data-title
                     className={isCollapsed ? 'flex flex-col shrink-0' : 'flex items-center justify-between shrink-0'}
                     style={{
@@ -2246,6 +2292,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       position: 'relative',
                       zIndex: 10,
                       overflow: 'visible',
+                      cursor: draggingStageId === stage.id ? 'grabbing' : 'grab',
+                    }}
+                    onMouseDown={(e) => {
+                      if (e.button !== 0) return;
+                      const target = e.target as HTMLElement;
+                      if (target.tagName === 'BUTTON' || target.tagName === 'INPUT') return;
+                      e.stopPropagation();
+                      const rect = canvasRef.current?.getBoundingClientRect();
+                      if (!rect) return;
+                      const mx = (e.clientX - rect.left - pan.x) / scale;
+                      dragStartXRef.current = mx;
+                      dragStartOffsetRef.current = stageOffsets[stage.id] ?? 0;
+                      setDraggingStageId(stage.id);
                     }}
                   >
                     {isCollapsed && (
@@ -2459,11 +2518,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       left: stagePositions[stageIndex] - 6,
                       top: isCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2 - 6,
                       width: 12, height: 12, borderRadius: '50%',
-                      background: '#58a6ff',
+                      background: stageConnecting && stageConnecting.sourceStageId !== stage.id ? (wouldCreateCycle(stage.id) ? '#f85149' : '#3fb950') : '#58a6ff',
                       border: '2px solid var(--bg-primary)',
                       cursor: 'pointer',
                       zIndex: 20,
-                      opacity: (stageConnecting && stageConnecting.sourceStageId !== stage.id) || hoveredAnchor === 'entrance-' + stage.id ? 1 : 0.4,
+                      opacity: (stageConnecting && stageConnecting.sourceStageId !== stage.id) ? 1 : (hoveredAnchor === 'entrance-' + stage.id ? 1 : 0.4),
                       transform: (stageConnecting && stageConnecting.sourceStageId !== stage.id && hoveredAnchor === 'entrance-' + stage.id) ? 'scale(1.5)' : 'scale(1)',
                       transition: 'opacity 0.15s, background 0.15s, transform 0.15s',
                     }}
