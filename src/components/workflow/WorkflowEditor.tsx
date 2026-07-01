@@ -346,10 +346,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       });
       if (filePath) {
         await invoke('export_workflow_to_file', { id: definitionId, filePath });
+        showToast('工作流导出成功', 'success');
         onSaveResult?.(true);
       }
     } catch (err: any) {
       console.error('导出工作流失败:', err);
+      showToast(`导出工作流失败: ${err}`, 'error');
       onSaveResult?.(false);
     }
   }, [definitionId, name, onSaveResult]);

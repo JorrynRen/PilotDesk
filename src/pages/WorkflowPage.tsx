@@ -146,12 +146,18 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
       });
       if (!filePaths || (filePaths as string[]).length === 0) return;
       const paths = filePaths as string[];
+      let successCount = 0;
       for (const filePath of paths) {
         try {
           await invoke('import_workflow_from_file', { filePath });
+          successCount++;
         } catch (innerErr: any) {
-          console.error(`导入工作流文件失败: ${filePath}`, innerErr);
+          const fileName = filePath.split(/[\/]/).pop();
+          showToast(`导入工作流「${fileName}」失败: ${innerErr}`, 'error');
         }
+      }
+      if (successCount > 0) {
+        showToast(`成功导入 ${successCount} 个工作流`, 'success');
       }
       await loadDefinitions();
     } catch (err: any) {
