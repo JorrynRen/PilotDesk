@@ -210,10 +210,15 @@ impl WorkflowEngine {
                                 if stage_id_set.contains(ds_id) && !visited_stages.contains(ds_id) {
                                     visited_stages.insert(ds_id.clone());
                                     stage_order.push(ds_id.clone());
-                                    // 将下游阶段所有节点加入队列
+                                    // 只将下游阶段的入口节点（入度为0的节点）加入队列，
+                                    // BFS 会沿阶段内节点连线自然遍历到真正可达的节点
                                     if let Some(ds) = stage_map.get(ds_id) {
+                                        let has_incoming: std::collections::HashSet<String> =
+                                            ds.edges.iter().map(|e| e.target.clone()).collect();
                                         for node in &ds.nodes {
-                                            if !visited_nodes.contains(&node.id) {
+                                            if !visited_nodes.contains(&node.id)
+                                                && !has_incoming.contains(&node.id)
+                                            {
                                                 visited_nodes.insert(node.id.clone());
                                                 node_queue.push_back(node.id.clone());
                                             }
