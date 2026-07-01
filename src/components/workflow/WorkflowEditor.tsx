@@ -25,7 +25,7 @@ interface ExecutionPlan {
   ordered_stage_ids: string[];
 }
 
-import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition, sanitizeMappingReferences } from '../../workflow/WorkflowDefinition';
+import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition, clampNodePositionNoSnap, sanitizeMappingReferences } from '../../workflow/WorkflowDefinition';
 import WorkflowNodeItem from './WorkflowNodeItem';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
 import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig } from '../../types/workflow';
@@ -50,8 +50,6 @@ const NODE_H = 60;
 const SNAP_SIZE = 20;
 const PAN_THRESHOLD = 3;
 const NODE_DRAG_THRESHOLD = 3;
-const CANVAS_W = 4000;
-const CANVAS_H = 3000;
 
 /** 工具栏可拖拽的节点类型（从 NODE_TYPE_META 派生，排除边界节点） */
 const BUILTIN_NODE_TYPES = (['agent', 'api', 'transform', 'interact', 'plugin', 'subflow'] as WorkflowNodeType[])
@@ -94,9 +92,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [hoveredStageEdge, setHoveredStageEdge] = useState<string | null>(null);
   const [hoveredAnchor, setHoveredAnchor] = useState<string | null>(null);
   const [stageOffsets, setStageOffsets] = useState<Record<string, number>>({});
+  const [stageOffsetsY, setStageOffsetsY] = useState<Record<string, number>>({});
   const [draggingStageId, setDraggingStageId] = useState<string | null>(null);
   const dragStartXRef = useRef<number>(0);
+  const dragStartYRef = useRef<number>(0);
   const dragStartOffsetRef = useRef<number>(0);
+  const dragStartOffsetYRef = useRef<number>(0);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
@@ -116,6 +117,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [gateStrategy, setGateStrategy] = useState<string>('all');
   const [showCustomMode, setShowCustomMode] = useState(false);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
+  const collapsedStagesRef = useRef(collapsedStages);
+  collapsedStagesRef.current = collapsedStages;
   const [customMode, setCustomMode] = useState<string>('selector');
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
@@ -133,10 +136,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // 画布平移和缩放状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const panThresholdRef = useRef<{ startX: number; startY: number; triggered: boolean } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  // 监听画布容器尺寸变化（用于无限画布动态计算）
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        setViewportSize({ width: Math.floor(width), height: Math.floor(height) });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   
   const dragOverCanvasRef = useRef<boolean>(false);
@@ -280,6 +298,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, [toolbarDrag, pan, scale, stages, collapsedStages]);
 
   // 节点拖拽状态
+  // ── 对齐辅助线 ──
+  type AlignLine = { axis: 'x' | 'y'; value: number }; // value = 画布坐标
+  const [alignLines, setAlignLines] = useState<AlignLine[]>([]);
+  const ALIGN_THRESHOLD = 6; // 像素阈值（视觉像素，不随缩放变化）
+
   const [draggingNode, setDraggingNode] = useState<{
     nodeId: string;
     stageId: string;
@@ -298,6 +321,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // 连线拖拽时的实际目标节点（鼠标悬停的input anchor）
   const [connectTargetId, setConnectTargetId] = useState<string | null>(null);
   const [cycleTargetId, setCycleTargetId] = useState<string | null>(null);
+  const [reachableTargets, setReachableTargets] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (def) {
@@ -678,6 +702,33 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setStageEdges(prev => [...prev, newEdge]);
     }
     setStages(updated.map((s, i) => ({ ...s, order: i })));
+    // 自动平移视图到新阶段位置（以新阶段为视图中心）
+    // 需要等setStages更新后计算位置，用setTimeout延迟一帧
+    setTimeout(() => {
+      const newStageIdx = updated.length - 1;
+      let leftOffset = 20;
+      for (let i = 0; i < newStageIdx; i++) {
+        const s = updated[i];
+        leftOffset += (collapsedStagesRef.current?.has(s.id) ? 72 + 36 : 480 + 36);
+      }
+      const stageW = 480;
+      const stageH = TITLE_H + CONTENT_H + GATE_H + 4;
+      const canvasEl = canvasRef.current;
+      if (!canvasEl) return;
+      const rect = canvasEl.getBoundingClientRect();
+      // 新阶段中心在画布坐标中
+      const stageCenterX = leftOffset + stageW / 2;
+      const stageCenterY = 20 + stageH / 2;
+      // 视口中心
+      const viewCenterX = rect.width / 2;
+      const viewCenterY = rect.height / 2;
+      // 以scale=1居中: pan.x + stageCenterX = viewCenterX
+      setScale(1);
+      setPan({
+        x: viewCenterX - stageCenterX,
+        y: viewCenterY - stageCenterY,
+      });
+    }, 0);
   };
 
   const handleDeleteStage = (stageId: string) => {
@@ -994,6 +1045,43 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const stagePositionsMap = getStagePositions();
 
+  // 动态画布尺寸：max(视口/scale, 内容包围盒+padding)
+  const canvasSize = useMemo(() => {
+    const CANVAS_PADDING = 1000;
+    // 计算内容包围盒
+    let maxRight = 0;
+    let maxBottom = 0;
+    for (const stage of stages) {
+      const stageLeft = stagePositionsMap[stage.id];
+      const yOffset = stageOffsetsY[stage.id] ?? 0;
+      const isCollapsed = collapsedStages.has(stage.id);
+      const stageW = isCollapsed ? STAGE_COLLAPSED_W : STAGE_W;
+      const stageH = isCollapsed ? TITLE_H + 4 : STAGE_TOP + TITLE_H + CONTENT_H + 20;
+      const stageTop = 20 + yOffset;
+      // 阶段内节点的实际范围（取最大节点位置）
+      for (const node of stage.nodes) {
+        const nx = stageLeft + node.position.x + node.position.width;
+        const ny = stageTop + TITLE_H + node.position.y + node.position.height;
+        if (nx > maxRight) maxRight = nx;
+        if (ny > maxBottom) maxBottom = ny;
+      }
+      const right = stageLeft + stageW;
+      const bottom = stageTop + stageH;
+      if (right > maxRight) maxRight = right;
+      if (bottom > maxBottom) maxBottom = bottom;
+    }
+    // 内容包围盒 + padding
+    const contentW = maxRight + CANVAS_PADDING * 2;
+    const contentH = maxBottom + CANVAS_PADDING * 2;
+    // 视口需求（确保缩放后仍能铺满视口）
+    const viewW = viewportSize.width / scale;
+    const viewH = viewportSize.height / scale;
+    return {
+      width: Math.max(Math.ceil(Math.max(contentW, viewW)), 400),
+      height: Math.max(Math.ceil(Math.max(contentH, viewH)), 300),
+    };
+  }, [stages, collapsedStages, stagePositionsMap, scale, viewportSize]);
+
   const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
     const stageLeft = stagePositionsMap[stageId];
     return {
@@ -1051,11 +1139,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       mouseCanvasY: my,
     } : null);
 
-    // 命中检测：鼠标是否在节点输入锚点附近（画布坐标）
+    // 命中检测：鼠标是否在节点区域/输入锚点附近（画布坐标）
     const stage = stages.find(s => s.id === connecting.stageId);
     if (!stage) return;
     let targetId: string | null = null;
     const stageLeft = stagePositionsMap[connecting.stageId];
+    const potentialTargets = new Set<string>();
     for (const node of stage.nodes) {
       if (node.id === connecting.source) continue;
       if (node.type === 'start') continue;
@@ -1063,18 +1152,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const nPos = node.position ?? { x: 20, y: 20 };
       const nW = 160;
       const nH = 60;
-      // 节点画布坐标（节点 position:absolute，定位基准 = 内容区 padding-box 左上角）
       const nodeCX = stageLeft + nPos.x + nW / 2;
-      const nodeCY = STAGE_TOP + TITLE_H + nPos.y + nH / 2;
-      const halfW = nW / (2 * scale); // 节点视觉半宽（画布坐标）
-      const halfH = nH / (2 * scale); // 节点视觉半高（画布坐标）
-      // 检测鼠标是否在节点视觉范围内（锚点在左边缘中心）
-      if (mx >= nodeCX - halfW - 15/scale && mx <= nodeCX - halfW + nW / scale * 0.35 &&
-          my >= nodeCY - halfH - 15/scale && my <= nodeCY + halfH + 15/scale) {
+      const nodeCY = (20 + (stageOffsetsY[connecting.stageId] ?? 0)) + TITLE_H + nPos.y + nH / 2;
+      const halfW = nW / (2 * scale);
+      const halfH = nH / (2 * scale);
+      // 第一层：鼠标在节点整体视觉区域内 → 潜在目标（变色）
+      if (mx >= nodeCX - halfW && mx <= nodeCX + halfW &&
+          my >= nodeCY - halfH && my <= nodeCY + halfH) {
+        potentialTargets.add(node.id);
+      }
+      // 第二层：鼠标更靠近输入锚点附近（左半区） → 精确目标（放大）
+      if (mx >= nodeCX - halfW - 10/scale && mx <= nodeCX - halfW + nW / scale * 0.35 &&
+          my >= nodeCY - halfH - 10/scale && my <= nodeCY + halfH + 10/scale) {
         targetId = node.id;
-        break;
       }
     }
+    setReachableTargets(potentialTargets);
     // 检测目标节点是否会产生闭环
     if (targetId && hasCycle(connecting.source, targetId, stage)) {
       setCycleTargetId(targetId);
@@ -1095,24 +1188,30 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     // Start节点只有输出锚点，不可被连线
     const targetNode = stages.find(s => s.id === stageId)?.nodes.find(n => n.id === nodeId);
     if (targetNode?.type === 'start') {
+      showToast('起始节点不可作为连线目标', 'warning');
       setConnecting(null);
       setConnectTargetId(null);
       setCycleTargetId(null);
+      setReachableTargets(new Set());
       return;
     }
     // 不允许重复连线
     const stage = stages.find(s => s.id === stageId);
     if (stage && stage.edges.some(e => e.source === connecting.source && e.target === nodeId)) {
+      showToast('该节点连线已存在', 'warning');
       setConnecting(null);
       setConnectTargetId(null);
       setCycleTargetId(null);
+      setReachableTargets(new Set());
       return;
     }
     // 闭环检测：若创建此边会产生闭环，阻止创建
     if (stage && hasCycle(connecting.source, nodeId, stage)) {
+      showToast('不允许创建闭环连线', 'error');
       setConnecting(null);
       setConnectTargetId(null);
       setCycleTargetId(null);
+      setReachableTargets(new Set());
       return;
     }
 
@@ -1124,9 +1223,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
     // 阶段间节点隔离：不允许跨阶段连线，只能通过门控传递数据
     if (connecting.stageId !== stageId) {
+      showToast('不允许跨阶段连线', 'warning');
       setConnecting(null);
       setConnectTargetId(null);
       setCycleTargetId(null);
+      setReachableTargets(new Set());
       return;
     }
 
@@ -1139,6 +1240,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setConnecting(null);
     setConnectTargetId(null);
     setCycleTargetId(null);
+    setReachableTargets(new Set());
     setStages((prev) => autoAssignStage(prev));
   }, [connecting, stages]);
 
@@ -1146,6 +1248,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setConnecting(null);
     setConnectTargetId(null);
     setCycleTargetId(null);
+    setReachableTargets(new Set());
   }, []);
 
   // 监听连线拖拽期间的鼠标移动和释放
@@ -1169,6 +1272,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
       setConnecting(null);
       setConnectTargetId(null);
+      setReachableTargets(new Set());
     };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
@@ -1305,8 +1409,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           const cx = (e.clientX - rect.left - pan.x) / scale;
           const cy = (e.clientY - rect.top - pan.y) / scale;
           const stageLeft = stagePositionsMap[stageId];
+          const stageTop = 20 + (stageOffsetsY[stageId] ?? 0);
           const contentX = cx - stageLeft;
-          const contentY = cy - STAGE_TOP - TITLE_H;
+          const contentY = cy - stageTop - TITLE_H;
           setIsBoxSelecting(true);
           boxSelectStartRef.current = { x: cx, y: cy, stageId };
           setBoxSelectRect({ x1: contentX, y1: contentY, x2: contentX, y2: contentY, stageId });
@@ -1358,8 +1463,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const cx = (e.clientX - rect.left - pan.x) / scale;
       const cy = (e.clientY - rect.top - pan.y) / scale;
       const stageLeft = stagePositionsMap[boxSelectStartRef.current.stageId];
+      const stageTop = 20 + (stageOffsetsY[boxSelectStartRef.current.stageId] ?? 0);
       const contentX = cx - stageLeft;
-      const contentY = cy - STAGE_TOP - TITLE_H;
+      const contentY = cy - stageTop - TITLE_H;
       setBoxSelectRect(prev => prev ? { ...prev, x2: contentX, y2: contentY } : null);
     };
     const handleUp = (e: MouseEvent) => {
@@ -1405,26 +1511,28 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, [isBoxSelecting, boxSelectRect, pan, scale, stages, stagePositionsMap]);
 
   // ── 鼠标滚轮缩放（以光标位置为中心） ──
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    e.preventDefault();
-
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    setScale((prevScale) => {
-      const delta = -e.deltaY * 0.002;
-      const newScale = Math.min(Math.max(prevScale + delta, 0.1), 4);
-      const ratio = newScale / prevScale;
-
-      setPan((prevPan) => ({
-        x: mouseX - ratio * (mouseX - prevPan.x),
-        y: mouseY - ratio * (mouseY - prevPan.y),
-      }));
-
-      return newScale;
-    });
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      if (!rect) return;
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      setScale((prevScale) => {
+        const delta = -e.deltaY * 0.002;
+        const newScale = Math.min(Math.max(prevScale + delta, 0.1), 4);
+        const ratio = newScale / prevScale;
+        setPan((prevPan) => ({
+          x: mouseX - ratio * (mouseX - prevPan.x),
+          y: mouseY - ratio * (mouseY - prevPan.y),
+        }));
+        return newScale;
+      });
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
   }, []);
 
   // ── 节点拖拽（含防误触阈值 + 视觉反馈） ──
@@ -1502,9 +1610,75 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const canvasX = (rawCanvasX - pan.x) / scale;
       const canvasY = (rawCanvasY - pan.y) / scale;
       const rel = canvasToContentPos(canvasX, canvasY, d.stageId);
-      // delta = 鼠标当前位置 - 鼠标起始位置（内容区坐标）
-      const deltaX = rel.x - d.startContentX;
-      const deltaY = rel.y - d.startContentY;
+      let deltaX = rel.x - d.startContentX;
+      let deltaY = rel.y - d.startContentY;
+      // 节点对齐吸附：只与同阶段内其他节点对齐
+      const threshold = ALIGN_THRESHOLD / scale;
+      const stage = stages.find(s => s.id === d.stageId);
+      if (stage && d.origPositions) {
+        const draggedNodeIds = d.multiSelect ? selectedNodeIds : new Set([d.nodeId]);
+        const lines: AlignLine[] = [];
+        let bestSnapX = 0, bestSnapY = 0;
+        let bestXDiff = Infinity, bestYDiff = Infinity;
+        let bestXLine: number | null = null, bestYLine: number | null = null;
+        const stageLeft = stagePositionsMap[d.stageId];
+        const stageTopY = 20 + (stageOffsetsY[d.stageId] ?? 0) + TITLE_H;
+        for (const node of stage.nodes) {
+          if (draggedNodeIds.has(node.id)) continue;
+          const meta = getNodeTypeMeta(node.type);
+          const nW = meta.nodeW, nH = meta.nodeH;
+          const nVisOX = (nW / 2) * (1 - 1 / scale);
+          const nVisOY = (nH / 2) * (1 - 1 / scale);
+          const nOrigCSS = { x: node.position.x, y: node.position.y };
+          for (const dragId of draggedNodeIds) {
+            const dragOrig = d.origPositions[dragId];
+            if (!dragOrig) continue;
+            const dragMeta = getNodeTypeMeta(stage.nodes.find(n => n.id === dragId)?.type || 'task');
+            const dw = dragMeta.nodeW, dh = dragMeta.nodeH;
+            const dVisOX = (dw / 2) * (1 - 1 / scale);
+            const dVisOY = (dh / 2) * (1 - 1 / scale);
+            const dLeft = dragOrig.x + deltaX, dRight = dLeft + dw, dCenterX = dLeft + dw / 2;
+            const dTop = dragOrig.y + deltaY, dBottom = dTop + dh, dCenterY = dTop + dh / 2;
+            const tLeft = nOrigCSS.x, tRight = tLeft + nW, tCX = tLeft + nW / 2;
+            const tTop = nOrigCSS.y, tBottom = tTop + nH, tCY = tTop + nH / 2;
+            const dLV = dLeft + dVisOX, dRV = dRight - dVisOX, dCV = dCenterX;
+            const tLV = tLeft + nVisOX, tRV = tRight - nVisOX, tCV = tCX;
+            const dTV = dTop + dVisOY, dBV = dBottom - dVisOY, dCYV = dCenterY;
+            const tTV = tTop + nVisOY, tBV = tBottom - nVisOY, tCYV = tCY;
+            const xPairs: [number, number, number][] = [
+              [dLV, tLV, stageLeft + tLV],
+              [dRV, tRV, stageLeft + tRV],
+              [dLV, tRV, stageLeft + tRV],
+              [dRV, tLV, stageLeft + tLV],
+              [dCV, tCV, stageLeft + tCV],
+            ];
+            for (const [dV, tV, lineV] of xPairs) {
+              const vDiff = tV - dV;
+              if (Math.abs(vDiff) < threshold && Math.abs(vDiff) < Math.abs(bestXDiff)) {
+                bestXDiff = vDiff; bestSnapX = vDiff; bestXLine = lineV;
+              }
+            }
+            const yPairs: [number, number, number][] = [
+              [dTV, tTV, stageTopY + tTV],
+              [dBV, tBV, stageTopY + tBV],
+              [dTV, tBV, stageTopY + tBV],
+              [dBV, tTV, stageTopY + tTV],
+              [dCYV, tCYV, stageTopY + tCYV],
+            ];
+            for (const [dV, tV, lineV] of yPairs) {
+              const vDiff = tV - dV;
+              if (Math.abs(vDiff) < threshold && Math.abs(vDiff) < Math.abs(bestYDiff)) {
+                bestYDiff = vDiff; bestSnapY = vDiff; bestYLine = lineV;
+              }
+            }
+          }
+        }
+        deltaX += bestSnapX;
+        deltaY += bestSnapY;
+        if (bestXLine !== null) lines.push({ axis: 'x', value: bestXLine });
+        if (bestYLine !== null) lines.push({ axis: 'y', value: bestYLine });
+        setAlignLines(lines);
+      }
       // All dragged nodes use origPositions (stored at mousedown time)
       setStages((prev) => prev.map((s) => {
         if (s.id !== d.stageId) return s;
@@ -1514,13 +1688,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             if (!d.origPositions || !d.origPositions[n.id]) return n;
             const meta = getNodeTypeMeta(n.type);
             const orig = d.origPositions[n.id];
-            return { ...n, position: clampNodePosition(orig.x + deltaX, orig.y + deltaY, meta.nodeW, meta.nodeH, scale) };
+            return { ...n, position: clampNodePositionNoSnap(orig.x + deltaX, orig.y + deltaY, meta.nodeW, meta.nodeH, scale) };
           }),
         };
       }));
     };
     const handleMouseUp = () => {
       setDraggingNode(null);
+      setAlignLines([]);
     };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
@@ -1528,7 +1703,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggingNode, scale, pan.x, pan.y, canvasToContentPos, selectedNodeIds]);
+  }, [draggingNode, scale, pan.x, pan.y, canvasToContentPos, selectedNodeIds, stages, ALIGN_THRESHOLD]);
 
   // ── 阶段连线拖拽：鼠标移动更新预览位置，释放取消 ──
   useEffect(() => {
@@ -1561,21 +1736,83 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [stageConnecting, scale, pan.x, pan.y]);
 
-  // ── 阶段拖拽：拖动标题栏移动阶段位置 ──
+  // ── 阶段拖拽：拖动标题栏移动阶段位置（支持x+y双向 + 对齐吸附） ──
   useEffect(() => {
     if (!draggingStageId) return;
     const onMouseMove = (e: MouseEvent) => {
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
       const currentX = (e.clientX - rect.left - pan.x) / scale;
+      const currentY = (e.clientY - rect.top - pan.y) / scale;
       const deltaX = currentX - dragStartXRef.current;
+      const deltaY = currentY - dragStartYRef.current;
+      // 对齐吸附计算（用 ref 初始值，不依赖闭包中的 state）
+      const threshold = ALIGN_THRESHOLD / scale;
+      const isCol = collapsedStages.has(draggingStageId);
+      const sw = isCol ? STAGE_COLLAPSED_W : STAGE_W;
+      const sh = isCol ? 154 : TITLE_H + CONTENT_H + GATE_H + 4;
+      // 被拖动阶段的 baseLeft（不含自身 offset）：从 stagePositionsMap 反推
+      const dragBaseLeft = (stagePositionsMap[draggingStageId] ?? 0) - (stageOffsets[draggingStageId] ?? 0);
+      const dragLeft = dragBaseLeft + dragStartOffsetRef.current + deltaX;
+      const dragRight = dragLeft + sw;
+      const dragCenterX = dragLeft + sw / 2;
+      const dragTop = 20 + dragStartOffsetYRef.current + deltaY;
+      const dragBottom = dragTop + sh;
+      const dragCenterY = dragTop + sh / 2;
+      const lines: AlignLine[] = [];
+      let bestSnapX = 0, bestSnapY = 0;
+      let bestXDiff = Infinity, bestYDiff = Infinity;
+      let bestXLine: number | null = null, bestYLine: number | null = null;
+      for (const s of stages) {
+        if (s.id === draggingStageId) continue;
+        const sLeft = stagePositionsMap[s.id];
+        const sIsCol = collapsedStages.has(s.id);
+        const sW = sIsCol ? STAGE_COLLAPSED_W : STAGE_W;
+        const sH = sIsCol ? 154 : TITLE_H + CONTENT_H + GATE_H + 4;
+        const sRight = sLeft + sW;
+        const sCenterX = sLeft + sW / 2;
+        const xPairs: [number, number][] = [
+          [dragLeft, sLeft], [dragRight, sRight],
+          [dragLeft, sRight], [dragRight, sLeft],
+          [dragCenterX, sCenterX],
+        ];
+        for (const [dVal, tVal] of xPairs) {
+          const diff = tVal - dVal;
+          if (Math.abs(diff) < threshold && Math.abs(diff) < Math.abs(bestXDiff)) {
+            bestXDiff = diff; bestSnapX = diff; bestXLine = tVal;
+          }
+        }
+        const sYOff = stageOffsetsY[s.id] ?? 0;
+        const sTop = 20 + sYOff;
+        const sBottom = sTop + sH;
+        const sCenterY = sTop + sH / 2;
+        const yPairs: [number, number][] = [
+          [dragTop, sTop], [dragBottom, sBottom],
+          [dragTop, sBottom], [dragBottom, sTop],
+          [dragCenterY, sCenterY],
+        ];
+        for (const [dVal, tVal] of yPairs) {
+          const diff = tVal - dVal;
+          if (Math.abs(diff) < threshold && Math.abs(diff) < Math.abs(bestYDiff)) {
+            bestYDiff = diff; bestSnapY = diff; bestYLine = tVal;
+          }
+        }
+      }
+      if (bestXLine !== null) lines.push({ axis: 'x', value: bestXLine });
+      if (bestYLine !== null) lines.push({ axis: 'y', value: bestYLine });
+      setAlignLines(lines);
       setStageOffsets(prev => ({
         ...prev,
-        [draggingStageId]: dragStartOffsetRef.current + deltaX,
+        [draggingStageId]: dragStartOffsetRef.current + deltaX + bestSnapX,
+      }));
+      setStageOffsetsY(prev => ({
+        ...prev,
+        [draggingStageId]: dragStartOffsetYRef.current + deltaY + bestSnapY,
       }));
     };
     const onMouseUp = () => {
       setDraggingStageId(null);
+      setAlignLines([]);
     };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
@@ -1583,7 +1820,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, [draggingStageId, scale, pan.x]);
+  }, [draggingStageId, scale, pan.x, pan.y, stages, collapsedStages, stagePositionsMap, stageOffsetsY, ALIGN_THRESHOLD]);
 
 
 
@@ -1591,14 +1828,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const getStageAtCanvasPos = useCallback((cx: number, cy: number) => {
     for (const stage of stages) {
       const left = stagePositionsMap[stage.id];
+      const yOffset = stageOffsetsY[stage.id] ?? 0;
       const width = collapsedStages.has(stage.id) ? STAGE_COLLAPSED_W : STAGE_W;
       const height = collapsedStages.has(stage.id) ? 123 : TITLE_H + CONTENT_H + GATE_H + 4;
-      if (cx >= left && cx <= left + width && cy >= STAGE_TOP && cy <= STAGE_TOP + height) {
+      const stageTop = STAGE_TOP + yOffset;
+      if (cx >= left && cx <= left + width && cy >= stageTop && cy <= stageTop + height) {
         return stage.id;
       }
     }
     return null;
-  }, [stages, collapsedStages, stagePositionsMap]);
+  }, [stages, collapsedStages, stagePositionsMap, stageOffsetsY]);
 
 
 
@@ -1696,8 +1935,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
     // 鼠标位置：画布坐标 → 内容区坐标
     const stageLeft = stagePositionsMap[stageId];
+    const stageTop = 20 + (stageOffsetsY[stageId] ?? 0);
     const mx = connecting.mouseCanvasX - stageLeft;
-    const my = connecting.mouseCanvasY - 20 - 36;
+    const my = connecting.mouseCanvasY - stageTop - TITLE_H;
 
     const H_SEG = 10 * invScale;
     const hEndX = SX + H_SEG;
@@ -1717,8 +1957,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const links: React.ReactNode[] = [];
     let leftOffset = 20;
     const sp: number[] = [];
+    const spY: number[] = [];
     for (let j = 0; j < stages.length; j++) {
       sp.push(leftOffset + (stageOffsets[stages[j].id] ?? 0));
+      spY.push(20 + (stageOffsetsY[stages[j].id] ?? 0));
       leftOffset += collapsedStages.has(stages[j].id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
     }
 
@@ -1738,9 +1980,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const tgtIdx = stages.findIndex(s => s.id === tgtStage.id);
       if (srcIdx < 0 || tgtIdx < 0) continue;
       const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W + 6 : STAGE_W + 6);
-      const srcY = srcCollapsed ? STAGE_TOP + 54 + 50 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+      const srcBaseY = srcCollapsed ? STAGE_TOP + 54 + 50 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+      const srcY = srcBaseY + spY[srcIdx] - 20; // 加入y偏移
       const tgtX = sp[tgtIdx] - 6;
-      const tgtY = tgtCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2;
+      const tgtBaseY = tgtCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2;
+      const tgtY = tgtBaseY + spY[tgtIdx] - 20; // 加入y偏移
 
       // 箭头尖端对齐：路径终点前移箭头长度，让箭头尖端恰好到达 tgtX
       const asLen = 5 * invScale * 1.5;
@@ -1797,7 +2041,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         const srcIdx = stages.findIndex(s => s.id === srcStage.id);
         if (srcIdx >= 0) {
           const srcX = sp[srcIdx] + (srcCollapsed ? STAGE_COLLAPSED_W + 6 : STAGE_W + 6);
-          const srcY = srcCollapsed ? STAGE_TOP + 54 + 50 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+          const srcBaseY = srcCollapsed ? STAGE_TOP + 54 + 50 : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2;
+          const srcY = srcBaseY + spY[srcIdx] - 20;
           const tgtX = stageConnecting.mouseCanvasX;
           const tgtY = stageConnecting.mouseCanvasY;
           const invScale = 1 / scale;
@@ -2091,7 +2336,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           userSelect: stageConnecting ? 'none' : undefined,
         }}
         onMouseDown={handleCanvasMouseDown}
-        onWheel={handleWheel}
         onContextMenu={(e) => {
           // 右键在阶段内容区内：阻止默认菜单（用于框选）
           if ((e.target as HTMLElement).closest('[data-stage-content]')) {
@@ -2265,10 +2509,27 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="5" cy="5" r="3.5" /><line x1="7.5" y1="7.5" x2="11" y2="11" /><line x1="3" y1="5" x2="7" y2="5" /></svg>
           </button>
           <button
-            onClick={() => { setPan({ x: 0, y: 0 }); setScale(1); }}
+            onClick={() => {
+              // 适应视图：100%比例，最左内容左对齐，最上内容顶部对齐
+              if (stages.length === 0) { setPan({ x: 0, y: 0 }); setScale(1); return; }
+              const MARGIN = 20;
+              let minLeft = Infinity, minTop = Infinity;
+              for (const stage of stages) {
+                const left = stagePositionsMap[stage.id];
+                const yOffset = stageOffsetsY[stage.id] ?? 0;
+                const stageTop = 20 + yOffset;
+                if (left < minLeft) minLeft = left;
+                if (stageTop < minTop) minTop = stageTop;
+              }
+              setScale(1);
+              setPan({
+                x: MARGIN - minLeft,
+                y: MARGIN - minTop,
+              });
+            }}
             className="pd-btn w-6 h-6 flex items-center justify-center rounded"
             style={{ background: '#8b949e22', color: '#8b949e', border: 'none' }}
-            title="重置视图"
+            title="适应视图"
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 1L1 3l3 1M10 11l1-2-3-1M1 3a5 5 0 0 1 9 0M11 9a5 5 0 0 1-9 0" /></svg>
           </button>
@@ -2345,8 +2606,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
             transformOrigin: '0 0',
-            width: CANVAS_W,
-            height: CANVAS_H,
+            width: canvasSize.width,
+            height: canvasSize.height,
             position: 'relative',
           }}
         >
@@ -2355,11 +2616,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
           {/* SVG 层：阶段间连线（画布坐标，pointer-events:none） */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1 }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, overflow: 'visible' }}
           >
 
             {renderStageLinks()}
           </svg>
+
+          {/* 对齐辅助线（独立SVG，zIndex高于阶段div=2，pointer-events:none不拦截鼠标） */}
+          {alignLines.length > 0 && (
+            <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 5, overflow: 'visible', pointerEvents: 'none' }}>
+              {alignLines.map((line, i) => {
+                const invScale = 1 / scale;
+                if (line.axis === 'x') {
+                  return <line key={`al-${i}`} x1={line.value} y1={-99999} x2={line.value} y2={99999} stroke="#58a6ff" strokeWidth={1 * invScale} strokeDasharray={`${4 * invScale} ${3 * invScale}`} opacity={0.6} />;
+                } else {
+                  return <line key={`al-${i}`} x1={-99999} y1={line.value} x2={99999} y2={line.value} stroke="#58a6ff" strokeWidth={1 * invScale} strokeDasharray={`${4 * invScale} ${3 * invScale}`} opacity={0.6} />;
+                }
+              })}
+            </svg>
+          )}
 
           {/* 空状态 */}
           {stages.length === 0 && (
@@ -2388,7 +2663,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   data-stage-id={stage.id}
                   style={{
                     position: 'absolute',
-                    top: 20,
+                    top: 20 + (stageOffsetsY[stage.id] ?? 0),
                     left: stagePositions[stageIndex],
                     width: isCollapsed ? 72 : 480,
                     height: isCollapsed ? 154 : TITLE_H + CONTENT_H + GATE_H + 4,
@@ -2397,7 +2672,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     border: '1px solid var(--border)',
                     transition: isCollapsed ? 'width 0.25s cubic-bezier(0.4,0,0.2,1)' : 'none',
                     overflow: 'visible',
-                    clipPath: 'inset(0 round 8px)',
+                    /* clipPath 移除：避免裁剪超出边界的节点 */
                     boxShadow: stageRunState === 'running'
                       ? '0 0 16px #58a6ff33'
                       : 'var(--shadow-sm)',
@@ -2443,8 +2718,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       const rect = canvasRef.current?.getBoundingClientRect();
                       if (!rect) return;
                       const mx = (e.clientX - rect.left - pan.x) / scale;
+                      const my = (e.clientY - rect.top - pan.y) / scale;
                       dragStartXRef.current = mx;
+                      dragStartYRef.current = my;
                       dragStartOffsetRef.current = stageOffsets[stage.id] ?? 0;
+                      dragStartOffsetYRef.current = stageOffsetsY[stage.id] ?? 0;
                       setDraggingStageId(stage.id);
                     }}
                   >
@@ -2551,6 +2829,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   hoveredNodeId={hoveredNodeId}
                   connectTargetId={connectTargetId}
                   cycleTargetId={cycleTargetId}
+                  reachableTargets={reachableTargets}
                   connecting={connecting}
                   stepStates={stepStates}
                   nodeResults={nodeResults}
@@ -2657,7 +2936,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     style={{
                       position: 'absolute',
                       left: stagePositions[stageIndex] - 6,
-                      top: isCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2 - 6,
+                      top: (isCollapsed ? STAGE_TOP + 27 : STAGE_TOP + TITLE_H / 2 - 6) + (stageOffsetsY[stage.id] ?? 0),
                       width: 12, height: 12, borderRadius: '50%',
                       background: stageConnecting && stageConnecting.sourceStageId !== stage.id ? (wouldCreateCycle(stage.id) ? '#f85149' : '#3fb950') : '#58a6ff',
                       border: '2px solid var(--bg-primary)',
@@ -2713,14 +2992,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       left: isCollapsed
                         ? stagePositions[stageIndex] + STAGE_COLLAPSED_W - 6
                         : stagePositions[stageIndex] + STAGE_W - 6,
-                      top: isCollapsed
+                      top: (isCollapsed
                         ? STAGE_TOP + 54 + 50 - 6
-                        : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2 - 6,
+                        : STAGE_TOP + TITLE_H + CONTENT_H + GATE_H / 2 - 6) + (stageOffsetsY[stage.id] ?? 0),
                       width: 12, height: 12, borderRadius: '50%',
                       background: '#58a6ff',
                       border: '2px solid var(--bg-primary)',
-                      cursor: stageConnecting || hoveredAnchor === 'exit-' + stage.id ? 'crosshair' : 'pointer', zIndex: 20,
-                      opacity: stageConnecting || hoveredAnchor === 'exit-' + stage.id ? 1 : 0.4,
+                      cursor: hoveredAnchor === 'exit-' + stage.id ? 'crosshair' : 'pointer', zIndex: 20,
+                      opacity: hoveredAnchor === 'exit-' + stage.id ? 1 : 0.4,
                       transition: 'opacity 0.15s, cursor 0.15s',
                     }}
                     onMouseEnter={() => setHoveredAnchor('exit-' + stage.id)}
@@ -2764,7 +3043,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             onContextMenu={(e) => { e.preventDefault(); setEdgeContextMenu(null); }}
           />
           <div
-            className="absolute z-[1000] rounded-lg py-1 min-w-[140px]"
+            className="fixed z-[1000] rounded-lg py-1 min-w-[140px]"
             style={{
               left: edgeContextMenu.x,
               top: edgeContextMenu.y,

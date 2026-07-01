@@ -16,6 +16,7 @@ interface WorkflowNodeItemProps {
   hoveredNodeId: string | null;
   connectTargetId: string | null;
   cycleTargetId: string | null;
+  reachableTargets: Set<string>;
   connecting: unknown;
   stepStates: Record<string, string>;
   nodeResults: Record<string, any>;
@@ -34,7 +35,7 @@ interface WorkflowNodeItemProps {
 const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   node, stageId, scale,
   selectedNodeId, selectedNodeIds,
-  draggingNode, hoveredNodeId, connectTargetId, cycleTargetId,
+  draggingNode, hoveredNodeId, connectTargetId, cycleTargetId, reachableTargets,
   connecting, stepStates, nodeResults,
   isUnreachable,
   isRestoredResult, isConfigChanged,
@@ -48,6 +49,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   const isHovered = hoveredNodeId === node.id;
   const isConnectTarget = connectTargetId === node.id;
   const isCycleTarget = cycleTargetId === node.id;
+  const isReachableTarget = !!connecting && reachableTargets.has(node.id);
   const runState = stepStates[`node_${node.id}`];
   const nodeResult = nodeResults[`node_${node.id}`];
   const [expanded, setExpanded] = useState(false);
@@ -250,15 +252,18 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
           }}
           className="absolute rounded-full transition-all duration-150"
           style={{
+            width: 10, height: 10,
             left: -5, top: '50%', marginTop: -5,
-            width: (connecting && (isConnectTarget || isCycleTarget)) ? 12 : 10,
-            height: (connecting && (isConnectTarget || isCycleTarget)) ? 12 : 10,
-            background: (connecting && isCycleTarget) ? 'var(--status-danger)'
-              : (connecting && isConnectTarget) ? 'var(--accent)' : 'var(--border)',
+            transform: isConnectTarget ? 'scale(1.5)' : 'scale(1)',
+            background: isCycleTarget ? 'var(--status-danger)'
+              : isConnectTarget ? 'var(--accent)'
+              : isReachableTarget ? '#3fb950'
+              : 'var(--border)',
             border: '2px solid var(--bg-secondary)',
-            cursor: (connecting && isConnectTarget) ? 'cell' : (connecting && isCycleTarget) ? 'not-allowed' : 'crosshair',
-            boxShadow: (connecting && isCycleTarget) ? '0 0 8px var(--status-danger)'
-              : (connecting && isConnectTarget) ? '0 0 8px var(--accent-light)' : 'none',
+            cursor: isConnectTarget ? 'cell' : isCycleTarget ? 'not-allowed' : 'crosshair',
+            boxShadow: isCycleTarget ? '0 0 8px var(--status-danger)'
+              : isConnectTarget ? '0 0 8px var(--accent-light)'
+              : isReachableTarget ? '0 0 6px #3fb95088' : 'none',
           }}
         />
       )}
@@ -273,13 +278,13 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
           }}
           className="absolute rounded-full transition-all duration-150"
           style={{
+            width: 10, height: 10,
             right: -5, top: '50%', marginTop: -5,
-            width: isHovered ? 12 : 10,
-            height: isHovered ? 12 : 10,
-            background: isHovered ? 'var(--accent)' : 'var(--border)',
+            transform: (!connecting && isHovered) ? 'scale(1.5)' : 'scale(1)',
+            background: (!connecting && isHovered) ? 'var(--accent)' : 'var(--border)',
             border: '2px solid var(--bg-secondary)',
             cursor: 'crosshair',
-            boxShadow: isHovered ? '0 0 8px var(--accent-light)' : 'none',
+            boxShadow: (!connecting && isHovered) ? '0 0 8px var(--accent-light)' : 'none',
           }}
         />
       )}

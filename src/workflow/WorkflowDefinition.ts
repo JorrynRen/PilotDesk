@@ -118,6 +118,35 @@ export function clampNodePosition(
 }
 
 /**
+ * Clamp节点位置到阶段内容区内，不进行网格snap（用于拖动+吸附场景）
+ */
+export function clampNodePositionNoSnap(
+  x: number,
+  y: number,
+  nodeW: number,
+  nodeH: number,
+  scale: number = 1,
+): { x: number; y: number } {
+  const M = NODE_SAFE_MARGIN;
+  const halfW = nodeW / 2;
+  const halfH = nodeH / 2;
+  const xMin = (M + halfW) / scale - halfW;
+  const xMax = STAGE_W - (M + halfW) / scale - halfW;
+  const yMin = (M + halfH) / scale - halfH;
+  const yMax = CONTENT_H - (M + halfH) / scale - halfH;
+  if (xMin > xMax || yMin > yMax) {
+    return {
+      x: (STAGE_W - nodeW) / 2,
+      y: (CONTENT_H - nodeH) / 2,
+    };
+  }
+  return {
+    x: Math.max(xMin, Math.min(xMax, x)),
+    y: Math.max(yMin, Math.min(yMax, y)),
+  };
+}
+
+/**
  * 计算节点默认初始位置（居中放置）
  * 用于边界节点和按钮手动添加的节点
  */
