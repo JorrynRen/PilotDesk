@@ -437,6 +437,7 @@ pub struct ExportWorkflowDefinition {
     pub description: String,
     pub trigger: workflow::TriggerConfig,
     pub stages: Vec<ExportStage>,
+    #[serde(default)]
     pub stage_edges: Vec<ExportEdge>,
     pub enabled: bool,
 }
