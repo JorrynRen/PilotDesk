@@ -347,6 +347,7 @@ pub fn run() {
             commands::workflow::get_node_execution_logs,
             commands::workflow::list_recoverable_executions,
             commands::workflow::recover_execution,
+            commands::workflow::get_execution_plan,
             commands::workflow::get_pending_human_inputs,
             commands::agents::upload_agent_icon,
             commands::agents::read_agent_icon,

@@ -980,6 +980,36 @@ pub async fn recover_execution(
 }
 
 // ════════════════════════════════════════════════════════════
+// 执行计划查询
+// ════════════════════════════════════════════════════════════════════════
+
+/// 获取工作流的执行计划（拓扑排序的阶段顺序 + 可达节点集合）
+/// 前端用于就绪状态标记和执行前验证，消除前后端拓扑逻辑重复
+///
+/// 支持两种调用方式：
+/// 1. 传入 definition JSON（前端编辑时，实时计算，无需保存）
+/// 2. 传入 workflow_id（从数据库读取已保存的定义）
+/// 优先使用 definition 参数，workflow_id 仅在 definition 为 None 时使用
+#[tauri::command]
+pub async fn get_execution_plan(
+    state: tauri::State<'_, crate::DbState>,
+    workflow_id: Option<String>,
+    definition: Option<serde_json::Value>,
+) -> Result<crate::workflow::engine::ExecutionPlan, String> {
+    let def = if let Some(def_val) = definition {
+        serde_json::from_value::<crate::workflow::WorkflowDefinition>(def_val)
+            .map_err(|e| format!("工作流定义解析失败: {}", e))?
+    } else {
+        let wf_id = workflow_id.ok_or_else(|| "必须提供 workflow_id 或 definition 参数".to_string())?;
+        let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+        workflow::get_definition(&conn, &wf_id)
+            .map_err(|e| format!("查询失败: {}", e))?
+            .ok_or_else(|| "工作流不存在".to_string())?
+    };
+    Ok(crate::workflow::engine::WorkflowEngine::compute_execution_plan(&def))
+}
+
+// ════════════════════════════════════════════════════════════
 // 人工介入查询命令
 // ════════════════════════════════════════════════════════════
 

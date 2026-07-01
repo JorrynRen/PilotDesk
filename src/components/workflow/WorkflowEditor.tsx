@@ -18,7 +18,14 @@ import { showToast } from '../../utils/toast';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
-import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition, sanitizeMappingReferences, getReachableNodes, validateWorkflowForExecution } from '../../workflow/WorkflowDefinition';
+
+/** 后端执行计划（拓扑权威数据） */
+interface ExecutionPlan {
+  reachable_node_ids: string[];
+  ordered_stage_ids: string[];
+}
+
+import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition, sanitizeMappingReferences } from '../../workflow/WorkflowDefinition';
 import WorkflowNodeItem from './WorkflowNodeItem';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
 import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig } from '../../types/workflow';
@@ -401,18 +408,33 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     console.log('[WorkflowEditor] handleRunWorkflow called, isRunning:', isRunning, ', executionIdRef:', executionIdRef.current);
     if (!definitionId) return;
 
-    // 执行前验证
-    const execErrors = validateWorkflowForExecution(stages, stageEdges);
-    const criticalErrors = execErrors.filter(e => e.severity === 'error');
-    if (criticalErrors.length > 0) {
-      showToast(`工作流验证失败：${criticalErrors.map(e => e.message).join('; ')}`, 'error');
+    // 执行前验证（基于后端执行计划）
+    const allNodeIds = new Set(stages.flatMap(s => s.nodes).map(n => n.id));
+    const planReachable = new Set(executionPlan?.reachable_node_ids ?? []);
+    const startNodes = stages.flatMap(s => s.nodes).filter(n => n.type === 'start');
+    const endNodes = stages.flatMap(s => s.nodes).filter(n => n.type === 'end');
+
+    // 检查 start/end 节点
+    if (startNodes.length !== 1) {
+      showToast(`工作流验证失败：必须有且仅有一个起始节点（当前 ${startNodes.length} 个）`, 'error');
       setIsRunning(false);
       return;
     }
-    // 有 warning 级别的未就绪节点，提示但允许继续
-    const warnings = execErrors.filter(e => e.severity === 'warning');
-    if (warnings.length > 0) {
-      showToast(`存在 ${warnings.length} 个未就绪节点，但存在完整执行路径，继续执行`, 'warning');
+    if (endNodes.length !== 1) {
+      showToast(`工作流验证失败：必须有且仅有一个结束节点（当前 ${endNodes.length} 个）`, 'error');
+      setIsRunning(false);
+      return;
+    }
+    // 检查 end 节点是否可达
+    if (!planReachable.has(endNodes[0].id)) {
+      showToast('工作流验证失败：不存在从起始节点到结束节点的完整路径', 'error');
+      setIsRunning(false);
+      return;
+    }
+    // 提示未就绪节点
+    const unreachable = [...allNodeIds].filter(id => !planReachable.has(id));
+    if (unreachable.length > 0) {
+      showToast(`存在 ${unreachable.length} 个未就绪节点，但存在完整执行路径，继续执行`, 'warning');
     }
     // 如果已经在执行中，先重置状态再重新开始
     if (isRunning) {
@@ -1793,10 +1815,71 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
 
-  // ── 计算不可达节点（用于标记红色虚线边框） ──
-  const reachableNodeIds = useMemo(() => getReachableNodes(stages, stageEdges), [stages, stageEdges]);
+  // ── 后端执行计划（拓扑权威，异步获取） ──
+  const [executionPlan, setExecutionPlan] = useState<ExecutionPlan | null>(null);
+
+  // 每当 stages/stageEdges 变化时，向后端请求最新的执行计划
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPlan = async () => {
+      try {
+        // 构建完整 definition 传给后端
+        const definition = {
+          id: definitionId || '',
+          name,
+          version: def?.version || '1.0.0',
+          description: '',
+          trigger: { triggerType: 'manual' },
+          stageEdges: stageEdges.map(e => ({ id: e.id, source: e.source, target: e.target })),
+          stages: stages.map(s => ({
+            id: s.id,
+            name: s.name,
+            order: s.order,
+            nodes: s.nodes.map(n => ({
+              id: n.id,
+              type: n.type,
+              label: n.label,
+              params: n.params || {},
+              position: n.position,
+              isBoundary: n.isBoundary,
+              inputMapping: n.inputMapping,
+              outputMapping: n.outputMapping,
+              timeoutMs: n.timeoutMs,
+              retryCount: n.retryCount,
+              retryDelayMs: n.retryDelayMs,
+              delayMs: n.delayMs,
+              pluginId: n.pluginId,
+              commandId: n.commandId,
+              inputSchema: n.inputSchema,
+              outputSchema: n.outputSchema,
+            })),
+            edges: s.edges,
+            gate: s.gate,
+          })),
+          createdAt: def?.createdAt || Math.floor(Date.now() / 1000),
+          updatedAt: def?.updatedAt || Math.floor(Date.now() / 1000),
+          enabled: true,
+        };
+        const plan = await invoke<ExecutionPlan>('get_execution_plan', { definition });
+        if (!cancelled) {
+          setExecutionPlan(plan);
+        }
+      } catch (err) {
+        console.warn('[WorkflowEditor] 获取执行计划失败:', err);
+        if (!cancelled) setExecutionPlan(null);
+      }
+    };
+    fetchPlan();
+    return () => { cancelled = true; };
+  }, [stages, stageEdges]);
+
+// ── 计算不可达节点（从后端执行计划获取） ──
+  const reachableNodeIds = useMemo(
+    () => new Set(executionPlan?.reachable_node_ids ?? []),
+    [executionPlan]
+  );
   const unreachableNodeIds = useMemo(
-    () => new Set(stages.flatMap(s => s.nodes).filter(n => n.type !== "start" ).map(n => n.id).filter(nid => !reachableNodeIds.has(nid))),
+    () => new Set(stages.flatMap(s => s.nodes).map(n => n.id).filter(nid => !reachableNodeIds.has(nid))),
     [stages, reachableNodeIds]
   );
   // ── JSX ──

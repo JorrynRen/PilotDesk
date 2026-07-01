@@ -146,6 +146,107 @@ fn record_node_execution(
 /// 两层调度引擎：阶段串行 → 阶段内 DAG
 pub struct WorkflowEngine;
 
+/// 执行计划：描述工作流的拓扑执行顺序和可达节点
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ExecutionPlan {
+    /// 从 start 节点可达的所有节点 ID
+    pub reachable_node_ids: Vec<String>,
+    /// 按拓扑排序的可达阶段 ID（执行顺序）
+    pub ordered_stage_ids: Vec<String>,
+}
+
+impl WorkflowEngine {
+    /// 根据 workflow definition 计算 execution plan
+    /// 从 start 节点出发，沿节点连线 + 阶段连线做全工作流 BFS，
+    /// 返回可达节点集合和拓扑排序的阶段执行顺序
+    pub fn compute_execution_plan(def: &WorkflowDefinition) -> ExecutionPlan {
+        // 1. 找到 start 节点和所在阶段
+        let start_stage_id = def.stages.iter().find_map(|s| {
+            s.nodes.iter().find(|n| n.node_type == WorkflowNodeType::Start).map(|_| s.id.clone())
+        });
+        let start_node_id = def.stages.iter().find_map(|s| {
+            s.nodes.iter().find(|n| n.node_type == WorkflowNodeType::Start).map(|n| n.id.clone())
+        });
+
+        match (start_stage_id, start_node_id) {
+            (Some(sid), Some(nid)) => {
+                let stage_id_set: std::collections::HashSet<String> =
+                    def.stages.iter().map(|s| s.id.clone()).collect();
+                let stage_map: std::collections::HashMap<String, &Stage> =
+                    def.stages.iter().map(|s| (s.id.clone(), s)).collect();
+
+                // 构建阶段连线快速查找
+                let se_down: std::collections::HashMap<String, Vec<String>> = {
+                    let mut m: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                    for edge in &def.stage_edges {
+                        m.entry(edge.source.clone()).or_default().push(edge.target.clone());
+                    }
+                    m
+                };
+
+                // BFS：同时收集可达阶段（按拓扑顺序）和可达节点
+                let mut visited_nodes = std::collections::HashSet::new();
+                let mut visited_stages = std::collections::HashSet::new();
+                let mut stage_order = Vec::new();
+                let mut node_queue = std::collections::VecDeque::new();
+
+                visited_nodes.insert(nid.clone());
+                visited_stages.insert(sid.clone());
+                node_queue.push_back(nid.clone());
+                stage_order.push(sid.clone());
+
+                while let Some(cur) = node_queue.pop_front() {
+                    if let Some(stage) = stage_map.values().find(|s| s.nodes.iter().any(|n| n.id == cur)) {
+                        // 沿阶段内节点连线找下游节点
+                        for edge in &stage.edges {
+                            if edge.source == cur && !visited_nodes.contains(&edge.target) {
+                                visited_nodes.insert(edge.target.clone());
+                                node_queue.push_back(edge.target.clone());
+                            }
+                        }
+                        // 沿阶段连线找下游阶段
+                        if let Some(downstreams) = se_down.get(&stage.id) {
+                            for ds_id in downstreams {
+                                if stage_id_set.contains(ds_id) && !visited_stages.contains(ds_id) {
+                                    visited_stages.insert(ds_id.clone());
+                                    stage_order.push(ds_id.clone());
+                                    // 将下游阶段所有节点加入队列
+                                    if let Some(ds) = stage_map.get(ds_id) {
+                                        for node in &ds.nodes {
+                                            if !visited_nodes.contains(&node.id) {
+                                                visited_nodes.insert(node.id.clone());
+                                                node_queue.push_back(node.id.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let mut reachable_ids: Vec<String> = visited_nodes.into_iter().collect();
+                reachable_ids.sort();
+                ExecutionPlan {
+                    reachable_node_ids: reachable_ids,
+                    ordered_stage_ids: stage_order,
+                }
+            }
+            _ => {
+                // 没有 start 节点，fallback：所有阶段和节点
+                ExecutionPlan {
+                    reachable_node_ids: def.stages.iter()
+                        .flat_map(|s| s.nodes.iter().map(|n| n.id.clone()))
+                        .collect(),
+                    ordered_stage_ids: def.stages.iter().map(|s| s.id.clone()).collect(),
+                }
+            }
+        }
+    }
+
+
+
+}
 impl WorkflowEngine {
     /// 拓扑排序（Kahn 算法）
     pub fn topological_sort(
@@ -958,112 +1059,15 @@ impl WorkflowEngine {
         let semaphore = Arc::new(Semaphore::new(max_concurrency));
         log::info!("[WorkflowEngine] Context after start node pre-population: {:?}", context.lock().await.keys().collect::<Vec<_>>());
 
-        // 根据 stage_edges 对阶段做拓扑排序，只执行从 start 阶段可达的阶段
-        let ordered_stage_ids: Vec<String> = {
-            // 找到 start 节点所在阶段
-            let start_stage_id = def.stages.iter().find_map(|s| {
-                s.nodes.iter().find(|n| n.node_type == WorkflowNodeType::Start).map(|_| s.id.clone())
-            });
+        // 使用统一的执行计划（消除重复 BFS 逻辑）
+        let plan = Self::compute_execution_plan(def);
+        let reachable_nodes: std::collections::HashSet<String> =
+            plan.reachable_node_ids.iter().cloned().collect();
+        let total_count = reachable_nodes.len();
 
-            if let Some(sid) = start_stage_id {
-                // 从 start 阶段出发，沿 stage_edges BFS 收集可达阶段，按 BFS 顺序即为拓扑顺序
-                let mut visited = std::collections::HashSet::new();
-                let mut queue = std::collections::VecDeque::new();
-                let mut order = Vec::new();
+        log::info!("[WorkflowEngine] 执行计划: stages={:?}, reachable_nodes={}", plan.ordered_stage_ids, total_count);
 
-                visited.insert(sid.clone());
-                queue.push_back(sid.clone());
-
-                let stage_id_set: std::collections::HashSet<String> = def.stages.iter().map(|s| s.id.clone()).collect();
-
-                while let Some(cur) = queue.pop_front() {
-                    order.push(cur.clone());
-                    // 找当前阶段的下游阶段
-                    for edge in &def.stage_edges {
-                        if edge.source == cur && stage_id_set.contains(&edge.target) && !visited.contains(&edge.target) {
-                            visited.insert(edge.target.clone());
-                            queue.push_back(edge.target.clone());
-                        }
-                    }
-                }
-                order
-            } else {
-                // 没有 start 节点，fallback 按原始顺序执行所有阶段
-                def.stages.iter().map(|s| s.id.clone()).collect()
-            }
-        };
-
-        // 更新 total_count 只统计可达阶段的节点
-        let reachable_stage_set: std::collections::HashSet<String> = ordered_stage_ids.iter().cloned().collect();
-        let total_count: usize = def.stages.iter()
-            .filter(|s| reachable_stage_set.contains(&s.id))
-            .map(|s| s.nodes.len())
-            .sum();
-
-        log::info!("[WorkflowEngine] 拓扑排序可达阶段: {:?}, total_nodes={}", ordered_stage_ids, total_count);
-
-        // 全工作流 BFS：从 start 节点沿节点连线 + 阶段连线，构建可达节点集合
-        // 阶段可达但节点不可达 start 时，该节点不应被执行
-        let reachable_nodes: std::collections::HashSet<String> = {
-            let start_node_id = def.stages.iter().find_map(|s| {
-                s.nodes.iter().find(|n| n.node_type == WorkflowNodeType::Start).map(|n| n.id.clone())
-            });
-            match start_node_id {
-                Some(snid) => {
-                    let mut visited = std::collections::HashSet::new();
-                    let mut queue = std::collections::VecDeque::new();
-                    let stage_map: std::collections::HashMap<String, &Stage> = def.stages.iter().map(|s| (s.id.clone(), s)).collect();
-                    // 构建阶段连线快速查找
-                    let se_down: std::collections::HashMap<String, Vec<String>> = {
-                        let mut m: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-                        for edge in &def.stage_edges {
-                            m.entry(edge.source.clone()).or_default().push(edge.target.clone());
-                        }
-                        m
-                    };
-                    visited.insert(snid.clone());
-                    queue.push_back(snid.clone());
-                    while let Some(cur) = queue.pop_front() {
-                        // 沿当前节点所在阶段的 edges 找下游节点
-                        if let Some(stage) = def.stages.iter().find(|s| s.nodes.iter().any(|n| n.id == cur)) {
-                            for edge in &stage.edges {
-                                if edge.source == cur && !visited.contains(&edge.target) {
-                                    visited.insert(edge.target.clone());
-                                    queue.push_back(edge.target.clone());
-                                }
-                            }
-                        }
-                        // 沿当前节点所在阶段的 stage_edges 找下游阶段，将该阶段所有节点加入队列
-                        if let Some(stage) = def.stages.iter().find(|s| s.nodes.iter().any(|n| n.id == cur)) {
-                            if let Some(downstreams) = se_down.get(&stage.id) {
-                                for ds_id in downstreams {
-                                    if let Some(ds) = stage_map.get(ds_id) {
-                                        for node in &ds.nodes {
-                                            if !visited.contains(&node.id) {
-                                                visited.insert(node.id.clone());
-                                                queue.push_back(node.id.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    visited
-                }
-                None => {
-                    // 没有 start 节点，所有节点都可达（fallback）
-                    def.stages.iter().flat_map(|s| s.nodes.iter().map(|n| n.id.clone())).collect()
-                }
-            }
-        };
-
-        // 更新 total_count 只统计可达节点
-        let total_count: usize = reachable_nodes.len();
-
-        log::info!("[WorkflowEngine] 全工作流可达节点: {:?}, total_reachable={}", reachable_nodes.iter().take(20).collect::<Vec<_>>(), total_count);
-
-        for stage_id in &ordered_stage_ids {
+        for stage_id in &plan.ordered_stage_ids {
             let stage = def.stages.iter().find(|s| s.id == *stage_id).unwrap();
             log::info!("[WorkflowEngine] 执行阶段: id={}, name={}, nodes={}, edges={}", stage.id, stage.name, stage.nodes.len(), stage.edges.len());
             if cancelled.load(Ordering::SeqCst) {
