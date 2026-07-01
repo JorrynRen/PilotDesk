@@ -551,6 +551,7 @@ impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
             description: def.description,
             trigger: def.trigger,
             stages,
+            stage_edges,
             enabled: def.enabled,
         }
     }
