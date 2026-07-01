@@ -1661,30 +1661,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           if (draggedNodeIds.has(node.id)) continue;
           const meta = getNodeTypeMeta(node.type);
           const nW = meta.nodeW, nH = meta.nodeH;
-          const nVisOX = (nW / 2) * (1 - 1 / scale);
-          const nVisOY = (nH / 2) * (1 - 1 / scale);
           const nOrigCSS = { x: node.position.x, y: node.position.y };
           for (const dragId of draggedNodeIds) {
             const dragOrig = d.origPositions[dragId];
             if (!dragOrig) continue;
             const dragMeta = getNodeTypeMeta(snapStageNodes.find(n => n.id === dragId)?.type || 'task');
             const dw = dragMeta.nodeW, dh = dragMeta.nodeH;
-            const dVisOX = (dw / 2) * (1 - 1 / scale);
-            const dVisOY = (dh / 2) * (1 - 1 / scale);
+
             const dLeft = dragOrig.x + deltaX, dRight = dLeft + dw, dCenterX = dLeft + dw / 2;
             const dTop = dragOrig.y + deltaY, dBottom = dTop + dh, dCenterY = dTop + dh / 2;
             const tLeft = nOrigCSS.x, tRight = tLeft + nW, tCX = tLeft + nW / 2;
             const tTop = nOrigCSS.y, tBottom = tTop + nH, tCY = tTop + nH / 2;
-            const dLV = dLeft + dVisOX, dRV = dRight - dVisOX, dCV = dCenterX;
-            const tLV = tLeft + nVisOX, tRV = tRight - nVisOX, tCV = tCX;
-            const dTV = dTop + dVisOY, dBV = dBottom - dVisOY, dCYV = dCenterY;
-            const tTV = tTop + nVisOY, tBV = tBottom - nVisOY, tCYV = tCY;
+            // 在纯CSS坐标空间比较：辅助线SVG在scale()容器内，坐标为内容坐标
             const xPairs: [number, number, number][] = [
-              [dLV, tLV, stageLeft + tLV],
-              [dRV, tRV, stageLeft + tRV],
-              [dLV, tRV, stageLeft + tRV],
-              [dRV, tLV, stageLeft + tLV],
-              [dCV, tCV, stageLeft + tCV],
+              [dLeft, tLeft, stageLeft + tLeft],
+              [dRight, tRight, stageLeft + tRight],
+              [dLeft, tRight, stageLeft + tRight],
+              [dRight, tLeft, stageLeft + tLeft],
+              [dCenterX, tCX, stageLeft + tCX],
             ];
             for (const [dV, tV, lineV] of xPairs) {
               const vDiff = tV - dV;
@@ -1693,11 +1687,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               }
             }
             const yPairs: [number, number, number][] = [
-              [dTV, tTV, stageTopY + tTV],
-              [dBV, tBV, stageTopY + tBV],
-              [dTV, tBV, stageTopY + tBV],
-              [dBV, tTV, stageTopY + tTV],
-              [dCYV, tCYV, stageTopY + tCYV],
+              [dTop, tTop, stageTopY + tTop],
+              [dBottom, tBottom, stageTopY + tBottom],
+              [dTop, tBottom, stageTopY + tBottom],
+              [dBottom, tTop, stageTopY + tTop],
+              [dCenterY, tCY, stageTopY + tCY],
             ];
             for (const [dV, tV, lineV] of yPairs) {
               const vDiff = tV - dV;
