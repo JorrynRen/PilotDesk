@@ -437,6 +437,7 @@ pub struct ExportWorkflowDefinition {
     pub description: String,
     pub trigger: workflow::TriggerConfig,
     pub stages: Vec<ExportStage>,
+    pub stage_edges: Vec<ExportEdge>,
     pub enabled: bool,
 }
 
@@ -480,6 +481,22 @@ pub struct ExportEdge {
 
 impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
     fn from(def: workflow::WorkflowDefinition) -> Self {
+        // 按阶段构建短标识符映射（s1, s2, ...）
+        let stage_short_ids: std::collections::HashMap<String, String> =
+            def.stages.iter().enumerate()
+                .map(|(i, s)| (s.id.clone(), format!("s{}", i + 1)))
+                .collect();
+
+        // 阶段连线导出：source/target 使用阶段短标识符
+        let stage_edges: Vec<ExportEdge> = def.stage_edges.iter().map(|se| {
+            ExportEdge {
+                source: stage_short_ids.get(&se.source).cloned().unwrap_or_default(),
+                target: stage_short_ids.get(&se.target).cloned().unwrap_or_default(),
+                label: None,
+                condition: None,
+            }
+        }).collect();
+
         // 按阶段构建局部节点编号映射（每个阶段从 n1 开始）
         // 注意：必须按阶段局部编号，与 into_definition 中的编号方式一致
         let stages: Vec<ExportStage> = def.stages.into_iter().map(|stage| {
@@ -638,6 +655,23 @@ impl ExportWorkflowDefinition {
             }
         }).collect();
 
+        // 构建阶段短标识符 -> 新UUID 映射
+        let stage_short_to_uuid: std::collections::HashMap<String, String> =
+            stages.iter().enumerate()
+                .map(|(i, s)| (format!("s{}", i + 1), s.id.clone()))
+                .collect();
+
+        // 恢复阶段连线
+        let stage_edges: Vec<workflow::WorkflowEdge> = self.stage_edges.into_iter().map(|se| {
+            workflow::WorkflowEdge {
+                id: crate::utils::new_id(),
+                source: stage_short_to_uuid.get(&se.source).cloned().unwrap_or_default(),
+                target: stage_short_to_uuid.get(&se.target).cloned().unwrap_or_default(),
+                label: None,
+                condition: None,
+            }
+        }).collect();
+
         workflow::WorkflowDefinition {
             id: wf_id,
             name: self.name,
@@ -645,7 +679,7 @@ impl ExportWorkflowDefinition {
             description: self.description,
             trigger: self.trigger,
             stages,
-                    stage_edges: vec![],
+            stage_edges,
 input_schema: None,
             output_schema: None,
             max_depth: Some(10),
