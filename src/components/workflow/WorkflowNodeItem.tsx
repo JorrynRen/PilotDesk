@@ -392,36 +392,30 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
                 >x</button>
               </div>
             </div>
-            {/* 内容区 — HTML 渲染 */}
-            <div
+            {/* 内容区 — 安全渲染（pre + JSON.stringify 替代 dangerouslySetInnerHTML） */}
+            <pre
               onWheel={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
               onMouseUp={(e) => e.stopPropagation()}
               style={{
                 flex: 1,
+                margin: 0,
                 padding: 10,
                 overflow: 'auto',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 13,
                 lineHeight: 1.6,
                 color: 'var(--text-primary)',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
               }}
-              dangerouslySetInnerHTML={{
-                __html: (typeof nodeResult === 'object'
-                  ? JSON.stringify(Object.fromEntries(
-                      Object.entries(nodeResult).filter(([k]) => k !== 'agent_session_id')
-                    ), null, 2)
-                  : String(nodeResult)
-                )
-                  .replace(/\\n/g, '\n')
-                  .replace(/\\r/g, '')
-                  .replace(/\\"/g, '"')
-                  .replace(/\\'/g, "'")
-                  .replace(/\\t/g, '  ')
-                  .split('\n').join('<br>')
-                  .replace(/  /g, '&nbsp;&nbsp;')
-              }}
-            />
+            >
+              {typeof nodeResult === 'object'
+                ? JSON.stringify(Object.fromEntries(
+                    Object.entries(nodeResult).filter(([k]) => k !== 'agent_session_id')
+                  ), null, 2)
+                : String(nodeResult)}
+            </pre>
             {/* 右下角缩放提示 */}
             <div style={{
                 position: 'absolute',

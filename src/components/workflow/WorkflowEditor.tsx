@@ -1535,7 +1535,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     return () => el.removeEventListener('wheel', handler);
   }, []);
 
-  // ── 节点拖拽（含防误触阈值 + 视觉反馈） ──
+  // P0-2: dragVisualOffset — 拖拽期间只更新此轻量状态，不更新stages
+  const [dragOffset, setDragOffset] = useState<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  // P0-2: ref 同步最新 dragOffset，供 useEffect 闭包（handleMouseUp）读取
+  const dragOffsetRef = useRef({ dx: 0, dy: 0 });
+
+
+  // P0-3: 拖拽快照ref — mousedown时存储stages/stagePositionsMap/stageOffsetsY，
+  //   使handleMouseMove不依赖闭包stages，避免每帧setStages触发useEffect重建
+  const dragSnapshotRef = useRef<{
+    stages: WorkflowStage[];
+    stageLeft: number;
+    stageOffsetY: number;
+    stageNodes: { id: string; position: { x: number; y: number }; type: string }[];
+  } | null>(null);
+
+// ── 节点拖拽（含防误触阈值 + 视觉反馈） ──
 
   const handleNodeMouseDown = useCallback((e: React.MouseEvent, nodeId: string, stageId: string) => {
     if ((e.target as HTMLElement).closest('[data-anchor]')) return;
@@ -1579,7 +1594,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         }
       }
     }
-    setDraggingNode({
+    // P0-3: 存储拖拽快照（stages快照+同阶段节点位置），使useEffect不依赖stages
+    const dragSnapshot = {
+      stages: stages,
+      stageLeft: stagePositionsMap[stageId],
+      stageOffsetY: stageOffsetsY[stageId] ?? 0,
+      stageNodes: (stages.find(s => s.id === stageId)?.nodes ?? []).map(n => ({
+        id: n.id,
+        position: { ...(n.position ?? { x: 20, y: 20 }) },
+        type: n.type,
+      })),
+    };
+    dragSnapshotRef.current = dragSnapshot;
+        // P0-2: mousedown 时重置 dragOffset
+        dragOffsetRef.current = { dx: 0, dy: 0 };
+      setDragOffset({ dx: 0, dy: 0 });
+        setDraggingNode({
       nodeId,
       stageId,
       startContentX: mouseContentX,
@@ -1609,21 +1639,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const rawCanvasY = e.clientY - rect.top;
       const canvasX = (rawCanvasX - pan.x) / scale;
       const canvasY = (rawCanvasY - pan.y) / scale;
-      const rel = canvasToContentPos(canvasX, canvasY, d.stageId);
-      let deltaX = rel.x - d.startContentX;
-      let deltaY = rel.y - d.startContentY;
+      // P0-3: 从快照ref计算content坐标，不再依赖闭包canvasToContentPos
+      const snap = dragSnapshotRef.current;
+      const relX = canvasX - (snap?.stageLeft ?? 0);
+      const relY = canvasY - STAGE_TOP - TITLE_H;
+      let deltaX = relX - d.startContentX;
+      let deltaY = relY - d.startContentY;
       // 节点对齐吸附：只与同阶段内其他节点对齐
       const threshold = ALIGN_THRESHOLD / scale;
-      const stage = stages.find(s => s.id === d.stageId);
-      if (stage && d.origPositions) {
+      // P0-3: 从快照ref读取同阶段节点，不依赖闭包stages
+      const snapStageNodes = dragSnapshotRef.current?.stageNodes ?? [];
+      if (snapStageNodes.length > 0 && d.origPositions) {
         const draggedNodeIds = d.multiSelect ? selectedNodeIds : new Set([d.nodeId]);
         const lines: AlignLine[] = [];
         let bestSnapX = 0, bestSnapY = 0;
         let bestXDiff = Infinity, bestYDiff = Infinity;
         let bestXLine: number | null = null, bestYLine: number | null = null;
-        const stageLeft = stagePositionsMap[d.stageId];
-        const stageTopY = 20 + (stageOffsetsY[d.stageId] ?? 0) + TITLE_H;
-        for (const node of stage.nodes) {
+        const stageLeft = dragSnapshotRef.current?.stageLeft ?? 0;
+        const stageTopY = 20 + (dragSnapshotRef.current?.stageOffsetY ?? 0) + TITLE_H;
+        for (const node of snapStageNodes) {
           if (draggedNodeIds.has(node.id)) continue;
           const meta = getNodeTypeMeta(node.type);
           const nW = meta.nodeW, nH = meta.nodeH;
@@ -1633,7 +1667,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           for (const dragId of draggedNodeIds) {
             const dragOrig = d.origPositions[dragId];
             if (!dragOrig) continue;
-            const dragMeta = getNodeTypeMeta(stage.nodes.find(n => n.id === dragId)?.type || 'task');
+            const dragMeta = getNodeTypeMeta(snapStageNodes.find(n => n.id === dragId)?.type || 'task');
             const dw = dragMeta.nodeW, dh = dragMeta.nodeH;
             const dVisOX = (dw / 2) * (1 - 1 / scale);
             const dVisOY = (dh / 2) * (1 - 1 / scale);
@@ -1679,23 +1713,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         if (bestYLine !== null) lines.push({ axis: 'y', value: bestYLine });
         setAlignLines(lines);
       }
-      // All dragged nodes use origPositions (stored at mousedown time)
-      setStages((prev) => prev.map((s) => {
-        if (s.id !== d.stageId) return s;
-        return {
-          ...s,
-          nodes: s.nodes.map((n) => {
-            if (!d.origPositions || !d.origPositions[n.id]) return n;
-            const meta = getNodeTypeMeta(n.type);
-            const orig = d.origPositions[n.id];
-            return { ...n, position: clampNodePositionNoSnap(orig.x + deltaX, orig.y + deltaY, meta.nodeW, meta.nodeH, scale) };
-          }),
-        };
-      }));
+      // P0-2: 只更新轻量 dragOffset，不触发 stages 级联重渲染
+      dragOffsetRef.current = { dx: deltaX, dy: deltaY };
+      setDragOffset({ dx: deltaX, dy: deltaY });
     };
     const handleMouseUp = () => {
+      // P0-2: 一次性合并 dragOffset 到 stages，清零 dragOffset
+      const finalOffset = dragOffsetRef.current;
+      if (finalOffset.dx !== 0 || finalOffset.dy !== 0) {
+        const offDx = finalOffset.dx;
+        const offDy = finalOffset.dy;
+        setStages((prev) => prev.map((s) => {
+          if (s.id !== draggingNode.stageId) return s;
+          return {
+            ...s,
+            nodes: s.nodes.map((n) => {
+              if (!draggingNode.origPositions || !draggingNode.origPositions[n.id]) return n;
+              const meta = getNodeTypeMeta(n.type);
+              const orig = draggingNode.origPositions[n.id];
+              return { ...n, position: clampNodePositionNoSnap(orig.x + offDx, orig.y + offDy, meta.nodeW, meta.nodeH, scale) };
+            }),
+          };
+        }));
+      }
       setDraggingNode(null);
       setAlignLines([]);
+      setDragOffset({ dx: 0, dy: 0 });
     };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
@@ -1703,7 +1746,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggingNode, scale, pan.x, pan.y, canvasToContentPos, selectedNodeIds, stages, ALIGN_THRESHOLD]);
+  // P0-3: 移除stages和canvasToContentPos依赖 — 拖拽期间从dragSnapshotRef读取
+  }, [draggingNode, scale, pan.x, pan.y, selectedNodeIds, ALIGN_THRESHOLD]);
 
   // ── 阶段连线拖拽：鼠标移动更新预览位置，释放取消 ──
   useEffect(() => {
@@ -1859,10 +1903,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     // 视觉Y中心 = pos.y + 30（反向缩放不改变Y中心位置）
     const halfW = NODE_W / 2;
     const halfH = NODE_H / 2;
-    const srcPosX = sourceNode.position?.x ?? 20;
-    const srcPosY = sourceNode.position?.y ?? 20;
-    const tgtPosX = targetNode.position?.x ?? 20;
-    const tgtPosY = targetNode.position?.y ?? 20;
+    // P0-2: 拖拽中的节点坐标加 dragOffset
+    const srcOff = (draggingNode?.started && draggingNode.origPositions?.[sourceNode.id]) ? dragOffset : null;
+    const tgtOff = (draggingNode?.started && draggingNode.origPositions?.[targetNode.id]) ? dragOffset : null;
+    const srcPosX = (sourceNode.position?.x ?? 20) + (srcOff?.dx ?? 0);
+    const srcPosY = (sourceNode.position?.y ?? 20) + (srcOff?.dy ?? 0);
+    const tgtPosX = (targetNode.position?.x ?? 20) + (tgtOff?.dx ?? 0);
+    const tgtPosY = (targetNode.position?.y ?? 20) + (tgtOff?.dy ?? 0);
     const SX = srcPosX + halfW + halfW * invScale; // output: 右边缘
     const SY = srcPosY + halfH;                      // Y中心
     const TX = tgtPosX + halfW - halfW * invScale;  // input: 左边缘
@@ -2065,12 +2112,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 后端执行计划（拓扑权威，异步获取） ──
   const [executionPlan, setExecutionPlan] = useState<ExecutionPlan | null>(null);
 
-  // 每当 stages/stageEdges 变化时，向后端请求最新的执行计划
+  // 每当 stages/stageEdges 变化时，向后端请求最新的执行计划（300ms 防抖，避免拖拽期间高频 IPC）
+  const planTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    if (planTimerRef.current) clearTimeout(planTimerRef.current);
     let cancelled = false;
-    const fetchPlan = async () => {
+    planTimerRef.current = setTimeout(async () => {
       try {
-        // 构建完整 definition 传给后端
         const definition = {
           id: definitionId || '',
           name,
@@ -2115,9 +2163,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         console.warn('[WorkflowEditor] 获取执行计划失败:', err);
         if (!cancelled) setExecutionPlan(null);
       }
-    };
-    fetchPlan();
-    return () => { cancelled = true; };
+    }, 300);
+    return () => { cancelled = true; if (planTimerRef.current) clearTimeout(planTimerRef.current); };
   }, [stages, stageEdges]);
 
 // ── 计算不可达节点（从后端执行计划获取） ──
@@ -2129,6 +2176,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     () => new Set(stages.flatMap(s => s.nodes).map(n => n.id).filter(nid => !reachableNodeIds.has(nid))),
     [stages, reachableNodeIds]
   );
+
+  // 预计算每个节点的 isConfigChanged（useMemo 避免渲染时对每个节点执行 IIFE + JSON.stringify）
+  const isConfigChangedMap = useMemo(() => {
+    const snap = restoredSnapshotRef.current;
+    if (!snap) return new Map<string, boolean>();
+    const map = new Map<string, boolean>();
+    for (const s of snap) {
+      const cur = stages.find((st: any) => st.id === s.id);
+      const stageChanged = !cur
+        || s.nodes.length !== cur.nodes.length
+        || s.edges.length !== cur.edges.length;
+      if (stageChanged) {
+        for (const n of s.nodes) map.set(n.id, true);
+        continue;
+      }
+      for (const n of s.nodes) {
+        const curNode = cur.nodes.find((cn: any) => cn.id === n.id);
+        if (!curNode) { map.set(n.id, true); continue; }
+        if (JSON.stringify(n.params) !== JSON.stringify(curNode.params) || n.type !== curNode.type || n.label !== curNode.label) {
+          map.set(n.id, true); continue;
+        }
+        map.set(n.id, false);
+      }
+    }
+    return map;
+  }, [stages]);
   // ── JSX ──
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -2818,56 +2891,75 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         </svg>
                         {/* 节点 zIndex:2 确保在连线之上 */}
                         {stage.nodes.map((node) => (
-                <WorkflowNodeItem
-                  key={node.id}
-                  node={node}
-                  stageId={stage.id}
-                  scale={scale}
-                  selectedNodeId={selectedNodeId}
-                  selectedNodeIds={selectedNodeIds}
-                  draggingNode={draggingNode}
-                  hoveredNodeId={hoveredNodeId}
-                  connectTargetId={connectTargetId}
-                  cycleTargetId={cycleTargetId}
-                  reachableTargets={reachableTargets}
-                  connecting={connecting}
-                  stepStates={stepStates}
-                  nodeResults={nodeResults}
-                  selectedNodeId={selectedNodeId}
-                  isUnreachable={unreachableNodeIds.has(node.id)}
-                  isRestoredResult={restoredExecutionId !== null}
-                  isConfigChanged={(() => {
-                    const snap = restoredSnapshotRef.current;
-                    if (!snap) return false;
-                    if (stages.length !== snap.length) return true;
-                    for (const s of snap) {
-                      const cur = stages.find((st: any) => st.id === s.id);
-                      if (!cur) return true;
-                      if (s.nodes.length !== cur.nodes.length) return true;
-                      if (s.edges.length !== cur.edges.length) return true;
-                      for (const n of s.nodes) {
-                        const curNode = cur.nodes.find((cn: any) => cn.id === n.id);
-                        if (!curNode) return true;
-                        if (JSON.stringify(n.params) !== JSON.stringify(curNode.params)) return true;
-                        if (n.type !== curNode.type) return true;
-                        if (n.label !== curNode.label) return true;
-                      }
-                      for (const e of s.edges) {
-                        const curEdge = cur.edges.find((ce: any) => ce.id === e.id);
-                        if (!curEdge) return true;
-                        if (e.source !== curEdge.source || e.target !== curEdge.target) return true;
-                      }
-                    }
-                    return false;
-                  })()}
-                  onSelectNode={handleSelectNode}
-                  onNodeMouseDown={handleNodeMouseDown}
-                  onDeleteNode={handleDeleteNode}
-                  onEndConnect={handleEndConnect}
-                  onStartConnect={handleStartConnect}
-                  onHoverNode={setHoveredNodeId}
-                />
-              ))}
+                          <>
+                            {/* P0-2: dragVisualOffset — 拖拽中节点用 offset wrapper 渲染 */}
+                            {draggingNode && draggingNode.started && draggingNode.origPositions?.[node.id] ? (
+                              <div style={{
+                                position: 'absolute',
+                                left: node.position?.x ?? 20,
+                                top: node.position?.y ?? 20,
+                                width: 160, height: 60,
+                                transform: `translate(${dragOffset.dx}px, ${dragOffset.dy}px)`,
+                                pointerEvents: 'none',
+                                zIndex: 100,
+                              }}>
+                                <WorkflowNodeItem
+                                  key={"offset-" + node.id}
+                                  node={{ ...node, position: { x: 0, y: 0 } }}
+                                  stageId={stage.id}
+                                  scale={scale}
+                                  selectedNodeId={selectedNodeId}
+                                  selectedNodeIds={selectedNodeIds}
+                                  draggingNode={draggingNode}
+                                  hoveredNodeId={hoveredNodeId}
+                                  connectTargetId={connectTargetId}
+                                  cycleTargetId={cycleTargetId}
+                                  reachableTargets={reachableTargets}
+                                  connecting={connecting}
+                                  stepStates={stepStates}
+                                  nodeResults={nodeResults}
+                                  selectedNodeId={selectedNodeId}
+                                  isUnreachable={unreachableNodeIds.has(node.id)}
+                                  isRestoredResult={restoredExecutionId !== null}
+                                  isConfigChanged={isConfigChangedMap.get(node.id) ?? false}
+                                  onSelectNode={handleSelectNode}
+                                  onNodeMouseDown={handleNodeMouseDown}
+                                  onDeleteNode={handleDeleteNode}
+                                  onEndConnect={handleEndConnect}
+                                  onStartConnect={handleStartConnect}
+                                  onHoverNode={setHoveredNodeId}
+                                />
+                              </div>
+                            ) : (
+                              <WorkflowNodeItem
+                                key={node.id}
+                                node={node}
+                                stageId={stage.id}
+                                scale={scale}
+                                selectedNodeId={selectedNodeId}
+                                selectedNodeIds={selectedNodeIds}
+                                draggingNode={draggingNode}
+                                hoveredNodeId={hoveredNodeId}
+                                connectTargetId={connectTargetId}
+                                cycleTargetId={cycleTargetId}
+                                reachableTargets={reachableTargets}
+                                connecting={connecting}
+                                stepStates={stepStates}
+                                nodeResults={nodeResults}
+                                selectedNodeId={selectedNodeId}
+                                isUnreachable={unreachableNodeIds.has(node.id)}
+                                isRestoredResult={restoredExecutionId !== null}
+                                isConfigChanged={isConfigChangedMap.get(node.id) ?? false}
+                                onSelectNode={handleSelectNode}
+                                onNodeMouseDown={handleNodeMouseDown}
+                                onDeleteNode={handleDeleteNode}
+                                onEndConnect={handleEndConnect}
+                                onStartConnect={handleStartConnect}
+                                onHoverNode={setHoveredNodeId}
+                              />
+                            )}
+                          </>
+                        ))}
                       </div>
 
                       {/* Gate 区域（正向缩放，不做反向补偿） */}
