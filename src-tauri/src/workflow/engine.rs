@@ -387,6 +387,14 @@ impl WorkflowEngine {
                         serde_json::to_string(&resolved_input).ok().as_deref(), None, None);
                     emit_node_status(emitter, execution_id, node_id, "running", None, None, None, None);
 
+                    // delay 支持：执行前等待 delay_ms 毫秒
+                    if let Some(delay_ms) = node.delay_ms {
+                        if delay_ms > 0 {
+                            log::info!("[WorkflowEngine] 节点 {} 延迟 {}ms 后执行", node_id, delay_ms);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        }
+                    }
+
                     match Self::execute_subflow_node(
                         executor, &node, resolved_input,
                         execution_id, emitter, max_concurrency,
@@ -437,6 +445,14 @@ impl WorkflowEngine {
                     record_node_execution(&emitter, &exec_id, &nid, "running",
                         serde_json::to_string(&resolved_input).ok().as_deref(), None, None);
                     emit_node_status(&emitter, &exec_id, &nid, "running", None, None, None, None);
+
+                    // delay 支持：执行前等待 delay_ms 毫秒
+                    if let Some(delay_ms) = node.delay_ms {
+                        if delay_ms > 0 {
+                            log::info!("[WorkflowEngine] 节点 {} 延迟 {}ms 后执行", nid, delay_ms);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                        }
+                    }
 
                     let mut node_def = node_to_node_def(&node);
 
