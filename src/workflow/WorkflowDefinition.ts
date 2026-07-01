@@ -442,11 +442,11 @@ export function getStageUpstreamMap(
 }
 
 /**
- * 获取从 start 节点出发通过边可达的所有节点 ID 集合
+ * 获取从 start 节点出发通过拓扑路线可达的所有节点 ID 集合
  *
- * 在阶段内通过 edges BFS，跨阶段通过 stageEdges BFS。
- * 跨阶段时，目标阶段的所有节点均视为可达（阶段按拓扑顺序执行，
- * 每个阶段的 start 节点可被隐式视为阶段的入口）。
+ * 全工作流 BFS：同时沿节点连线（阶段内）和阶段连线（阶段间）遍历，
+ * 阶段连线是工作流拓扑结构的一部分。到达下游阶段时，该阶段所有节点
+ * 进入 BFS 队列继续沿拓扑路线遍历。
  *
  * @param stages  工作流阶段列表
  * @param stageEdges  阶段间连线列表
@@ -471,63 +471,45 @@ export function getReachableNodes(
   }
   if (!startStageId || !startNodeId) return new Set();
 
-  // 2. 构建阶段拓扑前序（反向：从某阶段可到达哪些下游阶段）
-  const stageIds = new Set(stages.map(s => s.id));
-  const downstreamMap = new Map<string, Set<string>>();
-  for (const stage of stages) {
-    downstreamMap.set(stage.id, new Set());
-  }
-  const edges = stageEdges ?? [];
-  for (const edge of edges) {
-    if (!stageIds.has(edge.source) || !stageIds.has(edge.target)) continue;
-    downstreamMap.get(edge.source)!.add(edge.target);
-  }
-  // 传递下游
-  let stable = false;
-  while (!stable) {
-    stable = true;
-    for (const edge of edges) {
-      if (!stageIds.has(edge.source) || !stageIds.has(edge.target)) continue;
-      const srcDown = downstreamMap.get(edge.source);
-      const tgtDown = downstreamMap.get(edge.target);
-      if (srcDown && tgtDown) {
-        for (const did of srcDown) {
-          if (!tgtDown.has(did)) {
-            tgtDown.add(did);
-            stable = false;
-          }
-        }
-      }
-    }
-  }
-
-  // 3. 收集 start 所在阶段的可达节点（阶段内 BFS）
+  // 2. 全工作流 BFS：沿节点连线 + 阶段连线遍历，收集从 start 可达的所有节点
   const reachable = new Set<string>();
-  const startStage = stages.find(s => s.id === startStageId)!;
-
-  // 阶段内 BFS
   const visited = new Set<string>();
   const queue = [startNodeId];
   visited.add(startNodeId);
+
+  // 构建阶段连线快速查找：从某阶段可达哪些下游阶段
+  const se = stageEdges ?? [];
+  const stageDownstream = new Map<string, string[]>();
+  for (const edge of se) {
+    const list = stageDownstream.get(edge.source) ?? [];
+    if (!list.includes(edge.target)) list.push(edge.target);
+    stageDownstream.set(edge.source, list);
+  }
+
   while (queue.length > 0) {
     const current = queue.shift()!;
     reachable.add(current);
-    // 找当前节点的直接下游
-    for (const edge of startStage.edges) {
+    // 找到当前节点所在阶段
+    const currentStage = stages.find(s => s.nodes.some(n => n.id === current));
+    if (!currentStage) continue;
+    // 沿阶段内节点连线找下游节点
+    for (const edge of currentStage.edges) {
       if (edge.source === current && !visited.has(edge.target)) {
         visited.add(edge.target);
         queue.push(edge.target);
       }
     }
-  }
-
-  // 4. 对 start 阶段的下游阶段，收集其中所有节点
-  const downstreamStages = downstreamMap.get(startStageId) ?? new Set();
-  for (const dsId of downstreamStages) {
-    const ds = stages.find(s => s.id === dsId);
-    if (ds) {
-      for (const node of ds.nodes) {
-        reachable.add(node.id);
+    // 沿阶段连线找下游阶段，将下游阶段的所有节点加入队列
+    const downstreams = stageDownstream.get(currentStage.id) ?? [];
+    for (const dsId of downstreams) {
+      const ds = stages.find(s => s.id === dsId);
+      if (ds) {
+        for (const node of ds.nodes) {
+          if (!visited.has(node.id)) {
+            visited.add(node.id);
+            queue.push(node.id);
+          }
+        }
       }
     }
   }
@@ -587,8 +569,8 @@ export function validateWorkflowForExecution(
   const unreachableNodes = allNodes.filter(n => !reachable.has(n.id));
   if (unreachableNodes.length > 0) {
     for (const node of unreachableNodes) {
-      // start 和 end 不算未就绪（即使暂时不连通，可能通过阶段拓扑连通）
-      if (node.type === 'start' || node.type === 'end') continue;
+      // start 节点不算未就绪（它是入口）
+      if (node.type === 'start') continue;
       errors.push({
         field: 'topology',
         message: `节点 "${node.label}"(${node.id}) 未与起始节点建立拓扑关系`,

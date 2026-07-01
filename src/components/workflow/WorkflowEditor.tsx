@@ -78,7 +78,7 @@ interface ConfirmAction {
 type StepRunState = 'idle' | 'running' | 'success' | 'failed';
 
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange, onSaveResult }) => {
-  const { definitions, instances, updateDefinition, loadDefinitions } = useWorkflowStore();
+  const { definitions, instances, selectedInstanceId, updateDefinition, loadDefinitions } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
@@ -428,6 +428,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     flushSync(() => {
       setIsRunning(true);
       setNodeResults({});
+      setStepStates({});
       // 执行时取消所有节点选中状态
       setSelectedNodeId(null);
       setSelectedNodeIds(new Set());
@@ -449,6 +450,58 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       console.error('执行工作流失败:', err);
       setIsRunning(false);
       executionIdRef.current = null;
+    }
+  };
+
+  /** 单点执行：只执行选中的单个节点 */
+  const handleExecuteSingleNode = async () => {
+    if (!selectedNodeId || !selectedInstanceId) {
+      showToast('请先选择一个节点，且存在执行记录', 'warning');
+      return;
+    }
+    if (isRunning) {
+      showToast('当前有工作流正在执行，请等待完成', 'warning');
+      return;
+    }
+    // 清除节点状态
+    setStepStates({});
+    setNodeResults({});
+    setIsRunning(true);
+    try {
+      await useWorkflowStore.getState().executeSingleNode(selectedInstanceId, selectedNodeId);
+      executionIdRef.current = selectedInstanceId;
+      await useWorkflowStore.getState().loadInstances();
+    } catch (err) {
+      console.error('单点执行失败:', err);
+      showToast(`单点执行失败: ${err}`, 'error');
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  /** 断点执行：从选中节点开始执行后续所有拓扑节点 */
+  const handleExecuteFromNode = async () => {
+    if (!selectedNodeId || !selectedInstanceId) {
+      showToast('请先选择一个节点，且存在执行记录', 'warning');
+      return;
+    }
+    if (isRunning) {
+      showToast('当前有工作流正在执行，请等待完成', 'warning');
+      return;
+    }
+    // 清除节点状态
+    setStepStates({});
+    setNodeResults({});
+    setIsRunning(true);
+    try {
+      await useWorkflowStore.getState().executeFromNode(selectedInstanceId, selectedNodeId);
+      executionIdRef.current = selectedInstanceId;
+      await useWorkflowStore.getState().loadInstances();
+    } catch (err) {
+      console.error('断点执行失败:', err);
+      showToast(`断点执行失败: ${err}`, 'error');
+    } finally {
+      setIsRunning(false);
     }
   };
 
@@ -1494,7 +1547,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const deltaX = currentX - dragStartXRef.current;
       setStageOffsets(prev => ({
         ...prev,
-        [draggingStageId]: Math.max(-400, Math.min(2000, dragStartOffsetRef.current + deltaX)),
+        [draggingStageId]: dragStartOffsetRef.current + deltaX,
       }));
     };
     const onMouseUp = () => {
@@ -1743,7 +1796,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 计算不可达节点（用于标记红色虚线边框） ──
   const reachableNodeIds = useMemo(() => getReachableNodes(stages, stageEdges), [stages, stageEdges]);
   const unreachableNodeIds = useMemo(
-    () => new Set(stages.flatMap(s => s.nodes).filter(n => n.type !== "start" && n.type !== "end").map(n => n.id).filter(nid => !reachableNodeIds.has(nid))),
+    () => new Set(stages.flatMap(s => s.nodes).filter(n => n.type !== "start" ).map(n => n.id).filter(nid => !reachableNodeIds.has(nid))),
     [stages, reachableNodeIds]
   );
   // ── JSX ──
@@ -2477,7 +2530,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           </span>
                           <span className="text-[10px] flex items-center gap-1" style={{ color: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)' }}>
                             <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)', animation: stageRunState === 'running' ? 'spin 1s linear infinite' : 'none' }} />
-                            {(() => { const r = stage.nodes.filter(n => n.type !== 'start' && n.type !== 'end'); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; return `${r.length - u}/${r.length}`; })()} 就绪
+                            {(() => { const r = stage.nodes.filter(n => n.type !== 'start'); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; return `${r.length - u}/${r.length}`; })()} 就绪
                           </span>
                         </div>
                         <div style={{borderTop: '1px solid var(--border)', marginBottom: '6px'}}></div>
@@ -3019,23 +3072,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           className="w-[360px] shrink-0 overflow-auto p-5 flex flex-col"
           style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}
         >
-          <WorkflowNodeConfig
-            node={stages.find((s) => s.id === selectedStageId)?.nodes.find((n) => n.id === selectedNodeId)!}
-            onUpdate={(updates) => handleUpdateNode(selectedNodeId, updates)}
-            onClose={() => { setSelectedNodeId(null); setSelectedStageId(null); }}
-            stages={stages}
-            onOpenSubflow={(definitionId) => {
-              const d = definitions.find(d => d.id === definitionId);
-              if (d) {
-                setSelectedNodeId(null);
-                setSelectedStageId(null);
-                if (d.stages && d.stages.length > 0) {
-                  setStages(d.stages);
-                }
-              }
-            }}
-          />
-        </div>
       )}
       </div>{/* end flex-row: canvas + panel */}
     </div>
