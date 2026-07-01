@@ -3155,6 +3155,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           className="w-[360px] shrink-0 overflow-auto p-5 flex flex-col"
           style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}
         >
+          <WorkflowNodeConfig
+            node={stages.find((s) => s.id === selectedStageId)?.nodes.find((n) => n.id === selectedNodeId)!}
+            onUpdate={(updates) => handleUpdateNode(selectedNodeId, updates)}
+            onClose={() => { setSelectedNodeId(null); setSelectedStageId(null); }}
+            stages={stages}
+            onOpenSubflow={(definitionId) => {
+              const d = definitions.find(d => d.id === definitionId);
+              if (d) {
+                setSelectedNodeId(null);
+                setSelectedStageId(null);
+                if (d.stages && d.stages.length > 0) {
+                  setStages(d.stages);
+                }
+              }
+            }}
+          />
+        </div>
       )}
       </div>{/* end flex-row: canvas + panel */}
     </div>
