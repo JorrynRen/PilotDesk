@@ -908,7 +908,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
           <div style={{ marginTop: 10 }}>
             <label style={S.label()}>{configFields[0].label}</label>
             {configFields[0].type === 'select' ? (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
                 <select
                   value={params[configFields[0].key] || configFields[0].placeholder || ''}
                   onChange={(e) => handleParamChange(configFields[0].key, e.target.value)}
@@ -923,105 +923,102 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 {configFields[0].key === 'agent_type' && (() => {
                   const sessionMode = params['session_mode'] || 'new';
                   return (
-                    <>
-                      <select
-                        value={sessionMode}
-                        onChange={(e) => handleParamChange('session_mode', e.target.value)}
-                        style={S.select({ minWidth: 90 })}
-                      >
-                        <option value="new">新会话</option>
-                        <option value="resume">延续会话</option>
-                      </select>
-                      {sessionMode === 'resume' && (() => {
-                        const resumeRef = params['resume_session_ref'] || '';
-                        const groups = stages ? getPredecessorOutputOptions(node.id, stages, stageEdges) : [];
-                        const hasAny = groups.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
-                        // 从 value 反查可读 label
-                        const displayLabel = (() => {
-                          if (!resumeRef) return '';
-                          for (const g of groups) {
-                            if (g.options) for (const opt of g.options) if (opt.value === resumeRef) return opt.label;
-                            if (g.children) for (const c of g.children) for (const opt of c.options) if (opt.value === resumeRef) return opt.label;
-                          }
-                          return resumeRef;
-                        })();
-                        return (
-                          <>
-                          <div style={{ position: 'relative', width: '100%' }}>
-                            <div
-                              onClick={() => setResumeDropdownOpen(v => !v)}
-                              style={{
-                                ...S.select(),
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                userSelect: 'none',
-                              }}
-                            >
-                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayLabel || '请选择会话变量'}</span>
-                              <span style={{ fontSize: 'var(--fs-9)', opacity: 0.5 }}>{resumeDropdownOpen ? '▲' : '▼'}</span>
-                            </div>
-                            {resumeDropdownOpen && (
-                              <div
-                                style={{
-                                  position: 'absolute',
-                                  left: 0,
-                                  top: '100%',
-                                  width: '100%',
-                                  zIndex: 100,
-                                  maxHeight: 200,
-                                  overflow: 'auto',
-                                  borderRadius: 'var(--radius-md)',
-                                  border: '1px solid var(--border)',
-                                  background: 'var(--bg-primary)',
-                                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                                  fontSize: 'var(--fs-11)',
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {!hasAny && (
-                                  <div style={{ padding: '12px 8px', color: 'var(--text-tertiary)', textAlign: 'center' }}>暂无可用字段</div>
-                                )}
-                                {groups.map((stage, si) => (
-                                  <div key={si}>
-                                    {stage.group && (
-                                      <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
-                                        [step{si + 1}] {stage.group}
-                                      </div>
-                                    )}
-                                    {stage.options.length > 0 && stage.options.map((opt) => (
-                                      <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-                                        {opt.label}
-                                      </div>
-                                    ))}
-                                    {stage.children && stage.children.map((nodeGroup, ni) => (
-                                      <div key={ni}>
-                                        <div style={{ padding: '6px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
-                                          {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
-                                        </div>
-                                        {nodeGroup.options.map((opt) => (
-                                          <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 20px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-                                            {opt.label}
-                                          </div>
-                                        ))}
-                                      </div>
-                                    ))}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 4, flexBasis: '100%' }}>
-                            选择前序节点通过输出映射声明的会话变量，用于延续该节点的 Agent 会话上下文
-                          </div>
-                          </>
-                        );
-                      })()}
-                    </>
+                    <select
+                      value={sessionMode}
+                      onChange={(e) => handleParamChange('session_mode', e.target.value)}
+                      style={S.select({ minWidth: 90 })}
+                    >
+                      <option value="new">新会话</option>
+                      <option value="resume">延续会话</option>
+                    </select>
                   );
                 })()}
               </div>
+              {configFields[0].key === 'agent_type' && params['session_mode'] === 'resume' && (() => {
+                const resumeRef = params['resume_session_ref'] || '';
+                const groups = stages ? getPredecessorOutputOptions(node.id, stages, stageEdges) : [];
+                const hasAny = groups.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
+                const displayLabel = (() => {
+                  if (!resumeRef) return '';
+                  for (const g of groups) {
+                    if (g.options) for (const opt of g.options) if (opt.value === resumeRef) return opt.label;
+                    if (g.children) for (const c of g.children) for (const opt of c.options) if (opt.value === resumeRef) return opt.label;
+                  }
+                  return resumeRef;
+                })();
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+                    <div style={{ position: 'relative' }}>
+                      <div
+                        onClick={() => setResumeDropdownOpen(v => !v)}
+                        style={{
+                          ...S.select(),
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          userSelect: 'none',
+                        }}
+                      >
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayLabel || '请选择会话变量'}</span>
+                        <span style={{ fontSize: 'var(--fs-9)', opacity: 0.5 }}>{resumeDropdownOpen ? '▲' : '▼'}</span>
+                      </div>
+                      {resumeDropdownOpen && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: '100%',
+                            width: '100%',
+                            zIndex: 100,
+                            maxHeight: 200,
+                            overflow: 'auto',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border)',
+                            background: 'var(--bg-primary)',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                            fontSize: 'var(--fs-11)',
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {!hasAny && (
+                            <div style={{ padding: '12px 8px', color: 'var(--text-tertiary)', textAlign: 'center' }}>暂无可用字段</div>
+                          )}
+                          {groups.map((stage, si) => (
+                            <div key={si}>
+                              {stage.group && (
+                                <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
+                                  [step{si + 1}] {stage.group}
+                                </div>
+                              )}
+                              {stage.options.length > 0 && stage.options.map((opt) => (
+                                <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                                  {opt.label}
+                                </div>
+                              ))}
+                              {stage.children && stage.children.map((nodeGroup, ni) => (
+                                <div key={ni}>
+                                  <div style={{ padding: '6px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
+                                    {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
+                                  </div>
+                                  {nodeGroup.options.map((opt) => (
+                                    <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 20px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                                      {opt.label}
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>
+                      选择前序节点通过输出映射声明的会话变量，用于延续该节点的 Agent 会话上下文
+                    </div>
+                  </div>
+                );
+              })()}
             ) : (
               <input
                 type={configFields[0].type || 'text'}
