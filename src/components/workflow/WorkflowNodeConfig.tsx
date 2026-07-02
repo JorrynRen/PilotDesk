@@ -956,10 +956,10 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                               <div
                                 style={{
                                   position: 'absolute',
-                                  right: 0,
+                                  left: 0,
                                   top: '100%',
+                                  width: '100%',
                                   zIndex: 100,
-                                  minWidth: 200,
                                   maxHeight: 200,
                                   overflow: 'auto',
                                   borderRadius: 'var(--radius-md)',
