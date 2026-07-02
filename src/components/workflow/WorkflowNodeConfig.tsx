@@ -1131,7 +1131,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                               )}
                             </div>
                           ));
-                        })()
+                        })()}
                         </div>
                       )}
                     </div>
