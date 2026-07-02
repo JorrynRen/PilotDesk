@@ -301,6 +301,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 对齐辅助线 ──
   type AlignLine = { axis: 'x' | 'y'; value: number }; // value = 画布坐标
   const [alignLines, setAlignLines] = useState<AlignLine[]>([]);
+  const [snapHighlightNodeId, setSnapHighlightNodeId] = useState<string | null>(null);
   const ALIGN_THRESHOLD = 6; // 像素阈值（视觉像素，不随缩放变化）
 
   const [draggingNode, setDraggingNode] = useState<{
@@ -1657,6 +1658,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         let bestXLine: number | null = null, bestYLine: number | null = null;
         const stageLeft = dragSnapshotRef.current?.stageLeft ?? 0;
         const stageTopY = 20 + (dragSnapshotRef.current?.stageOffsetY ?? 0) + TITLE_H;
+        let snapTargetId: string | null = null;
         for (const node of snapStageNodes) {
           if (draggedNodeIds.has(node.id)) continue;
           const meta = getNodeTypeMeta(node.type);
@@ -1684,6 +1686,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               const vDiff = tV - dV;
               if (Math.abs(vDiff) < threshold && Math.abs(vDiff) < Math.abs(bestXDiff)) {
                 bestXDiff = vDiff; bestSnapX = vDiff; bestXLine = lineV;
+                snapTargetId = node.id;
               }
             }
             const yPairs: [number, number, number][] = [
@@ -1697,6 +1700,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               const vDiff = tV - dV;
               if (Math.abs(vDiff) < threshold && Math.abs(vDiff) < Math.abs(bestYDiff)) {
                 bestYDiff = vDiff; bestSnapY = vDiff; bestYLine = lineV;
+                snapTargetId = node.id;
               }
             }
           }
@@ -1706,6 +1710,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         if (bestXLine !== null) lines.push({ axis: 'x', value: bestXLine });
         if (bestYLine !== null) lines.push({ axis: 'y', value: bestYLine });
         setAlignLines(lines);
+        setSnapHighlightNodeId(snapTargetId);
       }
       // P0-2: 只更新轻量 dragOffset，不触发 stages 级联重渲染
       dragOffsetRef.current = { dx: deltaX, dy: deltaY };
@@ -1732,6 +1737,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
       setDraggingNode(null);
       setAlignLines([]);
+      setSnapHighlightNodeId(null);
       setDragOffset({ dx: 0, dy: 0 });
     };
     window.addEventListener('mousemove', handleMouseMove);
@@ -2940,6 +2946,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                                 connecting={connecting}
                                 stepStates={stepStates}
                                 nodeResults={nodeResults}
+                                snapHighlightNodeId={snapHighlightNodeId}
                                 selectedNodeId={selectedNodeId}
                                 isUnreachable={unreachableNodeIds.has(node.id)}
                                 isRestoredResult={restoredExecutionId !== null}

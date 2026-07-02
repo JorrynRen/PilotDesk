@@ -14,6 +14,7 @@ interface WorkflowNodeItemProps {
   selectedNodeIds: Set<string>;
   draggingNode: { nodeId: string; started: boolean } | null;
   hoveredNodeId: string | null;
+  snapHighlightNodeId: string | null;
   connectTargetId: string | null;
   cycleTargetId: string | null;
   reachableTargets: Set<string>;
@@ -35,7 +36,7 @@ interface WorkflowNodeItemProps {
 const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   node, stageId, scale,
   selectedNodeId, selectedNodeIds,
-  draggingNode, hoveredNodeId, connectTargetId, cycleTargetId, reachableTargets,
+  draggingNode, hoveredNodeId, snapHighlightNodeId, connectTargetId, cycleTargetId, reachableTargets,
   connecting, stepStates, nodeResults,
   isUnreachable,
   isRestoredResult, isConfigChanged,
@@ -47,6 +48,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   const isSelected = selectedNodeId === node.id;
   const isDraggingThis = draggingNode?.nodeId === node.id && draggingNode?.started;
   const isHovered = hoveredNodeId === node.id;
+  const isSnapHighlight = snapHighlightNodeId === node.id;
   const isConnectTarget = connectTargetId === node.id;
   const isCycleTarget = cycleTargetId === node.id;
   const isReachableTarget = !!connecting && reachableTargets.has(node.id);
@@ -103,7 +105,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
               : runState === 'failed'
                 ? '#f8514910'
                 : 'var(--bg-tertiary)',
-        boxShadow: isDraggingThis
+        boxShadow: isDraggingThis || isSnapHighlight
           ? '0 8px 24px rgba(0,0,0,0.4), 0 0 0 1px var(--accent)'
           : selectedNodeIds.has(node.id) && !isSelected
             ? '0 0 0 2px var(--accent-light), var(--shadow-md)'
@@ -115,12 +117,12 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
                 ? 'inset 0 0 12px #3b82f666, inset 0 0 24px #2563eb44'
                 : 'var(--shadow-sm)',
         animation: runState === 'running' ? 'pulseGlow 1.5s ease-in-out infinite' : 'none',
-        zIndex: isDraggingThis ? 20 : showResult ? 30 : 2,
+        zIndex: (isDraggingThis || isSnapHighlight) ? 20 : showResult ? 30 : 2,
         userSelect: 'none',
         transformOrigin: '80px 30px',
-        transform: `scale(${isDraggingThis ? 1.03 / scale : 1 / scale})`,
-        opacity: isDraggingThis ? 0.92 : 1,
-        transition: isDraggingThis ? 'none' : 'box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease',
+        transform: `scale(${isDraggingThis || isSnapHighlight ? 1.03 / scale : 1 / scale})`,
+        opacity: (isDraggingThis || isSnapHighlight) ? 0.92 : 1,
+        transition: (isDraggingThis || isSnapHighlight) ? 'none' : 'box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease',
       }}
     >
       {/* 节点内容行：图标 + 标签 */}
@@ -439,6 +441,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
   if (prev.selectedNodeId !== next.selectedNodeId) return false;
   if (prev.hoveredNodeId !== next.hoveredNodeId) return false;
   if (prev.connectTargetId !== next.connectTargetId) return false;
+  if (prev.snapHighlightNodeId !== next.snapHighlightNodeId) return false;
   if (prev.draggingNode?.nodeId !== next.draggingNode?.nodeId) return false;
   if (prev.draggingNode?.started !== next.draggingNode?.started) return false;
   if (prev.stepStates[`node_${prev.node.id}`] !== next.stepStates[`node_${next.node.id}`]) return false;
