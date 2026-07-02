@@ -18,6 +18,8 @@ interface Props {
   onOpenSubflow?: (definitionId: string) => void;
   /** 所有阶段（用于输入映射计算前序节点） */
   stages?: Stage[];
+  /** 阶段间连线（用于阶段拓扑前序判断） */
+  stageEdges?: WorkflowEdge[];
 }
 
 const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; label: string; type: string; placeholder?: string }[] }> = {
@@ -206,6 +208,7 @@ function getGateMergeOptions(
 function getPredecessorOutputOptions(
   nodeId: string,
   stages: Stage[],
+  stageEdges?: WorkflowEdge[],
 ): OptionGroup[] {
   // 1. 找到当前节点所在阶段索引
   let currentStageIdx = -1;
@@ -308,13 +311,8 @@ function getPredecessorOutputOptions(
       });
     }
 
-    // Agent 节点自动提供 session_id（排除当前节点自身的 session_id）
-    if (pn.type === 'agent' && !outputKeys.some(k => k === 'session_id')) {
-      fieldList.push({
-        value: `{{session_id.${pn.id}.${stageId}}}`,
-        label: 'session_id',
-      });
-    }
+    // Agent 节点的 session_id 需通过 outputMapping 显式声明后才能被引用
+    // 不再自动注入，确保遵循"变量通过输出映射显式声明"原则
 
     // 只有有有效字段的节点才添加到分组
     if (fieldList.length > 0) {
@@ -327,21 +325,32 @@ function getPredecessorOutputOptions(
 
   // 3.3 为每个前序阶段注入 gate_output 作为二级选项
   //    本阶段节点不能引用本阶段门控合并变量（门控合并在本阶段所有节点执行完后才产生）
-  //    使用阶段拓扑前序关系（stageEdges）判断，而非简单的 order 比较
-  //    兼容无 stageEdges 的旧数据：回退到 order 比较
-  //    currentStage 已在第238行声明
-  // 构建当前阶段的上游阶段集合（简化版，仅用于展示）
-  //    TODO: 当 WorkflowEditor 将 stageEdges 传入后，可改用 getStageUpstreamMap
+  //    使用阶段拓扑前序关系（stageEdges）判断
   const stageUpstreamSet = new Set<string>();
-  if (stages.length > 0 && currentStage) {
-    // 尝试基于 order 的简单前序判断（向后兼容）
-    // 如果有显式的阶段拓扑信息，优先使用
-    const currentOrder = currentStage.order;
-    for (const s of stages) {
-      if (s.order < currentOrder) {
-        stageUpstreamSet.add(s.id);
+  if (stages.length > 0 && currentStage && stageEdges && stageEdges.length > 0) {
+    // 基于阶段连线构建上游集合（BFS 传递）
+    const stageIdSet = new Set(stages.map(s => s.id));
+    for (const edge of stageEdges) {
+      if (stageIdSet.has(edge.source) && stageIdSet.has(edge.target)) {
+        if (edge.target === currentStage.id) {
+          stageUpstreamSet.add(edge.source);
+        }
       }
     }
+    // 传递上游
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const edge of stageEdges) {
+        if (stageUpstreamSet.has(edge.source) && !stageUpstreamSet.has(edge.target) && stageIdSet.has(edge.target)) {
+          stageUpstreamSet.add(edge.target);
+          changed = true;
+        }
+      }
+    }
+    // stageUpstreamSet 现在包含所有通过 stageEdges 可达 currentStage.id 的上游阶段
+    // 但我们只需要 currentStage 的直接上游集合，所以取交集减去自身
+    stageUpstreamSet.delete(currentStage.id);
   }
 
   for (const stageName of allPredecessorStageNames) {
@@ -724,7 +733,7 @@ const MappingEditor: React.FC<{
     </div>
   );
 };
-export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow, stages }) => {
+export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow, stages, stageEdges }) => {
   const meta = getNodeTypeMeta(node.type);
   const configFields = NODE_TYPE_CONFIG_MAP[node.type]?.fields || [];
   const [params, setParams] = useState<Record<string, any>>(node.params || {});
@@ -1061,7 +1070,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             keyPlaceholder="参数名"
             valuePlaceholder={'输入文本或选择前序字段'}
             baseKeyRef={inputBaseKeyRef}
-            valueOptions={stages ? getPredecessorOutputOptions(node.id, stages) : undefined}
+            valueOptions={stages ? getPredecessorOutputOptions(node.id, stages, stageEdges) : undefined}
           />
       </div>
       )}

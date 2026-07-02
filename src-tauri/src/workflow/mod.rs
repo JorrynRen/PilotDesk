@@ -224,7 +224,6 @@ pub struct WorkflowInstance {
     pub definition_name: String,
     pub status: WorkflowInstanceStatus,
     pub context: serde_json::Value,
-    /// @deprecated 引擎已不再写入此字段，数据源改为 node_executions 表（v68 迁移后为 NULL）
     #[allow(dead_code)]
     pub steps: Option<serde_json::Value>,
     pub current_node_id: Option<String>,
@@ -406,35 +405,6 @@ pub fn create_instance(conn: &Connection, instance: &WorkflowInstance) -> Result
     Ok(())
 }
 
-/// 更新实例状态
-///
-/// 注意：`steps` 参数已废弃（引擎已改为写入 node_executions 表），保留仅为向后兼容。
-/// 新代码应使用 `update_instance_status_minimal` 或直接更新 node_executions 表。
-#[allow(dead_code)]
-#[allow(deprecated)]
-pub fn update_instance_status(
-    conn: &Connection,
-    id: &str,
-    status: &WorkflowInstanceStatus,
-    context: Option<&serde_json::Value>,
-    #[allow(unused_variables)] _steps: Option<&serde_json::Value>,
-    current_node_id: Option<&str>,
-    error: Option<&str>,
-) -> Result<(), AppError> {
-    let now = crate::utils::now();
-    let status_str = serde_json::to_string(status).map_err(|e| AppError::External(e.to_string()))?;
-    conn.execute(
-        "UPDATE workflow_instances SET status = ?1, context = COALESCE(?2, context),
-         current_node_id = ?3, error = ?4, updated_at = ?5
-         WHERE id = ?6",
-        params![
-            status_str,
-            context.map(|c| c.to_string()),
-            current_node_id, error, now, id,
-        ],
-    )?;
-    Ok(())
-}
 
 // ════════════════════════════════════════════════════════════
 // 统计查询

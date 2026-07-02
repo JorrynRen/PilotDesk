@@ -275,14 +275,39 @@ pub async fn start_workflow(
 
 /// 中止工作流执行
 #[tauri::command]
-pub fn cancel_workflow(
+pub async fn cancel_workflow(
     state: tauri::State<'_, crate::DbState>,
+    executor: tauri::State<'_, Arc<crate::workflow::executor::NodeExecutor>>,
     execution_id: String,
 ) -> Result<(), String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
-    workflow::update_instance_status(&conn, &execution_id,
-        &workflow::WorkflowInstanceStatus::Cancelled, None, None, None, Some("用户中止"))
-        .map_err(|e| format!("更新失败: {}", e))
+    // 1. 标记数据库状态为已取消
+    let status_str = serde_json::to_string(&workflow::WorkflowInstanceStatus::Cancelled).unwrap();
+    let now = crate::utils::now();
+    conn.execute(
+        "UPDATE workflow_instances SET status = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
+        rusqlite::params![status_str, "用户中止", now, execution_id],
+    ).map_err(|e| format!("更新失败: {}", e))?;
+
+    // 2. 停止该执行关联的所有 Agent 子进程
+    // 工作流引擎的临时 session_id 格式为 wf_{execution_id}_{node_id}
+    let node_ids: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT node_id FROM node_executions WHERE execution_id = ?1"
+        ).map_err(|e| format!("查询失败: {}", e))?;
+        let rows = stmt.query_map(rusqlite::params![execution_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("查询失败: {}", e))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let agent_manager = executor.inner().agent_manager();
+    let mut mgr = agent_manager.lock().await;
+    for node_id in &node_ids {
+        let session_id = format!("wf_{}_{}", execution_id, node_id);
+        mgr.stop_generation(&session_id);
+    }
+    log::info!("[cancel_workflow] 已取消执行: {}, 关联节点: {:?}", execution_id, node_ids);
+    Ok(())
 }
 
 /// 删除工作流执行记录
@@ -489,12 +514,14 @@ impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
                 .collect();
 
         // 阶段连线导出：source/target 使用阶段短标识符
-        let stage_edges: Vec<ExportEdge> = def.stage_edges.iter().map(|se| {
-            ExportEdge {
-                source: stage_short_ids.get(&se.source).cloned().unwrap_or_default(),
-                target: stage_short_ids.get(&se.target).cloned().unwrap_or_default(),
-                label: None,
-                condition: None,
+        let stage_edges: Vec<ExportEdge> = def.stage_edges.iter().filter_map(|se| {
+            let src = stage_short_ids.get(&se.source).cloned();
+            let tgt = stage_short_ids.get(&se.target).cloned();
+            match (src, tgt) {
+                (Some(source), Some(target)) => Some(ExportEdge {
+                    source, target, label: None, condition: None,
+                }),
+                _ => None, // 跳过引用无效阶段ID的连线
             }
         }).collect();
 

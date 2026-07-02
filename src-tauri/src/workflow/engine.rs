@@ -330,7 +330,7 @@ impl WorkflowEngine {
         for layer in &layers {
             let mut handles: Vec<tokio::task::JoinHandle<Result<(), AppError>>> = Vec::new();
 
-            let stage_id = stage.id.clone(); // 用于 async move 闭包
+            let _stage_id = stage.id.clone(); // 用于 async move 闭包
             for node_id in layer {
                 let node = match node_map.get(node_id) {
                     Some(n) => (*n).clone(),
@@ -441,7 +441,6 @@ impl WorkflowEngine {
                     None
                 };
                 let node_statuses_clone = node_statuses.clone();
-                let stage_id_clone = stage_id.clone();
                 let handle = tokio::spawn(async move {
                     let ctx_snapshot = context.lock().await.clone();
                     log::info!("[WorkflowEngine] Executing node {} (type={:?}), context keys: {:?}", nid, node.node_type, context.lock().await.keys().collect::<Vec<_>>());
@@ -493,22 +492,51 @@ impl WorkflowEngine {
                             } else {
                                 output.output.clone()
                             };
-                            // Agent 节点：将 content 和 session_id 组装为对象存入 context
-                            // 使模板 {{key.output.nodeId}} 可解析 content / session_id 字段
-                            // 同时保留 session_id 到独立 key 供直接引用
+                            // Agent 节点：仅将通过 outputMapping 显式声明的字段暴露给 context
+                            // session_id 以 __ 前缀内部保留（供会话延续），不暴露给模板引用
                             if let Some(ref sid) = output.session_id {
-                                let ctx_value = serde_json::json!({
-                                    "content": node_output,
-                                    "session_id": sid,
-                                });
-                                context.lock().await.insert(nid.clone(), ctx_value);
-                                // 旧格式兼容
+                                // 内部保留 session_id（__ 前缀隔离，不暴露给用户模板）
                                 context.lock().await.insert(format!("__session_id__{}", nid), Value::String(sid.clone()));
-                                // 新格式：session_id.{nodeId}.{stageId}
-                                context.lock().await.insert(format!("session_id.{}.{}", nid, stage_id_clone), Value::String(sid.clone()));
-                                log::info!("[WorkflowEngine] Agent node {} context: content + session_id({})", nid, sid);
+                            }
+                            // 根据 outputMapping 构建暴露给后续节点的 context
+                            let output_mapping = node.output_mapping.as_ref();
+                            if node.node_type == WorkflowNodeType::Start {
+                                // Start 节点：预填充阶段已写入完整 context，跳过覆盖
+                                log::info!("[WorkflowEngine] Start node {} context preserved from pre-population", nid);
+                            } else if let Some(mapping) = output_mapping.and_then(|m| m.as_object()) {
+                                // 非 Start 节点：暴露 outputMapping 声明的字段
+                                let mut exposed = serde_json::Map::new();
+                                for (key, path) in mapping {
+                                    match key.as_str() {
+                                        "content" => { exposed.insert("content".to_string(), node_output.clone()); }
+                                        "session_id" => {
+                                            if let Some(ref sid) = output.session_id {
+                                                exposed.insert("session_id".to_string(), Value::String(sid.clone()));
+                                            }
+                                        }
+                                        _ => {
+                                            // 其他自定义 key：尝试从 node_output 按路径提取
+                                            if let Some(path_str) = path.as_str() {
+                                                if !path_str.is_empty() {
+                                                    if let Some(val) = node_output.get(path_str) {
+                                                        exposed.insert(key.clone(), val.clone());
+                                                    } else {
+                                                        exposed.insert(key.clone(), node_output.clone());
+                                                    }
+                                                } else {
+                                                    exposed.insert(key.clone(), node_output.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                let exposed_keys: Vec<String> = exposed.keys().cloned().collect();
+                                context.lock().await.insert(nid.clone(), Value::Object(exposed));
+                                log::info!("[WorkflowEngine] Node {} context (outputMapping): {:?}", nid, exposed_keys);
                             } else {
-                                context.lock().await.insert(nid.clone(), node_output.clone());
+                                // 无 outputMapping：默认不暴露任何字段（空对象）
+                                context.lock().await.insert(nid.clone(), Value::Object(serde_json::Map::new()));
+                                log::info!("[WorkflowEngine] Node {} context: no outputMapping, empty", nid);
                             }
                             log::info!("[WorkflowEngine] Node {} output written to context: {:?}", nid, node_output);
                             node_statuses_clone.lock().await.insert(nid.clone(), "completed".to_string());

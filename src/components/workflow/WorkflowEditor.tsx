@@ -772,6 +772,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           }
         }
       }
+      // 同步清理引用被删除阶段的 stageEdges
+      const deletedStageId = confirmAction.targetId;
+      setStageEdges(prev => prev.filter(e => e.source !== deletedStageId && e.target !== deletedStageId));
       const cleaned = sanitizeMappingReferences(remaining.map((s, i) => ({ ...s, order: i })));
       setStages(cleaned);
     } else if (confirmAction.type === 'deleteNode') {
@@ -3534,6 +3537,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             onUpdate={(updates) => handleUpdateNode(selectedNodeId, updates)}
             onClose={() => { setSelectedNodeId(null); setSelectedStageId(null); }}
             stages={stages}
+            stageEdges={stageEdges}
             onOpenSubflow={(definitionId) => {
               const d = definitions.find(d => d.id === definitionId);
               if (d) {

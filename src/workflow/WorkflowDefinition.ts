@@ -481,12 +481,9 @@ export function getStageUpstreamMap(
  * 正则匹配映射值中的节点 ID 引用
  *
  * 新引用格式: {{key.节点ID.阶段ID}}，从中提取第二段（节点ID）
- * 旧引用格式: {{key.output.nodeId}}，向后兼容
  * 门控引用格式: {{gate_output.阶段ID}}，需特殊处理（不匹配节点ID模式）
  */
 const MAPPING_REF_PATTERN = /\{\{[\w.]+?\.(node_[a-zA-Z0-9_]+)\.stage_[a-zA-Z0-9_]+\}\}/g;
-/** 旧格式向后兼容: {{key.output.nodeId}} */
-const MAPPING_REF_PATTERN_LEGACY = /\{\{[\w.]+?\.output\.(node_[a-zA-Z0-9_]+)\}\}/g;
 /** 门控合并输出引用: {{gate_output.stageId}} */
 const MAPPING_GATE_REF_PATTERN = /\{\{gate_output\.(stage_[a-zA-Z0-9_]+)\}\}/g;
 /** session_id 引用: {{session_id.nodeId.stageId}}，需校验 agent 类型一致性 */
@@ -568,11 +565,10 @@ export function sanitizeMappingReferences(stages: Stage[], stageEdges?: Workflow
 
         // 提取各类引用
         const newRefs = value.match(MAPPING_REF_PATTERN) || [];
-        const legacyRefs = value.match(MAPPING_REF_PATTERN_LEGACY) || [];
         const gateRefs = value.match(MAPPING_GATE_REF_PATTERN) || [];
         const sessionRefs = value.match(MAPPING_SESSION_REF_PATTERN) || [];
 
-        const nodeRefs = [...newRefs, ...legacyRefs];
+        const nodeRefs = newRefs;
 
         if (nodeRefs.length === 0 && gateRefs.length === 0 && sessionRefs.length === 0) {
           newMapping[key] = value;
@@ -674,7 +670,6 @@ export function remapImportedWorkflowIds(stages: Stage[], stageEdges?: WorkflowE
 
   // 2. 替换字符串中所有旧 ID 为新 ID
   //    新格式 {{key.nodeId.stageId}} 中 nodeId 在第二段
-  //    旧格式 {{key.output.nodeId}} 中 nodeId 在第三段
   //    gate_output 引用中无 nodeId，不替换
   //    直接全局替换所有 nodeId 出现即可（阶段 ID 也会被替换，但 idMap 仅含节点 ID）
   const replaceIds = (str: string): string => {

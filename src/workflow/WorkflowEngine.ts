@@ -22,8 +22,6 @@ import { PluginAgentAPI } from '../plugin/PluginAPI.agent';
 // ── 模板变量替换 ──
 
 function resolveTemplate(template: string, context: Record<string, any>): string {
-  // 预处理：简写格式 {{参数名.output.节点ID}} → {{节点ID.参数名}}
-  template = template.replace(/\{\{([a-zA-Z_]\w*)\.output\.([a-zA-Z0-9_]+)\}\}/g, '{{$2.$1}}');
   return template.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
     const value = key.trim().split('.').reduce((obj: any, k: string) => obj?.[k], context);
     return value !== undefined ? String(value) : `{{${key}}}`;
@@ -399,7 +397,6 @@ class WorkflowEngine {
       for (const stage of def.stages) {
         const startNode = stage.nodes.find(n => n.type === 'start');
         if (startNode?.outputMapping) {
-          // 按节点ID存储，支持 {{变量名.output.节点ID}} 格式
           instance.context[startNode.id] = { ...startNode.outputMapping };
           // 也设置扁平键，支持 {{变量名}} 简单格式
           Object.assign(instance.context, startNode.outputMapping);

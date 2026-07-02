@@ -40,10 +40,19 @@ pub struct NodeExecutor {
     pub plugin_execute_manager: Arc<PluginExecuteManager>,
     plugin_host: Arc<std::sync::Mutex<PluginHost>>,
     pool: DbPool,
+    /// Agent 管理器（供 cancel_workflow 等命令中止子进程）
+    agent_manager: Arc<AsyncMutex<AgentManager>>,
 }
 
 impl NodeExecutor {
+    /// 获取 Agent 管理器的 Arc clone（供外部命令中止 Agent 子进程）
+    pub fn agent_manager(&self) -> Arc<AsyncMutex<AgentManager>> {
+        self.agent_manager.clone()
+    }
+
+
     pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, plugin_host: Arc<std::sync::Mutex<PluginHost>>, pool: DbPool) -> Self {
+        let agent_manager_clone = agent_manager.clone();
         let mut registry = WorkflowNodeTypeRegistry::new();
 
         // 注册 6 种实体节点类型
@@ -97,6 +106,7 @@ impl NodeExecutor {
 
         let human_input_manager = Arc::new(InteractManager::new());
         let plugin_execute_manager = Arc::new(PluginExecuteManager::new());
+        let agent_manager_field = agent_manager_clone;
 
         registry.register(NodeTypeRegistration {
             type_id: "interact".into(),
@@ -150,6 +160,7 @@ impl NodeExecutor {
             plugin_execute_manager,
             plugin_host,
             pool,
+            agent_manager: agent_manager_field,
         }
     }
 
