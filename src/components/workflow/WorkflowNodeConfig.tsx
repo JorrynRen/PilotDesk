@@ -342,8 +342,8 @@ function getPredecessorOutputOptions(
     while (changed) {
       changed = false;
       for (const edge of stageEdges) {
-        if (stageUpstreamSet.has(edge.source) && !stageUpstreamSet.has(edge.target) && stageIdSet.has(edge.target)) {
-          stageUpstreamSet.add(edge.target);
+        if (stageUpstreamSet.has(edge.target) && !stageUpstreamSet.has(edge.source) && stageIdSet.has(edge.source)) {
+          stageUpstreamSet.add(edge.source);
           changed = true;
         }
       }
