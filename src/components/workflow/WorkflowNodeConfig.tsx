@@ -936,6 +936,15 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                         const resumeRef = params['resume_session_ref'] || '';
                         const groups = stages ? getPredecessorOutputOptions(node.id, stages, stageEdges) : [];
                         const hasAny = groups.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
+                        // 从 value 反查可读 label
+                        const displayLabel = (() => {
+                          if (!resumeRef) return '';
+                          for (const g of groups) {
+                            if (g.options) for (const opt of g.options) if (opt.value === resumeRef) return opt.label;
+                            if (g.children) for (const c of g.children) for (const opt of c.options) if (opt.value === resumeRef) return opt.label;
+                          }
+                          return resumeRef;
+                        })();
                         return (
                           <div style={{ position: 'relative' }}>
                             <div
@@ -949,7 +958,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                 userSelect: 'none',
                               }}
                             >
-                              <span>{resumeRef || '请选择会话变量'}</span>
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayLabel || '请选择会话变量'}</span>
                               <span style={{ fontSize: 'var(--fs-9)', opacity: 0.5 }}>{resumeDropdownOpen ? '▲' : '▼'}</span>
                             </div>
                             {resumeDropdownOpen && (
