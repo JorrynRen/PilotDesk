@@ -852,7 +852,12 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
     const currentVal = (params[key] as string) || '';
     const pos = triggerCursorPosRef.current;
     if (pos <= 0) return;
-    const newVal = currentVal.slice(0, pos - 2) + '{{' + fieldValue + '}}' + currentVal.slice(pos);
+    // fieldValue 可能已经包含 {{...}}（来自 getPredecessorOutputOptions 的选项值）
+    // 不再重复包裹，避免 {{{{...}}}} 问题
+    const wrapped = fieldValue.startsWith('{{') && fieldValue.endsWith('}}')
+      ? fieldValue
+      : '{{' + fieldValue + '}}';
+    const newVal = currentVal.slice(0, pos - 2) + wrapped + currentVal.slice(pos);
     handleParamChange(key, newVal);
     setFieldSelectorKey(null);
   };
