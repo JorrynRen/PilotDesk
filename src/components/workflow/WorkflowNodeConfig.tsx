@@ -933,52 +933,26 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                       </select>
                       {sessionMode === 'resume' && (() => {
                         const resumeRef = params['resume_session_ref'] || '';
-                        const prevAgentOptions = (() => {
-                          if (!stages) return [];
-                          const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
-                          const options: { value: string; label: string }[] = [];
-                          // 从前序节点（agent）的 outputMapping 声明中获取可用字段
-                          // 遵循"节点变量通过输出映射显式声明后才能暴露"原则
-                          const collectFromNodes = (nodes: typeof stages[0]['nodes'], stageId: string, stageName: string) => {
-                            for (const n of nodes) {
-                              if (n.type === 'agent') {
-                                const outputMapping = n.outputMapping || {};
-                                const outputKeys = Object.keys(outputMapping);
-                                for (const key of outputKeys) {
-                                  options.push({
-                                    value: `{{${key}.${n.id}.${stageId}}}`,
-                                    label: `[${stageName}] ${n.label || n.id}.${key}`,
-                                  });
-                                }
-                              }
-                            }
-                          };
-                          // 前序阶段中的所有 agent 节点
-                          for (let i = 0; i < currentStageIdx; i++) {
-                            const stage = stages[i];
-                            collectFromNodes(stage.nodes, stage.id, stage.name);
-                          }
-                          // 同阶段中通过边连接的前序 agent 节点
-                          if (currentStageIdx >= 0) {
-                            const currentStage = stages[currentStageIdx];
-                            const incomingEdges = currentStage.edges.filter(e => e.target === node.id);
-                            for (const edge of incomingEdges) {
-                              const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                              if (sourceNode) {
-                                collectFromNodes([sourceNode], currentStage.id, currentStage.name);
-                              }
+                        // 复用输入映射的下拉方案：从前序节点 outputMapping 声明中获取可用字段
+                        const groups = stages ? getPredecessorOutputOptions(node.id, stages, stageEdges) : [];
+                        // 扁平化所有选项
+                        const allOptions: { value: string; label: string }[] = [];
+                        for (const g of groups) {
+                          if (g.children) {
+                            for (const child of g.children) {
+                              for (const opt of child.options) allOptions.push(opt);
                             }
                           }
-                          return options;
-                        })();
+                          for (const opt of g.options) allOptions.push(opt);
+                        }
                         return (
                           <select
                             value={resumeRef}
                             onChange={(e) => handleParamChange('resume_session_ref', e.target.value)}
                             style={S.select()}
                           >
-                            <option value="">请选项会话ID</option>
-                            {prevAgentOptions.map((opt) => (
+                            <option value="">请选择会话变量</option>
+                            {allOptions.map((opt) => (
                               <option key={opt.value} value={opt.value}>{opt.label}</option>
                             ))}
                           </select>
@@ -1000,32 +974,13 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             {/* 延续会话空状态提示 — 仅 agent + resume 模式 */}
             {configFields[0].key === 'agent_type' && params['session_mode'] === 'resume' && (() => {
               if (!stages) return null;
-              const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
-              let hasOptions = false;
-              // 检查前序阶段
-              for (let i = 0; i < currentStageIdx && !hasOptions; i++) {
-                for (const n of stages[i].nodes) {
-                  if (n.type === 'agent' && n.params?.agent_type === params['agent_type']) {
-                    hasOptions = true;
-                    break;
-                  }
-                }
-              }
-              // 检查同阶段前序节点（通过边连接）
-              if (!hasOptions && currentStageIdx >= 0) {
-                const currentStage = stages[currentStageIdx];
-                for (const edge of currentStage.edges.filter(e => e.target === node.id)) {
-                  const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                  if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type']) {
-                    hasOptions = true;
-                    break;
-                  }
-                }
-              }
+              // 复用 getPredecessorOutputOptions 检查是否有可用选项
+              const groups = getPredecessorOutputOptions(node.id, stages, stageEdges);
+              const hasOptions = groups.length > 0;
               if (hasOptions) return null;
               return (
                 <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 4 }}>
-                  提示：前序节点暂无可引用的 agent 会话ID，请确保前序 agent 节点已配置 session_id 输出映射
+                  提示：前序节点暂无可引用的输出变量，请确保前序节点已配置输出映射
                 </div>
               );
             })()}
