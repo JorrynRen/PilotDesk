@@ -947,11 +947,11 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                         })();
                         return (
                           <>
-                          <div style={{ position: 'relative' }}>
+                          <div style={{ position: 'relative', width: '100%' }}>
                             <div
                               onClick={() => setResumeDropdownOpen(v => !v)}
                               style={{
-                                ...S.select({ minWidth: 140 }),
+                                ...S.select(),
                                 cursor: 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
