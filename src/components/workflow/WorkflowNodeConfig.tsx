@@ -656,7 +656,7 @@ const MappingEditor: React.FC<{
                                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                               >
-                                ├─{opt.label}
+                                {opt.label}
                               </div>
                             ))}
                             {/* [node] 分组（标题+嵌套字段） */}
@@ -671,7 +671,7 @@ const MappingEditor: React.FC<{
                                     borderBottom: '1px solid var(--border)',
                                   }}
                                 >
-                                  ├─{nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
+                                  {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                 </div>
                                 {nodeGroup.options.map((opt) => (
                                   <div
@@ -689,7 +689,7 @@ const MappingEditor: React.FC<{
                                     onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                                     onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                   >
-                                    ├─{opt.label}
+                                    {opt.label}
                                   </div>
                                 ))}
                               </div>
@@ -991,13 +991,13 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                     )}
                                     {stage.options.length > 0 && stage.options.map((opt) => (
                                       <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-                                        ├─{opt.label}
+                                        {opt.label}
                                       </div>
                                     ))}
                                     {stage.children && stage.children.map((nodeGroup, ni) => (
                                       <div key={ni}>
                                         <div style={{ padding: '6px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
-                                          ├─{nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
+                                          {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                         </div>
                                         {nodeGroup.options.map((opt) => (
                                           <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 20px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
@@ -1183,7 +1183,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                       >
-                                        ├─{opt.label}
+                                        {opt.label}
                                       </div>
                                     ))}
                                   </div>
