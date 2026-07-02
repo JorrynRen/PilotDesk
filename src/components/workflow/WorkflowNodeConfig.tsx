@@ -743,6 +743,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const inputBaseKeyRef = useRef<string>('');
   const outputBaseKeyRef = useRef<string>('');
   const [fieldSelectorKey, setFieldSelectorKey] = useState<string | null>(null);
+  const [resumeDropdownOpen, setResumeDropdownOpen] = useState(false);
   const [selectorPos, setSelectorPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const triggerCursorPosRef = useRef<number>(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -933,29 +934,74 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                       </select>
                       {sessionMode === 'resume' && (() => {
                         const resumeRef = params['resume_session_ref'] || '';
-                        // 复用输入映射的下拉方案：从前序节点 outputMapping 声明中获取可用字段
                         const groups = stages ? getPredecessorOutputOptions(node.id, stages, stageEdges) : [];
-                        // 扁平化所有选项
-                        const allOptions: { value: string; label: string }[] = [];
-                        for (const g of groups) {
-                          if (g.children) {
-                            for (const child of g.children) {
-                              for (const opt of child.options) allOptions.push(opt);
-                            }
-                          }
-                          for (const opt of g.options) allOptions.push(opt);
-                        }
+                        const hasAny = groups.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
                         return (
-                          <select
-                            value={resumeRef}
-                            onChange={(e) => handleParamChange('resume_session_ref', e.target.value)}
-                            style={S.select()}
-                          >
-                            <option value="">请选择会话变量</option>
-                            {allOptions.map((opt) => (
-                              <option key={opt.value} value={opt.value}>{opt.label}</option>
-                            ))}
-                          </select>
+                          <div style={{ position: 'relative' }}>
+                            <div
+                              onClick={() => setResumeDropdownOpen(v => !v)}
+                              style={{
+                                ...S.select(),
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                userSelect: 'none',
+                              }}
+                            >
+                              <span>{resumeRef || '请选择会话变量'}</span>
+                              <span style={{ fontSize: 'var(--fs-9)', opacity: 0.5 }}>{resumeDropdownOpen ? '▲' : '▼'}</span>
+                            </div>
+                            {resumeDropdownOpen && (
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: '100%',
+                                  left: 0,
+                                  right: 0,
+                                  zIndex: 100,
+                                  maxHeight: 240,
+                                  overflowY: 'auto',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: 'var(--radius-md)',
+                                  background: 'var(--bg-primary)',
+                                  boxShadow: 'var(--shadow-md)',
+                                  marginTop: 2,
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {!hasAny && (
+                                  <div style={{ padding: '8px 12px', color: 'var(--text-tertiary)', fontSize: 'var(--fs-10)' }}>暂无可用字段</div>
+                                )}
+                                {groups.map((stage, si) => (
+                                  <div key={si}>
+                                    {stage.group && (
+                                      <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
+                                        [step{si + 1}] {stage.group}
+                                      </div>
+                                    )}
+                                    {stage.options.length > 0 && stage.options.map((opt) => (
+                                      <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                                        ├─{opt.label}
+                                      </div>
+                                    ))}
+                                    {stage.children && stage.children.map((nodeGroup, ni) => (
+                                      <div key={ni}>
+                                        <div style={{ padding: '6px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
+                                          ├─{nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
+                                        </div>
+                                        {nodeGroup.options.map((opt) => (
+                                          <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 20px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                                            {opt.label}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         );
                       })()}
                     </>
