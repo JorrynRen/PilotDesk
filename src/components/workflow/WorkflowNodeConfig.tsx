@@ -956,22 +956,22 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                               <div
                                 style={{
                                   position: 'absolute',
+                                  right: 0,
                                   top: '100%',
-                                  left: 0,
                                   zIndex: 100,
-                                  minWidth: 220,
-                                  maxHeight: 240,
-                                  overflowY: 'auto',
-                                  border: '1px solid var(--border)',
+                                  minWidth: 200,
+                                  maxHeight: 200,
+                                  overflow: 'auto',
                                   borderRadius: 'var(--radius-md)',
+                                  border: '1px solid var(--border)',
                                   background: 'var(--bg-primary)',
-                                  boxShadow: 'var(--shadow-md)',
-                                  marginTop: 2,
+                                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                  fontSize: 'var(--fs-11)',
                                 }}
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 {!hasAny && (
-                                  <div style={{ padding: '8px 12px', color: 'var(--text-tertiary)', fontSize: 'var(--fs-10)' }}>暂无可用字段</div>
+                                  <div style={{ padding: '12px 8px', color: 'var(--text-tertiary)', textAlign: 'center' }}>暂无可用字段</div>
                                 )}
                                 {groups.map((stage, si) => (
                                   <div key={si}>
