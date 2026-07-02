@@ -690,6 +690,7 @@ const MappingEditor: React.FC<{
                                   padding: '6px 8px 6px 16px',
                                   cursor: 'pointer',
                                   color: 'var(--text-primary)',
+                                    ...(opt.value === value[key] ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}),
                                   borderBottom: '1px solid var(--border)',
                                 }}
                                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
@@ -733,6 +734,7 @@ const MappingEditor: React.FC<{
                                       padding: '5px 8px 5px 32px',
                                       cursor: 'pointer',
                                       color: 'var(--text-primary)',
+                                      ...(opt.value === value[key] ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}),
                                       borderBottom: '1px solid var(--border)',
                                     }}
                                     onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
@@ -1101,7 +1103,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                               {(showAll || expandedResumeStages.has('sr:' + stage.group)) && (
                               <>
                               {stage.options.length > 0 && stage.options.map((opt) => (
-                                <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 16px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                                <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 16px', cursor: 'pointer', color: 'var(--text-primary)', ...(opt.value === resumeRef ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}), borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                                   {opt.label}
                                 </div>
                               ))}
@@ -1121,7 +1123,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                     {expandedResumeNodes.has('nr:' + stage.group + ':' + ni) ? '\u25bc' : '\u25b6'} {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                   </div>
                                   {(showAll || expandedResumeNodes.has('nr:' + stage.group + ':' + ni)) && nodeGroup.options.map((opt) => (
-                                    <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 32px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                                    <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 32px', cursor: 'pointer', color: 'var(--text-primary)', ...(opt.value === resumeRef ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}), borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                                       {opt.label}
                                     </div>
                                   ))}
@@ -1304,7 +1306,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                       <div
                                         key={opt.value}
                                         onClick={() => { insertFieldAtCursor(field.key, opt.value); }}
-                                        style={{ padding: '5px 8px 5px 32px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}
+                                        style={{ padding: '5px 8px 5px 32px', cursor: 'pointer', color: 'var(--text-primary)', ...(opt.value === field.key ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}), borderBottom: '1px solid var(--border)' }}
                                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
                                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                                       >
