@@ -908,7 +908,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
           <div style={{ marginTop: 10 }}>
             <label style={S.label()}>{configFields[0].label}</label>
             {configFields[0].type === 'select' ? (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                 <select
                   value={params[configFields[0].key] || configFields[0].placeholder || ''}
                   onChange={(e) => handleParamChange(configFields[0].key, e.target.value)}
