@@ -427,6 +427,7 @@ const MappingEditor: React.FC<{
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set());
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
 
   const handleKeyChange = (oldKey: string, newKey: string) => {
     if (oldKey === newKey) return;
@@ -595,20 +596,45 @@ const MappingEditor: React.FC<{
                         fontSize: 'var(--fs-11)',
                       }}
                     >
-                      <div
+                      <input
+                        autoFocus
+                        value={searchQuery}
+                        onChange={(e) => { e.stopPropagation(); setSearchQuery(e.target.value); }}
+                        placeholder="搜索字段…"
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setActiveDropdown(null); } }}
                         style={{
+                          width: '100%',
                           padding: '6px 8px',
                           fontSize: 'var(--fs-11)',
-                          color: 'var(--text-secondary)',
-                          fontWeight: 600,
+                          border: 'none',
                           borderBottom: '1px solid var(--border)',
-                          textAlign: 'center',
+                          outline: 'none',
+                          background: 'var(--bg-primary)',
+                          color: 'var(--text-primary)',
+                          boxSizing: 'border-box',
                         }}
-                      >
-                        请选择…
-                      </div>
+                      />
                       {(() => {
-                        const hasOptions = valueOptions.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
+                        const showAll = searchQuery.length > 0;
+                        const q = searchQuery.toLowerCase();
+                        const filteredGroups = showAll ? valueOptions.reduce((acc, stage) => {
+                          const stageMatch = stage.group?.toLowerCase().includes(q);
+                          const filteredOptions = stage.options.filter(opt => opt.label.toLowerCase().includes(q));
+                          const filteredChildren = (stage.children || []).reduce((ca, node) => {
+                            const nodeMatch = node.group.toLowerCase().includes(q);
+                            const filteredNodeOpts = node.options.filter(opt => opt.label.toLowerCase().includes(q));
+                            if (nodeMatch || filteredNodeOpts.length > 0) {
+                              ca.push({ ...node, options: nodeMatch ? node.options : filteredNodeOpts });
+                            }
+                            return ca;
+                          }, [] as OptionGroup[]);
+                          if (stageMatch || filteredOptions.length > 0 || filteredChildren.length > 0) {
+                            acc.push({ ...stage, options: stageMatch ? stage.options : filteredOptions, children: filteredChildren });
+                          }
+                          return acc;
+                        }, [] as OptionGroup[]) : valueOptions;
+                        const hasOptions = filteredGroups.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
                         if (!hasOptions) {
                           return (
                             <div
@@ -619,11 +645,11 @@ const MappingEditor: React.FC<{
                                 textAlign: 'center',
                               }}
                             >
-                              暂无可用字段
+                              {searchQuery ? '无匹配字段' : '暂无可用字段'}
                             </div>
                           );
                         }
-                        return valueOptions.map((stage, si) => (
+                        return filteredGroups.map((stage, si) => (
                           <div key={si}>
                             {/* 第一级：[序号] 阶段名 */}
                             {stage.group && (
@@ -650,7 +676,7 @@ const MappingEditor: React.FC<{
                                 {expandedStages.has('s:' + stage.group) ? '\u25bc' : '\u25b6'} [step{si + 1}] {stage.group}
                               </div>
                             )}
-                            {expandedStages.has('s:' + stage.group) && (
+                            {(showAll || expandedStages.has('s:' + stage.group)) && (
                             <>
                             {/* gate_output 选项 */}
                             {stage.options.length > 0 && stage.options.map((opt) => (
@@ -696,7 +722,7 @@ const MappingEditor: React.FC<{
                                 >
                                   {expandedNodes.has('n:' + stage.group + ':' + ni) ? '\u25bc' : '\u25b6'} {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                 </div>
-                                {expandedNodes.has('n:' + stage.group + ':' + ni) && nodeGroup.options.map((opt) => (
+                                {(showAll || expandedNodes.has('n:' + stage.group + ':' + ni)) && nodeGroup.options.map((opt) => (
                                   <div
                                     key={opt.value}
                                     onClick={() => {
@@ -771,6 +797,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const [resumeDropdownOpen, setResumeDropdownOpen] = useState(false);
   const [expandedResumeStages, setExpandedResumeStages] = useState<Set<string>>(new Set());
   const [expandedResumeNodes, setExpandedResumeNodes] = useState<Set<string>>(new Set());
+  const [resumeSearchQuery, setResumeSearchQuery] = useState('');
   const [selectorPos, setSelectorPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const triggerCursorPosRef = useRef<number>(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -965,7 +992,6 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
               {configFields[0].key === 'agent_type' && params['session_mode'] === 'resume' && (() => {
                 const resumeRef = params['resume_session_ref'] || '';
                 const groups = stages ? getPredecessorOutputOptions(node.id, stages, stageEdges) : [];
-                const hasAny = groups.some(g => g.options.length > 0 || (g.children && g.children.some(c => c.options.length > 0)));
                 const displayLabel = (() => {
                   if (!resumeRef) return '';
                   for (const g of groups) {
@@ -1009,10 +1035,48 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {!hasAny && (
-                            <div style={{ padding: '12px 8px', color: 'var(--text-tertiary)', textAlign: 'center' }}>暂无可用字段</div>
-                          )}
-                          {groups.map((stage, si) => (
+                          <input
+                            autoFocus
+                            value={resumeSearchQuery}
+                            onChange={(e) => { e.stopPropagation(); setResumeSearchQuery(e.target.value); }}
+                            placeholder="搜索字段…"
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setResumeDropdownOpen(false); } }}
+                            style={{
+                              width: '100%',
+                              padding: '6px 8px',
+                              fontSize: 'var(--fs-11)',
+                              border: 'none',
+                              borderBottom: '1px solid var(--border)',
+                              outline: 'none',
+                              background: 'var(--bg-primary)',
+                              color: 'var(--text-primary)',
+                              boxSizing: 'border-box',
+                            }}
+                          />
+                          {(() => {
+                            const showAll = resumeSearchQuery.length > 0;
+                            const q = resumeSearchQuery.toLowerCase();
+                            const filteredGroups = showAll ? groups.reduce((acc, stage) => {
+                              const stageMatch = stage.group?.toLowerCase().includes(q);
+                              const filteredOptions = stage.options.filter(opt => opt.label.toLowerCase().includes(q));
+                              const filteredChildren = (stage.children || []).reduce((ca, node) => {
+                                const nodeMatch = node.group.toLowerCase().includes(q);
+                                const filteredNodeOpts = node.options.filter(opt => opt.label.toLowerCase().includes(q));
+                                if (nodeMatch || filteredNodeOpts.length > 0) {
+                                  ca.push({ ...node, options: nodeMatch ? node.options : filteredNodeOpts });
+                                }
+                                return ca;
+                              }, [] as OptionGroup[]);
+                              if (stageMatch || filteredOptions.length > 0 || filteredChildren.length > 0) {
+                                acc.push({ ...stage, options: stageMatch ? stage.options : filteredOptions, children: filteredChildren });
+                              }
+                              return acc;
+                            }, [] as OptionGroup[]) : groups;
+                            if (filteredGroups.length === 0) {
+                              return <div style={{ padding: '12px 8px', fontSize: 'var(--fs-11)', color: 'var(--text-tertiary)', textAlign: 'center' }}>{resumeSearchQuery ? '无匹配字段' : '暂无可用字段'}</div>;
+                            }
+                            return filteredGroups.map((stage, si) => (
                             <div key={si}>
                               {stage.group && (
                                 <div
@@ -1029,7 +1093,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                   {expandedResumeStages.has('sr:' + stage.group) ? '\u25bc' : '\u25b6'} [step{si + 1}] {stage.group}
                                 </div>
                               )}
-                              {expandedResumeStages.has('sr:' + stage.group) && (
+                              {(showAll || expandedResumeStages.has('sr:' + stage.group)) && (
                               <>
                               {stage.options.length > 0 && stage.options.map((opt) => (
                                 <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
@@ -1051,7 +1115,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                   >
                                     {expandedResumeNodes.has('nr:' + stage.group + ':' + ni) ? '\u25bc' : '\u25b6'} {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                   </div>
-                                  {expandedResumeNodes.has('nr:' + stage.group + ':' + ni) && nodeGroup.options.map((opt) => (
+                                  {(showAll || expandedResumeNodes.has('nr:' + stage.group + ':' + ni)) && nodeGroup.options.map((opt) => (
                                     <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 20px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                                       {opt.label}
                                     </div>
