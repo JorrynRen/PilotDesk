@@ -1010,7 +1010,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                                 ))}
                               </div>
                             )}
-                            <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 4 }}>
+                            <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 4, flexBasis: '100%' }}>
                               选择前序节点通过输出映射声明的会话变量，用于延续该节点的 Agent 会话上下文
                             </div>
                           </div>
