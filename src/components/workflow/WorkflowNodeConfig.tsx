@@ -425,6 +425,8 @@ const MappingEditor: React.FC<{
   const [invalidKeys, setInvalidKeys] = useState<Set<string>>(new Set());
   const [dupKeys, setDupKeys] = useState<Set<string>>(new Set());
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set());
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
   const handleKeyChange = (oldKey: string, newKey: string) => {
     if (oldKey === newKey) return;
@@ -626,6 +628,14 @@ const MappingEditor: React.FC<{
                             {/* 第一级：[序号] 阶段名 */}
                             {stage.group && (
                               <div
+                                onClick={() => {
+                                  const k = 's:' + stage.group;
+                                  setExpandedStages(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(k)) next.delete(k); else next.add(k);
+                                    return next;
+                                  });
+                                }}
                                 style={{
                                   padding: '4px 8px',
                                   fontSize: 'var(--fs-10)',
@@ -633,13 +643,16 @@ const MappingEditor: React.FC<{
                                   fontWeight: 600,
                                   borderBottom: '1px solid var(--border)',
                                   background: 'var(--bg-tertiary)',
+                                  cursor: 'pointer',
+                                  userSelect: 'none',
                                 }}
                               >
-                                [step{si + 1}] {stage.group}
+                                {expandedStages.has('s:' + stage.group) ? '\u25bc' : '\u25b6'} [step{si + 1}] {stage.group}
                               </div>
                             )}
-                            {/* 二级：gate_output 选项 + [node] 分组 */}
-                            {/* gate_output 选项（直接可点，和[node]标题同级） */}
+                            {expandedStages.has('s:' + stage.group) && (
+                            <>
+                            {/* gate_output 选项 */}
                             {stage.options.length > 0 && stage.options.map((opt) => (
                               <div
                                 key={opt.value}
@@ -659,21 +672,31 @@ const MappingEditor: React.FC<{
                                 {opt.label}
                               </div>
                             ))}
-                            {/* [node] 分组（标题+嵌套字段） */}
+                            {/* [node] 分组 */}
                             {stage.children && stage.children.map((nodeGroup, ni) => (
                               <div key={ni}>
                                 <div
+                                  onClick={() => {
+                                    const k = 'n:' + stage.group + ':' + ni;
+                                    setExpandedNodes(prev => {
+                                      const next = new Set(prev);
+                                      if (next.has(k)) next.delete(k); else next.add(k);
+                                      return next;
+                                    });
+                                  }}
                                   style={{
                                     padding: '6px 8px',
                                     fontSize: 'var(--fs-10)',
                                     color: 'var(--text-secondary)',
                                     fontWeight: 500,
                                     borderBottom: '1px solid var(--border)',
+                                    cursor: 'pointer',
+                                    userSelect: 'none',
                                   }}
                                 >
-                                  {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
+                                  {expandedNodes.has('n:' + stage.group + ':' + ni) ? '\u25bc' : '\u25b6'} {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                 </div>
-                                {nodeGroup.options.map((opt) => (
+                                {expandedNodes.has('n:' + stage.group + ':' + ni) && nodeGroup.options.map((opt) => (
                                   <div
                                     key={opt.value}
                                     onClick={() => {
@@ -694,6 +717,8 @@ const MappingEditor: React.FC<{
                                 ))}
                               </div>
                             ))}
+                            </>
+                            )}
                           </div>
                         ));
                       })()}
@@ -744,6 +769,8 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const outputBaseKeyRef = useRef<string>('');
   const [fieldSelectorKey, setFieldSelectorKey] = useState<string | null>(null);
   const [resumeDropdownOpen, setResumeDropdownOpen] = useState(false);
+  const [expandedResumeStages, setExpandedResumeStages] = useState<Set<string>>(new Set());
+  const [expandedResumeNodes, setExpandedResumeNodes] = useState<Set<string>>(new Set());
   const [selectorPos, setSelectorPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const triggerCursorPosRef = useRef<number>(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -988,10 +1015,22 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           {groups.map((stage, si) => (
                             <div key={si}>
                               {stage.group && (
-                                <div style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)' }}>
-                                  [step{si + 1}] {stage.group}
+                                <div
+                                  onClick={() => {
+                                    const k = 'sr:' + stage.group;
+                                    setExpandedResumeStages(prev => {
+                                      const next = new Set(prev);
+                                      if (next.has(k)) next.delete(k); else next.add(k);
+                                      return next;
+                                    });
+                                  }}
+                                  style={{ padding: '4px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', fontWeight: 600, borderBottom: '1px solid var(--border)', background: 'var(--bg-tertiary)', cursor: 'pointer', userSelect: 'none' }}
+                                >
+                                  {expandedResumeStages.has('sr:' + stage.group) ? '\u25bc' : '\u25b6'} [step{si + 1}] {stage.group}
                                 </div>
                               )}
+                              {expandedResumeStages.has('sr:' + stage.group) && (
+                              <>
                               {stage.options.length > 0 && stage.options.map((opt) => (
                                 <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                                   {opt.label}
@@ -999,16 +1038,28 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                               ))}
                               {stage.children && stage.children.map((nodeGroup, ni) => (
                                 <div key={ni}>
-                                  <div style={{ padding: '6px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>
-                                    {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
+                                  <div
+                                    onClick={() => {
+                                      const k = 'nr:' + stage.group + ':' + ni;
+                                      setExpandedResumeNodes(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(k)) next.delete(k); else next.add(k);
+                                        return next;
+                                      });
+                                    }}
+                                    style={{ padding: '6px 8px', fontSize: 'var(--fs-10)', color: 'var(--text-secondary)', fontWeight: 500, borderBottom: '1px solid var(--border)', cursor: 'pointer', userSelect: 'none' }}
+                                  >
+                                    {expandedResumeNodes.has('nr:' + stage.group + ':' + ni) ? '\u25bc' : '\u25b6'} {nodeGroup.group.startsWith('[') ? nodeGroup.group : `[node] ${nodeGroup.group}`}
                                   </div>
-                                  {nodeGroup.options.map((opt) => (
+                                  {expandedResumeNodes.has('nr:' + stage.group + ':' + ni) && nodeGroup.options.map((opt) => (
                                     <div key={opt.value} onClick={() => { handleParamChange('resume_session_ref', opt.value); setResumeDropdownOpen(false); }} style={{ padding: '6px 8px 6px 20px', cursor: 'pointer', color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                                       {opt.label}
                                     </div>
                                   ))}
                                 </div>
                               ))}
+                              </>
+                              )}
                             </div>
                           ))}
                         </div>
