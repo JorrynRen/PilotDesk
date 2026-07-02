@@ -937,36 +937,35 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                           if (!stages) return [];
                           const currentStageIdx = stages.findIndex(s => s.nodes.some(n => n.id === node.id));
                           const options: { value: string; label: string }[] = [];
-                          const seenNodeIds = new Set<string>();
-                          // 前序阶段中的所有同类型 agent 节点
-                          for (let i = 0; i < currentStageIdx; i++) {
-                            const stage = stages[i];
-                            for (const n of stage.nodes) {
-                              if (n.type === 'agent' && n.params?.agent_type === params['agent_type']) {
-                                if (!seenNodeIds.has(n.id)) {
-                                  seenNodeIds.add(n.id);
+                          // 从前序节点（agent）的 outputMapping 声明中获取可用字段
+                          // 遵循"节点变量通过输出映射显式声明后才能暴露"原则
+                          const collectFromNodes = (nodes: typeof stages[0]['nodes'], stageId: string, stageName: string) => {
+                            for (const n of nodes) {
+                              if (n.type === 'agent') {
+                                const outputMapping = n.outputMapping || {};
+                                const outputKeys = Object.keys(outputMapping);
+                                for (const key of outputKeys) {
                                   options.push({
-                                    value: `{{session_id.${n.id}.${stage.id}}}`,
-                                    label: `[${stage.name}] ${n.label || n.id}.session_id`,
+                                    value: `{{${key}.${n.id}.${stageId}}}`,
+                                    label: `[${stageName}] ${n.label || n.id}.${key}`,
                                   });
                                 }
                               }
                             }
+                          };
+                          // 前序阶段中的所有 agent 节点
+                          for (let i = 0; i < currentStageIdx; i++) {
+                            const stage = stages[i];
+                            collectFromNodes(stage.nodes, stage.id, stage.name);
                           }
-                          // 同阶段中通过边连接的前序同类型 agent 节点
+                          // 同阶段中通过边连接的前序 agent 节点
                           if (currentStageIdx >= 0) {
                             const currentStage = stages[currentStageIdx];
                             const incomingEdges = currentStage.edges.filter(e => e.target === node.id);
                             for (const edge of incomingEdges) {
                               const sourceNode = currentStage.nodes.find(n => n.id === edge.source);
-                              if (sourceNode && sourceNode.type === 'agent' && sourceNode.params?.agent_type === params['agent_type']) {
-                                if (!seenNodeIds.has(sourceNode.id)) {
-                                  seenNodeIds.add(sourceNode.id);
-                                  options.push({
-                                    value: `{{session_id.${sourceNode.id}.${currentStage.id}}}`,
-                                    label: `[${currentStage.name}] ${sourceNode.label || sourceNode.id}.session_id`,
-                                  });
-                                }
+                              if (sourceNode) {
+                                collectFromNodes([sourceNode], currentStage.id, currentStage.name);
                               }
                             }
                           }
