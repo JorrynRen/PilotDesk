@@ -13,11 +13,39 @@ use crate::utils::errors::AppError;
 
 pub mod handler;
 
+#[cfg(target_os = "windows")]
+mod conpty;
+#[cfg(target_os = "windows")]
+pub use conpty::ConptyProcess;
+
 // ------------------------------------------------------------------
 //  输出解析器
 // ------------------------------------------------------------------
 
 #[allow(dead_code)]
+fn quote_cmdline_arg(s: &str) -> String {
+    let needs_quote = s.is_empty()
+        || s.contains(' ')
+        || s.contains('\t')
+        || s.contains('\n')
+        || s.contains('"');
+    if needs_quote {
+        let mut escaped = String::with_capacity(s.len() + 2);
+        escaped.push('"');
+        for c in s.chars() {
+            match c {
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                _ => escaped.push(c),
+            }
+        }
+        escaped.push('"');
+        escaped
+    } else {
+        s.to_string()
+    }
+}
+
 fn parse_claude_output(line: &str) -> Option<String> {
     if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
         if event["type"] == "assistant" {
@@ -133,13 +161,40 @@ struct AgentProcess {
     aborted: Arc<AtomicBool>,
 }
 
-/// 共享的进程启动结果
+/// Unified process wrapper: tokio Child or ConPTY process
+enum ProcessChild {
+    Tokio(tokio::process::Child),
+    #[cfg(target_os = "windows")]
+    Conpty(ConptyProcess),
+}
+
+impl ProcessChild {
+    async fn wait(&mut self) -> Result<i32, String> {
+        match self {
+            ProcessChild::Tokio(child) => {
+                let status = child.wait().await
+                    .map_err(|e| format!("Wait failed: {}", e))?;
+                Ok(status.code().unwrap_or(-1))
+            }
+            ProcessChild::Conpty(conpty) => conpty.wait().await,
+        }
+    }
+    fn id(&self) -> u32 {
+        match self {
+            ProcessChild::Tokio(child) => child.id().unwrap_or(0),
+            ProcessChild::Conpty(conpty) => conpty.id(),
+        }
+    }
+}
+
+/// Shared process spawn result
 struct SpawnedProcess {
-    child: tokio::process::Child,
-    stdout: tokio::process::ChildStdout,
-    stderr: tokio::process::ChildStderr,
+    child: ProcessChild,
+    stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+    stderr: Box<dyn tokio::io::AsyncRead + Unpin + Send>,
     stderr_buf: Arc<Mutex<String>>,
     agent_type: String,
+    conpty_mode: bool,
 }
 
 pub struct AgentManager {
@@ -182,21 +237,51 @@ impl AgentManager {
             .unwrap_or_else(|| effective_cmd.to_string());
 
         #[cfg(target_os = "windows")]
-        let mut child = {
-            let mut cmd = Command::new("cmd");
-            cmd.arg("/C");
-            cmd.arg(&resolved_cmd);
-            cmd.args(&args);
-            cmd.current_dir(&work_dir);
-            cmd.stdout(std::process::Stdio::piped());
-            cmd.stderr(std::process::Stdio::piped());
-            cmd.kill_on_drop(true);
-            cmd.env_remove("PYTHONHOME");
-            cmd.spawn()
-                .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?
+        let (child, stdout, stderr, conpty_mode) = {
+            let mut cmdline = String::new();
+            cmdline.push_str(&quote_cmdline_arg(&resolved_cmd));
+            for arg in &args {
+                cmdline.push(' ');
+                cmdline.push_str(&quote_cmdline_arg(arg));
+            }
+
+            log::info!("[Agent/{}] SPAWN (ConPTY): cmd={} args={:?} sid={:?} cwd={}",
+                agent_type, resolved_cmd, args, agent_session_id, work_dir);
+
+            match crate::agent::conpty::spawn_with_conpty(&cmdline, &work_dir) {
+                Ok((c, o, e, cm)) => (
+                    ProcessChild::Conpty(c),
+                    Box::new(o) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                    Box::new(e) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                    cm,
+                ),
+                Err(e) => {
+                    log::warn!("[Agent/{}] ConPTY failed, fallback: {}", agent_type, e);
+                    let mut cmd = Command::new(&resolved_cmd);
+                    cmd.args(&args);
+                    cmd.current_dir(&work_dir);
+                    cmd.stdout(std::process::Stdio::piped());
+                    cmd.stderr(std::process::Stdio::piped());
+                    cmd.kill_on_drop(true);
+                    cmd.env_remove("PYTHONHOME");
+                    let mut spawned = cmd.spawn()
+                        .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?;
+                    let o = spawned.stdout.take()
+                        .ok_or_else(|| format!("无法获取 {} stdout", agent_type))?;
+                    let e = spawned.stderr.take()
+                        .ok_or_else(|| format!("无法获取 {} stderr", agent_type))?;
+                    (
+                        ProcessChild::Tokio(spawned),
+                        Box::new(o) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                        Box::new(e) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                        false,
+                    )
+                }
+            }
         };
+
         #[cfg(not(target_os = "windows"))]
-        let mut child = {
+        let (child, stdout, stderr, conpty_mode) = {
             let mut cmd = Command::new(&resolved_cmd);
             cmd.args(&args);
             cmd.current_dir(&work_dir);
@@ -204,14 +289,19 @@ impl AgentManager {
             cmd.stderr(std::process::Stdio::piped());
             cmd.kill_on_drop(true);
             cmd.env_remove("PYTHONHOME");
-            cmd.spawn()
-                .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?
+            let mut spawned = cmd.spawn()
+                .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?;
+            let o = spawned.stdout.take()
+                .ok_or_else(|| format!("无法获取 {} stdout", agent_type))?;
+            let e = spawned.stderr.take()
+                .ok_or_else(|| format!("无法获取 {} stderr", agent_type))?;
+            (
+                ProcessChild::Tokio(spawned),
+                Box::new(o) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                Box::new(e) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                false,
+            )
         };
-
-        let stdout = child.stdout.take()
-            .ok_or_else(|| format!("无法获取 {} stdout", agent_type))?;
-        let stderr = child.stderr.take()
-            .ok_or_else(|| format!("无法获取 {} stderr", agent_type))?;
 
         let stderr_buf = Arc::new(Mutex::new(String::new()));
 
@@ -221,6 +311,7 @@ impl AgentManager {
             stderr,
             stderr_buf,
             agent_type,
+            conpty_mode,
         })
     }
 
@@ -242,76 +333,92 @@ impl AgentManager {
     ) -> Result<(String, Option<String>, i32, String), String> {
         let process_handler = handler::StdioHandler::from_config(config.clone());
 
-        let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type } =
+        let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type, conpty_mode } =
             Self::spawn_agent_process(config, prompt, agent_session_id, cwd)?;
 
-        // 后台收集 stderr（含 session_id 提取）
-        let stderr_buf_clone = stderr_buf.clone();
-        let agent_type_clone = agent_type.clone();
-        let process_handler_for_stderr = process_handler.clone();
-        let agent_session_id_shared: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
-        let sid_shared = agent_session_id_shared.clone();
-        let stderr_handle = tokio::spawn(async move {
-            let reader = BufReader::new(stderr);
-            use tokio::io::AsyncBufReadExt;
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Some(sid) = process_handler_for_stderr.extract_session_id(&line, true) {
-                    if let Ok(mut s) = sid_shared.lock() {
-                        *s = Some(sid);
-                    }
-                }
-                if let Ok(mut buf) = stderr_buf_clone.lock() {
-                    buf.push_str(&line);
-                    buf.push('\n');
-                }
-            }
-            if let Ok(buf) = stderr_buf_clone.lock() {
-                if !buf.is_empty() {
-                    log::warn!("[Agent/{}] stderr: {}", agent_type_clone, buf.trim());
-                }
-            }
-        });
-
-        // 读取 stdout
-        let reader = BufReader::new(stdout);
         use tokio::io::AsyncBufReadExt;
-        let mut lines = reader.lines();
         let mut full_output = String::new();
         let mut agent_session_id_result: Option<String> = None;
 
-        while let Ok(Some(line)) = lines.next_line().await {
-            if abort_check() { break; }
-
-            if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
-                agent_session_id_result = Some(sid.clone());
-                on_session_id(sid.clone());
-            }
-            if let Some(content) = process_handler.parse_output_line(&line) {
-                on_chunk(content.clone());
-                full_output.push_str(&content);
-            }
-        }
-
-        let status = child.wait().await
-            .map_err(|e| format!("等待进程失败: {}", e))?;
-        let exit_code = status.code().unwrap_or(-1);
-
-        // 等待 stderr 后台任务完成，确保所有 stderr 行已被处理
-        if let Err(e) = stderr_handle.await {
-            log::warn!("[Agent/{}] stderr task join error: {:?}", agent_type, e);
-        }
-
-        // 现在安全地从 stderr 提取 session_id（无竞态条件）
-        if agent_session_id_result.is_none() {
-            if let Ok(sid) = agent_session_id_shared.lock() {
-                if let Some(s) = sid.clone() {
-                    agent_session_id_result = Some(s.clone());
-                    on_session_id(s);
+        if conpty_mode {
+            // ConPTY merged mode: stdout+stderr in same pipe
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if abort_check() { break; }
+                if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
+                    agent_session_id_result = Some(sid.clone());
+                    on_session_id(sid.clone());
+                } else if let Some(ref sid) = process_handler.extract_session_id(&line, true) {
+                    agent_session_id_result = Some(sid.clone());
+                    on_session_id(sid.clone());
+                }
+                if let Some(content) = process_handler.parse_output_line(&line) {
+                    on_chunk(content.clone());
+                    full_output.push_str(&content);
                 }
             }
-        }
+            drop(stderr);
+        } else {
+            // Stdio mode: stderr in background task
+            let stderr_buf_clone = stderr_buf.clone();
+            let agent_type_clone = agent_type.clone();
+            let process_handler_for_stderr = process_handler.clone();
+            let agent_session_id_shared: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+            let sid_shared = agent_session_id_shared.clone();
+            let stderr_handle = tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                use tokio::io::AsyncBufReadExt;
+                let mut lines = reader.lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(sid) = process_handler_for_stderr.extract_session_id(&line, true) {
+                        if let Ok(mut s) = sid_shared.lock() {
+                            *s = Some(sid);
+                        }
+                    }
+                    if let Ok(mut buf) = stderr_buf_clone.lock() {
+                        buf.push_str(&line);
+                        buf.push('\n');
+                    }
+                }
+                if let Ok(buf) = stderr_buf_clone.lock() {
+                    if !buf.is_empty() {
+                        log::warn!("[Agent/{}] stderr: {}", agent_type_clone, buf.trim());
+                    }
+                }
+            });
 
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if abort_check() { break; }
+                if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
+                    agent_session_id_result = Some(sid.clone());
+                    on_session_id(sid.clone());
+                }
+                if let Some(content) = process_handler.parse_output_line(&line) {
+                    on_chunk(content.clone());
+                    full_output.push_str(&content);
+                }
+            }
+
+            // Wait for stderr background task
+            if let Err(e) = stderr_handle.await {
+                log::warn!("[Agent/{}] stderr task join error: {:?}", agent_type, e);
+            }
+
+            // Extract session_id from stderr
+            if agent_session_id_result.is_none() {
+                if let Ok(sid) = agent_session_id_shared.lock() {
+                    if let Some(s) = sid.clone() {
+                        agent_session_id_result = Some(s.clone());
+                        on_session_id(s);
+                    }
+                }
+            }
+        } // end else (stdio mode)
+
+        let exit_code = child.wait().await?;
 
         let stderr_text = stderr_buf.lock()
             .map(|b| b.clone())
@@ -339,7 +446,7 @@ impl AgentManager {
         let pid = {
             let SpawnedProcess { child, .. } =
                 Self::spawn_agent_process(&config, &message, agent_session_id.as_deref(), cwd.as_deref().unwrap_or(""))?;
-            child.id().unwrap_or(0)
+            child.id()
         };
 
         self.processes.insert(session_id.clone(), AgentProcess {

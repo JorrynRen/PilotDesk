@@ -41,3 +41,6 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
 cron = "0.15"
 async-recursion = "1.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Memory"] }
