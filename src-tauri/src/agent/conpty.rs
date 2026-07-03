@@ -48,7 +48,7 @@ pub fn spawn_with_conpty(
     cmdline: &str,
     cwd: &str,
 ) -> Result<(ConptyProcess, tokio::fs::File, tokio::fs::File, bool), String> {
-    log::info!("[ConPTY] spawn_with_conpty: cmdline={} cwd={}", cmdline, cwd);
+    log::info!("[ConPTY] >>> ENTRY: cmdline={} cwd={}", cmdline, cwd);
     unsafe {
         // 1. 创建 ConPTY 通信管道
         // pipe_server: ConPTY 写入端（子进程的 console 输出）
