@@ -41,8 +41,10 @@ impl ProcessHandler for StdioHandler {
         // 有 agent_session_id → 使用 resume_arg_template（完整的命令模板，含 --resume {session_id}）
         // 无 agent_session_id → 使用 run_cmd_template
         let template_str = if let Some(sid) = agent_session_id {
+            log::info!("[Handler] build_command: session_id={:?} resume_tpl={}", sid, self.config.resume_arg_template);
             self.config.resume_arg_template.replace("{session_id}", sid)
         } else {
+            log::info!("[Handler] build_command: no session_id, using run_cmd_template");
             self.config.run_cmd_template.clone()
         };
 
