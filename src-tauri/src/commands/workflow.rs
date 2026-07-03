@@ -846,7 +846,11 @@ pub async fn test_node(
         .unwrap_or(Value::Null);
     let result = executor.execute(&node_def, input, "test", &app_handle).await
         .map_err(|e| format!("执行失败: {}", e))?;
-    Ok(result.output)
+    // 返回 output 和 session_id（供前端引擎延续会话使用）
+    Ok(serde_json::json!({
+        "output": result.output,
+        "session_id": result.session_id,
+    }))
 }
 
 /// 获取所有注册的节点类型

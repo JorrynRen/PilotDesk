@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 69];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 69, 70, 71];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -304,7 +304,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "claude --version",
          "npm view @anthropic-ai/claude-code version",
          "claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
-         "json-stream", "", 1, "stdout-json", "system/init", "session_id", "--resume {session_id}",
+         "json-stream", "", 1, "stdout-json", "system", "session_id", "claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
          "#3B82F6", "file:claude_icon.ico", "~/.claude/skills/", "collection", 1),
         ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
          "hermes", None, Some("hermes-agent"),
@@ -316,7 +316,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "hermes chat --query={message} -Q",
          "ansi-text",
          "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
-         "stderr-text", "", "", "--resume {session_id}",
+         "stderr-text", "", "session_id: ", "hermes --resume {session_id} chat --query={message} -Q",
          "#8B5CF6", "file:hermes_icon.ico", "~/AppData/Local/hermes/skills/", "collection", 2),
         ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
          "codex", Some("@openai/codex"), None,
@@ -326,7 +326,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "codex --version",
          "npm view @openai/codex version",
          "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
-         "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "exec resume {session_id}",
+         "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
          "#F59E0B", "file:codex_icon.ico", "~/.codex/skills/", "collection", 3),
     ];
 
@@ -832,6 +832,45 @@ fn migrate_add_stage_edges_column(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Migration v70 — 标准化 session_id_source 为五种来源类型
+/// 将 agents 表中的 session_id_source 规范化为以下五种之一：
+///   none, stdout-text, stderr-text, stdout-json, stderr-json
+/// 空字符串和无效值统一转为 "none"
+fn migrate_normalize_session_id_source(conn: &Connection) -> Result<(), AppError> {
+    // 将空字符串或 NULL 转为 "none"
+    conn.execute(
+        "UPDATE agents SET session_id_source = 'none' WHERE session_id_source IS NULL OR session_id_source = ''",
+        [],
+    )?;
+    // 将非标准值转为 "none"
+    conn.execute(
+        "UPDATE agents SET session_id_source = 'none' WHERE session_id_source NOT IN ('none', 'stdout-text', 'stderr-text', 'stdout-json', 'stderr-json')",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Migration v71 — 同步内置 agent 延续会话命令模板和 session_id 配置
+/// 将 run_cmd_template、resume_arg_template、session_id_source/field/event_type 统一为最新版本
+fn migrate_sync_resume_templates(conn: &Connection) -> Result<(), AppError> {
+    // Hermes: stderr-text, session_id: , 完整 resume 模板
+    conn.execute(
+        "UPDATE agents SET run_cmd_template = 'hermes chat --query={message} -Q', session_id_source = 'stderr-text', session_id_field = 'session_id: ', resume_arg_template = 'hermes --resume {session_id} chat --query={message} -Q' WHERE agent_type = 'hermes'",
+        [],
+    )?;
+    // Claude: stdout-json, system, session_id, 完整 resume 模板
+    conn.execute(
+        "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}', session_id_source = 'stdout-json', session_id_event_type = 'system', session_id_field = 'session_id', resume_arg_template = 'claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
+        [],
+    )?;
+    // Codex: stdout-json, thread.started, thread_id, 完整 resume 模板
+    conn.execute(
+        "UPDATE agents SET run_cmd_template = 'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}', session_id_source = 'stdout-json', session_id_event_type = 'thread.started', session_id_field = 'thread_id', resume_arg_template = 'codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}' WHERE agent_type = 'codex'",
+        [],
+    )?;
+    Ok(())
+}
+
 fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppError> {
     for &ver in MIGRATION_VERSIONS {
         if current_version < ver {
@@ -863,6 +902,8 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 67 => migrate_legacy_workflow_columns(conn)?,
                 68 => migrate_deprecate_steps_column(conn)?,
                 69 => migrate_add_stage_edges_column(conn)?,
+                70 => migrate_normalize_session_id_source(conn)?,
+                71 => migrate_sync_resume_templates(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }

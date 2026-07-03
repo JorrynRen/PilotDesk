@@ -224,150 +224,26 @@ impl AgentManager {
         })
     }
 
-    // -- 前端会话模式：Event 推送 --
+    // -- 核心 IO 循环：启动进程 → 读取 stdout/stderr → 提取 session_id --
+    // agent 模块的权威实现，send_message_with_config 和 execute_once 均基于此
 
-    pub async fn send_message_with_config(
-        &mut self,
-        app_handle: tauri::AppHandle,
-        session_id: String,
-        config: AgentConfig,
-        message: String,
-        _mode: String,
-        cwd: Option<String>,
-        _system_prompt: Option<String>,
-        agent_session_id: Option<String>,
-    ) -> Result<(), String> {
-        let process_handler = handler::StdioHandler::from_config(config.clone());
-        let aborted = Arc::new(AtomicBool::new(false));
-        let aborted_clone = aborted.clone();
-
-        let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type } =
-            Self::spawn_agent_process(&config, &message, agent_session_id.as_deref(), cwd.as_deref().unwrap_or(""))?;
-
-        let pid = child.id().unwrap_or(0);
-
-        self.processes.insert(session_id.clone(), AgentProcess {
-            pid: Some(pid),
-            aborted: aborted_clone,
-        });
-
-        // 后台收集 stderr（含 session_id 提取）
-        let handler_for_stderr = process_handler.clone();
-        let app_clone_for_stderr = app_handle.clone();
-        let sid_for_stderr = session_id.clone();
-        let stderr_buf_for_reader = stderr_buf.clone();
-        let agent_type_name_for_stderr = agent_type.clone();
-        tokio::spawn(async move {
-            let reader = BufReader::new(stderr);
-            use tokio::io::AsyncBufReadExt;
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Some(sid_agent) = handler_for_stderr.extract_session_id(&line, true) {
-                    let _ = app_clone_for_stderr.emit("agent-session", serde_json::json!({
-                        "sessionId": sid_for_stderr,
-                        "agentSessionId": sid_agent,
-                    }));
-                }
-                if let Ok(mut buf) = stderr_buf_for_reader.lock() {
-                    buf.push_str(&line);
-                    buf.push('\n');
-                }
-            }
-            if let Ok(buf) = stderr_buf_for_reader.lock() {
-                if !buf.is_empty() {
-                    log::warn!("[Agent/{}] send_message stderr: {}", agent_type_name_for_stderr, buf.trim());
-                }
-            }
-        });
-
-        // 主任务：读取 stdout（带 300s 超时）+ 等待子进程 + 检查退出码
-        let app_clone = app_handle.clone();
-        let sid = session_id.clone();
-        let agent_type_name2 = agent_type.clone();
-
-        tokio::spawn(async move {
-            let timeout_duration = Duration::from_secs(300);
-
-            let read_result = timeout(timeout_duration, async {
-                let reader = BufReader::new(stdout);
-                use tokio::io::AsyncBufReadExt;
-                let mut lines = reader.lines();
-
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if aborted.load(Ordering::Relaxed) { break; }
-
-                    if let Some(sid_agent) = process_handler.extract_session_id(&line, false) {
-                        let _ = app_clone.emit("agent-session", serde_json::json!({
-                            "sessionId": sid,
-                            "agentSessionId": sid_agent,
-                        }));
-                    }
-
-                    if let Some(content) = process_handler.parse_output_line(&line) {
-                        let _ = app_clone.emit("agent-chunk", serde_json::json!({
-                            "sessionId": sid,
-                            "content": content,
-                        }));
-                    }
-                }
-            }).await;
-
-            if read_result.is_err() {
-                let _ = app_clone.emit("agent-error", serde_json::json!({
-                    "sessionId": sid,
-                    "error": "请求超时：智能体未在 300 秒内响应，请检查智能体状态后重试",
-                }));
-                let _ = app_clone.emit("agent-done", serde_json::json!({
-                    "sessionId": sid,
-                }));
-                return;
-            }
-
-            match child.wait().await {
-                Ok(status) => {
-                    if let Some(code) = status.code() {
-                        if code != 0 {
-                            let stderr_text = stderr_buf.lock()
-                                .map(|b| b.clone())
-                                .unwrap_or_default();
-                            let err_msg = friendly_agent_error(&agent_type_name2, code, &stderr_text);
-                            let _ = app_clone.emit("agent-error", serde_json::json!({
-                                "sessionId": sid,
-                                "error": err_msg,
-                            }));
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[Agent/{}] wait() failed: {}", agent_type_name2, e);
-                }
-            }
-
-            let _ = app_clone.emit("agent-done", serde_json::json!({
-                "sessionId": sid,
-            }));
-        });
-
-        Ok(())
-    }
-
-    // -- 单次执行模式：直接返回完整输出 --
-
-    pub async fn execute_once(
-        &mut self,
+    /// 内部 IO 执行 — 启动 Agent 进程，收集 stdout/stderr，提取 session_id
+    ///
+    /// 返回: (完整输出文本, agent_session_id, 退出码, stderr文本)
+    /// 这是 agent 模块的核心 IO 逻辑，两个公开入口方法均调用此函数。
+    async fn execute_agent_inner(
         config: &AgentConfig,
         prompt: &str,
-        _params: &serde_json::Value,
-        cwd: &str,
-        _temp_session_id: &str,
-        on_chunk: impl Fn(String) + Send + 'static,
         agent_session_id: Option<&str>,
-    ) -> Result<(String, Option<String>), AppError> {
+        cwd: &str,
+        on_chunk: impl Fn(String) + Send + 'static,
+        on_session_id: impl Fn(String) + Send + 'static,
+        abort_check: impl Fn() -> bool + Send + 'static,
+    ) -> Result<(String, Option<String>, i32, String), String> {
         let process_handler = handler::StdioHandler::from_config(config.clone());
 
         let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type } =
-            Self::spawn_agent_process(config, prompt, agent_session_id, cwd)
-                .map_err(|e| AppError::External(e))?;
+            Self::spawn_agent_process(config, prompt, agent_session_id, cwd)?;
 
         // 后台收集 stderr（含 session_id 提取）
         let stderr_buf_clone = stderr_buf.clone();
@@ -375,7 +251,7 @@ impl AgentManager {
         let process_handler_for_stderr = process_handler.clone();
         let agent_session_id_shared: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
         let sid_shared = agent_session_id_shared.clone();
-        tokio::spawn(async move {
+        let stderr_handle = tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             use tokio::io::AsyncBufReadExt;
             let mut lines = reader.lines();
@@ -392,7 +268,7 @@ impl AgentManager {
             }
             if let Ok(buf) = stderr_buf_clone.lock() {
                 if !buf.is_empty() {
-                    log::warn!("[Agent/{}] execute_once stderr: {}", agent_type_clone, buf.trim());
+                    log::warn!("[Agent/{}] stderr: {}", agent_type_clone, buf.trim());
                 }
             }
         });
@@ -402,11 +278,14 @@ impl AgentManager {
         use tokio::io::AsyncBufReadExt;
         let mut lines = reader.lines();
         let mut full_output = String::new();
-        let mut agent_session_id: Option<String> = None;
+        let mut agent_session_id_result: Option<String> = None;
 
         while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(sid) = process_handler.extract_session_id(&line, false) {
-                agent_session_id = Some(sid);
+            if abort_check() { break; }
+
+            if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
+                agent_session_id_result = Some(sid.clone());
+                on_session_id(sid.clone());
             }
             if let Some(content) = process_handler.parse_output_line(&line) {
                 on_chunk(content.clone());
@@ -414,29 +293,169 @@ impl AgentManager {
             }
         }
 
-        // 合并 stderr 中提取的 session_id（hermes 的 session_id 来自 stderr）
-        if agent_session_id.is_none() {
-            if let Ok(sid) = agent_session_id_shared.lock() {
-                agent_session_id = sid.clone();
-            }
-        }
-
         let status = child.wait().await
-            .map_err(|e| AppError::External(format!("等待进程失败: {}", e)))?;
+            .map_err(|e| format!("等待进程失败: {}", e))?;
+        let exit_code = status.code().unwrap_or(-1);
 
-        if let Some(code) = status.code() {
-            if code != 0 {
-                let stderr_text = stderr_buf.lock()
-                    .map(|b| b.clone())
-                    .unwrap_or_default();
-                let err_msg = friendly_agent_error(&agent_type, code, &stderr_text);
-                return Err(AppError::External(err_msg));
+        // 等待 stderr 后台任务完成，确保所有 stderr 行已被处理
+        if let Err(e) = stderr_handle.await {
+            log::warn!("[Agent/{}] stderr task join error: {:?}", agent_type, e);
+        }
+
+        // 现在安全地从 stderr 提取 session_id（无竞态条件）
+        if agent_session_id_result.is_none() {
+            if let Ok(sid) = agent_session_id_shared.lock() {
+                if let Some(s) = sid.clone() {
+                    agent_session_id_result = Some(s.clone());
+                    on_session_id(s);
+                }
             }
         }
 
-        Ok((full_output.trim().to_string(), agent_session_id))
+
+        let stderr_text = stderr_buf.lock()
+            .map(|b| b.clone())
+            .unwrap_or_default();
+
+        Ok((full_output.trim().to_string(), agent_session_id_result, exit_code, stderr_text))
     }
 
+    // -- 前端会话模式：Event 推送（基于 execute_agent_inner） --
+
+    pub async fn send_message_with_config(
+        &mut self,
+        app_handle: tauri::AppHandle,
+        session_id: String,
+        config: AgentConfig,
+        message: String,
+        _mode: String,
+        cwd: Option<String>,
+        _system_prompt: Option<String>,
+        agent_session_id: Option<String>,
+    ) -> Result<(), String> {
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_clone = aborted.clone();
+
+        let pid = {
+            let SpawnedProcess { child, .. } =
+                Self::spawn_agent_process(&config, &message, agent_session_id.as_deref(), cwd.as_deref().unwrap_or(""))?;
+            child.id().unwrap_or(0)
+        };
+
+        self.processes.insert(session_id.clone(), AgentProcess {
+            pid: Some(pid),
+            aborted: aborted_clone,
+        });
+
+        // 后台任务：调用共享 IO 循环，通过 Event 推送结果
+        let app_clone = app_handle.clone();
+        let sid = session_id.clone();
+        let agent_type_name = config.agent_type.clone();
+        let aborted_clone = aborted.clone();
+        let config_owned = config.clone();
+        let message_owned = message.clone();
+        let agent_session_id_owned = agent_session_id.clone();
+        let cwd_owned = cwd.clone();
+
+        tokio::spawn(async move {
+            let timeout_duration = Duration::from_secs(300);
+
+            let app = app_clone;
+            let sid_inner = sid;
+            let agent_type_name_inner = agent_type_name;
+            let aborted_inner = aborted_clone;
+
+            let result = timeout(timeout_duration, async {
+                let app_for_chunk = app.clone();
+                let sid_for_chunk = sid_inner.clone();
+                let app_for_sid = app.clone();
+                let sid_for_sid = sid_inner.clone();
+
+                Self::execute_agent_inner(
+                    &config_owned,
+                    &message_owned,
+                    agent_session_id_owned.as_deref(),
+                    cwd_owned.as_deref().unwrap_or(""),
+                    move |chunk| {
+                        let _ = app_for_chunk.emit("agent-chunk", serde_json::json!({
+                            "sessionId": sid_for_chunk,
+                            "content": chunk,
+                        }));
+                    },
+                    move |sid_agent| {
+                        let _ = app_for_sid.emit("agent-session", serde_json::json!({
+                            "sessionId": sid_for_sid,
+                            "agentSessionId": sid_agent,
+                        }));
+                    },
+                    move || aborted_inner.load(Ordering::Relaxed),
+                ).await
+            }).await;
+
+            match result {
+                Ok(Ok((_output, _sid_from_inner, exit_code, stderr_text))) => {
+                    // session_id 已由 execute_agent_inner 内部的 on_session_id 回调发射
+                    // stdout-text/json 通过 stdout 循环直接发射；stderr-text/json 通过 stderr 线程 -> 合并后发射
+                    if exit_code != 0 {
+                        let err_msg = friendly_agent_error(&agent_type_name_inner, exit_code, &stderr_text);
+                        let _ = app.emit("agent-error", serde_json::json!({
+                            "sessionId": sid_inner,
+                            "error": err_msg,
+                        }));
+                    }
+                }
+                Ok(Err(e)) => {
+                    let _ = app.emit("agent-error", serde_json::json!({
+                        "sessionId": sid_inner,
+                        "error": e,
+                    }));
+                }
+                Err(_) => {
+                    let _ = app.emit("agent-error", serde_json::json!({
+                        "sessionId": sid_inner,
+                        "error": "请求超时：智能体未在 300 秒内响应，请检查智能体状态后重试",
+                    }));
+                }
+            }
+
+            let _ = app.emit("agent-done", serde_json::json!({
+                "sessionId": sid_inner,
+            }));
+        });
+
+        Ok(())
+    }
+
+    // -- 单次执行模式：直接返回完整输出（基于 execute_agent_inner） --
+
+    pub async fn execute_once(
+        &mut self,
+        config: &AgentConfig,
+        prompt: &str,
+        _params: &serde_json::Value,
+        cwd: &str,
+        _temp_session_id: &str,
+        on_chunk: impl Fn(String) + Send + 'static,
+        agent_session_id: Option<&str>,
+    ) -> Result<(String, Option<String>), AppError> {
+        let (_output, sid, exit_code, stderr_text) = Self::execute_agent_inner(
+            config,
+            prompt,
+            agent_session_id,
+            cwd,
+            on_chunk,
+            |_| {},  // session_id 已由 execute_agent_inner 内部处理
+            || false, // execute_once 不支持中途中止
+        ).await.map_err(|e| AppError::External(e))?;
+
+        if exit_code != 0 {
+            return Err(AppError::External(friendly_agent_error(
+                &config.agent_type, exit_code, &stderr_text,
+            )));
+        }
+
+        Ok((_output, sid))
+    }
     pub fn stop_generation(&mut self, session_id: &str) {
         if let Some(process) = self.processes.get(session_id) {
             process.aborted.store(true, Ordering::Relaxed);

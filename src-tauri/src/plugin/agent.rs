@@ -1,9 +1,9 @@
 use serde::Serialize;
 use std::sync::Mutex;
 
-use super::PluginHost;
 use crate::agent::AgentManager;
 use crate::commands::agents::get_agent_inner;
+use crate::plugin::PluginHost;
 use crate::DbState;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -38,7 +38,7 @@ pub struct AgentMessage {
     pub timestamp: String,
 }
 
-/// 创建会话
+/// 创建会话 — 插件调用入口
 #[tauri::command]
 pub async fn plugin_agent_create_session(
     host: tauri::State<'_, Mutex<PluginHost>>,
@@ -60,8 +60,11 @@ pub async fn plugin_agent_create_session(
 
     drop(host);
 
-    // 创建会话 ID
-    let session_id = format!("plugin_{}_{}", plugin_id, uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown"));
+    // 四段式 session_id: plugin_{pluginId}_{agentType}_{uuid}
+    // parts[2] 对应 agent_type，与 send_message 解析逻辑一致
+    let uuid_str = uuid::Uuid::new_v4().to_string();
+    let uuid_part = uuid_str.split('-').next().unwrap_or("unknown");
+    let session_id = format!("plugin_{}_{}_{}", plugin_id, agent_type, uuid_part);
 
     Ok(AgentSessionInfo {
         session_id,
@@ -70,7 +73,7 @@ pub async fn plugin_agent_create_session(
     })
 }
 
-/// 发送消息到 Agent
+/// 发送消息到 Agent — 插件调用入口
 #[tauri::command]
 pub async fn plugin_agent_send_message(
     app: tauri::AppHandle,
@@ -80,6 +83,7 @@ pub async fn plugin_agent_send_message(
     plugin_id: String,
     session_id: String,
     content: String,
+    agent_session_id: Option<String>,
 ) -> Result<AgentResponse, String> {
     {
         let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
@@ -96,7 +100,7 @@ pub async fn plugin_agent_send_message(
 
     // 从 session_id 推断 agent_type (格式: plugin_{pluginId}_{agentType}_{uuid})
     let parts: Vec<&str> = session_id.split('_').collect();
-    let agent_type = if parts.len() >= 3 { parts[2] } else { "hermes" };
+    let agent_type = if parts.len() >= 4 { parts[2] } else if parts.len() >= 3 { parts[2] } else { "hermes" };
 
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
     let config = get_agent_inner(&conn, agent_type)
@@ -112,7 +116,7 @@ pub async fn plugin_agent_send_message(
         "stream".to_string(),
         None,
         None,
-        None,
+        agent_session_id,
     ).await.map_err(|e| format!("发送消息失败: {}", e))?;
 
     Ok(AgentResponse {

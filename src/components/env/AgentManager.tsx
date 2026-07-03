@@ -683,8 +683,10 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
         <div className="grid grid-cols-2 gap-2">
           <SelectField label="Session ID 来源" value={form.sessionIdSource || 'none'} onChange={(v) => onChange({ ...form, sessionIdSource: v })} options={[
             { value: 'none', label: 'none（不支持会话延续）' },
-            { value: 'stdout-json', label: 'stdout-json（标准输出 JSON）' },
+            { value: 'stdout-text', label: 'stdout-text（标准输出文本行）' },
             { value: 'stderr-text', label: 'stderr-text（标准错误文本行）' },
+            { value: 'stdout-json', label: 'stdout-json（标准输出 JSON）' },
+            { value: 'stderr-json', label: 'stderr-json（标准错误 JSON）' },
           ]} />
           <FormField label="Session ID 事件类型" value={form.sessionIdEventType || ''} onChange={(v) => onChange({ ...form, sessionIdEventType: v })} placeholder="如 system/init" />
         </div>

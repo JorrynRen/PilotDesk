@@ -64,11 +64,12 @@ export class PluginAgentAPI {
     });
   }
 
-  async sendMessage(sessionId: string, content: string): Promise<AgentResponse> {
+  async sendMessage(sessionId: string, content: string, agentSessionId?: string): Promise<AgentResponse> {
     return invoke<AgentResponse>('plugin_agent_send_message', {
       pluginId: this.pluginId,
       sessionId,
       content,
+      agentSessionId: agentSessionId || null,
     });
   }
 

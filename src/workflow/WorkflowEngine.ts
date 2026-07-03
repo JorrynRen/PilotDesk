@@ -17,7 +17,7 @@ import { createInstance, updateStepStatus, canTransition, emitWorkflowEvent } fr
 import { commandDispatcher } from '../plugin/CommandDispatcher';
 import { eventDispatcher } from '../plugin/EventDispatcher';
 import { globalEventBus } from '../plugin/GlobalEventBus';
-import { PluginAgentAPI } from '../plugin/PluginAPI.agent';
+import { invoke } from '@tauri-apps/api/core';
 
 // ── 模板变量替换 ──
 
@@ -196,7 +196,6 @@ class WorkflowEngine {
   private instances: Map<string, WorkflowInstance> = new Map();
   private running: Set<string> = new Set();
   private eventUnsubscribers: Map<string, () => void> = new Map();
-  private agentSessions: Map<string, { api: PluginAgentAPI; sessionId: string; agentType: string }> = new Map();
 
   // ── 定义管理 ──
 
@@ -285,7 +284,6 @@ class WorkflowEngine {
     instance.completedAt = Math.floor(Date.now() / 1000);
     this.running.delete(instanceId);
     emitWorkflowEvent('instance:cancelled', instanceId);
-    this.cleanupAgentSessions(instanceId);
   }
 
   async retry(instanceId: string, stepId?: string): Promise<void> {
@@ -329,19 +327,6 @@ class WorkflowEngine {
     if (filter?.status) list = list.filter((i) => i.status === filter.status);
     if (filter?.definitionId) list = list.filter((i) => i.definitionId === filter.definitionId);
     return list.sort((a, b) => b.createdAt - a.createdAt);
-  }
-
-  // ── Agent 会话管理 ──
-
-  private cleanupAgentSessions(_instanceId: string): void {
-    for (const [sessionId, session] of this.agentSessions.entries()) {
-      try {
-        session.api.deleteSession(sessionId);
-      } catch (err) {
-        console.warn(`[WorkflowEngine] 清理 Agent 会话失败: ${sessionId}`, err);
-      }
-    }
-    this.agentSessions.clear();
   }
 
   // ── 事件触发器管理 ──
@@ -560,34 +545,53 @@ class WorkflowEngine {
   ): Promise<any> {
     if (!node.pluginId) throw new Error(`Agent 节点 "${node.label}" 缺少插件 ID`);
 
-    const agentApi = new PluginAgentAPI(node.pluginId);
-    // 从可用 Agent 列表中动态检查配置的 agent 是否已安装且启用
-    const availableAgents = await agentApi.listAgents();
     const configuredAgentType = node.params?.agent_type || 'claude';
-    const isAgentAvailable = availableAgents.some(a => a.agent_type === configuredAgentType);
-    const agentType = isAgentAvailable ? configuredAgentType : (availableAgents.length > 0 ? availableAgents[0].agent_type : configuredAgentType);
-    if (!isAgentAvailable && configuredAgentType !== agentType) {
-      console.warn('[WorkflowEngine] Agent 节点 "' + node.label + '" 配置的 agent "' + configuredAgentType + '" 不可用，回退到 "' + agentType + '"');
-    }
     const promptTemplate = node.params?.prompt_template || '';
-    const prompt = promptTemplate ? resolveTemplate(promptTemplate, instance.context) : '';
 
-    const sessionInfo = await agentApi.createSession(agentType);
-    this.agentSessions.set(sessionInfo.session_id, {
-      api: agentApi,
-      sessionId: sessionInfo.session_id,
-      agentType,
+    // 构建节点配置（匹配后端 agent_executor.rs 期望的字段）
+    const config: Record<string, any> = {
+      agent_type: configuredAgentType,
+      prompt_template: promptTemplate,
+    };
+
+    // 延续会话：检查上下文或节点参数中的 resume_session_ref
+    const resumeSessionRef: string | undefined =
+      node.params?.resume_session_ref ||
+      (instance.context as Record<string, any>)?.resume_session_ref;
+
+    if (resumeSessionRef) {
+      config.session_mode = 'resume';
+      config.resume_session_ref = resumeSessionRef;
+    } else {
+      config.session_mode = 'new';
+    }
+
+    // 通过后端 test_node 命令执行 agent 节点
+    // 后端路径: NodeExecutor → AgentExecutor → AgentManager.execute_once
+    // execute_once 支持延续会话：有 agent_session_id 时使用 resume_arg_template 恢复会话
+    // 返回的 session_id 可存入上下文供后续 agent 节点延续会话
+    const response = await invoke<{ output: any; session_id?: string }>('test_node', {
+      nodeType: 'agent',
+      config: JSON.stringify(config),
+      inputData: JSON.stringify(instance.context),
     });
 
-    const response = await agentApi.sendMessage(sessionInfo.session_id, prompt);
-    const result = response.content;
+    const output = response.output;
+    const sessionId = response.session_id;
 
+    // 将 agent_session_id 存入上下文（供后续节点通过 resume_session_ref 延续会话）
+    if (sessionId) {
+      (instance.context as Record<string, any>).agent_session_id = sessionId;
+    }
+
+    // 处理 outputMapping（将 agent 输出字段映射到上下文）
     if (node.outputMapping) {
       for (const [contextPath, outputField] of Object.entries(node.outputMapping)) {
-        instance.context[contextPath] = (result as Record<string, any>)?.[outputField];
+        instance.context[contextPath] = (output as Record<string, any>)?.[outputField];
       }
     }
-    return result;
+
+    return output;
   }
 
   private async executeApiNode(
