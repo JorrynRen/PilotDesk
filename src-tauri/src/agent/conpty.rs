@@ -197,7 +197,7 @@ pub fn spawn_with_conpty(
 
         log::info!("[ConPTY] Step 5: calling CreateProcessW...");
         let result = windows_sys::Win32::System::Threading::CreateProcessW(
-            cmd_buf.as_ptr(),  // lpApplicationName: 直接使用可执行文件路径
+            std::ptr::null(),  // lpApplicationName: null, let CreateProcessW parse exe path from lpCommandLine
             cmd_buf.as_mut_ptr(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
