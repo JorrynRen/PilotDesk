@@ -66,15 +66,19 @@ pub fn spawn_with_conpty(
 
         // 输出管道：ConPTY → 宿主
         // CreatePipe(hRead, hWrite): h_pipe_client_out=read(宿主读), h_pipe_server_out=write(ConPTY写)
+        log::info!("[ConPTY] Step 1: creating output pipe...");
         if CreatePipe(
             &mut h_pipe_client_out,
             &mut h_pipe_server_out,
             &sa,
             0,
         ) == 0 {
+            log::error!("[ConPTY] Step 1 FAILED");
             return Err("CreatePipe(output) 失败".into());
         }
+        log::info!("[ConPTY] Step 1 OK: output pipe created");
 
+        log::info!("[ConPTY] Step 2: creating input pipe...");
         // 输入管道：宿主 → ConPTY（提供 stdin 数据）
         if CreatePipe(
             &mut h_pipe_server_in,
@@ -91,6 +95,7 @@ pub fn spawn_with_conpty(
         let mut h_pc: HPCON = 0;
         use windows_sys::Win32::System::Console::COORD;
         let coord = COORD { X: 80, Y: 30 };
+        log::info!("[ConPTY] Step 3: creating PseudoConsole...");
         let result = CreatePseudoConsole(
             coord,
             h_pipe_server_in,   // ConPTY 读 stdin 从这个管道
@@ -99,7 +104,9 @@ pub fn spawn_with_conpty(
             &mut h_pc,
         );
 
+        log::info!("[ConPTY] Step 3: CreatePseudoConsole returned 0x{:X}", result as u32);
         if result != 0 {
+            log::error!("[ConPTY] Step 3 FAILED: 0x{:X}", result as u32);
             CloseHandle(h_pipe_server_in);
             CloseHandle(h_pipe_client_in);
             CloseHandle(h_pipe_server_out);
@@ -146,6 +153,7 @@ pub fn spawn_with_conpty(
             return Err("InitializeProcThreadAttributeList 失败".into());
         }
 
+        log::info!("[ConPTY] Step 4: setting ConPTY attribute...");
         // 关联 ConPTY 到属性列表
         if UpdateProcThreadAttribute(
             startup_info_ex.lpAttributeList,
@@ -162,8 +170,10 @@ pub fn spawn_with_conpty(
             CloseHandle(h_pipe_client_in);
             CloseHandle(h_pipe_server_out);
             CloseHandle(h_pipe_client_out);
+            log::error!("[ConPTY] Step 4 FAILED");
             return Err("UpdateProcThreadAttribute 失败".into());
         }
+        log::info!("[ConPTY] Step 4 OK: attribute set");
 
         // 4. 构建命令行和环境
         let cmdline_w: Vec<u16> = encode_wide(cmdline);
@@ -185,6 +195,7 @@ pub fn spawn_with_conpty(
 
         let creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
 
+        log::info!("[ConPTY] Step 5: calling CreateProcessW...");
         let result = windows_sys::Win32::System::Threading::CreateProcessW(
             cmd_buf.as_ptr(),  // lpApplicationName: 直接使用可执行文件路径
             cmd_buf.as_mut_ptr(),
@@ -210,6 +221,7 @@ pub fn spawn_with_conpty(
         log::info!("[ConPTY] CreateProcessW result={}, pid={}", result, proc_info.dwProcessId);
         if result == 0 {
             let err_code = windows_sys::Win32::Foundation::GetLastError();
+            log::error!("[ConPTY] Step 5 FAILED: CreateProcessW result=0, GetLastError={}", err_code);
             CloseHandle(h_pipe_client_in);
             CloseHandle(h_pipe_client_out);
             return Err(format!("CreateProcessW 失败: 系统错误 {}", err_code));
