@@ -252,10 +252,12 @@ pub fn spawn_with_conpty(
 
         // 用 ConptyProcess 封装进程句柄
         // stdin_pipe 必须在进程生命周期内保持打开，否则 ConPTY 会发送 Ctrl+C 终止子进程
+        // stdout_pipe 持有读端 HANDLE，进程退出后关闭以触发 EOF
         let child = ConptyProcess {
             handle: SendHandle(proc_info.hProcess),
             pid: proc_info.dwProcessId,
             stdin_pipe: SendHandle(h_pipe_client_in),
+            stdout_pipe: SendHandle(h_pipe_client_out),
         };
 
         log::info!("[ConPTY] process started successfully, pid={}", proc_info.dwProcessId);
@@ -277,6 +279,7 @@ unsafe fn allocate_attr_list(size: usize) -> *mut std::ffi::c_void {
 }
 
 /// HANDLE 不自动实现 Send，需要 newtype 包装以在 spawn_blocking 中跨线程传递
+#[derive(Clone, Copy)]
 struct SendHandle(HANDLE);
 unsafe impl Send for SendHandle {}
 unsafe impl Sync for SendHandle {}
@@ -305,6 +308,10 @@ pub struct ConptyProcess {
     /// stdin 写入端，必须在进程生命周期内保持打开
     /// ConPTY 在 stdin 关闭时会向子进程发送 Ctrl+C
     stdin_pipe: SendHandle,
+    /// stdout 读端 HANDLE，进程退出后关闭以触发 EOF
+    /// 注意：不在 spawn_blocking 中关闭（*mut c_void 不是 Send），
+    /// 而是在调用者线程中关闭
+    stdout_pipe: SendHandle,
 }
 
 impl ConptyProcess {
@@ -312,14 +319,22 @@ impl ConptyProcess {
         self.pid
     }
 
-    /// 等待进程退出，返回退出码
-    pub async fn wait(&self) -> Result<i32, String> {
-        let send_handle = SendHandle(self.handle.0);
-        tokio::task::spawn_blocking(move || send_handle.wait_for_exit())
-            .await.map_err(|e| format!("等待进程失败: {}", e))
+    /// 关闭 stdout 读端，触发 tokio 读取 EOF
+    pub fn close_stdout_pipe(&self) {
+        unsafe { CloseHandle(self.stdout_pipe.0); }
     }
 
-    /// 通过 taskkill 终止进程
+    /// 等待进程退出，返回退出码
+    pub async fn wait(&self) -> Result<i32, String> {
+        let pid = self.pid;
+        let handle = self.handle;
+        tokio::task::spawn_blocking(move || {
+            let exit_code = handle.wait_for_exit();
+            log::info!("[ConPTY] process exited (pid={}), exit_code={}", pid, exit_code);
+            exit_code
+        })
+        .await.map_err(|e| format!("等待进程失败: {}", e))
+    }
     pub fn kill(&self) {
         let _ = std::process::Command::new("taskkill")
             .args(&["/PID", &self.pid.to_string(), "/F"])
@@ -332,9 +347,11 @@ impl ConptyProcess {
 impl Drop for ConptyProcess {
     fn drop(&mut self) {
         unsafe {
-            // 先关闭 stdin 管道（进程已结束，安全关闭）
+            // 关闭 stdout 读端
+            CloseHandle(self.stdout_pipe.0);
+            // 关闭 stdin 管道（进程已结束，安全关闭）
             CloseHandle(self.stdin_pipe.0);
-            // 再关闭进程句柄
+            // 关闭进程句柄
             CloseHandle(self.handle.0);
         }
     }
