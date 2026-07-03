@@ -324,16 +324,20 @@ impl ConptyProcess {
         unsafe { CloseHandle(self.stdout_pipe.0); }
     }
 
-    /// 等待进程退出，返回退出码
+    /// 等待进程退出，关闭 stdout pipe 触发 EOF，返回退出码
     pub async fn wait(&self) -> Result<i32, String> {
         let pid = self.pid;
         let handle = self.handle;
-        tokio::task::spawn_blocking(move || {
+        let stdout_pipe = self.stdout_pipe;
+        let stdin_pipe = self.stdin_pipe;
+        // Spawn a thread to wait (HANDLEs are Copy, Drop auto-closes them)
+        let join_handle = std::thread::spawn(move || {
             let exit_code = handle.wait_for_exit();
             log::info!("[ConPTY] process exited (pid={}), exit_code={}", pid, exit_code);
             exit_code
-        })
-        .await.map_err(|e| format!("等待进程失败: {}", e))
+        });
+        Ok(join_handle.join()
+            .map_err(|e| format!("等待进程失败: {:?}", e))?)
     }
     pub fn kill(&self) {
         let _ = std::process::Command::new("taskkill")

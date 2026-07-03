@@ -185,11 +185,6 @@ impl ProcessChild {
             ProcessChild::Conpty(conpty) => conpty.id(),
         }
     }
-    fn close_stdout_pipe(&self) {
-        if let ProcessChild::Conpty(conpty) = self {
-            conpty.close_stdout_pipe();
-        }
-    }
 }
 
 /// Shared process spawn result
