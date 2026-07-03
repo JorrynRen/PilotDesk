@@ -418,7 +418,13 @@ impl AgentManager {
             }
         } // end else (stdio mode)
 
+        log::info!("[ConPTY/IO] read loop ended, full_output_len={}, conpty_mode={}",
+            full_output.len(), conpty_mode);
+
         let exit_code = child.wait().await?;
+
+        log::info!("[Agent/{}] execute_agent_inner done: exit_code={}, conpty_mode={}, output_len={}, stderr_len={}",
+            agent_type, exit_code, conpty_mode, full_output.len(), stderr_buf.lock().map(|b| b.len()).unwrap_or(0));
 
         let stderr_text = stderr_buf.lock()
             .map(|b| b.clone())
