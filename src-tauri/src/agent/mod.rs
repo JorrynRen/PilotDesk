@@ -185,6 +185,12 @@ impl ProcessChild {
             ProcessChild::Conpty(conpty) => conpty.id(),
         }
     }
+    fn send_eof(&self) {
+        if let ProcessChild::Conpty(conpty) = self {
+            conpty.send_eof();
+        }
+    }
+
     fn close_stdout_pipe(&self) {
         if let ProcessChild::Conpty(conpty) = self {
             conpty.close_stdout_pipe();
@@ -363,6 +369,9 @@ impl AgentManager {
                     full_output.push_str(&content);
                 }
             }
+            // After reading all output, send EOF (Ctrl+D) to terminate interactive CLI tools
+            // (e.g., hermes chat stays in interactive mode after processing --query)
+            child.send_eof();
             drop(stderr);
         } else {
             // Stdio mode: stderr in background task
