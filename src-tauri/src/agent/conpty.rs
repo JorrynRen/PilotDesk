@@ -213,10 +213,10 @@ pub fn spawn_with_conpty(
         DeleteProcThreadAttributeList(startup_info_ex.lpAttributeList);
         free_attr_list(startup_info_ex.lpAttributeList);
 
-        // 关闭 ConPTY 输入管道的服务端（不再需要，ConPTY 已连接）
-        CloseHandle(h_pipe_server_in);
-        // 关闭 ConPTY 输出管道的服务端（ConPTY 已连接，不需要服务端句柄）
-        CloseHandle(h_pipe_server_out);
+        // 注意：h_pipe_server_in 和 h_pipe_server_out 不能在进程退出前关闭
+        // 否则 ConPTY 的伪控制台会立即产生 EOF
+        // 它们在 ConptyProcess::Drop 中被关闭
+
 
         log::info!("[ConPTY] CreateProcessW result={}, pid={}", result, proc_info.dwProcessId);
         if result == 0 {
@@ -324,20 +324,16 @@ impl ConptyProcess {
         unsafe { CloseHandle(self.stdout_pipe.0); }
     }
 
-    /// 等待进程退出，关闭 stdout pipe 触发 EOF，返回退出码
+    /// 等待进程退出，返回退出码
     pub async fn wait(&self) -> Result<i32, String> {
         let pid = self.pid;
         let handle = self.handle;
-        let stdout_pipe = self.stdout_pipe;
-        let stdin_pipe = self.stdin_pipe;
-        // Spawn a thread to wait (HANDLEs are Copy, Drop auto-closes them)
-        let join_handle = std::thread::spawn(move || {
+        tokio::task::spawn_blocking(move || {
             let exit_code = handle.wait_for_exit();
             log::info!("[ConPTY] process exited (pid={}), exit_code={}", pid, exit_code);
             exit_code
-        });
-        Ok(join_handle.join()
-            .map_err(|e| format!("等待进程失败: {:?}", e))?)
+        })
+        .await.map_err(|e| format!("等待进程失败: {}", e))
     }
     pub fn kill(&self) {
         let _ = std::process::Command::new("taskkill")
