@@ -1,4 +1,4 @@
-{"schemaVersion":"1.0","updatedAt":"2026-06-21T22:33:25Z","plugins":[
+{"schemaVersion":"1.0","updatedAt":"2026-07-04T08:00:25Z","plugins":[
 {
   "id": "hello-world",
   "name": "Hello World",
@@ -22,7 +22,7 @@
   "minAppVersion": "0.1.0",
   "path": "plugins/snippet-manager/1.0.0",
   "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0",
-  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/icon.png",
+  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/favicon.png",
   "size": "28K",
   "readme": ""
 }
