@@ -336,23 +336,23 @@ impl ConptyProcess {
         .await.map_err(|e| format!("等待进程失败: {}", e))
     }
 
-    /// 发送 Ctrl+D (EOF) 到 ConPTY stdin，终止交互式 CLI 工具
+    /// 向 ConPTY stdin 写入 Ctrl+C (0x03)，终止交互式 CLI 工具
     pub fn send_eof(&self) {
         unsafe {
             use windows_sys::Win32::Storage::FileSystem::WriteFile;
             let mut bytes_written: u32 = 0;
-            let eof_byte: u8 = 0x04; // Ctrl+D
+            let ctrl_c: u8 = 0x03; // Ctrl+C
             let result = WriteFile(
                 self.stdin_pipe.0,
-                &eof_byte as *const u8 as *const _,
+                &ctrl_c as *const u8 as *const _,
                 1,
                 &mut bytes_written,
                 std::ptr::null_mut(),
             );
             if result != 0 {
-                log::info!("[ConPTY] Sent EOF (Ctrl+D) to process pid={}", self.pid);
+                log::info!("[ConPTY] Sent Ctrl+C to process pid={}", self.pid);
             } else {
-                log::warn!("[ConPTY] Failed to send EOF to process pid={}", self.pid);
+                log::warn!("[ConPTY] Failed to send Ctrl+C to process pid={}", self.pid);
             }
         }
     }
