@@ -340,8 +340,10 @@ impl ConptyProcess {
     pub fn send_eof(&self) {
         unsafe {
             use windows_sys::Win32::Storage::FileSystem::WriteFile;
+            use windows_sys::Win32::Foundation::GetLastError;
             let mut bytes_written: u32 = 0;
             let ctrl_c: u8 = 0x03; // Ctrl+C
+            log::info!("[ConPTY] Attempting to send Ctrl+C to process pid={}, stdin_pipe={:?}", self.pid, self.stdin_pipe.0);
             let result = WriteFile(
                 self.stdin_pipe.0,
                 &ctrl_c as *const u8 as *const _,
@@ -349,10 +351,11 @@ impl ConptyProcess {
                 &mut bytes_written,
                 std::ptr::null_mut(),
             );
+            let last_error = GetLastError();
             if result != 0 {
-                log::info!("[ConPTY] Sent Ctrl+C to process pid={}", self.pid);
+                log::info!("[ConPTY] Sent Ctrl+C to process pid={}, bytes_written={}, last_error={}", self.pid, bytes_written, last_error);
             } else {
-                log::warn!("[ConPTY] Failed to send Ctrl+C to process pid={}", self.pid);
+                log::error!("[ConPTY] Failed to send Ctrl+C to process pid={}, last_error={}", self.pid, last_error);
             }
         }
     }
