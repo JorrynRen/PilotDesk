@@ -221,6 +221,14 @@ async fn agent_detect_installed(state: tauri::State<'_, DbState>) -> Result<Vec<
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 进程启动时清除 Python 环境变量干扰
+    // PilotDesk可能会受到其他app的 PYTHONHOME / PYTHONPATH / CONDA_PREFIX 等环境变量干扰，
+    // 导致子进程（hermes 等 Python CLI）加载错误的 .pth / site 模块而异常退出。
+    // 此处一次性清除，所有后续 Command 子进程自动继承干净环境，无需逐处调用。
+    for key in ["PYTHONHOME", "PYTHONPATH", "CONDA_PREFIX", "PYTHONNOUSERSITE"] {
+        std::env::remove_var(key);
+    }
+
     let pool = init_db().expect("Failed to initialize database");
 
     tauri::Builder::default()
@@ -334,7 +342,7 @@ pub fn run() {
             commands::workflow::import_workflow,
             commands::workflow::export_workflow_to_file,
             commands::workflow::import_workflow_from_file,
-            commands::workflow::test_node,
+
             commands::workflow::get_workflow_stats,
             commands::workflow::get_execution_timeline,
             commands::workflow::get_node_type_stats,

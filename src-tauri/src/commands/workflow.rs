@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
-use crate::workflow::registry::NodeDef;
 use crate::utils::{new_id, now};
 use crate::workflow::executor::NodeExecutor;
 use crate::workflow::engine::WorkflowEngine;
@@ -819,38 +818,6 @@ pub fn import_workflow_from_file(
     let json = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("读取文件失败: {}", e))?;
     import_workflow(state, json)
-}
-
-/// 测试单个节点执行
-#[tauri::command]
-pub async fn test_node(
-    executor: tauri::State<'_, Arc<NodeExecutor>>,
-    app_handle: tauri::AppHandle,
-    node_type: String,
-    config: String,
-    input_data: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let node_def = NodeDef {
-        id: "test_node".to_string(),
-        node_type,
-        label: "测试节点".to_string(),
-        config: serde_json::from_str(&config).map_err(|e| format!("配置解析失败: {}", e))?,
-        plugin_id: None,
-        command_id: None,
-        timeout_seconds: Some(60),
-        retry_count: Some(0),
-        retry_interval_ms: None,
-    };
-    let input = input_data
-        .map(|s| serde_json::from_str(&s).unwrap_or(Value::String(s)))
-        .unwrap_or(Value::Null);
-    let result = executor.execute(&node_def, input, "test", &app_handle).await
-        .map_err(|e| format!("执行失败: {}", e))?;
-    // 返回 output 和 session_id（供前端引擎延续会话使用）
-    Ok(serde_json::json!({
-        "output": result.output,
-        "session_id": result.session_id,
-    }))
 }
 
 /// 获取所有注册的节点类型

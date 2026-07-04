@@ -92,10 +92,34 @@ impl NodeExecutorTrait for AgentExecutor {
         let session_mode = node.config.get("session_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("new");
-        // resume_session_ref 已由 engine.rs 通过 TemplateEngine 从 context 中解析为实际 session_id 值
-        let resume_session_id = node.config.get("resume_session_id")
+
+        // 解析延续会话 session_id：
+        // 优先使用已由 engine.rs 通过 TemplateEngine 解析的 resume_session_id
+        // 回退到 resume_session_ref 模板解析（兼容直接调用 executor 的路径）
+        let mut resolved_session_id = node.config.get("resume_session_id")
             .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        if resolved_session_id.is_none() {
+            if let Some(ref_tmpl) = node.config.get("resume_session_ref").and_then(|v| v.as_str()) {
+                if !ref_tmpl.is_empty() {
+                    if let Value::Object(map) = &resolved_input {
+                        let ctx: std::collections::HashMap<String, serde_json::Value> = map.iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if let Ok(sid) = TemplateEngine::resolve(ref_tmpl, &ctx) {
+                            if !sid.is_empty() {
+                                resolved_session_id = Some(sid);
+                                log::info!("[AgentExecutor] Resolved resume_session_ref '{}' -> '{}'", ref_tmpl, resolved_session_id.as_deref().unwrap());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let resume_session_id = resolved_session_id.as_deref();
 
         let agent_session_id_param = if session_mode == "resume" {
             resume_session_id

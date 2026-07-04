@@ -34,9 +34,7 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
             c.arg(&arg_s);
             c
         };
-        // Clear PYTHONHOME to avoid interference from parent process (WPS 灵犀)
-        command.env_remove("PYTHONHOME");
-        command.env_remove("PYTHONPATH");
+
         let output = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -80,9 +78,7 @@ pub fn run_shell_cmd(cmd_str: &str) -> Result<String, String> {
     child.args(["/C", cmd_str])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // Clear PYTHONHOME to avoid interference from parent process (WPS 灵犀)
-    child.env_remove("PYTHONHOME");
-    child.env_remove("PYTHONPATH");
+
     let child = child.spawn()
         .map_err(|e| format!("执行命令失败: {}", e))?;
 
