@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow } from 'lucide-react';
+import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare } from 'lucide-react';
 
 export type StatusHintState = 'loading' | 'ready' | 'error' | 'saving' | 'saved' | 'save-error' | 'idle';
 
@@ -22,6 +22,9 @@ interface TitleBarProps {
   onBack?: () => void;
   /** 标题栏状态提示 */
   statusHint?: StatusHint | null;
+  /** 虚拟控制台开关 */
+  onToggleVirtualConsole?: () => void;
+  isVirtualConsoleOpen?: boolean;
 }
 
 /** 标题栏状态提示徽标组件 */
@@ -58,7 +61,7 @@ function StatusHintBadge({ hint }: { hint: StatusHint }) {
   );
 }
 
-export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleVirtualConsole, isVirtualConsoleOpen }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const [isMaximized, setIsMaximized] = useState(false);
   const [tauriReady, setTauriReady] = useState(true);
@@ -208,8 +211,24 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         )}
       </div>
 
-      {/* Right: settings + panel toggle | window controls */}
+      {/* Right: settings + panel toggle + virtual console | window controls */}
       <div className="flex items-center h-full">
+        {!showBackButton && onToggleVirtualConsole && (
+          <button
+            onClick={onToggleVirtualConsole}
+            className="pd-btn px-1.5 py-1 rounded transition-colors hover:opacity-80"
+            style={{
+              color: isVirtualConsoleOpen ? 'var(--accent)' : 'var(--text-secondary)',
+              background: isVirtualConsoleOpen ? 'var(--border)' : 'transparent',
+            }}
+            title={isVirtualConsoleOpen ? '客户端模式' : '终端模式'}
+          >
+            <span className="inline-flex items-center gap-1">
+              {isVirtualConsoleOpen ? <MessageSquare size={13} /> : <Terminal size={13} />}
+              <span className="text-[11px]">{isVirtualConsoleOpen ? '客户端模式' : '终端模式'}</span>
+            </span>
+          </button>
+        )}
         {!showBackButton && onOpenWorkflow && (
           <button
             onClick={onOpenWorkflow}
@@ -230,7 +249,10 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             style={{ color: 'var(--text-secondary)', background: 'transparent' }}
             title="设置"
           >
-            <Settings size={13} />
+            <span className="inline-flex items-center gap-1">
+              <Settings size={13} />
+              <span className="text-[11px]">设置</span>
+            </span>
           </button>
         )}
         {onToggleRightPanel && (

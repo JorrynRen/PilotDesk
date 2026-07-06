@@ -7,6 +7,7 @@ import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { showToast } from '../../utils/toast';
 import { useGeneratingStore } from '../../stores/generatingStore';
+
 import type { ChatMode, Message } from '../../types';
 import { getModePrompt } from '../../types';
 import { isApiSession } from '../../utils/sessionType';
@@ -30,7 +31,6 @@ type Action =
   | { type: 'APPEND_CHUNK'; sessionId: string; content: string }
   | { type: 'GENERATION_DONE'; sessionId: string }
   | { type: 'GENERATION_ERROR'; sessionId: string; error: string }
-  | { type: 'GENERATION_TIMEOUT'; sessionId: string }
   | { type: 'STOP_GENERATION'; sessionId: string }
   | { type: 'CLEAR_SESSION'; sessionId: string }
   | { type: 'CLEAR_PENDING_COMPLETE' }
@@ -87,22 +87,6 @@ function reducer(state: MainPanelState, action: Action): MainPanelState {
       return { ...state, generatingSessions: rest };
     }
 
-    case 'GENERATION_TIMEOUT': {
-      const session = state.generatingSessions[action.sessionId];
-      const { [action.sessionId]: _, ...rest } = state.generatingSessions;
-      const timeoutMsg = '*(请求超时：智能体未在 60 秒内响应，请检查智能体状态后重试)*';
-      return {
-        ...state,
-        generatingSessions: rest,
-        pendingComplete: {
-          sessionId: action.sessionId,
-          content: session?.streamingContent
-            ? session.streamingContent + '\n\n' + timeoutMsg
-            : timeoutMsg,
-        },
-      };
-    }
-
     case 'STOP_GENERATION': {
       const session = state.generatingSessions[action.sessionId];
       const { [action.sessionId]: _, ...rest } = state.generatingSessions;
@@ -133,7 +117,9 @@ function reducer(state: MainPanelState, action: Action): MainPanelState {
 
 // ── Component ──
 
-export function MainPanel() {
+export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
+  
+  
   const {
     currentSessionId,
     sessions,
@@ -145,8 +131,6 @@ export function MainPanel() {
 
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  // 每个会话独立的超时计时器
-  const timeoutRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   // 已完成的会话 ID 集合（防止重复处理）
   const doneSessionIdsRef = useRef<Set<string>>(new Set());
   const createdSessionsRef = useRef<Set<string>>(new Set());
@@ -162,15 +146,6 @@ export function MainPanel() {
     ? state.generatingSessions[currentSessionId]
     : undefined;
 
-  // ── 超时管理 ──
-
-  const clearSessionTimeout = useCallback((sessionId: string) => {
-    if (timeoutRefs.current[sessionId]) {
-      clearTimeout(timeoutRefs.current[sessionId]);
-      delete timeoutRefs.current[sessionId];
-    }
-  }, []);
-
   // ── Agent Event handlers ──
 
   const onChunk = useCallback((sessionId: string, content: string) => {
@@ -183,13 +158,10 @@ export function MainPanel() {
     if (doneSessionIdsRef.current.has(sessionId)) return;
     doneSessionIdsRef.current.add(sessionId);
 
-    clearSessionTimeout(sessionId);
     dispatch({ type: 'GENERATION_DONE', sessionId });
-  }, [clearSessionTimeout]);
+  }, []);
 
   const onError = useCallback((sessionId: string, error: string) => {
-    clearSessionTimeout(sessionId);
-
     // 只有当前可见会话的错误才弹 Toast
     if (sessionId === currentSessionId) {
       showToast(`错误: ${error}`, 'error');
@@ -206,7 +178,7 @@ export function MainPanel() {
     });
 
     dispatch({ type: 'GENERATION_ERROR', sessionId, error });
-  }, [currentSessionId, addMessage, clearSessionTimeout]);
+  }, [currentSessionId, addMessage]);
 
   // ── Agent session ID handler: save agent-side session ID to database ──
   const onSession = useCallback((sessionId: string, agentSessionId: string) => {
@@ -284,7 +256,6 @@ export function MainPanel() {
 
       // 清除当前会话的旧状态
       doneSessionIdsRef.current.delete(sid);
-      clearSessionTimeout(sid);
 
       dispatch({ type: 'SEND_START', sessionId: sid, status: '发送中...' });
 
@@ -298,23 +269,11 @@ export function MainPanel() {
         timestamp: Math.floor(Date.now() / 1000),
       });
 
-      // 每个会话独立的 60s 超时计时器
-      const timeoutId = setTimeout(() => {
-        dispatch({ type: 'GENERATION_TIMEOUT', sessionId: sid });
-        if (isApiSession(currentSession.agentType)) {
-          stopApiChat();
-        } else {
-          stopGeneration(sid);
-        }
-        showToast('请求超时：智能体未在 60 秒内响应', 'error');
-      }, 60000);
-      timeoutRefs.current[sid] = timeoutId;
 
       if (isApiSession(currentSession.agentType)) {
         // API direct call
         if (!currentSession.apiProvider || !currentSession.apiModel) {
           showToast('API 会话缺少提供商或模型配置', 'error');
-          clearSessionTimeout(sid);
           dispatch({ type: 'GENERATION_ERROR', sessionId: sid, error: '缺少 API 配置' });
           return;
         }
@@ -327,7 +286,6 @@ export function MainPanel() {
         } catch { /* ignore */ }
         if (!apiEndpoint) {
           showToast('未找到 API URL，请在设置中配置', 'error');
-          clearSessionTimeout(sid);
           dispatch({ type: 'GENERATION_ERROR', sessionId: sid, error: '未找到 API URL' });
           return;
         }
@@ -343,14 +301,12 @@ export function MainPanel() {
         sendChat(sid, message, mode, currentSession.agentType, currentSession.cwd || undefined, systemPrompt, agentSessionId);
       }
     },
-    [currentSession, sendChat, sendApiChat, addMessage, clearSessionTimeout, stopApiChat, stopGeneration, messages],
+    [currentSession, sendChat, sendApiChat, addMessage, stopApiChat, stopGeneration, messages],
   );
 
   const handleStop = useCallback(() => {
     if (!currentSession) return;
     const sid = currentSession.id;
-
-    clearSessionTimeout(sid);
 
     if (isApiSession(currentSession.agentType)) {
       stopApiChat();
@@ -359,7 +315,7 @@ export function MainPanel() {
     }
 
     dispatch({ type: 'STOP_GENERATION', sessionId: sid });
-  }, [currentSession, stopGeneration, stopApiChat, clearSessionTimeout]);
+  }, [currentSession, stopGeneration, stopApiChat]);
 
   // ── Build display messages ──
 
@@ -377,7 +333,17 @@ export function MainPanel() {
   const displayMessages = streamingMsg ? [...messages, streamingMsg] : messages;
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden relative" style={style}>
+      <div
+        style={{
+          height: '100%',
+          width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+      <div className="flex-1 flex flex-col overflow-hidden">
       {isLoadingMessages ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="pilotdesk-spinner" />
@@ -412,6 +378,8 @@ export function MainPanel() {
         pendingInput={state.pendingInput}
         onPendingConsumed={() => dispatch({ type: 'SET_PENDING_INPUT', content: null })}
       />
+      </div>
+      </div>
     </div>
   );
 }

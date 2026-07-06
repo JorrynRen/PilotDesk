@@ -360,7 +360,7 @@ pub fn upload_agent_icon(
 
     // 目标文件名: {agentType}_icon.{ext}
     let file_name = format!("{}_icon.{}", agent_type, ext);
-    let dest = resources.user.join("icons").join(&file_name);
+    let dest = crate::utils::paths::agent_icons_dir().join(&file_name);
 
     // 确保目标目录存在
     if let Some(parent) = dest.parent() {
@@ -385,7 +385,7 @@ pub fn read_agent_icon(icon_name: String, resources: tauri::State<'_, crate::Res
     //   3. Dev 模式:     exe/../../resources/icons/xxx.ico
     let icon_path = {
         // 1. 用户资源目录
-        let user_path = resources.user.join("icons").join(&icon_name);
+        let user_path = crate::utils::paths::agent_icons_dir().join(&icon_name);
         if user_path.exists() {
             user_path
         } else {

@@ -1,9 +1,10 @@
 mod agent;
 mod commands;
 mod db;
-mod market;
 mod plugin;
 mod workflow;
+mod terminal;
+mod virtual_console;
 mod utils;
 
 use db::init::{init_db, DbPool};
@@ -202,6 +203,17 @@ async fn agent_close_session(
     Ok(())
 }
 
+
+/// 获取 Agent 虚拟控制台桥接的会话列表
+#[tauri::command]
+async fn list_agent_console_sessions(
+    agent_mgr: tauri::State<'_, AsyncMutex<AgentManager>>,
+) -> Result<Vec<agent::console_bridge::ConsoleSessionView>, String> {
+    let mgr = agent_mgr.lock().await;
+    let sessions = mgr.with_console_bridge(|bridge| bridge.list_session_views());
+    Ok(sessions)
+}
+
 #[tauri::command]
 async fn agent_list_skills(state: tauri::State<'_, DbState>, agent_type: String) -> Result<Vec<crate::db::models::SkillInfo>, String> {
     let config = state.get_conn()
@@ -236,6 +248,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
                 .manage(DbState { pool: pool.clone() })
         .manage(AsyncMutex::new(AgentManager::new()))
+        .manage(AsyncMutex::new(terminal::TerminalManager::new()))
         .manage(Mutex::new(plugin::PluginHost::new()))
         .invoke_handler(tauri::generate_handler![
             commands::env::detect_env,
@@ -248,6 +261,8 @@ pub fn run() {
             commands::update::check_pilotdesk_update,
             commands::update::check_agent_update,
             commands::session::list_sessions,
+            commands::virtual_console::list_virtual_console_sessions,
+            list_agent_console_sessions,
             commands::session::list_archived_sessions,
             commands::session::create_session,
             commands::session::get_session,
@@ -359,14 +374,19 @@ pub fn run() {
             commands::workflow::get_pending_human_inputs,
             commands::agents::upload_agent_icon,
             commands::agents::read_agent_icon,
+            terminal::commands::terminal_create,
+            terminal::commands::terminal_write,
+            terminal::commands::terminal_close,
+            terminal::commands::terminal_resize,
+            terminal::commands::terminal_list,
+            terminal::commands::terminal_attach,
+            utils::market::fetch_agents_config,
         ])
         .setup(move |app| {
             // 初始化资源路径（Windows: app_data_dir = %APPDATA%/com.pilotdesk.app/）
             let builtin = app.path().resource_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("resources"));
-            let user = app.path().app_data_dir()
-                .unwrap_or_else(|_| dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join("PilotDesk"))
-                .join("resources");
+            let user = crate::utils::paths::user_resources_dir();
 
             // 确保用户资源子目录存在（首次运行时创建）
             for sub in &["agents", "icons", "assets"] {

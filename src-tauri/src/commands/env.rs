@@ -72,27 +72,7 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
     }
 }
 
-/// Run a full shell command string via cmd /C (for install/uninstall/update commands from DB)
-pub fn run_shell_cmd(cmd_str: &str) -> Result<String, String> {
-    let mut child = Command::new("cmd");
-    child.args(["/C", cmd_str])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
 
-    let child = child.spawn()
-        .map_err(|e| format!("执行命令失败: {}", e))?;
-
-    let output = child.wait_with_output()
-        .map_err(|e| format!("命令执行过程出错: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("命令执行失败 (exit code {:?}): {}", output.status.code(), stderr.trim()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.trim().to_string())
-}
 
 /// 探测工具版本：先尝试动态查找（用 cmd /C 处理 .cmd 脚本），再回退 PATH
 fn probe_tool_version(name: &str, version_flag: &str) -> Option<String> {
@@ -135,10 +115,11 @@ fn clean_version_string(raw: &str) -> String {
 
 /// 简单缓存：仅用于避免高频重复检测
 static LAST_DETECT: std::sync::RwLock<Option<(Instant, EnvInfo)>> = std::sync::RwLock::new(None);
-const CACHE_TTL: Duration = Duration::from_secs(30);
+const CACHE_TTL: Duration = Duration::from_secs(120);
 
-fn detect_env_inner(state: &crate::DbState) -> Result<EnvInfo, AppError> {
-    log_env!("[env] Detecting environment...");
+/// 通过 AgentManager 统一虚拟控制台执行环境检测（Agent 版本查询）
+async fn detect_env_with_console(state: &crate::DbState, agent_mgr: &crate::agent::AgentManager) -> Result<EnvInfo, AppError> {
+    log_env!("[env] Detecting environment via console...");
 
     let node_version = probe_tool_version("node", "--version");
     let git_version = probe_tool_version("git", "--version");
@@ -146,18 +127,21 @@ fn detect_env_inner(state: &crate::DbState) -> Result<EnvInfo, AppError> {
         .or_else(|| probe_tool_version("python3", "--version"))
         .or_else(|| probe_tool_version("py", "--version"));
 
-    // Read enabled agents from DB and detect versions
     let conn = state.get_conn()?;
     let db_agents = agents::list_agents_inner(&conn).unwrap_or_default();
 
     let mut agent_versions = std::collections::HashMap::new();
 
     for agent in &db_agents {
-        if !agent.is_enabled {
+        if !agent.is_enabled || agent.version_cmd.is_empty() {
             continue;
         }
-        let version = run_shell_cmd(&agent.version_cmd).ok()
-            .map(|v| clean_version_string(&v));
+        let label = format!("{} 版本查询", agent.agent_type);
+        let version = agent_mgr.execute_command_output(
+            &agent.version_cmd, "", 15,
+            crate::agent::console_bridge::CommandKind::VersionCheck,
+            &label,
+        ).await.ok().map(|v| clean_version_string(&v));
         agent_versions.insert(agent.agent_type.clone(), version);
     }
 
@@ -173,7 +157,10 @@ fn detect_env_inner(state: &crate::DbState) -> Result<EnvInfo, AppError> {
 }
 
 #[tauri::command]
-pub async fn detect_env(state: tauri::State<'_, crate::DbState>) -> Result<EnvInfo, AppError> {
+pub async fn detect_env(
+    state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+) -> Result<EnvInfo, AppError> {
     {
         let cache = LAST_DETECT.read().unwrap();
         if let Some((fetched, ref info)) = *cache {
@@ -183,9 +170,35 @@ pub async fn detect_env(state: tauri::State<'_, crate::DbState>) -> Result<EnvIn
         }
     }
 
+    // In-progress guard: prevent concurrent detect from executing duplicate work
+    static DETECTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DETECTING.compare_exchange(false, true, std::sync::atomic::Ordering::Acquire, std::sync::atomic::Ordering::Relaxed).is_err() {
+        let cache = LAST_DETECT.read().unwrap();
+        if let Some((fetched, ref info)) = *cache {
+            if fetched.elapsed() < CACHE_TTL {
+                return Ok(info.clone());
+            }
+        }
+        // Wait for the in-flight detection to complete
+        for _ in 0..100 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if !DETECTING.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+        }
+        let cache = LAST_DETECT.read().unwrap();
+        if let Some((fetched, ref info)) = *cache {
+            if fetched.elapsed() < CACHE_TTL {
+                return Ok(info.clone());
+            }
+        }
+    }
+
     let state_ref: crate::DbState = crate::DbState { pool: state.pool.clone() };
-    let result = tokio::task::spawn_blocking(move || detect_env_inner(&state_ref)).await
-        .map_err(|e| AppError::External(format!("环境检测任务失败: {}", e)))?;
+    let mgr = agent_mgr.lock().await;
+    let result = detect_env_with_console(&state_ref, &mgr).await;
+
+    DETECTING.store(false, std::sync::atomic::Ordering::Release);
 
     if let Ok(ref info) = result {
         let mut cache = LAST_DETECT.write().unwrap();
@@ -214,7 +227,12 @@ pub async fn clear_env_detect_cache() -> Result<(), AppError> {
 
 /// 根据 agent_type 从 DB 读取 install_cmd 并执行
 #[tauri::command]
-pub async fn install_agent(app: tauri::AppHandle, state: tauri::State<'_, crate::DbState>, agent_type: String) -> Result<(), AppError> {
+pub async fn install_agent(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: String,
+) -> Result<(), AppError> {
     let conn = state.get_conn()?;
     let config = agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
@@ -230,7 +248,10 @@ pub async fn install_agent(app: tauri::AppHandle, state: tauri::State<'_, crate:
         "progress": 50
     }));
 
-    run_shell_cmd(&cmd).map_err(|e| AppError::External(format!("安装 {} 失败: {}", agent_type, e)))?;
+    let mgr = agent_mgr.lock().await;
+    mgr.execute_command(&cmd, "", 300, crate::agent::console_bridge::CommandKind::Install, &format!("安装 {}", agent_type))
+        .await
+        .map_err(|e| AppError::External(format!("安装 {} 失败: {}", agent_type, e)))?;
 
     let _ = app.emit("install-progress", serde_json::json!({
         "agent": agent_type,
@@ -244,7 +265,12 @@ pub async fn install_agent(app: tauri::AppHandle, state: tauri::State<'_, crate:
 
 /// 根据 agent_type 从 DB 读取 uninstall_cmd 并执行
 #[tauri::command]
-pub async fn uninstall_agent(app: tauri::AppHandle, state: tauri::State<'_, crate::DbState>, agent_type: String) -> Result<(), AppError> {
+pub async fn uninstall_agent(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: String,
+) -> Result<(), AppError> {
     let conn = state.get_conn()?;
     let config = agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
@@ -260,7 +286,10 @@ pub async fn uninstall_agent(app: tauri::AppHandle, state: tauri::State<'_, crat
         "progress": 50
     }));
 
-    run_shell_cmd(&cmd).map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
+    let mgr = agent_mgr.lock().await;
+    mgr.execute_command(&cmd, "", 300, crate::agent::console_bridge::CommandKind::Uninstall, &format!("卸载 {}", agent_type))
+        .await
+        .map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
 
     let _ = app.emit("install-progress", serde_json::json!({
         "agent": agent_type,

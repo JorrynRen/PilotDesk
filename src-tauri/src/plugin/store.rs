@@ -187,40 +187,24 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
-/// 从所有服务器源尝试获取并解析插件索引
+/// 从所有服务器源尝试获取并解析插件索引（复用 market::fetch_market_json）
 async fn fetch_plugin_index(force: bool) -> Result<IndexFetchResult, String> {
-    let urls = crate::market::build_urls(crate::market::PLUGINS_INDEX_PATH);
-    let mut last_err = String::new();
-    for url in &urls {
-        match fetch_url(url).await {
-            Ok(c) => {
-                let index: PluginIndex = serde_json::from_str(&c)
-                    .map_err(|e| format!("解析索引失败: {}", e))?;
+    let json = crate::utils::market::fetch_market_json(crate::utils::market::PLUGINS_INDEX_PATH).await?;
+    let index: PluginIndex = serde_json::from_value(json)
+        .map_err(|e| format!("解析索引失败: {}", e))?;
 
-                if index.schema_version != INDEX_SCHEMA_VERSION {
-                    return Err(format!("索引 schema 版本不兼容: {} (期望: {})", index.schema_version, INDEX_SCHEMA_VERSION));
-                }
-
-                let source = if force {
-                    "raw"
-                } else if url.starts_with("https://cdn.jsdelivr") {
-                    "cdn"
-                } else {
-                    "raw"
-                };
-
-                return Ok(IndexFetchResult {
-                    plugins: index.plugins,
-                    updated_at: index.updated_at,
-                    source: source.to_string(),
-                });
-            }
-            Err(e) => {
-                last_err = e;
-            }
-        }
+    if index.schema_version != INDEX_SCHEMA_VERSION {
+        return Err(format!("索引 schema 版本不兼容: {} (期望: {})", index.schema_version, INDEX_SCHEMA_VERSION));
     }
-    Err(format!("所有服务器源均不可用: {}", last_err))
+
+    // source 由 market.rs 内部根据成功响应的 URL 判断
+    let source = if force { "raw" } else { "cdn" };
+
+    Ok(IndexFetchResult {
+        plugins: index.plugins,
+        updated_at: index.updated_at,
+        source: source.to_string(),
+    })
 }
 
 #[tauri::command]

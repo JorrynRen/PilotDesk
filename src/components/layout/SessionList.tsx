@@ -7,11 +7,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { useEnvInfo } from '../../hooks/useEnvInfo';
 import { SessionListItem } from './SessionListItem';
 
 type NewSessionType = string;
 
-function SessionListFn() {
+function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const sessions = useSessionStore((s) => s.sessions);
   const archivedSessions = useSessionStore((s) => s.archivedSessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
@@ -57,20 +58,19 @@ function SessionListFn() {
 
     fetchProviders().catch(() => {});
 
-    // Detect installed agents for session creation filtering
-    ;(async () => {
-      try {
-        const info = await invoke<any>('detect_env');
-        const installed = new Set<string>();
-        if (info.agentVersions) {
-          for (const [agentType, version] of Object.entries(info.agentVersions)) {
-            if (version) installed.add(agentType);
-          }
-        }
-        setInstalledAgents(installed);
-      } catch { /* ignore */ }
-    })();
   }, [fetchSessions, fetchProviders]);
+
+  // Sync installed agents from envInfo (shared singleton, no extra detect_env call)
+  const { envInfo } = useEnvInfo();
+  useEffect(() => {
+    if (envInfo?.agentVersions) {
+      const installed = new Set<string>();
+      for (const [agentType, version] of Object.entries(envInfo.agentVersions)) {
+        if (version) installed.add(agentType);
+      }
+      setInstalledAgents(installed);
+    }
+  }, [envInfo]);
 
   // Load workspace setting from SQLite when dialog opens
   useEffect(() => {
@@ -360,7 +360,7 @@ function SessionListFn() {
   return (
     <aside
       className="w-[260px] shrink-0 flex flex-col overflow-hidden"
-      style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+      style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', ...style }}
     >
       {/* Header */}
       <div className="flex items-center px-3 h-9" style={{ borderBottom: '1px solid var(--border)' }}>

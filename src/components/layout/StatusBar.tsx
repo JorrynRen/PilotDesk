@@ -22,9 +22,9 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
     .map(agent => [agent.agentType, envInfo?.agentVersions?.[agent.agentType] ?? null] as const);
 
   // Show loading state when envInfo is being fetched
-  const showLoading = loading && !envInfo;
+  const showLoading = !envInfo;
   // Show fallback when envInfo loaded but no enabled agents
-  const showEmpty = !loading && envInfo && agentEntries.length === 0;
+  const showEmpty = !!envInfo && agentEntries.length === 0;
 
   return (
     <footer
@@ -44,7 +44,7 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
         {showEmpty && (
           <span style={{ color: 'var(--text-tertiary)' }}>未检测</span>
         )}
-        {agentEntries.map(([agentType, version]) => {
+        {!showLoading && agentEntries.map(([agentType, version]) => {
           const theme = AGENT_THEMES[agentType];
           const color = theme?.color ?? '#6366F1';
           const label = version ?? pendingLabel;

@@ -172,7 +172,7 @@ fn get_or_create_key() -> Result<[u8; 32], String> {
 }
 
 fn key_file_path() -> PathBuf {
-    crate::utils::paths::app_data_dir().join(".key")
+    crate::utils::paths::encryption_key_path()
 }
 
 // ──────────────────────────────────────────────

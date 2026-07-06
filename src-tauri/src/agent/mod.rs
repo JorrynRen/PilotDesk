@@ -5,125 +5,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tokio::io::BufReader;
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
 use tauri::Emitter;
 use crate::commands::agents::AgentConfig;
 use crate::agent::handler::ProcessHandler;
 use crate::utils::errors::AppError;
+use crate::virtual_console::factory::ConsoleFactory;
+use crate::virtual_console::traits::VirtualConsole;
+use crate::agent::console_bridge::{AgentConsoleBridge, CommandKind};
 
 pub mod handler;
+pub mod line_processor;
+pub mod console_bridge;
 
 #[cfg(target_os = "windows")]
-mod conpty;
+pub mod session_process;
 #[cfg(target_os = "windows")]
-pub use conpty::ConptyProcess;
-
-// ------------------------------------------------------------------
-//  输出解析器
-// ------------------------------------------------------------------
-
-#[allow(dead_code)]
-fn quote_cmdline_arg(s: &str) -> String {
-    let needs_quote = s.is_empty()
-        || s.contains(' ')
-        || s.contains('\t')
-        || s.contains('\n')
-        || s.contains('"');
-    if needs_quote {
-        let mut escaped = String::with_capacity(s.len() + 2);
-        escaped.push('"');
-        for c in s.chars() {
-            match c {
-                '\\' => escaped.push_str("\\\\"),
-                '"' => escaped.push_str("\\\""),
-                _ => escaped.push(c),
-            }
-        }
-        escaped.push('"');
-        escaped
-    } else {
-        s.to_string()
-    }
-}
-
-fn parse_claude_output(line: &str) -> Option<String> {
-    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
-        if event["type"] == "assistant" {
-            if let Some(content) = event["message"]["content"].as_array() {
-                for block in content {
-                    if block["type"] == "text" {
-                        if let Some(text) = block["text"].as_str() {
-                            return Some(text.to_string() + "\n");
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-fn strip_ansi(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut in_escape = false;
-    for c in text.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c == 'm' || c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
-fn is_content_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty() { return false; }
-    if trimmed.starts_with("Initializing agent") { return false; }
-    if trimmed.starts_with("Resume this session") { return false; }
-    if trimmed.starts_with("hermes --resume") { return false; }
-    if trimmed.starts_with("Session:") { return false; }
-    if trimmed.starts_with("Duration:") { return false; }
-    if trimmed.starts_with("Messages:") { return false; }
-    if trimmed.starts_with("Query:") { return false; }
-    true
-}
-
-#[allow(dead_code)]
-fn parse_hermes_output(line: &str) -> Option<String> {
-    let clean = strip_ansi(line);
-    if is_content_line(&clean) {
-        Some(clean + "\n")
-    } else {
-        None
-    }
-}
-
-#[allow(dead_code)]
-fn parse_codex_output(line: &str) -> Option<String> {
-    if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
-        if event["type"] == "item.completed" {
-            if let Some(text) = event["item"]["text"].as_str() {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string() + "\n");
-                }
-            }
-        }
-        None
-    } else {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            Some(trimmed.to_string() + "\n")
-        } else {
-            None
-        }
-    }
-}
+pub use session_process::ConptyProcess;
 
 // ------------------------------------------------------------------
 //  统一错误映射
@@ -210,14 +107,169 @@ struct SpawnedProcess {
 
 pub struct AgentManager {
     processes: HashMap<String, AgentProcess>,
+    /// 虚拟控制台桥接：Agent 会话终端状态跟踪器
+    console_bridge: Arc<std::sync::Mutex<AgentConsoleBridge>>,
 }
 
 impl AgentManager {
     pub fn new() -> Self {
-        Self { processes: HashMap::new() }
+        Self {
+            processes: HashMap::new(),
+            console_bridge: Arc::new(std::sync::Mutex::new(AgentConsoleBridge::new())),
+        }
     }
 
-    // -- 共享方法：构建命令 -> 启动进程 -> 返回管道 --
+    /// 获取虚拟控制台桥接的 Arc clone
+    pub fn console_bridge_clone(&self) -> Arc<std::sync::Mutex<AgentConsoleBridge>> {
+        Arc::clone(&self.console_bridge)
+    }
+
+    /// 通过锁获取虚拟控制台桥接的可变引用
+    pub fn with_console_bridge<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut AgentConsoleBridge) -> R,
+    {
+        let mut bridge = self.console_bridge.lock().unwrap();
+        f(&mut bridge)
+    }
+
+    // ------------------------------------------------------------------
+    //  统一命令执行 — 所有 Agent 管理操作的统一入口
+    // ------------------------------------------------------------------
+
+    /// 统一命令执行入口（智能超时等待）
+    ///
+    /// 所有 Agent 管理命令（版本查询、安装、卸载、更新检查等）
+    /// 均通过此方法，经由虚拟控制台桥接跟踪。
+    ///
+    /// 超时机制：
+    /// - 每隔 timeout_secs 检查一次执行结果
+    /// - 超时后检查子进程 PID 存活性
+    ///   - 存活 -> 假超时（进程仍在工作），继续等待
+    ///   - 不存活 -> 真超时（进程已退出），报错
+    /// - 最大等待上限 = timeout_secs * 10
+    pub async fn execute_command(
+        &self,
+        command: &str,
+        cwd: &str,
+        timeout_secs: u64,
+        command_kind: CommandKind,
+        label: &str,
+    ) -> Result<(String, i32, String), String> {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis()).unwrap_or(0);
+        let session_id = format!("cmd_{}_{}", label, ts);
+        let work_dir = if cwd.is_empty() {
+            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+        } else { cwd.to_string() };
+
+        let bridge_arc = Arc::clone(&self.console_bridge);
+        let bridge_sid = session_id.clone();
+        {
+            let mut bridge = self.console_bridge.lock().unwrap();
+            bridge.register_session(&session_id, label, 0, command, vec![], &work_dir, false, command_kind.clone());
+        }
+
+        log::info!("[Agent/execute_command] kind={:?} label='{}' cmd='{}' cwd='{}'", command_kind, label, command, work_dir);
+
+        let cmd_owned = command.to_string();
+        let work_dir_owned = work_dir.clone();
+        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let shared_pid_clone = Arc::clone(&shared_pid);
+        let (tx, rx) = std::sync::mpsc::channel::<(u32, Result<(String, i32, String), String>)>();
+
+        // 在独立线程中通过虚拟控制台同步执行命令（匹配 plugin/shell.rs 模式）
+        std::thread::spawn(move || {
+            let result = (|| -> Result<(String, i32, String), String> {
+                let mut console = ConsoleFactory::auto_create()
+                    .map_err(|e| format!("创建虚拟控制台失败: {}", e))?;
+
+                #[cfg(target_os = "windows")]
+                let (exe, args): (&str, &[&str]) = ("cmd", &["/C", &cmd_owned]);
+                #[cfg(not(target_os = "windows"))]
+                let (exe, args): (&str, &[&str]) = ("sh", &["-c", &cmd_owned]);
+
+                let mut handle = console.spawn(exe, args, &work_dir_owned)
+                    .map_err(|e| format!("虚拟控制台 spawn 失败: {}", e))?;
+
+                let pid = handle.pid;
+                shared_pid_clone.store(pid, std::sync::atomic::Ordering::Relaxed);
+                log::info!("[Agent/execute_command] console spawned: pid={} cmd='{}'", pid, cmd_owned);
+
+                let mut stdout_bytes = Vec::new();
+                { let mut buf = [0u8; 4096]; loop {
+                    match handle.stdout.read(&mut buf) {
+                        Ok(0) => break, Ok(n) => stdout_bytes.extend_from_slice(&buf[..n]),
+                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
+                }}
+
+                let mut stderr_bytes = Vec::new();
+                { let mut buf = [0u8; 4096]; loop {
+                    match handle.stderr.read(&mut buf) {
+                        Ok(0) => break, Ok(n) => stderr_bytes.extend_from_slice(&buf[..n]),
+                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
+                }}
+
+                let _ = handle.stdin.close();
+                let status = console.wait(None).map_err(|e| format!("虚拟控制台 wait 失败: {}", e))?;
+                let exit_code = status.code().unwrap_or(-1);
+
+                let stdout_text = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
+                let stderr_text = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
+
+                Ok((stdout_text, exit_code, stderr_text))
+            })();
+
+            let pid = shared_pid_clone.load(std::sync::atomic::Ordering::Relaxed);
+            let _ = tx.send((pid, result));
+        });
+
+        // 智能超时：使用 process.rs 统一策略
+        let pid = shared_pid.load(std::sync::atomic::Ordering::Relaxed);
+        match crate::utils::process::wait_channel_with_alive(
+            pid,
+            &rx,
+            &format!("execute_command:{}", command),
+        ) {
+            Ok((_pid, Ok((stdout, exit_code, stderr)))) => {
+                let mut bridge = bridge_arc.lock().unwrap();
+                if exit_code == 0 { bridge.mark_completed(&bridge_sid); }
+                else { bridge.mark_failed(&bridge_sid); }
+                bridge.unregister_session(&bridge_sid);
+                return Ok((stdout, exit_code, stderr));
+            }
+            Ok((_pid, Err(e))) => {
+                let mut bridge = bridge_arc.lock().unwrap();
+                bridge.mark_failed(&bridge_sid);
+                bridge.unregister_session(&bridge_sid);
+                return Err(e);
+            }
+            Err(e) => {
+                let mut bridge = bridge_arc.lock().unwrap();
+                bridge.mark_terminated(&bridge_sid);
+                bridge.unregister_session(&bridge_sid);
+                return Err(format!("{}", e));
+            }
+        }
+    }
+
+    /// 便捷方法：执行命令并返回 stdout
+    pub async fn execute_command_output(
+        &self, command: &str, cwd: &str, timeout_secs: u64,
+        command_kind: CommandKind, label: &str,
+    ) -> Result<String, String> {
+        let (stdout, exit_code, stderr) = self.execute_command(command, cwd, timeout_secs, command_kind, label).await?;
+        if exit_code != 0 {
+            Err(format!("命令执行失败 (exit code {}): {}", exit_code, stderr))
+        } else { Ok(stdout) }
+    }
+
+// -- 共享方法：构建命令 -> 启动进程 -> 返回管道 --
 
     fn spawn_agent_process(
         config: &AgentConfig,
@@ -249,17 +301,34 @@ impl AgentManager {
 
         #[cfg(target_os = "windows")]
         let (child, stdout, stderr, conpty_mode) = {
-            let mut cmdline = String::new();
-            cmdline.push_str(&quote_cmdline_arg(&resolved_cmd));
-            for arg in &args {
-                cmdline.push(' ');
-                cmdline.push_str(&quote_cmdline_arg(arg));
-            }
+            // Detect if resolved_cmd is a batch script (.cmd / .bat)
+            let is_batch = resolved_cmd.to_lowercase().ends_with(".cmd")
+                || resolved_cmd.to_lowercase().ends_with(".bat");
 
-            log::info!("[Agent/{}] SPAWN (ConPTY): cmd={} args={:?} sid={:?} cwd={}",
-                agent_type, resolved_cmd, args, agent_session_id, work_dir);
+            let cmdline = if is_batch {
+                // Batch scripts require cmd.exe /C because CreateProcessW + ConPTY
+                // cannot delegate .cmd→cmd.exe (ERROR_BAD_EXE_FORMAT / os error 193).
+                // Also needed for fallback Command::new() which doesn't auto-resolve .cmd.
+                let mut c = String::from("cmd /C ");
+                c.push_str(&escape_cmdline_arg(&resolved_cmd));
+                for arg in &args {
+                    c.push(' ');
+                    c.push_str(&escape_cmdline_arg(arg));
+                }
+                c
+            } else {
+                // Native executables (.exe): use resolved_cmd directly.
+                // CreateProcessW handles PATH resolution internally.
+                let mut c = String::new();
+                c.push_str(&escape_cmdline_arg(&resolved_cmd));
+                for arg in &args {
+                    c.push(' ');
+                    c.push_str(&escape_cmdline_arg(arg));
+                }
+                c
+            };
 
-            match crate::agent::conpty::spawn_with_conpty(&cmdline, &work_dir) {
+            match crate::agent::session_process::spawn_with_conpty(&cmdline, &work_dir, 80, 30) {
                 Ok((c, o, e, cm)) => (
                     ProcessChild::Conpty(c),
                     Box::new(o) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
@@ -268,8 +337,18 @@ impl AgentManager {
                 ),
                 Err(e) => {
                     log::warn!("[Agent/{}] ConPTY failed, fallback: {}", agent_type, e);
-                    let mut cmd = Command::new(&resolved_cmd);
-                    cmd.args(&args);
+                    let mut cmd = if is_batch {
+                        // Batch scripts need cmd /C even in fallback
+                        let mut c = Command::new("C:\\Windows\\System32\\cmd.exe");
+                        c.arg("/C");
+                        c.arg(&resolved_cmd);
+                        c.args(&args);
+                        c
+                    } else {
+                        let mut cmd = Command::new(&resolved_cmd);
+                        cmd.args(&args);
+                        cmd
+                    };
                     cmd.current_dir(&work_dir);
                     cmd.stdout(std::process::Stdio::piped());
                     cmd.stderr(std::process::Stdio::piped());
@@ -485,68 +564,64 @@ impl AgentManager {
         let cwd_owned = cwd.clone();
 
         tokio::spawn(async move {
-            let timeout_duration = Duration::from_secs(300);
-
             let app = app_clone;
             let sid_inner = sid;
             let agent_type_name_inner = agent_type_name;
+            let app_for_result = app.clone();
+            let sid_inner_for_result = sid_inner.clone();
             let aborted_inner = aborted_clone;
 
-            let result = timeout(timeout_duration, async {
-                let app_for_chunk = app.clone();
-                let sid_for_chunk = sid_inner.clone();
-                let app_for_sid = app.clone();
-                let sid_for_sid = sid_inner.clone();
+            let result = crate::utils::process::wait_future_with_alive(
+                pid,
+                Box::pin(async move {
+                    let app_for_chunk = app.clone();
+                    let sid_for_chunk = sid_inner.clone();
+                    let app_for_sid = app.clone();
+                    let sid_for_sid = sid_inner.clone();
 
-                Self::execute_agent_inner(
-                    &config_owned,
-                    &message_owned,
-                    agent_session_id_owned.as_deref(),
-                    cwd_owned.as_deref().unwrap_or(""),
-                    move |chunk| {
-                        let _ = app_for_chunk.emit("agent-chunk", serde_json::json!({
-                            "sessionId": sid_for_chunk,
-                            "content": chunk,
-                        }));
-                    },
-                    move |sid_agent| {
-                        let _ = app_for_sid.emit("agent-session", serde_json::json!({
-                            "sessionId": sid_for_sid,
-                            "agentSessionId": sid_agent,
-                        }));
-                    },
-                    move || aborted_inner.load(Ordering::Relaxed),
-                ).await
-            }).await;
+                    Self::execute_agent_inner(
+                        &config_owned,
+                        &message_owned,
+                        agent_session_id_owned.as_deref(),
+                        cwd_owned.as_deref().unwrap_or(""),
+                        move |chunk| {
+                            let _ = app_for_chunk.emit("agent-chunk", serde_json::json!({
+                                "sessionId": sid_for_chunk,
+                                "content": chunk,
+                            }));
+                        },
+                        move |sid_agent| {
+                            let _ = app_for_sid.emit("agent-session", serde_json::json!({
+                                "sessionId": sid_for_sid,
+                                "agentSessionId": sid_agent,
+                            }));
+                        },
+                        move || aborted_inner.load(Ordering::Relaxed),
+                    ).await
+                }),
+                &format!("Agent {}", agent_type_name_inner),
+            ).await;
 
             match result {
-                Ok(Ok((_output, _sid_from_inner, exit_code, stderr_text))) => {
-                    // session_id 已由 execute_agent_inner 内部的 on_session_id 回调发射
-                    // stdout-text/json 通过 stdout 循环直接发射；stderr-text/json 通过 stderr 线程 -> 合并后发射
+                Ok((_output, _sid_from_inner, exit_code, stderr_text)) => {
                     if exit_code != 0 {
                         let err_msg = friendly_agent_error(&agent_type_name_inner, exit_code, &stderr_text);
-                        let _ = app.emit("agent-error", serde_json::json!({
-                            "sessionId": sid_inner,
+                        let _ = app_for_result.emit("agent-error", serde_json::json!({
+                            "sessionId": sid_inner_for_result,
                             "error": err_msg,
                         }));
                     }
                 }
-                Ok(Err(e)) => {
-                    let _ = app.emit("agent-error", serde_json::json!({
-                        "sessionId": sid_inner,
-                        "error": e,
-                    }));
-                }
-                Err(_) => {
-                    let _ = app.emit("agent-error", serde_json::json!({
-                        "sessionId": sid_inner,
-                        "error": "请求超时：智能体未在 300 秒内响应，请检查智能体状态后重试",
+                Err(e) => {
+                    let _ = app_for_result.emit("agent-error", serde_json::json!({
+                        "sessionId": sid_inner_for_result,
+                        "error": format!("{}", e),
                     }));
                 }
             }
 
-            let _ = app.emit("agent-done", serde_json::json!({
-                "sessionId": sid_inner,
+            let _ = app_for_result.emit("agent-done", serde_json::json!({
+                "sessionId": sid_inner_for_result,
             }));
         });
 
@@ -565,23 +640,50 @@ impl AgentManager {
         on_chunk: impl Fn(String) + Send + 'static,
         agent_session_id: Option<&str>,
     ) -> Result<(String, Option<String>), AppError> {
-        let (_output, sid, exit_code, stderr_text) = Self::execute_agent_inner(
-            config,
-            prompt,
-            agent_session_id,
-            cwd,
-            on_chunk,
-            |_| {},  // session_id 已由 execute_agent_inner 内部处理
-            || false, // execute_once 不支持中途中止
-        ).await.map_err(|e| AppError::External(e))?;
+        // ── 智能超时策略（与 send_message_with_config 一致）──
+        // 先 spawn 获取 PID，再通过 wait_future_with_alive 包裹 execute_agent_inner
+        // 30s 轮询 + 10min 上限，通过 is_process_alive 区分假超时和真超时
+        let pid = {
+            let spawned = Self::spawn_agent_process(config, prompt, agent_session_id, cwd)
+                .map_err(|e| AppError::External(e))?;
+            spawned.child.id()
+        };
 
-        if exit_code != 0 {
-            return Err(AppError::External(friendly_agent_error(
-                &config.agent_type, exit_code, &stderr_text,
-            )));
+        // 为 async 'static 闭包准备 owned 副本
+        let config_owned = config.clone();
+        let prompt_owned = prompt.to_string();
+        let cwd_owned = cwd.to_string();
+        let agent_session_id_owned = agent_session_id.map(|s| s.to_string());
+        let agent_type_label = config.agent_type.clone();
+        let agent_type_for_error = config.agent_type.clone();
+
+        let timeout_result = crate::utils::process::wait_future_with_alive(
+            pid,
+            Box::pin(async move {
+                Self::execute_agent_inner(
+                    &config_owned,
+                    &prompt_owned,
+                    agent_session_id_owned.as_deref(),
+                    &cwd_owned,
+                    on_chunk,
+                    |_| {},
+                    || false,
+                ).await
+            }),
+            &format!("Agent(workflow) {}", agent_type_label),
+        ).await;
+
+        match timeout_result {
+            Ok((_output, sid, exit_code, stderr_text)) => {
+                if exit_code != 0 {
+                    return Err(AppError::External(friendly_agent_error(
+                        &agent_type_for_error, exit_code, &stderr_text,
+                    )));
+                }
+                Ok((_output, sid))
+            }
+            Err(e) => Err(AppError::External(format!("{}", e))),
         }
-
-        Ok((_output, sid))
     }
     pub fn stop_generation(&mut self, session_id: &str) {
         if let Some(process) = self.processes.get(session_id) {
@@ -703,7 +805,6 @@ fn which(name: &str) -> bool {
         }
     }
     false
- 
 }
 
 // ------------------------------------------------------------------
@@ -770,4 +871,28 @@ fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode:
         }
     }
     skills
+}
+
+/// 转义命令行参数（用于 ConPTY cmdline 构建）
+fn escape_cmdline_arg(s: &str) -> String {
+    let needs_quote = s.is_empty()
+        || s.contains(' ')
+        || s.contains('\t')
+        || s.contains('\n')
+        || s.contains('"');
+    if needs_quote {
+        let mut escaped = String::with_capacity(s.len() + 2);
+        escaped.push('"');
+        for c in s.chars() {
+            match c {
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                _ => escaped.push(c),
+            }
+        }
+        escaped.push('"');
+        escaped
+    } else {
+        s.to_string()
+    }
 }

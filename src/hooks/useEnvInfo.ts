@@ -15,7 +15,8 @@ import type { EnvInfo } from '../types';
 let globalEnvInfo: EnvInfo | null = null;
 let globalListeners = new Set<() => void>();
 let globalLoading = false;
-let globalFetching = false;
+/** Active fetch promise — all callers share the same in-flight request */
+let globalFetchPromise: Promise<EnvInfo | null> | null = null;
 
 function notifyListeners() {
   for (const listener of globalListeners) {
@@ -24,21 +25,27 @@ function notifyListeners() {
 }
 
 async function fetchEnv(): Promise<EnvInfo | null> {
-  if (globalFetching) return globalEnvInfo;
-  globalFetching = true;
+  // If a fetch is already in-flight, return the same promise (no duplicate call)
+  if (globalFetchPromise) return globalFetchPromise;
+
   globalLoading = true;
   notifyListeners();
-  try {
-    const info = await invoke<EnvInfo>('detect_env');
-    globalEnvInfo = info;
-    return info;
-  } catch {
-    return null;
-  } finally {
-    globalLoading = false;
-    globalFetching = false;
-    notifyListeners();
-  }
+
+  globalFetchPromise = (async () => {
+    try {
+      const info = await invoke<EnvInfo>('detect_env');
+      globalEnvInfo = info;
+      return info;
+    } catch {
+      return null;
+    } finally {
+      globalLoading = false;
+      globalFetchPromise = null;
+      notifyListeners();
+    }
+  })();
+
+  return globalFetchPromise;
 }
 
 export function useEnvInfo() {
@@ -49,7 +56,7 @@ export function useEnvInfo() {
     globalListeners.add(listener);
 
     // Fetch on first mount if not yet fetched (app startup)
-    if (globalEnvInfo === null && !globalFetching) {
+    if (globalEnvInfo === null && !globalFetchPromise) {
       fetchEnv();
     }
 

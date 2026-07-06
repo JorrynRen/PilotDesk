@@ -3,14 +3,18 @@
 // ──────────────────────────────────────────────
 //  支持 stdio / http / sse 三种交互模式，
 //  降低新增 Agent 的进程管理门槛。
+//
+//  噪声过滤已迁移至 line_processor 模块（L0 平台层 + L1 Agent 配置层）。
 
+use crate::agent::line_processor::LineProcessor;
 use crate::commands::agents::AgentConfig;
 
 /// 进程交互协议抽象
 pub trait ProcessHandler: Send + Sync {
     /// 构建命令和参数
     /// 返回 (命令名, 参数列表)
-    fn build_command(&self, message: &str, agent_session_id: Option<&str>) -> (String, Vec<String>);
+    fn build_command(&self, message: &str, agent_session_id: Option<&str>)
+        -> (String, Vec<String>);
 
     /// 解析输出行，返回可展示的内容
     fn parse_output_line(&self, line: &str) -> Option<String>;
@@ -18,6 +22,9 @@ pub trait ProcessHandler: Send + Sync {
     /// 从输出行提取 agent session_id
     /// is_stderr: 当前行是否来自 stderr
     fn extract_session_id(&self, line: &str, is_stderr: bool) -> Option<String>;
+
+    /// 获取 LineProcessor 实例（用于 ANSI 剥离和噪声过滤）
+    fn get_line_processor(&self) -> &LineProcessor;
 }
 
 // ──────────────────────────────────────────────
@@ -27,21 +34,39 @@ pub trait ProcessHandler: Send + Sync {
 #[derive(Clone)]
 pub struct StdioHandler {
     pub config: AgentConfig,
+    /// 行处理流水线：ANSI 剥离 + 噪声过滤
+    line_processor: LineProcessor,
 }
 
 impl StdioHandler {
     pub fn from_config(config: AgentConfig) -> Self {
-        Self { config }
+        let line_processor = LineProcessor::default_with_filter(&config.output_filter_regex);
+        Self {
+            config,
+            line_processor,
+        }
+    }
+
+    pub fn get_line_processor(&self) -> &LineProcessor {
+        &self.line_processor
     }
 }
 
 impl ProcessHandler for StdioHandler {
-    fn build_command(&self, message: &str, agent_session_id: Option<&str>) -> (String, Vec<String>) {
+    fn build_command(
+        &self,
+        message: &str,
+        agent_session_id: Option<&str>,
+    ) -> (String, Vec<String>) {
         // ── 选择模板 ──
         // 有 agent_session_id → 使用 resume_arg_template（完整的命令模板，含 --resume {session_id}）
         // 无 agent_session_id → 使用 run_cmd_template
         let template_str = if let Some(sid) = agent_session_id {
-            log::info!("[Handler] build_command: session_id={:?} resume_tpl={}", sid, self.config.resume_arg_template);
+            log::info!(
+                "[Handler] build_command: session_id={:?} resume_tpl={}",
+                sid,
+                self.config.resume_arg_template
+            );
             self.config.resume_arg_template.replace("{session_id}", sid)
         } else {
             log::info!("[Handler] build_command: no session_id, using run_cmd_template");
@@ -88,17 +113,24 @@ impl ProcessHandler for StdioHandler {
     }
 
     fn parse_output_line(&self, line: &str) -> Option<String> {
+        // 统一通过 LineProcessor 处理：
+        //   L0: ConPTY 路径噪声过滤
+        //   L1: ANSI 剥离 + output_filter_regex 过滤
+        // 解析器层（json-stream / ansi-text / raw-text）在此之后处理
+        let processor = self.get_line_processor();
+
         match self.config.output_parser.as_str() {
-            "json-stream" => parse_json_stream(line),
-            "ansi-text" => parse_ansi_text(line, &self.config.output_filter_regex),
+            "json-stream" => {
+                // json-stream 不需要行级噪声过滤（所有内容在 JSON 结构体内）
+                parse_json_stream(line)
+            }
+            "ansi-text" => {
+                // ansi-text 走 LineProcessor 流水线
+                processor.process_line(line)
+            }
             _ => {
-                // raw-text: 非空行直接返回
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_string() + "\n")
-                }
+                // raw-text: 非空行直接返回（仍需 LineProcessor 过滤噪声）
+                processor.process_line(line).map(|s| s + "\n")
             }
         }
     }
@@ -126,17 +158,29 @@ impl ProcessHandler for StdioHandler {
                 if is_stderr {
                     return None;
                 }
-                extract_session_id_from_json(line, &self.config.session_id_event_type, &self.config.session_id_field)
+                extract_session_id_from_json(
+                    line,
+                    &self.config.session_id_event_type,
+                    &self.config.session_id_field,
+                )
             }
             // stderr-json — 仅从标准错误解析 JSON
             "stderr-json" => {
                 if !is_stderr {
                     return None;
                 }
-                extract_session_id_from_json(line, &self.config.session_id_event_type, &self.config.session_id_field)
+                extract_session_id_from_json(
+                    line,
+                    &self.config.session_id_event_type,
+                    &self.config.session_id_field,
+                )
             }
             _ => None,
         }
+    }
+
+    fn get_line_processor(&self) -> &LineProcessor {
+        &self.line_processor
     }
 }
 
@@ -168,54 +212,6 @@ fn parse_json_stream(line: &str) -> Option<String> {
         }
     }
     None
-}
-
-// ──────────────────────────────────────────────
-//  ANSI 文本解析器
-// ──────────────────────────────────────────────
-
-#[allow(dead_code)]
-fn strip_ansi(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut in_escape = false;
-    for c in text.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c == 'm' || c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
-#[allow(dead_code)]
-fn is_content_line(line: &str) -> bool {
-    // 非空行即为有效内容行
-    // Agent 特定的过滤逻辑已由 output_filter_regex 统一处理
-    !line.trim().is_empty()
-}
-
-fn parse_ansi_text(line: &str, filter_regex: &str) -> Option<String> {
-    let clean = strip_ansi(line);
-
-    // 如果配置了过滤正则，匹配的行跳过
-    if !filter_regex.is_empty() {
-        if let Ok(re) = regex::Regex::new(filter_regex) {
-            if re.is_match(&clean) {
-                return None;
-            }
-        }
-    }
-
-    if is_content_line(&clean) {
-        Some(clean + "\n")
-    } else {
-        None
-    }
 }
 
 // ──────────────────────────────────────────────
@@ -266,6 +262,24 @@ fn extract_session_id_from_text(line: &str, field: &str) -> Option<String> {
     }
 }
 
+/// 剥离 ANSI 颜色码（用于 session_id 提取等场景）
+fn strip_ansi(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut in_escape = false;
+    for c in text.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' || c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// 简单 shell 风格拆分（按空格拆分，支持双引号包裹的参数）
 fn simple_split(input: &str) -> Vec<String> {
     let mut result = Vec::new();
@@ -295,7 +309,6 @@ fn simple_split(input: &str) -> Vec<String> {
     result
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,7 +333,11 @@ mod tests {
         // 有 ANSI 码，修复版应正确提取
         let line = "\x1b[36mSession: abc123\x1b[0m";
         let result = extract_session_id_from_text(line, "Session: ");
-        assert_eq!(result, Some("abc123".to_string()), "ANSI codes should be stripped before matching");
+        assert_eq!(
+            result,
+            Some("abc123".to_string()),
+            "ANSI codes should be stripped before matching"
+        );
     }
 
     #[test]
@@ -332,14 +349,23 @@ mod tests {
             ("session_id: abc123", "", Some("abc123")),
             ("\x1b[32mSession: xyz\x1b[0m", "Session: ", Some("xyz")),
             // Hermes 实际 stderr 输出格式：session_id: + 空格 + 值
-            ("session_id: 20260703_114256_e2449d", "session_id: ", Some("20260703_114256_e2449d")),
+            (
+                "session_id: 20260703_114256_e2449d",
+                "session_id: ",
+                Some("20260703_114256_e2449d"),
+            ),
             // 默认 field 为 "session_id: " 时匹配 "session_id:" + 任意空白
             ("session_id:        xyz789", "", Some("xyz789")),
         ];
         for (line, field, expected) in cases {
             let result = extract_session_id_from_text(line, field);
-            assert_eq!(result, expected.map(|s| s.to_string()),
-                "Failed on line={:?}, field={:?}", line, field);
+            assert_eq!(
+                result,
+                expected.map(|s| s.to_string()),
+                "Failed on line={:?}, field={:?}",
+                line,
+                field
+            );
         }
     }
 
@@ -347,14 +373,17 @@ mod tests {
     fn test_extract_session_id_from_text_no_match() {
         let cases = vec![
             ("  Session: abc123", "Session: "),    // 前导空格
-            ("[Session: abc123]", "Session: "),     // 括号
-            ("Session ID: abc123", "Session: "),    // 不同前缀
-            ("Chat Session: abc123", "Session: "),  // 不同前缀
+            ("[Session: abc123]", "Session: "),    // 括号
+            ("Session ID: abc123", "Session: "),   // 不同前缀
+            ("Chat Session: abc123", "Session: "), // 不同前缀
         ];
         for (line, field) in cases {
             let result = extract_session_id_from_text(line, field);
-            assert_eq!(result, None,
-                "Should not match on line={:?}, field={:?}", line, field);
+            assert_eq!(
+                result, None,
+                "Should not match on line={:?}, field={:?}",
+                line, field
+            );
         }
     }
 
@@ -365,6 +394,9 @@ mod tests {
         assert_eq!(result, Some("abc123".to_string()));
 
         let result = extract_session_id_from_text("Session: abc123", "");
-        assert_eq!(result, None, "Default prefix is 'session_id: ', not 'Session: '");
+        assert_eq!(
+            result, None,
+            "Default prefix is 'session_id: ', not 'Session: '"
+        );
     }
 }

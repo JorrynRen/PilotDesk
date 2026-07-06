@@ -4,7 +4,7 @@ import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialo
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
-import { buildUrls, AGENTS_CONFIG_PATH } from '../../utils/market';
+
 import type { AgentConfig } from '../../types';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
 import {
@@ -124,34 +124,15 @@ export function AgentManager() {
     setSaving(false);
   };
 
-  const MARKET_URLS = buildUrls(AGENTS_CONFIG_PATH);
-
-  /** 带超时的 fetch，timeoutMs 默认 8 秒 */
-  const fetchWithTimeout = (url: string, timeoutMs = 8000, extra?: RequestInit): Promise<Response> => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    return fetch(url, { signal: controller.signal, ...extra }).finally(() => clearTimeout(timer));
-  };
-
+  /** 从 Rust 后端获取 Agent 市场配置（服务器源/降级/重试由 market.rs 统一管理） */
   const fetchMarket = async () => {
     setMarketLoading(true);
-    let lastError: string | null = null;
-    // 添加时间戳防止 CDN 缓存
-    const ts = Date.now();
-    for (const url of MARKET_URLS) {
-      const cacheBustUrl = `${url}${url.includes('?') ? '&' : '?'}_t=${ts}`;
-      try {
-        const response = await fetchWithTimeout(cacheBustUrl, 8000, { cache: 'no-cache' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        setMarketAgents(data.agents || []);
-        setMarketLoading(false);
-        return;
-      } catch (err: any) {
-        lastError = err.name === 'AbortError' ? '连接超时' : String(err.message || err);
-      }
+    try {
+      const data = await invoke<{ agents?: AgentConfig[] }>('fetch_agents_config');
+      setMarketAgents(data.agents || []);
+    } catch (err: any) {
+      showToast(`无法连接 Agent 市场，请检查网络连接 (${err})`, 'warning');
     }
-    showToast(`无法连接 Agent 市场，请检查网络连接`, 'warning');
     setMarketLoading(false);
   };
 

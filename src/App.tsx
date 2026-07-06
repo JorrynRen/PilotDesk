@@ -7,14 +7,17 @@ import { useSkillStore } from './stores/skillStore';
 import { useAgentEvent } from './hooks/useAgentEvent';
 import { commandDispatcher } from './plugin/CommandDispatcher';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
+import { VirtualConsolePanel } from './components/VirtualConsolePanel';
 import { MarketPage } from './components/inspiration/MarketPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { WorkflowPage } from './pages/WorkflowPage';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
+import { VirtualConsoleProvider, useVirtualConsole } from './VirtualConsoleManager';
 import './styles/ui.css';
 
 function MainLayout() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const { viewMode, toggleConsole: toggleVirtualConsole } = useVirtualConsole();
   const navigate = useNavigate();
   const currentSession = useSessionStore((s) => {
     const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
@@ -28,26 +31,33 @@ function MainLayout() {
     },
   });
 
+  const isTerminal = viewMode === 'terminal';
+
   return (
     <div className="pilotdesk-window-shell">
       <div className="pilotdesk-window-content flex flex-col h-full">
-          <TitleBar
-            onOpenSettings={() => navigate('/settings')}
-            onOpenWorkflow={() => navigate('/workflow')}
-            onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
-            rightPanelOpen={rightPanelOpen}
-          />
-          <div className="flex-1 flex overflow-hidden relative">
-            <SessionList />
-            <MainPanel />
-            <RightPanel isOpen={rightPanelOpen} />
+        <TitleBar
+          onOpenSettings={() => navigate('/settings')}
+          onOpenWorkflow={() => navigate('/workflow')}
+          onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
+          onToggleVirtualConsole={toggleVirtualConsole}
+          isVirtualConsoleOpen={isTerminal}
+          rightPanelOpen={rightPanelOpen}
+        />
+        <div className="flex-1 flex overflow-hidden relative">
+          <SessionList style={isTerminal ? { display: 'none' } : undefined} />
+          <div className="flex-1 flex flex-col overflow-hidden" style={{ display: isTerminal ? 'flex' : 'none' }}>
+            <VirtualConsolePanel />
           </div>
-          <StatusBar
-            onOpenSettings={() => navigate('/settings')}
-            onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-          />
+          <MainPanel style={isTerminal ? { display: 'none' } : undefined} />
+          <RightPanel isOpen={rightPanelOpen} />
         </div>
+        <StatusBar
+          onOpenSettings={() => navigate('/settings')}
+          onOpenEnvSettings={() => navigate('/settings?tab=environment')}
+        />
       </div>
+    </div>
   );
 }
 
@@ -126,13 +136,15 @@ function App() {
   }, []);
 
   return (
-    <Routes>
-      <Route path="/" element={<MainLayout />} />
-      <Route path="/market" element={<MarketPage onBack={() => window.history.back()} />} />
-      <Route path="/workflow" element={<WorkflowPage onBack={() => window.history.back()} />} />
-      <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
-      <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
-    </Routes>
+    <VirtualConsoleProvider>
+      <Routes>
+        <Route path="/" element={<MainLayout />} />
+        <Route path="/market" element={<MarketPage onBack={() => window.history.back()} />} />
+        <Route path="/workflow" element={<WorkflowPage onBack={() => window.history.back()} />} />
+        <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
+        <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
+      </Routes>
+    </VirtualConsoleProvider>
   );
 }
 

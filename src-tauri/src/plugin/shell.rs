@@ -1,5 +1,15 @@
+//! 插件 Shell 执行模块
+//!
+//! 提供插件 Shell 命令执行能力。
+//! 所有命令均通过虚拟控制台（VirtualConsole trait）统一执行，
+//! 不使用裸 std::process::Command，确保执行通道的一致性与可追溯性。
+
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use crate::virtual_console::factory::ConsoleFactory;
+use crate::virtual_console::traits::VirtualConsole;
 
 use super::PluginHost;
 
@@ -19,6 +29,71 @@ pub struct ShellExecOptions {
     pub working_dir: Option<String>,
 }
 
+/// 插件 Shell 统一虚拟工作台方法
+///
+/// 通过 VirtualConsole trait 统一执行，返回 (pid, ShellResult)。
+fn execute_via_virtual_console(
+    command: &str,
+    options: &Option<ShellExecOptions>,
+) -> Result<(u32, ShellResult), String> {
+    let work_dir = options
+        .as_ref()
+        .and_then(|o| o.working_dir.clone())
+        .unwrap_or_else(|| {
+            // 默认使用用户数据根目录作为工作区
+            crate::utils::paths::app_data_dir()
+                .to_string_lossy()
+                .to_string()
+        });
+
+    let mut console = ConsoleFactory::auto_create()
+        .map_err(|e| format!("创建虚拟控制台失败: {}", e))?;
+
+    #[cfg(target_os = "windows")]
+    let (exe, args): (&str, &[&str]) = ("cmd", &["/C", command]);
+    #[cfg(not(target_os = "windows"))]
+    let (exe, args): (&str, &[&str]) = ("sh", &["-c", command]);
+
+    let mut handle = console
+        .spawn(exe, args, &work_dir)
+        .map_err(|e| format!("虚拟控制台 spawn 失败: {}", e))?;
+
+    let pid = handle.pid;
+    log::info!("[Plugin/Shell] virtual console spawned: pid={} cmd='{}' cwd='{}'", pid, command, work_dir);
+
+    // 读取 stdout
+    let mut stdout_bytes = Vec::new();
+    { let mut buf = [0u8; 4096]; loop {
+        match handle.stdout.read(&mut buf) {
+            Ok(0) => break, Ok(n) => stdout_bytes.extend_from_slice(&buf[..n]),
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }}
+
+    // 读取 stderr
+    let mut stderr_bytes = Vec::new();
+    { let mut buf = [0u8; 4096]; loop {
+        match handle.stderr.read(&mut buf) {
+            Ok(0) => break, Ok(n) => stderr_bytes.extend_from_slice(&buf[..n]),
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }}
+
+    let _ = handle.stdin.close();
+    let status = console.wait(None).map_err(|e| format!("虚拟控制台 wait 失败: {}", e))?;
+    let exit_code = status.code().unwrap_or(-1);
+
+    log::info!("[Plugin/Shell] command completed: pid={} exit_code={}", pid, exit_code);
+
+    Ok((pid, ShellResult {
+        stdout: String::from_utf8_lossy(&stdout_bytes).trim().to_string(),
+        stderr: String::from_utf8_lossy(&stderr_bytes).trim().to_string(),
+        exit_code,
+    }))
+}
+
 #[tauri::command]
 pub fn plugin_shell_exec(
     host: tauri::State<'_, Mutex<PluginHost>>,
@@ -28,62 +103,47 @@ pub fn plugin_shell_exec(
 ) -> Result<ShellResult, String> {
     let host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
     let sandbox_info = host.get_sandbox_info();
-    
-    // 沙箱启用时拒绝
+
     if sandbox_info.sandbox_enabled {
         return Err("沙箱已启用，Shell 命令执行被拒绝".to_string());
     }
-    
-    // 验证插件存在
+
     let plugins = host.list_plugins();
-    let _plugin = plugins.iter().find(|p| p.manifest.id == plugin_id)
+    let _plugin = plugins
+        .iter()
+        .find(|p| p.manifest.id == plugin_id)
         .ok_or_else(|| format!("插件 '{}' 未找到", plugin_id))?;
-    
-    // 释放锁后再执行命令，避免死锁
+
     drop(host);
-    
-    let timeout = options.as_ref().and_then(|o| o.timeout_ms).unwrap_or(30000);
-    
-    // 在 Windows 上使用 cmd /c，其他系统使用 sh -c
-    let (shell, flag) = if cfg!(target_os = "windows") {
-        ("cmd", "/C")
-    } else {
-        ("sh", "-c")
-    };
-    
-    let mut child = std::process::Command::new(shell)
-        .arg(flag)
-        .arg(&command)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("启动进程失败: {}", e))?;
-    
-    // 等待进程完成（带超时）
-    let start = std::time::Instant::now();
-    let status = loop {
-        if start.elapsed().as_millis() as u64 > timeout {
-            let _ = child.kill();
-            return Err(format!("命令执行超时 ({}ms)", timeout));
+
+    // 智能超时等待
+    let timeout_ms = options.as_ref().and_then(|o| o.timeout_ms).unwrap_or(30000);
+    let timeout_secs_f = timeout_ms as f64 / 1000.0;
+
+    let shared_pid = Arc::new(AtomicU32::new(0));
+    let cmd = command.clone();
+    let opts = options.clone();
+    let shared_pid_clone = Arc::clone(&shared_pid);
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    std::thread::spawn(move || {
+        let result = execute_via_virtual_console(&cmd, &opts);
+        if let Ok((pid, _)) = &result {
+            shared_pid_clone.store(*pid, Ordering::Relaxed);
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
-            Err(e) => return Err(format!("等待进程失败: {}", e)),
-        }
-    };
-    
-    use std::io::Read;
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    child.stdout.take().unwrap().read_to_string(&mut stdout).ok();
-    child.stderr.take().unwrap().read_to_string(&mut stderr).ok();
-    
-    let exit_code = status.code().unwrap_or(-1);
-    
-    Ok(ShellResult {
-        stdout,
-        stderr,
-        exit_code,
-    })
+        let _ = tx.send(result);
+    });
+
+    // 智能超时：使用 process.rs 统一策略
+    let pid = shared_pid.load(Ordering::Relaxed);
+    match crate::utils::process::wait_channel_with_alive(
+        pid,
+        &rx,
+        &format!("plugin_shell:{}", command),
+    ) {
+        Ok(Ok((_, shell_result))) => return Ok(shell_result),
+        Ok(Err(e)) => return Err(e),
+        Err(e) => return Err(format!("{}", e)),
+    }
+
 }

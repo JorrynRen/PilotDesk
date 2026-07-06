@@ -90,9 +90,13 @@ pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppErro
 }
 
 /// Generic agent update check: reads latest_version_cmd from agents table and executes it.
-/// 完全依赖数据库命令模板，代码不做任何特殊处理，保证通用性和可拓展性。
+/// 通过 AgentManager 统一虚拟控制台执行，确保所有命令经由 bridge 跟踪。
 #[tauri::command]
-pub async fn check_agent_update(state: tauri::State<'_, crate::DbState>, agent_type: String) -> Result<VersionTimeInfo, AppError> {
+pub async fn check_agent_update(
+    state: tauri::State<'_, crate::DbState>,
+    agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
+    agent_type: String,
+) -> Result<VersionTimeInfo, AppError> {
     let conn = state.get_conn()?;
     let config = crate::commands::agents::get_agent_inner(&conn, &agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)))?;
@@ -102,9 +106,13 @@ pub async fn check_agent_update(state: tauri::State<'_, crate::DbState>, agent_t
         return Err(AppError::Config(format!("{} 未配置版本查询命令", agent_type)));
     }
 
-    // 统一执行命令，不区分命令类型
-    let output = crate::commands::env::run_shell_cmd(&cmd)
-        .map_err(|e| AppError::External(format!("版本查询失败: {}", e)))?;
+    let mgr = agent_mgr.lock().await;
+    let output = mgr.execute_command_output(
+        &cmd, "", 15,
+        crate::agent::console_bridge::CommandKind::UpdateCheck,
+        &format!("{} 更新检查", agent_type),
+    ).await.map_err(|e| AppError::External(format!("版本查询失败: {}", e)))?;
+
     Ok(VersionTimeInfo {
         version: output,
         release_time: None,

@@ -156,10 +156,7 @@ pub struct PluginHost {
 
 impl PluginHost {
     pub fn new() -> Self {
-        let plugins_dir = dirs_next::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("PilotDesk")
-            .join("plugins");
+        let plugins_dir = crate::utils::paths::plugins_dir();
 
         Self {
             plugins_dir,

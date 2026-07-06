@@ -1,2 +1,0 @@
-cargo:rustc-link-search=native=E:/WorkSpace_HermesAgent/pilotdeskProject/PilotDesk/src-tauri/target-check\debug\build\webview2-com-sys-5f1dd782a49c1fb1\out\x64
-cargo:rustc-link-lib=advapi32
