@@ -282,6 +282,8 @@ impl AgentManager {
         let cmd_name = config.cli_command.clone();
 
         let (cmd_name_from_template, args) = process_handler.build_command(message, agent_session_id);
+        log::info!("[Agent/{}] spawn诊断: cmd_from_template={}, args=[{}]",
+            agent_type, cmd_name_from_template, args.join(", "));
         let effective_cmd = if cmd_name_from_template.is_empty() {
             cmd_name
         } else {
@@ -296,13 +298,16 @@ impl AgentManager {
             cwd.to_string()
         };
 
-        let resolved_cmd = resolve_in_path(&effective_cmd)
-            .unwrap_or_else(|| effective_cmd.to_string());
+        let resolve_result = resolve_in_path(&effective_cmd);
+        let resolved_cmd = resolve_result.clone().unwrap_or_else(|| effective_cmd.to_string());
 
         // Track whether resolve_in_path actually found a path or fell back to the raw name.
         // When unresolved, the command might be a .cmd/.bat that `where` and PATH scan both
         // missed — wrapping with cmd /C is the safest fallback (avoids os error 193).
-        let cmd_was_resolved = resolve_in_path(&effective_cmd).is_some();
+        let cmd_was_resolved = resolve_result.is_some();
+
+        log::info!("[Agent/{}] spawn诊断: effective_cmd={}, resolved_cmd={}, cmd_was_resolved={}",
+            agent_type, effective_cmd, resolved_cmd, cmd_was_resolved);
 
         #[cfg(target_os = "windows")]
         let (child, stdout, stderr, conpty_mode) = {
@@ -314,15 +319,18 @@ impl AgentManager {
                 // to let Windows resolve it, avoiding os error 193 on CreateProcessW.
                 || (!cmd_was_resolved && !resolved_cmd.to_lowercase().ends_with(".exe"));
 
+            log::info!("[Agent/{}] spawn诊断: is_batch={}, resolved_cmd={}",
+                agent_type, is_batch, resolved_cmd);
+
             let cmdline = if is_batch {
                 // Batch scripts require cmd.exe /C because CreateProcessW + ConPTY
                 // cannot delegate .cmd→cmd.exe (ERROR_BAD_EXE_FORMAT / os error 193).
-                // Also needed for fallback Command::new() which doesn't auto-resolve .cmd.
+                // Use escape_cmdline_arg_for_cmd: cmd.exe doesn't understand MSVC \\ escaping.
                 let mut c = String::from("cmd /C ");
-                c.push_str(&escape_cmdline_arg(&resolved_cmd));
+                c.push_str(&escape_cmdline_arg_for_cmd(&resolved_cmd));
                 for arg in &args {
                     c.push(' ');
-                    c.push_str(&escape_cmdline_arg(arg));
+                    c.push_str(&escape_cmdline_arg_for_cmd(arg));
                 }
                 c
             } else {
@@ -337,6 +345,9 @@ impl AgentManager {
                 c
             };
 
+            log::info!("[Agent/{}] spawn诊断: cmdline={}, work_dir={}",
+                agent_type, &cmdline, work_dir);
+
             match crate::agent::session_process::spawn_with_conpty(&cmdline, &work_dir, 80, 30) {
                 Ok((c, o, e, cm)) => (
                     ProcessChild::Conpty(c),
@@ -345,7 +356,7 @@ impl AgentManager {
                     cm,
                 ),
                 Err(e) => {
-                    log::warn!("[Agent/{}] ConPTY failed, fallback: {}", agent_type, e);
+                    log::error!("[Agent/{}] ConPTY spawn失败! cmdline={}, error={}", agent_type, &cmdline, e);
                     let mut cmd = if is_batch {
                         // Batch scripts need cmd /C even in fallback
                         let mut c = Command::new("C:\\Windows\\System32\\cmd.exe");
@@ -441,9 +452,57 @@ impl AgentManager {
 
         if conpty_mode {
             // ConPTY merged mode: stdout+stderr in same pipe
+            //
+            // Idle watchdog: interactive CLI tools (e.g. hermes chat) may not exit
+            // after processing --query. A background task monitors a shared flag
+            // and sends EOF when no output arrives for too long.
+            use std::sync::atomic::{AtomicU64, Ordering};
+            let last_output_ts = Arc::new(AtomicU64::new(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            ));
+            let watchdog_ts = last_output_ts.clone();
+            let watchdog_child_pid = child.id();
+            let watchdog_agent_type = agent_type.clone();
+            // Spawn watchdog in background — it will send taskkill after idle period
+            // (cannot send_eof because ConptyProcess is not Send)
+            let output_idle_secs: u64 = 5;
+            let _watchdog = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(output_idle_secs)).await;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let last = watchdog_ts.load(Ordering::Relaxed);
+                    if now.saturating_sub(last) >= output_idle_secs {
+                        log::info!(
+                            "[Agent/{}] Watchdog: no output for {}s, terminating PID {}",
+                            watchdog_agent_type, output_idle_secs, watchdog_child_pid
+                        );
+                        // Send Ctrl+C to the process via taskkill / PID
+                        let _ = std::process::Command::new("taskkill")
+                            .args(&["/PID", &watchdog_child_pid.to_string(), "/F"])
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                        break;
+                    }
+                }
+            });
+
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                // Update watchdog timestamp
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                last_output_ts.store(now, Ordering::Relaxed);
+
                 if abort_check() { break; }
                 if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
                     agent_session_id_result = Some(sid.clone());
@@ -457,9 +516,6 @@ impl AgentManager {
                     full_output.push_str(&content);
                 }
             }
-            // After reading all output, send EOF (Ctrl+D) to terminate interactive CLI tools
-            // (e.g., hermes chat stays in interactive mode after processing --query)
-            child.send_eof();
             drop(stderr);
         } else {
             // Stdio mode: stderr in background task
@@ -883,6 +939,15 @@ fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode:
 }
 
 /// 转义命令行参数（用于 ConPTY cmdline 构建）
+/// 转义命令行参数（用于 CreateProcessW 直接启动 .exe 场景）
+///
+/// 使用 MSVC CRT 转义规则（CommandLineToArgvW 语义）：
+/// - 反斜杠转义：每个 \ 变成 \\
+/// - 引号转义：内部 " 变成 \"
+/// - 含空格/特殊字符的参数用双引号包裹
+///
+/// 注意：此规则仅适用于 CreateProcessW 直接启动 .exe 的场景。
+/// cmd /C 场景必须使用 escape_cmdline_arg_for_cmd()。
 fn escape_cmdline_arg(s: &str) -> String {
     let needs_quote = s.is_empty()
         || s.contains(' ')
@@ -901,6 +966,36 @@ fn escape_cmdline_arg(s: &str) -> String {
         }
         escaped.push('"');
         escaped
+    } else {
+        s.to_string()
+    }
+}
+
+/// 转义命令行参数（用于 cmd.exe /C 场景）
+///
+/// cmd.exe 不遵循 MSVC CRT 转义规则：
+/// - 反斜杠是字面字符，不需要转义
+/// - 内部双引号用 "" 转义（不是 \"）
+/// - 含空格/shell特殊字符的参数用双引号包裹
+///
+/// Windows 路径中的反斜杠（如 C:\Users\...）必须保持原样，
+/// 否则 cmd.exe 会把 \\ 当作双反斜杠导致路径无效。
+fn escape_cmdline_arg_for_cmd(s: &str) -> String {
+    let needs_quote = s.is_empty()
+        || s.contains(' ')
+        || s.contains('\t')
+        || s.contains('\n')
+        || s.contains('&')
+        || s.contains('|')
+        || s.contains('<')
+        || s.contains('>')
+        || s.contains('^');
+    if needs_quote {
+        // cmd.exe: 内部双引号用 "" 转义
+        let inner = s.replace("\"", "\"\"");
+        format!("\"{}\"", inner)
+    } else if s.contains('"') {
+        s.replace("\"", "\"\"")
     } else {
         s.to_string()
     }
