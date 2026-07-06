@@ -106,7 +106,7 @@ struct SpawnedProcess {
 }
 
 pub struct AgentManager {
-    processes: HashMap<String, AgentProcess>,
+    processes: Arc<Mutex<HashMap<String, AgentProcess>>>,
     /// 虚拟控制台桥接：Agent 会话终端状态跟踪器
     console_bridge: Arc<std::sync::Mutex<AgentConsoleBridge>>,
 }
@@ -114,7 +114,7 @@ pub struct AgentManager {
 impl AgentManager {
     pub fn new() -> Self {
         Self {
-            processes: HashMap::new(),
+            processes: Arc::new(Mutex::new(HashMap::new())),
             console_bridge: Arc::new(std::sync::Mutex::new(AgentConsoleBridge::new())),
         }
     }
@@ -443,11 +443,17 @@ fn spawn_agent_process(
         on_chunk: impl Fn(String) + Send + 'static,
         on_session_id: impl Fn(String) + Send + 'static,
         abort_check: impl Fn() -> bool + Send + 'static,
+        on_pid: impl Fn(u32) + Send + 'static,
     ) -> Result<(String, Option<String>, i32, String), String> {
         let process_handler = handler::StdioHandler::from_config(config.clone());
 
         let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type, conpty_mode } =
             Self::spawn_agent_process(config, prompt, agent_session_id, cwd)?;
+
+        // 通知调用者：进程已成功 spawn
+        let pid = child.id();
+        on_pid(pid);
+        log::info!("[Agent/{}] execute_agent_inner: process spawned, pid={}", agent_type, pid);
 
         use tokio::io::AsyncBufReadExt;
         let mut full_output = String::new();
@@ -469,30 +475,57 @@ fn spawn_agent_process(
             let watchdog_ts = last_output_ts.clone();
             let watchdog_child_pid = child.id();
             let watchdog_agent_type = agent_type.clone();
-            // Spawn watchdog in background — it will send taskkill after idle period
+            // Spawn watchdog in background — two-phase timeout strategy:
+            // Phase 1: Grace period (60s) — allows Agent to initialize (API auth, network handshake)
+            // Phase 2: Idle timeout (15s) — after first output, terminate if no output for 15s
             // (cannot send_eof because ConptyProcess is not Send)
-            let output_idle_secs: u64 = 5;
+            let grace_secs: u64 = 60;
+            let idle_secs: u64 = 15;
             let _watchdog = tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(output_idle_secs)).await;
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let last = watchdog_ts.load(Ordering::Relaxed);
-                    if now.saturating_sub(last) >= output_idle_secs {
-                        log::info!(
-                            "[Agent/{}] Watchdog: no output for {}s, terminating PID {}",
-                            watchdog_agent_type, output_idle_secs, watchdog_child_pid
-                        );
-                        // Send Ctrl+C to the process via taskkill / PID
-                        let _ = std::process::Command::new("taskkill")
-                            .args(&["/PID", &watchdog_child_pid.to_string(), "/F"])
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn();
-                        break;
+                // Phase 1: Wait for grace period
+                tokio::time::sleep(std::time::Duration::from_secs(grace_secs)).await;
+
+                // Check: if process already produced output during grace period, switch to idle mode
+                let spawn_ts = watchdog_ts.load(Ordering::Relaxed);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let has_output = now.saturating_sub(spawn_ts) > 1; // output updated if >1s difference from spawn time
+
+                if has_output {
+                    // Phase 2: Monitor idle timeout
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(idle_secs)).await;
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let last = watchdog_ts.load(Ordering::Relaxed);
+                        if now.saturating_sub(last) >= idle_secs {
+                            log::info!(
+                                "[Agent/{}] Watchdog: no output for {}s (idle phase), terminating PID {}",
+                                watchdog_agent_type, idle_secs, watchdog_child_pid
+                            );
+                            let _ = std::process::Command::new("taskkill")
+                                .args(&["/PID", &watchdog_child_pid.to_string(), "/F"])
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .spawn();
+                            break;
+                        }
                     }
+                } else {
+                    // No output at all during grace period — terminate
+                    log::info!(
+                        "[Agent/{}] Watchdog: no output after {}s grace period, terminating PID {}",
+                        watchdog_agent_type, grace_secs, watchdog_child_pid
+                    );
+                    let _ = std::process::Command::new("taskkill")
+                        .args(&["/PID", &watchdog_child_pid.to_string(), "/F"])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
                 }
             });
 
@@ -610,26 +643,25 @@ fn spawn_agent_process(
         let aborted = Arc::new(AtomicBool::new(false));
         let aborted_clone = aborted.clone();
 
-        let pid = {
-            let SpawnedProcess { child, .. } =
-                Self::spawn_agent_process(&config, &message, agent_session_id.as_deref(), cwd.as_deref().unwrap_or(""))?;
-            child.id()
-        };
-
-        self.processes.insert(session_id.clone(), AgentProcess {
-            pid: Some(pid),
-            aborted: aborted_clone,
+        // 不再提前 spawn（避免双重 spawn 导致第一个进程被 drop 终止），
+        // 改由 execute_agent_inner 内部通过 on_pid 回调通知并注册 PID。
+        self.processes.lock().unwrap().insert(session_id.clone(), AgentProcess {
+            pid: None,
+            aborted: aborted_clone.clone(),
         });
 
         // 后台任务：调用共享 IO 循环，通过 Event 推送结果
         let app_clone = app_handle.clone();
         let sid = session_id.clone();
         let agent_type_name = config.agent_type.clone();
-        let aborted_clone = aborted.clone();
+        let processes_arc = Arc::clone(&self.processes);
+        let aborted_clone = aborted_clone;
         let config_owned = config.clone();
         let message_owned = message.clone();
         let agent_session_id_owned = agent_session_id.clone();
         let cwd_owned = cwd.clone();
+
+        let sid_for_pid = sid.clone();
 
         tokio::spawn(async move {
             let app = app_clone;
@@ -640,7 +672,7 @@ fn spawn_agent_process(
             let aborted_inner = aborted_clone;
 
             let result = crate::utils::process::wait_future_with_alive(
-                pid,
+                0,  // PID 通过 on_pid 回调动态注册; wait_future_with_alive 中 is_process_alive(0)=false 不影响
                 Box::pin(async move {
                     let app_for_chunk = app.clone();
                     let sid_for_chunk = sid_inner.clone();
@@ -665,6 +697,15 @@ fn spawn_agent_process(
                             }));
                         },
                         move || aborted_inner.load(Ordering::Relaxed),
+                        move |spawned_pid: u32| {
+                            // 进程 spawn 成功，注册 PID 到进程管理表
+                            if let Ok(mut procs) = processes_arc.lock() {
+                                if let Some(proc) = procs.get_mut(&sid_for_pid) {
+                                    proc.pid = Some(spawned_pid);
+                                }
+                            }
+                            log::info!("[Agent/send_message] on_pid callback: session={}, pid={}", sid_for_pid, spawned_pid);
+                        },
                     ).await
                 }),
                 &format!("Agent {}", agent_type_name_inner),
@@ -709,13 +750,10 @@ fn spawn_agent_process(
         agent_session_id: Option<&str>,
     ) -> Result<(String, Option<String>), AppError> {
         // ── 智能超时策略（与 send_message_with_config 一致）──
-        // 先 spawn 获取 PID，再通过 wait_future_with_alive 包裹 execute_agent_inner
-        // 30s 轮询 + 10min 上限，通过 is_process_alive 区分假超时和真超时
-        let pid = {
-            let spawned = Self::spawn_agent_process(config, prompt, agent_session_id, cwd)
-                .map_err(|e| AppError::External(e))?;
-            spawned.child.id()
-        };
+        // 不再提前 spawn（避免双重 spawn），PID 通过 on_pid 回调动态注册。
+        // on_chunk 闭包中捕获 shared_pid 用于动态获取 PID。
+        let shared_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
+        let shared_pid_for_on_pid = Arc::clone(&shared_pid);
 
         // 为 async 'static 闭包准备 owned 副本
         let config_owned = config.clone();
@@ -725,8 +763,16 @@ fn spawn_agent_process(
         let agent_type_label = config.agent_type.clone();
         let agent_type_for_error = config.agent_type.clone();
 
+        // 注册占位条目，on_pid 回调中补填 PID
+        self.processes.lock().unwrap().insert(_temp_session_id.to_string(), AgentProcess {
+            pid: None,
+            aborted: Arc::new(AtomicBool::new(false)),
+        });
+        let processes_arc = Arc::clone(&self.processes);
+        let temp_session_id_owned = _temp_session_id.to_string();
+
         let timeout_result = crate::utils::process::wait_future_with_alive(
-            pid,
+            0,  // PID 通过 on_pid 回调动态注册
             Box::pin(async move {
                 Self::execute_agent_inner(
                     &config_owned,
@@ -736,6 +782,18 @@ fn spawn_agent_process(
                     on_chunk,
                     |_| {},
                     || false,
+                    move |spawned_pid: u32| {
+                        if let Ok(mut p) = shared_pid_for_on_pid.lock() {
+                            *p = Some(spawned_pid);
+                        }
+                        // 注册 PID 到进程管理表
+                        if let Ok(mut procs) = processes_arc.lock() {
+                            if let Some(proc) = procs.get_mut(&temp_session_id_owned) {
+                                proc.pid = Some(spawned_pid);
+                            }
+                        }
+                        log::info!("[Agent/execute_once] on_pid callback: session={}, pid={}", temp_session_id_owned, spawned_pid);
+                    },
                 ).await
             }),
             &format!("Agent(workflow) {}", agent_type_label),
@@ -754,11 +812,11 @@ fn spawn_agent_process(
         }
     }
     pub fn stop_generation(&mut self, session_id: &str) {
-        if let Some(process) = self.processes.get(session_id) {
-            process.aborted.store(true, Ordering::Relaxed);
-        }
-        if let Some(process) = self.processes.get_mut(session_id) {
-            if let Some(pid) = process.pid {
+        if let Ok(processes) = self.processes.lock() {
+            if let Some(process) = processes.get(session_id) {
+                process.aborted.store(true, Ordering::Relaxed);
+            }
+            if let Some(pid) = processes.get(session_id).and_then(|p| p.pid) {
                 #[cfg(target_os = "windows")]
                 {
                     let _ = std::process::Command::new("taskkill")
@@ -778,7 +836,9 @@ fn spawn_agent_process(
                 }
             }
         }
-        self.processes.remove(session_id);
+        if let Ok(mut processes) = self.processes.lock() {
+            processes.remove(session_id);
+        }
         log::info!("[Agent] Generation stopped: {}", session_id);
     }
 
@@ -813,25 +873,27 @@ fn spawn_agent_process(
 
 impl Drop for AgentManager {
     fn drop(&mut self) {
-        for (_, process) in self.processes.drain() {
-            process.aborted.store(true, Ordering::Relaxed);
-            if let Some(pid) = process.pid {
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = std::process::Command::new("taskkill")
-                        .args(&["/PID", &pid.to_string(), "/F"])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn();
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = std::process::Command::new("kill")
-                        .arg("-9")
-                        .arg(pid.to_string())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn();
+        if let Ok(mut processes) = self.processes.lock() {
+            for (_, process) in processes.drain() {
+                process.aborted.store(true, Ordering::Relaxed);
+                if let Some(pid) = process.pid {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = std::process::Command::new("taskkill")
+                            .args(&["/PID", &pid.to_string(), "/F"])
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let _ = std::process::Command::new("kill")
+                            .arg("-9")
+                            .arg(pid.to_string())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                    }
                 }
             }
         }
