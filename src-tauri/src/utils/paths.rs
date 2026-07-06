@@ -166,10 +166,28 @@ pub fn resolve_in_path(name: &str) -> Option<String> {
     {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
+            // where 可能返回多行（如 claude 同时有 POSIX 脚本和 claude.cmd），
+            // 必须选择 Windows 可执行格式（.exe/.cmd/.bat/.com），
+            // 避免拿到 POSIX shell 脚本导致 os error 193。
+            let windows_exts = [".exe", ".cmd", ".bat", ".com"];
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let lower = trimmed.to_lowercase();
+                if windows_exts.iter().any(|ext| lower.ends_with(ext)) {
+                    // 写入缓存
+                    if let Ok(mut cache) = path_cache().lock() {
+                        cache.entry(name.to_string()).or_insert(trimmed.to_string());
+                    }
+                    return Some(trimmed.to_string());
+                }
+            }
+            // 没有找到 Windows 可执行格式，回退到第一行（兼容非标准扩展名）
             if let Some(first_line) = stdout.lines().next() {
                 let trimmed = first_line.trim().to_string();
                 if !trimmed.is_empty() {
-                    // 写入缓存
                     if let Ok(mut cache) = path_cache().lock() {
                         cache.entry(name.to_string()).or_insert(trimmed.clone());
                     }
