@@ -125,13 +125,62 @@ pub fn builtin_resources_dir() -> PathBuf {
 }
 
 /// 通过 where 命令动态查找可执行文件路径（Windows）
+///
+/// 查找顺序：
+/// 1. 使用 `where` 命令（Windows 原生，能找到 .exe/.cmd/.bat/.com 等）
+/// 2. 回退到手动遍历 PATH 环境变量，依次查找 .exe -> .cmd -> .bat
+///
+/// 回退机制解决以下场景：
+/// - Tauri 打包进程的 PATH 不完整，`where` 找不到 npm 全局命令
+/// - `where` 对某些 PATHEXT 扩展名不敏感
 pub fn resolve_in_path(name: &str) -> Option<String> {
-    let output = Command::new("where")
+    // 策略1：使用 where 命令
+    if let Ok(output) = Command::new("where")
         .arg(name)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().next().map(|s| s.trim().to_string())
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(first_line) = stdout.lines().next() {
+                let trimmed = first_line.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    // 策略2：手动遍历 PATH 环境变量查找
+    let path_var = std::env::var("PATH").ok()?;
+    let extensions = [".exe", ".cmd", ".bat"];
+    let name_lower = name.to_lowercase();
+    let name_has_ext = name_lower.ends_with(".exe")
+        || name_lower.ends_with(".cmd")
+        || name_lower.ends_with(".bat");
+
+    for dir in path_var.split(';') {
+        let dir = dir.trim();
+        if dir.is_empty() {
+            continue;
+        }
+
+        let candidates = if name_has_ext {
+            // 命令已带扩展名，直接查找
+            vec![name.to_string()]
+        } else {
+            // 按优先级尝试各扩展名
+            extensions.iter().map(|ext| format!("{}{}", name, ext)).collect()
+        };
+
+        for candidate in &candidates {
+            let full_path = std::path::Path::new(dir).join(candidate);
+            if full_path.is_file() {
+                return Some(full_path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
 }

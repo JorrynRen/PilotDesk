@@ -299,11 +299,20 @@ impl AgentManager {
         let resolved_cmd = resolve_in_path(&effective_cmd)
             .unwrap_or_else(|| effective_cmd.to_string());
 
+        // Track whether resolve_in_path actually found a path or fell back to the raw name.
+        // When unresolved, the command might be a .cmd/.bat that `where` and PATH scan both
+        // missed — wrapping with cmd /C is the safest fallback (avoids os error 193).
+        let cmd_was_resolved = resolve_in_path(&effective_cmd).is_some();
+
         #[cfg(target_os = "windows")]
         let (child, stdout, stderr, conpty_mode) = {
             // Detect if resolved_cmd is a batch script (.cmd / .bat)
             let is_batch = resolved_cmd.to_lowercase().ends_with(".cmd")
-                || resolved_cmd.to_lowercase().ends_with(".bat");
+                || resolved_cmd.to_lowercase().ends_with(".bat")
+                // Safety net: if resolve_in_path returned None, the raw command name
+                // might be a batch wrapper (e.g. "claude" → claude.cmd). Use cmd /C
+                // to let Windows resolve it, avoiding os error 193 on CreateProcessW.
+                || (!cmd_was_resolved && !resolved_cmd.to_lowercase().ends_with(".exe"));
 
             let cmdline = if is_batch {
                 // Batch scripts require cmd.exe /C because CreateProcessW + ConPTY
