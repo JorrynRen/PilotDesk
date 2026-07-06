@@ -23,9 +23,15 @@ static CONPTY_PATH_NOISE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// 预编译的 ANSI 转义序列正则
-/// 匹配 \x1b[...m 等 CSI 序列
+/// 匹配所有 CSI (Control Sequence Introducer) 序列:
+/// - SGR (颜色): \x1b[...m
+/// - 光标移动: \x1b[...A/B/C/D/H/J/K/f/g
+/// - 擦除: \x1b[...J/K
+/// - 滚动: \x1b[...r/s
+/// - 标题设置: \x1b]0;...\x07 (OSC sequences)
+/// - BEL (\x07): 终端响铃字符
 static ANSI_ESCAPE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap());
+    LazyLock::new(|| Regex::new(r"(\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x07)").unwrap());
 
 /// LineProcessor 状态
 #[derive(Clone, Debug)]
