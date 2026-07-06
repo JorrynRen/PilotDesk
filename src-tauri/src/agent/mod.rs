@@ -271,13 +271,13 @@ impl AgentManager {
 
 // -- 共享方法：构建命令 -> 启动进程 -> 返回管道 --
 
-    fn spawn_agent_process(
+fn spawn_agent_process(
         config: &AgentConfig,
         message: &str,
         agent_session_id: Option<&str>,
         cwd: &str,
     ) -> Result<SpawnedProcess, String> {
-        let process_handler = handler::StdioHandler::from_config(config.clone());
+            let process_handler = handler::StdioHandler::from_config(config.clone());
         let agent_type = config.agent_type.clone();
         let cmd_name = config.cli_command.clone();
 
@@ -357,6 +357,7 @@ impl AgentManager {
                 ),
                 Err(e) => {
                     log::error!("[Agent/{}] ConPTY spawn失败! cmdline={}, error={}", agent_type, &cmdline, e);
+                    let cmdline_for_log = cmdline.clone();
                     let mut cmd = if is_batch {
                         // Batch scripts need cmd /C even in fallback
                         let mut c = Command::new("C:\\Windows\\System32\\cmd.exe");
@@ -375,7 +376,9 @@ impl AgentManager {
                     cmd.kill_on_drop(true);
                     cmd.env_remove("PYTHONHOME");
                     let mut spawned = cmd.spawn()
-                        .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?;
+                        .map_err(|e| {
+                            format!("启动 {} 失败: {}", agent_type, e)
+                        })?;
                     let o = spawned.stdout.take()
                         .ok_or_else(|| format!("无法获取 {} stdout", agent_type))?;
                     let e = spawned.stderr.take()
