@@ -1,10 +1,8 @@
 //! Windows 平台虚拟控制台实现
 //!
 //! 基于 std::process::Command + piped stdio 的真实终端实现。
-//! 所有 Agent 管理命令（版本查询、安装、卸载、更新检查等）均通过此模块执行。
-//!
-//! 注意：Agent 会话交互（send_message）仍走 agent/session_process.rs 的真实 ConPTY，
-//! 因为会话模式有特殊需求（合并 stdout/stderr、Ctrl+C 终止交互式 CLI 等）。
+//! 供 commands/virtual_console（虚拟控制台 UI）和 plugin/shell 使用。
+//! Agent 模块已与虚拟工作台解耦，直接使用 tokio::process::Command。
 
 use super::traits::*;
 use std::io::{self, Read, Write as StdWrite};
@@ -71,16 +69,19 @@ impl VirtualConsole for WindowsConpty {
         Ok(handle)
     }
 
+    #[allow(deprecated)]
     fn write(&mut self, _data: &[u8]) -> io::Result<()> {
         // 写入已通过 ConsoleHandle 的 stdin 完成
         Err(io::Error::new(io::ErrorKind::Unsupported, "请通过 ConsoleHandle.stdin 写入"))
     }
 
+    #[allow(deprecated)]
     fn read(&mut self) -> io::Result<Vec<u8>> {
         // 读取已通过 ConsoleHandle 的 stdout/stderr 完成
         Err(io::Error::new(io::ErrorKind::Unsupported, "请通过 ConsoleHandle.stdout/stderr 读取"))
     }
 
+    #[allow(deprecated)]
     fn read_line(&mut self) -> io::Result<String> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "请通过 ConsoleHandle.stdout.read_line 读取"))
     }
@@ -111,6 +112,24 @@ impl VirtualConsole for WindowsConpty {
         }
     }
 
+    fn try_wait(&mut self) -> Option<i32> {
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    self.running = false;
+                    Some(status.code().unwrap_or(-1))
+                }
+                Ok(None) => None, // 仍在运行
+                Err(_) => {
+                    self.running = false;
+                    Some(-1)
+                }
+            }
+        } else {
+            None
+        }
+    }
+
     fn pid(&self) -> u32 {
         self.pid
     }
@@ -120,10 +139,11 @@ impl VirtualConsole for WindowsConpty {
     }
 
     fn status(&self) -> ProcessStatus {
+        // 利用 try_wait 获取精确状态（需要可变借用，此处用 running 标志做快速判断）
         if self.running {
             ProcessStatus::Running
         } else {
-            ProcessStatus::Unknown
+            ProcessStatus::Exited(0)
         }
     }
 

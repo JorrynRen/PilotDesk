@@ -1,7 +1,8 @@
 //! Linux 平台虚拟控制台实现
 //!
 //! 基于 std::process::Command + piped stdio 的真实终端实现。
-//! 正确持有 Child 引用，提供真实的 stdin/stdout/stderr 读写能力。
+//! 供 commands/virtual_console（虚拟控制台 UI）和 plugin/shell 使用。
+//! Agent 模块已与虚拟工作台解耦，直接使用 tokio::process::Command。
 
 use super::traits::*;
 use std::io::{self, Read, Write as StdWrite};
@@ -64,14 +65,17 @@ impl VirtualConsole for LinuxVirtualConsole {
         Ok(handle)
     }
 
+    #[allow(deprecated)]
     fn write(&mut self, _data: &[u8]) -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "请通过 ConsoleHandle.stdin 写入"))
     }
 
+    #[allow(deprecated)]
     fn read(&mut self) -> io::Result<Vec<u8>> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "请通过 ConsoleHandle.stdout/stderr 读取"))
     }
 
+    #[allow(deprecated)]
     fn read_line(&mut self) -> io::Result<String> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "请通过 ConsoleHandle.stdout.read_line 读取"))
     }
@@ -102,10 +106,28 @@ impl VirtualConsole for LinuxVirtualConsole {
         }
     }
 
+    fn try_wait(&mut self) -> Option<i32> {
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    self.running = false;
+                    Some(status.code().unwrap_or(-1))
+                }
+                Ok(None) => None,
+                Err(_) => {
+                    self.running = false;
+                    Some(-1)
+                }
+            }
+        } else {
+            None
+        }
+    }
+
     fn pid(&self) -> u32 { self.pid }
     fn is_running(&self) -> bool { self.running }
     fn status(&self) -> ProcessStatus {
-        if self.running { ProcessStatus::Running } else { ProcessStatus::Unknown }
+        if self.running { ProcessStatus::Running } else { ProcessStatus::Exited(0) }
     }
 
     fn close(&mut self) -> io::Result<()> {

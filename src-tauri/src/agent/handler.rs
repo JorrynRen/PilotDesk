@@ -7,7 +7,7 @@
 //  噪声过滤已迁移至 line_processor 模块（L0 平台层 + L1 Agent 配置层）。
 
 use crate::agent::line_processor::LineProcessor;
-use crate::commands::agents::AgentConfig;
+use crate::agent::config::AgentConfig;
 
 /// 进程交互协议抽象
 pub trait ProcessHandler: Send + Sync {
@@ -22,9 +22,6 @@ pub trait ProcessHandler: Send + Sync {
     /// 从输出行提取 agent session_id
     /// is_stderr: 当前行是否来自 stderr
     fn extract_session_id(&self, line: &str, is_stderr: bool) -> Option<String>;
-
-    /// 获取 LineProcessor 实例（用于 ANSI 剥离和噪声过滤）
-    fn get_line_processor(&self) -> &LineProcessor;
 }
 
 // ──────────────────────────────────────────────
@@ -47,9 +44,6 @@ impl StdioHandler {
         }
     }
 
-    pub fn get_line_processor(&self) -> &LineProcessor {
-        &self.line_processor
-    }
 }
 
 impl ProcessHandler for StdioHandler {
@@ -117,7 +111,7 @@ impl ProcessHandler for StdioHandler {
         //   L0: ConPTY 路径噪声过滤
         //   L1: ANSI 剥离 + output_filter_regex 过滤
         // 解析器层（json-stream / ansi-text / raw-text）在此之后处理
-        let processor = self.get_line_processor();
+        let processor = &self.line_processor;
 
         match self.config.output_parser.as_str() {
             "json-stream" => {
@@ -179,9 +173,6 @@ impl ProcessHandler for StdioHandler {
         }
     }
 
-    fn get_line_processor(&self) -> &LineProcessor {
-        &self.line_processor
-    }
 }
 
 // ──────────────────────────────────────────────
@@ -237,7 +228,7 @@ fn extract_session_id_from_json(line: &str, event_type: &str, field: &str) -> Op
 /// 从 stderr 文本行中提取 session_id（前缀匹配，自动剥离 ANSI 颜色码）
 fn extract_session_id_from_text(line: &str, field: &str) -> Option<String> {
     // 先剥离 ANSI 颜色码（Hermes 等 CLI 工具可能输出带颜色的文本）
-    let clean = strip_ansi(line);
+    let clean = crate::agent::line_processor::strip_ansi_text(line);
 
     // 确定 key 前缀：提取 field 中冒号前的部分（含冒号）作为 key
     // 兼容 field 中冒号后任意数量的空白（如 "Session: " 匹配 "Session:        xxx"）
@@ -260,24 +251,6 @@ fn extract_session_id_from_text(line: &str, field: &str) -> Option<String> {
     } else {
         None
     }
-}
-
-/// 剥离 ANSI 颜色码（用于 session_id 提取等场景）
-fn strip_ansi(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut in_escape = false;
-    for c in text.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c == 'm' || c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
 
 /// 简单 shell 风格拆分（按空格拆分，支持双引号包裹的参数）
@@ -315,10 +288,10 @@ mod tests {
 
     #[test]
     fn test_strip_ansi() {
-        assert_eq!(strip_ansi("\x1b[36mHello\x1b[0m"), "Hello");
-        assert_eq!(strip_ansi("\x1b[1m\x1b[31mRed Bold\x1b[0m"), "Red Bold");
-        assert_eq!(strip_ansi("No ANSI"), "No ANSI");
-        assert_eq!(strip_ansi(""), "");
+        assert_eq!(crate::agent::line_processor::strip_ansi_text("\x1b[36mHello\x1b[0m"), "Hello");
+        assert_eq!(crate::agent::line_processor::strip_ansi_text("\x1b[1m\x1b[31mRed Bold\x1b[0m"), "Red Bold");
+        assert_eq!(crate::agent::line_processor::strip_ansi_text("No ANSI"), "No ANSI");
+        assert_eq!(crate::agent::line_processor::strip_ansi_text(""), "");
     }
 
     #[test]

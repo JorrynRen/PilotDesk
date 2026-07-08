@@ -5,11 +5,13 @@
 //  via Tauri events.
 
 pub mod commands;
+pub mod conpty_process;
+pub mod console_bridge;
 
 use std::collections::HashMap;
 use tauri::Emitter;
 
-use crate::agent::session_process::{spawn_with_conpty, ConptyProcess};
+use crate::terminal::conpty_process::{spawn_with_conpty, ConptyProcess};
 
 /// Single terminal session state
 pub struct TerminalSession {
@@ -77,7 +79,7 @@ impl TerminalManager {
         let pid = process.id();
 
 
-        let mut session = TerminalSession {
+        let session = TerminalSession {
             id: id.clone(),
             shell_type: shell_type.to_string(),
             process,
@@ -203,8 +205,8 @@ async fn terminal_read_loop(
     use tokio::io::AsyncReadExt;
     let mut buf = [0u8; 4096];
     let event_name = format!("terminal://output/{}", session_id);
-    let mut read_count: usize = 0;
-    let mut total_bytes: usize = 0;
+    let mut _read_count: usize = 0;
+    let mut _total_bytes: usize = 0;
 
 
     loop {
@@ -220,8 +222,8 @@ async fn terminal_read_loop(
                 break;
             }
             Ok(n) => {
-                read_count += 1;
-                total_bytes += n;
+                _read_count += 1;
+                _total_bytes += n;
                 let data = String::from_utf8_lossy(&buf[..n]).to_string();
                 let _ = app_handle.emit(&event_name, data);
             }

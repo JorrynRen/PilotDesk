@@ -1,7 +1,5 @@
 pub mod traits;
 pub mod config;
-pub mod events;
-pub mod adapters;
 pub mod factory;
 
 #[cfg(target_os = "windows")]

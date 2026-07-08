@@ -1,4 +1,9 @@
 // ──────────────────────────────────────────────
+/// Strip ANSI escape codes from text (pub for cross-module use)
+pub fn strip_ansi_text(text: &str) -> String {
+    ANSI_ESCAPE_RE.replace_all(text, "").to_string()
+}
+
 //  LineProcessor — 统一输出行处理流水线
 // ──────────────────────────────────────────────
 //  三层架构：
@@ -41,6 +46,7 @@ pub struct LineProcessor {
     /// 是否剥离 ConPTY 路径噪声（默认 true）
     strip_conpty_noise: bool,
     /// Agent 专属过滤正则
+    #[allow(dead_code)]
     output_filter_regex: String,
     /// 预编译的过滤正则（延迟初始化）
     filter_re: Option<Regex>,

@@ -1,7 +1,4 @@
 use tauri::Emitter;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use crate::db::models::EnvInfo;
 use crate::utils::errors::AppError;
@@ -20,29 +17,27 @@ macro_rules! log_env {
 
 /// Run a command and capture stdout, with timeout.
 /// For .cmd/.bat scripts on Windows, wraps in `cmd /C`.
-fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
-    let (tx, rx) = mpsc::channel();
-    let cmd_s = cmd.to_string();
-    let arg_s = arg.to_string();
-    thread::spawn(move || {
+/// 异步执行命令并捕获 stdout（带超时）
+/// 对 Windows .cmd/.bat 脚本自动使用 cmd /C 包装
+async fn run_cmd_async(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
+    let result = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         let mut command = if use_cmd_wrapper {
-            let mut c = Command::new("cmd");
-            c.args(["/C", &cmd_s, &arg_s]);
+            let mut c = tokio::process::Command::new("cmd");
+            c.args(["/C", cmd, arg]);
             c
         } else {
-            let mut c = Command::new(&cmd_s);
-            c.arg(&arg_s);
+            let mut c = tokio::process::Command::new(cmd);
+            c.arg(arg);
             c
         };
 
-        let output = command
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output();
-        let _ = tx.send(output);
-    });
+        command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output().await
+    }).await;
 
-    let output = match rx.recv_timeout(Duration::from_secs(15)) {
+    let output = match result {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
             log_env!("[env] Spawn failed for {}: {}", cmd, e);
@@ -57,7 +52,6 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Some tools (e.g. python on Windows) output version to stderr
     let output_text = if stdout.trim().is_empty() && !stderr.trim().is_empty() {
         stderr
     } else {
@@ -72,16 +66,9 @@ fn run_cmd(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
     }
 }
 
-
-
-/// 探测工具版本：先尝试动态查找（用 cmd /C 处理 .cmd 脚本），再回退 PATH
-fn probe_tool_version(name: &str, version_flag: &str) -> Option<String> {
-    if let Some(path) = crate::utils::paths::resolve_in_path(name) {
-        if let Some(v) = run_cmd(&path, version_flag, true) {
-            return Some(v);
-        }
-    }
-    run_cmd(name, version_flag, false)
+/// 异步探测工具版本：统一通过 cmd /C 执行，由 cmd.exe 自行解析 PATH
+async fn probe_tool_version_async(name: &str, version_flag: &str) -> Option<String> {
+    run_cmd_async(name, version_flag, true).await
 }
 
 /// Clean version string: keep only the semver part
@@ -121,11 +108,15 @@ const CACHE_TTL: Duration = Duration::from_secs(120);
 async fn detect_env_with_console(state: &crate::DbState, agent_mgr: &crate::agent::AgentManager) -> Result<EnvInfo, AppError> {
     log_env!("[env] Detecting environment via console...");
 
-    let node_version = probe_tool_version("node", "--version");
-    let git_version = probe_tool_version("git", "--version");
-    let python_version = probe_tool_version("python", "--version")
-        .or_else(|| probe_tool_version("python3", "--version"))
-        .or_else(|| probe_tool_version("py", "--version"));
+    let node_version = probe_tool_version_async("node", "--version").await;
+    let git_version = probe_tool_version_async("git", "--version").await;
+    let mut python_version = probe_tool_version_async("python", "--version").await;
+    if python_version.is_none() {
+        python_version = probe_tool_version_async("python3", "--version").await;
+    }
+    if python_version.is_none() {
+        python_version = probe_tool_version_async("py", "--version").await;
+    }
 
     let conn = state.get_conn()?;
     let db_agents = agents::list_agents_inner(&conn).unwrap_or_default();
@@ -139,7 +130,6 @@ async fn detect_env_with_console(state: &crate::DbState, agent_mgr: &crate::agen
         let label = format!("{} 版本查询", agent.agent_type);
         let version = agent_mgr.execute_command_output(
             &agent.version_cmd, "", 15,
-            crate::agent::console_bridge::CommandKind::VersionCheck,
             &label,
         ).await.ok().map(|v| clean_version_string(&v));
         agent_versions.insert(agent.agent_type.clone(), version);
@@ -249,7 +239,7 @@ pub async fn install_agent(
     }));
 
     let mgr = agent_mgr.lock().await;
-    mgr.execute_command(&cmd, "", 300, crate::agent::console_bridge::CommandKind::Install, &format!("安装 {}", agent_type))
+    mgr.execute_command_output(&cmd, "", 300, &format!("安装 {}", agent_type))
         .await
         .map_err(|e| AppError::External(format!("安装 {} 失败: {}", agent_type, e)))?;
 
@@ -287,7 +277,7 @@ pub async fn uninstall_agent(
     }));
 
     let mgr = agent_mgr.lock().await;
-    mgr.execute_command(&cmd, "", 300, crate::agent::console_bridge::CommandKind::Uninstall, &format!("卸载 {}", agent_type))
+    mgr.execute_command_output(&cmd, "", 300, &format!("卸载 {}", agent_type))
         .await
         .map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
 

@@ -1,3 +1,4 @@
+#![allow(dead_code, deprecated, unused_imports)]
 //! 虚拟控制台 Tauri 命令
 
 use std::io;
@@ -6,12 +7,10 @@ use tokio::sync::Mutex;
 
 use crate::virtual_console::factory::ConsoleFactory;
 use crate::virtual_console::traits::VirtualConsole;
-use crate::virtual_console::events::EventSystem;
 
 /// 虚拟控制台状态（由 Tauri 管理）
 pub struct VirtualConsoleState {
     pub console: Mutex<Option<Box<dyn VirtualConsole>>>,
-    pub event_system: Mutex<Option<EventSystem>>,
     pub sessions: Mutex<std::collections::HashMap<String, SessionInfoData>>,
 }
 
@@ -19,7 +18,6 @@ impl Default for VirtualConsoleState {
     fn default() -> Self {
         Self {
             console: Mutex::new(None),
-            event_system: Mutex::new(None),
             sessions: Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -33,9 +31,6 @@ pub async fn connect_virtual_console(
     let console = ConsoleFactory::auto_create().map_err(|e| format!("创建虚拟控制台失败: {}", e))?;
     *console_guard = Some(console);
 
-    let event_system = EventSystem::new();
-    *state.event_system.lock().await = Some(event_system);
-
     log::info!("[VirtualConsole] Connected");
     Ok(())
 }
@@ -48,7 +43,6 @@ pub async fn disconnect_virtual_console(
     if let Some(mut console) = console_guard.take() {
         let _ = console.close();
     }
-    *state.event_system.lock().await = None;
     state.sessions.lock().await.clear();
 
     log::info!("[VirtualConsole] Disconnected");

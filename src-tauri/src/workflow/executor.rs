@@ -39,6 +39,7 @@ pub struct NodeExecutor {
     /// 插件节点执行通道管理器（前端回传结果时唤醒挂起的 oneshot）
     pub plugin_execute_manager: Arc<PluginExecuteManager>,
     plugin_host: Arc<std::sync::Mutex<PluginHost>>,
+    #[allow(dead_code)]
     pool: DbPool,
     /// Agent 管理器（供 cancel_workflow 等命令中止子进程）
     agent_manager: Arc<AsyncMutex<AgentManager>>,

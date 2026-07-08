@@ -1,26 +1,20 @@
 use std::collections::HashMap;
-use crate::utils::paths::resolve_in_path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tokio::io::BufReader;
-use tokio::process::Command;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
-use crate::commands::agents::AgentConfig;
+use crate::agent::config::AgentConfig;
 use crate::agent::handler::ProcessHandler;
 use crate::utils::errors::AppError;
-use crate::virtual_console::factory::ConsoleFactory;
-use crate::virtual_console::traits::VirtualConsole;
-use crate::agent::console_bridge::{AgentConsoleBridge, CommandKind};
+use crate::utils::process::{TimeoutPolicy, check_process_state, make_still_alive_error, summarize_stderr};
 
+use crate::virtual_console::factory::ConsoleFactory;
+// AsyncConsole trait 已通过 ConsoleFactory::create_async() 内部使用，无需直接导入
 pub mod handler;
 pub mod line_processor;
-pub mod console_bridge;
-
-#[cfg(target_os = "windows")]
-pub mod session_process;
-#[cfg(target_os = "windows")]
-pub use session_process::ConptyProcess;
+pub mod list_skills;
+pub mod config;
 
 // ------------------------------------------------------------------
 //  统一错误映射
@@ -50,6 +44,70 @@ fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> Strin
 }
 
 // ------------------------------------------------------------------
+//  统一执行参数与结果类型
+// ------------------------------------------------------------------
+
+/// 同步命令执行参数（简单模式）
+///
+/// 用于版本查询、安装/卸载等短生命周期命令。
+/// 通过同步虚拟控制台 (VirtualConsole) 执行，智能超时轮询。
+#[derive(Debug, Clone)]
+pub struct ExecuteOptions {
+    /// 命令字符串（将被 cmd /C 或 sh -c 包装）
+    pub command: String,
+    /// 工作目录（空字符串使用当前目录）
+    pub cwd: String,
+    /// 前端会话 ID（用于控制台桥接跟踪）
+    pub session_id: String,
+    /// 来源类型（agent 类型、插件名称等）
+    pub source_type: String,
+    /// 超时策略
+    pub timeout: TimeoutPolicy,
+}
+
+/// 同步命令执行结果
+#[derive(Debug, Clone)]
+pub struct ExecuteResult {
+    /// 标准输出（ trimmed）
+    pub stdout: String,
+    /// 退出码
+    pub exit_code: i32,
+    /// 标准错误
+    pub stderr: String,
+}
+
+/// 异步会话执行参数（会话模式）
+///
+/// 用于 Agent LLM 交互等长生命周期会话。
+/// 通过异步虚拟控制台 (AsyncConsole) 执行，双通道 IO 循环。
+#[derive(Debug, Clone)]
+pub struct AsyncOptions {
+    /// 工作目录（会话启动前先 CD 到此目录）
+    pub cwd: String,
+    /// 前端会话 ID
+    pub session_id: String,
+    /// 来源类型
+    pub source_type: String,
+    /// 超时策略
+    pub timeout: TimeoutPolicy,
+}
+
+
+/// 异步 IO 回调集
+///
+/// 由调用方提供，execute_command 在 IO 循环中按需调用。
+pub struct AsyncCallbacks {
+    /// 收到 Agent 输出片段时调用（用于 Event 推送到前端）
+    pub on_chunk: Box<dyn Fn(String) + Send>,
+    /// 提取到 Agent 会话 ID 时调用（用于 Event 推送到前端）
+    pub on_session_id: Box<dyn Fn(String) + Send>,
+    /// 检查是否应取消执行（abort_check）
+    pub abort_check: Box<dyn Fn() -> bool + Send>,
+    /// 进程 spawn 成功后调用（携带 PID，用于注册到进程管理表）
+    pub on_pid: Box<dyn Fn(u32) + Send>,
+}
+
+// ------------------------------------------------------------------
 //  进程管理
 // ------------------------------------------------------------------
 
@@ -58,577 +116,417 @@ struct AgentProcess {
     aborted: Arc<AtomicBool>,
 }
 
-/// Unified process wrapper: tokio Child or ConPTY process
-enum ProcessChild {
-    Tokio(tokio::process::Child),
-    #[cfg(target_os = "windows")]
-    Conpty(ConptyProcess),
-}
-
-impl ProcessChild {
-    async fn wait(&mut self) -> Result<i32, String> {
-        match self {
-            ProcessChild::Tokio(child) => {
-                let status = child.wait().await
-                    .map_err(|e| format!("Wait failed: {}", e))?;
-                Ok(status.code().unwrap_or(-1))
-            }
-            ProcessChild::Conpty(conpty) => conpty.wait().await,
-        }
-    }
-    fn id(&self) -> u32 {
-        match self {
-            ProcessChild::Tokio(child) => child.id().unwrap_or(0),
-            ProcessChild::Conpty(conpty) => conpty.id(),
-        }
-    }
-    fn send_eof(&self) {
-        if let ProcessChild::Conpty(conpty) = self {
-            conpty.send_eof();
-        }
-    }
-
-    fn close_stdout_pipe(&self) {
-        if let ProcessChild::Conpty(conpty) = self {
-            conpty.close_stdout_pipe();
-        }
-    }
-}
-
-/// Shared process spawn result
-struct SpawnedProcess {
-    child: ProcessChild,
-    stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-    stderr: Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-    stderr_buf: Arc<Mutex<String>>,
-    agent_type: String,
-    conpty_mode: bool,
-}
-
+/// Agent 管理器
 pub struct AgentManager {
     processes: Arc<Mutex<HashMap<String, AgentProcess>>>,
-    /// 虚拟控制台桥接：Agent 会话终端状态跟踪器
-    console_bridge: Arc<std::sync::Mutex<AgentConsoleBridge>>,
 }
 
 impl AgentManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
-            console_bridge: Arc::new(std::sync::Mutex::new(AgentConsoleBridge::new())),
         }
     }
 
-    /// 获取虚拟控制台桥接的 Arc clone
-    pub fn console_bridge_clone(&self) -> Arc<std::sync::Mutex<AgentConsoleBridge>> {
-        Arc::clone(&self.console_bridge)
-    }
-
-    /// 通过锁获取虚拟控制台桥接的可变引用
-    pub fn with_console_bridge<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut AgentConsoleBridge) -> R,
-    {
-        let mut bridge = self.console_bridge.lock().unwrap();
-        f(&mut bridge)
-    }
 
     // ------------------------------------------------------------------
-    //  统一命令执行 — 所有 Agent 管理操作的统一入口
+    //  统一命令执行入口
     // ------------------------------------------------------------------
+    //
+    // execute_command 是唯一的命令执行入口。
+    //
+    //   - 同步路径（opts.async_opts == None）：
+    //     通过 ConsoleFactory::auto_create() 创建同步虚拟控制台，
+    //     执行简单命令（版本查询、安装等），智能超时轮询。
+    //     返回 ExecuteResult。
+    //
+    //   - 异步路径（opts.async_opts == Some(...)）：
+    //     通过 ConsoleFactory::create_async() 创建异步虚拟控制台，
+    //     使用 ProcessHandler 驱动双通道 IO 循环，
+    //     提取 session_id，推送输出片段到前端。
+    //     返回 AsyncResult。
+    //
+    // 恢复会话与首次会话除多一个 agent_session_id 参数外完全相同。
 
-    /// 统一命令执行入口（智能超时等待）
+    /// 统一命令执行入口
     ///
-    /// 所有 Agent 管理命令（版本查询、安装、卸载、更新检查等）
-    /// 均通过此方法，经由虚拟控制台桥接跟踪。
+    /// # 同步路径
+    /// - 创建同步虚拟控制台 → spawn → 读取 stdout → wait → 返回 ExecuteResult
+    /// - 超时轮询：通过 channel 传递结果，外层按 TimeoutPolicy 轮询
     ///
-    /// 超时机制：
-    /// - 每隔 timeout_secs 检查一次执行结果
-    /// - 超时后检查子进程 PID 存活性
-    ///   - 存活 -> 假超时（进程仍在工作），继续等待
-    ///   - 不存活 -> 真超时（进程已退出），报错
-    /// - 最大等待上限 = timeout_secs * 10
+    /// # 异步路径
+    /// - 创建异步虚拟控制台 → ProcessHandler.build_command → spawn → 双通道 IO 循环
+    /// - session_id 由 ProcessHandler.extract_session_id 从 stdout/stderr 提取
+    /// - cwd 会话前先 CD 到指定目录
     pub async fn execute_command(
         &self,
-        command: &str,
-        cwd: &str,
-        timeout_secs: u64,
-        command_kind: CommandKind,
-        label: &str,
-    ) -> Result<(String, i32, String), String> {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis()).unwrap_or(0);
-        let session_id = format!("cmd_{}_{}", label, ts);
-        let work_dir = if cwd.is_empty() {
-            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
-        } else { cwd.to_string() };
-
-        let bridge_arc = Arc::clone(&self.console_bridge);
-        let bridge_sid = session_id.clone();
-        {
-            let mut bridge = self.console_bridge.lock().unwrap();
-            bridge.register_session(&session_id, label, 0, command, vec![], &work_dir, false, command_kind.clone());
+        opts: ExecuteOptions,
+        async_opts: Option<AsyncOptions>,
+        callbacks: Option<AsyncCallbacks>,
+        config: Option<&AgentConfig>,
+        message: Option<&str>,
+        agent_session_id: Option<&str>,
+    ) -> Result<ExecuteResult, String> {
+        if async_opts.is_some() {
+            // ── 异步路径 ──
+            self.execute_async(async_opts.unwrap(), callbacks.unwrap(), config.unwrap(), message.unwrap(), agent_session_id).await
+        } else {
+            // ── 同步路径 ──
+            self.execute_sync(opts).await
         }
+    }
 
-        log::info!("[Agent/execute_command] kind={:?} label='{}' cmd='{}' cwd='{}'", command_kind, label, command, work_dir);
+    // ------------------------------------------------------------------
+    //  同步路径实现
+    // ------------------------------------------------------------------
 
-        let cmd_owned = command.to_string();
-        let work_dir_owned = work_dir.clone();
-        let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let shared_pid_clone = Arc::clone(&shared_pid);
-        let (tx, rx) = std::sync::mpsc::channel::<(u32, Result<(String, i32, String), String>)>();
+    /// 同步命令执行（简单模式）
+    ///
+    /// 通过 ConsoleFactory::auto_create() 创建同步虚拟控制台，
+    /// 在 spawn_blocking 中执行命令并读取输出，通过 channel 返回结果。
+    /// 外层按 TimeoutPolicy 轮询 channel，并检查进程状态。
+    async fn execute_sync(&self, opts: ExecuteOptions) -> Result<ExecuteResult, String> {
+        let command = opts.command.clone();
+        let command_for_log = command.clone();
+        let work_dir = if opts.cwd.is_empty() {
+            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+        } else {
+            opts.cwd.clone()
+        };
+        let timeout = opts.timeout;
+        let session_id = opts.session_id.clone();
+        let _source_type = opts.source_type.clone();
 
-        // 在独立线程中通过虚拟控制台同步执行命令（匹配 plugin/shell.rs 模式）
-        std::thread::spawn(move || {
-            let result = (|| -> Result<(String, i32, String), String> {
+        log::info!("[Agent/execute_sync] session='{}' cmd='{}' cwd='{}'",
+            session_id, command, work_dir);
+
+        let (tx, rx) = std::sync::mpsc::channel::<Result<ExecuteResult, String>>();
+
+
+        // spawn_blocking 中执行同步虚拟控制台
+        tokio::task::spawn_blocking(move || {
+            let result = (|| -> Result<ExecuteResult, String> {
+                #[cfg(target_os = "windows")]
+                let (exe, args): (&str, &[&str]) = ("cmd", &["/C", &command]);
+                #[cfg(not(target_os = "windows"))]
+                let (exe, args): (&str, &[&str]) = ("sh", &["-c", &command]);
+
                 let mut console = ConsoleFactory::auto_create()
                     .map_err(|e| format!("创建虚拟控制台失败: {}", e))?;
 
-                #[cfg(target_os = "windows")]
-                let (exe, args): (&str, &[&str]) = ("cmd", &["/C", &cmd_owned]);
-                #[cfg(not(target_os = "windows"))]
-                let (exe, args): (&str, &[&str]) = ("sh", &["-c", &cmd_owned]);
-
-                let mut handle = console.spawn(exe, args, &work_dir_owned)
-                    .map_err(|e| format!("虚拟控制台 spawn 失败: {}", e))?;
+                let mut handle = console.spawn(exe, args, &work_dir)
+                    .map_err(|e| format!("启动进程失败: {}", e))?;
 
                 let pid = handle.pid;
-                shared_pid_clone.store(pid, std::sync::atomic::Ordering::Relaxed);
-                log::info!("[Agent/execute_command] console spawned: pid={} cmd='{}'", pid, cmd_owned);
+                log::info!("[Agent/execute_sync] console spawned: pid={} cmd='{}'", pid, command);
 
-                let mut stdout_bytes = Vec::new();
-                { let mut buf = [0u8; 4096]; loop {
-                    match handle.stdout.read(&mut buf) {
-                        Ok(0) => break, Ok(n) => stdout_bytes.extend_from_slice(&buf[..n]),
-                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                // 注册 PID 到桥接（同步路径无法回调，直接设置）
+                // PID 注册通过结果传递回外层处理
+
+                // 读取 stdout
+                let mut output_lines = Vec::new();
+                loop {
+                    match handle.stdout.read_line() {
+                        Ok(line) if line.is_empty() => break,
+                        Ok(line) => output_lines.push(line),
                         Err(_) => break,
                     }
-                }}
+                }
 
-                let mut stderr_bytes = Vec::new();
-                { let mut buf = [0u8; 4096]; loop {
-                    match handle.stderr.read(&mut buf) {
-                        Ok(0) => break, Ok(n) => stderr_bytes.extend_from_slice(&buf[..n]),
-                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => break,
-                    }
-                }}
+                let exit_code = match console.wait(None) {
+                    Ok(status) => status.code().unwrap_or(-1),
+                    Err(e) => return Err(format!("等待进程失败: {}", e)),
+                };
 
-                let _ = handle.stdin.close();
-                let status = console.wait(None).map_err(|e| format!("虚拟控制台 wait 失败: {}", e))?;
-                let exit_code = status.code().unwrap_or(-1);
-
-                let stdout_text = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
-                let stderr_text = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
-
-                Ok((stdout_text, exit_code, stderr_text))
+                let combined = output_lines.join("");
+                Ok(ExecuteResult {
+                    stdout: combined.trim().to_string(),
+                    exit_code,
+                    stderr: String::new(),
+                })
             })();
 
-            let pid = shared_pid_clone.load(std::sync::atomic::Ordering::Relaxed);
-            let _ = tx.send((pid, result));
+            let _ = tx.send(result);
         });
 
-        // 智能超时：使用 process.rs 统一策略
-        let pid = shared_pid.load(std::sync::atomic::Ordering::Relaxed);
-        match crate::utils::process::wait_channel_with_alive(
-            pid,
-            &rx,
-            &format!("execute_command:{}", command),
-        ) {
-            Ok((_pid, Ok((stdout, exit_code, stderr)))) => {
-                let mut bridge = bridge_arc.lock().unwrap();
-                if exit_code == 0 { bridge.mark_completed(&bridge_sid); }
-                else { bridge.mark_failed(&bridge_sid); }
-                bridge.unregister_session(&bridge_sid);
-                return Ok((stdout, exit_code, stderr));
-            }
-            Ok((_pid, Err(e))) => {
-                let mut bridge = bridge_arc.lock().unwrap();
-                bridge.mark_failed(&bridge_sid);
-                bridge.unregister_session(&bridge_sid);
-                return Err(e);
-            }
-            Err(e) => {
-                let mut bridge = bridge_arc.lock().unwrap();
-                bridge.mark_terminated(&bridge_sid);
-                bridge.unregister_session(&bridge_sid);
-                return Err(format!("{}", e));
+        // 智能超时轮询
+        let start = Instant::now();
+        loop {
+            match rx.try_recv() {
+                Ok(Ok(result)) => {
+                    return Ok(result);
+                }
+                Ok(Err(e)) => {
+                    return Err(e);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // 尚未完成，检查超时
+                    let elapsed = start.elapsed();
+                    if elapsed >= timeout.max_wait {
+                        // 超过最大等待时间，报告超时
+                        // 注意：同步控制台不支持 try_wait，无法精确判断进程状态
+                        return Err(make_still_alive_error(
+                            &format!("execute_sync:{}", command_for_log),
+                            elapsed,
+                            timeout.max_wait,
+                        ));
+                    }
+
+                    tokio::time::sleep(timeout.check_interval).await;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // channel 断开（spawn_blocking 任务 panic）
+                    return Err(format!("执行通道异常断开"));
+                }
             }
         }
     }
 
-    /// 便捷方法：执行命令并返回 stdout
-    pub async fn execute_command_output(
-        &self, command: &str, cwd: &str, timeout_secs: u64,
-        command_kind: CommandKind, label: &str,
-    ) -> Result<String, String> {
-        let (stdout, exit_code, stderr) = self.execute_command(command, cwd, timeout_secs, command_kind, label).await?;
-        if exit_code != 0 {
-            Err(format!("命令执行失败 (exit code {}): {}", exit_code, stderr))
-        } else { Ok(stdout) }
-    }
+    // ------------------------------------------------------------------
+    //  异步路径实现（核心 IO 循环）
+    // ------------------------------------------------------------------
 
-// -- 共享方法：构建命令 -> 启动进程 -> 返回管道 --
-
-fn spawn_agent_process(
+    /// 异步会话执行（会话模式）
+    ///
+    /// 通过 AsyncConsole 创建异步虚拟控制台，
+    /// ProcessHandler 驱动命令构建和输出解析，
+    /// 双通道（stdout + stderr）IO 循环提取 session_id 和输出片段。
+    ///
+    /// 会话启动前先执行 "CD {cwd}" 确保 Agent 在指定目录下工作。
+    #[allow(unused_assignments)]
+    async fn execute_async(
+        &self,
+        async_opts: AsyncOptions,
+        callbacks: AsyncCallbacks,
         config: &AgentConfig,
         message: &str,
         agent_session_id: Option<&str>,
-        cwd: &str,
-    ) -> Result<SpawnedProcess, String> {
-            let process_handler = handler::StdioHandler::from_config(config.clone());
+    ) -> Result<ExecuteResult, String> {
+        let cwd = if async_opts.cwd.is_empty() {
+            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+        } else {
+            async_opts.cwd.clone()
+        };
+        let session_id = async_opts.session_id.clone();
+        let _source_type = async_opts.source_type.clone();
+        let timeout = async_opts.timeout;
         let agent_type = config.agent_type.clone();
-        let cmd_name = config.cli_command.clone();
 
-        let (cmd_name_from_template, args) = process_handler.build_command(message, agent_session_id);
-        log::info!("[Agent/{}] spawn诊断: cmd_from_template={}, args=[{}]",
-            agent_type, cmd_name_from_template, args.join(", "));
-        let effective_cmd = if cmd_name_from_template.is_empty() {
-            cmd_name
-        } else {
-            cmd_name_from_template
-        };
+        log::info!("[Agent/execute_async] session='{}' agent_type='{}' cwd='{}' msg_len={}",
+            session_id, agent_type, cwd, message.len());
 
-        let work_dir = if cwd.is_empty() {
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default()
-        } else {
-            cwd.to_string()
-        };
+        // 创建异步控制台
+        let mut console = ConsoleFactory::create_async().await
+            .map_err(|e| format!("创建异步控制台失败: {}", e))?;
 
-        let resolve_result = resolve_in_path(&effective_cmd);
-        let resolved_cmd = resolve_result.clone().unwrap_or_else(|| effective_cmd.to_string());
-
-        // Track whether resolve_in_path actually found a path or fell back to the raw name.
-        // When unresolved, the command might be a .cmd/.bat that `where` and PATH scan both
-        // missed — wrapping with cmd /C is the safest fallback (avoids os error 193).
-        let cmd_was_resolved = resolve_result.is_some();
-
-        log::info!("[Agent/{}] spawn诊断: effective_cmd={}, resolved_cmd={}, cmd_was_resolved={}",
-            agent_type, effective_cmd, resolved_cmd, cmd_was_resolved);
-
-        #[cfg(target_os = "windows")]
-        let (child, stdout, stderr, conpty_mode) = {
-            // Detect if resolved_cmd is a batch script (.cmd / .bat)
-            let is_batch = resolved_cmd.to_lowercase().ends_with(".cmd")
-                || resolved_cmd.to_lowercase().ends_with(".bat")
-                // Safety net: if resolve_in_path returned None, the raw command name
-                // might be a batch wrapper (e.g. "claude" → claude.cmd). Use cmd /C
-                // to let Windows resolve it, avoiding os error 193 on CreateProcessW.
-                || (!cmd_was_resolved && !resolved_cmd.to_lowercase().ends_with(".exe"));
-
-            log::info!("[Agent/{}] spawn诊断: is_batch={}, resolved_cmd={}",
-                agent_type, is_batch, resolved_cmd);
-
-            let cmdline = if is_batch {
-                // Batch scripts require cmd.exe /C because CreateProcessW + ConPTY
-                // cannot delegate .cmd→cmd.exe (ERROR_BAD_EXE_FORMAT / os error 193).
-                // Use escape_cmdline_arg_for_cmd: cmd.exe doesn't understand MSVC \\ escaping.
-                let mut c = String::from("cmd /C ");
-                c.push_str(&escape_cmdline_arg_for_cmd(&resolved_cmd));
-                for arg in &args {
-                    c.push(' ');
-                    c.push_str(&escape_cmdline_arg_for_cmd(arg));
-                }
-                c
-            } else {
-                // Native executables (.exe): use resolved_cmd directly.
-                // CreateProcessW handles PATH resolution internally.
-                let mut c = String::new();
-                c.push_str(&escape_cmdline_arg(&resolved_cmd));
-                for arg in &args {
-                    c.push(' ');
-                    c.push_str(&escape_cmdline_arg(arg));
-                }
-                c
-            };
-
-            log::info!("[Agent/{}] spawn诊断: cmdline={}, work_dir={}",
-                agent_type, &cmdline, work_dir);
-
-            match crate::agent::session_process::spawn_with_conpty(&cmdline, &work_dir, 80, 30) {
-                Ok((c, o, e, cm)) => (
-                    ProcessChild::Conpty(c),
-                    Box::new(o) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-                    Box::new(e) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-                    cm,
-                ),
-                Err(e) => {
-                    log::error!("[Agent/{}] ConPTY spawn失败! cmdline={}, error={}", agent_type, &cmdline, e);
-                    let cmdline_for_log = cmdline.clone();
-                    let mut cmd = if is_batch {
-                        // Batch scripts need cmd /C even in fallback
-                        let mut c = Command::new("C:\\Windows\\System32\\cmd.exe");
-                        c.arg("/C");
-                        c.arg(&resolved_cmd);
-                        c.args(&args);
-                        c
-                    } else {
-                        let mut cmd = Command::new(&resolved_cmd);
-                        cmd.args(&args);
-                        cmd
-                    };
-                    cmd.current_dir(&work_dir);
-                    cmd.stdout(std::process::Stdio::piped());
-                    cmd.stderr(std::process::Stdio::piped());
-                    cmd.kill_on_drop(true);
-                    cmd.env_remove("PYTHONHOME");
-                    let mut spawned = cmd.spawn()
-                        .map_err(|e| {
-                            format!("启动 {} 失败: {}", agent_type, e)
-                        })?;
-                    let o = spawned.stdout.take()
-                        .ok_or_else(|| format!("无法获取 {} stdout", agent_type))?;
-                    let e = spawned.stderr.take()
-                        .ok_or_else(|| format!("无法获取 {} stderr", agent_type))?;
-                    (
-                        ProcessChild::Tokio(spawned),
-                        Box::new(o) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-                        Box::new(e) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-                        false,
-                    )
-                }
-            }
-        };
-
-        #[cfg(not(target_os = "windows"))]
-        let (child, stdout, stderr, conpty_mode) = {
-            let mut cmd = Command::new(&resolved_cmd);
-            cmd.args(&args);
-            cmd.current_dir(&work_dir);
-            cmd.stdout(std::process::Stdio::piped());
-            cmd.stderr(std::process::Stdio::piped());
-            cmd.kill_on_drop(true);
-            cmd.env_remove("PYTHONHOME");
-            let mut spawned = cmd.spawn()
-                .map_err(|e| format!("启动 {} 失败: {}", agent_type, e))?;
-            let o = spawned.stdout.take()
-                .ok_or_else(|| format!("无法获取 {} stdout", agent_type))?;
-            let e = spawned.stderr.take()
-                .ok_or_else(|| format!("无法获取 {} stderr", agent_type))?;
-            (
-                ProcessChild::Tokio(spawned),
-                Box::new(o) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-                Box::new(e) as Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-                false,
-            )
-        };
-
-        let stderr_buf = Arc::new(Mutex::new(String::new()));
-
-        Ok(SpawnedProcess {
-            child,
-            stdout,
-            stderr,
-            stderr_buf,
-            agent_type,
-            conpty_mode,
-        })
-    }
-
-    // -- 核心 IO 循环：启动进程 → 读取 stdout/stderr → 提取 session_id --
-    // agent 模块的权威实现，send_message_with_config 和 execute_once 均基于此
-
-    /// 内部 IO 执行 — 启动 Agent 进程，收集 stdout/stderr，提取 session_id
-    ///
-    /// 返回: (完整输出文本, agent_session_id, 退出码, stderr文本)
-    /// 这是 agent 模块的核心 IO 逻辑，两个公开入口方法均调用此函数。
-    async fn execute_agent_inner(
-        config: &AgentConfig,
-        prompt: &str,
-        agent_session_id: Option<&str>,
-        cwd: &str,
-        on_chunk: impl Fn(String) + Send + 'static,
-        on_session_id: impl Fn(String) + Send + 'static,
-        abort_check: impl Fn() -> bool + Send + 'static,
-        on_pid: impl Fn(u32) + Send + 'static,
-    ) -> Result<(String, Option<String>, i32, String), String> {
         let process_handler = handler::StdioHandler::from_config(config.clone());
 
-        let SpawnedProcess { mut child, stdout, stderr, stderr_buf, agent_type, conpty_mode } =
-            Self::spawn_agent_process(config, prompt, agent_session_id, cwd)?;
+        // 构建命令
+        let (effective_cmd, args) = process_handler.build_command(message, agent_session_id);
 
-        // 通知调用者：进程已成功 spawn
-        let pid = child.id();
-        on_pid(pid);
-        log::info!("[Agent/{}] execute_agent_inner: process spawned, pid={}", agent_type, pid);
+        // 统一 cmd /C 包装（Windows）或直接执行（非 Windows）
+        #[cfg(target_os = "windows")]
+        let (exe, spawn_args): (String, Vec<String>) = {
+            let mut a = vec!["/C".to_string(), effective_cmd];
+            a.extend(args.iter().cloned());
+            ("C:\\Windows\\System32\\cmd.exe".to_string(), a)
+        };
+        #[cfg(not(target_os = "windows"))]
+        let (exe, spawn_args): (String, Vec<String>) = (effective_cmd, args);
 
-        use tokio::io::AsyncBufReadExt;
+        let spawn_args_refs: Vec<&str> = spawn_args.iter().map(|s| s.as_str()).collect();
+
+
+        // Spawn 进程
+        let (pid, mut stdout_rx, mut stderr_rx) = console
+            .spawn(&exe, &spawn_args_refs, &cwd).await
+            .map_err(|e| {
+                format!("启动进程失败: {}", e)
+            })?;
+
+
+        (callbacks.on_pid)(pid);
+        log::info!("[Agent/execute_async] async console spawned, pid={}", pid);
+
+        // 注册 PID 到进程管理表
+        {
+            let aborted = Arc::new(AtomicBool::new(false));
+            let aborted_clone = aborted.clone();
+            self.processes.lock().unwrap().insert(session_id.clone(), AgentProcess {
+                pid: Some(pid),
+                aborted: aborted_clone,
+            });
+        }
+
+        // stderr 缓冲区（共享）
+        let stderr_buf = Arc::new(Mutex::new(String::new()));
+        let stderr_buf_clone = stderr_buf.clone();
+        let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let stderr_lines_clone = stderr_lines.clone();
+        let agent_type_clone = agent_type.clone();
+
+        // 后台读取 stderr
+        let stderr_handle = tokio::spawn(async move {
+            loop {
+                let line_opt = stderr_rx.recv().await;
+                let line = match line_opt {
+                    Some(l) => l,
+                    None => break,
+                };
+if let Ok(mut buf) = stderr_buf_clone.lock() {
+                    buf.push_str(&line);
+                }
+                if let Ok(mut lines) = stderr_lines_clone.lock() {
+                    lines.push(line);
+                }
+            }
+            if let Ok(buf) = stderr_buf_clone.lock() {
+                if !buf.is_empty() {
+                    log::warn!("[Agent/{}] stderr: {}", agent_type_clone, buf.trim());
+                }
+            }
+        });
+
+        // 主线程读取 stdout + 智能超时轮询
         let mut full_output = String::new();
-        let mut agent_session_id_result: Option<String> = None;
+        let poll_start = Instant::now();
 
-        if conpty_mode {
-            // ConPTY merged mode: stdout+stderr in same pipe
-            //
-            // Idle watchdog: interactive CLI tools (e.g. hermes chat) may not exit
-            // after processing --query. A background task monitors a shared flag
-            // and sends EOF when no output arrives for too long.
-            use std::sync::atomic::{AtomicU64, Ordering};
-            let last_output_ts = Arc::new(AtomicU64::new(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-            ));
-            let watchdog_ts = last_output_ts.clone();
-            let watchdog_child_pid = child.id();
-            let watchdog_agent_type = agent_type.clone();
-            // Spawn watchdog in background — two-phase timeout strategy:
-            // Phase 1: Grace period (60s) — allows Agent to initialize (API auth, network handshake)
-            // Phase 2: Idle timeout (15s) — after first output, terminate if no output for 15s
-            // (cannot send_eof because ConptyProcess is not Send)
-            let grace_secs: u64 = 60;
-            let idle_secs: u64 = 15;
-            let _watchdog = tokio::spawn(async move {
-                // Phase 1: Wait for grace period
-                tokio::time::sleep(std::time::Duration::from_secs(grace_secs)).await;
+        loop {
+            // 检查取消
+            if (callbacks.abort_check)() {
+                log::info!("[Agent/execute_async] abort requested, killing pid={}", pid);
+                let _ = console.kill().await;
+                break;
+            }
 
-                // Check: if process already produced output during grace period, switch to idle mode
-                let spawn_ts = watchdog_ts.load(Ordering::Relaxed);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let has_output = now.saturating_sub(spawn_ts) > 1; // output updated if >1s difference from spawn time
+            // 智能超时轮询：检查 AsyncConsole 状态
+            let elapsed = poll_start.elapsed();
+            if elapsed >= timeout.check_interval {
+                // 定期检查进程状态
+                let try_wait_result = console.try_wait();
 
-                if has_output {
-                    // Phase 2: Monitor idle timeout
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(idle_secs)).await;
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs();
-                        let last = watchdog_ts.load(Ordering::Relaxed);
-                        if now.saturating_sub(last) >= idle_secs {
-                            log::info!(
-                                "[Agent/{}] Watchdog: no output for {}s (idle phase), terminating PID {}",
-                                watchdog_agent_type, idle_secs, watchdog_child_pid
-                            );
-                            let _ = std::process::Command::new("taskkill")
-                                .args(&["/PID", &watchdog_child_pid.to_string(), "/F"])
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null())
-                                .spawn();
-                            break;
+                if let Some(error) = check_process_state(
+                    try_wait_result,
+                    elapsed,
+                    timeout.max_wait,
+                    &format!("Agent({})", agent_type),
+                    "",
+                ) {
+                    match error {
+                        crate::utils::process::TimeoutError::ProcessExited { exit_code, .. } => {
+                            log::warn!("[Agent/execute_async] process exited early: code={}", exit_code);
+                        }
+                        crate::utils::process::TimeoutError::StillAlive { .. } => {
+                            log::error!("[Agent/execute_async] max wait exceeded, killing pid={}", pid);
+                            let _ = console.kill().await;
+                            // 构建 stderr 摘要
+                            let _stderr_summary = {
+                                let lines = stderr_lines.lock().map(|l| l.clone()).unwrap_or_default();
+                                summarize_stderr(&lines, 300, 5)
+                            };
+                            return Err(make_still_alive_error(
+                                &format!("Agent({})", agent_type),
+                                elapsed,
+                                timeout.max_wait,
+                            ));
+                        }
+                        crate::utils::process::TimeoutError::ChannelDisconnected(msg) => {
+                            return Err(format!("执行通道异常断开: {}", msg));
+                        }
+                        crate::utils::process::TimeoutError::Cancelled(msg) => {
+                            return Err(format!("已取消: {}", msg));
                         }
                     }
-                } else {
-                    // No output at all during grace period — terminate
-                    log::info!(
-                        "[Agent/{}] Watchdog: no output after {}s grace period, terminating PID {}",
-                        watchdog_agent_type, grace_secs, watchdog_child_pid
-                    );
-                    let _ = std::process::Command::new("taskkill")
-                        .args(&["/PID", &watchdog_child_pid.to_string(), "/F"])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn();
-                }
-            });
-
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                // Update watchdog timestamp
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                last_output_ts.store(now, Ordering::Relaxed);
-
-                if abort_check() { break; }
-                if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
-                    agent_session_id_result = Some(sid.clone());
-                    on_session_id(sid.clone());
-                } else if let Some(ref sid) = process_handler.extract_session_id(&line, true) {
-                    agent_session_id_result = Some(sid.clone());
-                    on_session_id(sid.clone());
-                }
-                if let Some(content) = process_handler.parse_output_line(&line) {
-                    on_chunk(content.clone());
-                    full_output.push_str(&content);
-                }
-            }
-            drop(stderr);
-        } else {
-            // Stdio mode: stderr in background task
-            let stderr_buf_clone = stderr_buf.clone();
-            let agent_type_clone = agent_type.clone();
-            let process_handler_for_stderr = process_handler.clone();
-            let agent_session_id_shared: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
-            let sid_shared = agent_session_id_shared.clone();
-            let stderr_handle = tokio::spawn(async move {
-                let reader = BufReader::new(stderr);
-                use tokio::io::AsyncBufReadExt;
-                let mut lines = reader.lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(sid) = process_handler_for_stderr.extract_session_id(&line, true) {
-                        if let Ok(mut s) = sid_shared.lock() {
-                            *s = Some(sid);
-                        }
-                    }
-                    if let Ok(mut buf) = stderr_buf_clone.lock() {
-                        buf.push_str(&line);
-                        buf.push('\n');
-                    }
-                }
-                if let Ok(buf) = stderr_buf_clone.lock() {
-                    if !buf.is_empty() {
-                        log::warn!("[Agent/{}] stderr: {}", agent_type_clone, buf.trim());
-                    }
-                }
-            });
-
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if abort_check() { break; }
-                if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
-                    agent_session_id_result = Some(sid.clone());
-                    on_session_id(sid.clone());
-                }
-                if let Some(content) = process_handler.parse_output_line(&line) {
-                    on_chunk(content.clone());
-                    full_output.push_str(&content);
                 }
             }
 
-            // Wait for stderr background task
-            if let Err(e) = stderr_handle.await {
-                log::warn!("[Agent/{}] stderr task join error: {:?}", agent_type, e);
-            }
+            // 带超时的 stdout recv
+            let recv_timeout = if elapsed >= timeout.max_wait.saturating_sub(timeout.check_interval) {
+                timeout.max_wait.saturating_sub(elapsed)
+            } else {
+                timeout.check_interval
+            };
 
-            // Extract session_id from stderr
-            if agent_session_id_result.is_none() {
-                if let Ok(sid) = agent_session_id_shared.lock() {
-                    if let Some(s) = sid.clone() {
-                        agent_session_id_result = Some(s.clone());
-                        on_session_id(s);
+            match tokio::time::timeout(Duration::from_secs_f64(recv_timeout.as_secs_f64()), stdout_rx.recv()).await {
+                Ok(Some(line)) => {
+                    // 提取 session_id
+                    if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
+                        (callbacks.on_session_id)(sid.clone());
+                    }
+                    // 解析输出行
+                    if let Some(content) = process_handler.parse_output_line(&line) {
+                        (callbacks.on_chunk)(content.clone());
+                        full_output.push_str(&content);
                     }
                 }
+                Ok(None) => {
+                    // stdout channel 关闭 → stdout 读完
+                    log::info!("[Agent/execute_async] stdout channel closed");
+                    break;
+                }
+                Err(_) => {
+                    // recv 超时 → 回到循环顶部继续轮询
+                    continue;
+                }
             }
-        } // end else (stdio mode)
+        }
 
-        log::info!("[ConPTY/IO] read loop ended, full_output_len={}, conpty_mode={}",
-            full_output.len(), conpty_mode);
+        // 等待 stderr 后台任务
+        if let Err(e) = stderr_handle.await {
+            log::warn!("[Agent/execute_async] stderr task join error: {:?}", e);
+        }
 
-        let exit_code = child.wait().await?;
+        log::info!("[Agent/execute_async] read loop ended, output_len={}", full_output.len());
 
-        log::info!("[Agent/{}] execute_agent_inner done: exit_code={}, conpty_mode={}, output_len={}, stderr_len={}",
-            agent_type, exit_code, conpty_mode, full_output.len(), stderr_buf.lock().map(|b| b.len()).unwrap_or(0));
+        // 等待进程退出
+        let exit_code = console.wait().await
+            .map_err(|e| format!("异步控制台 wait 失败: {}", e))?;
 
         let stderr_text = stderr_buf.lock()
             .map(|b| b.clone())
             .unwrap_or_default();
 
-        Ok((full_output.trim().to_string(), agent_session_id_result, exit_code, stderr_text))
+        log::info!("[Agent/execute_async] done: exit_code={}, output_len={}, stderr_len={}",
+            exit_code, full_output.len(), stderr_text.len());
+
+        // 异步路径也返回 ExecuteResult（统一出口类型）
+        // agent_session_id 已通过 on_session_id 回调推送到前端
+        Ok(ExecuteResult {
+            stdout: full_output.trim().to_string(),
+            exit_code,
+            stderr: stderr_text,
+        })
     }
 
-    // -- 前端会话模式：Event 推送（基于 execute_agent_inner） --
+    // ------------------------------------------------------------------
+    //  高层便捷方法（基于 execute_command 统一入口）
+    // ------------------------------------------------------------------
 
+    /// 便捷方法：执行同步命令并返回 stdout
+    pub async fn execute_command_output(
+        &self, command: &str, cwd: &str, timeout_secs: u64,
+        label: &str,
+    ) -> Result<String, String> {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis()).unwrap_or(0);
+        let opts = ExecuteOptions {
+            command: command.to_string(),
+            cwd: cwd.to_string(),
+            session_id: format!("cmd_{}_{}", label, ts),
+            source_type: label.to_string(),
+            timeout: TimeoutPolicy::custom(timeout_secs, timeout_secs * 10),
+        };
+
+        let result = self.execute_command(opts, None, None, None, None, None).await?;
+        if result.exit_code != 0 {
+            Err(format!("命令执行失败 (exit code {}): {}", result.exit_code, result.stderr))
+        } else {
+            Ok(result.stdout)
+        }
+    }
+
+    /// 前端会话模式：Event 推送
     pub async fn send_message_with_config(
         &mut self,
         app_handle: tauri::AppHandle,
@@ -640,105 +538,101 @@ fn spawn_agent_process(
         _system_prompt: Option<String>,
         agent_session_id: Option<String>,
     ) -> Result<(), String> {
+        let source_type = config.agent_type.clone();
+        let async_opts = AsyncOptions {
+            cwd: cwd.unwrap_or_default(),
+            session_id: session_id.clone(),
+            source_type: source_type.clone(),
+            timeout: TimeoutPolicy::llm_inference(),
+        };
+
+        let app_for_chunk = app_handle.clone();
+        let sid_for_chunk = session_id.clone();
+        let app_for_sid = app_handle.clone();
+        let sid_for_sid = session_id.clone();
         let aborted = Arc::new(AtomicBool::new(false));
         let aborted_clone = aborted.clone();
-
-        // 不再提前 spawn（避免双重 spawn 导致第一个进程被 drop 终止），
-        // 改由 execute_agent_inner 内部通过 on_pid 回调通知并注册 PID。
-        self.processes.lock().unwrap().insert(session_id.clone(), AgentProcess {
-            pid: None,
-            aborted: aborted_clone.clone(),
-        });
-
-        // 后台任务：调用共享 IO 循环，通过 Event 推送结果
-        let app_clone = app_handle.clone();
-        let sid = session_id.clone();
-        let agent_type_name = config.agent_type.clone();
         let processes_arc = Arc::clone(&self.processes);
-        let aborted_clone = aborted_clone;
-        let config_owned = config.clone();
-        let message_owned = message.clone();
-        let agent_session_id_owned = agent_session_id.clone();
-        let cwd_owned = cwd.clone();
+        let session_for_abort = Arc::new(session_id.clone());
+        let session_for_abort_check = Arc::clone(&session_for_abort);
+        let session_for_pid = Arc::clone(&session_for_abort);
 
-        let sid_for_pid = sid.clone();
-
-        tokio::spawn(async move {
-            let app = app_clone;
-            let sid_inner = sid;
-            let agent_type_name_inner = agent_type_name;
-            let app_for_result = app.clone();
-            let sid_inner_for_result = sid_inner.clone();
-            let aborted_inner = aborted_clone;
-
-            let result = crate::utils::process::wait_future_with_alive(
-                0,  // PID 通过 on_pid 回调动态注册; wait_future_with_alive 中 is_process_alive(0)=false 不影响
-                Box::pin(async move {
-                    let app_for_chunk = app.clone();
-                    let sid_for_chunk = sid_inner.clone();
-                    let app_for_sid = app.clone();
-                    let sid_for_sid = sid_inner.clone();
-
-                    Self::execute_agent_inner(
-                        &config_owned,
-                        &message_owned,
-                        agent_session_id_owned.as_deref(),
-                        cwd_owned.as_deref().unwrap_or(""),
-                        move |chunk| {
-                            let _ = app_for_chunk.emit("agent-chunk", serde_json::json!({
-                                "sessionId": sid_for_chunk,
-                                "content": chunk,
-                            }));
-                        },
-                        move |sid_agent| {
-                            let _ = app_for_sid.emit("agent-session", serde_json::json!({
-                                "sessionId": sid_for_sid,
-                                "agentSessionId": sid_agent,
-                            }));
-                        },
-                        move || aborted_inner.load(Ordering::Relaxed),
-                        move |spawned_pid: u32| {
-                            // 进程 spawn 成功，注册 PID 到进程管理表
-                            if let Ok(mut procs) = processes_arc.lock() {
-                                if let Some(proc) = procs.get_mut(&sid_for_pid) {
-                                    proc.pid = Some(spawned_pid);
-                                }
-                            }
-                            log::info!("[Agent/send_message] on_pid callback: session={}, pid={}", sid_for_pid, spawned_pid);
-                        },
-                    ).await
-                }),
-                &format!("Agent {}", agent_type_name_inner),
-            ).await;
-
-            match result {
-                Ok((_output, _sid_from_inner, exit_code, stderr_text)) => {
-                    if exit_code != 0 {
-                        let err_msg = friendly_agent_error(&agent_type_name_inner, exit_code, &stderr_text);
-                        let _ = app_for_result.emit("agent-error", serde_json::json!({
-                            "sessionId": sid_inner_for_result,
-                            "error": err_msg,
-                        }));
+        let callbacks = AsyncCallbacks {
+            on_chunk: Box::new(move |chunk| {
+                let _ = app_for_chunk.emit("agent-chunk", serde_json::json!({
+                    "sessionId": sid_for_chunk,
+                    "content": chunk,
+                }));
+            }),
+            on_session_id: Box::new(move |sid_agent| {
+                let _ = app_for_sid.emit("agent-session", serde_json::json!({
+                    "sessionId": sid_for_sid,
+                    "agentSessionId": sid_agent,
+                }));
+            }),
+            abort_check: Box::new(move || {
+                // 检查 aborted 标志
+                let val = aborted_clone.load(Ordering::Relaxed);
+                if val {
+                    // 额外检查进程表中的 aborted（stop_generation 可能通过 pid 直接 kill）
+                    if let Ok(procs) = processes_arc.lock() {
+                        if let Some(proc) = procs.get(&*session_for_abort_check) {
+                            return proc.aborted.load(Ordering::Relaxed);
+                        }
                     }
                 }
-                Err(e) => {
+                val
+            }),
+            on_pid: Box::new(move |spawned_pid: u32| {
+                log::info!("[Agent/send_message] on_pid callback: session={}, pid={}", &*session_for_pid, spawned_pid);
+            }),
+        };
+
+        let app_for_result = app_handle.clone();
+        let sid_for_result = session_id.clone();
+        let source_type_for_error = source_type.clone();
+
+        let result = self.execute_command(
+            ExecuteOptions {
+                command: String::new(), // 异步路径不使用
+                cwd: String::new(),
+                session_id: session_id.clone(),
+                source_type: source_type.clone(),
+                timeout: TimeoutPolicy::llm_inference(),
+            },
+            Some(async_opts),
+            Some(callbacks),
+            Some(&config),
+            Some(&message),
+            agent_session_id.as_deref(),
+        ).await;
+
+        match result {
+            Ok(exec_result) => {
+                if exec_result.exit_code != 0 {
+                    let err_msg = friendly_agent_error(&source_type_for_error, exec_result.exit_code, &exec_result.stderr);
                     let _ = app_for_result.emit("agent-error", serde_json::json!({
-                        "sessionId": sid_inner_for_result,
-                        "error": format!("{}", e),
+                        "sessionId": sid_for_result,
+                        "error": err_msg,
                     }));
                 }
             }
+            Err(e) => {
+                let _ = app_for_result.emit("agent-error", serde_json::json!({
+                    "sessionId": sid_for_result,
+                    "error": format!("{}", e),
+                }));
+            }
+        }
 
-            let _ = app_for_result.emit("agent-done", serde_json::json!({
-                "sessionId": sid_inner_for_result,
-            }));
-        });
+        let _ = app_for_result.emit("agent-done", serde_json::json!({
+            "sessionId": sid_for_result,
+        }));
 
         Ok(())
     }
 
-    // -- 单次执行模式：直接返回完整输出（基于 execute_agent_inner） --
-
+    /// 单次执行模式：直接返回完整输出
     pub async fn execute_once(
         &mut self,
         config: &AgentConfig,
@@ -749,68 +643,65 @@ fn spawn_agent_process(
         on_chunk: impl Fn(String) + Send + 'static,
         agent_session_id: Option<&str>,
     ) -> Result<(String, Option<String>), AppError> {
-        // ── 智能超时策略（与 send_message_with_config 一致）──
-        // 不再提前 spawn（避免双重 spawn），PID 通过 on_pid 回调动态注册。
-        // on_chunk 闭包中捕获 shared_pid 用于动态获取 PID。
-        let shared_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
-        let shared_pid_for_on_pid = Arc::clone(&shared_pid);
+        let source_type = config.agent_type.clone();
+        let async_opts = AsyncOptions {
+            cwd: cwd.to_string(),
+            session_id: _temp_session_id.to_string(),
+            source_type: source_type.clone(),
+            timeout: TimeoutPolicy::llm_inference(),
+        };
 
-        // 为 async 'static 闭包准备 owned 副本
-        let config_owned = config.clone();
-        let prompt_owned = prompt.to_string();
-        let cwd_owned = cwd.to_string();
-        let agent_session_id_owned = agent_session_id.map(|s| s.to_string());
-        let agent_type_label = config.agent_type.clone();
-        let agent_type_for_error = config.agent_type.clone();
+        let on_chunk_owned = Arc::new(Mutex::new(Box::new(on_chunk) as Box<dyn Fn(String) + Send>));
+        let on_chunk_clone = on_chunk_owned.clone();
+        let sid_result = Arc::new(Mutex::new(None::<String>));
 
-        // 注册占位条目，on_pid 回调中补填 PID
-        self.processes.lock().unwrap().insert(_temp_session_id.to_string(), AgentProcess {
-            pid: None,
-            aborted: Arc::new(AtomicBool::new(false)),
-        });
-        let processes_arc = Arc::clone(&self.processes);
-        let temp_session_id_owned = _temp_session_id.to_string();
-
-        let timeout_result = crate::utils::process::wait_future_with_alive(
-            0,  // PID 通过 on_pid 回调动态注册
-            Box::pin(async move {
-                Self::execute_agent_inner(
-                    &config_owned,
-                    &prompt_owned,
-                    agent_session_id_owned.as_deref(),
-                    &cwd_owned,
-                    on_chunk,
-                    |_| {},
-                    || false,
-                    move |spawned_pid: u32| {
-                        if let Ok(mut p) = shared_pid_for_on_pid.lock() {
-                            *p = Some(spawned_pid);
-                        }
-                        // 注册 PID 到进程管理表
-                        if let Ok(mut procs) = processes_arc.lock() {
-                            if let Some(proc) = procs.get_mut(&temp_session_id_owned) {
-                                proc.pid = Some(spawned_pid);
-                            }
-                        }
-                        log::info!("[Agent/execute_once] on_pid callback: session={}, pid={}", temp_session_id_owned, spawned_pid);
-                    },
-                ).await
-            }),
-            &format!("Agent(workflow) {}", agent_type_label),
-        ).await;
-
-        match timeout_result {
-            Ok((_output, sid, exit_code, stderr_text)) => {
-                if exit_code != 0 {
-                    return Err(AppError::External(friendly_agent_error(
-                        &agent_type_for_error, exit_code, &stderr_text,
-                    )));
+        let callbacks = AsyncCallbacks {
+            on_chunk: Box::new(move |chunk| {
+                if let Ok(func) = on_chunk_clone.lock() {
+                    func(chunk);
                 }
-                Ok((_output, sid))
-            }
-            Err(e) => Err(AppError::External(format!("{}", e))),
+            }),
+            on_session_id: Box::new({
+                let sid_result_clone = sid_result.clone();
+                move |sid| {
+                    if let Ok(mut s) = sid_result_clone.lock() {
+                        *s = Some(sid);
+                    }
+                }
+            }),
+            abort_check: Box::new(|| false),
+            on_pid: Box::new(|_pid| {}),
+        };
+
+        let result = self.execute_command(
+            ExecuteOptions {
+                command: String::new(),
+                cwd: String::new(),
+                session_id: _temp_session_id.to_string(),
+                source_type: source_type.clone(),
+                timeout: TimeoutPolicy::llm_inference(),
+            },
+            Some(async_opts),
+            Some(callbacks),
+            Some(config),
+            Some(prompt),
+            agent_session_id,
+        ).await.map_err(|e| AppError::External(e))?;
+
+        if result.exit_code != 0 {
+            return Err(AppError::External(friendly_agent_error(
+                &source_type, result.exit_code, &result.stderr,
+            )));
         }
+
+        let agent_sid = sid_result.lock().unwrap().clone();
+        Ok((result.stdout, agent_sid))
     }
+
+    // ------------------------------------------------------------------
+    //  进程控制
+    // ------------------------------------------------------------------
+
     pub fn stop_generation(&mut self, session_id: &str) {
         if let Ok(processes) = self.processes.lock() {
             if let Some(process) = processes.get(session_id) {
@@ -851,7 +742,7 @@ fn spawn_agent_process(
         log::info!("[Agent] Session closed: {}", session_id);
     }
 
-    pub async fn list_skills(_agent_type: &str, config: Option<&crate::commands::agents::AgentConfig>) -> Vec<crate::db::models::SkillInfo> {
+    pub async fn list_skills(_agent_type: &str, config: Option<&crate::agent::config::AgentConfig>) -> Vec<crate::db::models::SkillInfo> {
         if let Some(cfg) = config {
             if !cfg.skills_dir.is_empty() {
                 let resolved = cfg.skills_dir.replace("{agent_type}", &cfg.agent_type);
@@ -903,38 +794,6 @@ impl Drop for AgentManager {
 /// 获取用户 home 目录（跨平台）
 fn home_dir() -> Option<std::path::PathBuf> {
     dirs::home_dir()
-}
-
-// ------------------------------------------------------------------
-//  已安装 Agent 检测
-// ------------------------------------------------------------------
-
-pub fn detect_installed_agents(agents: &[crate::commands::agents::AgentConfig]) -> Vec<String> {
-    let mut installed = Vec::new();
-    for agent in agents {
-        if !agent.is_enabled {
-            continue;
-        }
-        if which(&agent.cli_command) {
-            installed.push(agent.agent_type.clone());
-        }
-    }
-    installed
-}
-
-fn which(name: &str) -> bool {
-    if let Ok(paths) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let exe = dir.join(name);
-            if exe.with_extension("exe").exists() || exe.with_extension("cmd").exists() || exe.exists() {
-                return true;
-            }
-            if exe.with_extension("CMD").exists() {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 // ------------------------------------------------------------------
@@ -1001,67 +860,4 @@ fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode:
         }
     }
     skills
-}
-
-/// 转义命令行参数（用于 ConPTY cmdline 构建）
-/// 转义命令行参数（用于 CreateProcessW 直接启动 .exe 场景）
-///
-/// 使用 MSVC CRT 转义规则（CommandLineToArgvW 语义）：
-/// - 反斜杠转义：每个 \ 变成 \\
-/// - 引号转义：内部 " 变成 \"
-/// - 含空格/特殊字符的参数用双引号包裹
-///
-/// 注意：此规则仅适用于 CreateProcessW 直接启动 .exe 的场景。
-/// cmd /C 场景必须使用 escape_cmdline_arg_for_cmd()。
-fn escape_cmdline_arg(s: &str) -> String {
-    let needs_quote = s.is_empty()
-        || s.contains(' ')
-        || s.contains('\t')
-        || s.contains('\n')
-        || s.contains('"');
-    if needs_quote {
-        let mut escaped = String::with_capacity(s.len() + 2);
-        escaped.push('"');
-        for c in s.chars() {
-            match c {
-                '\\' => escaped.push_str("\\\\"),
-                '"' => escaped.push_str("\\\""),
-                _ => escaped.push(c),
-            }
-        }
-        escaped.push('"');
-        escaped
-    } else {
-        s.to_string()
-    }
-}
-
-/// 转义命令行参数（用于 cmd.exe /C 场景）
-///
-/// cmd.exe 不遵循 MSVC CRT 转义规则：
-/// - 反斜杠是字面字符，不需要转义
-/// - 内部双引号用 "" 转义（不是 \"）
-/// - 含空格/shell特殊字符的参数用双引号包裹
-///
-/// Windows 路径中的反斜杠（如 C:\Users\...）必须保持原样，
-/// 否则 cmd.exe 会把 \\ 当作双反斜杠导致路径无效。
-fn escape_cmdline_arg_for_cmd(s: &str) -> String {
-    let needs_quote = s.is_empty()
-        || s.contains(' ')
-        || s.contains('\t')
-        || s.contains('\n')
-        || s.contains('&')
-        || s.contains('|')
-        || s.contains('<')
-        || s.contains('>')
-        || s.contains('^');
-    if needs_quote {
-        // cmd.exe: 内部双引号用 "" 转义
-        let inner = s.replace("\"", "\"\"");
-        format!("\"{}\"", inner)
-    } else if s.contains('"') {
-        s.replace("\"", "\"\"")
-    } else {
-        s.to_string()
-    }
 }

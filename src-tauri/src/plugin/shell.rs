@@ -7,9 +7,9 @@
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, Arc};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::virtual_console::factory::ConsoleFactory;
-use crate::virtual_console::traits::VirtualConsole;
 
 use super::PluginHost;
 
@@ -118,13 +118,14 @@ pub fn plugin_shell_exec(
 
     // 智能超时等待
     let timeout_ms = options.as_ref().and_then(|o| o.timeout_ms).unwrap_or(30000);
-    let timeout_secs_f = timeout_ms as f64 / 1000.0;
+    let max_wait = Duration::from_millis(timeout_ms);
+    let check_interval = Duration::from_secs(5);
 
     let shared_pid = Arc::new(AtomicU32::new(0));
     let cmd = command.clone();
     let opts = options.clone();
     let shared_pid_clone = Arc::clone(&shared_pid);
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(u32, ShellResult), String>>();
 
     std::thread::spawn(move || {
         let result = execute_via_virtual_console(&cmd, &opts);
@@ -134,16 +135,26 @@ pub fn plugin_shell_exec(
         let _ = tx.send(result);
     });
 
-    // 智能超时：使用 process.rs 统一策略
-    let pid = shared_pid.load(Ordering::Relaxed);
-    match crate::utils::process::wait_channel_with_alive(
-        pid,
-        &rx,
-        &format!("plugin_shell:{}", command),
-    ) {
-        Ok(Ok((_, shell_result))) => return Ok(shell_result),
-        Ok(Err(e)) => return Err(e),
-        Err(e) => return Err(format!("{}", e)),
+    // 智能超时轮询（与 agent execute_sync 一致的模式）
+    let start = Instant::now();
+    loop {
+        match rx.try_recv() {
+            Ok(Ok((_, shell_result))) => return Ok(shell_result),
+            Ok(Err(e)) => return Err(e),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                let elapsed = start.elapsed();
+                if elapsed >= max_wait {
+                    return Err(format!(
+                        "plugin_shell: 超时 ({:.1}s)，命令: {}",
+                        elapsed.as_secs_f64(),
+                        &command[..command.len().min(100)]
+                    ));
+                }
+                std::thread::sleep(check_interval);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err("plugin_shell: 执行通道异常断开".to_string());
+            }
+        }
     }
-
 }

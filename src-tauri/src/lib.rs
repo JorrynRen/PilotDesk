@@ -204,13 +204,12 @@ async fn agent_close_session(
 }
 
 
-/// 获取 Agent 虚拟控制台桥接的会话列表
+/// 获取终端会话桥接的会话列表
 #[tauri::command]
-async fn list_agent_console_sessions(
-    agent_mgr: tauri::State<'_, AsyncMutex<AgentManager>>,
-) -> Result<Vec<agent::console_bridge::ConsoleSessionView>, String> {
-    let mgr = agent_mgr.lock().await;
-    let sessions = mgr.with_console_bridge(|bridge| bridge.list_session_views());
+async fn list_console_sessions(
+    bridge: tauri::State<'_, std::sync::Mutex<crate::terminal::console_bridge::ConsoleBridge>>,
+) -> Result<Vec<crate::terminal::console_bridge::ConsoleSessionView>, String> {
+    let sessions = bridge.lock().unwrap().list_session_views();
     Ok(sessions)
 }
 
@@ -221,14 +220,6 @@ async fn agent_list_skills(state: tauri::State<'_, DbState>, agent_type: String)
         .and_then(|conn| commands::agents::get_agent_inner(&conn, &agent_type).ok()?)
         ;
     Ok(agent::AgentManager::list_skills(&agent_type, config.as_ref()).await)
-}
-
-#[tauri::command]
-async fn agent_detect_installed(state: tauri::State<'_, DbState>) -> Result<Vec<String>, String> {
-    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
-    let agents = commands::agents::list_agents_inner(&conn)
-        .map_err(|e| format!("查询 Agent 列表失败: {}", e))?;
-    Ok(agent::detect_installed_agents(&agents))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -248,6 +239,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
                 .manage(DbState { pool: pool.clone() })
         .manage(AsyncMutex::new(AgentManager::new()))
+        .manage(std::sync::Mutex::new(terminal::console_bridge::ConsoleBridge::new()))
         .manage(AsyncMutex::new(terminal::TerminalManager::new()))
         .manage(Mutex::new(plugin::PluginHost::new()))
         .invoke_handler(tauri::generate_handler![
@@ -262,7 +254,7 @@ pub fn run() {
             commands::update::check_agent_update,
             commands::session::list_sessions,
             commands::virtual_console::list_virtual_console_sessions,
-            list_agent_console_sessions,
+            list_console_sessions,
             commands::session::list_archived_sessions,
             commands::session::create_session,
             commands::session::get_session,
@@ -298,7 +290,6 @@ pub fn run() {
             agent_create_session,
             agent_close_session,
             agent_list_skills,
-            agent_detect_installed,
             plugin::plugin_discover,
             plugin::plugin_list,
             plugin::plugin_enable,
