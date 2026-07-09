@@ -100,6 +100,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
 
   const [showShellMenu, setShowShellMenu] = useState(false);
   const [showThemeMenu, setShowThemeMenu] = useState(false);
+  const [terminalDims, setTerminalDims] = useState<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
 
   // terminal instance map: tabId -> { term, fitAddon }
   const terminalRef = useRef<Map<string, { term: Terminal; fitAddon: FitAddon }>>(new Map());
@@ -152,7 +153,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     let shellType: string;
     let initialData = "";
     try {
-      const result = await invoke<{ session_id: string; shell_type: string; initial_data?: string }>('terminal_create', {
+      const result = await invoke<{ session_id: string; shell_type: string; pid?: number; initial_data?: string }>('terminal_create', {
         shellType: terminalShellType,
         cols: dims.cols,
         rows: dims.rows,
@@ -205,9 +206,11 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
       id: sessionId,
       shellType,
       title: shellType.toUpperCase(),
+      pid: result.pid,
     };
     setTerminalTabs((prev) => [...prev, tab]);
     setActiveTerminalTabId(sessionId);
+    setTerminalDims({ cols: dims.cols, rows: dims.rows });
 
     // 6. Register event listeners (await to ensure they're ready before read loop)
     await setupTerminalListeners(sessionId, term);
@@ -332,6 +335,10 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     const entry = terminalRef.current.get(activeTerminalTabId);
     if (entry) {
       entry.term.focus();
+      const tabDims = entry.fitAddon.proposeDimensions();
+      if (tabDims?.cols && tabDims?.rows) {
+        setTerminalDims({ cols: tabDims.cols, rows: tabDims.rows });
+      }
     }
   }, [activeTerminalTabId]);
 
@@ -406,6 +413,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
           if (conptyKnown && conptyKnown.cols === newDims.cols && conptyKnown.rows === newDims.rows) return;
 
           conptyDimsRef.current.set(activeTerminalTabId, { cols: newDims.cols, rows: newDims.rows });
+          setTerminalDims({ cols: newDims.cols, rows: newDims.rows });
           invoke('terminal_resize', {
             sessionId: activeTerminalTabId,
             cols: newDims.cols,
@@ -628,6 +636,33 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
           )}
         </div>
       </div>
+
+      {/* Status bar */}
+      {activeTab && (
+        <div
+          className="flex items-center h-6 shrink-0 px-3 gap-3"
+          style={{
+            borderTop: '1px solid rgba(255,255,255,0.1)',
+            background: 'rgba(0,0,0,0.2)',
+            color: 'rgba(255,255,255,0.5)',
+            fontSize: '11px',
+            fontFamily: 'Cascadia Code, Consolas, monospace',
+          }}
+        >
+          <span>{activeTab.shellType === 'powershell' ? 'PowerShell' : 'CMD'}</span>
+          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+          <span>{terminalDims.cols} x {terminalDims.rows}</span>
+          {activeTab.pid && (
+            <>
+              <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+              <span>PID {activeTab.pid}</span>
+            </>
+          )}
+          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+          <span>Tab {terminalTabs.findIndex(t => t.id === activeTerminalTabId) + 1}/{terminalTabs.length}</span>
+          <span className="ml-auto">{terminalTheme}</span>
+        </div>
+      )}
     </div>
   );
 };

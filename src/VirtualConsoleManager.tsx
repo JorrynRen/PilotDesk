@@ -6,6 +6,8 @@ interface TerminalTabData {
   id: string;
   shellType: string;
   title: string;
+  pid?: number;
+  cwd?: string;
 }
 
 interface VirtualConsoleContextType {

@@ -30,9 +30,13 @@ pub async fn terminal_create(
     let mut mgr = terminal_mgr.lock().await;
     mgr.create_session(id.clone(), &shell, &cwd_dir, app, cols, rows).await?;
 
+    let sessions = mgr.list_sessions();
+    let pid = sessions.iter().find(|s| s.id == id).map(|s| s.pid).unwrap_or(0);
+
     Ok(serde_json::json!({
         "session_id": id,
         "shell_type": shell,
+        "pid": pid,
     }))
 }
 
