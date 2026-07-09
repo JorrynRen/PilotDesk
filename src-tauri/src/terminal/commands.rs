@@ -30,13 +30,9 @@ pub async fn terminal_create(
     let mut mgr = terminal_mgr.lock().await;
     mgr.create_session(id.clone(), &shell, &cwd_dir, app, cols, rows).await?;
 
-    let sessions = mgr.list_sessions();
-    let pid = sessions.iter().find(|s| s.id == id).map(|s| s.pid).unwrap_or(0);
-
     Ok(serde_json::json!({
         "session_id": id,
         "shell_type": shell,
-        "pid": pid,
     }))
 }
 
@@ -92,4 +88,20 @@ pub async fn terminal_list(
 ) -> Result<Vec<super::TerminalSessionInfo>, String> {
     let mgr = terminal_mgr.lock().await;
     Ok(mgr.list_sessions())
+}
+
+/// Get console configuration info for status bar
+#[tauri::command]
+pub async fn terminal_get_config() -> Result<serde_json::Value, String> {
+    let config = crate::virtual_console::config::ConsoleConfig::default();
+    let console_type = crate::virtual_console::config::detect_os_type();
+    Ok(serde_json::json!({
+        "console_type": console_type,
+        "buffer_size": config.buffer_size,
+        "timeout_ms": config.timeout_ms,
+        "event_driven": config.event_driven,
+        "output_encoding": config.output_encoding,
+        "merge_output": config.merge_output,
+        "max_lines": config.max_lines,
+    }))
 }

@@ -101,6 +101,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
   const [showShellMenu, setShowShellMenu] = useState(false);
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [terminalDims, setTerminalDims] = useState<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
+  const [consoleConfig, setConsoleConfig] = useState<{ consoleType: string; bufferSize: number; maxLines: number | null } | null>(null);
 
   // terminal instance map: tabId -> { term, fitAddon }
   const terminalRef = useRef<Map<string, { term: Terminal; fitAddon: FitAddon }>>(new Map());
@@ -153,7 +154,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     let shellType: string;
     let initialData = "";
     try {
-      const result = await invoke<{ session_id: string; shell_type: string; pid?: number; initial_data?: string }>('terminal_create', {
+      const result = await invoke<{ session_id: string; shell_type: string; initial_data?: string }>('terminal_create', {
         shellType: terminalShellType,
         cols: dims.cols,
         rows: dims.rows,
@@ -206,7 +207,6 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
       id: sessionId,
       shellType,
       title: shellType.toUpperCase(),
-      pid: result.pid,
     };
     setTerminalTabs((prev) => [...prev, tab]);
     setActiveTerminalTabId(sessionId);
@@ -246,6 +246,13 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
   const setupTerminalListeners = useCallback((tabId: string, term: Terminal): Promise<void> => {
     const unlistens: UnlistenFn[] = [];
 
+    // Listen for terminal://created to capture pid
+    const p_created = listen<{ session_id: string; pid: number }>('terminal://created', (event) => {
+      if (event.payload.session_id === tabId) {
+        setTerminalTabs(prev => prev.map(t => t.id === tabId ? { ...t, pid: event.payload.pid } : t));
+      }
+    }).then(fn => unlistens.push(fn));
+
     const p1 = listen<string>(`terminal://output/${tabId}`, (event) => {
       // Mark banner received so debounce resize can proceed
       if (!firstDataReceivedRef.current.has(tabId)) {
@@ -272,7 +279,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     });
 
     unlistenRefs.current.set(tabId, unlistens);
-    return Promise.all([p1, p2]).then(() => {});
+    return Promise.all([p_created, p1, p2]).then(() => {});
   }, []);
 
   // ── Close terminal tab ──
@@ -434,6 +441,17 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
       }
     };
   }, [activeTerminalTabId, createTerminal]);
+
+  // ── Load console config ──
+  useEffect(() => {
+    invoke<Record<string, unknown>>('terminal_get_config').then((cfg) => {
+      setConsoleConfig({
+        consoleType: cfg.console_type as string,
+        bufferSize: cfg.buffer_size as number,
+        maxLines: cfg.max_lines as number | null,
+      });
+    }).catch(() => {});
+  }, []);
 
   // ── Keyboard shortcut: Ctrl+Shift+T ──
 
@@ -660,6 +678,16 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
           )}
           <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
           <span>Tab {terminalTabs.findIndex(t => t.id === activeTerminalTabId) + 1}/{terminalTabs.length}</span>
+          {consoleConfig && (
+            <>
+              <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+              <span>{consoleConfig.consoleType}</span>
+              <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+              <span title="Buffer">{(consoleConfig.bufferSize / 1024).toFixed(0)}KB</span>
+              <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+              <span title="Scrollback">{consoleConfig.maxLines ?? '-'} lines</span>
+            </>
+          )}
           <span className="ml-auto">{terminalTheme}</span>
         </div>
       )}

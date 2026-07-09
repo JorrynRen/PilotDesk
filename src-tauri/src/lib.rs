@@ -371,6 +371,7 @@ pub fn run() {
             terminal::commands::terminal_resize,
             terminal::commands::terminal_list,
             terminal::commands::terminal_attach,
+            terminal::commands::terminal_get_config,
             utils::market::fetch_agents_config,
         ])
         .setup(move |app| {
