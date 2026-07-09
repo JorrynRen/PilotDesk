@@ -181,13 +181,19 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   }, [currentSessionId, addMessage]);
 
   // ── Agent session ID handler: save agent-side session ID to database ──
-  const onSession = useCallback((sessionId: string, agentSessionId: string) => {
-    // Persist agent_session_id to database
-    invoke('update_session_agent_id', { sessionId, agentSessionId }).catch((err) => {
+  const onSession = useCallback(async (sessionId: string, agentSessionId: string) => {
+    // Persist agent_session_id to database first
+    try {
+      await invoke('update_session_agent_id', { sessionId, agentSessionId });
+      // 局部更新：仅修改目标 session 的 agentSessionId，不触发全量刷新
+      useSessionStore.setState((state) => ({
+        sessions: state.sessions.map((s) =>
+          s.id === sessionId ? { ...s, agentSessionId } : s
+        ),
+      }));
+    } catch (err) {
       console.error('[Session] Failed to save agent session ID:', err);
-    });
-    // Also update local state
-    useSessionStore.getState().fetchSessions();
+    }
   }, []);
 
   const {

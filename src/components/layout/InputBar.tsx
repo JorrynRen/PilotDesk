@@ -6,7 +6,6 @@ import { InspirationPicker } from '../input/InspirationPicker';
 import { SkillPicker } from '../input/SkillPicker';
 import { showToast } from '../../utils/toast';
 import { AGENT_THEMES } from '../../types';
-import { getAgentLabel } from '../../utils/sessionType';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
 
@@ -121,7 +120,8 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
   }, [input, mode, session, onSend]);
 
   // Placeholder based on context
-  const agentLabel = session ? getAgentLabel(session.agentType) : '';
+  const { getDisplayName } = useAgentRegistry();
+  const agentLabel = session ? getDisplayName(session.agentType) : '';
   const placeholder = !session
     ? '选择会话开始对话...'
     : `向 ${agentLabel} 发送消息... (Ctrl+I 灵感, Ctrl+K 技能)`;

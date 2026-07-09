@@ -12,25 +12,3 @@ export function isApiSession(agentType: string): boolean {
 export function isAgentSession(agentType: string): boolean {
   return agentType !== 'api';
 }
-
-/** Get the CSS variable for an agent type's theme color */
-export function agentTypeToCssVar(agentType: string): string {
-  const map: Record<string, string> = {
-    claude: 'var(--claude-tag)',
-    hermes: 'var(--hermes-tag)',
-    codex: 'var(--codex-tag)',
-    api: 'var(--api-tag)',
-  };
-  return map[agentType] || 'var(--text-tertiary)';
-}
-
-/** Get a human-readable label for an agent type */
-export function getAgentLabel(agentType: string): string {
-  const map: Record<string, string> = {
-    claude: 'Claude Code',
-    hermes: 'Hermes Agent',
-    codex: 'codeX',
-    api: 'API 模型',
-  };
-  return map[agentType] || agentType;
-}

@@ -1,8 +1,6 @@
 //! Windows 平台虚拟控制台实现
 //!
 //! 基于 std::process::Command + piped stdio 的真实终端实现。
-//! 供 commands/virtual_console（虚拟控制台 UI）和 plugin/shell 使用。
-//! Agent 模块已与虚拟工作台解耦，直接使用 tokio::process::Command。
 
 use super::traits::*;
 use std::io::{self, Read, Write as StdWrite};

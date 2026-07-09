@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
 import { InstallLog } from './InstallLog';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
+import type { EnvInfo } from '../../types';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { SettingsSection, SettingsCard, SettingsButton, SettingsStatusIcon } from '../settings';
 
@@ -20,6 +21,7 @@ interface DependencyStatus {
   latestReleaseTime: string | null;
   hasUpdate: boolean;
   updateChecking: boolean;
+  detecting: boolean;
 }
 
 interface EnvManagerProps {
@@ -29,7 +31,7 @@ interface EnvManagerProps {
 export type { EnvManagerProps };
 
 export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
-  const { envInfo, loading: envLoading, refresh: fetchEnv } = useEnvInfo();
+  const { envInfo, loading: envLoading, agentStatus, refresh: fetchEnv } = useEnvInfo();
   const { agents, loading: agentsLoading, fetchAgents } = useAgentRegistry();
   const [installing, setInstalling] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ key: string; action: 'update' | 'uninstall' | 'reinstall' | 'install' } | null>(null);
@@ -82,39 +84,49 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
     return () => { unlisten.then((fn) => fn()); };
   }, [addLog]);
 
-  // Track last snapshot to prevent duplicate checks from re-renders
-  // Auto-detect once per mount when envInfo and agents are both ready
-  // (covers: initial load, tab switch)
-  const autoDetected = useRef(false);
-
-  useEffect(() => {
-    if (!envLoading && !agentsLoading && envInfo?.agentVersions && agents.length > 0 && !autoDetected.current) {
-      autoDetected.current = true;
-      for (const agent of agents) {
-        if (agent.isEnabled && envInfo.agentVersions[agent.agentType]) {
-          checkAgentUpdate(agent.agentType);
-        }
-      }
-    }
-  }, [envLoading, agentsLoading, envInfo, agents, checkAgentUpdate]);
+  // Latest version detection is now handled in Phase 2 of detect_env
+  // (auto-detected via envInfo.agentLatestVersions)
 
   const fetchEnvWithLog = useCallback(async () => {
-    const info = await fetchEnv();
-    if (info) {
-      addLog(`Node.js: ${info.nodeVersion || '未安装'}`, info.nodeVersion ? 'success' : 'warn');
-      addLog(`Git: ${info.gitVersion || '未安装'}`, info.gitVersion ? 'success' : 'warn');
-      addLog(`Python: ${info.pythonVersion || '未安装'}`, info.pythonVersion ? 'success' : 'warn');
-    }
-    addLog('环境检测完成', 'success');
-    // 手动刷新后直接触发版本检测（autoDetected 守卫阻止 useEffect 重复执行）
-    if (info?.agentVersions) {
-      for (const agent of agents) {
-        if (agent.isEnabled && info.agentVersions[agent.agentType]) {
-          checkAgentUpdate(agent.agentType);
-        }
+    // Force fresh detection by clearing cache
+    await invoke('clear_env_detect_cache').catch(() => {});
+
+    // Track which base tools have been logged (env-base-tools emits 3 times, only log actual detections)
+    const loggedTools = new Set<string>();
+    const unlistenBase = await listen<Record<string, string | null>>('env-base-tools', (event) => {
+      const data = event.payload;
+      if (data.nodeVersion && !loggedTools.has('node')) {
+        loggedTools.add('node');
+        addLog(`Node.js: ${data.nodeVersion}`, 'success');
       }
+      if (data.gitVersion && !loggedTools.has('git')) {
+        loggedTools.add('git');
+        addLog(`Git: ${data.gitVersion}`, 'success');
+      }
+      if (data.pythonVersion && !loggedTools.has('python')) {
+        loggedTools.add('python');
+        addLog(`Python: ${data.pythonVersion}`, 'success');
+      }
+    });
+
+    const unlistenAgent = await listen<{ agentType: string; version: string | null }>('env-agent-version', (event) => {
+      const { agentType, version } = event.payload;
+      const agent = agents.find(a => a.agentType === agentType);
+      const name = agent?.displayName || agentType;
+      addLog(`${name}: ${version || '未安装'}`, version ? 'success' : 'warn');
+    });
+
+    let info: EnvInfo | null = null;
+    try {
+      info = await fetchEnv();
+    } finally {
+      // Clean up temporary listeners (even if fetchEnv fails)
+      unlistenBase();
+      unlistenAgent();
     }
-  }, [fetchEnv, addLog, agents, checkAgentUpdate]);
+
+    addLog('环境检测完成', 'success');
+  }, [fetchEnv, addLog, agents]);
 
   /** Simple semver older check */
   const isOlder = (current: string, latest: string) => {
@@ -141,6 +153,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       latestReleaseTime: null,
       hasUpdate: false,
       updateChecking: false,
+      detecting: envLoading && !envInfo?.nodeVersion,
     },
     {
       name: 'Git',
@@ -151,6 +164,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       latestReleaseTime: null,
       hasUpdate: false,
       updateChecking: false,
+      detecting: envLoading && !envInfo?.gitVersion,
     },
     {
       name: 'Python',
@@ -161,10 +175,14 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       latestReleaseTime: null,
       hasUpdate: false,
       updateChecking: false,
+      detecting: envLoading && !envInfo?.pythonVersion,
     },
     // Dynamic agents from DB
     ...agents.filter(a => a.isEnabled).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)).map((agent) => {
       const version = envInfo?.agentVersions?.[agent.agentType] ?? null;
+      const latestVer = envInfo?.agentLatestVersions?.[agent.agentType] ?? latestVersions[agent.agentType]?.version ?? null;
+      const latestRelease = latestVersions[agent.agentType]?.releaseTime ?? null;
+      const updateCheck = updateChecking[agent.agentType] ?? false;
       return {
         name: agent.displayName,
         key: agent.agentType,
@@ -172,12 +190,11 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
         installed: !!version,
         action: version ? 'update' as const : 'install' as const,
         installing: installing === agent.agentType,
-        latestVersion: latestVersions[agent.agentType]?.version ?? null,
-        latestReleaseTime: latestVersions[agent.agentType]?.releaseTime ?? null,
-        hasUpdate: version && latestVersions[agent.agentType]
-          ? isOlder(version, latestVersions[agent.agentType]!.version)
-          : false,
-        updateChecking: updateChecking[agent.agentType] ?? false,
+        latestVersion: latestVer,
+        latestReleaseTime: latestRelease,
+        hasUpdate: !!version && !!latestVer && isOlder(version, latestVer),
+        updateChecking: updateCheck,
+        detecting: envLoading && agentStatus[agent.agentType] === undefined,
       };
     }),
   ];
@@ -234,9 +251,10 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                 <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
                   {dep.name}
                 </span>
+                {dep.detecting && <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
               </div>
               <span className="text-[10px]" style={{ color: dep.installed ? 'var(--text-secondary)' : '#EF4444' }}>
-                {dep.version ?? '未安装'}
+                {dep.detecting ? '检查中' : (dep.version ?? '未安装')}
               </span>
             </SettingsCard>
           ))}
@@ -255,13 +273,14 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                     <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
                       {dep.name}
                     </span>
+                    {dep.detecting && <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
                     {dep.hasUpdate && (
                       <ArrowUpCircle size={13} style={{ color: '#F59E0B' }} />
                     )}
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                      {dep.installed ? `v${dep.version}` : '未安装'}
+                      {dep.detecting ? '检查中' : (dep.installed ? `v${dep.version}` : '未安装')}
                     </span>
                     {dep.updateChecking && (
                       <Loader2 size={10} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />

@@ -66,6 +66,8 @@ pub struct EnvInfo {
     pub git_version: Option<String>,
     pub python_version: Option<String>,
     pub agent_versions: std::collections::HashMap<String, Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_latest_versions: Option<std::collections::HashMap<String, Option<String>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

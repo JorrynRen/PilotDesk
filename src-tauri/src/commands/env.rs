@@ -15,61 +15,6 @@ macro_rules! log_env {
 //  工具函数
 // ──────────────────────────────────────────────
 
-/// Run a command and capture stdout, with timeout.
-/// For .cmd/.bat scripts on Windows, wraps in `cmd /C`.
-/// 异步执行命令并捕获 stdout（带超时）
-/// 对 Windows .cmd/.bat 脚本自动使用 cmd /C 包装
-async fn run_cmd_async(cmd: &str, arg: &str, use_cmd_wrapper: bool) -> Option<String> {
-    let result = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        let mut command = if use_cmd_wrapper {
-            let mut c = tokio::process::Command::new("cmd");
-            c.args(["/C", cmd, arg]);
-            c
-        } else {
-            let mut c = tokio::process::Command::new(cmd);
-            c.arg(arg);
-            c
-        };
-
-        command
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output().await
-    }).await;
-
-    let output = match result {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => {
-            log_env!("[env] Spawn failed for {}: {}", cmd, e);
-            return None;
-        }
-        Err(_) => {
-            log_env!("[env] Timeout (15s) for: {} {}", cmd, arg);
-            return None;
-        }
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    let output_text = if stdout.trim().is_empty() && !stderr.trim().is_empty() {
-        stderr
-    } else {
-        stdout
-    };
-
-    let first_line = output_text.lines().next()?;
-    if output.status.success() {
-        Some(first_line.trim().to_string())
-    } else {
-        None
-    }
-}
-
-/// 异步探测工具版本：统一通过 cmd /C 执行，由 cmd.exe 自行解析 PATH
-async fn probe_tool_version_async(name: &str, version_flag: &str) -> Option<String> {
-    run_cmd_async(name, version_flag, true).await
-}
 
 /// Clean version string: keep only the semver part
 fn clean_version_string(raw: &str) -> String {
@@ -104,50 +49,136 @@ fn clean_version_string(raw: &str) -> String {
 static LAST_DETECT: std::sync::RwLock<Option<(Instant, EnvInfo)>> = std::sync::RwLock::new(None);
 const CACHE_TTL: Duration = Duration::from_secs(120);
 
-/// 通过 AgentManager 统一虚拟控制台执行环境检测（Agent 版本查询）
-async fn detect_env_with_console(state: &crate::DbState, agent_mgr: &crate::agent::AgentManager) -> Result<EnvInfo, AppError> {
-    log_env!("[env] Detecting environment via console...");
+/// 通过 AgentManager 异步路径执行环境检测
+async fn detect_env_with_console(
+    app: &tauri::AppHandle,
+    state: &crate::DbState,
+    agent_mgr: &crate::agent::AgentManager,
+) -> Result<EnvInfo, AppError> {
+    log_env!("[env] Detecting environment via async path...");
 
-    let node_version = probe_tool_version_async("node", "--version").await;
-    let git_version = probe_tool_version_async("git", "--version").await;
-    let mut python_version = probe_tool_version_async("python", "--version").await;
-    if python_version.is_none() {
-        python_version = probe_tool_version_async("python3", "--version").await;
-    }
-    if python_version.is_none() {
-        python_version = probe_tool_version_async("py", "--version").await;
-    }
+    // ── Phase 1: 基础工具（tokio::join! 真正并行） ──
+    let (node_result, git_result, py_result) = tokio::join!(
+        agent_mgr.execute_command_output_async("node --version", "", 15, "node 版本查询"),
+        agent_mgr.execute_command_output_async("git --version", "", 15, "git 版本查询"),
+        async {
+            // python fallback: python → python3 → py
+            if let Ok(v) = agent_mgr.execute_command_output_async("python --version", "", 15, "python 版本查询").await {
+                return Ok(v);
+            }
+            if let Ok(v) = agent_mgr.execute_command_output_async("python3 --version", "", 15, "python3 版本查询").await {
+                return Ok(v);
+            }
+            if let Ok(v) = agent_mgr.execute_command_output_async("py --version", "", 15, "py 版本查询").await {
+                return Ok(v);
+            }
+            Err("未找到 Python".to_string())
+        },
+    );
 
+    let node_version = node_result.ok().map(|v| clean_version_string(&v));
+    let git_version = git_result.ok().map(|v| clean_version_string(&v));
+    let python_version = py_result.ok().map(|v| clean_version_string(&v));
+
+    // emit 基础工具检测结果
+    let _ = app.emit("env-base-tools", serde_json::json!({
+        "nodeVersion": node_version,
+        "gitVersion": git_version,
+        "pythonVersion": python_version,
+    }));
+
+    // Agent 版本查询（futures::join_all 并行）
     let conn = state.get_conn()?;
     let db_agents = agents::list_agents_inner(&conn).unwrap_or_default();
 
-    let mut agent_versions = std::collections::HashMap::new();
-
+    let mut agent_futures = Vec::new();
     for agent in &db_agents {
         if !agent.is_enabled || agent.version_cmd.is_empty() {
             continue;
         }
+        let cmd = agent.version_cmd.clone();
         let label = format!("{} 版本查询", agent.agent_type);
-        let version = agent_mgr.execute_command_output(
-            &agent.version_cmd, "", 15,
-            &label,
-        ).await.ok().map(|v| clean_version_string(&v));
-        agent_versions.insert(agent.agent_type.clone(), version);
+        let agent_type = agent.agent_type.clone();
+        agent_futures.push(async move {
+            let version = agent_mgr.execute_command_output_async(
+                &cmd, "", 15, &label,
+            ).await.ok().map(|v| clean_version_string(&v));
+            (agent_type, version)
+        });
+    }
+
+    let agent_results = futures::future::join_all(agent_futures).await;
+
+    let mut agent_versions = std::collections::HashMap::new();
+    for (agent_type, version) in agent_results {
+        let _ = app.emit("env-agent-version", serde_json::json!({
+            "agentType": agent_type,
+            "version": version,
+        }));
+        agent_versions.insert(agent_type, version);
     }
 
     log_env!("[env] node={:?} git={:?} python={:?} agents={:?}",
         node_version, git_version, python_version, agent_versions);
 
-    Ok(EnvInfo {
+    let result = EnvInfo {
         node_version,
         git_version,
         python_version,
         agent_versions,
-    })
+        agent_latest_versions: None,
+    };
+
+    // ── Phase 2: 更新检查（fire-and-forget 后台任务） ──
+    let app_clone = app.clone();
+    let state_clone: crate::DbState = crate::DbState { pool: state.pool.clone() };
+    let mgr = std::sync::Arc::new(agent_mgr.shared());
+
+    tokio::spawn(async move {
+        let conn = match state_clone.get_conn() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[env/Phase2] get conn failed: {:?}", e);
+                return;
+            }
+        };
+        let db_agents = agents::list_agents_inner(&conn).unwrap_or_default();
+
+        // Phase 2 并行查询所有 Agent 最新版本
+        // 构建 async future 列表（避免 map 闭包 move mgr）
+        let mut latest_futures = Vec::new();
+        for agent in &db_agents {
+            if !agent.is_enabled || agent.latest_version_cmd.is_empty() {
+                continue;
+            }
+            let cmd = agent.latest_version_cmd.clone();
+            let label = format!("{} 最新版本查询", agent.agent_type);
+            let agent_type = agent.agent_type.clone();
+            let mgr_clone = mgr.clone();
+            latest_futures.push(async move {
+                let version = mgr_clone.execute_command_output_async(
+                    &cmd, "", 120, &label,
+                ).await.ok().map(|v| clean_version_string(&v));
+                (agent_type, version)
+            });
+        }
+
+        let latest_results = futures::future::join_all(latest_futures).await;
+        for (agent_type, version) in latest_results {
+            let _ = app_clone.emit("env-agent-latest-version", serde_json::json!({
+                "agentType": agent_type,
+                "version": version,
+            }));
+            log_env!("[env/Phase2] {} latest={:?}", agent_type, version);
+        }
+    });
+
+    Ok(result)
 }
 
 #[tauri::command]
 pub async fn detect_env(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::DbState>,
     agent_mgr: tauri::State<'_, crate::AsyncMutex<crate::agent::AgentManager>>,
 ) -> Result<EnvInfo, AppError> {
@@ -186,7 +217,7 @@ pub async fn detect_env(
 
     let state_ref: crate::DbState = crate::DbState { pool: state.pool.clone() };
     let mgr = agent_mgr.lock().await;
-    let result = detect_env_with_console(&state_ref, &mgr).await;
+    let result = detect_env_with_console(&app, &state_ref, &mgr).await;
 
     DETECTING.store(false, std::sync::atomic::Ordering::Release);
 
@@ -239,7 +270,7 @@ pub async fn install_agent(
     }));
 
     let mgr = agent_mgr.lock().await;
-    mgr.execute_command_output(&cmd, "", 300, &format!("安装 {}", agent_type))
+    mgr.execute_command_output_async(&cmd, "", 300, &format!("安装 {}", agent_type))
         .await
         .map_err(|e| AppError::External(format!("安装 {} 失败: {}", agent_type, e)))?;
 
@@ -277,7 +308,7 @@ pub async fn uninstall_agent(
     }));
 
     let mgr = agent_mgr.lock().await;
-    mgr.execute_command_output(&cmd, "", 300, &format!("卸载 {}", agent_type))
+    mgr.execute_command_output_async(&cmd, "", 300, &format!("卸载 {}", agent_type))
         .await
         .map_err(|e| AppError::External(format!("卸载 {} 失败: {}", agent_type, e)))?;
 

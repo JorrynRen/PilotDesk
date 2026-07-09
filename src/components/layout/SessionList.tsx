@@ -330,6 +330,27 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     }
   };
 
+  const handleListClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    const row = target.closest<HTMLElement>('[data-session-id]');
+    if (!row) return;
+    const sessionId = row.dataset.sessionId!;
+    const action = target.closest<HTMLElement>('[data-action]')?.dataset.action;
+
+    switch (action) {
+      case 'archive':
+        handleArchive(sessionId);
+        break;
+      case 'delete':
+        handleDelete(sessionId);
+        break;
+      default:
+        // 点击行本身 = 选中会话
+        if (!batchMode) selectSession(sessionId);
+        else toggleBatchSelect(sessionId);
+    }
+  }, [batchMode, selectSession, toggleBatchSelect, handleArchive, handleDelete]);
+
   const renderGroup = (label: string, items: typeof sessions) => {
     if (items.length === 0) return null;
     return (
@@ -342,10 +363,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             key={session.id}
             session={session}
             isActive={session.id === currentSessionId}
-            onSelect={() => selectSession(session.id)}
-            onArchive={showArchived ? undefined : () => handleArchive(session.id)}
             onRename={handleRename}
-            onDelete={() => handleDelete(session.id)}
             batchMode={batchMode}
             selected={selectedIds.has(session.id)}
             onToggleSelect={toggleBatchSelect}
@@ -467,7 +485,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
         </div>
       ) : (
         /* Session list */
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto" onClick={handleListClick}>
           {filteredList.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full gap-2 px-4">
               <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>

@@ -87,7 +87,6 @@ impl ConsoleFactory {
     }
 
     /// 创建异步控制台（基于 tokio::process::Command）
-    /// 供 Agent 会话使用
     pub async fn create_async() -> io::Result<Box<dyn AsyncConsole>> {
         Ok(Box::new(TokioConsole::new()))
     }
@@ -132,14 +131,17 @@ impl AsyncConsole for TokioConsole {
 
         if let Some(stdout) = stdout {
             tokio::spawn(async move {
-                use tokio::io::AsyncReadExt;
+                use tokio::io::AsyncBufReadExt;
                 let mut reader = tokio::io::BufReader::new(stdout);
-                let mut buf = [0u8; 8192];
+                let mut line = String::new();
                 loop {
-                    match reader.read(&mut buf).await {
+                    match reader.read_line(&mut line).await {
                         Ok(0) => break,
-                        Ok(n) => {
-                            let _ = tx_out.send(String::from_utf8_lossy(&buf[..n]).to_string()).await;
+                        Ok(_) => {
+                            if !line.is_empty() {
+                                let _ = tx_out.send(line.clone()).await;
+                                line.clear();
+                            }
                         }
                         Err(_) => break,
                     }
@@ -149,14 +151,17 @@ impl AsyncConsole for TokioConsole {
 
         if let Some(stderr) = stderr {
             tokio::spawn(async move {
-                use tokio::io::AsyncReadExt;
+                use tokio::io::AsyncBufReadExt;
                 let mut reader = tokio::io::BufReader::new(stderr);
-                let mut buf = [0u8; 8192];
+                let mut line = String::new();
                 loop {
-                    match reader.read(&mut buf).await {
+                    match reader.read_line(&mut line).await {
                         Ok(0) => break,
-                        Ok(n) => {
-                            let _ = tx_err.send(String::from_utf8_lossy(&buf[..n]).to_string()).await;
+                        Ok(_) => {
+                            if !line.is_empty() {
+                                let _ = tx_err.send(line.clone()).await;
+                                line.clear();
+                            }
                         }
                         Err(_) => break,
                     }

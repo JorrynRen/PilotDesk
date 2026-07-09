@@ -157,11 +157,5 @@ function getBuiltinTheme(agentType: string): AgentTheme {
 }
 
 function getBuiltinLabel(agentType: string): string {
-  const map: Record<string, string> = {
-    claude: 'Claude Code',
-    hermes: 'Hermes Agent',
-    codex: 'codeX',
-    api: 'API 直连',
-  };
-  return map[agentType] || agentType;
+  return BUILTIN_THEMES[agentType]?.label || agentType;
 }

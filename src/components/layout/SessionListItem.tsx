@@ -9,10 +9,7 @@ import type { Session } from '../../types';
 interface SessionListItemProps {
   session: Session;
   isActive: boolean;
-  onSelect: () => void;
-  onArchive?: () => void;
   onRename?: (id: string, newTitle: string) => void;
-  onDelete?: () => void;
   batchMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
@@ -37,10 +34,7 @@ function formatTime(timestamp: number): string {
 export const SessionListItem = memo(function SessionListItem({
   session,
   isActive,
-  onSelect,
-  onArchive,
   onRename,
-  onDelete,
   batchMode,
   selected,
   onToggleSelect,
@@ -94,7 +88,8 @@ export const SessionListItem = memo(function SessionListItem({
         backgroundColor: selected ? 'var(--accent-light)' : isActive ? 'var(--border)' : 'transparent',
         borderBottom: '1px solid var(--border)',
       }}
-      onClick={isEditing ? undefined : batchMode ? () => onToggleSelect?.(session.id) : onSelect}
+      data-session-id={session.id}
+      onClick={isEditing ? undefined : batchMode ? (e) => { e.stopPropagation(); onToggleSelect?.(session.id); } : undefined}
     >
       <div className="flex items-start gap-2">
         {batchMode && (
@@ -175,7 +170,7 @@ export const SessionListItem = memo(function SessionListItem({
             </>
           )}
         </div>
-        {(onArchive || onRename || onDelete) && !isEditing && (
+        {!isEditing && (
           <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
             {onRename && (
               <button
@@ -187,26 +182,22 @@ export const SessionListItem = memo(function SessionListItem({
                 <Pencil size={11} />
               </button>
             )}
-            {onArchive && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onArchive(); }}
-                className="p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
-                style={{ color: 'var(--text-secondary)' }}
-                title="归档"
-              >
-                <Archive size={11} />
-              </button>
-            )}
-            {onDelete && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onDelete(); }}
-                className="p-0.5 rounded transition-all hover:bg-red-500/20 active:scale-90"
-                style={{ color: '#EF4444' }}
-                title="删除"
-              >
-                <Trash2 size={11} />
-              </button>
-            )}
+            <button
+              data-action="archive"
+              className="p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
+              style={{ color: 'var(--text-secondary)' }}
+              title="归档"
+            >
+              <Archive size={11} />
+            </button>
+            <button
+              data-action="delete"
+              className="p-0.5 rounded transition-all hover:bg-red-500/20 active:scale-90"
+              style={{ color: '#EF4444' }}
+              title="删除"
+            >
+              <Trash2 size={11} />
+            </button>
           </div>
         )}
       </div>

@@ -100,7 +100,7 @@ pub struct AsyncCallbacks {
     /// 收到 Agent 输出片段时调用（用于 Event 推送到前端）
     pub on_chunk: Box<dyn Fn(String) + Send>,
     /// 提取到 Agent 会话 ID 时调用（用于 Event 推送到前端）
-    pub on_session_id: Box<dyn Fn(String) + Send>,
+    pub on_session_id: std::sync::Arc<dyn Fn(String) + Send + Sync>,
     /// 检查是否应取消执行（abort_check）
     pub abort_check: Box<dyn Fn() -> bool + Send>,
     /// 进程 spawn 成功后调用（携带 PID，用于注册到进程管理表）
@@ -125,6 +125,14 @@ impl AgentManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// 创建共享实例（用于 fire-and-forget 后台任务）
+    /// 克隆进程追踪表的 Arc，使后台任务持有独立实例但共享进程表
+    pub fn shared(&self) -> Self {
+        Self {
+            processes: Arc::clone(&self.processes),
         }
     }
 
@@ -156,7 +164,7 @@ impl AgentManager {
     ///
     /// # 异步路径
     /// - 创建异步虚拟控制台 → ProcessHandler.build_command → spawn → 双通道 IO 循环
-    /// - session_id 由 ProcessHandler.extract_session_id 从 stdout/stderr 提取
+    /// - session_id 由 ProcessHandler.extract_session_id 根据 session_id_source 自动提取
     /// - cwd 会话前先 CD 到指定目录
     pub async fn execute_command(
         &self,
@@ -321,6 +329,7 @@ impl AgentManager {
 
         let process_handler = handler::StdioHandler::from_config(config.clone());
 
+
         // 构建命令
         let (effective_cmd, args) = process_handler.build_command(message, agent_session_id);
 
@@ -360,32 +369,8 @@ impl AgentManager {
 
         // stderr 缓冲区（共享）
         let stderr_buf = Arc::new(Mutex::new(String::new()));
-        let stderr_buf_clone = stderr_buf.clone();
         let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let stderr_lines_clone = stderr_lines.clone();
-        let agent_type_clone = agent_type.clone();
 
-        // 后台读取 stderr
-        let stderr_handle = tokio::spawn(async move {
-            loop {
-                let line_opt = stderr_rx.recv().await;
-                let line = match line_opt {
-                    Some(l) => l,
-                    None => break,
-                };
-if let Ok(mut buf) = stderr_buf_clone.lock() {
-                    buf.push_str(&line);
-                }
-                if let Ok(mut lines) = stderr_lines_clone.lock() {
-                    lines.push(line);
-                }
-            }
-            if let Ok(buf) = stderr_buf_clone.lock() {
-                if !buf.is_empty() {
-                    log::warn!("[Agent/{}] stderr: {}", agent_type_clone, buf.trim());
-                }
-            }
-        });
 
         // 主线程读取 stdout + 智能超时轮询
         let mut full_output = String::new();
@@ -440,18 +425,38 @@ if let Ok(mut buf) = stderr_buf_clone.lock() {
                 }
             }
 
-            // 带超时的 stdout recv
+            // 检查 stdout/stderr channel 是否都已关闭（进程退出后管道 EOF 会关闭 channel）
+            // 使用 is_closed() 检测，不消耗数据，避免 Empty 误判
+            let stdout_closed = stdout_rx.is_closed();
+            let stderr_closed = stderr_rx.is_closed();
+            if stdout_closed && stderr_closed {
+                log::info!("[Agent/execute_async] both channels closed, breaking loop");
+                break;
+            }
+
+            // 根据 session_id_source 决定从哪个流提取 session_id
+            let sid_from_stdout = config.session_id_source.starts_with("stdout-");
+            let sid_from_stderr = config.session_id_source.starts_with("stderr-");
+
+            // 超时计算
             let recv_timeout = if elapsed >= timeout.max_wait.saturating_sub(timeout.check_interval) {
                 timeout.max_wait.saturating_sub(elapsed)
             } else {
                 timeout.check_interval
             };
 
-            match tokio::time::timeout(Duration::from_secs_f64(recv_timeout.as_secs_f64()), stdout_rx.recv()).await {
-                Ok(Some(line)) => {
-                    // 提取 session_id
-                    if let Some(ref sid) = process_handler.extract_session_id(&line, false) {
-                        (callbacks.on_session_id)(sid.clone());
+            // 使用 biased select! 确保 stdout/stderr 优先于超时
+            // sleep 作为超时兜底，确保循环不会无限挂起
+            tokio::select! {
+                biased;
+
+                // stdout 分支
+                Some(line) = stdout_rx.recv() => {
+                    // 仅当 session_id 来源为 stdout 时提取
+                    if sid_from_stdout {
+                        if let Some(ref sid) = process_handler.extract_session_id(&line) {
+                            (callbacks.on_session_id)(sid.clone());
+                        }
                     }
                     // 解析输出行
                     if let Some(content) = process_handler.parse_output_line(&line) {
@@ -459,21 +464,34 @@ if let Ok(mut buf) = stderr_buf_clone.lock() {
                         full_output.push_str(&content);
                     }
                 }
-                Ok(None) => {
-                    // stdout channel 关闭 → stdout 读完
-                    log::info!("[Agent/execute_async] stdout channel closed");
-                    break;
+                // stderr 分支
+                Some(line) = stderr_rx.recv() => {
+                    // 仅当 session_id 来源为 stderr 时提取
+                    if sid_from_stderr {
+                        if let Some(ref sid) = process_handler.extract_session_id(&line) {
+                            (callbacks.on_session_id)(sid.clone());
+                        }
+                    }
+                    // stderr 缓冲
+                    if let Ok(mut buf) = stderr_buf.lock() {
+                        buf.push_str(&line);
+                    }
+                    if let Ok(mut lines) = stderr_lines.lock() {
+                        lines.push(line);
+                    }
                 }
-                Err(_) => {
-                    // recv 超时 → 回到循环顶部继续轮询
-                    continue;
+                // 超时分支
+                _ = tokio::time::sleep(Duration::from_secs_f64(recv_timeout.as_secs_f64())) => {
+                    // 超时 → 回到循环顶部继续轮询
                 }
             }
         }
 
-        // 等待 stderr 后台任务
-        if let Err(e) = stderr_handle.await {
-            log::warn!("[Agent/execute_async] stderr task join error: {:?}", e);
+        // stderr 日志汇总
+        if let Ok(buf) = stderr_buf.lock() {
+            if !buf.is_empty() {
+                log::warn!("[Agent/{}] stderr: {}", agent_type, buf.trim());
+            }
         }
 
         log::info!("[Agent/execute_async] read loop ended, output_len={}", full_output.len());
@@ -526,6 +544,72 @@ if let Ok(mut buf) = stderr_buf_clone.lock() {
         }
     }
 
+    /// 异步便捷方法：执行命令并返回 stdout（纯 tokio::process，不经过虚拟控制台）
+    ///
+    /// 用于环境检测、版本查询等短命令场景。
+    /// 比 execute_sync 更轻量：无 ConPTY 开销、无 spawn_blocking 线程开销。
+    /// 与 execute_async 同路径：tokio 原生异步 I/O。
+    pub async fn execute_command_output_async(
+        &self,
+        command: &str,
+        cwd: &str,
+        timeout_secs: u64,
+        label: &str,
+    ) -> Result<String, String> {
+        let work_dir = if cwd.is_empty() {
+            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+        } else {
+            cwd.to_string()
+        };
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis()).unwrap_or(0);
+        let session_id = format!("async_cmd_{}_{}", label, ts);
+
+        log::info!("[Agent/execute_command_output_async] session='{}' cmd='{}' cwd='{}'",
+            session_id, command, work_dir);
+
+        // Windows: cmd /C 包装
+        #[cfg(target_os = "windows")]
+        let (exe, args): (&str, Vec<&str>) = ("cmd", vec!["/C", command]);
+        #[cfg(not(target_os = "windows"))]
+        let (exe, args): (&str, Vec<&str>) = ("sh", vec!["-c", command]);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            async {
+                let mut cmd = tokio::process::Command::new(exe);
+                cmd.args(&args)
+                    .current_dir(&work_dir)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .env_remove("PYTHONHOME")
+                    .kill_on_drop(true);
+
+                cmd.output().await
+            }
+        ).await;
+
+        match result {
+            Ok(Ok(output)) => {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Ok(stdout.trim().to_string())
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    Err(format!("命令执行失败 (exit code {:?}): {}", output.status.code(), stderr.trim()))
+                }
+            }
+            Ok(Err(e)) => {
+                Err(format!("启动进程失败: {}", e))
+            }
+            Err(_) => {
+                Err(format!("命令执行超时 ({}s): {}", timeout_secs, command))
+            }
+        }
+    }
+
     /// 前端会话模式：Event 推送
     pub async fn send_message_with_config(
         &mut self,
@@ -564,7 +648,7 @@ if let Ok(mut buf) = stderr_buf_clone.lock() {
                     "content": chunk,
                 }));
             }),
-            on_session_id: Box::new(move |sid_agent| {
+            on_session_id: std::sync::Arc::new(move |sid_agent| {
                 let _ = app_for_sid.emit("agent-session", serde_json::json!({
                     "sessionId": sid_for_sid,
                     "agentSessionId": sid_agent,
@@ -661,7 +745,7 @@ if let Ok(mut buf) = stderr_buf_clone.lock() {
                     func(chunk);
                 }
             }),
-            on_session_id: Box::new({
+            on_session_id: std::sync::Arc::new({
                 let sid_result_clone = sid_result.clone();
                 move |sid| {
                     if let Ok(mut s) = sid_result_clone.lock() {

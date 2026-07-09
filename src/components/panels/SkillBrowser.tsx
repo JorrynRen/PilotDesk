@@ -3,6 +3,7 @@ import { Cpu, Search, FolderOpen, Bot, ChevronDown, ChevronRight } from 'lucide-
 import { useSkillStore } from '../../stores/skillStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { useEnvInfo } from '../../hooks/useEnvInfo';
 import { AGENT_THEMES } from '../../types';
 import type { SkillInfo } from '../../stores/skillStore';
 
@@ -14,6 +15,7 @@ interface SkillBrowserProps {
 export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
   const { skillsByAgent, isLoading, setAgentSkills, setLoading } = useSkillStore();
   const { agents, getDisplayName } = useAgentRegistry();
+  const { envInfo } = useEnvInfo();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSkill, setSelectedSkill] = useState<{ agent: string; name: string; description: string; category?: string } | null>(null);
   const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(new Set());
@@ -42,13 +44,16 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map(a => a.agentType);
 
-  // Auto-fetch skills: detect installed agents first, then fetch skills for each
+  // Auto-fetch skills: use detect_env results to determine installed agents, then fetch skills
   useEffect(() => {
     const fetchAll = async () => {
       setLoading(true);
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const installed = await invoke<string[]>('agent_detect_installed');
+        // Derive installed agents from detect_env (version non-null = installed)
+        const agentVersions = envInfo?.agentVersions ?? {};
+        const installed = Object.entries(agentVersions)
+          .filter(([, version]) => version !== null && version !== undefined)
+          .map(([agentType]) => agentType);
         for (const agent of installed) {
           const cached = skillsByAgent[agent];
           if (!cached) {
@@ -67,7 +72,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
       setLoading(false);
     };
     fetchAll();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [envInfo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 按 DB 排序聚合所有 agent 的技能
   const allAgentTypes = Object.keys(skillsByAgent).sort(

@@ -82,6 +82,8 @@ export interface EnvInfo {
   pythonVersion: string | null;
   /** Dynamic agent versions keyed by agent_type */
   agentVersions: Record<string, string | null>;
+  /** Dynamic agent latest versions keyed by agent_type */
+  agentLatestVersions?: Record<string, string | null>;
 }
 
 export type ChatMode = 'native' | 'fast' | 'think' | 'expert';

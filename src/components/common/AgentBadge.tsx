@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import clsx from 'clsx';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { AgentIcon } from './AgentIcon';
@@ -8,7 +9,7 @@ interface AgentBadgeProps {
   isGenerating?: boolean;
 }
 
-export function AgentBadge({ agentType, size = 'sm', isGenerating }: AgentBadgeProps) {
+export const AgentBadge = memo(function AgentBadge({ agentType, size = 'sm', isGenerating }: AgentBadgeProps) {
   const { getTheme } = useAgentRegistry();
   const theme = getTheme(agentType);
 
@@ -56,4 +57,4 @@ export function AgentBadge({ agentType, size = 'sm', isGenerating }: AgentBadgeP
       {theme.initial}
     </span>
   );
-}
+});

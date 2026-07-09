@@ -107,7 +107,7 @@ pub async fn check_agent_update(
     }
 
     let mgr = agent_mgr.lock().await;
-    let output = mgr.execute_command_output(
+    let output = mgr.execute_command_output_async(
         &cmd, "", 15,
         &format!("{} 更新检查", agent_type),
     ).await.map_err(|e| AppError::External(format!("版本查询失败: {}", e)))?;

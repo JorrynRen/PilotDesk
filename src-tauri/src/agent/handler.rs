@@ -21,7 +21,7 @@ pub trait ProcessHandler: Send + Sync {
 
     /// 从输出行提取 agent session_id
     /// is_stderr: 当前行是否来自 stderr
-    fn extract_session_id(&self, line: &str, is_stderr: bool) -> Option<String>;
+    fn extract_session_id(&self, line: &str) -> Option<String>;
 }
 
 // ──────────────────────────────────────────────
@@ -129,40 +129,14 @@ impl ProcessHandler for StdioHandler {
         }
     }
 
-    fn extract_session_id(&self, line: &str, is_stderr: bool) -> Option<String> {
-        match self.config.session_id_source.as_str() {
-            // none — 不支持会话延续，不提取任何 session_id
-            "none" => None,
-            // stdout-text — 仅从标准输出匹配关键字（兼容颜色码和多空格）
-            "stdout-text" => {
-                if is_stderr {
-                    return None;
-                }
+    fn extract_session_id(&self, line: &str) -> Option<String> {
+        let source = self.config.session_id_source.as_str();
+        // 根据 session_id_source 决定提取方式，调用方无需关心来源
+        match source {
+            "stdout-text" | "stderr-text" => {
                 extract_session_id_from_text(line, &self.config.session_id_field)
             }
-            // stderr-text — 仅从标准错误匹配关键字（兼容颜色码和多空格）
-            "stderr-text" => {
-                if !is_stderr {
-                    return None;
-                }
-                extract_session_id_from_text(line, &self.config.session_id_field)
-            }
-            // stdout-json — 仅从标准输出解析 JSON
-            "stdout-json" => {
-                if is_stderr {
-                    return None;
-                }
-                extract_session_id_from_json(
-                    line,
-                    &self.config.session_id_event_type,
-                    &self.config.session_id_field,
-                )
-            }
-            // stderr-json — 仅从标准错误解析 JSON
-            "stderr-json" => {
-                if !is_stderr {
-                    return None;
-                }
+            "stdout-json" | "stderr-json" => {
                 extract_session_id_from_json(
                     line,
                     &self.config.session_id_event_type,

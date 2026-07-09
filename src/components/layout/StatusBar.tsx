@@ -1,6 +1,6 @@
 import { Loader2 } from 'lucide-react';
 import { AGENT_THEMES } from '../../types';
-import { useEnvInfo } from '../../hooks/useEnvInfo';
+import { useEnvInfo, type AgentDetectStatus } from '../../hooks/useEnvInfo';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
 interface StatusBarProps {
@@ -9,11 +9,8 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps) {
-  const { envInfo, loading } = useEnvInfo();
+  const { envInfo, loading, agentStatus } = useEnvInfo();
   const { agents } = useAgentRegistry();
-
-  const pendingLabel = loading && !envInfo ? '查询中…' : '未安装';
-  const pendingColor = loading && !envInfo ? '#9CA3AF' : '#6B7280';
 
   // Show all enabled agents from DB, with versions from envInfo
   const agentEntries = agents
@@ -21,10 +18,23 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     .map(agent => [agent.agentType, envInfo?.agentVersions?.[agent.agentType] ?? null] as const);
 
-  // Show loading state when envInfo is being fetched
-  const showLoading = !envInfo;
-  // Show fallback when envInfo loaded but no enabled agents
-  const showEmpty = !!envInfo && agentEntries.length === 0;
+  // Determine per-agent display state
+  const getAgentState = (agentType: string, version: string | null): {
+    status: AgentDetectStatus;
+    label: string;
+    dotColor: string;
+  } => {
+    const status = agentStatus[agentType];
+    if (status === 'done' && version) {
+      const theme = AGENT_THEMES[agentType];
+      return { status: 'done', label: version, dotColor: theme?.color ?? '#6366F1' };
+    }
+    if (status === 'error' || (status === 'done' && !version)) {
+      return { status: 'error', label: '未安装', dotColor: '#9CA3AF' };
+    }
+    // pending or detecting — colon only, spinner indicates progress
+    return { status: 'detecting', label: '', dotColor: '#9CA3AF' };
+  };
 
   return (
     <footer
@@ -32,33 +42,25 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
       style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}
     >
       <div className="flex items-center gap-3">
-        {/* Agent status — no longer needs Sidecar/WS indicator */}
-        <span className="flex items-center gap-1">
-          Agent:
-        </span>
-        {showLoading && (
-          <span className="flex items-center gap-1" style={{ color: 'var(--text-tertiary)' }}>
-            <Loader2 size={10} className="animate-spin" /> 查询中…
-          </span>
-        )}
-        {showEmpty && (
+        <span className="flex items-center gap-1">Agent:</span>
+        {agentEntries.length === 0 && (
           <span style={{ color: 'var(--text-tertiary)' }}>未检测</span>
         )}
-        {!showLoading && agentEntries.map(([agentType, version]) => {
+        {agentEntries.map(([agentType, version]) => {
+          const { status, label, dotColor } = getAgentState(agentType, version);
           const theme = AGENT_THEMES[agentType];
-          const color = theme?.color ?? '#6366F1';
-          const label = version ?? pendingLabel;
-          const dotColor = version ? color : pendingColor;
           const displayName = theme?.label ?? agentType;
           return (
             <button
               key={agentType}
-              onClick={onOpenEnvSettings ?? onOpenSettings}
+              onClick={() => {
+                (onOpenEnvSettings ?? onOpenSettings)?.();
+              }}
               className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
-              title={`点击查看环境检测`}
+              title={status === 'detecting' ? '点击刷新环境检测' : '点击查看环境检测'}
             >
               <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: dotColor }} />
-              {displayName}: {label}
+              {displayName}:{status === 'detecting' ? <Loader2 size={10} className="animate-spin" style={{ color: '#9CA3AF' }} /> : label ? ` ${label}` : ''}
             </button>
           );
         })}

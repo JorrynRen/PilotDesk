@@ -26,9 +26,9 @@ pub struct TimeoutPolicy {
 
 impl Default for TimeoutPolicy {
     fn default() -> Self {
-        // Agent LLM 推理场景：每 30s 检查一次，最多等待 10 分钟
+        // Agent LLM 推理场景：每 500ms 轮询一次，最多等待 10 分钟
         Self {
-            check_interval: Duration::from_secs(30),
+            check_interval: Duration::from_millis(500),
             max_wait: Duration::from_secs(600),
         }
     }
@@ -39,7 +39,7 @@ impl TimeoutPolicy {
     #[allow(dead_code)]
     pub fn quick() -> Self {
         Self {
-            check_interval: Duration::from_secs(5),
+            check_interval: Duration::from_millis(500),
             max_wait: Duration::from_secs(30),
         }
     }
@@ -48,7 +48,7 @@ impl TimeoutPolicy {
     #[allow(dead_code)]
     pub fn standard() -> Self {
         Self {
-            check_interval: Duration::from_secs(10),
+            check_interval: Duration::from_millis(500),
             max_wait: Duration::from_secs(120),
         }
     }
@@ -56,7 +56,7 @@ impl TimeoutPolicy {
     /// 创建 LLM 推理超时策略（适用于 Agent 会话交互）
     pub fn llm_inference() -> Self {
         Self {
-            check_interval: Duration::from_secs(30),
+            check_interval: Duration::from_millis(500),
             max_wait: Duration::from_secs(600),
         }
     }
@@ -220,14 +220,14 @@ mod tests {
     #[test]
     fn test_timeout_policy_defaults() {
         let policy = TimeoutPolicy::default();
-        assert_eq!(policy.check_interval, Duration::from_secs(30));
+        assert_eq!(policy.check_interval, Duration::from_millis(500));
         assert_eq!(policy.max_wait, Duration::from_secs(600));
     }
 
     #[test]
     fn test_timeout_policy_quick() {
         let policy = TimeoutPolicy::quick();
-        assert_eq!(policy.check_interval, Duration::from_secs(5));
+        assert_eq!(policy.check_interval, Duration::from_millis(500));
         assert_eq!(policy.max_wait, Duration::from_secs(30));
     }
 

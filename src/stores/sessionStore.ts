@@ -13,6 +13,8 @@ interface SessionState {
   showArchived: boolean;
 
   fetchSessions: () => Promise<void>;
+  /** 静默刷新会话列表（不改变 isLoadingSessions，不触发 DOM 替换） */
+  refreshSessions: () => Promise<void>;
   selectSession: (id: string) => Promise<void>;
   createSession: (
     agentType: string,
@@ -69,6 +71,19 @@ export const useSessionStore = create<SessionState>((set) => ({
       console.error('Failed to fetch sessions:', err);
     } finally {
       set({ isLoadingSessions: false });
+    }
+  },
+
+  /** 静默刷新：仅更新数据，不触碰 isLoadingSessions，不导致列表 DOM 替换 */
+  refreshSessions: async () => {
+    try {
+      const [sessions, archivedSessions] = await Promise.all([
+        invoke<Session[]>('list_sessions'),
+        invoke<Session[]>('list_archived_sessions'),
+      ]);
+      set({ sessions, archivedSessions });
+    } catch (err) {
+      console.error('Failed to refresh sessions:', err);
     }
   },
 
