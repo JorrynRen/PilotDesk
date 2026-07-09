@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { MessageBubble } from './MessageBubble';
@@ -18,6 +18,7 @@ interface MessageListProps {
 
 export function MessageList({ messages, session, isGenerating, streamingStatus, onEditMessage, onSaveInspiration, onResendMessage }: MessageListProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const [searchResultIndex, setSearchResultIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
   const [isSearchingMessages, setIsSearchingMessages] = useState(false);
@@ -45,6 +46,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
           limit: 50,
         });
         setSearchResults(results);
+        setSearchResultIndex(0);
       } catch { /* ignore */ }
       setIsSearchingMessages(false);
     }, 300);
@@ -71,15 +73,6 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
       }
     }
   }, [session?.id]);
-
-  // 收到消息时 → 滚动到底部
-  useEffect(() => {
-    if (messages.length > 0) {
-      requestAnimationFrame(() => {
-        virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' });
-      });
-    }
-  }, [messages]);
 
   const itemContent = useCallback((index: number) => {
     const msg = messages[index];
@@ -194,15 +187,48 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
             {searchResults !== null && (
               <div className="flex items-center gap-1 shrink-0">
                 <span className="pd-text-10" style={{ color: 'var(--text-tertiary)' }}>
-                  {searchResults.length} 条
+                  {searchResults.length > 0
+                    ? `${searchResultIndex + 1}/${searchResults.length}`
+                    : '0 条'}
                 </span>
+                {searchResults.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => {
+                        const next = Math.max(0, searchResultIndex - 1);
+                        setSearchResultIndex(next);
+                        const target = messages.findIndex(m => m.id === searchResults[next].id);
+                        if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'smooth', align: 'center' });
+                      }}
+                      className="pd-btn pd-text-10 px-1 py-0.5 rounded transition-colors hover:opacity-80"
+                      style={{ color: searchResultIndex === 0 ? 'var(--text-quaternary)' : 'var(--text-secondary)' }}
+                      title="上一条"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+                    </button>
+                    <button
+                      onClick={() => {
+                        const next = Math.min(searchResults.length - 1, searchResultIndex + 1);
+                        setSearchResultIndex(next);
+                        const target = messages.findIndex(m => m.id === searchResults[next].id);
+                        if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'smooth', align: 'center' });
+                      }}
+                      className="pd-btn pd-text-10 px-1 py-0.5 rounded transition-colors hover:opacity-80"
+                      style={{ color: searchResultIndex >= searchResults.length - 1 ? 'var(--text-quaternary)' : 'var(--text-secondary)' }}
+                      title="下一条"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                  </>
+                )}
                 {searchResults.length > 0 && (
                   <button
                     onClick={() => {
-                      const first = messages.findIndex(m => m.id === searchResults[0].id);
-                      if (first >= 0) virtuosoRef.current?.scrollToIndex({ index: first, behavior: 'smooth' });
+                      setSearchResultIndex(0);
+                      const target = messages.findIndex(m => m.id === searchResults[0].id);
+                      if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'smooth', align: 'center' });
                     }}
-                    className="pd-text-10 px-1.5 py-0.5 rounded transition-colors hover:opacity-80"
+                    className="pd-btn pd-text-10 px-1.5 py-0.5 rounded transition-colors hover:opacity-80"
                     style={{ color: 'var(--accent)' }}
                     title="定位到第一条"
                   >

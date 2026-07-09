@@ -355,10 +355,10 @@ pub fn search_messages(
     let sql = match session_id {
         Some(_) => "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name
                     FROM messages WHERE session_id = ?1 AND content LIKE ?2
-                    ORDER BY timestamp DESC LIMIT ?3",
+                    ORDER BY timestamp ASC LIMIT ?3",
         None => "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name
                  FROM messages WHERE content LIKE ?1
-                 ORDER BY timestamp DESC LIMIT ?2",
+                 ORDER BY timestamp ASC LIMIT ?2",
     };
 
     let mut stmt = conn.prepare(sql)?;

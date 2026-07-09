@@ -47,7 +47,19 @@ function CopyButton({ code }: { code: string }) {
   );
 }
 
+function preprocessMarkdown(content: string): string {
+  // nl = newline char, 避免与实际换行混淆
+  const nl = String.fromCharCode(10);
+  // 保护独立的 --- 行（thematic break），避免被 remark-breaks 误解析
+  let result = content.replace(/^(\s*)(-{3,})(\s*)$/gm, nl + nl + '$1$2$3' + nl + nl);
+  // 清理可能产生的多余空行（最多保留两个连续换行）
+  result = result.replace(new RegExp(nl + '{4,}', 'g'), nl + nl + nl);
+  return result;
+}
+
+
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+  const processedContent = preprocessMarkdown(content);
   return (
     <div className="pilotdesk-markdown" style={{ color: 'var(--text-primary)' }}>
       <ReactMarkdown
@@ -197,7 +209,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           },
           p({ children, ...props }) {
             return (
-              <p style={{ margin: 0, lineHeight: '1.625', fontSize: '13px', whiteSpace: 'pre-wrap' }} {...props}>
+              <p style={{ margin: 0, lineHeight: '1.625', fontSize: '13px' }} {...props}>
                 {children}
               </p>
             );
@@ -254,7 +266,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           },
         }}
       >
-        {content}
+        {processedContent}
       </ReactMarkdown>
     </div>
   );

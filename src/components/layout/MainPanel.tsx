@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MessageList } from '../message/MessageList';
 import { InputBar } from './InputBar';
@@ -33,6 +33,7 @@ type Action =
   | { type: 'GENERATION_ERROR'; sessionId: string; error: string }
   | { type: 'STOP_GENERATION'; sessionId: string }
   | { type: 'CLEAR_SESSION'; sessionId: string }
+  | { type: 'CLEAR_GENERATING_SESSION'; sessionId: string }
   | { type: 'CLEAR_PENDING_COMPLETE' }
   | { type: 'SET_PENDING_INPUT'; content: string | null };
 
@@ -72,10 +73,8 @@ function reducer(state: MainPanelState, action: Action): MainPanelState {
     case 'GENERATION_DONE': {
       const session = state.generatingSessions[action.sessionId];
       if (!session) return state;
-      const { [action.sessionId]: _, ...rest } = state.generatingSessions;
       return {
         ...state,
-        generatingSessions: rest,
         pendingComplete: session.streamingContent
           ? { sessionId: action.sessionId, content: session.streamingContent }
           : null,
@@ -100,6 +99,11 @@ function reducer(state: MainPanelState, action: Action): MainPanelState {
     }
 
     case 'CLEAR_SESSION': {
+      const { [action.sessionId]: _, ...rest } = state.generatingSessions;
+      return { ...state, generatingSessions: rest };
+    }
+
+    case 'CLEAR_GENERATING_SESSION': {
       const { [action.sessionId]: _, ...rest } = state.generatingSessions;
       return { ...state, generatingSessions: rest };
     }
@@ -204,20 +208,24 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     createAgentSession,
   } = useAgentEvent({ onChunk, onDone, onError, onSession });
 
-  // ── Side effect: persist completed streaming content as a message ──
+  // ── Layout effect: atomically persist completed streaming content ──
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!state.pendingComplete) return;
-    const { sessionId, content } = state.pendingComplete;
-    dispatch({ type: 'CLEAR_PENDING_COMPLETE' });
+    const { sessionId, content: msgContent } = state.pendingComplete;
 
-    if (!content) return;
+    // 先清除 pendingComplete 防止重复执行
+    dispatch({ type: 'CLEAR_PENDING_COMPLETE' });
+    // 同步清除 generatingSessions 中的 session（React 18+ 批处理合并）
+    dispatch({ type: 'CLEAR_GENERATING_SESSION', sessionId });
+
+    if (!msgContent) return;
 
     addMessage({
       id: `msg-${Date.now()}`,
       sessionId,
       role: 'assistant',
-      content,
+      content: msgContent,
       mode: 'native',
       timestamp: Math.floor(Date.now() / 1000),
     });
@@ -323,6 +331,22 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     dispatch({ type: 'STOP_GENERATION', sessionId: sid });
   }, [currentSession, stopGeneration, stopApiChat]);
 
+  // ── Stable callbacks for MessageList ──
+
+  const handleEditMessage = useCallback((content: string) => {
+    dispatch({ type: 'SET_PENDING_INPUT', content });
+    showToast('消息已填入输入框，可修改后重新发送', 'info');
+  }, []);
+
+  const handleSaveInspiration = useCallback((content: string) => {
+    usePendingInputStore.getState().set(content);
+    showToast('灵感内容已准备好，前往灵感市集保存', 'success');
+  }, []);
+
+  const handleResendMessage = useCallback((content: string) => {
+    dispatch({ type: 'SET_PENDING_INPUT', content });
+  }, []);
+
   // ── Build display messages ──
 
   const streamingMsg = currentGenState?.streamingContent
@@ -361,17 +385,9 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
           session={currentSession}
           isGenerating={!!currentGenState}
           streamingStatus={currentGenState?.streamingStatus ?? ''}
-          onEditMessage={(content) => {
-            dispatch({ type: 'SET_PENDING_INPUT', content });
-            showToast('消息已填入输入框，可修改后重新发送', 'info');
-          }}
-          onSaveInspiration={(content) => {
-            usePendingInputStore.getState().set(content);
-            showToast('灵感内容已准备好，前往灵感市集保存', 'success');
-          }}
-          onResendMessage={(content) => {
-            dispatch({ type: 'SET_PENDING_INPUT', content });
-          }}
+          onEditMessage={handleEditMessage}
+          onSaveInspiration={handleSaveInspiration}
+          onResendMessage={handleResendMessage}
         />
       )}
 

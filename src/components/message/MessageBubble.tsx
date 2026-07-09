@@ -321,8 +321,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, onE
         <div
           className="rounded-xl px-3.5 py-2.5"
           style={{
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
+            backgroundColor: 'transparent',
           }}
         >
           <MarkdownRenderer content={message.content} />
