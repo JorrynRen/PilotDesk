@@ -61,7 +61,7 @@ impl ProcessHandler for StdioHandler {
                 sid,
                 self.config.resume_arg_template
             );
-            self.config.resume_arg_template.replace("{session_id}", sid)
+            self.config.resume_arg_template.replace("{session_id}", &format!("\"{}\"", sid))
         } else {
             log::info!("[Handler] build_command: no session_id, using run_cmd_template");
             self.config.run_cmd_template.clone()

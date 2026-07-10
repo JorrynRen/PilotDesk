@@ -161,6 +161,8 @@ impl NodeExecutorTrait for InteractExecutor {
         Ok(NodeOutput {
             output: serde_json::json!({ "user_input": user_input }),
             session_id: None,
+            input_data: None,
+            artifacts_path: None,
         })
     }
 }

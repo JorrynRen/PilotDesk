@@ -48,13 +48,14 @@ fn update_node_execution(
     status: &str,
     output_data: Option<&str>,
     error_message: Option<&str>,
+    agent_session_id: Option<&str>,
+    input_data: Option<&str>,
+    artifacts_path: Option<&str>,
 ) -> Result<(), AppError> {
     let now = crate::utils::now();
-    // 从 output_data 中提取 agent_session_id
-    let agent_session_id = output_data.and_then(|s| {
-        serde_json::from_str::<serde_json::Value>(s).ok()
-            .and_then(|v| v.get("agent_session_id").and_then(|v| v.as_str().map(|s| s.to_string())))
-    });
+    // agent_session_id 由调用方直接传入（从 NodeOutput.session_id 获取）
+    // input_data 由调用方传入（completed 时覆盖 running 时写入的输入映射内容）
+    // artifacts_path 由调用方传入（节点执行工件路径）
     // 计算 duration_ms = finished_at - started_at
     let duration_ms: Option<i64> = conn.query_row(
         "SELECT started_at FROM node_executions WHERE execution_id = ?1 AND node_id = ?2",
@@ -66,11 +67,14 @@ fn update_node_execution(
         "UPDATE node_executions SET status = ?1, output_data = COALESCE(?2, output_data),
          error_message = ?3, finished_at = ?4, updated_at = ?4,
          duration_ms = COALESCE(?5, duration_ms),
-         agent_session_id = COALESCE(?6, agent_session_id)
-         WHERE execution_id = ?7 AND node_id = ?8",
+         agent_session_id = COALESCE(?6, agent_session_id),
+         input_data = COALESCE(?7, input_data),
+         artifacts_path = COALESCE(?8, artifacts_path)
+         WHERE execution_id = ?9 AND node_id = ?10",
         rusqlite::params![
             status, output_data, error_message, now,
             duration_ms, agent_session_id,
+            input_data, artifacts_path,
             execution_id, node_id,
         ],
     )?;
@@ -121,6 +125,9 @@ fn record_node_execution(
     input_data: Option<&str>,
     output_data: Option<&str>,
     error_message: Option<&str>,
+    agent_session_id: Option<&str>,
+    input_data_override: Option<&str>,
+    artifacts_path: Option<&str>,
 ) {
     let conn = match get_db_conn(emitter) {
         Ok(c) => c,
@@ -134,7 +141,7 @@ fn record_node_execution(
             insert_node_execution(&conn, execution_id, node_id, status, input_data)
         }
         _ => {
-            update_node_execution(&conn, execution_id, node_id, status, output_data, error_message)
+            update_node_execution(&conn, execution_id, node_id, status, output_data, error_message, agent_session_id, input_data_override, artifacts_path)
         }
     };
     if let Err(e) = result {
@@ -369,7 +376,7 @@ impl WorkflowEngine {
                     if !all_conditions_met {
                         node_statuses.lock().await.insert(node_id.clone(), "skipped".to_string());
                         completed_count.fetch_add(1, Ordering::SeqCst);
-                        record_node_execution(emitter, execution_id, node_id, "skipped", None, None, None);
+                        record_node_execution(emitter, execution_id, node_id, "skipped", None, None, None, None, None, None);
                         emit_node_status(emitter, execution_id, node_id, "skipped", None, None,
                             Some(completed_count.load(Ordering::SeqCst)), Some(total_count));
                         continue;
@@ -389,7 +396,7 @@ impl WorkflowEngine {
                     let resolved_input = resolve_node_input(&node, &ctx_snapshot);
 
                     record_node_execution(emitter, execution_id, node_id, "running",
-                        serde_json::to_string(&resolved_input).ok().as_deref(), None, None);
+                        serde_json::to_string(&resolved_input).ok().as_deref(), None, None, None, None, None);
                     emit_node_status(emitter, execution_id, node_id, "running", None, None, None, None);
 
                     // delay 支持：执行前等待 delay_ms 毫秒
@@ -410,14 +417,14 @@ impl WorkflowEngine {
                             context.lock().await.insert(node_id.clone(), output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(emitter, execution_id, node_id, "completed", None,
-                                serde_json::to_string(&output).ok().as_deref(), None);
+                                serde_json::to_string(&output).ok().as_deref(), None, None, None, None);
                             emit_node_status(emitter, execution_id, node_id, "completed", Some(&output), None,
                                 Some(completed_count.load(Ordering::SeqCst)), Some(total_count));
                         }
                         Err(e) => {
                             node_statuses.lock().await.insert(node_id.clone(), "failed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);
-                            record_node_execution(emitter, execution_id, node_id, "failed", None, None, Some(&e.to_string()));
+                            record_node_execution(emitter, execution_id, node_id, "failed", None, None, Some(&e.to_string()), None, None, None);
                             emit_node_status(emitter, execution_id, node_id, "failed", None, Some(&e.to_string()), None, None);
                             // 不再 return Err，让后续节点继续执行
                         }
@@ -447,7 +454,7 @@ impl WorkflowEngine {
                     let resolved_input = resolve_node_input(&node, &ctx_snapshot);
 
                     record_node_execution(&emitter, &exec_id, &nid, "running",
-                        serde_json::to_string(&resolved_input).ok().as_deref(), None, None);
+                        serde_json::to_string(&resolved_input).ok().as_deref(), None, None, None, None, None);
                     emit_node_status(&emitter, &exec_id, &nid, "running", None, None, None, None);
 
                     // delay 支持：执行前等待 delay_ms 毫秒
@@ -505,17 +512,20 @@ impl WorkflowEngine {
                                 log::info!("[WorkflowEngine] Start node {} context preserved from pre-population", nid);
                             } else if let Some(mapping) = output_mapping.and_then(|m| m.as_object()) {
                                 // 非 Start 节点：暴露 outputMapping 声明的字段
+                                // 匹配逻辑：判断 path（下拉选择的值）而非 key（用户自定义字段名）
                                 let mut exposed = serde_json::Map::new();
                                 for (key, path) in mapping {
-                                    match key.as_str() {
-                                        "content" => { exposed.insert("content".to_string(), node_output.clone()); }
-                                        "session_id" => {
+                                    match path.as_str() {
+                                        Some("content") => {
+                                            exposed.insert(key.clone(), output.output.clone());
+                                        }
+                                        Some("session_id") => {
                                             if let Some(ref sid) = output.session_id {
-                                                exposed.insert("session_id".to_string(), Value::String(sid.clone()));
+                                                exposed.insert(key.clone(), Value::String(sid.clone()));
                                             }
                                         }
                                         _ => {
-                                            // 其他自定义 key：尝试从 node_output 按路径提取
+                                            // 其他自定义路径：尝试从 node_output 按路径提取
                                             if let Some(path_str) = path.as_str() {
                                                 if !path_str.is_empty() {
                                                     if let Some(val) = node_output.get(path_str) {
@@ -542,7 +552,10 @@ impl WorkflowEngine {
                             node_statuses_clone.lock().await.insert(nid.clone(), "completed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(&emitter, &exec_id, &nid, "completed", None,
-                                serde_json::to_string(&node_output).ok().as_deref(), None);
+                                serde_json::to_string(&node_output).ok().as_deref(), None,
+                                output.session_id.as_deref(),
+                                output.input_data.as_deref(),
+                                output.artifacts_path.as_deref());
                             emit_node_status(&emitter, &exec_id, &nid, "completed", Some(&node_output), None,
                                 Some(completed_count.load(Ordering::SeqCst)), Some(total));
                             return Ok(());
@@ -550,7 +563,7 @@ impl WorkflowEngine {
                         Err(e) => {
                             node_statuses_clone.lock().await.insert(nid.clone(), "failed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);
-                            record_node_execution(&emitter, &exec_id, &nid, "failed", None, None, Some(&e.to_string()));
+                            record_node_execution(&emitter, &exec_id, &nid, "failed", None, None, Some(&e.to_string()), None, None, None);
                             emit_node_status(&emitter, &exec_id, &nid, "failed", None, Some(&e.to_string()),
                                 Some(completed_count.load(Ordering::SeqCst)), Some(total));
                             // 不再 return Err，让同层其他节点继续执行

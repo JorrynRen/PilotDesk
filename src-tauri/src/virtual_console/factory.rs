@@ -117,6 +117,7 @@ impl AsyncConsole for TokioConsole {
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .env_remove("PYTHONHOME")
             .kill_on_drop(true);
 
         let mut child = cmd.spawn()?;

@@ -343,6 +343,8 @@ impl AgentManager {
         #[cfg(not(target_os = "windows"))]
         let (exe, spawn_args): (String, Vec<String>) = (effective_cmd, args);
 
+        log::info!("[Agent/execute_async] CMD: {} {} | session_id={:?}", exe, spawn_args.join(" "), agent_session_id);
+
         let spawn_args_refs: Vec<&str> = spawn_args.iter().map(|s| s.as_str()).collect();
 
 

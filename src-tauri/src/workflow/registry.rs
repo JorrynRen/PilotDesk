@@ -28,6 +28,12 @@ pub struct NodeOutput {
     /// Agent 节点的会话 session_id（用于后续节点延续会话）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// 节点执行最终输入（agent 节点为最终提示词，覆盖 running 时写入的输入映射）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_data: Option<String>,
+    /// 节点执行工件路径（agent 节点为工作区路径）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifacts_path: Option<String>,
 }
 
 /// 节点执行器 trait — 所有节点类型实现此接口

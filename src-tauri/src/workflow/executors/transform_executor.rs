@@ -23,7 +23,7 @@ impl NodeExecutorTrait for TransformExecutor {
         inputs.insert("input".to_string(), resolved_input);
 
         let result = execute_js(script, &inputs)?;
-        Ok(NodeOutput { output: result, session_id: None })
+        Ok(NodeOutput { output: result, session_id: None, input_data: None, artifacts_path: None })
     }
 }
 

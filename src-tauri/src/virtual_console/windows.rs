@@ -38,7 +38,8 @@ impl VirtualConsole for WindowsConpty {
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
-
+        // 移除 PYTHONHOME 环境变量，避免 Hermes/Codex 等 venv 工具出现 SRE 模块不匹配
+        cmd.env_remove("PYTHONHOME");
 
         let mut child = cmd.spawn()
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;

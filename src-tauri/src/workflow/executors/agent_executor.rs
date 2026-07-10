@@ -125,9 +125,13 @@ impl NodeExecutorTrait for AgentExecutor {
         ).await?;
 
         // output 只存 agent 原始返回文本，session_id 放 NodeOutput.session_id 字段
+        // input_data 存最终提示词（覆盖 running 时写入的输入映射）
+        // artifacts_path 存工作区路径（agent 运行时生成工件的位置）
         Ok(NodeOutput {
             output: Value::String(output),
             session_id: agent_session_id,
+            input_data: Some(prompt.clone()),
+            artifacts_path: Some(workspace_dir),
         })
     }
 }
