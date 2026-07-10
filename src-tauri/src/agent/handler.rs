@@ -88,13 +88,20 @@ impl ProcessHandler for StdioHandler {
         // 检测前缀最后一个参数是否使用 = 语法（如 --query= 或 -q=）
         let uses_equals_syntax = args.last().map_or(false, |a| a.ends_with('='));
 
-        // 消息内容作为单个原子参数
+        // 消息内容作为单个原子参数（用双引号包裹，避免 cmd.exe 错误解析换行/特殊字符）
+        // 换行符→字面 \\n，双引号→""（cmd.exe 转义），再用双引号包裹
+        let sanitized = message
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\n', "\\n")
+            .replace('"', "\"\"");
+        let quoted_msg = format!("\"{}\"", sanitized);
         if uses_equals_syntax {
             if let Some(last) = args.last_mut() {
-                last.push_str(message);
+                last.push_str(&quoted_msg);
             }
         } else {
-            args.push(message.to_string());
+            args.push(quoted_msg);
         }
 
         // 追加后缀固定参数

@@ -8,7 +8,6 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::workflow::registry::{NodeDef, NodeOutput, NodeExecutorTrait};
 use crate::db::init::DbPool;
 use crate::commands::agents::get_agent_inner;
-use crate::commands::app_settings;
 use crate::workflow::template::TemplateEngine;
 
 pub struct AgentExecutor {
@@ -48,10 +47,6 @@ impl NodeExecutorTrait for AgentExecutor {
         } else {
             prompt_template.to_string()
         };
-
-        // 换行转义：CLI 参数中的实际换行会导致 cmd.exe 截断，转义为 \n 字面量
-        let context_prompt = prompt.replace('\n', "\\n");
-
         let temp_session_id = format!("wf_{}_{}", execution_id, node.id);
         let exec_id = execution_id.to_string();
         let node_id = node.id.clone();
@@ -67,25 +62,11 @@ impl NodeExecutorTrait for AgentExecutor {
                 })
         };
 
-        // 读取工作区目录（默认使用 app 全局工作区目录）
+        // 读取工作区目录（统一使用 resolve_workspace_path）
         let workspace_dir: String = {
             let conn = self.pool.get().map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
-            match app_settings::get_setting(&conn, "pilotdesk-workspace") {
-                Ok(Some(path)) if !path.is_empty() => {
-                    // 解析 ~ 为用户 home 目录
-                    if path.starts_with('~') {
-                        if let Some(home) = dirs::home_dir() {
-                            let resolved = home.join(&path[2..]); // 跳过 "~\" 或 "~/"
-                            resolved.to_string_lossy().to_string()
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        path
-                    }
-                }
-                _ => String::new(),
-            }
+            crate::utils::paths::resolve_workspace_path(None, "", &conn)
+                .to_string_lossy().to_string()
         };
 
         // 读取会话延续参数
@@ -129,7 +110,7 @@ impl NodeExecutorTrait for AgentExecutor {
 
         let (output, agent_session_id) = self.agent_manager.lock().await.execute_once(
             &agent_config,
-            &context_prompt,
+            &prompt,
             &Default::default(),
             &workspace_dir,
             &temp_session_id,

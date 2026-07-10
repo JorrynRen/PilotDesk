@@ -106,6 +106,9 @@ pub async fn plugin_agent_send_message(
     let config = get_agent_inner(&conn, agent_type)
         .map_err(|e| format!("查询 Agent 配置失败: {}", e))?
         .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
+    // cwd 统一使用全局工作区路径
+    let workspace_cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn)
+        .to_string_lossy().to_string();
 
     let mut mgr = agent_mgr.lock().await;
     mgr.send_message_with_config(
@@ -114,7 +117,7 @@ pub async fn plugin_agent_send_message(
         config,
         content,
         "stream".to_string(),
-        None,
+        Some(workspace_cwd),
         None,
         agent_session_id,
     ).await.map_err(|e| format!("发送消息失败: {}", e))?;

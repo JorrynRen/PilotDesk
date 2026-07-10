@@ -594,3 +594,13 @@ textarea {
 .pilotdesk-markdown > *:last-child {
   margin-bottom: 0;
 }
+
+/* ═══════════════════════════════════════════════════
+   Virtual Console — xterm scrollbar hidden
+   Scrollback navigation via mouse wheel only.
+   ═══════════════════════════════════════════════════ */
+.terminal-viewport-area .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
+

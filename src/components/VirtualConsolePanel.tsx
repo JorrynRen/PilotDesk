@@ -102,21 +102,43 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [terminalDims, setTerminalDims] = useState<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
   const [consoleConfig, setConsoleConfig] = useState<{ consoleType: string; bufferSize: number; maxLines: number | null } | null>(null);
+  // Terminal cols/rows are FIXED at creation time — never changed by resize.
+  // Initial size is measured from the container to fill the content area exactly.
+
+  // ── Helpers ──
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return bytes + 'B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + 'KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + 'MB';
+  }
+
+  function formatUptime(seconds: number): string {
+    if (seconds < 60) return seconds + 's';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+    return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
+  }
 
   // terminal instance map: tabId -> { term, fitAddon }
   const terminalRef = useRef<Map<string, { term: Terminal; fitAddon: FitAddon }>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
   // Tauri event listener unlisten functions: tabId -> UnlistenFn[]
   const unlistenRefs = useRef<Map<string, UnlistenFn[]>>(new Map());
-  // Track ConPTY's known dimensions to avoid redundant resizes
-  const conptyDimsRef = useRef<Map<string, { cols: number; rows: number }>>(new Map());
   // Guard against ResizeObserver triggering createTerminal while one is in-flight
   const creatingRef = useRef(false);
   const observerRef = useRef<ResizeObserver | null>(null);
-  // Debounce timer for resize operations — prevents rapid ConPTY resize during window drag
-  const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Track which sessions have received first data (banner) — skip all fit/resize until then
-  const firstDataReceivedRef = useRef<Set<string>>(new Set());
+  // Ref to scale wrapper div — tab divs must be appended here, not to containerRef
+  const scaleWrapperRef = useRef<HTMLDivElement>(null);
+  // Store the pixel dimensions of the initial terminal render (for layout sizing)
+  const terminalOrigSizeRef = useRef<{ w: number; h: number } | null>(null);
+  // Session metadata: createdAt + alive status
+  const sessionMetaRef = useRef<Map<string, { createdAt: number; alive: boolean }>>(new Map());
+  // Byte counters for transfer tracking
+  const bytesTrackerRef = useRef<Map<string, { rx: number; tx: number }>>(new Map());
+  // Previous snapshot for rate calculation (1s interval)
+  // Transmission state machine: idle | sending | waiting | receiving
+  const txStateRef = useRef<Map<string, { state: 'idle' | 'sending' | 'waiting' | 'receiving'; lastRxTime: number }>>(new Map());
+
 
   // Mirror tabs count in a ref for ResizeObserver callback (avoids stale closure)
   const tabsCountRef = useRef(terminalTabs.length);
@@ -127,29 +149,63 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
   const createTerminal = useCallback(async () => {
     if (creatingRef.current) return; // Already creating
     const container = containerRef.current;
-    if (!container || container.offsetWidth === 0 || container.offsetHeight === 0) return;
+
     creatingRef.current = true;
     try {
-    // (body continues below)
-
-    // 1. Pre-calculate dimensions with a temporary Terminal so ConPTY starts at the right size.
-    //    This eliminates the need for post-creation resize, preserving the shell banner.
-    const tempDiv = document.createElement('div');
-    tempDiv.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;padding:4px 4px 4px 8px;visibility:hidden';
-    container.appendChild(tempDiv);
-    const dummy = new Terminal({
-      fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
-      fontSize: 14, lineHeight: 1.2, cols: 80, rows: 24,
+    // 1. Create terminal in actual DOM, fit to measure exact cols, then create ConPTY.
+    const scaleWrapper = scaleWrapperRef.current;
+    if (!scaleWrapper) {
+      console.error('[Terminal] Scale wrapper not ready');
+      return;
+    }
+    // Create tab div first (placeholder id, will be updated after ConPTY creation)
+    const tabDiv = document.createElement('div');
+    tabDiv.style.cssText = '';
+    scaleWrapper.querySelectorAll('[id^="xterm-tab-"]').forEach((el) => {
+      (el as HTMLElement).style.display = 'none';
     });
-    const dummyFit = new FitAddon();
-    dummy.loadAddon(dummyFit);
-    dummy.open(tempDiv);
-    dummyFit.fit();
-    const dims = dummyFit.proposeDimensions() || { cols: 80, rows: 24 };
-    dummy.dispose();
-    container.removeChild(tempDiv);
+    tabDiv.style.display = 'block';
+    scaleWrapper.appendChild(tabDiv);
 
-    // 2. Create backend ConPTY session at the calculated size
+    // Create xterm with placeholder cols (80), rows fixed at 150
+    const term = new Terminal({
+      theme: TERMINAL_THEMES[terminalTheme],
+      fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
+      fontSize: 14, lineHeight: 1.2,
+      cols: 80, rows: 150,
+      cursorBlink: true, cursorStyle: 'bar',
+      scrollback: 50000, allowProposedApi: true, convertEol: false,
+    });
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(tabDiv);
+
+    // Fit to actual container (rAF ensures layout complete)
+    await new Promise(r => requestAnimationFrame(r));
+    fitAddon.fit();
+    // Reset scrollable-element padding + make viewport scrollbar overlay
+    const scrollableEl = tabDiv.querySelector('.xterm-scrollable-element') as HTMLElement | null;
+    if (scrollableEl) {
+      scrollableEl.style.paddingRight = '0';
+    }
+    const viewport = tabDiv.querySelector('.xterm-viewport') as HTMLElement | null;
+    if (viewport) {
+      viewport.style.overflowY = 'overlay';
+    }
+    // Force xterm-screen (and child canvases) to viewport's content width
+    const screen = tabDiv.querySelector('.xterm-screen') as HTMLElement | null;
+    if (screen && viewport) {
+      const w = viewport.clientWidth;
+      screen.style.setProperty('width', w + 'px', 'important');
+      screen.style.setProperty('max-width', w + 'px', 'important');
+      const canvases = screen.querySelectorAll('canvas');
+      canvases.forEach(c => {
+        (c as HTMLElement).style.setProperty('width', w + 'px', 'important');
+      });
+    }
+    const dims = { cols: term.cols, rows: 150 };
+
+    // 2. Create backend ConPTY session at the fitted size
     let sessionId: string;
     let shellType: string;
     let initialData = "";
@@ -162,39 +218,31 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
       sessionId = result.session_id;
       shellType = result.shell_type;
       initialData = result.initial_data || '';
-      if (initialData) {
-      }
     } catch (err) {
       console.error('[Terminal] Failed to create session:', err);
       return;
     }
 
-    // Record ConPTY initial dimensions (so ResizeObserver won't trigger a redundant resize)
-    conptyDimsRef.current.set(sessionId, { cols: dims.cols, rows: dims.rows });
-
-    // 3. Create persistent div for this tab's xterm instance
-    const tabDiv = document.createElement('div');
+    // 3. Update tabDiv id with real sessionId and store in refs
     tabDiv.id = `xterm-tab-${sessionId}`;
-    tabDiv.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;padding:4px 4px 4px 8px';
-    container.querySelectorAll('[id^="xterm-tab-"]').forEach((el) => {
-      (el as HTMLElement).style.display = 'none';
-    });
-    tabDiv.style.display = 'block';
-    container.appendChild(tabDiv);
-
-    // 4. Create xterm instance — pre-set cols/rows to match ConPTY exactly
-    const term = new Terminal({
-      theme: TERMINAL_THEMES[terminalTheme],
-      fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
-      fontSize: 14, lineHeight: 1.2,
-      cols: dims.cols, rows: dims.rows,
-      cursorBlink: true, cursorStyle: 'bar',
-      scrollback: 10000, allowProposedApi: true, convertEol: false,
-    });
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(tabDiv);
     terminalRef.current.set(sessionId, { term, fitAddon });
+
+    // Initialize session metadata and byte tracking
+    sessionMetaRef.current.set(sessionId, { createdAt: Date.now(), alive: true });
+    bytesTrackerRef.current.set(sessionId, { rx: 0, tx: 0 });
+    txStateRef.current.set(sessionId, { state: 'idle', lastRxTime: Date.now() });
+
+    // Measure the rendered terminal pixel size and store for layout
+    const screenEl = tabDiv.querySelector('.xterm-screen') as HTMLElement | null;
+    const renderedH = screenEl?.offsetHeight || tabDiv.offsetHeight;
+    terminalOrigSizeRef.current = { w: 0, h: renderedH };
+    // Size the scaleWrapper to match terminal height, bottom-aligned in scrollable container
+    if (scaleWrapper) {
+      scaleWrapper.style.height = renderedH + 'px';
+      scaleWrapper.style.marginTop = 'auto';
+    }
+
+
 
     // Write banner data that was synchronously read from ConPTY pipe in Rust.
     // This guarantees CMD/PowerShell banner is displayed immediately.
@@ -221,11 +269,6 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     } catch (err) {
       console.error('[Terminal] Attach failed:', err);
     }
-
-    // Mark that this tab should NOT be resized until first data arrives.
-    // This protects the banner from being overwritten by a premature fit/resize.
-    // firstDataReceivedRef will be set to true in the output listener callback.
-    firstDataReceivedRef.current.delete(sessionId);
 
     term.focus();
 
@@ -254,22 +297,55 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     }).then(fn => unlistens.push(fn));
 
     const p1 = listen<string>(`terminal://output/${tabId}`, (event) => {
-      // Mark banner received so debounce resize can proceed
-      if (!firstDataReceivedRef.current.has(tabId)) {
-        firstDataReceivedRef.current.add(tabId);
+      const payload = event.payload;
+      if (payload) {
+        const tracker = bytesTrackerRef.current.get(tabId);
+        if (tracker) {
+          tracker.rx += payload.length;
+          setDisplaySecRx(tracker.rx);
+          setTick(t => t + 1);
+        }
+        // Update tx state machine
+        const txState = txStateRef.current.get(tabId);
+        if (txState) {
+          if (txState.state === 'sending' || txState.state === 'waiting') {
+            txState.state = 'receiving';
+          }
+          txState.lastRxTime = Date.now();
+        }
       }
-      term.write(event.payload);
+      term.write(payload);
     }).then((fn) => {
       unlistens.push(fn);
     });
 
     const p2 = listen(`terminal://exited`, (event: any) => {
       if (event.payload?.session_id === tabId) {
+        const meta = sessionMetaRef.current.get(tabId);
+        if (meta) meta.alive = false;
         term.writeln('\r\n\x1b[90m[Process exited]\x1b[0m');
       }
     }).then((fn) => { unlistens.push(fn); });
 
     term.onData((data) => {
+      const tracker = bytesTrackerRef.current.get(tabId);
+      if (tracker) {
+        tracker.tx += data.length;
+        setDisplaySecTx(tracker.tx);
+        setTick(t => t + 1);
+      }
+      // Detect Enter key to start tx state machine (only from idle state)
+      if (data === '\r') {
+        const txState = txStateRef.current.get(tabId);
+        if (txState && txState.state === 'idle') {
+          txState.state = 'sending';
+          // After 150ms, if still sending, transition to waiting
+          setTimeout(() => {
+            const s = txStateRef.current.get(tabId);
+            if (s && s.state === 'sending') s.state = 'waiting';
+          }, 150);
+        }
+      }
       invoke('terminal_write', {
         sessionId: tabId,
         data,
@@ -283,6 +359,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
   }, []);
 
   // ── Close terminal tab ──
+  //    Uses functional state updates to avoid stale closure issues with activeTerminalTabId.
 
   const closeTerminal = useCallback(async (tabId: string, event?: React.MouseEvent) => {
     if (event) event.stopPropagation();
@@ -299,33 +376,36 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
       unlistenRefs.current.delete(tabId);
     }
 
-    conptyDimsRef.current.delete(tabId);
-    firstDataReceivedRef.current.delete(tabId);
-
     try {
       await invoke('terminal_close', { sessionId: tabId });
     } catch (err) {
       console.error('[Terminal] Failed to close session:', err);
     }
 
+    // Clean up tracking refs
+    sessionMetaRef.current.delete(tabId);
+    bytesTrackerRef.current.delete(tabId);
+    txStateRef.current.delete(tabId);
+
     const tabDiv = document.getElementById(`xterm-tab-${tabId}`);
     if (tabDiv?.parentNode) {
       tabDiv.parentNode.removeChild(tabDiv);
     }
 
+    // Use functional update to read latest state — avoids stale closure on activeTerminalTabId
     setTerminalTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
-      if (activeTerminalTabId === tabId) {
-        const newActiveId = next.length > 0 ? next[next.length - 1].id : null;
-        if (newActiveId) {
-          const div = document.getElementById(`xterm-tab-${newActiveId}`);
-          if (div) div.style.display = 'block';
+      // Check against current activeTerminalTabId via functional setter
+      setActiveTerminalTabId((currentActive) => {
+        if (currentActive === tabId) {
+          const newActiveId = next.length > 0 ? next[next.length - 1].id : null;
+          return newActiveId;
         }
-        setActiveTerminalTabId(newActiveId);
-      }
+        return currentActive;
+      });
       return next;
     });
-  }, [activeTerminalTabId]);
+  }, []);
 
   // ── Tab switch: CSS display toggle + focus only (NO fit ever) ──
 
@@ -349,16 +429,15 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     }
   }, [activeTerminalTabId]);
 
-  // ── ResizeObserver: auto-create + fit + smart resize ──
-  //    This is the ONLY effect that responds to container size changes.
-  //    No visibility tracking, no mode-switch-specific logic.
+  // ── ResizeObserver: auto-create terminal only ──
+  //    Terminal cols/rows are FIXED at creation time — never changed.
+  //    No fit/resize on container change — avoids xterm reflow vs ConPTY VT redraw conflicts.
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const observer = new ResizeObserver(() => {
-      // Skip all processing during terminal creation
       if (creatingRef.current) return;
 
       const w = container.offsetWidth;
@@ -366,68 +445,12 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
 
       // Auto-create first terminal when panel becomes visible with no tabs
       if (tabsCountRef.current === 0 && w > 0 && h > 0) {
-        observer.disconnect(); // Pause observer during async create
+        observer.disconnect();
         createTerminal();
         return;
       }
 
-      // Ignore zero-size observations (display:none or transition)
-      if (w === 0 || h === 0) return;
 
-      if (!activeTerminalTabId) return;
-      const entry = terminalRef.current.get(activeTerminalTabId);
-      if (!entry) return;
-
-      // Don't resize until shell has output its first data (banner).
-      // This prevents premature fit/resize from overwriting the banner.
-      if (!firstDataReceivedRef.current.has(activeTerminalTabId)) return;
-
-      // DEBOUNCE: Cancel any pending resize and schedule a new one after 150ms.
-      // This prevents multiple ConPTY resizes during window drag, which causes
-      // shell screen buffer redraws → content loss and duplication.
-      if (resizeTimerRef.current !== null) {
-        clearTimeout(resizeTimerRef.current);
-      }
-      resizeTimerRef.current = setTimeout(() => {
-        resizeTimerRef.current = null;
-        try {
-          // Send VT clear-screen to xterm BEFORE fit to prevent content duplication.
-          // fit() changes cols → text rewraps; then ConPTY resize sends VT redraw.
-          // Without clearing, both rewrapped text AND ConPTY redraw are visible.
-          // \x1b[2J clears entire screen — ConPTY redraw becomes the sole source.
-          // Clear xterm visible area before fit to prevent content duplication.
-          // ConPTY resize will redraw the screen buffer via VT sequences,
-          // so clearing here ensures the final content comes only from ConPTY.
-          const term = entry.term;
-          const buffer = term.buffer.active;
-          const totalLines = buffer.length;
-          const viewRows = term.rows;
-          const base = buffer.baseY + viewRows;
-          const scrollback = totalLines - base;
-          if (scrollback > 0) {
-            // Preserve scrollback, clear only visible viewport
-            for (let r = 0; r < viewRows; r++) {
-              const line = buffer.getLine(base + r - viewRows);
-              if (line) line.clear();
-            }
-          }
-          
-          entry.fitAddon.fit();
-          const newDims = entry.fitAddon.proposeDimensions();
-          if (!newDims?.cols || !newDims?.rows) return;
-
-          const conptyKnown = conptyDimsRef.current.get(activeTerminalTabId);
-          if (conptyKnown && conptyKnown.cols === newDims.cols && conptyKnown.rows === newDims.rows) return;
-
-          conptyDimsRef.current.set(activeTerminalTabId, { cols: newDims.cols, rows: newDims.rows });
-          setTerminalDims({ cols: newDims.cols, rows: newDims.rows });
-          invoke('terminal_resize', {
-            sessionId: activeTerminalTabId,
-            cols: newDims.cols,
-            rows: newDims.rows,
-          }).catch(() => {});
-        } catch { /* ignore */ }
-      }, 150);
     });
 
     observerRef.current = observer;
@@ -435,12 +458,57 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     return () => {
       observer.disconnect();
       observerRef.current = null;
-      if (resizeTimerRef.current !== null) {
-        clearTimeout(resizeTimerRef.current);
-        resizeTimerRef.current = null;
-      }
     };
   }, [activeTerminalTabId, createTerminal]);
+
+  // ── 1s poll: direct state updates from refs (recursive setTimeout, no setInterval) ──
+  const [tick, setTick] = useState(0);
+  const [displayUptime, setDisplayUptime] = useState(0);
+  const [displayAlive, setDisplayAlive] = useState(true);
+  const [displayBufferLines, setDisplayBufferLines] = useState(0);
+  const [displayTxState, setDisplayTxState] = useState<'idle' | 'sending' | 'waiting' | 'receiving'>('idle');
+
+  // Per-second throughput: poll reads + resets counters, displays last-second values
+  const [displaySecRx, setDisplaySecRx] = useState(0);
+  const [displaySecTx, setDisplaySecTx] = useState(0);
+
+  useEffect(() => {
+    let running = true;
+    const poll = () => {
+      if (!running) return;
+      const activeId = activeTerminalTabId;
+      if (activeId) {
+        const meta = sessionMetaRef.current.get(activeId);
+        const tracker = bytesTrackerRef.current.get(activeId);
+        const entry = terminalRef.current.get(activeId);
+        const txState = txStateRef.current.get(activeId);
+        if (meta) {
+          setDisplayAlive(meta.alive);
+          setDisplayUptime(Math.floor((Date.now() - meta.createdAt) / 1000));
+        }
+        if (tracker) {
+          setDisplaySecRx(tracker.rx);
+          setDisplaySecTx(tracker.tx);
+          tracker.rx = 0;
+          tracker.tx = 0;
+        }
+        setTick(t => t + 1);
+        if (entry) {
+          // baseY (scrollback lines) + cursorY (current line within viewport) + 1 = actual used lines
+          setDisplayBufferLines(entry.term.buffer.active.baseY + entry.term.buffer.active.cursorY + 1);
+        }
+        if (txState) {
+          if (txState.state === 'receiving' && Date.now() - txState.lastRxTime > 500) {
+            txState.state = 'idle';
+          }
+          setDisplayTxState(txState.state);
+        }
+      }
+      setTimeout(poll, 1000);
+    };
+    poll();
+    return () => { running = false; };
+  }, [activeTerminalTabId]);
 
   // ── Load console config ──
   useEffect(() => {
@@ -638,24 +706,34 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
         </div>
       </div>
 
-      {/* Terminal content area */}
-      <div className="flex-1 relative overflow-hidden">
-        <div ref={containerRef} className="absolute inset-0">
-          {terminalTabs.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center gap-4" style={{ color: 'rgba(255,255,255,0.3)' }}>
-              <Monitor className="w-12 h-12" />
-              <div className="text-center">
-                <p className="text-sm font-medium">No active terminals</p>
-                <p className="text-xs mt-1">
-                  Press <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: 'rgba(255,255,255,0.1)' }}>Ctrl+Shift+T</kbd> to open a terminal
-                </p>
-              </div>
+      {/* Terminal content area — scrollable parent for oversized terminal; xterm handles scrollback internally */}
+      <div className="flex-1 relative overflow-x-hidden overflow-y-auto terminal-viewport-area" style={{ background: TERMINAL_THEMES[terminalTheme].background }}>
+        {/* Empty state — centered in the entire content area */}
+        {terminalTabs.length === 0 && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4" style={{ color: 'rgba(255,255,255,0.3)' }}>
+            <Monitor className="w-12 h-12" />
+            <div className="text-center">
+              <p className="text-sm font-medium">No active terminals</p>
+              <p className="text-xs mt-1">
+                Press <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: 'rgba(255,255,255,0.1)' }}>Ctrl+Shift+T</kbd> to open a terminal
+              </p>
             </div>
-          )}
+          </div>
+        )}
+        
+        {/* Scrollable container — at least full height so marginTop:auto bottom-aligns terminal */}
+        <div ref={containerRef} style={{ minHeight: '100%', display: 'flex', flexDirection: 'column', padding: '12px 0 12px 16px' }}>
+          {/* scaleWrapper: sized by JS after terminal render, bottom-aligned via marginTop:auto */}
+          <div
+            ref={scaleWrapperRef}
+            className="relative"
+          >
+            {/* Tab content divs are managed imperatively by createTerminal */}
+          </div>
         </div>
       </div>
 
-      {/* Status bar */}
+      {/* Status bar — connection, shell, dims, scrollback, tab, transfer */}
       {activeTab && (
         <div
           className="flex items-center h-6 shrink-0 px-3 gap-3"
@@ -667,27 +745,41 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
             fontFamily: 'Cascadia Code, Consolas, monospace',
           }}
         >
+          {/* Connection status + uptime */}
+          <span style={{ color: displayAlive ? '#10B981' : '#EF4444' }}>
+            {displayAlive ? 'Live' : 'Exit'}
+          </span>
+          {displayUptime > 0 && <span className="text-[10px] opacity-70">{formatUptime(displayUptime)}</span>}
+          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+          {/* Shell type */}
           <span>{activeTab.shellType === 'powershell' ? 'PowerShell' : 'CMD'}</span>
           <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+          {/* Dimensions */}
           <span>{terminalDims.cols} x {terminalDims.rows}</span>
-          {activeTab.pid && (
-            <>
-              <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
-              <span>PID {activeTab.pid}</span>
-            </>
-          )}
           <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+          {/* Buffer lines — actual line count from xterm buffer */}
+          <span title="Buffer lines">{displayBufferLines} lines</span>
+          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+          {/* Tab index */}
           <span>Tab {terminalTabs.findIndex(t => t.id === activeTerminalTabId) + 1}/{terminalTabs.length}</span>
-          {consoleConfig && (
-            <>
-              <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
-              <span>{consoleConfig.consoleType}</span>
-              <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
-              <span title="Buffer">{(consoleConfig.bufferSize / 1024).toFixed(0)}KB</span>
-              <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
-              <span title="Scrollback">{consoleConfig.maxLines ?? '-'} lines</span>
-            </>
-          )}
+          <span style={{ color: 'rgba(255,255,255,0.25)' }}>|</span>
+          {/* Transfer info: cumulative bytes + real-time state */}
+          <span title="Data transmission">
+            {'↑'} {formatBytes(displaySecTx)} {'↓'} {formatBytes(displaySecRx)}
+          </span>
+          <span
+            style={{
+              color: displayTxState === 'receiving' ? '#60A5FA' :
+                     displayTxState === 'waiting' ? '#FBBF24' :
+                     displayTxState === 'sending' ? '#F59E0B' :
+                     'rgba(255,255,255,0.5)',
+            }}
+          >
+            {displayTxState === 'idle' && '已就绪'}
+            {displayTxState === 'sending' && '发送中...'}
+            {displayTxState === 'waiting' && '等待回传...'}
+            {displayTxState === 'receiving' && <span>回传中</span>}
+          </span>
           <span className="ml-auto">{terminalTheme}</span>
         </div>
       )}

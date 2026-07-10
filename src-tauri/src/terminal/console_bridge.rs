@@ -117,21 +117,12 @@ impl ConsoleBridge {
             cwd.to_string(),
         );
         self.sessions.insert(session_id.to_string(), session);
-        log::info!(
-            "[ConsoleBridge] Session registered: '{}' pid={}",
-            session_id, pid
-        );
     }
 
     /// 标记会话完成（正常退出，exit_code == 0）
     pub fn mark_completed(&mut self, session_id: &str) {
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.status = SessionStatus::Completed;
-            log::info!(
-                "[ConsoleBridge] Session '{}' completed (elapsed={}ms)",
-                session_id,
-                session.started_at.elapsed().as_millis()
-            );
         }
     }
 
@@ -139,11 +130,6 @@ impl ConsoleBridge {
     pub fn mark_failed(&mut self, session_id: &str) {
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.status = SessionStatus::Failed;
-            log::info!(
-                "[ConsoleBridge] Session '{}' failed (elapsed={}ms)",
-                session_id,
-                session.started_at.elapsed().as_millis()
-            );
         }
     }
 
@@ -151,19 +137,12 @@ impl ConsoleBridge {
     pub fn mark_terminated(&mut self, session_id: &str) {
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.status = SessionStatus::Terminated;
-            log::info!(
-                "[ConsoleBridge] Session '{}' terminated (elapsed={}ms)",
-                session_id,
-                session.started_at.elapsed().as_millis()
-            );
         }
     }
 
     /// 注销会话
     pub fn unregister_session(&mut self, session_id: &str) {
-        if self.sessions.remove(session_id).is_some() {
-            log::info!("[ConsoleBridge] Session '{}' unregistered", session_id);
-        }
+        self.sessions.remove(session_id);
     }
 
     // ── 查询接口 ──
@@ -181,9 +160,6 @@ impl ConsoleBridge {
 
 impl Drop for ConsoleBridge {
     fn drop(&mut self) {
-        let count = self.sessions.len();
-        if count > 0 {
-            log::info!("[ConsoleBridge] Drop: {} sessions still tracked", count);
-        }
+        let _ = self.sessions.len();
     }
 }

@@ -65,8 +65,7 @@ impl TerminalManager {
             _ => "cmd /K".to_string(),
         };
 
-
-        let cmdline_owned = cmdline.clone();
+let cmdline_owned = cmdline.clone();
         let cwd_owned = cwd.to_string();
         let init_cols = initial_cols.unwrap_or(80);
         let init_rows = initial_rows.unwrap_or(30);
@@ -78,8 +77,7 @@ impl TerminalManager {
 
         let pid = process.id();
 
-
-        let session = TerminalSession {
+let session = TerminalSession {
             id: id.clone(),
             shell_type: shell_type.to_string(),
             process,
@@ -152,8 +150,7 @@ impl TerminalManager {
         Ok(())
     }
 
-
-    /// Start reading stdout for a terminal session (call after frontend registers listeners)
+/// Start reading stdout for a terminal session (call after frontend registers listeners)
     pub fn attach(&mut self, id: &str, app_handle: &tauri::AppHandle) -> Result<(), String> {
         let session = self
             .sessions
@@ -205,9 +202,6 @@ async fn terminal_read_loop(
     use tokio::io::AsyncReadExt;
     let mut buf = [0u8; 4096];
     let event_name = format!("terminal://output/{}", session_id);
-    let mut _read_count: usize = 0;
-    let mut _total_bytes: usize = 0;
-
 
     loop {
         match stdout.read(&mut buf).await {
@@ -222,8 +216,6 @@ async fn terminal_read_loop(
                 break;
             }
             Ok(n) => {
-                _read_count += 1;
-                _total_bytes += n;
                 let data = String::from_utf8_lossy(&buf[..n]).to_string();
                 let _ = app_handle.emit(&event_name, data);
             }

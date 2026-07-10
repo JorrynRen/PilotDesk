@@ -167,8 +167,15 @@ async fn agent_send_message_with_config(
     let config = commands::agents::get_agent_inner(&conn, &agent_type)
         .map_err(|e| format!("查询 Agent 配置失败: {}", e))?
         .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
+    // cwd 为空时统一使用全局工作区路径
+    let resolved_cwd = if cwd.as_deref().map_or(true, |s| s.is_empty()) {
+        Some(crate::utils::paths::resolve_workspace_path(None, "", &conn)
+            .to_string_lossy().to_string())
+    } else {
+        cwd
+    };
     let mut mgr = agent_mgr.lock().await;
-    mgr.send_message_with_config(app, session_id, config, message, mode, cwd, system_prompt, agent_session_id).await
+    mgr.send_message_with_config(app, session_id, config, message, mode, resolved_cwd, system_prompt, agent_session_id).await
 }
 
 #[tauri::command]

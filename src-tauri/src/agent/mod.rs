@@ -753,8 +753,31 @@ impl AgentManager {
                     }
                 }
             }),
-            abort_check: Box::new(|| false),
-            on_pid: Box::new(|_pid| {}),
+            abort_check: {
+                let processes_abort = Arc::clone(&self.processes);
+                let session_abort = _temp_session_id.to_string();
+                Box::new(move || {
+                    if let Ok(procs) = processes_abort.lock() {
+                        if let Some(proc) = procs.get(&session_abort) {
+                            return proc.aborted.load(Ordering::Relaxed);
+                        }
+                    }
+                    false
+                })
+            },
+            on_pid: {
+                let processes_pid = Arc::clone(&self.processes);
+                let session_pid = _temp_session_id.to_string();
+                Box::new(move |spawned_pid: u32| {
+                    log::info!("[Agent/execute_once] on_pid callback: session={}, pid={}", session_pid, spawned_pid);
+                    let aborted = Arc::new(AtomicBool::new(false));
+                    let aborted_clone = aborted.clone();
+                    processes_pid.lock().unwrap().insert(session_pid.clone(), AgentProcess {
+                        pid: Some(spawned_pid),
+                        aborted: aborted_clone,
+                    });
+                })
+            },
         };
 
         let result = self.execute_command(
