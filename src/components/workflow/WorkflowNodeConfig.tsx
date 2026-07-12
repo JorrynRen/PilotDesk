@@ -1398,7 +1398,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
         </div>
       )}
 
-      {/* ===== 输出映射 ===== */}
+      {node.type !== 'end' && (
       <div style={S.sectionGap}>
         <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
           <div style={S.sectionTitle}>输出映射</div>
@@ -1435,6 +1435,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
             baseKeyRef={outputBaseKeyRef}
             valueOptions={getOutputFieldOptions(node.type)} />
       </div>
+      )}
 
       {/* ===== 控制属性 ===== */}
       <div style={S.sectionGap}>

@@ -244,17 +244,12 @@ export function createDefaultWorkflow(name: string): WorkflowDefinition {
   const endNode = createWorkflowNode('end');
   const startStageId = generateStageId();
   const endStageId = generateStageId();
-  const stageEdges: WorkflowEdge[] = [
-    { id: generateEdgeId(startStageId, endStageId), source: startStageId, target: endStageId },
-  ];
-
   return {
     id: generateId(),
     name,
     version: '1.0.0',
     description: '',
     trigger: { triggerType: 'manual' },
-    stageEdges,
     stages: [
       {
         id: startStageId,
@@ -262,6 +257,7 @@ export function createDefaultWorkflow(name: string): WorkflowDefinition {
         order: 0,
         nodes: [startNode],
         edges: [],
+        stageEdges: [{ id: generateEdgeId(startStageId, endStageId), source: startStageId, target: endStageId }],
         gate: { strategy: 'all', mergeStrategy: 'merge' },
       },
       {

@@ -85,33 +85,30 @@ fn update_node_execution(
 fn emit_node_status(
     emitter: &tauri::AppHandle,
     execution_id: &str,
+    definition_id: &str,
     node_id: &str,
     status: &str,
     output: Option<&Value>,
     error: Option<&str>,
     completed_count: Option<usize>,
     total: Option<usize>,
+    mode: &ExecutionMode,
 ) {
-    let mut payload = serde_json::json!({
-        "execution_id": execution_id,
-        "node_id": node_id,
+    let mut node_payload = serde_json::json!({
+        "id": node_id,
         "status": status,
     });
     if let Some(out) = output {
-        payload["output"] = out.clone();
+        node_payload["output"] = out.clone();
     }
     if let Some(err) = error {
-        payload["error"] = err.into();
+        node_payload["error"] = err.into();
     }
-    emitter.emit("workflow:node-status", payload).ok();
-
-    if let (Some(cc), Some(t)) = (completed_count, total) {
-        emitter.emit("workflow:progress", serde_json::json!({
-            "execution_id": execution_id,
-            "completed": cc,
-            "total": t,
-        })).ok();
-    }
+    emit_progress(
+        emitter, execution_id, definition_id, mode,
+        Some(node_payload), None, None,
+        completed_count.zip(total),
+    );
 }
 
 /// 写入节点执行记录到 DB 并发送事件
@@ -153,13 +150,456 @@ fn record_node_execution(
 /// 两层调度引擎：阶段串行 → 阶段内 DAG
 pub struct WorkflowEngine;
 
+/// 执行模式（预留：支持完整执行、单点执行、断点执行）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ExecutionMode {
+    /// 完整执行（默认）：从 start 节点执行到 end 节点
+    Full,
+    /// 单点执行：仅执行选中的单个节点（预留）
+    #[allow(dead_code)]
+    SingleNode { node_id: String },
+    /// 断点执行：从选中节点执行至 end 节点（预留）
+    #[allow(dead_code)]
+    FromNode { node_id: String },
+}
+
+impl Default for ExecutionMode {
+    fn default() -> Self {
+        ExecutionMode::Full
+    }
+}
+
+/// 校验结果
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ValidationResult {
+    /// 是否通过（无 error 级别检查项）
+    pub ok: bool,
+    /// 校验详情列表
+    pub checks: Vec<ValidationCheck>,
+}
+
+/// 单项校验结果
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationCheck {
+    /// 校验类型标识
+    pub check_type: String,
+    /// 严重级别
+    pub severity: String, // "error" | "warning" | "info"
+    /// 可读消息
+    pub message: String,
+    /// 可选详情（如涉及的节点/阶段 ID）
+    pub details: Option<serde_json::Value>,
+}
+
 /// 执行计划：描述工作流的拓扑执行顺序和可达节点
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct ExecutionPlan {
     /// 从 start 节点可达的所有节点 ID
     pub reachable_node_ids: Vec<String>,
-    /// 按拓扑排序的可达阶段 ID（执行顺序）
-    pub ordered_stage_ids: Vec<String>,
+    /// 分层阶段 ID（同层无依赖关系，可并行执行）
+    pub ordered_stage_ids: Vec<Vec<String>>,
+}
+
+/// Drop 时自动注销执行注册
+struct ExecutionGuard<'a> {
+    executor: &'a NodeExecutor,
+    execution_id: String,
+}
+
+impl WorkflowEngine {
+    /// 工作流执行前校验（统一前置检查）
+    ///
+    /// 检查项：start/end 唯一性、完整路径、阶段内循环依赖、阶段连线环路、
+    ///         未就绪节点统计、子工作流全链路深度/循环引用预检、空阶段检测
+    pub fn validate_workflow_for_execution(
+        def: &WorkflowDefinition,
+        conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+        _mode: &ExecutionMode,
+    ) -> Result<ValidationResult, AppError> {
+        let mut checks: Vec<ValidationCheck> = Vec::new();
+        let mut has_error = false;
+
+        // ── 1. start 节点唯一性 ──
+        let start_nodes: Vec<&WorkflowNode> = def.stages.iter()
+            .flat_map(|s| s.nodes.iter())
+            .filter(|n| n.node_type == WorkflowNodeType::Start)
+            .collect();
+        let start_ok = start_nodes.len() == 1;
+        checks.push(ValidationCheck {
+            check_type: "boundary_start".into(),
+            severity: if start_ok { "info".into() } else { "error".into() },
+            message: if start_ok {
+                format!("起始节点唯一 (id={})", start_nodes[0].id)
+            } else {
+                format!("起始节点数量异常: 期望 1 个，实际 {} 个", start_nodes.len())
+            },
+            details: if !start_ok {
+                Some(serde_json::json!({ "ids": start_nodes.iter().map(|n| &n.id).collect::<Vec<_>>() }))
+            } else { None },
+        });
+        if !start_ok { has_error = true; }
+
+        // ── 2. end 节点唯一性 ──
+        let end_nodes: Vec<&WorkflowNode> = def.stages.iter()
+            .flat_map(|s| s.nodes.iter())
+            .filter(|n| n.node_type == WorkflowNodeType::End)
+            .collect();
+        let end_ok = end_nodes.len() == 1;
+        checks.push(ValidationCheck {
+            check_type: "boundary_end".into(),
+            severity: if end_ok { "info".into() } else { "error".into() },
+            message: if end_ok {
+                format!("结束节点唯一 (id={})", end_nodes[0].id)
+            } else {
+                format!("结束节点数量异常: 期望 1 个，实际 {} 个", end_nodes.len())
+            },
+            details: if !end_ok {
+                Some(serde_json::json!({ "ids": end_nodes.iter().map(|n| &n.id).collect::<Vec<_>>() }))
+            } else { None },
+        });
+        if !end_ok { has_error = true; }
+
+        // ── 3. 完整路径（start → end 可达）──
+        if start_ok && end_ok {
+            let plan = Self::compute_execution_plan(def);
+            let end_reachable = plan.reachable_node_ids.contains(&end_nodes[0].id);
+            checks.push(ValidationCheck {
+                check_type: "path_complete".into(),
+                severity: if end_reachable { "info".into() } else { "error".into() },
+                message: if end_reachable {
+                    "从起始节点到结束节点存在完整执行路径".into()
+                } else {
+                    "不存在从起始节点到结束节点的完整路径".into()
+                },
+                details: None,
+            });
+            if !end_reachable { has_error = true; }
+
+            // ── 4. 未就绪节点统计 ──
+            let all_node_ids: std::collections::HashSet<String> = def.stages.iter()
+                .flat_map(|s| s.nodes.iter().map(|n| n.id.clone()))
+                .collect();
+            let reachable_set: std::collections::HashSet<String> =
+                plan.reachable_node_ids.iter().cloned().collect();
+            let unreachable_count = all_node_ids.len().saturating_sub(reachable_set.len());
+            checks.push(ValidationCheck {
+                check_type: "unreachable_nodes".into(),
+                severity: if unreachable_count == 0 { "info".into() } else { "warning".into() },
+                message: if unreachable_count == 0 {
+                    "所有节点均可达".into()
+                } else {
+                    format!("存在 {} 个未就绪节点（不在执行路径上）", unreachable_count)
+                },
+                details: if unreachable_count > 0 {
+                    let unreachable_ids: Vec<String> = all_node_ids.into_iter()
+                        .filter(|id| !reachable_set.contains(id))
+                        .collect();
+                    Some(serde_json::json!({ "count": unreachable_count, "ids": unreachable_ids }))
+                } else { None },
+            });
+        }
+
+        // ── 5. 阶段内无循环依赖（Kahn 算法）──
+        let mut has_cycle = false;
+        let mut cycle_stages = Vec::new();
+        for stage in &def.stages {
+            if stage.nodes.len() <= 1 { continue; }
+            match Self::topological_sort(&stage.nodes, &stage.edges) {
+                Ok(_) => {}
+                Err(_) => {
+                    has_cycle = true;
+                    cycle_stages.push(stage.id.clone());
+                }
+            }
+        }
+        checks.push(ValidationCheck {
+            check_type: "node_cycle".into(),
+            severity: if has_cycle { "error".into() } else { "info".into() },
+            message: if has_cycle {
+                format!("{} 个阶段内存在节点循环依赖", cycle_stages.len())
+            } else {
+                "所有阶段内均无循环依赖".into()
+            },
+            details: if has_cycle {
+                Some(serde_json::json!({ "stage_ids": cycle_stages }))
+            } else { None },
+        });
+        if has_cycle { has_error = true; }
+
+        // ── 6. 阶段连线环路检测（Kahn 算法）──
+        let stage_cycle_check = Self::check_stage_edge_cycle(def);
+        if stage_cycle_check.severity == "error" {
+            has_error = true;
+        }
+        checks.push(stage_cycle_check);
+
+        // ── 7. 空阶段检测 ──
+        let mut empty_stages = Vec::new();
+        for stage in &def.stages {
+            let non_boundary = stage.nodes.iter()
+                .filter(|n| n.node_type != WorkflowNodeType::Start && n.node_type != WorkflowNodeType::End)
+                .count();
+            if non_boundary == 0 && stage.nodes.len() > 0 {
+                empty_stages.push(stage.id.clone());
+            }
+        }
+        checks.push(ValidationCheck {
+            check_type: "empty_stages".into(),
+            severity: if empty_stages.is_empty() { "info".into() } else { "warning".into() },
+            message: if empty_stages.is_empty() {
+                "所有阶段均包含非边界节点".into()
+            } else {
+                format!("{} 个阶段仅包含边界节点（无实际工作节点）", empty_stages.len())
+            },
+            details: if !empty_stages.is_empty() {
+                Some(serde_json::json!({ "stage_ids": empty_stages }))
+            } else { None },
+        });
+
+        // ── 8. 子工作流全链路预检（深度 + 循环引用）──
+        let max_depth: usize = conn.query_row(
+            "SELECT value FROM app_settings WHERE key = 'workflow_max_subflow_depth'",
+            [],
+            |row| row.get::<_, String>(0),
+        ).ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+
+        let subflow_checks = Self::check_all_subflow_chains(def, conn, max_depth);
+        for sc in subflow_checks {
+            if sc.severity == "error" { has_error = true; }
+            checks.push(sc);
+        }
+
+        Ok(ValidationResult { ok: !has_error, checks })
+    }
+
+    /// 阶段连线环路检测（Kahn 算法）
+    fn check_stage_edge_cycle(def: &WorkflowDefinition) -> ValidationCheck {
+        let stage_ids: std::collections::HashSet<String> =
+            def.stages.iter().map(|s| s.id.clone()).collect();
+
+        let mut in_degree: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut adj: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+        for s in &def.stages {
+            in_degree.entry(s.id.clone()).or_insert(0);
+            adj.entry(s.id.clone()).or_default();
+        }
+        for s in &def.stages {
+            for edge in &s.stage_edges {
+                if stage_ids.contains(&edge.source) && stage_ids.contains(&edge.target) {
+                    adj.get_mut(&edge.source).unwrap().push(edge.target.clone());
+                    *in_degree.entry(edge.target.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut queue: Vec<String> = in_degree.iter()
+            .filter(|(_, &d)| d == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut processed = 0;
+
+        while !queue.is_empty() {
+            let mut next_queue = Vec::new();
+            for id in &queue {
+                processed += 1;
+                if let Some(neighbors) = adj.get(id) {
+                    for neighbor in neighbors {
+                        if let Some(d) = in_degree.get_mut(neighbor) {
+                            *d -= 1;
+                            if *d == 0 {
+                                next_queue.push(neighbor.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            queue = next_queue;
+        }
+
+        let has_cycle = processed < def.stages.len();
+        ValidationCheck {
+            check_type: "stage_edge_cycle".into(),
+            severity: if has_cycle { "error".into() } else { "info".into() },
+            message: if has_cycle {
+                format!("阶段连线存在环路（{} 个阶段不可达）", def.stages.len() - processed)
+            } else {
+                "阶段连线无环路".into()
+            },
+            details: None,
+        }
+    }
+
+    /// 子工作流全链路预检（递归检查所有 Subflow 节点的嵌套深度和循环引用）
+    fn check_all_subflow_chains(
+        def: &WorkflowDefinition,
+        conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+        max_depth: usize,
+    ) -> Vec<ValidationCheck> {
+        let mut checks = Vec::new();
+        Self::check_subflow_chain_recursive(
+            def, conn, max_depth, &mut Vec::new(), &mut std::collections::HashSet::new(), &mut checks,
+        );
+        checks
+    }
+
+    fn check_subflow_chain_recursive(
+        current_def: &WorkflowDefinition,
+        conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+        max_depth: usize,
+        chain: &mut Vec<String>,
+        visited_global: &mut std::collections::HashSet<String>,
+        checks: &mut Vec<ValidationCheck>,
+    ) {
+        chain.push(current_def.id.clone());
+
+        if visited_global.contains(&current_def.id) {
+            chain.pop();
+            return;
+        }
+        visited_global.insert(current_def.id.clone());
+
+        for stage in &current_def.stages {
+            for node in &stage.nodes {
+                if node.node_type != WorkflowNodeType::Subflow { continue; }
+
+                let subflow_def_id = node.params.as_ref()
+                    .and_then(|p| p.get("definitionId"))
+                    .and_then(|v| v.as_str());
+
+                let subflow_def_id = match subflow_def_id {
+                    Some(id) => id.to_string(),
+                    None => {
+                        checks.push(ValidationCheck {
+                            check_type: "subflow_config".into(),
+                            severity: "warning".into(),
+                            message: format!("阶段 '{}' 的 Subflow 节点 '{}' 缺少 definitionId 参数",
+                                stage.name, node.id),
+                            details: Some(serde_json::json!({ "stageId": &stage.id, "nodeId": &node.id })),
+                        });
+                        continue;
+                    }
+                };
+
+                // 检查循环引用
+                if chain.contains(&subflow_def_id) {
+                    let mut chain_display = chain.clone();
+                    chain_display.push(subflow_def_id.clone());
+                    checks.push(ValidationCheck {
+                        check_type: "subflow_cycle".into(),
+                        severity: "error".into(),
+                        message: format!(
+                            "检测到子工作流循环引用: {}",
+                            chain_display.join(" → ")
+                        ),
+                        details: Some(serde_json::json!({
+                            "chain": chain_display,
+                            "nodeId": &node.id,
+                            "stageId": &stage.id,
+                        })),
+                    });
+                    continue;
+                }
+
+                // 检查嵌套深度
+                if chain.len() >= max_depth {
+                    checks.push(ValidationCheck {
+                        check_type: "subflow_depth".into(),
+                        severity: "error".into(),
+                        message: format!(
+                            "子工作流嵌套深度 {} 超过最大限制 {} (链路: {} → {})",
+                            chain.len() + 1, max_depth, chain.join(" → "), subflow_def_id
+                        ),
+                        details: Some(serde_json::json!({
+                            "depth": chain.len() + 1,
+                            "maxDepth": max_depth,
+                            "nodeId": &node.id,
+                            "stageId": &stage.id,
+                        })),
+                    });
+                    continue;
+                }
+
+                // 加载子工作流定义并递归检查
+                match super::get_definition(conn, &subflow_def_id) {
+                    Ok(Some(sub_def)) => {
+                        Self::check_subflow_chain_recursive(
+                            &sub_def, conn, max_depth, chain, visited_global, checks,
+                        );
+                    }
+                    Ok(None) => {
+                        checks.push(ValidationCheck {
+                            check_type: "subflow_missing".into(),
+                            severity: "error".into(),
+                            message: format!("子工作流定义不存在: {}", subflow_def_id),
+                            details: Some(serde_json::json!({
+                                "definitionId": &subflow_def_id,
+                                "nodeId": &node.id,
+                                "stageId": &stage.id,
+                            })),
+                        });
+                    }
+                    Err(e) => {
+                        checks.push(ValidationCheck {
+                            check_type: "subflow_load_error".into(),
+                            severity: "warning".into(),
+                            message: format!("加载子工作流定义失败: {} ({})", subflow_def_id, e),
+                            details: Some(serde_json::json!({
+                                "definitionId": &subflow_def_id,
+                                "nodeId": &node.id,
+                                "error": e.to_string(),
+                            })),
+                        });
+                    }
+                }
+            }
+        }
+
+        chain.pop();
+    }
+}
+
+/// 统一执行进度事件发射
+///
+/// 将 node-status / stage-status / execution-status 三个事件统一为
+/// workflow:execution-progress，前端只需注册一个 listen。
+/// payload 为扁平结构，node/stage/execution 三个可选字段标识变更类型。
+fn emit_progress(
+    emitter: &tauri::AppHandle,
+    execution_id: &str,
+    definition_id: &str,
+    mode: &ExecutionMode,
+    node: Option<serde_json::Value>,
+    stage: Option<serde_json::Value>,
+    execution: Option<serde_json::Value>,
+    progress: Option<(usize, usize)>,
+) {
+    let mut payload = serde_json::json!({
+        "execution_id": execution_id,
+        "definition_id": definition_id,
+        "mode": mode,
+    });
+    if let Some(n) = node {
+        payload["node"] = n;
+    }
+    if let Some(s) = stage {
+        payload["stage"] = s;
+    }
+    if let Some(e) = execution {
+        payload["execution"] = e;
+    }
+    if let Some((completed, total)) = progress {
+        payload["progress"] = serde_json::json!({ "completed": completed, "total": total });
+    }
+    emitter.emit("workflow:execution-progress", payload).ok();
+}
+
+impl Drop for ExecutionGuard<'_> {
+    fn drop(&mut self) {
+        self.executor.unregister_execution(&self.execution_id);
+    }
 }
 
 impl WorkflowEngine {
@@ -182,25 +622,27 @@ impl WorkflowEngine {
                 let stage_map: std::collections::HashMap<String, &Stage> =
                     def.stages.iter().map(|s| (s.id.clone(), s)).collect();
 
-                // 构建阶段连线快速查找
+                // 构建阶段连线快速查找（从各阶段的 stage_edges 读取）
                 let se_down: std::collections::HashMap<String, Vec<String>> = {
                     let mut m: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-                    for edge in &def.stage_edges {
-                        m.entry(edge.source.clone()).or_default().push(edge.target.clone());
+                    for stage in &def.stages {
+                        for edge in &stage.stage_edges {
+                            m.entry(edge.source.clone()).or_default().push(edge.target.clone());
+                        }
                     }
                     m
                 };
 
-                // BFS：同时收集可达阶段（按拓扑顺序）和可达节点
+                // BFS：同时收集可达阶段（按拓扑顺序分层）和可达节点
                 let mut visited_nodes = std::collections::HashSet::new();
                 let mut visited_stages = std::collections::HashSet::new();
-                let mut stage_order = Vec::new();
+                let mut stage_depth: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
                 let mut node_queue = std::collections::VecDeque::new();
 
                 visited_nodes.insert(nid.clone());
                 visited_stages.insert(sid.clone());
+                stage_depth.insert(sid.clone(), 0);
                 node_queue.push_back(nid.clone());
-                stage_order.push(sid.clone());
 
                 while let Some(cur) = node_queue.pop_front() {
                     if let Some(stage) = stage_map.values().find(|s| s.nodes.iter().any(|n| n.id == cur)) {
@@ -213,10 +655,11 @@ impl WorkflowEngine {
                         }
                         // 沿阶段连线找下游阶段
                         if let Some(downstreams) = se_down.get(&stage.id) {
+                            let cur_depth = *stage_depth.get(&stage.id).unwrap_or(&0);
                             for ds_id in downstreams {
                                 if stage_id_set.contains(ds_id) && !visited_stages.contains(ds_id) {
                                     visited_stages.insert(ds_id.clone());
-                                    stage_order.push(ds_id.clone());
+                                    stage_depth.insert(ds_id.clone(), cur_depth + 1);
                                     // 只将下游阶段的入口节点（入度为0的节点）加入队列，
                                     // BFS 会沿阶段内节点连线自然遍历到真正可达的节点
                                     if let Some(ds) = stage_map.get(ds_id) {
@@ -239,9 +682,15 @@ impl WorkflowEngine {
 
                 let mut reachable_ids: Vec<String> = visited_nodes.into_iter().collect();
                 reachable_ids.sort();
+                // 按深度分组，同层阶段可并行执行
+                let max_depth = stage_depth.values().max().copied().unwrap_or(0);
+                let mut layers: Vec<Vec<String>> = (0..=max_depth).map(|_| Vec::new()).collect();
+                for (sid, depth) in &stage_depth {
+                    layers[*depth].push(sid.clone());
+                }
                 ExecutionPlan {
                     reachable_node_ids: reachable_ids,
-                    ordered_stage_ids: stage_order,
+                    ordered_stage_ids: layers,
                 }
             }
             _ => {
@@ -250,7 +699,7 @@ impl WorkflowEngine {
                     reachable_node_ids: def.stages.iter()
                         .flat_map(|s| s.nodes.iter().map(|n| n.id.clone()))
                         .collect(),
-                    ordered_stage_ids: def.stages.iter().map(|s| s.id.clone()).collect(),
+                    ordered_stage_ids: vec![def.stages.iter().map(|s| s.id.clone()).collect()],
                 }
             }
         }
@@ -319,7 +768,10 @@ impl WorkflowEngine {
         executor: &Arc<NodeExecutor>,
         stage: &Stage,
         execution_id: &str,
+        definition_id: &str,
+        mode: &ExecutionMode,
         context: &Arc<AsyncMutex<HashMap<String, Value>>>,
+        raw_outputs: &Arc<AsyncMutex<HashMap<String, Value>>>,
         emitter: &tauri::AppHandle,
         cancelled: &Arc<AtomicBool>,
         completed_count: &Arc<AtomicUsize>,
@@ -377,8 +829,7 @@ impl WorkflowEngine {
                         node_statuses.lock().await.insert(node_id.clone(), "skipped".to_string());
                         completed_count.fetch_add(1, Ordering::SeqCst);
                         record_node_execution(emitter, execution_id, node_id, "skipped", None, None, None, None, None, None);
-                        emit_node_status(emitter, execution_id, node_id, "skipped", None, None,
-                            Some(completed_count.load(Ordering::SeqCst)), Some(total_count));
+                        emit_node_status(emitter, execution_id, definition_id, node_id, "skipped", None, None, Some(completed_count.load(Ordering::SeqCst)), Some(total_count), mode);
                         continue;
                     }
                 }
@@ -397,7 +848,7 @@ impl WorkflowEngine {
 
                     record_node_execution(emitter, execution_id, node_id, "running",
                         serde_json::to_string(&resolved_input).ok().as_deref(), None, None, None, None, None);
-                    emit_node_status(emitter, execution_id, node_id, "running", None, None, None, None);
+                    emit_node_status(emitter, execution_id, definition_id, node_id, "running", None, None, None, None, mode);
 
                     // delay 支持：执行前等待 delay_ms 毫秒
                     if let Some(delay_ms) = node.delay_ms {
@@ -415,17 +866,17 @@ impl WorkflowEngine {
                         Ok(output) => {
                             node_statuses.lock().await.insert(node_id.clone(), "completed".to_string());
                             context.lock().await.insert(node_id.clone(), output.clone());
+                            raw_outputs.lock().await.insert(node_id.clone(), output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(emitter, execution_id, node_id, "completed", None,
                                 serde_json::to_string(&output).ok().as_deref(), None, None, None, None);
-                            emit_node_status(emitter, execution_id, node_id, "completed", Some(&output), None,
-                                Some(completed_count.load(Ordering::SeqCst)), Some(total_count));
+                            emit_node_status(emitter, execution_id, definition_id, node_id, "completed", Some(&output), None, Some(completed_count.load(Ordering::SeqCst)), Some(total_count), mode);
                         }
                         Err(e) => {
                             node_statuses.lock().await.insert(node_id.clone(), "failed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(emitter, execution_id, node_id, "failed", None, None, Some(&e.to_string()), None, None, None);
-                            emit_node_status(emitter, execution_id, node_id, "failed", None, Some(&e.to_string()), None, None);
+                            emit_node_status(emitter, execution_id, definition_id, node_id, "failed", None, Some(&e.to_string()), None, None, mode);
                             // 不再 return Err，让后续节点继续执行
                         }
                     }
@@ -437,6 +888,7 @@ impl WorkflowEngine {
                 let nid = node_id.clone();
                 let emitter = emitter.clone();
                 let context = context.clone();
+                let raw_outputs = raw_outputs.clone();
                 let completed_count = completed_count.clone();
                 let total = total_count;
                 let exec = executor.clone();
@@ -448,6 +900,8 @@ impl WorkflowEngine {
                     None
                 };
                 let node_statuses_clone = node_statuses.clone();
+                let def_id_owned = definition_id.to_string();
+                let mode_owned = mode.clone();
                 let handle = tokio::spawn(async move {
                     let ctx_snapshot = context.lock().await.clone();
                     log::info!("[WorkflowEngine] Executing node {} (type={:?}), context keys: {:?}", nid, node.node_type, context.lock().await.keys().collect::<Vec<_>>());
@@ -455,7 +909,7 @@ impl WorkflowEngine {
 
                     record_node_execution(&emitter, &exec_id, &nid, "running",
                         serde_json::to_string(&resolved_input).ok().as_deref(), None, None, None, None, None);
-                    emit_node_status(&emitter, &exec_id, &nid, "running", None, None, None, None);
+                    emit_node_status(&emitter, &exec_id, &def_id_owned, &nid, "running", None, None, None, None, &mode_owned);
 
                     // delay 支持：执行前等待 delay_ms 毫秒
                     if let Some(delay_ms) = node.delay_ms {
@@ -543,11 +997,17 @@ impl WorkflowEngine {
                                 let exposed_keys: Vec<String> = exposed.keys().cloned().collect();
                                 context.lock().await.insert(nid.clone(), Value::Object(exposed));
                                 log::info!("[WorkflowEngine] Node {} context (outputMapping): {:?}", nid, exposed_keys);
+                            } else if node.node_type == WorkflowNodeType::End {
+                                // End 节点：无 outputMapping，输出 = resolved_input（所有 inputMapping 组成的对象）
+                                context.lock().await.insert(nid.clone(), resolved_input.clone());
+                                log::info!("[WorkflowEngine] End node {} context: resolved_input = {:?}", nid, resolved_input);
                             } else {
                                 // 无 outputMapping：默认不暴露任何字段（空对象）
                                 context.lock().await.insert(nid.clone(), Value::Object(serde_json::Map::new()));
                                 log::info!("[WorkflowEngine] Node {} context: no outputMapping, empty", nid);
                             }
+                            // 保存原始执行结果到 raw_outputs（供门控合并使用）
+                            raw_outputs.lock().await.insert(nid.clone(), output.output.clone());
                             log::info!("[WorkflowEngine] Node {} output written to context: {:?}", nid, node_output);
                             node_statuses_clone.lock().await.insert(nid.clone(), "completed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);
@@ -556,16 +1016,14 @@ impl WorkflowEngine {
                                 output.session_id.as_deref(),
                                 output.input_data.as_deref(),
                                 output.artifacts_path.as_deref());
-                            emit_node_status(&emitter, &exec_id, &nid, "completed", Some(&node_output), None,
-                                Some(completed_count.load(Ordering::SeqCst)), Some(total));
+                            emit_node_status(&emitter, &exec_id, &def_id_owned, &nid, "completed", Some(&node_output), None, Some(completed_count.load(Ordering::SeqCst)), Some(total), &mode_owned);
                             return Ok(());
                         }
                         Err(e) => {
                             node_statuses_clone.lock().await.insert(nid.clone(), "failed".to_string());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(&emitter, &exec_id, &nid, "failed", None, None, Some(&e.to_string()), None, None, None);
-                            emit_node_status(&emitter, &exec_id, &nid, "failed", None, Some(&e.to_string()),
-                                Some(completed_count.load(Ordering::SeqCst)), Some(total));
+                            emit_node_status(&emitter, &exec_id, &def_id_owned, &nid, "failed", None, Some(&e.to_string()), Some(completed_count.load(Ordering::SeqCst)), Some(total), &mode_owned);
                             // 不再 return Err，让同层其他节点继续执行
                             return Ok(());
                         }
@@ -721,10 +1179,10 @@ impl WorkflowEngine {
     /// 执行 Gate 合并逻辑
     fn merge_stage_outputs(
         stage: &Stage,
-        context: &HashMap<String, Value>,
+        raw_outputs: &HashMap<String, Value>,
     ) -> Value {
         let node_outputs: Vec<(&String, &Value)> = stage.nodes.iter()
-            .filter_map(|n| context.get(&n.id).map(|v| (&n.id, v)))
+            .filter_map(|n| raw_outputs.get(&n.id).map(|v| (&n.id, v)))
             .collect();
 
         match stage.gate.merge_strategy {
@@ -929,7 +1387,7 @@ impl WorkflowEngine {
             .ok_or_else(|| AppError::InvalidInput(format!("子工作流定义不存在: {}", subflow_def_id)))?;
 
         // 检查 maxDepth（默认 10）
-        let max_depth = subflow_def.max_depth.unwrap_or(10) as usize;
+        let max_depth = conn.query_row("SELECT value FROM app_settings WHERE key = 'workflow_max_subflow_depth'", [], |row| row.get::<_, String>(0)).ok().and_then(|v| v.parse().ok()).unwrap_or(3);
         if visited_def_ids.len() >= max_depth {
             return Err(AppError::InvalidInput(format!(
                 "子工作流嵌套深度 {} 超过最大限制 {}（maxDepth）。工作流: \"{}\" -> \"{}\"",
@@ -1040,6 +1498,9 @@ impl WorkflowEngine {
         max_concurrency: usize,
         visited_def_ids: &[String],
     ) -> Result<Value, AppError> {
+        let _guard = ExecutionGuard { executor: executor.as_ref(), execution_id: execution_id.to_string() };
+        let definition_id = def.id.clone();
+        let mode = ExecutionMode::default(); // 预留：未来可从参数获取
         // -- inputSchema 校验 --
         if let Some(schema) = &def.input_schema {
             if let Some(schema_obj) = schema.as_object() {
@@ -1085,13 +1546,14 @@ impl WorkflowEngine {
             }
         }
 
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled = executor.register_execution(execution_id);
         let total_count: usize = def.stages.iter().map(|s| s.nodes.len()).sum();
         let completed_count = Arc::new(AtomicUsize::new(0));
 
         log::info!("[WorkflowEngine] 开始执行: id={}, stages={}, total_nodes={}", execution_id, def.stages.len(), total_count);
 
         let context: Arc<AsyncMutex<HashMap<String, Value>>> = Arc::new(AsyncMutex::new(HashMap::new()));
+        let raw_outputs: Arc<AsyncMutex<HashMap<String, Value>>> = Arc::new(AsyncMutex::new(HashMap::new()));
         context.lock().await.insert("__input__".to_string(), input_data.clone());
 
         // 开始节点：将输出映射作为初始上下文值
@@ -1127,82 +1589,141 @@ impl WorkflowEngine {
             plan.reachable_node_ids.iter().cloned().collect();
         let total_count = reachable_nodes.len();
 
-        log::info!("[WorkflowEngine] 执行计划: stages={:?}, reachable_nodes={}", plan.ordered_stage_ids, total_count);
+        log::info!("[WorkflowEngine] 执行计划: stages layers={:?}, reachable_nodes={}", plan.ordered_stage_ids, total_count);
 
-        for stage_id in &plan.ordered_stage_ids {
-            let stage = def.stages.iter().find(|s| s.id == *stage_id).unwrap();
-            log::info!("[WorkflowEngine] 执行阶段: id={}, name={}, nodes={}, edges={}", stage.id, stage.name, stage.nodes.len(), stage.edges.len());
-            if cancelled.load(Ordering::SeqCst) {
-                return Err(AppError::External("工作流已被取消".into()));
-            }
+        for layer in &plan.ordered_stage_ids {
+            // 同层阶段并行执行（无依赖关系的阶段可同时运行）
+            let mut handles: Vec<tokio::task::JoinHandle<Result<(String, HashMap<String, String>, bool), AppError>>> = Vec::new();
 
-            emitter.emit("workflow:stage-status", serde_json::json!({
-                "execution_id": execution_id,
-                "stage_id": stage.id,
-                "stage_name": stage.name,
-                "status": "running",
-            })).ok();
+            for stage_id in layer {
+                let stage = def.stages.iter().find(|s| s.id == *stage_id).unwrap();
+                log::info!("[WorkflowEngine] 执行阶段: id={}, name={}, nodes={}, edges={}", stage.id, stage.name, stage.nodes.len(), stage.edges.len());
 
-            let (node_statuses, _) = Self::execute_stage(
-                executor, stage, execution_id,
-                &context, emitter, &cancelled,
-                &completed_count, total_count, &semaphore,
-                max_concurrency,
-                visited_def_ids,
-                &reachable_nodes,
-            ).await?;
-
-            // ── 步骤 1: 执行合并策略（始终执行） ──
-            let ctx = context.lock().await.clone();
-            let merged = Self::merge_stage_outputs(stage, &ctx);
-
-            // ── 步骤 2: 门控策略检查（合并完成后检查） ──
-            //  - All: 全部非边界节点成功 → 放行；任一失败 → 中止
-            //  - Count(n): 成功数 >= n → 放行；成功数 < n → 中止
-            //  - Threshold: 合并后的值满足条件 → 放行；不满足 → 中止
-            match Self::check_gate_strategy(stage, &node_statuses, &merged) {
-                Ok(true) => {
-                    log::info!("[WorkflowEngine] 阶段 '{}' 门控策略检查通过，合并结果已写入", stage.name);
-                    context.lock().await.insert(format!("gate_output.{}", stage.id), merged);
+                if cancelled.load(Ordering::SeqCst) {
+                    return Err(AppError::External("工作流已被取消".into()));
                 }
-                Ok(false) => {
-                    // 策略不满足（Count 成功数不足 / Threshold 条件不满足），中止工作流
-                    let msg = format!(
-                        "阶段 '{}' 门控策略未通过（strategy={:?}），工作流中止",
-                        stage.name, stage.gate.strategy
+
+                // clone shared state for spawn
+                let exec_id = execution_id.to_string();
+                let stage_clone = stage.clone();
+                let context = context.clone();
+                let raw_outputs = raw_outputs.clone();
+                let emitter = emitter.clone();
+                let cancelled = cancelled.clone();
+                let completed_count = completed_count.clone();
+                let semaphore = semaphore.clone();
+                let executor = executor.clone();
+                let reachable_nodes = reachable_nodes.clone();
+                let visited_def_ids = visited_def_ids.to_vec();
+                let definition_id = definition_id.clone();
+                let mode = mode.clone();
+
+                handles.push(tokio::spawn(async move {
+                    emit_progress(
+                        &emitter, &exec_id, &definition_id, &mode,
+                        None,
+                        Some(serde_json::json!({
+                            "id": stage_clone.id.clone(),
+                            "name": stage_clone.name.clone(),
+                            "status": "running",
+                        })),
+                        None, None,
                     );
-                    log::warn!("[WorkflowEngine] {}", msg);
-                    emitter.emit("workflow:stage-status", serde_json::json!({
-                        "execution_id": execution_id,
-                        "stage_id": stage.id,
-                        "stage_name": stage.name,
-                        "status": "gate_failed",
-                        "reason": msg.clone(),
-                    })).ok();
-                    return Err(AppError::External(msg));
-                }
-                Err(e) => {
-                    // 策略判定失败（如 All 策略下有节点失败），中止工作流
-                    log::error!("[WorkflowEngine] 阶段 '{}' 门控策略检查失败: {}", stage.name, e);
-                    emitter.emit("workflow:stage-status", serde_json::json!({
-                        "execution_id": execution_id,
-                        "stage_id": stage.id,
-                        "stage_name": stage.name,
-                        "status": "gate_failed",
-                        "error": e.to_string(),
-                    })).ok();
-                    return Err(e);
-                }
+
+                    let (node_statuses, _) = WorkflowEngine::execute_stage(
+                        &executor, &stage_clone, &exec_id,
+                        &definition_id, &mode,
+                        &context, &raw_outputs, &emitter, &cancelled,
+                        &completed_count, total_count, &semaphore,
+                        max_concurrency,
+                        &visited_def_ids,
+                        &reachable_nodes,
+                    ).await?;
+
+                    // 合并策略
+                    let raw_ctx = raw_outputs.lock().await.clone();
+                    let merged = WorkflowEngine::merge_stage_outputs(&stage_clone, &raw_ctx);
+
+                    // 门控策略检查
+                    match WorkflowEngine::check_gate_strategy(&stage_clone, &node_statuses, &merged) {
+                        Ok(true) => {
+                            log::info!("[WorkflowEngine] 阶段 '{}' 门控策略检查通过，合并结果已写入", stage_clone.name);
+                            context.lock().await.insert(format!("gate_output.{}", stage_clone.id), merged);
+                            emit_progress(
+                                &emitter, &exec_id, &definition_id, &mode,
+                                None,
+                                Some(serde_json::json!({
+                                    "id": stage_clone.id.clone(),
+                                    "name": stage_clone.name.clone(),
+                                    "status": "completed",
+                                })),
+                                None, None,
+                            );
+                            Ok((stage_clone.id.clone(), node_statuses, true))
+                        }
+                        Ok(false) => {
+                            let msg = format!(
+                                "阶段 '{}' 门控策略未通过（strategy={:?}），工作流中止",
+                                stage_clone.name, stage_clone.gate.strategy
+                            );
+                            log::warn!("[WorkflowEngine] {}", msg);
+                            emit_progress(
+                                &emitter, &exec_id, &definition_id, &mode,
+                                None,
+                                Some(serde_json::json!({
+                                    "id": stage_clone.id.clone(),
+                                    "name": stage_clone.name.clone(),
+                                    "status": "gate_failed",
+                                    "reason": msg.clone(),
+                                })),
+                                None, None,
+                            );
+                            cancelled.store(true, Ordering::SeqCst);
+                            Ok((stage_clone.id.clone(), node_statuses, false))
+                        }
+                        Err(e) => {
+                            log::error!("[WorkflowEngine] 阶段 '{}' 门控策略检查失败: {}", stage_clone.name, e);
+                            emit_progress(
+                                &emitter, &exec_id, &definition_id, &mode,
+                                None,
+                                Some(serde_json::json!({
+                                    "id": stage_clone.id.clone(),
+                                    "name": stage_clone.name.clone(),
+                                    "status": "gate_failed",
+                                    "error": e.to_string(),
+                                })),
+                                None, None,
+                            );
+                            Err(AppError::InvalidInput(format!(
+                                "阶段 '{}' 门控策略检查异常: {}", stage_clone.name, e
+                            )))
+                        }
+                    }
+                }));
             }
 
-            emitter.emit("workflow:stage-status", serde_json::json!({
-                "execution_id": execution_id,
-                "stage_id": stage.id,
-                "stage_name": stage.name,
-                "status": "completed",
-            })).ok();
+            // 等待当前层所有阶段执行完成
+            for handle in handles {
+                match handle.await {
+                    Ok(Ok((sid, _ns, gate_pass))) => {
+                        if !gate_pass {
+                            cancelled.store(true, Ordering::SeqCst);
+                            return Err(AppError::External(format!(
+                                "阶段 '{}' 门控策略未通过，工作流中止", sid
+                            )));
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        cancelled.store(true, Ordering::SeqCst);
+                        return Err(e);
+                    }
+                    Err(join_err) => {
+                        cancelled.store(true, Ordering::SeqCst);
+                        return Err(AppError::External(format!("阶段执行任务异常: {}", join_err)));
+                    }
+                }
+            }
         }
-
         // 更新实例状态为成功
         if let Ok(conn) = get_db_conn(emitter) {
             let _ = conn.execute(
@@ -1211,12 +1732,15 @@ impl WorkflowEngine {
             );
         }
 
-        emitter.emit("workflow:execution-status", serde_json::json!({
-            "execution_id": execution_id,
-            "definition_id": &def.id,
-            "definition_name": &def.name,
-            "status": "completed",
-        })).ok();
+        emit_progress(
+            emitter, execution_id, &definition_id, &mode,
+            None, None,
+            Some(serde_json::json!({
+                "status": "completed",
+                "definition_name": &def.name,
+            })),
+            None,
+        );
 
         let ctx = context.lock().await.clone();
         // 过滤内部变量（__ 前缀），仅返回用户数据作为工作流输出
@@ -1271,7 +1795,8 @@ impl WorkflowEngine {
                     .collect();
                 recovered_stages.push(Stage {
                     id: stage.id.clone(), name: stage.name.clone(), order: stage.order,
-                    nodes: pending_nodes, edges: filtered_edges, gate: stage.gate.clone(),
+                    nodes: pending_nodes, edges: filtered_edges, stage_edges: stage.stage_edges.clone(), gate: stage.gate.clone(),
+                    collapsed: stage.collapsed, offset_x: stage.offset_x, offset_y: stage.offset_y,
                 });
             }
             (completed_nodes, recovered_stages)
@@ -1279,10 +1804,16 @@ impl WorkflowEngine {
 
 
         if recovered_stages.is_empty() {
-            emitter.emit("workflow:execution-status", serde_json::json!({
-                "execution_id": execution_id, "definition_id": &def.id, "definition_name": &def.name,
-                "status": "completed", "message": "所有节点已完成",
-            })).ok();
+            emit_progress(
+                emitter, execution_id, &def.id, &ExecutionMode::default(),
+                None, None,
+                Some(serde_json::json!({
+                    "status": "completed",
+                    "definition_name": &def.name,
+                    "message": "所有节点已完成",
+                })),
+                None,
+            );
             return Ok(Value::Null);
         }
 
@@ -1293,10 +1824,8 @@ impl WorkflowEngine {
             description: def.description.clone(),
             trigger: def.trigger.clone(),
             stages: recovered_stages,
-            stage_edges: vec![],
             input_schema: def.input_schema.clone(),
             output_schema: def.output_schema.clone(),
-            max_depth: def.max_depth,
             created_at: def.created_at,
             updated_at: crate::utils::now(),
             enabled: def.enabled,

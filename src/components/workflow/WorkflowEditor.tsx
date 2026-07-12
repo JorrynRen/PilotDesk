@@ -16,19 +16,19 @@ import { flushSync } from 'react-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { showToast } from '../../utils/toast';
 import { useWorkflowStore } from '../../stores/workflowStore';
-import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 
 /** 后端执行计划（拓扑权威数据） */
 interface ExecutionPlan {
   reachable_node_ids: string[];
-  ordered_stage_ids: string[];
+  ordered_stage_ids: string[][];
 }
 
 import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition, clampNodePositionNoSnap, sanitizeMappingReferences } from '../../workflow/WorkflowDefinition';
 import WorkflowNodeItem from './WorkflowNodeItem';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
-import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig } from '../../types/workflow';
+import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig, ExecutionProgressPayload, ValidationResult } from '../../types/workflow';
 
 interface Props {
   definitionId: string;
@@ -87,12 +87,15 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const def = definitions.find((d) => d.id === definitionId);
 
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
-  const [stageEdges, setStageEdges] = useState<WorkflowEdge[]>(def?.stageEdges || []);
+  const stageEdges = useMemo(() => stages.flatMap(s => s.stageEdges || []), [stages]);
   const [stageConnecting, setStageConnecting] = useState<StageConnectingPreview | null>(null);
   const [hoveredStageEdge, setHoveredStageEdge] = useState<string | null>(null);
   const [hoveredAnchor, setHoveredAnchor] = useState<string | null>(null);
   const [stageOffsets, setStageOffsets] = useState<Record<string, number>>({});
   const [stageOffsetsY, setStageOffsetsY] = useState<Record<string, number>>({});
+  const stageOffsetsRef = useRef<Record<string, number>>({});
+  const stageOffsetsYRef = useRef<Record<string, number>>({});
+  const saveStageLayoutRef = useRef<() => void>(() => {});
   const [draggingStageId, setDraggingStageId] = useState<string | null>(null);
   const dragStartXRef = useRef<number>(0);
   const dragStartYRef = useRef<number>(0);
@@ -107,7 +110,59 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [isBoxSelecting, setIsBoxSelecting] = useState(false);
 
   const [boxSelectRect, setBoxSelectRect] = useState<{ x1: number; y1: number; x2: number; y2: number; stageId: string } | null>(null);
+  const boxSelectRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number; stageId: string } | null>(null);
+
+  // ── 框选状态 ref（静态监听器实时获取） ──
+  // 使用单一 ref 对象避免 TDZ 问题
+  const boxStateRef = useRef({
+    pan: { x: 0, y: 0 },
+    scale: 1,
+    isBoxSelecting: false,
+    stages: [] as Stage[],
+  });
+  
+  // 同步状态到 boxStateRef（必须在 pan/scale/stages/isBoxSelecting 声明之后）
+  
+  // ── 节点尺寸缓存 ──
+  const nodeSizesRef = useRef<Map<string, { width: number; height: number }>>(new Map());
+  const measuredNodeTypesRef = useRef<Set<string>>(new Set());
   const boxSelectStartRef = useRef<{ x: number; y: number; stageId: string } | null>(null);
+
+  // ── 节点尺寸测量（前置声明，避免 TDZ） ──
+  const measureNodeSize = useCallback((type: string) => {
+    if (measuredNodeTypesRef.current.has(type)) return;
+    measuredNodeTypesRef.current.add(type);
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-node-type="${type}"]`);
+      if (el) {
+        nodeSizesRef.current.set(type, {
+          width: el.offsetWidth,
+          height: el.offsetHeight
+        });
+      }
+    });
+  }, []);
+
+  const measureAllNodeTypes = useCallback(() => {
+    const uniqueTypes = new Set<string>();
+    for (const stage of boxStateRef.current.stages) {
+      for (const node of stage.nodes) {
+        uniqueTypes.add(node.type);
+      }
+    }
+    for (const type of uniqueTypes) {
+      measureNodeSize(type);
+    }
+  }, [measureNodeSize]);
+
+  // ── 重置框选状态（前置声明，避免 TDZ） ──
+  const resetBoxSelect = useCallback(() => {
+    setIsBoxSelecting(false);
+    boxSelectStartRef.current = null;
+    setBoxSelectRect(null);
+    boxSelectRectRef.current = null;
+  }, []);
+
   const [name, setName] = useState(def?.name || '');
   const [description, setDescription] = useState(def?.description || '');
   const [connecting, setConnecting] = useState<ConnectingPreview | null>(null);
@@ -119,6 +174,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const collapsedStagesRef = useRef(collapsedStages);
   collapsedStagesRef.current = collapsedStages;
+  saveStageLayoutRef.current = () => {
+    const offX = stageOffsetsRef.current;
+    const offY = stageOffsetsYRef.current;
+    setStages(prev => {
+      const updated = prev.map(s => ({
+        ...s,
+        offsetX: offX[s.id] ?? s.offsetX ?? 0,
+        offsetY: offY[s.id] ?? s.offsetY ?? 0,
+      }));
+      // 异步保存到数据库
+      if (definitionId) {
+        invoke('save_workflow_dag', { id: definitionId, stages: updated }).catch((err: any) =>
+          console.warn('[WorkflowEditor] 保存阶段布局失败:', err)
+        );
+      }
+      return updated;
+    });
+  };
   const [customMode, setCustomMode] = useState<string>('selector');
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
@@ -136,6 +209,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // 画布平移和缩放状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
+  
+  // 同步状态到 boxStateRef（必须在 pan/scale/stages/isBoxSelecting 声明之后）
+  useEffect(() => { boxStateRef.current.pan = pan; }, [pan]);
+  useEffect(() => { boxStateRef.current.scale = scale; }, [scale]);
+  useEffect(() => { boxStateRef.current.isBoxSelecting = isBoxSelecting; }, [isBoxSelecting]);
+  useEffect(() => { boxStateRef.current.stages = stages; }, [stages]);
+  
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
@@ -326,25 +406,26 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   useEffect(() => {
     if (def) {
-      setStages(sanitizeMappingReferences(def.stages));
+      const sanitized = sanitizeMappingReferences(def.stages);
+      setStages(sanitized);
       setName(def.name);
-      // Auto-create stage edges only when none exist (new workflow / migration)
-      if (def.stageEdges && def.stageEdges.length > 0) {
-        setStageEdges(def.stageEdges);
-      } else {
-        const sorted = [...def.stages].sort((a, b) => a.order - b.order);
-        const edges: WorkflowEdge[] = [];
-        for (let idx = 0; idx < sorted.length - 1; idx++) {
-          edges.push({
-            id: generateEdgeId(sorted[idx].id, sorted[idx + 1].id),
-            source: sorted[idx].id,
-            target: sorted[idx + 1].id,
-          });
-        }
-        setStageEdges(edges);
+      // 从 stages 恢复折叠状态和位置偏移
+      const collapsed = new Set<string>();
+      const offsetsX: Record<string, number> = {};
+      const offsetsY: Record<string, number> = {};
+      for (const s of sanitized) {
+        if (s.collapsed) collapsed.add(s.id);
+        if (s.offsetX) offsetsX[s.id] = s.offsetX;
+        if (s.offsetY) offsetsY[s.id] = s.offsetY;
       }
+      setCollapsedStages(collapsed);
+      if (Object.keys(offsetsX).length > 0) setStageOffsets(offsetsX);
+      if (Object.keys(offsetsY).length > 0) setStageOffsetsY(offsetsY);
+      
+      // 首次打开工作流时，批量测量所有节点类型尺寸
+      measureAllNodeTypes();
     }
-  }, [def]);
+  }, [def, measureAllNodeTypes]);
 
   // 组件挂载时：加载实例数据并取消旧的 running 实例
   useEffect(() => {
@@ -365,12 +446,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const handleExportWorkflow = useCallback(async () => {
     if (!definitionId) return;
     try {
-      const filePath = await saveDialog({
-        defaultPath: `${name || '工作流'}.json`,
-        filters: [{ name: '工作流文件', extensions: ['json'] }],
+      const dirPath = await openDialog({
+        directory: true,
+        title: '选择导出目录',
+        defaultPath: name || '工作流',
       });
-      if (filePath) {
-        await invoke('export_workflow_to_file', { id: definitionId, filePath });
+      if (dirPath) {
+        await invoke('export_workflow_to_file', { id: definitionId, dirPath });
         showToast('工作流导出成功', 'success');
         onSaveResult?.(true);
       }
@@ -384,7 +466,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const handleSave = async () => {
     if (!def) return;
     try {
-      await updateDefinition(definitionId, { name, description, stages, stageEdges });
+      await updateDefinition(definitionId, { name, description, stages });
       onSaveResult?.(true);
     } catch {
       onSaveResult?.(false);
@@ -420,6 +502,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           states['node_' + ne.nodeId] = 'skipped';
         }
       }
+      // 根据节点状态推导阶段状态
+      for (const stage of stages) {
+        const nodeStates = stage.nodes.map(n => states['node_' + n.id]);
+        if (nodeStates.every(s => s === 'success' || s === 'skipped')) {
+          states['stage_' + stage.id] = 'success';
+        } else if (nodeStates.some(s => s === 'failed')) {
+          states['stage_' + stage.id] = 'failed';
+        } else if (nodeStates.some(s => s === 'running')) {
+          states['stage_' + stage.id] = 'running';
+        }
+      }
       // 记录恢复时的工作流快照（用于后续检测配置变更）
       restoredSnapshotRef.current = JSON.parse(JSON.stringify(stages));
       restoredModCountRef.current = modCountRef.current;
@@ -435,33 +528,27 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     console.log('[WorkflowEditor] handleRunWorkflow called, isRunning:', isRunning, ', executionIdRef:', executionIdRef.current);
     if (!definitionId) return;
 
-    // 执行前验证（基于后端执行计划）
-    const allNodeIds = new Set(stages.flatMap(s => s.nodes).map(n => n.id));
-    const planReachable = new Set(executionPlan?.reachable_node_ids ?? []);
-    const startNodes = stages.flatMap(s => s.nodes).filter(n => n.type === 'start');
-    const endNodes = stages.flatMap(s => s.nodes).filter(n => n.type === 'end');
-
-    // 检查 start/end 节点
-    if (startNodes.length !== 1) {
-      showToast(`工作流验证失败：必须有且仅有一个起始节点（当前 ${startNodes.length} 个）`, 'error');
+    // 执行前验证（调用后端 validate_workflow 命令）
+    try {
+      const result: ValidationResult = await invoke('validate_workflow', { workflowId: definitionId });
+      if (!result.ok) {
+        const errors = result.checks.filter(c => c.severity === 'error');
+        const errorMessages = errors.map(c => c.message).join('\n');
+        showToast(`工作流验证失败：${errorMessages}`, 'error');
+        setIsRunning(false);
+        return;
+      }
+      // 展示 warning/info 级别提示
+      const warnings = result.checks.filter(c => c.severity === 'warning');
+      if (warnings.length > 0) {
+        const warnMessages = warnings.map(c => c.message).join('; ');
+        showToast(`验证提示：${warnMessages}`, 'warning');
+      }
+    } catch (err) {
+      console.error('[WorkflowEditor] validate_workflow error:', err);
+      showToast(`工作流验证调用失败: ${err}`, 'error');
       setIsRunning(false);
       return;
-    }
-    if (endNodes.length !== 1) {
-      showToast(`工作流验证失败：必须有且仅有一个结束节点（当前 ${endNodes.length} 个）`, 'error');
-      setIsRunning(false);
-      return;
-    }
-    // 检查 end 节点是否可达
-    if (!planReachable.has(endNodes[0].id)) {
-      showToast('工作流验证失败：不存在从起始节点到结束节点的完整路径', 'error');
-      setIsRunning(false);
-      return;
-    }
-    // 提示未就绪节点
-    const unreachable = [...allNodeIds].filter(id => !planReachable.has(id));
-    if (unreachable.length > 0) {
-      showToast(`存在 ${unreachable.length} 个未就绪节点，但存在完整执行路径，继续执行`, 'warning');
     }
     // 如果已经在执行中，先重置状态再重新开始
     if (isRunning) {
@@ -482,13 +569,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setSelectedNodeId(null);
       setSelectedNodeIds(new Set());
       setSelectedStageId(null);
+      setSelectedHistoryId(null);
     });
     try {
       // 清除历史恢复标记（开始真实执行）
       setRestoredExecutionId(null);
       restoredSnapshotRef.current = null;
       // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
-      await invoke('save_workflow_dag', { id: definitionId, stages, stageEdges });
+      await invoke('save_workflow_dag', { id: definitionId, stages });
       // 预生成实例 ID 并在 invoke 前设置 ref（消除 IPC 竞态：快速工作流可能在响应返回前就完成）
       const preGeneratedId = crypto.randomUUID();
       executionIdRef.current = preGeneratedId;
@@ -581,58 +669,59 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // 组件挂载时注册事件监听器（一次性，deps=[]）
   // 监听器通过 executionIdRef（ref）动态匹配当前执行，无需每次执行重新注册
   useEffect(() => {
-    let unlistenNode: UnlistenFn | null = null;
-    let unlistenExec: UnlistenFn | null = null;
-    let unlistenStage: UnlistenFn | null = null;
+    let unlistenProgress: UnlistenFn | null = null;
 
     const setupListeners = async () => {
-      console.log('[WorkflowEditor] setupListeners: starting listener registration...');
-      unlistenNode = await listen<{
-        execution_id: string;
-        node_id: string;
-        status: string;
-        output?: any;
-        error?: string;
-      }>('workflow:node-status', (event) => {
-        if (event.payload.execution_id !== executionIdRef.current) return;
-        const nodeId = event.payload.node_id;
-        const status = event.payload.status;
-        if (status === 'completed' && event.payload.output !== undefined) {
-          setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: event.payload.output }));
-        } else if (status === 'failed') {
-          setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: event.payload.error || '执行失败' } }));
+      console.log('[WorkflowEditor] setupListeners: registering unified progress listener...');
+      unlistenProgress = await listen<ExecutionProgressPayload>('workflow:execution-progress', (event) => {
+        const p = event.payload;
+        // 过滤非当前工作流的进度事件（通过 definitionId 匹配）
+        if (p.definitionId !== definitionIdRef.current) return;
+
+        // 处理节点状态变更
+        if (p.node) {
+          const nodeId = p.node.id;
+          const status = p.node.status;
+          if (status === 'completed' && p.node.output !== undefined) {
+            setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: p.node.output }));
+          } else if (status === 'failed') {
+            setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: p.node.error || '执行失败' } }));
+          }
+          setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev['node_' + nodeId] }));
         }
-        // 更新步骤状态（用于连线动画）
-        setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev['node_' + nodeId] }));
+
+        // 处理阶段状态变更
+        if (p.stage) {
+          const { id: stageId, status, name, reason, error } = p.stage;
+          if (status === 'running') {
+            setStepStates(prev => ({ ...prev, ['stage_' + stageId]: 'running' }));
+          } else if (status === 'completed') {
+            setStepStates(prev => ({ ...prev, ['stage_' + stageId]: 'success' }));
+          } else if (status === 'gate_failed') {
+            setStepStates(prev => ({ ...prev, ['stage_' + stageId]: 'failed' }));
+            const detail = reason || error || '';
+            showToast(`${name || '阶段'} 门控策略未通过${detail ? ': ' + detail : ''}`, 'error');
+          }
+        }
+
+        // 处理执行状态变更
+        if (p.execution) {
+          const { status } = p.execution;
+          if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+            console.log('[WorkflowEditor] execution', status, ', setting isRunning=false');
+            setIsRunning(false);
+            useWorkflowStore.getState().loadInstances();
+          }
+        }
       });
 
-      unlistenExec = await listen<{ execution_id: string; definition_id: string; status: string; error?: string }>('workflow:execution-status', (event) => {
-        // 通过 definitionId 匹配，彻底消除 IPC 竞态（不依赖 executionIdRef 时序）
-        if (event.payload.definition_id !== definitionIdRef.current) return;
-        if (event.payload.status === 'completed' || event.payload.status === 'failed' || event.payload.status === 'cancelled') {
-          console.log('[WorkflowEditor] execution', event.payload.status, ', setting isRunning=false');
-          setIsRunning(false);
-          useWorkflowStore.getState().loadInstances();
-        }
-      });
-
-      // 监听阶段门控失败事件
-      unlistenStage = await listen<{ execution_id: string; stage_id: string; stage_name: string; status: string; reason?: string; error?: string }>('workflow:stage-status', (event) => {
-        if (event.payload.status === 'gate_failed') {
-          const detail = event.payload.reason || event.payload.error || '';
-          showToast(`${event.payload.stage_name} 门控策略未通过${detail ? ': ' + detail : ''}`, 'error');
-        }
-      });
-
-      console.log('[WorkflowEditor] setupListeners: both listeners registered successfully');
+      console.log('[WorkflowEditor] setupListeners: unified progress listener registered successfully');
     };
 
     setupListeners();
 
     return () => {
-      unlistenNode?.();
-      unlistenExec?.();
-      unlistenStage?.();
+      unlistenProgress?.();
     };
   }, []);
 
@@ -700,7 +789,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         source: prevStage.id,
         target: newStage.id,
       };
-      setStageEdges(prev => [...prev, newEdge]);
+      // 直接在 prevStage 的 stageEdges 中添加新边
+      const prevIdx = updated.length - 2;
+      updated[prevIdx] = {
+        ...updated[prevIdx],
+        stageEdges: [...(updated[prevIdx].stageEdges || []), newEdge],
+      };
     }
     setStages(updated.map((s, i) => ({ ...s, order: i })));
     // 自动平移视图到新阶段位置（以新阶段为视图中心）
@@ -774,8 +868,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
       // 同步清理引用被删除阶段的 stageEdges
       const deletedStageId = confirmAction.targetId;
-      setStageEdges(prev => prev.filter(e => e.source !== deletedStageId && e.target !== deletedStageId));
-      const cleaned = sanitizeMappingReferences(remaining.map((s, i) => ({ ...s, order: i })));
+      const cleaned = sanitizeMappingReferences(remaining.map((s, i) => ({
+        ...s,
+        order: i,
+        stageEdges: (s.stageEdges || []).filter(e => e.source !== deletedStageId && e.target !== deletedStageId),
+      })));
       setStages(cleaned);
     } else if (confirmAction.type === 'deleteNode') {
       const afterDeleteNode = stages.map((s) => ({
@@ -792,12 +889,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }));
       setStages(sanitizeMappingReferences(afterDeleteEdge));
     } else if (confirmAction.type === 'deleteStageEdge') {
-      const edge = stageEdges.find(e => e.id === confirmAction.targetId);
-      setStageEdges(stageEdges.filter(e => e.id !== confirmAction.targetId));
+      const edgeId = confirmAction.targetId;
+      const edge = stageEdges.find(e => e.id === edgeId);
       const srcStage = edge ? stages.find(s => s.id === edge.source) : null;
       const tgtStage = edge ? stages.find(s => s.id === edge.target) : null;
       const srcLabel = srcStage ? `step${srcStage.order + 1} ${srcStage.name}` : edge?.source || '';
       const tgtLabel = tgtStage ? `step${tgtStage.order + 1} ${tgtStage.name}` : edge?.target || '';
+      // 从所属阶段的 stageEdges 中移除
+      setStages(prev => prev.map(s => ({
+        ...s,
+        stageEdges: (s.stageEdges || []).filter(e => e.id !== edgeId),
+      })));
       showToast(`已删除阶段连线「${srcLabel} → ${tgtLabel}」`, 'success');
       setConfirmAction(null);
     } else if (confirmAction.type === 'deleteNodes') {
@@ -838,6 +940,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setStages(stages.map((s) =>
       s.id === stageId ? { ...s, nodes: [...s.nodes, newNode] } : s
     ));
+    
+    // 新类型节点：触发尺寸测量
+    measureNodeSize(type);
   };
 
   const handleDeleteNode = (nodeId: string) => {
@@ -1034,7 +1139,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
     }
     return visited.has(stageConnecting?.sourceStageId ?? '');
-  }, [stageEdges, stageConnecting?.sourceStageId]);
+  }, [stages, stageConnecting?.sourceStageId]);
 
 
   const getStagePositions = useCallback(() => {
@@ -1343,11 +1448,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
 
   const toggleCollapseStage = (stageId: string) => {
-    setCollapsedStages((prev) => {
-      const next = new Set(prev);
-      if (next.has(stageId)) next.delete(stageId);
-      else next.add(stageId);
-      return next;
+    const newCollapsed = new Set(collapsedStages);
+    if (newCollapsed.has(stageId)) newCollapsed.delete(stageId);
+    else newCollapsed.add(stageId);
+    setCollapsedStages(newCollapsed);
+    // 同步到 stages 并保存
+    setStages(prev => {
+      const updated = prev.map(s =>
+        s.id === stageId ? { ...s, collapsed: newCollapsed.has(stageId) } : s
+      );
+      if (definitionId) {
+        invoke('save_workflow_dag', { id: definitionId, stages: updated }).catch((err: any) =>
+          console.warn('[WorkflowEditor] 保存折叠状态失败:', err)
+        );
+      }
+      return updated;
     });
   };
 
@@ -1418,7 +1533,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           const contentY = cy - stageTop - TITLE_H;
           setIsBoxSelecting(true);
           boxSelectStartRef.current = { x: cx, y: cy, stageId };
-          setBoxSelectRect({ x1: contentX, y1: contentY, x2: contentX, y2: contentY, stageId });
+          const initialRect = { x1: contentX, y1: contentY, x2: contentX, y2: contentY, stageId };
+          setBoxSelectRect(initialRect);
+          boxSelectRectRef.current = initialRect;
           handleClearSelection();
         }
       }
@@ -1457,62 +1574,104 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
   }, [isPanning]);
 
-  // ── 框选鼠标追踪 ──
+  // ── 框选鼠标追踪（静态注册） ──
   useEffect(() => {
-    if (!isBoxSelecting) return;
     const handleMove = (e: MouseEvent) => {
-      if (!boxSelectStartRef.current) return;
-      const rect = canvasRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const cx = (e.clientX - rect.left - pan.x) / scale;
-      const cy = (e.clientY - rect.top - pan.y) / scale;
-      const stageLeft = stagePositionsMap[boxSelectStartRef.current.stageId];
-      const stageTop = 20 + (stageOffsetsY[boxSelectStartRef.current.stageId] ?? 0);
-      const contentX = cx - stageLeft;
-      const contentY = cy - stageTop - TITLE_H;
-      setBoxSelectRect(prev => prev ? { ...prev, x2: contentX, y2: contentY } : null);
-    };
-    const handleUp = (e: MouseEvent) => {
-      if (!boxSelectStartRef.current || !boxSelectRect) {
-        setIsBoxSelecting(false);
-        boxSelectStartRef.current = null;
-        setBoxSelectRect(null);
+      // 错误处理：检查必要条件
+      if (!boxStateRef.current.isBoxSelecting) return;
+      if (!boxSelectStartRef.current) {
+        resetBoxSelect();
         return;
       }
-      // Find nodes inside the selection rect
+      
+      const canvasRect = canvasRef.current?.getBoundingClientRect();
+      if (!canvasRect) {
+        resetBoxSelect();
+        return;
+      }
+      
+      // 实时获取最新状态
+      const currentPan = boxStateRef.current.pan;
+      const currentScale = boxStateRef.current.scale;
+      const currentStagePositions = getStagePositions();
+      const currentStageOffsetsY = stageOffsetsY;
+      
+      const cx = (e.clientX - canvasRect.left - currentPan.x) / currentScale;
+      const cy = (e.clientY - canvasRect.top - currentPan.y) / currentScale;
       const stageId = boxSelectStartRef.current.stageId;
-      const stage = stages.find(s => s.id === stageId);
-      if (stage) {
-        const r = boxSelectRect;
-        const x1 = Math.min(r.x1, r.x2), x2 = Math.max(r.x1, r.x2);
-        const y1 = Math.min(r.y1, r.y2), y2 = Math.max(r.y1, r.y2);
-        const hitIds = new Set<string>();
-        for (const node of stage.nodes) {
-          const nx = node.position?.x ?? 20;
-          const ny = node.position?.y ?? 20;
-          // Node box in content coords: (nx, ny, nx+NODE_W, ny+NODE_H)
-          if (nx + NODE_W > x1 && nx < x2 && ny + NODE_H > y1 && ny < y2) {
-            hitIds.add(node.id);
-          }
-        }
-        if (hitIds.size > 0) {
-          setSelectedNodeIds(hitIds);
-          const first = [...hitIds][0] ?? null;
-          setSelectedNodeId(first);
-          setSelectedStageId(stageId);
+      const stageLeft = currentStagePositions[stageId];
+      const stageTop = 20 + (currentStageOffsetsY[stageId] ?? 0);
+      const contentX = cx - stageLeft;
+      const contentY = cy - stageTop - TITLE_H;
+      
+      // 更新框选矩形
+      const updatedRect = {
+        x1: boxSelectRectRef.current?.x1 ?? contentX,
+        y1: boxSelectRectRef.current?.y1 ?? contentY,
+        x2: contentX,
+        y2: contentY,
+        stageId
+      };
+      setBoxSelectRect(updatedRect);
+      boxSelectRectRef.current = updatedRect;
+    };
+    
+    const handleUp = (e: MouseEvent) => {
+      // 错误处理
+      if (!boxSelectStartRef.current) {
+        resetBoxSelect();
+        return;
+      }
+      
+      const stageId = boxSelectStartRef.current.stageId;
+      const stage = boxStateRef.current.stages.find(s => s.id === stageId);
+      const rect = boxSelectRectRef.current;
+      
+      if (!stage || !rect) {
+        resetBoxSelect();
+        return;
+      }
+      
+      // 计算选择框范围
+      const x1 = Math.min(rect.x1, rect.x2);
+      const x2 = Math.max(rect.x1, rect.x2);
+      const y1 = Math.min(rect.y1, rect.y2);
+      const y2 = Math.max(rect.y1, rect.y2);
+      
+      // 检查节点是否在选择框内（使用实际尺寸）
+      const hitIds = new Set<string>();
+      for (const node of stage.nodes) {
+        const nx = node.position?.x ?? 20;
+        const ny = node.position?.y ?? 20;
+        
+        // 使用实际测量尺寸，fallback 到默认值
+        const size = nodeSizesRef.current.get(node.type);
+        const nw = size?.width ?? NODE_W;
+        const nh = size?.height ?? NODE_H;
+        
+        if (nx + nw > x1 && nx < x2 && ny + nh > y1 && ny < y2) {
+          hitIds.add(node.id);
         }
       }
-      setIsBoxSelecting(false);
-      boxSelectStartRef.current = null;
-      setBoxSelectRect(null);
+      
+      if (hitIds.size > 0) {
+        setSelectedNodeIds(hitIds);
+        const first = [...hitIds][0] ?? null;
+        setSelectedNodeId(first);
+        setSelectedStageId(stageId);
+      }
+      
+      // 重置框选状态
+      resetBoxSelect();
     };
+    
     window.addEventListener('mousemove', handleMove);
     window.addEventListener('mouseup', handleUp);
     return () => {
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
-  }, [isBoxSelecting, boxSelectRect, pan, scale, stages, stagePositionsMap]);
+  }, []); // 静态注册，空依赖数组
 
   // ── 鼠标滚轮缩放（以光标位置为中心） ──
   useEffect(() => {
@@ -1848,18 +2007,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       if (bestXLine !== null) lines.push({ axis: 'x', value: bestXLine });
       if (bestYLine !== null) lines.push({ axis: 'y', value: bestYLine });
       setAlignLines(lines);
-      setStageOffsets(prev => ({
-        ...prev,
-        [draggingStageId]: dragStartOffsetRef.current + deltaX + bestSnapX,
-      }));
-      setStageOffsetsY(prev => ({
-        ...prev,
-        [draggingStageId]: dragStartOffsetYRef.current + deltaY + bestSnapY,
-      }));
+      const newOffX = dragStartOffsetRef.current + deltaX + bestSnapX;
+      const newOffY = dragStartOffsetYRef.current + deltaY + bestSnapY;
+      stageOffsetsRef.current[draggingStageId] = newOffX;
+      stageOffsetsYRef.current[draggingStageId] = newOffY;
+      setStageOffsets(prev => ({ ...prev, [draggingStageId]: newOffX }));
+      setStageOffsetsY(prev => ({ ...prev, [draggingStageId]: newOffY }));
     };
     const onMouseUp = () => {
       setDraggingStageId(null);
       setAlignLines([]);
+      // 拖拽结束时同步 offset 到 stages 并保存
+      saveStageLayoutRef.current();
     };
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
@@ -1924,7 +2083,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       if (tgtState === 'running') return 'running';
       if (tgtState === 'success') return 'success';
       if (tgtState === 'failed') return 'failed';
-      if (srcState === 'success' && !tgtState) return 'running';
+      // 历史查看模式下，不存在的目标节点视为 idle 而非 running
+      if (srcState === 'success' && !tgtState) return restoredExecutionId ? 'idle' : 'running';
       return 'idle';
     })();
 
@@ -2050,7 +2210,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
       const srcState = stepStates[`stage_${srcStage.id}`];
       const tgtState = stepStates[`stage_${tgtStage.id}`];
-      const rs = tgtState === 'running' ? 'running' : tgtState === 'success' ? 'success' : tgtState === 'failed' ? 'failed' : srcState === 'success' && !tgtState ? 'running' : 'idle';
+            // 历史查看模式下，不存在的目标阶段视为 idle 而非 running
+      const rs = tgtState === 'running' ? 'running' : tgtState === 'success' ? 'success' : tgtState === 'failed' ? 'failed' : srcState === 'success' && !tgtState ? (restoredExecutionId ? 'idle' : 'running') : 'idle';
       const lc = rs === 'running' ? '#58a6ff' : rs === 'success' ? '#3fb950' : rs === 'failed' ? '#f85149' : 'var(--border)';
       const sw = (rs === 'running' ? 2.5 : 2) * invScale;
       const as = 5 * invScale;
@@ -2128,7 +2289,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           version: def?.version || '1.0.0',
           description: '',
           trigger: { triggerType: 'manual' },
-          stageEdges: stageEdges.map(e => ({ id: e.id, source: e.source, target: e.target })),
+
           stages: stages.map(s => ({
             id: s.id,
             name: s.name,
@@ -2152,6 +2313,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               outputSchema: n.outputSchema,
             })),
             edges: s.edges,
+            stageEdges: s.stageEdges || [],
             gate: s.gate,
           })),
           createdAt: def?.createdAt || Math.floor(Date.now() / 1000),
@@ -2168,7 +2330,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
     }, 300);
     return () => { cancelled = true; if (planTimerRef.current) clearTimeout(planTimerRef.current); };
-  }, [stages, stageEdges]);
+  }, [stages]);
 
 // ── 计算不可达节点（从后端执行计划获取） ──
   const reachableNodeIds = useMemo(
@@ -2742,10 +2904,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     top: 20 + (stageOffsetsY[stage.id] ?? 0),
                     left: stagePositions[stageIndex],
                     width: isCollapsed ? 72 : 480,
-                    height: isCollapsed ? 154 : TITLE_H + CONTENT_H + GATE_H + 4,
+                    height: isCollapsed ? 174 : TITLE_H + CONTENT_H + GATE_H + 4,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
-                    border: '1px solid var(--border)',
+                    border: stageRunState === 'running' ? '1px solid #58a6ff' : stageRunState === 'success' ? '1px solid #3fb950' : stageRunState === 'failed' ? '1px solid #f85149' : '1px solid var(--border)',
                     transition: isCollapsed ? 'width 0.25s cubic-bezier(0.4,0,0.2,1)' : 'none',
                     overflow: 'visible',
                     /* clipPath 移除：避免裁剪超出边界的节点 */
@@ -2813,6 +2975,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         <span className="text-[10px] truncate" style={{ color: 'var(--text-primary)', width: '100%', textAlign: 'center', display: 'block' }}>
                           {stage.name}
                         </span>
+
                       </>
                     )}
                     {!isCollapsed && (
@@ -2969,7 +3132,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       {/* Gate 区域（正向缩放，不做反向补偿） */}
                       <div
                         data-gate
-                        className="mx-2 p-2 rounded-lg cursor-pointer transition-colors duration-150"
+                        className="mx-1 mb-1 p-2 rounded-lg cursor-pointer transition-colors duration-150"
                         style={{
                           height: GATE_H,
                           border: `1px solid ${stageRunState === 'running' ? '#58a6ff88' : 'var(--border)'}`,
@@ -2989,7 +3152,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                             门控 Gate
                           </span>
                           <span className="text-[10px] flex items-center gap-1" style={{ color: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)' }}>
-                            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)', animation: stageRunState === 'running' ? 'spin 1s linear infinite' : 'none' }} />
+                            <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)', animation: 'none' }} />
                             {(() => { const r = stage.nodes.filter(n => n.type !== 'start'); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; return `${r.length - u}/${r.length}`; })()} 就绪
                           </span>
                         </div>
@@ -3019,6 +3182,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     <div className="flex flex-col items-center justify-center px-1" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 100, gap: 3, lineHeight: '16px', paddingTop: 10 }}>
                       <span>{stage.nodes.length} 节点</span>
                       <span>{stage.edges.length} 连线</span>
+                      <span>{(() => { const r = stage.nodes.filter(n => n.type !== 'start' && n.type !== 'end'); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; const color = u === 0 ? '#3fb950' : '#d29922'; return <span style={{ color }}>{r.length - u}/{r.length} 就绪</span>; })()}</span>
                       <span>{gateStrategyLabel(stage.gate.strategy)}</span>
                       <span>{mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
                     </div>
@@ -3068,11 +3232,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         setStageConnecting(null);
                         return;
                       }
-                      setStageEdges(prev => [...prev, {
-                        id: generateEdgeId(stageConnecting.sourceStageId, targetStageId),
-                        source: stageConnecting.sourceStageId,
-                        target: targetStageId,
-                      }]);
+                      setStages(prev => prev.map(s => s.id === stageConnecting.sourceStageId ? {
+                        ...s,
+                        stageEdges: [...(s.stageEdges || []), {
+                          id: generateEdgeId(stageConnecting.sourceStageId, targetStageId),
+                          source: stageConnecting.sourceStageId,
+                          target: targetStageId,
+                        }],
+                      } : s));
                       showToast('阶段连线已创建', 'success');
                       setStageConnecting(null);
                     }}

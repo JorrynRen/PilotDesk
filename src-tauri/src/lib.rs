@@ -351,8 +351,6 @@ pub fn run() {
             commands::workflow::create_schedule,
             commands::workflow::list_schedules,
             commands::workflow::delete_schedule,
-            commands::workflow::export_workflow,
-            commands::workflow::import_workflow,
             commands::workflow::export_workflow_to_file,
             commands::workflow::import_workflow_from_file,
 
@@ -369,6 +367,7 @@ pub fn run() {
             commands::workflow::list_recoverable_executions,
             commands::workflow::recover_execution,
             commands::workflow::get_execution_plan,
+            commands::workflow::validate_workflow,
             commands::workflow::get_pending_human_inputs,
             commands::agents::upload_agent_icon,
             commands::agents::read_agent_icon,

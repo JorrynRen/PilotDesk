@@ -1,8 +1,10 @@
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{Mutex as AsyncMutex, RwLock};
+use std::collections::HashMap;
 use crate::agent::AgentManager;
 use crate::plugin::PluginHost;
-use tokio::sync::Mutex as AsyncMutex;
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
 use super::registry::{
@@ -32,7 +34,12 @@ impl NodeExecutorTrait for NoopExecutor {
     }
 }
 
-/// 节点执行器分发器
+/// 执行句柄（用于外部取消）
+pub struct ExecutionHandle {
+    pub cancelled: Arc<AtomicBool>,
+}
+
+/// 节点执行器
 pub struct NodeExecutor {
     registry: Arc<std::sync::Mutex<WorkflowNodeTypeRegistry>>,
     pub human_input_manager: Arc<InteractManager>,
@@ -43,12 +50,42 @@ pub struct NodeExecutor {
     pool: DbPool,
     /// Agent 管理器（供 cancel_workflow 等命令中止子进程）
     agent_manager: Arc<AsyncMutex<AgentManager>>,
+    /// 运行中的执行注册表（execution_id -> ExecutionHandle）
+    running_executions: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
 }
 
 impl NodeExecutor {
     /// 获取 Agent 管理器的 Arc clone（供外部命令中止 Agent 子进程）
     pub fn agent_manager(&self) -> Arc<AsyncMutex<AgentManager>> {
         self.agent_manager.clone()
+    }
+
+    /// 注册执行句柄（执行开始时调用）
+    pub fn register_execution(&self, execution_id: &str) -> Arc<AtomicBool> {
+        let mut map = self.running_executions.blocking_write();
+        let handle = ExecutionHandle {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        let cancelled = handle.cancelled.clone();
+        map.insert(execution_id.to_string(), handle);
+        cancelled
+    }
+
+    /// 注销执行句柄（执行结束时调用）
+    pub fn unregister_execution(&self, execution_id: &str) {
+        let mut map = self.running_executions.blocking_write();
+        map.remove(execution_id);
+    }
+
+    /// 取消执行（设置 cancelled 标志）
+    pub fn cancel_execution(&self, execution_id: &str) -> bool {
+        let map = self.running_executions.blocking_read();
+        if let Some(handle) = map.get(execution_id) {
+            handle.cancelled.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
     }
 
 
@@ -162,6 +199,7 @@ impl NodeExecutor {
             plugin_host,
             pool,
             agent_manager: agent_manager_field,
+            running_executions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 

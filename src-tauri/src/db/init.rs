@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 69, 70, 71];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 70, 71, 72];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -140,6 +140,8 @@ fn migrate_add_app_settings(conn: &Connection) -> Result<(), AppError> {
         ("mode_prompt_think", "逐步分析推理，详细解释你的思路和过程，给出完整的推理链"),
         ("mode_prompt_expert", "以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案"),
         ("pilotdesk-workspace", "~\\AppData\\Roaming\\PilotDesk"),
+        ("workflow_max_concurrency", "10"),
+        ("workflow_max_subflow_depth", "3"),
     ];
     let now = crate::utils::now();
     for (key, value) in seeds {
@@ -818,19 +820,7 @@ fn migrate_deprecate_steps_column(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 根据 MIGRATION_VERSIONS 数组循环执行迁移
-/// 新增迁移时：在 MIGRATION_VERSIONS 末尾追加版本号，并在 match 中添加对应分支
-fn migrate_add_stage_edges_column(conn: &Connection) -> Result<(), AppError> {
-    let has_col: bool = conn
-        .prepare("SELECT stage_edges FROM workflow_definitions LIMIT 0")
-        .is_ok();
-    if !has_col {
-        conn.execute_batch(
-            "ALTER TABLE workflow_definitions ADD COLUMN stage_edges TEXT NOT NULL DEFAULT '[]';",
-        )?;
-    }
-    Ok(())
-}
+
 
 /// Migration v70 — 标准化 session_id_source 为五种来源类型
 /// 将 agents 表中的 session_id_source 规范化为以下五种之一：
@@ -850,8 +840,98 @@ fn migrate_normalize_session_id_source(conn: &Connection) -> Result<(), AppError
     Ok(())
 }
 
-/// Migration v71 — 同步内置 agent 延续会话命令模板和 session_id 配置
-/// 将 run_cmd_template、resume_arg_template、session_id_source/field/event_type 统一为最新版本
+/// v72: 清除 workflow_definitions 表中的遗留列
+/// - stage_edges: 旧版遗留独立列（阶段连线已改为存储在 stages JSON 内）
+/// - max_depth: 移至 app_settings 全局设置（workflow_max_subflow_depth），不再按工作流定义存储
+fn migrate_cleanup_workflow_columns(conn: &Connection) -> Result<(), AppError> {
+    // 检查是否存在需要清除的遗留列
+    let has_stage_edges_col = conn
+        .prepare("SELECT stage_edges FROM workflow_definitions LIMIT 0")
+        .is_ok();
+    let has_max_depth_col = conn
+        .prepare("SELECT max_depth FROM workflow_definitions LIMIT 0")
+        .is_ok();
+
+    if !has_stage_edges_col && !has_max_depth_col {
+        return Ok(());
+    }
+
+    let mut cleanup_reasons = Vec::new();
+    if has_stage_edges_col { cleanup_reasons.push("stage_edges"); }
+    if has_max_depth_col { cleanup_reasons.push("max_depth"); }
+    log::info!("[migration v72] 检测到 workflow_definitions 遗留列: {:?}", cleanup_reasons);
+
+    // 读取所有现有数据（根据列存在情况动态构建 SELECT）
+    let select_sql = if has_stage_edges_col && has_max_depth_col {
+        "SELECT id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled FROM workflow_definitions"
+    } else if has_stage_edges_col {
+        "SELECT id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled FROM workflow_definitions"
+    } else {
+        "SELECT id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled FROM workflow_definitions"
+    };
+    let mut stmt = conn.prepare(select_sql)?;
+    let rows: Vec<(String, String, String, String, String, String, Option<String>, Option<String>, i64, i64, bool)> = stmt.query_map([], |row| {
+        Ok((
+            row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+            row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+            row.get(6)?, row.get(7)?,
+            row.get(8)?, row.get(9)?, row.get(10)?,
+        ))
+    })?.filter_map(|r| r.ok()).collect();
+
+    // 重建表：旧表 → 新表（10列标准 schema，不含 stage_edges / max_depth）
+    conn.execute_batch(
+        "ALTER TABLE workflow_definitions RENAME TO workflow_definitions_v72_old;"
+    )?;
+
+    conn.execute_batch(
+        r#"CREATE TABLE IF NOT EXISTS workflow_definitions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            version TEXT NOT NULL DEFAULT '1.0.0',
+            description TEXT NOT NULL DEFAULT '',
+            trigger TEXT NOT NULL DEFAULT '{"triggerType":"manual"}',
+            stages TEXT NOT NULL DEFAULT '[]',
+            input_schema TEXT,
+            output_schema TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1
+        );"#
+    )?;
+
+    // 回填数据
+    for (id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled) in &rows {
+        conn.execute(
+            "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                id, name, version, description, trigger, stages,
+                input_schema, output_schema,
+                created_at, updated_at, enabled,
+            ],
+        )?;
+    }
+
+    // 删除旧表
+    conn.execute_batch("DROP TABLE IF EXISTS workflow_definitions_v72_old;")?;
+
+    // 重建索引
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);"
+    )?;
+
+    // 补种新增的全局设置（旧用户 v4 已运行，INSERT OR IGNORE 不会覆盖）
+    let now = crate::utils::now();
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('workflow_max_subflow_depth', '3', ?1)",
+        rusqlite::params![now],
+    )?;
+
+    log::info!("[migration v72] workflow_definitions 清除完成，已移除列: {:?}，迁移数据 {} 行", cleanup_reasons, rows.len());
+    Ok(())
+}
+
 fn migrate_sync_resume_templates(conn: &Connection) -> Result<(), AppError> {
     // Hermes: stderr-text, session_id: , 完整 resume 模板
     conn.execute(
@@ -901,9 +981,10 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 66 => migrate_add_workflow_missing_tables(conn)?,
                 67 => migrate_legacy_workflow_columns(conn)?,
                 68 => migrate_deprecate_steps_column(conn)?,
-                69 => migrate_add_stage_edges_column(conn)?,
+
                 70 => migrate_normalize_session_id_source(conn)?,
                 71 => migrate_sync_resume_templates(conn)?,
+                72 => migrate_cleanup_workflow_columns(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }

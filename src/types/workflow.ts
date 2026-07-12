@@ -88,7 +88,11 @@ export interface Stage {
   order: number;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
+  stageEdges?: WorkflowEdge[];
   gate: GateConfig;
+  collapsed?: boolean;
+  offsetX?: number;
+  offsetY?: number;
 }
 
 // ── 工作流定义 ──
@@ -101,11 +105,8 @@ export interface WorkflowDefinition {
   description: string;
   trigger: TriggerConfig;
   stages: Stage[];
-  /** 阶段间连线（source/target 指向 stage.id），定义阶段拓扑顺序 */
-  stageEdges?: WorkflowEdge[];
   inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
   outputSchema?: Record<string, { type: string; description?: string }>;
-  maxDepth?: number;
   createdAt: number;
   updatedAt: number;
   enabled: boolean;
@@ -210,3 +211,67 @@ export type WorkflowEventType =
   | 'step:retrying'
   | 'human_input'
   | 'error';
+
+
+// ── 执行模式（预留：支持完整执行、单点执行、断点执行）──
+
+export type ExecutionMode =
+  | { type: 'full' }
+  | { type: 'single_node'; nodeId: string }
+  | { type: 'from_node'; nodeId: string };
+
+// ── 工作流校验结果 ──
+
+export interface ValidationCheck {
+  /** 校验类型标识 */
+  checkType: string;
+  /** 严重级别: "error" | "warning" | "info" */
+  severity: string;
+  /** 可读消息 */
+  message: string;
+  /** 可选详情（如涉及的节点/阶段 ID） */
+  details?: Record<string, any>;
+}
+
+export interface ValidationResult {
+  /** 是否通过（无 error 级别检查项） */
+  ok: boolean;
+  /** 校验详情列表 */
+  checks: ValidationCheck[];
+}
+
+// ── 统一执行进度事件 payload ──
+
+export interface ExecutionProgressPayload {
+  executionId: string;
+  definitionId: string;
+  /** 执行模式 */
+  mode: ExecutionMode;
+  /** 节点状态变更（可选） */
+  node?: {
+    id: string;
+    status: string;
+    output?: any;
+    error?: string;
+  };
+  /** 阶段状态变更（可选） */
+  stage?: {
+    id: string;
+    name?: string;
+    status: string;
+    reason?: string;
+    error?: string;
+  };
+  /** 执行状态变更（可选） */
+  execution?: {
+    status: string;
+    definitionName?: string;
+    error?: string;
+    message?: string;
+  };
+  /** 进度统计（可选） */
+  progress?: {
+    completed: number;
+    total: number;
+  };
+}

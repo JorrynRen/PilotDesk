@@ -88,7 +88,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         padding: '12px 10px',
         borderRadius: 8,
         border: isUnreachable
-          ? '2px dashed #f85149'
+          ? '1px dashed #f85149'
           : selectedNodeIds.has(node.id)
             ? '2px solid var(--accent)'
             : isSelected

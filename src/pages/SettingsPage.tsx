@@ -63,6 +63,8 @@ function GeneralSettings() {
   const [language] = useState('zh-CN');
   const [workspace, setWorkspace] = useState('');
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [maxConcurrency, setMaxConcurrency] = useState(10);
+  const [maxSubflowDepth, setMaxSubflowDepth] = useState(3);
 
   // Load workspace from SQLite on mount
   useEffect(() => {
@@ -70,6 +72,14 @@ function GeneralSettings() {
       try {
         const val = await invoke<string | null>('get_app_setting', { key: 'pilotdesk-workspace' });
         if (val) setWorkspace(val);
+      } catch { /* ignore */ }
+      try {
+        const mc = await invoke<number | null>('get_workflow_max_concurrency');
+        if (mc) setMaxConcurrency(mc);
+      } catch { /* ignore */ }
+      try {
+        const msd = await invoke<string | null>('get_app_setting', { key: 'workflow_max_subflow_depth' });
+        if (msd) setMaxSubflowDepth(parseInt(msd));
       } catch { /* ignore */ }
       setWorkspaceLoaded(true);
     })();
@@ -80,6 +90,22 @@ function GeneralSettings() {
     { value: 'light' as const, icon: Sun, label: '浅色' },
     { value: 'system' as const, icon: Monitor, label: '跟随系统' },
   ];
+
+  const handleMaxConcurrencyChange = async (value: number) => {
+    const clamped = Math.max(1, Math.min(10, value));
+    setMaxConcurrency(clamped);
+    try {
+      await invoke('set_workflow_max_concurrency', { maxConcurrency: clamped });
+    } catch { /* ignore */ }
+  };
+
+  const handleMaxSubflowDepthChange = async (value: number) => {
+    const clamped = Math.max(1, Math.min(10, value));
+    setMaxSubflowDepth(clamped);
+    try {
+      await invoke('set_app_setting', { key: 'workflow_max_subflow_depth', value: clamped.toString() });
+    } catch { /* ignore */ }
+  };
 
   const handlePickWorkspace = async () => {
     try {
@@ -158,6 +184,54 @@ function GeneralSettings() {
             更多语言支持即将推出
           </p>
         </div>
+      </SettingsSection>
+
+      {/* Max Concurrency */}
+      <SettingsSection title="并行节点数">
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min="1"
+            max="20"
+            value={maxConcurrency}
+            onChange={(e) => handleMaxConcurrencyChange(parseInt(e.target.value))}
+            className="flex-1"
+            style={{ accentColor: 'var(--accent)' }}
+          />
+          <span
+            className="px-2 py-1 rounded text-xs font-mono min-w-[24px] text-center"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          >
+            {maxConcurrency}
+          </span>
+        </div>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          工作流执行时同一时刻最多并行运行的节点数。增加此值可加速并行节点较多的工作流，但会消耗更多系统资源。
+        </p>
+      </SettingsSection>
+
+      {/* Max Subflow Depth */}
+      <SettingsSection title="子工作流嵌套深度">
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min="1"
+            max="10"
+            value={maxSubflowDepth}
+            onChange={(e) => handleMaxSubflowDepthChange(parseInt(e.target.value))}
+            className="flex-1"
+            style={{ accentColor: 'var(--accent)' }}
+          />
+          <span
+            className="px-2 py-1 rounded text-xs font-mono min-w-[24px] text-center"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          >
+            {maxSubflowDepth}
+          </span>
+        </div>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          子工作流（Subflow 节点）允许的最大递归嵌套层数（1-10）。超过此限制将阻止执行以防止无限递归。
+        </p>
       </SettingsSection>
     </div>
   );

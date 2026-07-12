@@ -38,12 +38,15 @@ pub fn create_workflow(
             order: 0,
             nodes: vec![],
             edges: vec![],
+            stage_edges: vec![],
             gate: workflow::GateConfig::default(),
+            collapsed: false,
+            offset_x: 0.0,
+            offset_y: 0.0,
         }],
-                stage_edges: vec![],
+
 input_schema: None,
         output_schema: None,
-        max_depth: None,
         created_at: ts,
         updated_at: ts,
         enabled: true,
@@ -188,7 +191,7 @@ pub async fn start_workflow(
         )
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(5);
+        .unwrap_or(10);
 
     // 4. 在后台执行工作流（使用 WorkflowEngine）
     let def_clone = def.clone();
@@ -198,6 +201,31 @@ pub async fn start_workflow(
 
     tokio::spawn(async move {
         log::info!("[WorkflowEngine] 开始执行工作流: id={}, name={}", instance_id_clone, def_clone.name);
+        // ── 兜底校验（前端已预检，此处为安全冗余）──
+        if let Some(conn) = app_handle_clone.try_state::<crate::DbState>().and_then(|s| s.get_conn().ok()) {
+            match crate::workflow::engine::WorkflowEngine::validate_workflow_for_execution(
+                &def_clone, &conn, &crate::workflow::ExecutionMode::default(),
+            ) {
+                Ok(result) if !result.ok => {
+                    log::error!("[WorkflowEngine] 工作流校验未通过: {:?}", result.checks);
+                    let errors: Vec<String> = result.checks.iter()
+                        .filter(|c| c.severity == "error")
+                        .map(|c| c.message.clone())
+                        .collect();
+                    if let Some(conn) = app_handle_clone.try_state::<crate::DbState>().and_then(|s| s.get_conn().ok()) {
+                        let _ = conn.execute(
+                            "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
+                            rusqlite::params![errors.join("; "), crate::utils::now(), instance_id_clone],
+                        );
+                    }
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    log::warn!("[WorkflowEngine] 兜底校验异常（不阻塞执行）: {}", e);
+                }
+            }
+        }
         // 克隆值供内层 spawn 使用（外层已 move）
         let inner_executor = executor.clone();
         let inner_def = def_clone.clone();
@@ -220,11 +248,14 @@ pub async fn start_workflow(
         match inner_handle.await {
             Ok(Ok(_output)) => {
                 log::info!("[WorkflowEngine] 工作流执行成功: id={}", instance_id_clone);
-                let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
+                let _ = app_handle_clone.emit("workflow:execution-progress", serde_json::json!({
                     "execution_id": instance_id_clone,
                     "definition_id": def_clone.id,
-                    "definition_name": def_clone.name,
-                    "status": "completed",
+                    "mode": "full",
+                    "execution": {
+                        "status": "completed",
+                        "definition_name": def_clone.name,
+                    },
                 }));
             }
             Ok(Err(e)) => {
@@ -236,12 +267,15 @@ pub async fn start_workflow(
                         rusqlite::params![e.to_string(), crate::utils::now(), instance_id_clone],
                     );
                 }
-                let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
+                let _ = app_handle_clone.emit("workflow:execution-progress", serde_json::json!({
                     "execution_id": instance_id_clone,
                     "definition_id": def_clone.id,
-                    "definition_name": def_clone.name,
-                    "status": "failed",
-                    "error": e.to_string(),
+                    "mode": "full",
+                    "execution": {
+                        "status": "failed",
+                        "error": e.to_string(),
+                        "definition_name": def_clone.name,
+                    },
                 }));
             }
             Err(join_err) => {
@@ -258,12 +292,15 @@ pub async fn start_workflow(
                         rusqlite::params![msg, crate::utils::now(), instance_id_clone],
                     );
                 }
-                let _ = app_handle_clone.emit("workflow:execution-status", serde_json::json!({
+                let _ = app_handle_clone.emit("workflow:execution-progress", serde_json::json!({
                     "execution_id": instance_id_clone,
                     "definition_id": def_clone.id,
-                    "definition_name": def_clone.name,
-                    "status": "failed",
-                    "error": format!("工作流引擎内部错误: {}", msg),
+                    "mode": "full",
+                    "execution": {
+                        "status": "failed",
+                        "error": format!("工作流引擎内部错误: {}", msg),
+                        "definition_name": def_clone.name,
+                    },
                 }));
             }
         }
@@ -464,6 +501,8 @@ pub struct ExportWorkflowDefinition {
     #[serde(default)]
     pub stage_edges: Vec<ExportEdge>,
     pub enabled: bool,
+    /// 关联码（子工作流有值，主工作流为 None）
+    pub ref_code: Option<String>,
 }
 
 /// 导出阶段（过滤 id）
@@ -475,6 +514,9 @@ pub struct ExportStage {
     pub nodes: Vec<ExportNode>,
     pub edges: Vec<ExportEdge>,
     pub gate: workflow::GateConfig,
+    pub collapsed: bool,
+    pub offset_x: f64,
+    pub offset_y: f64,
 }
 
 /// 导出节点（过滤 id/plugin_id/command_id/input_schema/output_schema）
@@ -505,73 +547,14 @@ pub struct ExportEdge {
 }
 
 impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
+    /// 基础转换（不含子工作流处理，用于向后兼容的 export_workflow 命令）
     fn from(def: workflow::WorkflowDefinition) -> Self {
-        // 按阶段构建短标识符映射（s1, s2, ...）
+        let stages = Self::convert_stages(&def.stages, &Default::default());
         let stage_short_ids: std::collections::HashMap<String, String> =
             def.stages.iter().enumerate()
                 .map(|(i, s)| (s.id.clone(), format!("s{}", i + 1)))
                 .collect();
-
-        // 阶段连线导出：source/target 使用阶段短标识符
-        let stage_edges: Vec<ExportEdge> = def.stage_edges.iter().filter_map(|se| {
-            let src = stage_short_ids.get(&se.source).cloned();
-            let tgt = stage_short_ids.get(&se.target).cloned();
-            match (src, tgt) {
-                (Some(source), Some(target)) => Some(ExportEdge {
-                    source, target, label: None, condition: None,
-                }),
-                _ => None, // 跳过引用无效阶段ID的连线
-            }
-        }).collect();
-
-        // 按阶段构建局部节点编号映射（每个阶段从 n1 开始）
-        // 注意：必须按阶段局部编号，与 into_definition 中的编号方式一致
-        let stages: Vec<ExportStage> = def.stages.into_iter().map(|stage| {
-            // 为该阶段内的节点构建 old_uuid -> index 映射
-            let mut stage_node_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            for node in &stage.nodes {
-                let ni = stage_node_ids.len();
-                stage_node_ids.entry(node.id.clone()).or_insert(ni);
-            }
-
-            let nodes: Vec<ExportNode> = stage.nodes.into_iter().map(|node| {
-                // Replace UUIDs in input_mapping/output_mapping with short IDs (n1, n2, ...)
-                let input_mapping = Self::remap_mapping_short_ids(&node.input_mapping, &stage_node_ids);
-                let output_mapping = Self::remap_mapping_short_ids(&node.output_mapping, &stage_node_ids);
-                ExportNode {
-                    node_type: node.node_type,
-                    label: node.label,
-                    params: node.params,
-                    delay_ms: node.delay_ms,
-                    timeout_ms: node.timeout_ms,
-                    retry_count: node.retry_count,
-                    retry_delay_ms: node.retry_delay_ms,
-                    input_mapping,
-                    output_mapping,
-                    position: node.position,
-                }
-            }).collect();
-
-            let edges: Vec<ExportEdge> = stage.edges.into_iter().map(|edge| {
-                let src_idx = stage_node_ids.get(&edge.source).copied().unwrap_or(0);
-                let tgt_idx = stage_node_ids.get(&edge.target).copied().unwrap_or(0);
-                ExportEdge {
-                    source: format!("n{}", src_idx + 1),
-                    target: format!("n{}", tgt_idx + 1),
-                    label: edge.label,
-                    condition: edge.condition,
-                }
-            }).collect();
-
-            ExportStage {
-                name: stage.name,
-                order: stage.order,
-                nodes,
-                edges,
-                gate: stage.gate,
-            }
-        }).collect();
-
+        let stage_edges = Self::convert_stage_edges(&def.stages, &stage_short_ids);
         Self {
             name: def.name,
             version: def.version,
@@ -580,25 +563,276 @@ impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
             stages,
             stage_edges,
             enabled: def.enabled,
+            ref_code: None,
         }
     }
 }
 
 impl ExportWorkflowDefinition {
+    /// 导出为带子工作流捆绑的结构（返回主工作流 ExportDef + 所有子工作流 ExportDef）
+    /// subflow_map: definitionId -> (ExportWorkflowDefinition, 子工作流原始名称)
+    pub fn from_with_subflows(
+        def: workflow::WorkflowDefinition,
+        conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+    ) -> Result<(Self, Vec<(String, Self)>), String> {
+        let mut subflow_defs: Vec<(String, Self)> = Vec::new(); // (ref_code, export_def)
+        let mut def_id_to_ref: std::collections::HashMap<String, String> = std::collections::HashMap::new(); // original defId -> ref_code
+        let mut ref_counter: usize = 0;
+
+        // 递归收集子工作流
+        Self::collect_subflows_recursive(&def, conn, &mut subflow_defs, &mut def_id_to_ref, &mut ref_counter)?;
+
+        // 转换主工作流（替换 Subflow 节点的 params）
+        let stage_short_ids: std::collections::HashMap<String, String> =
+            def.stages.iter().enumerate()
+                .map(|(i, s)| (s.id.clone(), format!("s{}", i + 1)))
+                .collect();
+        let stages = Self::convert_stages_with_subflow_remap(&def.stages, &stage_short_ids, &def_id_to_ref);
+        let stage_edges = Self::convert_stage_edges(&def.stages, &stage_short_ids);
+
+        let main_export = Self {
+            name: def.name.clone(),
+            version: def.version,
+            description: def.description,
+            trigger: def.trigger,
+            stages,
+            stage_edges,
+            enabled: def.enabled,
+            ref_code: None,
+        };
+
+        Ok((main_export, subflow_defs))
+    }
+
+    /// 递归收集子工作流定义并生成关联码
+    fn collect_subflows_recursive(
+        def: &workflow::WorkflowDefinition,
+        conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+        subflow_defs: &mut Vec<(String, Self)>,
+        def_id_to_ref: &mut std::collections::HashMap<String, String>,
+        ref_counter: &mut usize,
+    ) -> Result<(), String> {
+        for stage in &def.stages {
+            for node in &stage.nodes {
+                if node.node_type != workflow::WorkflowNodeType::Subflow { continue; }
+                let subflow_def_id = node.params.as_ref()
+                    .and_then(|p| p.get("definitionId"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if subflow_def_id.is_empty() { continue; }
+
+                // 如果已处理过此子工作流，跳过（同一子工作流被多个节点引用）
+                if def_id_to_ref.contains_key(subflow_def_id) { continue; }
+
+                // 加载子工作流定义
+                let sub_def = workflow::get_definition(conn, subflow_def_id)
+                    .map_err(|e| format!("加载子工作流失败: {}", e))?
+                    .ok_or_else(|| format!("子工作流定义不存在: {}", subflow_def_id))?;
+
+                *ref_counter += 1;
+                let ref_code = format!("ref_{}", ref_counter);
+                def_id_to_ref.insert(subflow_def_id.to_string(), ref_code.clone());
+
+                // 递归收集更深层子工作流
+                Self::collect_subflows_recursive(&sub_def, conn, subflow_defs, def_id_to_ref, ref_counter)?;
+
+                // 转换子工作流本身（替换其 Subflow 节点的 params）
+                let sub_stage_short_ids: std::collections::HashMap<String, String> =
+                    sub_def.stages.iter().enumerate()
+                        .map(|(i, s)| (s.id.clone(), format!("s{}", i + 1)))
+                        .collect();
+                let sub_stages = Self::convert_stages_with_subflow_remap(&sub_def.stages, &sub_stage_short_ids, def_id_to_ref);
+                let sub_stage_edges = Self::convert_stage_edges(&sub_def.stages, &sub_stage_short_ids);
+
+                let sub_export = Self {
+                    name: sub_def.name,
+                    version: sub_def.version,
+                    description: sub_def.description,
+                    trigger: sub_def.trigger,
+                    stages: sub_stages,
+                    stage_edges: sub_stage_edges,
+                    enabled: sub_def.enabled,
+                    ref_code: Some(ref_code.clone()),
+                };
+                subflow_defs.push((ref_code, sub_export));
+            }
+        }
+        Ok(())
+    }
+
+    /// 转换阶段列表（基础版，不处理子工作流替换）
+    fn convert_stages(
+        stages: &[workflow::Stage],
+        stage_uuid_to_short: &std::collections::HashMap<String, String>,
+    ) -> Vec<ExportStage> {
+        stages.iter().map(|stage| {
+            let mut stage_node_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            for node in &stage.nodes {
+                let ni = stage_node_ids.len();
+                stage_node_ids.entry(node.id.clone()).or_insert(ni);
+            }
+            let nodes: Vec<ExportNode> = stage.nodes.iter().map(|node| {
+                ExportNode {
+                    node_type: node.node_type.clone(),
+                    label: node.label.clone(),
+                    params: node.params.clone(),
+                    delay_ms: node.delay_ms,
+                    timeout_ms: node.timeout_ms,
+                    retry_count: node.retry_count,
+                    retry_delay_ms: node.retry_delay_ms,
+                    input_mapping: Self::remap_mapping_short_ids(&node.input_mapping, &stage_node_ids, stage_uuid_to_short),
+                    output_mapping: Self::remap_mapping_short_ids(&node.output_mapping, &stage_node_ids, stage_uuid_to_short),
+                    position: node.position.clone(),
+                }
+            }).collect();
+            let edges: Vec<ExportEdge> = stage.edges.iter().map(|edge| {
+                let src_idx = stage_node_ids.get(&edge.source).copied().unwrap_or(0);
+                let tgt_idx = stage_node_ids.get(&edge.target).copied().unwrap_or(0);
+                ExportEdge {
+                    source: format!("n{}", src_idx + 1),
+                    target: format!("n{}", tgt_idx + 1),
+                    label: edge.label.clone(),
+                    condition: edge.condition.clone(),
+                }
+            }).collect();
+            ExportStage {
+                name: stage.name.clone(),
+                order: stage.order,
+                nodes,
+                edges,
+                gate: stage.gate.clone(),
+                collapsed: stage.collapsed,
+                offset_x: stage.offset_x,
+                offset_y: stage.offset_y,
+            }
+        }).collect()
+    }
+
+    /// 转换阶段列表（含子工作流节点 params 替换）
+    fn convert_stages_with_subflow_remap(
+        stages: &[workflow::Stage],
+        stage_uuid_to_short: &std::collections::HashMap<String, String>,
+        def_id_to_ref: &std::collections::HashMap<String, String>,
+    ) -> Vec<ExportStage> {
+        stages.iter().map(|stage| {
+            let mut stage_node_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            for node in &stage.nodes {
+                let ni = stage_node_ids.len();
+                stage_node_ids.entry(node.id.clone()).or_insert(ni);
+            }
+            let nodes: Vec<ExportNode> = stage.nodes.iter().map(|node| {
+                // Subflow 节点：替换 params 中的 definitionId 为 refCode + subflowFileName
+                let params = if node.node_type == workflow::WorkflowNodeType::Subflow {
+                    Self::remap_subflow_params(&node.params, def_id_to_ref)
+                } else {
+                    node.params.clone()
+                };
+                ExportNode {
+                    node_type: node.node_type.clone(),
+                    label: node.label.clone(),
+                    params,
+                    delay_ms: node.delay_ms,
+                    timeout_ms: node.timeout_ms,
+                    retry_count: node.retry_count,
+                    retry_delay_ms: node.retry_delay_ms,
+                    input_mapping: Self::remap_mapping_short_ids(&node.input_mapping, &stage_node_ids, stage_uuid_to_short),
+                    output_mapping: Self::remap_mapping_short_ids(&node.output_mapping, &stage_node_ids, stage_uuid_to_short),
+                    position: node.position.clone(),
+                }
+            }).collect();
+            let edges: Vec<ExportEdge> = stage.edges.iter().map(|edge| {
+                let src_idx = stage_node_ids.get(&edge.source).copied().unwrap_or(0);
+                let tgt_idx = stage_node_ids.get(&edge.target).copied().unwrap_or(0);
+                ExportEdge {
+                    source: format!("n{}", src_idx + 1),
+                    target: format!("n{}", tgt_idx + 1),
+                    label: edge.label.clone(),
+                    condition: edge.condition.clone(),
+                }
+            }).collect();
+            ExportStage {
+                name: stage.name.clone(),
+                order: stage.order,
+                nodes,
+                edges,
+                gate: stage.gate.clone(),
+                collapsed: stage.collapsed,
+                offset_x: stage.offset_x,
+                offset_y: stage.offset_y,
+            }
+        }).collect()
+    }
+
+    /// 转换阶段连线为导出格式
+    fn convert_stage_edges(
+        stages: &[workflow::Stage],
+        stage_short_ids: &std::collections::HashMap<String, String>,
+    ) -> Vec<ExportEdge> {
+        stages.iter().flat_map(|stage| {
+            stage.stage_edges.iter().filter_map(|se| {
+                let src = stage_short_ids.get(&se.source).cloned();
+                let tgt = stage_short_ids.get(&se.target).cloned();
+                match (src, tgt) {
+                    (Some(source), Some(target)) => Some(ExportEdge {
+                        source, target, label: None, condition: None,
+                    }),
+                    _ => None,
+                }
+            })
+        }).collect()
+    }
+
+    /// 替换 Subflow 节点的 params：definitionId -> refCode + subflowFileName
+    fn remap_subflow_params(
+        params: &Option<serde_json::Value>,
+        def_id_to_ref: &std::collections::HashMap<String, String>,
+    ) -> Option<serde_json::Value> {
+        params.as_ref().and_then(|p| p.as_object()).map(|obj| {
+            let mut new_obj = serde_json::Map::new();
+            // 保留非 definitionId 的字段
+            for (k, v) in obj {
+                if k != "definitionId" {
+                    new_obj.insert(k.clone(), v.clone());
+                }
+            }
+            // 获取 definitionId 并替换为 refCode + subflowFileName
+            if let Some(def_id) = obj.get("definitionId").and_then(|v| v.as_str()) {
+                if let Some(ref_code) = def_id_to_ref.get(def_id) {
+                    new_obj.insert("refCode".to_string(), serde_json::json!(ref_code));
+                    // 文件名后续在导出文件写入时根据工作流名称 + refCode 生成
+                    // 此处先预留 subflowFileName 占位，实际值在 export_workflow_to_file 中填入
+                    new_obj.insert("subflowFileName".to_string(), serde_json::Value::Null);
+                }
+            }
+            serde_json::Value::Object(new_obj)
+        })
+    }
+
     /// 导入时重建完整 WorkflowDefinition（生成新 UUID）
-    pub fn into_definition(self) -> workflow::WorkflowDefinition {
+    /// ref_code_to_uuid: 关联码 -> 已写入数据库的子工作流新 UUID（用于替换 Subflow 节点的 refCode）
+    pub fn into_definition_with_subflows(
+        self,
+        ref_code_to_uuid: &std::collections::HashMap<String, String>,
+    ) -> workflow::WorkflowDefinition {
         let now_ts = crate::utils::now();
         let wf_id = crate::utils::new_id();
 
-        let stages: Vec<workflow::Stage> = self.stages.into_iter().map(|stage| {
+        let mut stages: Vec<workflow::Stage> = self.stages.into_iter().map(|stage| {
             let nodes: Vec<workflow::WorkflowNode> = stage.nodes.into_iter().map(|en| {
+                // Subflow 节点：将 refCode 替换回 definitionId
+                let params = if en.node_type == workflow::WorkflowNodeType::Subflow {
+                    Self::restore_subflow_params(&en.params, ref_code_to_uuid)
+                } else {
+                    en.params
+                };
                 workflow::WorkflowNode {
-                    id: String::new(), // will be filled below
+                    id: String::new(),
                     node_type: en.node_type,
                     label: en.label,
                     plugin_id: None,
                     command_id: None,
-                    params: en.params,
+                    params,
                     delay_ms: en.delay_ms,
                     timeout_ms: en.timeout_ms,
                     retry_count: en.retry_count,
@@ -634,6 +868,11 @@ impl ExportWorkflowDefinition {
                 }
             }).collect();
 
+            // 构建阶段短标识符 -> 新UUID 映射（用于 mapping 中的阶段 UUID 替换）
+            let _stage_short_to_uuid: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            // 注意：此时 stages 还在构建中，stage 的 id 已在上方生成
+            // 我们需要在该阶段生成后才能获取其 id，因此 mapping 替换在下方单独处理
+
             // Update input_mapping/output_mapping: replace short IDs (n1, n2) with new UUIDs
             let nodes: Vec<workflow::WorkflowNode> = nodes.into_iter().map(|mut n| {
                 if let Some(ref mapping) = n.input_mapping {
@@ -641,7 +880,7 @@ impl ExportWorkflowDefinition {
                         let new_mapping = val.iter()
                             .map(|(k, v)| {
                                 let new_v = if let Some(s) = v.as_str() {
-                                    Self::remap_mapping_value_uuids(s, &stage_node_map)
+                                    Self::remap_mapping_value_uuids(s, &stage_node_map, &std::collections::HashMap::new())
                                         .map(serde_json::Value::String)
                                         .unwrap_or_else(|| v.clone())
                                 } else {
@@ -658,7 +897,7 @@ impl ExportWorkflowDefinition {
                         let new_mapping = val.iter()
                             .map(|(k, v)| {
                                 let new_v = if let Some(s) = v.as_str() {
-                                    Self::remap_mapping_value_uuids(s, &stage_node_map)
+                                    Self::remap_mapping_value_uuids(s, &stage_node_map, &std::collections::HashMap::new())
                                         .map(serde_json::Value::String)
                                         .unwrap_or_else(|| v.clone())
                                 } else {
@@ -679,7 +918,11 @@ impl ExportWorkflowDefinition {
                 order: stage.order,
                 nodes,
                 edges,
+                stage_edges: vec![],
                 gate: stage.gate,
+                collapsed: stage.collapsed,
+                offset_x: stage.offset_x,
+                offset_y: stage.offset_y,
             }
         }).collect();
 
@@ -689,8 +932,32 @@ impl ExportWorkflowDefinition {
                 .map(|(i, s)| (format!("s{}", i + 1), s.id.clone()))
                 .collect();
 
+        // 二次遍历：替换所有 mapping 中的阶段 UUID（s1/s2 -> 新 UUID）
+        for stage in &mut stages {
+            for node in &mut stage.nodes {
+                if let Some(ref mapping) = node.input_mapping {
+                    if let Some(val) = mapping.as_object() {
+                        let new_mapping: serde_json::Map<String, serde_json::Value> = val.iter()
+                            .map(|(k, v)| {
+                                let new_v = if let Some(s) = v.as_str() {
+                                    Self::remap_mapping_value_uuids_stage(s, &stage_short_to_uuid)
+                                        .map(serde_json::Value::String)
+                                        .unwrap_or_else(|| v.clone())
+                                } else {
+                                    v.clone()
+                                };
+                                (k.clone(), new_v)
+                            })
+                            .collect();
+                        node.input_mapping = Some(serde_json::Value::Object(new_mapping));
+                    }
+                }
+                // output_mapping 不含 UUID，无需处理
+            }
+        }
+
         // 恢复阶段连线
-        let stage_edges: Vec<workflow::WorkflowEdge> = self.stage_edges.into_iter().map(|se| {
+        let all_stage_edges: Vec<workflow::WorkflowEdge> = self.stage_edges.into_iter().map(|se| {
             workflow::WorkflowEdge {
                 id: crate::utils::new_id(),
                 source: stage_short_to_uuid.get(&se.source).cloned().unwrap_or_default(),
@@ -699,6 +966,12 @@ impl ExportWorkflowDefinition {
                 condition: None,
             }
         }).collect();
+        for stage in &mut stages {
+            stage.stage_edges = all_stage_edges.iter()
+                .filter(|e| e.source == stage.id)
+                .cloned()
+                .collect();
+        }
 
         workflow::WorkflowDefinition {
             id: wf_id,
@@ -707,28 +980,35 @@ impl ExportWorkflowDefinition {
             description: self.description,
             trigger: self.trigger,
             stages,
-            stage_edges,
-input_schema: None,
+            input_schema: None,
             output_schema: None,
-            max_depth: Some(10),
             created_at: now_ts,
             updated_at: now_ts,
             enabled: self.enabled,
         }
     }
 
-    /// Replace node UUIDs in mapping values with short IDs (n1, n2, ...)
-    /// Used during export to ensure mapping references are in short ID format
+    /// 向后兼容：不带子工作流映射的导入
+    pub fn into_definition(self) -> workflow::WorkflowDefinition {
+        self.into_definition_with_subflows(&std::collections::HashMap::new())
+    }
+
+    /// 替换 mapping 中的节点 UUID 为短 ID（n1/n2）和阶段 UUID 为短 ID（s1/s2）
     fn remap_mapping_short_ids(
         mapping: &Option<serde_json::Value>,
         uuid_to_short: &std::collections::HashMap<String, usize>,
+        stage_uuid_to_short: &std::collections::HashMap<String, String>,
     ) -> Option<serde_json::Value> {
         mapping.as_ref().and_then(|m| m.as_object()).map(|obj| {
             let new_obj: serde_json::Map<String, serde_json::Value> = obj.iter()
                 .map(|(k, v)| {
                     let new_v = if let Some(s) = v.as_str() {
                         let mut result = s.to_string();
-                        // Replace all node UUIDs with their short ID counterparts
+                        // 先替换阶段 UUID（较长，避免与 n 前缀冲突）
+                        for (uuid, short) in stage_uuid_to_short {
+                            result = result.replace(uuid, short);
+                        }
+                        // 再替换节点 UUID
                         for (uuid, &idx) in uuid_to_short {
                             let short_id = format!("n{}", idx + 1);
                             result = result.replace(uuid, &short_id);
@@ -744,32 +1024,51 @@ input_schema: None,
         })
     }
 
-    /// Replace short IDs (n1, n2) in mapping values with new UUIDs
-    /// Used during import to restore mapping references to actual node UUIDs
+    /// 替换 mapping 中的短 ID（n1/n2）为新 UUID（节点维度）
     fn remap_mapping_value_uuids(
         value: &str,
-        short_to_uuid: &std::collections::HashMap<String, String>,
+        short_to_node_uuid: &std::collections::HashMap<String, String>,
+        _short_to_stage_uuid: &std::collections::HashMap<String, String>,
     ) -> Option<String> {
         let mut result = value.to_string();
-        for (short_id, new_uuid) in short_to_uuid {
+        for (short_id, new_uuid) in short_to_node_uuid {
             result = result.replace(short_id, new_uuid);
         }
         Some(result)
     }
-}
 
-/// 导出工作流为 JSON
-#[tauri::command]
-pub fn export_workflow(
-    state: tauri::State<'_, crate::DbState>,
-    id: String,
-) -> Result<String, String> {
-    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
-    let def = workflow::get_definition(&conn, &id)
-        .map_err(|e| format!("查询失败: {}", e))?
-        .ok_or_else(|| "工作流不存在".to_string())?;
-    let export_def: ExportWorkflowDefinition = def.into();
-    serde_json::to_string_pretty(&export_def).map_err(|e| format!("序列化失败: {}", e))
+    /// 替换 mapping 中的阶段短 ID（s1/s2）为新 UUID
+    fn remap_mapping_value_uuids_stage(
+        value: &str,
+        short_to_stage_uuid: &std::collections::HashMap<String, String>,
+    ) -> Option<String> {
+        let mut result = value.to_string();
+        for (short_id, new_uuid) in short_to_stage_uuid {
+            result = result.replace(short_id, new_uuid);
+        }
+        Some(result)
+    }
+
+    /// 恢复 Subflow 节点的 params：refCode -> definitionId
+    fn restore_subflow_params(
+        params: &Option<serde_json::Value>,
+        ref_code_to_uuid: &std::collections::HashMap<String, String>,
+    ) -> Option<serde_json::Value> {
+        params.as_ref().and_then(|p| p.as_object()).map(|obj| {
+            let mut new_obj = serde_json::Map::new();
+            for (k, v) in obj {
+                if k != "refCode" && k != "subflowFileName" {
+                    new_obj.insert(k.clone(), v.clone());
+                }
+            }
+            if let Some(ref_code) = obj.get("refCode").and_then(|v| v.as_str()) {
+                if let Some(new_uuid) = ref_code_to_uuid.get(ref_code) {
+                    new_obj.insert("definitionId".to_string(), serde_json::json!(new_uuid));
+                }
+            }
+            serde_json::Value::Object(new_obj)
+        })
+    }
 }
 
 /// 从 JSON 导入工作流
@@ -795,29 +1094,221 @@ pub fn import_workflow(
 pub fn export_workflow_to_file(
     state: tauri::State<'_, crate::DbState>,
     id: String,
-    file_path: String,
+    dir_path: String,
 ) -> Result<(), String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
     let def = workflow::get_definition(&conn, &id)
         .map_err(|e| format!("查询失败: {}", e))?
         .ok_or_else(|| "工作流不存在".to_string())?;
-    let export_def: ExportWorkflowDefinition = def.into();
-    let json = serde_json::to_string_pretty(&export_def)
-        .map_err(|e| format!("序列化失败: {}", e))?;
-    std::fs::write(&file_path, json)
-        .map_err(|e| format!("写入文件失败: {}", e))?;
+
+    // 判断是否包含子工作流
+    let has_subflows = def.stages.iter().any(|stage| {
+        stage.nodes.iter().any(|n| n.node_type == workflow::WorkflowNodeType::Subflow)
+    });
+
+    if !has_subflows {
+        // 简单导出：无子工作流，使用基础 From impl
+        let export_def: ExportWorkflowDefinition = def.into();
+        let file_name = format!("[主]{}.json", export_def.name);
+        let file_path = std::path::Path::new(&dir_path).join(&file_name);
+        let json = serde_json::to_string_pretty(&export_def)
+            .map_err(|e| format!("序列化失败: {}", e))?;
+        std::fs::write(&file_path, json)
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+    } else {
+        // 含子工作流导出：使用 from_with_subflows
+        let (main_export, subflow_exports) = ExportWorkflowDefinition::from_with_subflows(def, &conn)?;
+
+        // 构建子工作流 refCode -> 文件名映射
+        let mut subflow_file_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for (ref_code, sub_def) in &subflow_exports {
+            let file_name = format!("[子]{}({}).json", sub_def.name, ref_code);
+            subflow_file_names.insert(ref_code.clone(), file_name);
+        }
+
+        // 填充主工作流中 Subflow 节点的 subflowFileName 字段
+        let mut main_json_value = serde_json::to_value(&main_export)
+            .map_err(|e| format!("序列化失败: {}", e))?;
+        if let Some(stages) = main_json_value.get_mut("stages").and_then(|s| s.as_array_mut()) {
+            for stage in stages {
+                if let Some(nodes) = stage.get_mut("nodes").and_then(|n| n.as_array_mut()) {
+                    for node in nodes {
+                        let is_subflow = node.get("node_type").and_then(|t| t.as_str()) == Some("Subflow");
+                        if is_subflow {
+                            if let Some(params) = node.get_mut("params").and_then(|p| p.as_object_mut()) {
+                                if let Some(ref_code) = params.get("refCode").and_then(|r| r.as_str()) {
+                                    if let Some(file_name) = subflow_file_names.get(ref_code) {
+                                        params.insert("subflowFileName".to_string(), serde_json::json!(file_name));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 写入主文件
+        let main_file_name = format!("[主]{}.json", main_export.name);
+        let main_file_path = std::path::Path::new(&dir_path).join(&main_file_name);
+        let main_json = serde_json::to_string_pretty(&main_json_value)
+            .map_err(|e| format!("序列化失败: {}", e))?;
+        std::fs::write(&main_file_path, main_json)
+            .map_err(|e| format!("写入主文件失败: {}", e))?;
+
+        // 写入各子工作流文件
+        for (ref_code, sub_def) in subflow_exports {
+            let file_name = subflow_file_names.get(&ref_code)
+                .ok_or_else(|| format!("未找到关联码 {} 的文件名映射", ref_code))?
+                .clone();
+            let sub_file_path = std::path::Path::new(&dir_path).join(&file_name);
+
+            // 同样填充子工作流中嵌套子工作流的 subflowFileName
+            let mut sub_json_value = serde_json::to_value(&sub_def)
+                .map_err(|e| format!("序列化失败: {}", e))?;
+            if let Some(stages) = sub_json_value.get_mut("stages").and_then(|s| s.as_array_mut()) {
+                for stage in stages {
+                    if let Some(nodes) = stage.get_mut("nodes").and_then(|n| n.as_array_mut()) {
+                        for node in nodes {
+                            let is_subflow = node.get("node_type").and_then(|t| t.as_str()) == Some("Subflow");
+                            if is_subflow {
+                                if let Some(params) = node.get_mut("params").and_then(|p| p.as_object_mut()) {
+                                    if let Some(rc) = params.get("refCode").and_then(|r| r.as_str()) {
+                                        if let Some(fn_) = subflow_file_names.get(rc) {
+                                            params.insert("subflowFileName".to_string(), serde_json::json!(fn_));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let sub_json = serde_json::to_string_pretty(&sub_json_value)
+                .map_err(|e| format!("序列化失败: {}", e))?;
+            std::fs::write(&sub_file_path, sub_json)
+                .map_err(|e| format!("写入子工作流文件失败: {}", e))?;
+        }
+    }
+
     Ok(())
 }
 
-/// 从文件导入工作流
+/// 从文件导入工作流（支持子工作流捆绑导入）
 #[tauri::command]
 pub fn import_workflow_from_file(
     state: tauri::State<'_, crate::DbState>,
     file_path: String,
 ) -> Result<workflow::WorkflowDefinition, String> {
-    let json = std::fs::read_to_string(&file_path)
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+
+    // 读取主文件
+    let main_json = std::fs::read_to_string(&file_path)
         .map_err(|e| format!("读取文件失败: {}", e))?;
-    import_workflow(state, json)
+    let main_export: ExportWorkflowDefinition = serde_json::from_str(&main_json)
+        .map_err(|e| format!("JSON 解析失败: {}", e))?;
+
+    // 检查主文件是否包含子工作流引用
+    let has_subflow_refs = main_export.stages.iter().any(|stage| {
+        stage.nodes.iter().any(|n| {
+            n.node_type == workflow::WorkflowNodeType::Subflow
+                && n.params.as_ref()
+                    .and_then(|p| p.get("refCode"))
+                    .is_some()
+        })
+    });
+
+    if !has_subflow_refs {
+        // 无子工作流：直接导入
+        let def = main_export.into_definition();
+        workflow::create_definition(&conn, &def).map_err(|e| format!("导入失败: {}", e))?;
+        Ok(def)
+    } else {
+        // 收集同目录下的 [子] 文件
+        let dir = std::path::Path::new(&file_path)
+            .parent()
+            .ok_or_else(|| "无法获取文件所在目录".to_string())?;
+        let mut subflow_files: std::collections::HashMap<String, String> = std::collections::HashMap::new(); // refCode -> 文件路径
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                // 文件名格式：[子]{name}(ref_N).json
+                if file_name.starts_with("[子]") && file_name.ends_with(".json") {
+                    // 提取关联码
+                    if let Some(rest) = file_name.strip_prefix("[子]") {
+                        if let Some(rest) = rest.strip_suffix(".json") {
+                            // rest = "{name}(ref_N)"
+                            if let Some(start) = rest.rfind("(ref_") {
+                                if rest.ends_with(")") {
+                                    let ref_code = &rest[start+1..rest.len()-1]; // "ref_N"
+                                    subflow_files.insert(ref_code.to_string(), entry.path().to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 读取所有子工作流文件
+        let mut subflow_defs: std::collections::HashMap<String, ExportWorkflowDefinition> = std::collections::HashMap::new();
+        for (ref_code, path) in &subflow_files {
+            let json = std::fs::read_to_string(path)
+                .map_err(|e| format!("读取子工作流文件失败: {}", e))?;
+            let def: ExportWorkflowDefinition = serde_json::from_str(&json)
+                .map_err(|e| format!("解析子工作流文件失败: {}", e))?;
+            subflow_defs.insert(ref_code.clone(), def);
+        }
+
+        // 按拓扑序导入：递归获取依赖深度，先导入深层再浅层
+        fn get_depth(
+            ref_code: &str,
+            defs: &std::collections::HashMap<String, ExportWorkflowDefinition>,
+            cache: &mut std::collections::HashMap<String, usize>,
+        ) -> usize {
+            if let Some(&d) = cache.get(ref_code) { return d; }
+            let def = match defs.get(ref_code) {
+                Some(d) => d,
+                None => { cache.insert(ref_code.to_string(), 0); return 0; }
+            };
+            let max_child = def.stages.iter().flat_map(|s| s.nodes.iter())
+                .filter(|n| n.node_type == workflow::WorkflowNodeType::Subflow)
+                .filter_map(|n| n.params.as_ref()?.get("refCode")?.as_str().map(String::from))
+                .map(|rc| get_depth(&rc, defs, cache))
+                .max()
+                .unwrap_or(0);
+            let depth = max_child + 1;
+            cache.insert(ref_code.to_string(), depth);
+            depth
+        }
+
+        let mut depth_cache: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut sorted_refs: Vec<String> = subflow_files.keys().cloned().collect();
+        sorted_refs.sort_by(|a, b| {
+            let da = get_depth(a, &subflow_defs, &mut depth_cache);
+            let db = get_depth(b, &subflow_defs, &mut depth_cache);
+            db.cmp(&da) // 深度大的先导入
+        });
+
+        // 逐层写入子工作流，建立 refCode -> 新 UUID 映射
+        let mut ref_code_to_uuid: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for ref_code in &sorted_refs {
+            let sub_export = subflow_defs.get(ref_code)
+                .ok_or_else(|| format!("子工作流 {} 未找到", ref_code))?;
+            let def = sub_export.clone().into_definition_with_subflows(&ref_code_to_uuid);
+            let new_id = def.id.clone();
+            workflow::create_definition(&conn, &def)
+                .map_err(|e| format!("导入子工作流 {} 失败: {}", ref_code, e))?;
+            ref_code_to_uuid.insert(ref_code.clone(), new_id);
+        }
+
+        // 导入主工作流
+        let main_def = main_export.into_definition_with_subflows(&ref_code_to_uuid);
+        workflow::create_definition(&conn, &main_def)
+            .map_err(|e| format!("导入主工作流失败: {}", e))?;
+        Ok(main_def)
+    }
 }
 
 /// 获取所有注册的节点类型
@@ -881,7 +1372,7 @@ pub fn get_workflow_max_concurrency(
             |row| row.get(0),
         )
         .unwrap_or_else(|_| "5".to_string());
-    Ok(value.parse::<usize>().unwrap_or(5))
+    Ok(value.parse::<usize>().unwrap_or(10))
 }
 
 /// 设置工作流最大并发数
@@ -1002,13 +1493,25 @@ pub async fn recover_execution(
         .map_err(|e| format!("查询失败: {}", e))?
         .ok_or_else(|| "工作流定义不存在".to_string())?;
     let executor = app_handle.state::<std::sync::Arc<crate::workflow::executor::NodeExecutor>>();
+
+    // 从 app_settings 读取最大并发数（与 start_workflow 保持一致）
+    let max_concurrency: usize = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'workflow_max_concurrency'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+
     crate::workflow::engine::WorkflowEngine::recover_execution(
         &executor.inner(),
         &def,
         &execution_id,
         serde_json::Value::Object(serde_json::Map::new()),
         &app_handle,
-        5, // 默认并发数
+        max_concurrency,
     ).await.map_err(|e| e.to_string())
         .map_err(|e| format!("恢复执行失败: {}", e))
 }
@@ -1041,6 +1544,31 @@ pub async fn get_execution_plan(
             .ok_or_else(|| "工作流不存在".to_string())?
     };
     Ok(crate::workflow::engine::WorkflowEngine::compute_execution_plan(&def))
+}
+
+/// 工作流执行前校验
+///
+/// 前端调用此命令获取校验结果，根据 ok 字段决定是否继续执行。
+/// 后端 start_workflow 内部也会执行兜底校验（安全冗余）。
+#[tauri::command]
+pub fn validate_workflow(
+    state: tauri::State<'_, crate::DbState>,
+    workflow_id: Option<String>,
+    definition: Option<serde_json::Value>,
+) -> Result<crate::workflow::ValidationResult, String> {
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+    let def = if let Some(def_val) = definition {
+        serde_json::from_value::<crate::workflow::WorkflowDefinition>(def_val)
+            .map_err(|e| format!("工作流定义解析失败: {}", e))?
+    } else {
+        let wf_id = workflow_id.ok_or_else(|| "必须提供 workflow_id 或 definition 参数".to_string())?;
+        workflow::get_definition(&conn, &wf_id)
+            .map_err(|e| format!("查询失败: {}", e))?
+            .ok_or_else(|| "工作流不存在".to_string())?
+    };
+    let mode = crate::workflow::ExecutionMode::default();
+    crate::workflow::engine::WorkflowEngine::validate_workflow_for_execution(&def, &conn, &mode)
+        .map_err(|e| format!("校验失败: {}", e))
 }
 
 // ════════════════════════════════════════════════════════════
