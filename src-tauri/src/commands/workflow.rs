@@ -667,11 +667,11 @@ impl ExportWorkflowDefinition {
         stage_uuid_to_short: &std::collections::HashMap<String, String>,
     ) -> Vec<ExportStage> {
         stages.iter().map(|stage| {
-            let mut stage_node_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            for node in &stage.nodes {
-                let ni = stage_node_ids.len();
-                stage_node_ids.entry(node.id.clone()).or_insert(ni);
-            }
+            // 按数组顺序分配短ID，确保 nodes[i] 对应 n{i+1}
+            let stage_node_ids: std::collections::HashMap<String, usize> =
+                stage.nodes.iter().enumerate()
+                    .map(|(i, node)| (node.id.clone(), i))
+                    .collect();
             let nodes: Vec<ExportNode> = stage.nodes.iter().map(|node| {
                 ExportNode {
                     node_type: node.node_type.clone(),
@@ -716,11 +716,11 @@ impl ExportWorkflowDefinition {
         def_id_to_ref: &std::collections::HashMap<String, String>,
     ) -> Vec<ExportStage> {
         stages.iter().map(|stage| {
-            let mut stage_node_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            for node in &stage.nodes {
-                let ni = stage_node_ids.len();
-                stage_node_ids.entry(node.id.clone()).or_insert(ni);
-            }
+            // 按数组顺序分配短ID，确保 nodes[i] 对应 n{i+1}
+            let stage_node_ids: std::collections::HashMap<String, usize> =
+                stage.nodes.iter().enumerate()
+                    .map(|(i, node)| (node.id.clone(), i))
+                    .collect();
             let nodes: Vec<ExportNode> = stage.nodes.iter().map(|node| {
                 // Subflow 节点：替换 params 中的 definitionId 为 refCode + subflowFileName
                 let params = if node.node_type == workflow::WorkflowNodeType::Subflow {
