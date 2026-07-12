@@ -126,15 +126,18 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const handleExportSingle = async (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation();
     try {
-      const filePath = await saveDialog({
-        defaultPath: `${name || '工作流'}.json`,
-        filters: [{ name: '工作流文件', extensions: ['json'] }],
+      const dirPath = await openDialog({
+        directory: true,
+        title: '选择导出目录',
+        defaultPath: name || '工作流',
       });
-      if (filePath) {
-        await invoke('export_workflow_to_file', { id, filePath });
+      if (dirPath) {
+        await invoke('export_workflow_to_file', { id, dirPath });
+        showToast('工作流导出成功', 'success');
       }
     } catch (err: any) {
       console.error('导出工作流失败:', err);
+      showToast(`导出工作流失败: ${err}`, 'error');
     }
   };
 

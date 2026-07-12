@@ -463,6 +463,33 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   }, [definitionId, name, onSaveResult]);
 
+  const handleImportWorkflow = useCallback(async () => {
+    try {
+      const filePaths = await openDialog({
+        title: '选择工作流文件导入',
+        filters: [{ name: '工作流文件', extensions: ['json'] }],
+        multiple: true,
+      });
+      if (!filePaths || (filePaths as string[]).length === 0) return;
+      const paths = filePaths as string[];
+      let successCount = 0;
+      for (const filePath of paths) {
+        try {
+          await invoke('import_workflow_from_file', { filePath });
+          successCount++;
+        } catch (innerErr: any) {
+          const fileName = filePath.split(/[\/]/).pop();
+          showToast(`导入工作流「${fileName}」失败: ${innerErr}`, 'error');
+        }
+      }
+      if (successCount > 0) {
+        showToast(`成功导入 ${successCount} 个工作流`, 'success');
+      }
+    } catch (err: any) {
+      console.error('导入工作流失败:', err);
+    }
+  }, []);
+
   const handleSave = async () => {
     if (!def) return;
     try {
@@ -2544,6 +2571,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M7 2v7M4.5 6L7 8.5 9.5 6M2 11h10" />
+            </svg>
+          </button>
+          <button
+            onClick={handleImportWorkflow}
+            className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="从文件导入工作流"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 9V2M4.5 5.5L7 3 9.5 5.5M2 11h10" />
             </svg>
           </button>
           <button
