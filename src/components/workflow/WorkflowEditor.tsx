@@ -35,6 +35,7 @@ interface Props {
   onClose: () => void;
   onNameChange?: (name: string) => void;
   onSaveResult?: (success: boolean) => void;
+  onImported?: (newId: string) => void;
 }
 
 // ── 布局常量（画布 & 阶段 & 节点尺寸） ──
@@ -82,7 +83,7 @@ interface ConfirmAction {
 /** 执行状态枚举 */
 type StepRunState = 'idle' | 'running' | 'success' | 'failed';
 
-export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange, onSaveResult }) => {
+export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange, onSaveResult, onImported }) => {
   const { definitions, instances, selectedInstanceId, updateDefinition, loadDefinitions } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
@@ -473,10 +474,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       if (!filePaths || (filePaths as string[]).length === 0) return;
       const paths = filePaths as string[];
       let successCount = 0;
+      let lastImportedId: string | null = null;
       for (const filePath of paths) {
         try {
-          await invoke('import_workflow_from_file', { filePath });
+          const result = await invoke<{ id: string }>('import_workflow_from_file', { filePath });
           successCount++;
+          if (result?.id) {
+            lastImportedId = result.id;
+          }
         } catch (innerErr: any) {
           const fileName = filePath.split(/[\/]/).pop();
           showToast(`导入工作流「${fileName}」失败: ${innerErr}`, 'error');
@@ -484,11 +489,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
       if (successCount > 0) {
         showToast(`成功导入 ${successCount} 个工作流`, 'success');
+        if (lastImportedId && onImported) {
+          onImported(lastImportedId);
+        }
       }
     } catch (err: any) {
       console.error('导入工作流失败:', err);
     }
-  }, []);
+  }, [onImported]);
 
   const handleSave = async () => {
     if (!def) return;

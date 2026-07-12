@@ -209,6 +209,10 @@ export function WorkflowEditorPage() {
               autoDismiss: 5000,
             });
           }}
+          onImported={(newId) => {
+            navigate(`/workflow/editor?id=${newId}`, { replace: true });
+            setReadyId(newId);
+          }}
         />
       </div>
       <StatusBar
