@@ -2653,16 +2653,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </svg>
           </button>
           <button
-            onClick={handleExportWorkflow}
-            className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title="导出工作流为 JSON 文件"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M7 9V2M4.5 5.5L7 3 9.5 5.5M2 11h10" />
-            </svg>
-          </button>
-          <button
             onClick={handleImportWorkflow}
             className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
@@ -2670,6 +2660,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M7 2v7M4.5 6L7 8.5 9.5 6M2 11h10" />
+            </svg>
+          </button>
+          <button
+            onClick={handleExportWorkflow}
+            className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="导出工作流为 JSON 文件"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 9V2M4.5 5.5L7 3 9.5 5.5M2 11h10" />
             </svg>
           </button>
           <button
