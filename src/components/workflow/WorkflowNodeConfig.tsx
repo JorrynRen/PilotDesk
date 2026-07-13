@@ -1386,7 +1386,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
       )}
 
       {/* ===== 节点配置 ===== */}
-      {configFields.length > 0 && (
+      {configFields.slice(1).length > 0 && (
         <div style={S.sectionGap}>
           <div style={S.sectionTitle}>节点配置</div>
 
