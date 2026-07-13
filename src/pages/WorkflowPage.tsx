@@ -365,7 +365,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
             className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
           >
-            <Upload size={14} /> 从文件导入
+            <Download size={14} /> 从文件导入
           </button>
         </div>
       </div>
@@ -441,7 +441,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                           style={{ color: 'var(--text-secondary)' }}
                           title="导出"
                         >
-                          <Download size={14} />
+                          <Upload size={14} />
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDelete(def.id, def.name); }}
@@ -483,7 +483,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                         {new Date(Number(def.createdAt) * 1000).toLocaleString()}
                       </span>
                       <span className="flex items-center gap-1">
-                        <Download size={10} />
+                        <Upload size={10} />
                         {new Date(Number(def.updatedAt) * 1000).toLocaleString()}
                       </span>
                     </div>
