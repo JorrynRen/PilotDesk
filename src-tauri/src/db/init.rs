@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 70, 71, 72];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 70, 71, 72, 73];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -951,6 +951,27 @@ fn migrate_sync_resume_templates(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+fn migrate_seed_api_providers(conn: &Connection) -> Result<(), AppError> {
+    let now = crate::utils::now();
+    let seeds: Vec<(&str, &str, &str, &str, i64)> = vec![
+        ("openai", "OpenAI", "https://api.openai.com/v1", "gpt-4o,gpt-4o-mini,o3,o4-mini", 1),
+        ("anthropic", "Anthropic", "https://api.anthropic.com", "claude-sonnet-4-20250514,claude-sonnet-4-20250514,claude-4-opus-20250514", 2),
+        ("deepseek", "DeepSeek", "https://api.deepseek.com", "deepseek-chat,deepseek-reasoner", 3),
+        ("siliconflow", "SiliconFlow", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V3,deepseek-ai/DeepSeek-R1,Qwen/Qwen2.5-72B-Instruct-Google", 4),
+        ("zhipu", "智谱AI", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus,glm-4-air", 5),
+    ];
+    for (id, name, endpoint, models_str, sort_order) in seeds {
+        let models: Vec<String> = models_str.split(',').map(|s| s.trim().to_string()).collect();
+        let models_json = serde_json::to_string(&models).unwrap_or_default();
+        conn.execute(
+            "INSERT OR IGNORE INTO api_providers (id, name, api_endpoint, api_key, api_key_masked, api_key_set, models, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, '', '', 0, ?4, ?5, ?6, ?6)",
+            rusqlite::params![id, name, endpoint, models_json, sort_order, now],
+        )?;
+    }
+    Ok(())
+}
+
 fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppError> {
     for &ver in MIGRATION_VERSIONS {
         if current_version < ver {
@@ -985,6 +1006,7 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 70 => migrate_normalize_session_id_source(conn)?,
                 71 => migrate_sync_resume_templates(conn)?,
                 72 => migrate_cleanup_workflow_columns(conn)?,
+                73 => migrate_seed_api_providers(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }
