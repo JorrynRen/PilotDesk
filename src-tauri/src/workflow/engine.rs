@@ -1004,19 +1004,24 @@ impl WorkflowEngine {
                                 let mut exposed = serde_json::Map::new();
                                 for (key, path) in mapping {
                                     match path.as_str() {
-                                        Some("content") => {
+                                        Some("content") | Some("{{content}}") => {
                                             exposed.insert(key.clone(), output.output.clone());
                                         }
-                                        Some("session_id") => {
+                                        Some("session_id") | Some("{{session_id}}") => {
                                             if let Some(ref sid) = output.session_id {
                                                 exposed.insert(key.clone(), Value::String(sid.clone()));
                                             }
                                         }
                                         _ => {
-                                            // 其他自定义路径：尝试从 node_output 按路径提取
+                                            // 其他自定义路径：尝试从 node_output 按路径提取，支持 {{var}} 格式
                                             if let Some(path_str) = path.as_str() {
-                                                if !path_str.is_empty() {
-                                                    if let Some(val) = node_output.get(path_str) {
+                                                let lookup = if path_str.starts_with("{{") && path_str.ends_with("}}") {
+                                                    &path_str[2..path_str.len()-2]
+                                                } else {
+                                                    path_str
+                                                };
+                                                if !lookup.is_empty() {
+                                                    if let Some(val) = node_output.get(lookup) {
                                                         exposed.insert(key.clone(), val.clone());
                                                     } else {
                                                         exposed.insert(key.clone(), node_output.clone());

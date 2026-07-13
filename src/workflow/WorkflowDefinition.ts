@@ -502,7 +502,7 @@ export function sanitizeMappingReferences(stages: Stage[], stageEdges?: Workflow
     }
   }
 
-  // 构建每个节点的上游 ID 集合（通过边 source→target 传递）
+  // 构建每个节点的上游 ID 集合（通过边 source→target 传递 + 跨阶段前序）
   const upstreamMap = new Map<string, Set<string>>();
   for (const stage of stages) {
     for (const edge of stage.edges) {
@@ -514,6 +514,19 @@ export function sanitizeMappingReferences(stages: Stage[], stageEdges?: Workflow
       if (srcUpstream) {
         for (const uid of srcUpstream) {
           upstreamMap.get(edge.target)!.add(uid);
+        }
+      }
+    }
+  }
+  // 补充跨阶段上游：前序阶段的所有节点视为当前阶段所有节点的上游
+  for (let i = 1; i < stages.length; i++) {
+    for (const node of stages[i].nodes) {
+      if (!upstreamMap.has(node.id)) {
+        upstreamMap.set(node.id, new Set());
+      }
+      for (let j = 0; j < i; j++) {
+        for (const prevNode of stages[j].nodes) {
+          upstreamMap.get(node.id)!.add(prevNode.id);
         }
       }
     }

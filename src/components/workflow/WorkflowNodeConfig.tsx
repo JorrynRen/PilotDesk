@@ -161,12 +161,12 @@ function getOutputFieldOptions(nodeType: WorkflowNodeType): OptionGroup[] | unde
   if (nodeType === 'start') return undefined; // 开始节点无输出映射
 
   const baseOptions: { value: string; label: string }[] = [
-    { value: 'content', label: 'content（执行结果）' },
+    { value: '{{content}}', label: 'content（执行结果）' },
   ];
 
   // agent 类型节点额外提供 session_id
   if (nodeType === 'agent') {
-    baseOptions.push({ value: 'session_id', label: 'session_id（会话ID）' });
+    baseOptions.push({ value: '{{session_id}}', label: 'session_id（会话ID）' });
   }
 
   return [{
