@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 70, 71, 72];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 70, 71, 72, 73];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -298,7 +298,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
 
     let now = crate::utils::now();
     let seeds: Vec<(&str, &str, &str, &str, Option<&str>, Option<&str>, &str, &str, &str, &str, &str, &str, &str, &str, i64, &str, &str, &str, &str, &str, &str, &str, &str, i64)> = vec![
-        ("claude", "Claude Code", "Anthropic 出品的 AI 编程助手",
+        ("claude", "Claude Code", "Anthropic 官方 AI 编程助手，支持代码生成、调试、重构",
          "claude", Some("@anthropic-ai/claude-code"), None,
          "npm install -g @anthropic-ai/claude-code",
          "npm uninstall -g @anthropic-ai/claude-code",
@@ -308,6 +308,16 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
          "json-stream", "", 1, "stdout-json", "system", "session_id", "claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
          "#3B82F6", "file:claude_icon.ico", "~/.claude/skills/", "collection", 1),
+        ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
+         "codex", Some("@openai/codex"), None,
+         "npm install -g @openai/codex",
+         "npm uninstall -g @openai/codex",
+         "codex update",
+         "codex --version",
+         "npm view @openai/codex version",
+         "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
+         "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
+         "#F59E0B", "file:codex_icon.ico", "~/.codex/skills/", "collection", 2),
         ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
          "hermes", None, Some("hermes-agent"),
          "pip install hermes-agent",
@@ -319,17 +329,7 @@ fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
          "ansi-text",
          "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
          "stderr-text", "", "session_id: ", "hermes --resume {session_id} chat --query={message} -Q",
-         "#8B5CF6", "file:hermes_icon.ico", "~/AppData/Local/hermes/skills/", "collection", 2),
-        ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
-         "codex", Some("@openai/codex"), None,
-         "npm install -g @openai/codex",
-         "npm uninstall -g @openai/codex",
-         "codex update",
-         "codex --version",
-         "npm view @openai/codex version",
-         "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
-         "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
-         "#F59E0B", "file:codex_icon.ico", "~/.codex/skills/", "collection", 3),
+         "#8B5CF6", "file:hermes_icon.ico", "~/AppData/Local/hermes/skills/", "collection", 4),
     ];
 
     for (agent_type, display_name, description, cli_command, npm_package, pip_package,
@@ -951,6 +951,25 @@ fn migrate_sync_resume_templates(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+fn migrate_update_agent_seeds(conn: &Connection) -> Result<(), AppError> {
+    // 更新 Claude Code 描述
+    conn.execute(
+        "UPDATE agents SET description = ?1 WHERE agent_type = 'claude' AND is_builtin = 1",
+        rusqlite::params!["Anthropic 官方 AI 编程助手，支持代码生成、调试、重构"],
+    )?;
+    // 更新排序顺序：Claude=1, Codex=2, Hermes=4
+    conn.execute(
+        "UPDATE agents SET sort_order = 2 WHERE agent_type = 'codex' AND is_builtin = 1",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE agents SET sort_order = 4 WHERE agent_type = 'hermes' AND is_builtin = 1",
+        [],
+    )?;
+    log::info!("[migration v73] 内置 Agent 种子数据已更新（描述/排序）");
+    Ok(())
+}
+
 fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppError> {
     for &ver in MIGRATION_VERSIONS {
         if current_version < ver {
@@ -985,6 +1004,7 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 70 => migrate_normalize_session_id_source(conn)?,
                 71 => migrate_sync_resume_templates(conn)?,
                 72 => migrate_cleanup_workflow_columns(conn)?,
+                73 => migrate_update_agent_seeds(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }
