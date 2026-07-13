@@ -8,6 +8,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { WorkflowNode, WorkflowNodeType, Stage } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
+import { invoke } from '@tauri-apps/api/core';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
@@ -20,6 +21,8 @@ interface Props {
   stages?: Stage[];
   /** 阶段间连线（用于阶段拓扑前序判断） */
   stageEdges?: WorkflowEdge[];
+  /** 当前工作流 ID（用于子工作流选择过滤） */
+  definitionId?: string;
 }
 
 const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; label: string; type: string; placeholder?: string }[] }> = {
@@ -786,7 +789,165 @@ const MappingEditor: React.FC<{
     </div>
   );
 };
-export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow, stages, stageEdges }) => {
+/** 子工作流选择器组件：可搜索、合法性过滤 */
+const SubflowSelector: React.FC<{
+  definitions: { id: string; name: string }[];
+  currentDefinitionId?: string;
+  value: string;
+  onChange: (v: string) => void;
+  onOpenSubflow?: (id: string) => void;
+  onCreateNew: () => void;
+  loadDefinitions?: () => Promise<void>;
+}> = ({ definitions, currentDefinitionId, value, onChange, onOpenSubflow, onCreateNew, loadDefinitions }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [invalidIds, setInvalidIds] = useState<Set<string>>(new Set());
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // 确保 definitions 已加载
+  useEffect(() => {
+    if (definitions.length === 0 && loadDefinitions) {
+      loadDefinitions();
+    }
+  }, [definitions.length]);
+
+  // 加载时异步检测所有候选工作流的合法性
+  useEffect(() => {
+    if (!currentDefinitionId) return;
+    const checkAll = async () => {
+      const invalid = new Set<string>();
+      for (const d of definitions) {
+        if (d.id === currentDefinitionId) {
+          invalid.add(d.id); // 排除自身
+          continue;
+        }
+        try {
+          const hasCycle = await invoke<boolean>('check_subflow_cycle', {
+            parentId: currentDefinitionId,
+            candidateId: d.id,
+          });
+          if (hasCycle) invalid.add(d.id);
+        } catch {
+          // 查询失败时不阻塞，标记为合法
+        }
+      }
+      setInvalidIds(invalid);
+    };
+    checkAll();
+  }, [currentDefinitionId, definitions]);
+
+  // 点击外部关闭下拉
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filtered = definitions.filter(d => {
+    // 搜索过滤
+    if (searchQuery && !d.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+        !d.id.toLowerCase().includes(searchQuery.toLowerCase())) {
+      return false;
+    }
+    return true;
+  });
+
+  const selectedDef = definitions.find(d => d.id === value);
+
+  return (
+    <div ref={dropdownRef} style={{ position: 'relative' }}>
+      {/* 搜索输入框（兼做选择显示） */}
+      <input
+        type="text"
+        value={isOpen ? searchQuery : (selectedDef ? selectedDef.name : '')}
+        placeholder="搜索工作流..."
+        onFocus={() => { setIsOpen(true); setSearchQuery(''); }}
+        onChange={(e) => { setSearchQuery(e.target.value); setIsOpen(true); }}
+        style={{
+          width: '100%',
+          padding: '6px 8px',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border)',
+          background: 'var(--bg-primary)',
+          color: 'var(--text-primary)',
+          fontSize: 'var(--fs-12)',
+          boxSizing: 'border-box',
+          marginBottom: 4,
+        }}
+      />
+      {/* 下拉选项列表 */}
+      {isOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            maxHeight: 200,
+            overflowY: 'auto',
+            background: 'var(--bg-primary)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            zIndex: 1000,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          }}
+        >
+          {filtered.length === 0 && (
+            <div style={{ padding: '8px 12px', color: 'var(--text-tertiary)', fontSize: 'var(--fs-11)' }}>
+              无匹配工作流
+            </div>
+          )}
+          {filtered.map((d) => {
+            const isSelf = d.id === currentDefinitionId;
+            const hasCycle = invalidIds.has(d.id);
+            const disabled = isSelf || hasCycle;
+            return (
+              <div
+                key={d.id}
+                onClick={() => {
+                  if (!disabled) {
+                    onChange(d.id);
+                    setIsOpen(false);
+                    setSearchQuery('');
+                  }
+                }}
+                style={{
+                  padding: '6px 12px',
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled ? 0.4 : 1,
+                  color: 'var(--text-primary)',
+                  background: d.id === value ? 'var(--accent-light)' : 'transparent',
+                  fontSize: 'var(--fs-12)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+                onMouseEnter={(e) => { if (!disabled) (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'; }}
+                onMouseLeave={(e) => { if (!disabled) (e.currentTarget as HTMLElement).style.background = d.id === value ? 'var(--accent-light)' : 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'; }}
+              >
+                <span style={{ color: 'var(--text-primary)' }}>{d.name}</span>
+                {isSelf && <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)' }}>(自身)</span>}
+                {hasCycle && !isSelf && <span style={{ fontSize: 'var(--fs-10)', color: 'var(--danger)' }}>(产生闭环)</span>}
+              </div>
+            );
+          })}
+          {invalidIds.size > 0 && (
+            <div style={{ padding: '4px 12px', fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', borderTop: '1px solid var(--border)' }}>
+              已过滤 {invalidIds.size} 个不合法工作流
+            </div>
+          )}
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow, stages, stageEdges, definitionId }) => {
   const meta = getNodeTypeMeta(node.type);
   const configFields = NODE_TYPE_CONFIG_MAP[node.type]?.fields || [];
   const [params, setParams] = useState<Record<string, any>>(node.params || {});
@@ -1144,6 +1305,19 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 );
               })()}
               </>
+            ) : configFields[0].type === 'subflow_select' ? (
+              <SubflowSelector
+                definitions={definitions}
+                currentDefinitionId={definitionId}
+                value={params[configFields[0].key] || ''}
+                onChange={(v) => handleParamChange(configFields[0].key, v)}
+                onOpenSubflow={onOpenSubflow}
+                onCreateNew={() => {
+                  const newId = 'wf_' + Date.now().toString(36);
+                  handleParamChange(configFields[0].key, newId);
+                }}
+                loadDefinitions={loadDefinitions}
+              />
             ) : (
               <input
                 type={configFields[0].type || 'text'}
@@ -1325,53 +1499,18 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 </div>
               ) : field.type === 'subflow_select' ? (
                 <div>
-                  <select
+                  <SubflowSelector
+                    definitions={definitions}
+                    currentDefinitionId={definitionId}
                     value={params[field.key] || ''}
-                    onChange={(e) => handleParamChange(field.key, e.target.value)}
-                    style={S.select({ marginBottom: 6 })}
-                  >
-                    <option value="">选择子工作流...</option>
-                    {definitions.map((d) => (
-                      <option key={d.id} value={d.id}>{d.name} ({d.id.slice(0, 8)}...)</option>
-                    ))}
-                  </select>
-                  <div className="flex" style={{ gap: 4 }}>
-                    {params[field.key] && (
-                      <button
-                        onClick={() => onOpenSubflow?.(params[field.key])}
-                        className="flex-1"
-                        style={{
-                          padding: '4px 8px',
-                          borderRadius: 'var(--radius-md)',
-                          border: '1px solid var(--accent)',
-                          background: 'var(--accent-light)',
-                          color: 'var(--accent)',
-                          fontSize: 'var(--fs-11)',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        打开子工作流
-                      </button>
-                    )}
-                    <button
-                      onClick={() => {
-                        const newId = 'wf_' + Date.now().toString(36);
-                        handleParamChange(field.key, newId);
-                      }}
-                      className="flex-1"
-                      style={{
-                        padding: '4px 8px',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px dashed var(--border)',
-                        background: 'transparent',
-                        color: 'var(--text-tertiary)',
-                        fontSize: 'var(--fs-11)',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      新建子工作流
-                    </button>
-                  </div>
+                    onChange={(v) => handleParamChange(field.key, v)}
+                    onOpenSubflow={onOpenSubflow}
+                    onCreateNew={() => {
+                      const newId = 'wf_' + Date.now().toString(36);
+                      handleParamChange(field.key, newId);
+                    }}
+                    loadDefinitions={loadDefinitions}
+                  />
                 </div>
               ) : field.type === 'select' ? (
                 <select

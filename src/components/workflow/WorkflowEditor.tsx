@@ -120,6 +120,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     scale: 1,
     isBoxSelecting: false,
     stages: [] as Stage[],
+    collapsedStages: new Set<string>(),
+    stageOffsets: {} as Record<string, number>,
+    stageOffsetsY: {} as Record<string, number>,
   });
   
   // 同步状态到 boxStateRef（必须在 pan/scale/stages/isBoxSelecting 声明之后）
@@ -216,6 +219,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   useEffect(() => { boxStateRef.current.scale = scale; }, [scale]);
   useEffect(() => { boxStateRef.current.isBoxSelecting = isBoxSelecting; }, [isBoxSelecting]);
   useEffect(() => { boxStateRef.current.stages = stages; }, [stages]);
+  useEffect(() => { boxStateRef.current.collapsedStages = collapsedStages; }, [collapsedStages]);
+  useEffect(() => { boxStateRef.current.stageOffsets = stageOffsets; }, [stageOffsets]);
+  useEffect(() => { boxStateRef.current.stageOffsetsY = stageOffsetsY; }, [stageOffsetsY]);
   
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -501,7 +507,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const handleSave = async () => {
     if (!def) return;
     try {
-      await updateDefinition(definitionId, { name, description, stages });
+      const sanitized = sanitizeMappingReferences(stages);
+      setStages(sanitized);
+      await updateDefinition(definitionId, { name, description, stages: sanitized });
       onSaveResult?.(true);
     } catch {
       onSaveResult?.(false);
@@ -517,6 +525,49 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const restoredSnapshotRef = useRef<any>(null);
   const restoredModCountRef = useRef<number>(0);
   const modCountRef = useRef<number>(0);
+
+  // ── 自动保存 ──
+  const stagesRef = useRef(stages);
+  stagesRef.current = stages;
+  const isDirtyRef = useRef(false);
+
+  // 追踪 stages 深度变化，标记脏数据
+  const prevStagesRef = useRef<string>('');
+  useEffect(() => {
+    const current = JSON.stringify(stages);
+    if (prevStagesRef.current !== '' && current !== prevStagesRef.current) {
+      isDirtyRef.current = true;
+    }
+    prevStagesRef.current = current;
+  });
+
+  // debounce 自动保存：脏数据 3 秒后自动保存
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!isDirtyRef.current || !definitionId) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      if (!isDirtyRef.current || !stagesRef.current) return;
+      try {
+        const sanitized = sanitizeMappingReferences(stagesRef.current);
+        await invoke('save_workflow_dag', { id: definitionId, stages: sanitized });
+        isDirtyRef.current = false;
+        prevStagesRef.current = JSON.stringify(stagesRef.current);
+      } catch (err) {
+        console.error('[AutoSave] 自动保存失败:', err);
+      }
+    }, 3000);
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [stages, definitionId]);
+
+  // 手动保存时清除脏标记
+  const handleSaveClean = async () => {
+    await handleSave();
+    isDirtyRef.current = false;
+    prevStagesRef.current = JSON.stringify(stagesRef.current);
+  };
 
   /** 恢复指定历史执行的节点状态 */
   const handleRestoreExecution = async (executionId: string) => {
@@ -611,7 +662,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setRestoredExecutionId(null);
       restoredSnapshotRef.current = null;
       // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
-      await invoke('save_workflow_dag', { id: definitionId, stages });
+      const preSaveStages = sanitizeMappingReferences(stages);
+      setStages(preSaveStages);
+      await invoke('save_workflow_dag', { id: definitionId, stages: preSaveStages });
       // 预生成实例 ID 并在 invoke 前设置 ref（消除 IPC 竞态：快速工作流可能在响应返回前就完成）
       const preGeneratedId = crypto.randomUUID();
       executionIdRef.current = preGeneratedId;
@@ -995,7 +1048,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const handleDeleteEdge = (edgeId: string) => {
     modCountRef.current++;
-    setConfirmAction({ type: 'deleteEdge', targetId: edgeId, label: '此连线' });
+    const flatNodes = stages.flatMap(s => s.nodes);
+    const edge = stages.flatMap(s => s.edges).find(e => e.id === edgeId);
+    let label = '此连线';
+    if (edge) {
+      const srcNode = flatNodes.find(n => n.id === edge.source);
+      const tgtNode = flatNodes.find(n => n.id === edge.target);
+      if (srcNode && tgtNode) {
+        label = srcNode.label + ' → ' + tgtNode.label;
+      }
+    }
+    setConfirmAction({ type: 'deleteEdge', targetId: edgeId, label });
   };
 
   const handleDeleteStageEdge = (edgeId: string) => {
@@ -1562,8 +1625,15 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           if (!rect) return;
           const cx = (e.clientX - rect.left - pan.x) / scale;
           const cy = (e.clientY - rect.top - pan.y) / scale;
-          const stageLeft = stagePositionsMap[stageId];
-          const stageTop = 20 + (stageOffsetsY[stageId] ?? 0);
+          // 从 boxStateRef 读取最新位置，避免闭包过期
+          const bs = boxStateRef.current;
+          let _lo = 20; let _tl = 20;
+          for (const _s of bs.stages) {
+            if (_s.id === stageId) { _tl = _lo + (bs.stageOffsets[stageId] ?? 0); break; }
+            _lo += bs.collapsedStages.has(_s.id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
+          }
+          const stageLeft = _tl;
+          const stageTop = 20 + (bs.stageOffsetsY[stageId] ?? 0);
           const contentX = cx - stageLeft;
           const contentY = cy - stageTop - TITLE_H;
           setIsBoxSelecting(true);
@@ -1628,14 +1698,25 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       // 实时获取最新状态
       const currentPan = boxStateRef.current.pan;
       const currentScale = boxStateRef.current.scale;
-      const currentStagePositions = getStagePositions();
-      const currentStageOffsetsY = stageOffsetsY;
+      // 从 boxStateRef 实时读取，避免闭包捕获过期值（空依赖 useEffect）
+      const currentCollapsed = boxStateRef.current.collapsedStages;
+      const currentOffsets = boxStateRef.current.stageOffsets;
+      const currentOffsetsY = boxStateRef.current.stageOffsetsY;
+      const currentStages = boxStateRef.current.stages;
+      // 手动计算 stageLeft（与 getStagePositions 逻辑一致）
+      let leftOff = 20;
+      let targetLeft = 20;
+      for (const s of currentStages) {
+        const sLeft = leftOff + (currentOffsets[s.id] ?? 0);
+        if (s.id === boxSelectStartRef.current.stageId) { targetLeft = sLeft; break; }
+        leftOff += currentCollapsed.has(s.id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
+      }
       
       const cx = (e.clientX - canvasRect.left - currentPan.x) / currentScale;
       const cy = (e.clientY - canvasRect.top - currentPan.y) / currentScale;
       const stageId = boxSelectStartRef.current.stageId;
-      const stageLeft = currentStagePositions[stageId];
-      const stageTop = 20 + (currentStageOffsetsY[stageId] ?? 0);
+      const stageLeft = targetLeft;
+      const stageTop = 20 + (currentOffsetsY[stageId] ?? 0);
       const contentX = cx - stageLeft;
       const contentY = cy - stageTop - TITLE_H;
       
@@ -2592,7 +2673,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </svg>
           </button>
           <button
-            onClick={handleSave}
+            onClick={handleSaveClean}
             className="pd-btn px-3 py-1 text-[11px] rounded"
             style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
           >
@@ -3423,7 +3504,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               确认删除
             </h3>
             <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              是否删除 <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{confirmAction.label}</span>连线？此操作不可撤销。
+              {confirmAction.type === 'deleteStage' && '是否删除'}
+              {confirmAction.type === 'deleteNode' && '是否删除'}
+              {confirmAction.type === 'deleteNodes' && '是否删除'}
+              {confirmAction.type === 'deleteEdge' && '是否删除'}
+              {confirmAction.type === 'deleteStageEdge' && '是否删除'}
+              {' '}<span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{'「'}{confirmAction.label}{'」'}</span>
+              {confirmAction.type === 'deleteStage' && '阶段？'}
+              {confirmAction.type === 'deleteNode' && '节点？'}
+              {confirmAction.type === 'deleteNodes' && '？'}
+              {confirmAction.type === 'deleteEdge' && '连线？'}
+              {confirmAction.type === 'deleteStageEdge' && '连线？'}
+              {' '}此操作不可撤销。
             </p>
             <div className="flex gap-2 justify-end">
               <button
@@ -3750,6 +3842,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             onClose={() => { setSelectedNodeId(null); setSelectedStageId(null); }}
             stages={stages}
             stageEdges={stageEdges}
+            definitionId={definitionId}
             onOpenSubflow={(definitionId) => {
               const d = definitions.find(d => d.id === definitionId);
               if (d) {

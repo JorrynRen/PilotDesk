@@ -369,6 +369,7 @@ pub fn run() {
             commands::workflow::get_execution_plan,
             commands::workflow::validate_workflow,
             commands::workflow::get_pending_human_inputs,
+            commands::workflow::check_subflow_cycle,
             commands::agents::upload_agent_icon,
             commands::agents::read_agent_icon,
             terminal::commands::terminal_create,

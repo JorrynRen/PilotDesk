@@ -318,11 +318,12 @@ pub async fn cancel_workflow(
 ) -> Result<(), String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
     // 1. 标记数据库状态为已取消
-    let status_str = serde_json::to_string(&workflow::WorkflowInstanceStatus::Cancelled).unwrap();
+    // 注意：serde_json::to_string 输出 JSON 字符串（带引号），不能用于 SQL CHECK 约束
+    // 必须使用纯字符串字面量以符合 CHECK(status IN (...))
     let now = crate::utils::now();
     conn.execute(
-        "UPDATE workflow_instances SET status = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
-        rusqlite::params![status_str, "用户中止", now, execution_id],
+        "UPDATE workflow_instances SET status = 'cancelled', error = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params!["用户中止", now, execution_id],
     ).map_err(|e| format!("更新失败: {}", e))?;
 
     // 2. 停止该执行关联的所有 Agent 子进程
@@ -1583,4 +1584,60 @@ pub fn get_pending_human_inputs(
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
     crate::workflow::get_pending_human_inputs(&conn)
         .map_err(|e| format!("查询待响应请求失败: {}", e))
+}
+
+
+/// 检查子工作流是否会形成闭环（供前端下拉过滤使用）
+#[tauri::command]
+pub fn check_subflow_cycle(
+    state: tauri::State<'_, crate::DbState>,
+    parent_id: String,
+    candidate_id: String,
+) -> Result<bool, String> {
+    use std::collections::HashSet;
+
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+
+    fn check_cycle(
+        conn: &rusqlite::Connection,
+        current_id: &str,
+        target_id: &str,
+        visited: &mut HashSet<String>,
+    ) -> Result<bool, String> {
+        if current_id == target_id {
+            return Ok(true);
+        }
+        if !visited.insert(current_id.to_string()) {
+            return Ok(false);
+        }
+
+        // 加载当前工作流定义
+        let def = crate::workflow::get_definition(conn, current_id)
+            .map_err(|e| format!("查询失败: {}", e))?
+            .ok_or_else(|| format!("工作流不存在: {}", current_id))?;
+
+        // 遍历所有 Subflow 节点
+        for stage in &def.stages {
+            for node in &stage.nodes {
+                if node.node_type != crate::workflow::WorkflowNodeType::Subflow {
+                    continue;
+                }
+                let subflow_id = node.params
+                    .as_ref()
+                    .and_then(|p| p.get("definitionId"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if let Some(sid) = subflow_id {
+                    if check_cycle(conn, &sid, target_id, visited)? {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    let mut visited = HashSet::new();
+    check_cycle(&conn, &candidate_id, &parent_id, &mut visited)
 }

@@ -338,10 +338,15 @@ impl WorkflowEngine {
         // ── 7. 空阶段检测 ──
         let mut empty_stages = Vec::new();
         for stage in &def.stages {
+            // 仅包含边界节点（开始/结束）的阶段是合法设计，不视为空阶段
+            let only_boundary = stage.nodes.len() > 0 && stage.nodes.iter().all(|n|
+                n.node_type == WorkflowNodeType::Start || n.node_type == WorkflowNodeType::End
+            );
+            if only_boundary { continue; }
             let non_boundary = stage.nodes.iter()
                 .filter(|n| n.node_type != WorkflowNodeType::Start && n.node_type != WorkflowNodeType::End)
                 .count();
-            if non_boundary == 0 && stage.nodes.len() > 0 {
+            if non_boundary == 0 {
                 empty_stages.push(stage.id.clone());
             }
         }
@@ -865,12 +870,41 @@ impl WorkflowEngine {
                     ).await {
                         Ok(output) => {
                             node_statuses.lock().await.insert(node_id.clone(), "completed".to_string());
-                            context.lock().await.insert(node_id.clone(), output.clone());
+                            // 子工作流节点：应用 output_mapping 提取字段（类似 Start 节点处理方式）
+                            // output_mapping 值支持 {{endNodeId.content}} 格式从子工作流返回的上下文中提取
+                            let mapped_output = if let Some(mapping) = &node.output_mapping {
+                                if let Some(obj) = mapping.as_object() {
+                                    // 构建临时 context：output 是子工作流返回的完整上下文
+                                    let mut sub_ctx = std::collections::HashMap::new();
+                                    sub_ctx.insert("__input__".to_string(), output.clone());
+                                    let mut result_map = serde_json::Map::new();
+                                    for (k, v) in obj {
+                                        if let Some(s) = v.as_str() {
+                                            match crate::workflow::template::TemplateEngine::resolve(s, &sub_ctx) {
+                                                Ok(resolved) => {
+                                                    result_map.insert(k.clone(), Value::String(resolved));
+                                                }
+                                                Err(_) => {
+                                                    result_map.insert(k.clone(), v.clone());
+                                                }
+                                            }
+                                        } else {
+                                            result_map.insert(k.clone(), v.clone());
+                                        }
+                                    }
+                                    Value::Object(result_map)
+                                } else {
+                                    output.clone()
+                                }
+                            } else {
+                                output.clone()
+                            };
+                            context.lock().await.insert(node_id.clone(), mapped_output.clone());
                             raw_outputs.lock().await.insert(node_id.clone(), output.clone());
                             completed_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(emitter, execution_id, node_id, "completed", None,
-                                serde_json::to_string(&output).ok().as_deref(), None, None, None, None);
-                            emit_node_status(emitter, execution_id, definition_id, node_id, "completed", Some(&output), None, Some(completed_count.load(Ordering::SeqCst)), Some(total_count), mode);
+                                serde_json::to_string(&mapped_output).ok().as_deref(), None, None, None, None);
+                            emit_node_status(emitter, execution_id, definition_id, node_id, "completed", Some(&mapped_output), None, Some(completed_count.load(Ordering::SeqCst)), Some(total_count), mode);
                         }
                         Err(e) => {
                             node_statuses.lock().await.insert(node_id.clone(), "failed".to_string());
@@ -1562,17 +1596,23 @@ impl WorkflowEngine {
                 if node.node_type == WorkflowNodeType::Start {
                     if let Some(mapping) = &node.output_mapping {
                         if let Some(obj) = mapping.as_object() {
-                            // 新架构：outputMapping 的 key 是用户自定义参数名，value 是 content（用户输入值）
-                            // 以 nodeId 为 key 存储全部输出，支持 {{参数名.节点ID.阶段ID}} 格式
-                            // 开始节点直接将 outputMapping 的 key-value 作为输出数据
-                            let output_obj: serde_json::Map<String, Value> = obj.iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
-                            context.lock().await.insert(node.id.clone(), Value::Object(output_obj));
-                            // 也设置扁平键，支持简单 {{参数名}} 格式
+                            // 开始节点：通过 TemplateEngine 解析 output_mapping 值
+                            // 支持 {{title}} 自动匹配 __input__.title（由 TemplateEngine 回退逻辑处理）
+                            let ctx = context.lock().await.clone();
+                            let mut output_obj = serde_json::Map::new();
                             for (k, v) in obj {
-                                context.lock().await.insert(k.clone(), v.clone());
+                                if let Some(s) = v.as_str() {
+                                    let resolved = TemplateEngine::resolve(s, &ctx)
+                                        .unwrap_or_else(|_| s.to_string());
+                                    output_obj.insert(k.clone(), Value::String(resolved.clone()));
+                                    // 设置扁平键，支持简单 {{参数名}} 格式
+                                    context.lock().await.insert(k.clone(), Value::String(resolved));
+                                } else {
+                                    output_obj.insert(k.clone(), v.clone());
+                                    context.lock().await.insert(k.clone(), v.clone());
+                                }
                             }
+                            context.lock().await.insert(node.id.clone(), Value::Object(output_obj));
                         }
                     }
                     break;

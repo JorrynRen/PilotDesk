@@ -94,6 +94,12 @@ impl TemplateEngine {
             if let Some(val) = context.get(expr) {
                 return Ok(Self::value_to_string(val));
             }
+            // 回退：从 __input__ 查找简单变量名（子工作流场景：{{title}} 自动匹配 __input__.title）
+            if let Some(input_val) = context.get("__input__") {
+                if let Some(val) = input_val.get(expr) {
+                    return Ok(Self::value_to_string(val));
+                }
+            }
             return Err(AppError::InvalidInput(format!("无效的模板变量: {}", expr)));
         }
 
