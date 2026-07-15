@@ -1004,7 +1004,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const { definitions, loadDefinitions } = useWorkflowStore();
   const pluginStore = usePluginStore();
   const [availablePlugins, setAvailablePlugins] = useState<Array<{ id: string; name: string }>>([]);
-  const inputBaseKeyRef = useRef<string>('');
+  const [selectedPluginId, setSelectedPluginId] = useState<string>(node.pluginId || '');  const inputBaseKeyRef = useRef<string>('');
   const outputBaseKeyRef = useRef<string>('');
   const [fieldSelectorKey, setFieldSelectorKey] = useState<string | null>(null);
   const [resumeDropdownOpen, setResumeDropdownOpen] = useState(false);
@@ -1389,9 +1389,15 @@ useEffect(() => {
                 loadDefinitions={loadDefinitions}
               />
             ) : configFields[0].type === 'plugin_select' ? (
+              <>
               <select
-                value={params[configFields[0].key] || ''}
-                onChange={(e) => handleParamChange(configFields[0].key, e.target.value)}
+                value={selectedPluginId || ''}
+                onChange={(e) => {
+                  const pid = e.target.value;
+                  setSelectedPluginId(pid);
+                  handleParamChange('plugin_id', pid);
+                  onUpdate({ pluginId: pid, commandId: undefined });
+                }}
                 style={{ ...S.select() }}
               >
                 <option value="">选择插件</option>
@@ -1399,6 +1405,31 @@ useEffect(() => {
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
+              {/* 命令选择器：根据已选插件动态显示 */}
+              {selectedPluginId && (() => {
+                const cmds = pluginStore.registeredCommands
+                  ? Array.from(pluginStore.registeredCommands.values())
+                      .filter((c) => c.pluginId === selectedPluginId)
+                      .map((c) => c.contribution)
+                  : [];
+                if (cmds.length === 0) return null;
+                return (
+                  <div style={{ marginTop: 6 }}>
+                    <label style={{ ...S.label(), marginBottom: 4, display: 'block' }}>选择命令</label>
+                    <select
+                      value={node.commandId || ''}
+                      onChange={(e) => onUpdate({ commandId: e.target.value })}
+                      style={{ ...S.select() }}
+                    >
+                      <option value="">选择命令</option>
+                      {cmds.map((cmd) => (
+                        <option key={cmd.id} value={cmd.id}>{cmd.title}</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
+              </>
             ) : (
               <input
                 type={configFields[0].type || 'text'}

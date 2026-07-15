@@ -240,7 +240,7 @@ var PluginNodeConfig = function (props) {
 // LLMChatPanel — 独立预览面板
 // ═══════════════════════════════════════════════════════════
 
-var LLMChatPanel = function () {
+var LLMChatPanel = function (props) {
   var stateProviderId = React.useState('');
   var stateModel = React.useState('');
   var statePrompt = React.useState('');
@@ -261,7 +261,7 @@ var LLMChatPanel = function () {
   var providers = stateProviders[0]; var setProviders = stateProviders[1];
   var models = stateModels[0]; var setModels = stateModels[1];
 
-  var api = window.__llmChatNodeAPI;
+  var api = (props && props.api) || window.__llmChatNodeAPI;
 
   React.useEffect(function () {
     if (!api) return;
@@ -292,7 +292,7 @@ var LLMChatPanel = function () {
     select: { width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, outline: 'none' },
     input: { width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, outline: 'none' },
     textarea: { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, outline: 'none', minHeight: 80, resize: 'vertical' },
-    button: { padding: '8px 16px', borderRadius: 6, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+    button: { padding: '8px 16px', borderRadius: 6, border: 'none', background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', textAlign: 'center' },
     response: { padding: 12, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-secondary)', fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap' },
     error: { padding: 8, borderRadius: 6, border: '1px solid #f85149', background: '#f8514915', fontSize: 12, color: '#f85149' },
     hint: { fontSize: 11, color: 'var(--text-tertiary)', marginTop: 2 }
@@ -325,7 +325,11 @@ var LLMChatPanel = function () {
       React.createElement('label', { style: S.label }, '系统提示词（可选）'),
       React.createElement('textarea', { value: systemPrompt, onChange: function (e) { setSystemPrompt(e.target.value); }, placeholder: '设定 AI 角色，如：你是一个专业的翻译助手...', style: Object.assign({}, S.textarea, { minHeight: 50 }), rows: 2 })
     ),
-    React.createElement('button', { onClick: handleSubmit, disabled: loading || !providerId || !model, style: S.button }, loading ? '思考中...' : '发送'),
+    React.createElement('button', {
+        onClick: handleSubmit,
+        disabled: loading || !providerId || !model,
+        style: Object.assign({}, S.button, { display: 'block', width: '100%', textAlign: 'center' })
+      }, loading ? '思考中...' : '发送'),
     error ? React.createElement('div', { style: S.error }, error) : null,
     response ? React.createElement('div', null, React.createElement('label', { style: S.label }, 'LLM 回复'), React.createElement('div', { style: S.response }, response)) : null
   );
@@ -341,7 +345,14 @@ export default {
   onLoad: function (api) {
     console.log('[LLMChatNode] Plugin loaded');
 
-    window.__llmChatNodeAPI = api;
+    // 注册独立面板到右侧面板
+    api.ui.addPanel({
+      id: 'llm-chat-panel',
+      title: 'LLM Chat',
+      component: function (panelProps) {
+        return React.createElement(LLMChatPanel, Object.assign({}, panelProps, { api: api }));
+      }
+    });
 
     // 注册命令 handler
     api.commands.register('llm-chat.chat', async function (params) {
@@ -365,6 +376,5 @@ export default {
 
   onUnload: function () {
     console.log('[LLMChatNode] Plugin unloaded');
-    if (window.__llmChatNodeAPI) delete window.__llmChatNodeAPI;
   }
 };

@@ -8,7 +8,7 @@
 #     ├── index.js          # 插件入口
 #     └── icon.png          # 插件图标（可选）
 #
-# 索引文件位置: server/market/plugins/index.json
+# 索引文件位置: server/market/plugins/plugins-index.json
 
 name: Generate Plugin Index
 
@@ -32,7 +32,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate index.json
+      - name: Generate plugins-index.json
         run: |
           # 生成索引文件头
           echo '{"schemaVersion":"1.0","updatedAt":"'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'","plugins":[' > server/market/plugins/plugins-index.json
@@ -71,7 +71,7 @@ jobs:
             case "$entry_main" in *..*) echo "跳过插件 $manifest_id: entry.main 包含路径遍历" >&2; continue ;; esac
 
             # 构建插件信息 JSON（仅存储浏览/搜索所需字段，完整清单安装时从 baseUrl 读取）
-            [ "$first" = true ] && first=false || echo ',' >> server/market/plugins/index.json
+            [ "$first" = true ] && first=false || echo ',' >> server/market/plugins/plugins-index.json
 
                           # 检测图标文件（支持 .png 或 .ico）
               icon_file=""
@@ -100,37 +100,37 @@ jobs:
                 icon: $icon,
                 size: $size,
                 readme: $readme
-              }' >> server/market/plugins/index.json
+              }' >> server/market/plugins/plugins-index.json
           done
 
           # 关闭 JSON 数组
-          echo ']}' >> server/market/plugins/index.json
+          echo ']}' >> server/market/plugins/plugins-index.json
 
-          echo "Index generated: $(wc -c < server/market/plugins/index.json) bytes"
-          echo "Plugin count: $(jq '.plugins | length' server/market/plugins/index.json)"
+          echo "Index generated: $(wc -c < server/market/plugins/plugins-index.json) bytes"
+          echo "Plugin count: $(jq '.plugins | length' server/market/plugins/plugins-index.json)"
 
-      - name: Validate index.json
+      - name: Validate plugins-index.json
         run: |
-          echo "Validating index.json..."
-          if [ ! -f server/market/plugins/index.json ]; then
-            echo "Error: index.json not generated"
+          echo "Validating plugins-index.json..."
+          if [ ! -f server/market/plugins/plugins-index.json ]; then
+            echo "Error: plugins-index.json not generated"
             exit 1
           fi
           # 验证 JSON 格式
-          if ! jq empty server/market/plugins/index.json 2>/dev/null; then
-            echo "Error: index.json is not valid JSON"
+          if ! jq empty server/market/plugins/plugins-index.json 2>/dev/null; then
+            echo "Error: plugins-index.json is not valid JSON"
             exit 1
           fi
-          echo "Index file size: $(wc -c < server/market/plugins/index.json) bytes"
-          echo "Plugin count: $(jq '.plugins | length' server/market/plugins/index.json)"
+          echo "Index file size: $(wc -c < server/market/plugins/plugins-index.json) bytes"
+          echo "Plugin count: $(jq '.plugins | length' server/market/plugins/plugins-index.json)"
 
       - name: Commit and push if changed
         run: |
           git config --local user.email "ren.jorryn@gmail.com"
           git config --local user.name "jorryn"
-          git add server/market/plugins/index.json
+          git add server/market/plugins/plugins-index.json
           if git diff --staged --quiet; then
-            echo "No changes to index.json"
+            echo "No changes to plugins-index.json"
           else
             git commit -m "chore(plugin-market): auto-generate plugin index [skip ci]"
             git push

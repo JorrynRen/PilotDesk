@@ -39,7 +39,7 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
   const Component = activePanelId ? getComponent(activePanelId) : undefined;
 
   return (
-    <div className="plugin-panels">
+    <div className="plugin-panels" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {/* 当前插件标题栏 */}
       {activePanel && (
         <div
@@ -58,7 +58,7 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
 
       {/* 面板内容 */}
       {activePanel && (
-        <div className="p-3">
+        <div className="p-3" style={{ flex: 1, overflowY: "auto" }}>
           {Component ? (
             <Component pluginId={activePanel.pluginId} />
           ) : (
