@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ChatMode } from '../../types';
-import { getModePrompt, MODE_LABELS, MODE_PROMPTS_DEFAULTS, invoke } from '../../types';
+import { getModePrompt, MODE_LABELS, invoke } from '../../types';
 import { SettingsSection, SettingsButton, SettingsInput } from '../settings';
 
 export function ModePromptSettings() {
@@ -43,10 +43,10 @@ export function ModePromptSettings() {
   }, [prompts, invoke]);
 
   const handleReset = useCallback(async (mode: ChatMode) => {
-    setPrompts((prev) => ({ ...prev, [mode]: MODE_PROMPTS_DEFAULTS[mode] }));
+    setPrompts((prev) => ({ ...prev, [mode]: '' }));
     const key = `mode_prompt_${mode}`;
     try {
-      await invoke('set_app_setting', { key, value: MODE_PROMPTS_DEFAULTS[mode] });
+      await invoke('set_app_setting', { key, value: '' });
     } catch (e) {
       console.error('reset failed:', e);
     }

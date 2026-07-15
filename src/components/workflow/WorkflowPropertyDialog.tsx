@@ -11,6 +11,8 @@ interface Props {
     version: string;
     trigger: TriggerConfig;
     enabled: boolean;
+    inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
+    outputSchema?: Record<string, { type: string; description?: string }>;
   }) => void;
   onClose: () => void;
 }
@@ -22,6 +24,8 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
   const [triggerType, setTriggerType] = useState<'manual' | 'cron' | 'event'>(initial?.trigger?.triggerType || 'manual');
   const [cronExpr, setCronExpr] = useState(initial?.trigger?.cron || '');
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [inputSchemaText, setInputSchemaText] = useState(initial?.inputSchema ? JSON.stringify(initial.inputSchema, null, 2) : '');
+  const [outputSchemaText, setOutputSchemaText] = useState(initial?.outputSchema ? JSON.stringify(initial.outputSchema, null, 2) : '');
   const [error, setError] = useState<string | null>(null);
   const [showCronHelp, setShowCronHelp] = useState(false);
 
@@ -44,6 +48,19 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
       return;
     }
     setError(null);
+
+    // 解析 input/output schema JSON
+    let inputSchema: Record<string, any> | undefined;
+    let outputSchema: Record<string, any> | undefined;
+    if (inputSchemaText.trim()) {
+      try { inputSchema = JSON.parse(inputSchemaText); }
+      catch { setError('输入 Schema JSON 格式错误'); return; }
+    }
+    if (outputSchemaText.trim()) {
+      try { outputSchema = JSON.parse(outputSchemaText); }
+      catch { setError('输出 Schema JSON 格式错误'); return; }
+    }
+
     onConfirm({
       name: trimmedName,
       description: description.trim(),
@@ -53,6 +70,8 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
         : triggerType === 'cron'
           ? { triggerType: 'cron', cron: cronExpr.trim() }
           : { triggerType: 'event' },
+      inputSchema,
+      outputSchema,
       enabled,
     });
   };
@@ -337,6 +356,39 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
             <span className="text-xs" style={{ color: enabled ? '#22c55e' : 'var(--text-tertiary)' }}>
               {enabled ? '已启用' : '已禁用'}
             </span>
+          </div>
+
+          {/* Schema 配置 */}
+          <div className="space-y-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+            <span className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+              输入/输出 Schema（JSON，可选）
+            </span>
+            <textarea
+              value={inputSchemaText}
+              onChange={(e) => setInputSchemaText(e.target.value)}
+              placeholder='{"field": {"type": "string", "required": true}}'
+              className="w-full rounded px-2 py-1 text-[11px] resize-none"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border)',
+                fontFamily: 'monospace',
+                height: 48,
+              }}
+            />
+            <textarea
+              value={outputSchemaText}
+              onChange={(e) => setOutputSchemaText(e.target.value)}
+              placeholder='{"field": {"type": "string", "description": "输出字段"}}'
+              className="w-full rounded px-2 py-1 text-[11px] resize-none"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border)',
+                fontFamily: 'monospace',
+                height: 48,
+              }}
+            />
           </div>
 
           {/* 错误提示 */}

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, Star, Search, Send, Trash2, Edit3, X } from 'lucide-react';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
-import { AGENT_THEMES } from '../../types';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 
 import { EMOJI_OPTIONS } from '../../constants';
@@ -183,7 +183,8 @@ interface InspirationRowProps {
 }
 
 function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDelete, onEdit }: InspirationRowProps) {
-  const sourceTheme = AGENT_THEMES[inspiration.sourceAgent ?? ''];
+  const { getTheme } = useAgentRegistry();
+  const sourceTheme = getTheme(inspiration.sourceAgent ?? '');
   const sourceLabel = sourceTheme?.label ?? inspiration.sourceAgent;
   const sourceColor = sourceTheme?.color ?? '#6B7280';
 

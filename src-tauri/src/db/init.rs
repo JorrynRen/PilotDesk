@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 67, 68, 70, 71, 72, 73];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 70, 71, 72, 73, 74, 75];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -94,14 +94,251 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
         CREATE INDEX IF NOT EXISTS idx_inspirations_tags ON inspiration_tags(tag);"
     )?;
 
+    conn.execute_batch(
+        r#"CREATE TABLE IF NOT EXISTS api_providers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            api_endpoint TEXT NOT NULL DEFAULT '',
+            api_key TEXT DEFAULT '',
+            api_key_masked TEXT DEFAULT '',
+            api_key_set INTEGER DEFAULT 0,
+            models TEXT NOT NULL DEFAULT '[]',
+            sort_order INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS install_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('info', 'warn', 'error', 'success'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_install_logs_time ON install_logs(timestamp);
+
+        CREATE TABLE IF NOT EXISTS agents (
+            agent_type TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            cli_command TEXT NOT NULL DEFAULT '',
+            npm_package TEXT,
+            pip_package TEXT,
+            install_cmd TEXT NOT NULL DEFAULT '',
+            uninstall_cmd TEXT NOT NULL DEFAULT '',
+            update_cmd TEXT NOT NULL DEFAULT '',
+            version_cmd TEXT NOT NULL DEFAULT '',
+            latest_version_cmd TEXT NOT NULL DEFAULT '',
+            run_cmd_template TEXT NOT NULL DEFAULT '',
+            output_parser TEXT NOT NULL DEFAULT 'raw-text',
+            output_filter_regex TEXT NOT NULL DEFAULT '',
+            version_pattern TEXT NOT NULL DEFAULT 'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)',
+            supports_session_continuity INTEGER NOT NULL DEFAULT 0,
+            session_id_source TEXT NOT NULL DEFAULT 'none',
+            session_id_event_type TEXT NOT NULL DEFAULT '',
+            session_id_field TEXT NOT NULL DEFAULT '',
+            resume_arg_template TEXT NOT NULL DEFAULT '',
+            skills_dir TEXT NOT NULL DEFAULT '',
+            skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
+            skill_display_mode TEXT NOT NULL DEFAULT 'collection',
+            color TEXT NOT NULL DEFAULT '#6366F1',
+            icon TEXT NOT NULL DEFAULT '\\U0001f916',
+            sort_order INTEGER DEFAULT 0,
+            is_enabled INTEGER DEFAULT 1,
+            is_builtin INTEGER DEFAULT 0,
+            version TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_definitions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            version TEXT NOT NULL DEFAULT '1.0.0',
+            description TEXT NOT NULL DEFAULT '',
+            trigger TEXT NOT NULL DEFAULT '{"triggerType":"manual"}',
+            stages TEXT NOT NULL DEFAULT '[]',
+            input_schema TEXT,
+            output_schema TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_instances (
+            id TEXT PRIMARY KEY,
+            definition_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            definition_name TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'paused', 'success', 'failed', 'cancelled', 'timeout')),
+            context TEXT NOT NULL DEFAULT '{}',
+            trigger TEXT NOT NULL DEFAULT 'manual' CHECK(trigger IN ('manual', 'cron', 'event')),
+            trigger_detail TEXT,
+            started_at INTEGER,
+            completed_at INTEGER,
+            error TEXT,
+            completion_rate REAL NOT NULL DEFAULT 0.0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS node_executions (
+            id TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
+            node_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')),
+            input_data TEXT DEFAULT NULL,
+            output_data TEXT DEFAULT NULL,
+            error_message TEXT DEFAULT NULL,
+            started_at INTEGER,
+            finished_at INTEGER,
+            retry_count INTEGER DEFAULT 0,
+            duration_ms INTEGER DEFAULT 0,
+            artifacts_path TEXT DEFAULT NULL,
+            agent_session_id TEXT DEFAULT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS node_execution_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            execution_id TEXT NOT NULL,
+            node_execution_id TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug', 'info', 'warn', 'error')),
+            message TEXT NOT NULL,
+            metadata TEXT DEFAULT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_node_exec_execution ON node_executions(execution_id);
+        CREATE INDEX IF NOT EXISTS idx_node_exec_status ON node_executions(execution_id, status);
+        CREATE INDEX IF NOT EXISTS idx_node_logs_exec ON node_execution_logs(node_execution_id, timestamp);
+
+        CREATE TABLE IF NOT EXISTS workflow_schedules (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            cron_expression TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            input_data TEXT DEFAULT '{}',
+            last_run_at INTEGER,
+            next_run_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_wf_schedule_next ON workflow_schedules(next_run_at, enabled);
+
+        CREATE TABLE IF NOT EXISTS workflow_versions (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            version INTEGER NOT NULL,
+            snapshot TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(workflow_id, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_wf_versions_workflow ON workflow_versions(workflow_id, version DESC);
+        CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_workflow_instances_completed ON workflow_instances(completed_at, status);
+        CREATE INDEX IF NOT EXISTS idx_node_executions_node ON node_executions(node_id, execution_id);
+        CREATE INDEX IF NOT EXISTS idx_node_execution_logs_level ON node_execution_logs(node_execution_id, level, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_wf_exec_workflow ON workflow_instances(definition_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_wf_exec_status ON workflow_instances(status, created_at DESC);"#
+    )?;
+
+    // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
+    let now = crate::utils::now();
+
+    // Agent 种子数据
+    let agent_seeds: Vec<(&str, &str, &str, &str, Option<&str>, Option<&str>, &str, &str, &str, &str, &str, &str, &str, &str, i64, &str, &str, &str, &str, &str, &str, &str, &str, i64)> = vec![
+        ("claude", "Claude Code", "Anthropic 官方 AI 编程助手，支持代码生成、调试、重构",
+         "claude", Some("@anthropic-ai/claude-code"), None,
+         "npm install -g @anthropic-ai/claude-code",
+         "npm uninstall -g @anthropic-ai/claude-code",
+         "claude update",
+         "claude --version",
+         "npm view @anthropic-ai/claude-code version",
+         "claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
+         "json-stream", "", 1, "stdout-json", "system", "session_id", "claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
+         "~/.claude/skills/", "collection", "#3B82F6", "file:claude_icon.ico", 2),
+        ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
+         "codex", Some("@openai/codex"), None,
+         "npm install -g @openai/codex",
+         "npm uninstall -g @openai/codex",
+         "codex update",
+         "codex --version",
+         "npm view @openai/codex version",
+         "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
+         "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
+         "~/.codex/skills/", "collection", "#F59E0B", "file:codex_icon.ico", 3),
+        ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
+         "hermes", None, Some("hermes-agent"),
+         "pip install hermes-agent",
+         "pip uninstall hermes-agent -y",
+         "hermes update",
+         "hermes --version",
+         "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version",
+         "hermes chat --query={message} -Q",
+         "ansi-text",
+         "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
+         "stderr-text", "", "session_id: ", "hermes --resume {session_id} chat --query={message} -Q",
+         "~/AppData/Local/hermes/skills/", "collection", "#8B5CF6", "file:hermes_icon.ico", 1),
+    ];
+
+    for (agent_type, display_name, description, cli_command, npm_package, pip_package,
+         install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
+         output_parser, output_filter_regex, supports_session_continuity,
+         session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+         skills_dir, skill_display_mode,
+         color, icon, sort_order) in agent_seeds {
+        conn.execute(
+            "INSERT OR IGNORE INTO agents (agent_type, display_name, description, cli_command, npm_package, pip_package,
+             install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
+             output_parser, output_filter_regex, version_pattern, supports_session_continuity,
+             session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+             skills_dir, skill_entry_file, skill_display_mode,
+             color, icon, sort_order, is_enabled, is_builtin, version, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+             'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)', ?15, ?16, ?17, ?18, ?19, ?20, 'SKILL.md', ?21, ?22, ?23, ?24, 1, 1, '1.0', ?25, ?25)",
+            rusqlite::params![agent_type, display_name, description, cli_command, npm_package, pip_package,
+                install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
+                output_parser, output_filter_regex, supports_session_continuity,
+                session_id_source, session_id_event_type, session_id_field, resume_arg_template,
+                skills_dir, skill_display_mode,
+                color, icon, sort_order, now],
+        )?;
+    }
+
+    // App Settings 种子数据
+    let settings_seeds: Vec<(&str, &str)> = vec![
+        ("mode_prompt_native", ""),
+        ("mode_prompt_fast", "快速简洁回答，直接给出结论，无需详细解释推理过程"),
+        ("mode_prompt_think", "逐步分析推理，详细解释你的思路和过程，给出完整的推理链"),
+        ("mode_prompt_expert", "以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案"),
+        ("pilotdesk-workspace", "~\\AppData\\Roaming\\PilotDesk"),
+        ("workflow_max_concurrency", "10"),
+        ("workflow_max_subflow_depth", "3"),
+    ];
+    for (key, value) in settings_seeds {
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![key, value, now],
+        )?;
+    }
+
     // Versioned migrations — 由 MIGRATION_VERSIONS 数组驱动
     let current_version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap_or(0);
 
-    run_migrations(&conn, current_version)?;
+    // 新数据库：初始建表已包含所有表的最终 schema，种子数据已插入，跳过增量迁移
+    if current_version > 0 {
+        run_migrations(&conn, current_version)?;
+    }
 
-if current_version < MIGRATION_VERSION {
+    if current_version < MIGRATION_VERSION {
         conn.pragma_update(None, "user_version", MIGRATION_VERSION)?;
     }
+
 
     Ok(pool)
 }
@@ -607,14 +844,12 @@ fn migrate_add_workflow_tables(conn: &Connection) -> Result<(), AppError> {
             definition_name TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'paused', 'success', 'failed', 'cancelled', 'timeout')),
             context TEXT NOT NULL DEFAULT '{}',
-            steps TEXT NOT NULL DEFAULT '{}',
-            current_node_id TEXT,
             trigger TEXT NOT NULL DEFAULT 'manual' CHECK(trigger IN ('manual', 'cron', 'event')),
             trigger_detail TEXT,
             started_at INTEGER,
             completed_at INTEGER,
-            estimated_remaining INTEGER,
             error TEXT,
+            completion_rate REAL NOT NULL DEFAULT 0.0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
         );
@@ -715,107 +950,6 @@ fn migrate_add_workflow_missing_tables(conn: &Connection) -> Result<(), AppError
         CREATE INDEX IF NOT EXISTS idx_wf_versions_workflow ON workflow_versions(workflow_id, version DESC);
         CREATE INDEX IF NOT EXISTS idx_wf_exec_workflow ON workflow_instances(definition_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_wf_exec_status ON workflow_instances(status, created_at DESC);"
-    )?;
-    Ok(())
-}
-
-/// v67: 迁移旧版 workflow_definitions 数据
-/// 旧版表有 nodes/edges 列，新版改为 trigger/stages 列
-/// 将旧 nodes/edges JSON 包装为默认阶段，设置默认 trigger
-fn migrate_legacy_workflow_columns(conn: &Connection) -> Result<(), AppError> {
-    // 检查旧列是否存在
-    let has_nodes_col: bool = conn.prepare("SELECT nodes FROM workflow_definitions LIMIT 1").is_ok();
-    if !has_nodes_col {
-        // 已经是新 schema，无需迁移
-        return Ok(());
-    }
-
-    // 读取所有旧数据
-    let mut stmt = conn.prepare(
-        "SELECT id, name, version, description, nodes, edges, input_schema, output_schema, max_depth, created_at, updated_at, enabled FROM workflow_definitions"
-    )?;
-    let rows: Vec<(String, String, String, String, String, String, Option<String>, Option<String>, Option<i32>, i64, i64, bool)> = stmt.query_map([], |row| {
-        Ok((
-            row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
-            row.get::<_, String>(4)?, row.get::<_, String>(5)?,
-            row.get(6)?, row.get(7)?, row.get(8)?,
-            row.get(9)?, row.get(10)?, row.get(11)?,
-        ))
-    })?.filter_map(|r| r.ok()).collect();
-
-    if rows.is_empty() {
-        // 无数据，直接重建表
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS workflow_definitions;"
-        )?;
-        // 重新创建新表（复用 v21 的建表逻辑）
-        migrate_add_workflow_tables(conn)?;
-        return Ok(());
-    }
-
-    // 重建表：旧表名 → 新表
-    conn.execute_batch(
-        "ALTER TABLE workflow_definitions RENAME TO workflow_definitions_old;"
-    )?;
-
-    // 创建新表
-    conn.execute_batch(
-        r#"CREATE TABLE IF NOT EXISTS workflow_definitions (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            version TEXT NOT NULL DEFAULT '1.0.0',
-            description TEXT NOT NULL DEFAULT '',
-            trigger TEXT NOT NULL DEFAULT '{"triggerType":"manual"}',
-            stages TEXT NOT NULL DEFAULT '[]',
-            input_schema TEXT,
-            output_schema TEXT,
-            max_depth INTEGER DEFAULT 10,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1
-        );"#
-    )?;
-
-    // 逐行迁移数据
-    for (id, name, version, description, nodes_json, _edges_json, input_schema, output_schema, max_depth, created_at, updated_at, enabled) in &rows {
-        let stages_json = format!(
-            r#"[{{"id":"{}","name":"默认阶段","order":0,"nodes":{},"edges":[],"gate":{{"strategy":"all","mergeStrategy":"merge"}}}}]"#,
-            crate::utils::new_id(),
-            nodes_json,
-        );
-        let trigger_json = r#"{"triggerType":"manual"}"#.to_string();
-
-        conn.execute(
-            "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages, input_schema, output_schema, max_depth, created_at, updated_at, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            rusqlite::params![
-                id, name, version, description,
-                trigger_json, stages_json,
-                input_schema, output_schema, max_depth,
-                created_at, updated_at, enabled,
-            ],
-        )?;
-    }
-
-    // 删除旧表
-    conn.execute_batch("DROP TABLE IF EXISTS workflow_definitions_old;")?;
-
-    // 清理旧版遗留表（已不再使用）
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS workflow_nodes;
-         DROP TABLE IF EXISTS workflow_edges;"
-    )?;
-
-    Ok(())
-}
-
-/// v68: 废弃 workflow_instances.steps 字段
-/// 引擎已不再写入 steps 字段（改为 node_executions 表），将所有 rows 的 steps 设为 NULL，
-/// 后续版本可直接 DROP COLUMN。
-fn migrate_deprecate_steps_column(conn: &Connection) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE workflow_instances SET steps = NULL WHERE steps IS NOT NULL",
-        [],
     )?;
     Ok(())
 }
@@ -951,6 +1085,141 @@ fn migrate_sync_resume_templates(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+/// v74: 内置 Agent 完整种子数据覆盖（所有字段与 pilotdesk-agents.json 一致）
+/// v75: workflow_instances schema -- add completion_rate, drop legacy columns
+fn migrate_workflow_instance_schema(conn: &Connection) -> Result<(), AppError> {
+    let has_completion_rate = conn
+        .prepare("SELECT completion_rate FROM workflow_instances LIMIT 0")
+        .is_ok();
+
+    if has_completion_rate {
+        log::info!("[migration v75] completion_rate already exists, skipping");
+        drop_old_workflow_instance_columns(conn);
+        return Ok(());
+    }
+
+    log::info!("[migration v75] Adding completion_rate column to workflow_instances");
+    conn.execute_batch(
+        "ALTER TABLE workflow_instances ADD COLUMN completion_rate REAL NOT NULL DEFAULT 0.0;"
+    )?;
+
+    drop_old_workflow_instance_columns(conn);
+    Ok(())
+}
+
+fn drop_old_workflow_instance_columns(conn: &Connection) {
+    let old_cols = ["steps", "current_node_id", "estimated_remaining", "trigger_detail"];
+    for col in &old_cols {
+        if conn.prepare(&format!("SELECT {} FROM workflow_instances LIMIT 0", col)).is_ok() {
+            log::info!("[migration v75] Dropping old column: {}", col);
+            let _ = conn.execute(&format!("ALTER TABLE workflow_instances DROP COLUMN {}", col), []);
+        }
+    }
+}
+
+fn migrate_full_agent_seeds(conn: &Connection) -> Result<(), AppError> {
+    let now = crate::utils::now();
+
+    conn.execute(
+        "UPDATE agents SET
+            display_name = 'Claude Code',
+            description = 'Anthropic 官方 AI 编程助手，支持代码生成、调试、重构',
+            cli_command = 'claude',
+            npm_package = '@anthropic-ai/claude-code',
+            pip_package = NULL,
+            install_cmd = 'npm install -g @anthropic-ai/claude-code',
+            uninstall_cmd = 'npm uninstall -g @anthropic-ai/claude-code',
+            update_cmd = 'claude update',
+            version_cmd = 'claude --version',
+            latest_version_cmd = 'npm view @anthropic-ai/claude-code version',
+            run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}',
+            output_parser = 'json-stream',
+            output_filter_regex = '',
+            supports_session_continuity = 1,
+            session_id_source = 'stdout-json',
+            session_id_event_type = 'system',
+            session_id_field = 'session_id',
+            resume_arg_template = 'claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}',
+            skills_dir = '~/.claude/skills/',
+            skill_display_mode = 'collection',
+            color = '#3B82F6',
+            icon = 'file:claude_icon.ico',
+            sort_order = 1,
+            is_enabled = 1,
+            is_builtin = 1,
+            updated_at = ?1
+         WHERE agent_type = 'claude'",
+        params![now],
+    )?;
+
+    conn.execute(
+        "UPDATE agents SET
+            display_name = 'Codex CLI',
+            description = 'OpenAI 出品的终端 AI 编程助手',
+            cli_command = 'codex',
+            npm_package = '@openai/codex',
+            pip_package = NULL,
+            install_cmd = 'npm install -g @openai/codex',
+            uninstall_cmd = 'npm uninstall -g @openai/codex',
+            update_cmd = 'codex update',
+            version_cmd = 'codex --version',
+            latest_version_cmd = 'npm view @openai/codex version',
+            run_cmd_template = 'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}',
+            output_parser = 'json-stream',
+            output_filter_regex = '',
+            supports_session_continuity = 1,
+            session_id_source = 'stdout-json',
+            session_id_event_type = 'thread.started',
+            session_id_field = 'thread_id',
+            resume_arg_template = 'codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}',
+            skills_dir = '~/.codex/skills/',
+            skill_display_mode = 'collection',
+            color = '#F59E0B',
+            icon = 'file:codex_icon.ico',
+            sort_order = 3,
+            is_enabled = 1,
+            is_builtin = 1,
+            updated_at = ?1
+         WHERE agent_type = 'codex'",
+        params![now],
+    )?;
+
+    conn.execute(
+        "UPDATE agents SET
+            display_name = 'Hermes Agent',
+            description = '轻量级通用 AI Agent',
+            cli_command = 'hermes',
+            npm_package = NULL,
+            pip_package = 'hermes-agent',
+            install_cmd = 'pip install hermes-agent',
+            uninstall_cmd = 'pip uninstall hermes-agent -y',
+            update_cmd = 'hermes update',
+            version_cmd = 'hermes --version',
+            latest_version_cmd = 'powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version',
+            run_cmd_template = 'hermes chat --query={message} -Q',
+            output_parser = 'ansi-text',
+            output_filter_regex = '^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)',
+            supports_session_continuity = 1,
+            session_id_source = 'stderr-text',
+            session_id_event_type = '',
+            session_id_field = 'session_id: ',
+            resume_arg_template = 'hermes --resume {session_id} chat --query={message} -Q',
+            skills_dir = '~/AppData/Local/hermes/skills/',
+            skill_display_mode = 'collection',
+            color = '#8B5CF6',
+            icon = 'file:hermes_icon.ico',
+            sort_order = 2,
+            is_enabled = 1,
+            is_builtin = 1,
+            updated_at = ?1
+         WHERE agent_type = 'hermes'",
+        params![now],
+    )?;
+
+    log::info!("[migration v74] 内置 Agent 完整种子数据已覆盖（claude/codex/hermes 全部字段）");
+    Ok(())
+}
+
 fn migrate_update_agent_seeds(conn: &Connection) -> Result<(), AppError> {
     // 更新 Claude Code 描述
     conn.execute(
@@ -998,13 +1267,13 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 23 => migrate_add_workflow_schedule(conn)?,
                 65 => migrate_add_performance_indexes(conn)?,
                 66 => migrate_add_workflow_missing_tables(conn)?,
-                67 => migrate_legacy_workflow_columns(conn)?,
-                68 => migrate_deprecate_steps_column(conn)?,
 
                 70 => migrate_normalize_session_id_source(conn)?,
                 71 => migrate_sync_resume_templates(conn)?,
                 72 => migrate_cleanup_workflow_columns(conn)?,
                 73 => migrate_update_agent_seeds(conn)?,
+                74 => migrate_full_agent_seeds(conn)?,
+                75 => migrate_workflow_instance_schema(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }

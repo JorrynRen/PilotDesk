@@ -8,8 +8,6 @@ import { globalEventBus } from '../plugin/GlobalEventBus';
 import type {
   WorkflowInstance,
   WorkflowInstanceStatus,
-  StepExecution,
-  StepStatus,
   WorkflowEventType,
 } from '../types/workflow';
 
@@ -43,46 +41,9 @@ export function createInstance(
     definitionName,
     status: 'pending',
     context: {},
-    steps: {},
     trigger,
     triggerDetail,
     createdAt: Math.floor(Date.now() / 1000),
-  };
-}
-
-// ── 步骤管理 ──
-
-export function createStepExecution(nodeId: string): StepExecution {
-  return {
-    nodeId,
-    status: 'pending',
-    retryCount: 0,
-  };
-}
-
-export function updateStepStatus(
-  instance: WorkflowInstance,
-  nodeId: string,
-  status: StepStatus,
-  extra?: Partial<StepExecution>,
-): WorkflowInstance {
-  const step = instance.steps?.[nodeId] || createStepExecution(nodeId);
-  const now = Math.floor(Date.now() / 1000);
-
-  if (status === 'running' && !step.startedAt) step.startedAt = now;
-  if (['success', 'failed', 'skipped'].includes(status)) step.completedAt = now;
-  if (status === 'success' || status === 'failed') {
-    step.duration = step.startedAt
-      ? Date.now() - new Date(step.startedAt).getTime()
-      : 0;
-  }
-
-  return {
-    ...instance,
-    steps: {
-      ...instance.steps,
-      [nodeId]: { ...step, ...extra, status },
-    },
   };
 }
 

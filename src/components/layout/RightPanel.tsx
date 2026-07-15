@@ -31,7 +31,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
     title: p.contribution.title,
     pluginId: p.pluginId,
     pluginPath: p.pluginPath,
-    icon: p.contribution.icon,
+    icon: p.contribution.icon || p.pluginIcon,
     uniqueKey: p.pluginId + ':' + p.contribution.id,
   }));
 

@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { MessageBubble } from './MessageBubble';
-import { AGENT_THEMES } from '../../types';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { Message, Session } from '../../types';
 import { isApiSession } from '../../utils/sessionType';
 
@@ -17,6 +17,7 @@ interface MessageListProps {
 }
 
 export function MessageList({ messages, session, isGenerating, streamingStatus, onEditMessage, onSaveInspiration, onResendMessage }: MessageListProps) {
+  const { getTheme } = useAgentRegistry();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -120,7 +121,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
   }
 
   if (messages.length === 0) {
-    const agentTheme = AGENT_THEMES[session.agentType] || AGENT_THEMES.claude;
+    const agentTheme = getTheme(session.agentType);
     const agentLabel = agentTheme.label;
     const modelInfo = isApiSession(session.agentType) && session.apiModel
       ? ` · ${session.apiModel}`

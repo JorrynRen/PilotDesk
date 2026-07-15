@@ -36,6 +36,32 @@ class PluginRegistry {
   private loadStates: Map<string, PluginLoadState> = new Map();
   /** 运行时实例 key: pluginPath */
   private runtimes: Map<string, PluginRuntime> = new Map();
+  /** 工作流配置组件 key: pluginId */
+  private workflowConfigComponents: Map<string, React.ComponentType<WorkflowConfigProps>> = new Map();
+
+  // ── 工作流配置组件管理 ──
+
+  setWorkflowConfig(pluginId: string, component: React.ComponentType<WorkflowConfigProps>): void {
+    this.workflowConfigComponents.set(pluginId, component);
+  }
+
+  getWorkflowConfig(pluginId: string): React.ComponentType<WorkflowConfigProps> | undefined {
+    return this.workflowConfigComponents.get(pluginId);
+  }
+
+  unsetWorkflowConfig(pluginId: string): void {
+    this.workflowConfigComponents.delete(pluginId);
+  }
+
+  /** 获取插件的 PluginAPI 实例 */
+  getPluginAPI(pluginId: string): PluginAPI | null {
+    for (const [, runtime] of this.runtimes) {
+      if ((runtime.api as any).pluginId === pluginId) {
+        return runtime.api;
+      }
+    }
+    return null;
+  }
 
   // ── 面板组件管理 ──
 
@@ -63,6 +89,16 @@ class PluginRegistry {
     }
   }
 
+  /** 通过插件路径获取第一个面板组件（供工作流节点配置渲染插件 UI） */
+  getFirstPanelByPluginPath(pluginPath: string): React.ComponentType<{ pluginId: string }> | undefined {
+    for (const [key, comp] of this.panelComponents.entries()) {
+      if (key.startsWith(pluginPath + ':')) {
+        return comp;
+      }
+    }
+    return undefined;
+  }
+
   // ── 加载状态管理 ──
 
   setLoadState(pluginPath: string, state: PluginLoadState): void {
@@ -87,22 +123,18 @@ class PluginRegistry {
    * 读取并执行插件入口文件
    * 将 export default { onLoad, onUnload } 转换为可调用的模块
    */
-  private async executePluginEntry(plugin: PluginInstance): Promise<{ onLoad?: ((api: PluginAPI) => void | Promise<void>) | undefined; onUnload?: (() => void | Promise<void>) | undefined; } | null> {
+  private async executePluginEntry(plugin: PluginInstance): Promise<Record<string, any> | null> {
     try {
       // 1. 读取入口文件内容
       const source = await invoke<string>('plugin_read_entry', { pluginId: plugin.manifest.id });
 
       // 2. 将 export default 替换为 return，包装为函数体
-      // 这样整个源码（含函数声明）都能被执行
       const wrapped = source.replace(/export\s+default\s*/, 'return ');
       const factory = new Function('React', wrapped);
 
-      // 3. 执行并获取模块对象
+      // 3. 执行并获取完整模块对象（含 onLoad/onUnload/PluginNodeConfig/...）
       const module = factory(React);
-      return {
-        onLoad: typeof module.onLoad === 'function' ? module.onLoad : undefined,
-        onUnload: typeof module.onUnload === 'function' ? module.onUnload : undefined,
-      };
+      return module;
     } catch (err) {
       console.warn('[PluginRegistry] 执行插件 ' + plugin.manifest.name + ' 入口失败:', err);
       return null;
@@ -150,6 +182,12 @@ class PluginRegistry {
       const api = new PluginAPI(plugin.path, plugin.manifest.id, plugin.manifest.name);
       const module = await this.executePluginEntry(plugin);
 
+      // 2b. 注册工作流配置组件（必须在 executePluginEntry 之后）
+      if (plugin.manifest.contributes?.workflow_config && module?.[plugin.manifest.contributes.workflow_config.component]) {
+        this.setWorkflowConfig(plugin.manifest.id, module[plugin.manifest.contributes.workflow_config.component]);
+        console.log('[PluginRegistry] 注册工作流配置组件: ' + plugin.manifest.id + ' -> ' + plugin.manifest.contributes.workflow_config.component);
+      }
+
       // 3. 调用 onLoad 生命周期
       if (module?.onLoad) {
         await module.onLoad(api);
@@ -182,6 +220,11 @@ class PluginRegistry {
     // 2. 注销工作流节点类型
     if (runtime) {
       workflowNodeTypeRegistry.unregisterPlugin((runtime.api as any).pluginId);
+    }
+
+    // 2b. 注销工作流配置组件
+    if (runtime) {
+      this.unsetWorkflowConfig((runtime.api as any).pluginId);
     }
 
     // 3. 清理 API 资源（自动注销命令/事件/全局订阅）

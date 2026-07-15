@@ -11,6 +11,8 @@ import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { invoke } from '@tauri-apps/api/core';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { usePluginStore } from '../../stores/pluginStore';
+import { pluginRegistry } from '../../plugin/PluginRegistry';
 
 interface Props {
   node: WorkflowNode;
@@ -53,8 +55,7 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
   },
   plugin: {
     fields: [
-      { key: 'pluginId', label: '插件 ID', type: 'text', placeholder: '插件 ID' },
-      { key: 'commandId', label: '命令 ID', type: 'text', placeholder: '命令 ID' },
+      { key: 'plugin_id', label: '选择插件', type: 'plugin_select', placeholder: '选择插件' },
     ],
   },
   subflow: {
@@ -69,6 +70,50 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
     fields: [],
   },
 };
+
+/* ---------- JSON Schema → 配置字段转换 ---------- */
+
+interface SchemaConfigField {
+  key: string;
+  label: string;
+  type: string;
+  placeholder?: string;
+  /** select 类型的选项列表 */
+  options?: Array<{ value: string; label: string }>;
+  /** 字段描述 */
+  description?: string;
+}
+
+/**
+ * 将 JSON Schema 的 properties 转换为配置字段列表。
+ * 支持 string / number / integer / boolean / textarea(select+enum) 类型。
+ */
+function schemaToConfigFields(schema: any): SchemaConfigField[] {
+  const props = schema?.properties;
+  if (!props || typeof props !== 'object') return [];
+  return Object.entries(props).map(([key, def]: [string, any]) => {
+    const field: SchemaConfigField = {
+      key,
+      label: def.title || key,
+      type: 'text',
+      placeholder: def.description || '',
+      description: def.description,
+    };
+    if (def.type === 'string') {
+      if (Array.isArray(def.enum)) {
+        field.type = 'select';
+        field.options = def.enum.map((v: string) => ({ value: v, label: v }));
+      } else if (def.format === 'textarea' || (def.maxLength && def.maxLength > 100)) {
+        field.type = 'textarea';
+      }
+    } else if (def.type === 'number' || def.type === 'integer') {
+      field.type = 'number';
+    } else if (def.type === 'boolean') {
+      field.type = 'checkbox';
+    }
+    return field;
+  });
+}
 
 /* ---------- 公共 style 对象（全部引用 CSS 变量） ---------- */
 
@@ -949,11 +994,16 @@ const SubflowSelector: React.FC<{
 
 export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, onOpenSubflow, stages, stageEdges, definitionId }) => {
   const meta = getNodeTypeMeta(node.type);
-  const configFields = NODE_TYPE_CONFIG_MAP[node.type]?.fields || [];
+  const builtinFields = NODE_TYPE_CONFIG_MAP[node.type as WorkflowNodeType]?.fields || [];
+  const configFields = builtinFields.length > 0
+    ? builtinFields
+    : [];
   const [params, setParams] = useState<Record<string, any>>(node.params || {});
   const { getEnabledAgentTypes } = useAgentRegistry();
   const enabledAgentTypes = getEnabledAgentTypes();
   const { definitions, loadDefinitions } = useWorkflowStore();
+  const pluginStore = usePluginStore();
+  const [availablePlugins, setAvailablePlugins] = useState<Array<{ id: string; name: string }>>([]);
   const inputBaseKeyRef = useRef<string>('');
   const outputBaseKeyRef = useRef<string>('');
   const [fieldSelectorKey, setFieldSelectorKey] = useState<string | null>(null);
@@ -965,7 +1015,24 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
   const triggerCursorPosRef = useRef<number>(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
 
+  
+  
+  // plugin 节点：初始化可选插件列表（仅显示有 workflow_config 的插件）
   useEffect(() => {
+    if (node.type !== 'plugin') return;
+    const plugins = pluginStore.plugins || [];
+    // 若列表为空或无可用于工作流的插件，触发重新扫描
+    const hasWorkflowPlugin = plugins.some((p) => p.manifest?.contributes?.workflow_config);
+    if (!hasWorkflowPlugin && pluginStore.discover) {
+      pluginStore.discover();
+    }
+    const list = plugins
+      .filter((p) => p.manifest?.contributes?.workflow_config)
+      .map((p) => ({ id: p.manifest.id, name: p.manifest.name }));
+    setAvailablePlugins(list);
+  }, [node.type, pluginStore.plugins]);
+
+useEffect(() => {
     if (node.type === 'subflow' && definitions.length === 0) {
       loadDefinitions();
     }
@@ -1138,6 +1205,9 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                   style={S.select()}
                 >
                   <option value="">选择...</option>
+                  {/* 插件节点：从 field.options 渲染 */}
+                  {(configFields[0] as SchemaConfigField).options?.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                  {/* 内置节点：硬编码选项 */}
                   {configFields[0].key === 'agent_type' && enabledAgentTypes.map((v) => <option key={v} value={v}>{v}</option>)}
                   {configFields[0].key === 'method' && ['GET', 'POST', 'PUT', 'DELETE'].map((v) => <option key={v} value={v}>{v}</option>)}
                   {configFields[0].key === 'inputType' && ['text', 'select', 'confirm', 'file'].map((v) => <option key={v} value={v}>{v}</option>)}
@@ -1318,6 +1388,17 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                 }}
                 loadDefinitions={loadDefinitions}
               />
+            ) : configFields[0].type === 'plugin_select' ? (
+              <select
+                value={params[configFields[0].key] || ''}
+                onChange={(e) => handleParamChange(configFields[0].key, e.target.value)}
+                style={{ ...S.select() }}
+              >
+                <option value="">选择插件</option>
+                {availablePlugins.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
             ) : (
               <input
                 type={configFields[0].type || 'text'}
@@ -1343,6 +1424,7 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
           </div>
         )}
       </div>
+
 
       {/* ===== 输入映射 ===== */}
       {node.type !== 'start' && (
@@ -1519,10 +1601,22 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
                   style={S.select()}
                 >
                   <option value="">选择...</option>
+                  {/* 插件节点：从 field.options 渲染 */}
+                  {(field as SchemaConfigField).options?.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                  {/* 内置节点：硬编码选项 */}
                   {field.key === 'agent_type' && enabledAgentTypes.map((v) => <option key={v} value={v}>{v}</option>)}
                   {field.key === 'method' && ['GET', 'POST', 'PUT', 'DELETE'].map((v) => <option key={v} value={v}>{v}</option>)}
                   {field.key === 'inputType' && ['text', 'select', 'confirm', 'file'].map((v) => <option key={v} value={v}>{v}</option>)}
                 </select>
+              ) : field.type === 'checkbox' ? (
+                <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: 'var(--fs-12)', color: 'var(--text-secondary)' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!params[field.key]}
+                    onChange={(e) => handleParamChange(field.key, e.target.checked)}
+                  />
+                  {(field as SchemaConfigField).description || field.placeholder}
+                </label>
               ) : (
                 <input
                   type={field.type}
@@ -1537,7 +1631,23 @@ export const WorkflowNodeConfig: React.FC<Props> = ({ node, onUpdate, onClose, o
         </div>
       )}
 
-      {node.type !== 'end' && (
+
+{/* ===== 插件配置组件（PluginNodeConfig） ===== */}
+      {node.type === 'plugin' && params.plugin_id && pluginRegistry.getWorkflowConfig(params.plugin_id) && (() => {
+        const PluginComp = pluginRegistry.getWorkflowConfig(params.plugin_id)!;
+        return (
+          <div style={S.sectionGap}>
+            <div style={S.sectionTitle}>插件配置</div>
+            <PluginComp
+              params={params}
+              onParamsChange={handleParamChange}
+              api={pluginRegistry.getPluginAPI(params.plugin_id) || undefined}
+            />
+          </div>
+        );
+      })()}
+
+            {node.type !== 'end' && (
       <div style={S.sectionGap}>
         <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
           <div style={S.sectionTitle}>输出映射</div>

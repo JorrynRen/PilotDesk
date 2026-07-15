@@ -95,27 +95,14 @@ export type PanelContent =
   | { kind: 'bot-setup'; agent: string }
   | { kind: 'update-check' };
 
-/**
- * Chat mode system prompts — loaded from app_settings storage.
- * Falls back to built-in defaults if not yet customized.
- */
-const DEFAULT_MODE_PROMPTS: Record<ChatMode, string> = {
-  native: '',
-  fast: '快速简洁回答，直接给出结论，无需详细解释推理过程',
-  think: '逐步分析推理，详细解释你的思路和过程，给出完整的推理链',
-  expert: '以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案',
-};
-
-export const MODE_PROMPTS_DEFAULTS = DEFAULT_MODE_PROMPTS;
-
-/** Get the current system prompt for a chat mode (from storage or default) */
+/** Get the current system prompt for a chat mode (from app_settings) */
 export async function getModePrompt(mode: ChatMode): Promise<string> {
   try {
     const key = `mode_prompt_${mode}`;
     const value = await _invoke('get_app_setting', { key });
     if (typeof value === 'string' && value !== '') return value;
-  } catch { /* storage not available or error — use default */ }
-  return DEFAULT_MODE_PROMPTS[mode] ?? '';
+  } catch { /* storage not available */ }
+  return '';
 }
 
 /** Save a custom system prompt for a chat mode */
@@ -144,21 +131,11 @@ export const MODE_LABELS: Record<ChatMode, string> = {
 };
 
 export const MODE_COLORS: Record<ChatMode, string> = {
-  native: 'var(--text-secondary)',
-  fast: '#10B981',
-  think: 'var(--accent)',
-  expert: 'var(--hermes-tag)',
+  native: 'var(--mode-native)',
+  fast: 'var(--mode-fast)',
+  think: 'var(--mode-think)',
+  expert: 'var(--mode-expert)',
 };
-
-/** Agent type theme configuration — centralized color, label, and initial for all agent types */
-export interface AgentTheme {
-  color: string;    // Primary hex color
-  bg: string;       // Background with alpha (rgba)
-  label: string;    // Display name
-  initial: string;  // Single letter initial
-  cssVar: string;   // CSS variable reference
-  icon?: string;    // Icon reference (file:filename.ico / URL / emoji)
-}
 
 /** Agent config from the backend agents table */
 export interface AgentConfig {
@@ -193,50 +170,6 @@ export interface AgentConfig {
   version: string;
 }
 
-/**
- * @deprecated Use useAgentRegistry() hook instead for dynamic agent themes.
- * This static map is kept as fallback for components not yet migrated.
- */
-export const AGENT_THEMES: Record<string, AgentTheme> = {
-  claude: {
-    color: '#3B82F6',
-    bg: 'rgba(59,130,246,0.15)',
-    label: 'Claude Code',
-    initial: 'C',
-    cssVar: 'var(--claude-tag)',
-    icon: 'file:claude_icon.ico',
-  },
-  hermes: {
-    color: '#8B5CF6',
-    bg: 'rgba(139,92,246,0.15)',
-    label: 'Hermes Agent',
-    initial: 'H',
-    cssVar: 'var(--hermes-tag)',
-    icon: 'file:hermes_icon.ico',
-  },
-  api: {
-    color: '#10B981',
-    bg: 'rgba(16,185,129,0.15)',
-    label: 'API 直连',
-    initial: 'A',
-    cssVar: 'var(--api-tag)',
-  },
-  codex: {
-    color: '#F59E0B',
-    bg: 'rgba(245,158,11,0.15)',
-    label: 'codeX',
-    initial: 'X',
-    cssVar: 'var(--codex-tag)',
-    icon: 'file:codex_icon.ico',
-  },
-  manual: {
-    color: '#6B7280',
-    bg: 'rgba(107,114,128,0.15)',
-    label: '手动',
-    initial: 'M',
-    cssVar: 'var(--text-tertiary)',
-  },
-};
 
 
 /** Search engine result item */

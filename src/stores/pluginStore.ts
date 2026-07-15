@@ -7,6 +7,8 @@ export interface RegisteredPanel {
   pluginId: string;
   pluginName: string;
   pluginPath: string;
+  /** manifest 顶层 icon（面板贡献点无 icon 时 fallback） */
+  pluginIcon?: string;
   contribution: PanelContribution;
 }
 
@@ -68,6 +70,7 @@ function buildRegistrations(plugins: PluginInstance[]) {
           pluginId: plugin.manifest.id,
           pluginName: plugin.manifest.name,
           pluginPath: plugin.path,
+          pluginIcon: plugin.manifest.icon,
           contribution: panel,
         });
       }

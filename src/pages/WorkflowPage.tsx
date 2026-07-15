@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Trash2, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, Layout, FileText, Tag, Layers, Zap } from 'lucide-react';
+import { Play, Plus, Trash2, UserCheck, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, Layout, FileText, Tag, Layers, Zap, Copy } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -9,7 +9,7 @@ import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
 import { WorkflowPropertyDialog } from '../components/workflow/WorkflowPropertyDialog';
-import type { WorkflowDefinition, WorkflowInstance } from '../types/workflow';
+import type { WorkflowDefinition, WorkflowInstance, PendingHumanInput } from '../types/workflow';
 
 interface WorkflowPageProps {
   onBack?: () => void;
@@ -113,7 +113,7 @@ function describeCron(expr: string): string {
 
 export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const navigate = useNavigate();
-  const { definitions, instances, loading, error, loadDefinitions, loadInstances, createDefinition, updateDefinition, deleteDefinition, deleteExecution, selectDefinition } = useWorkflowStore();
+  const { definitions, instances, pendingInputs, loading, error, loadDefinitions, loadInstances, loadPendingInputs, respondHumanInput, createDefinition, updateDefinition, deleteDefinition, deleteExecution, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances'>('definitions');
   const [showPropertyDialog, setShowPropertyDialog] = useState<'create' | 'edit' | null>(null);
   const [editingDef, setEditingDef] = useState<WorkflowDefinition | null>(null);
@@ -121,6 +121,19 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
   useEffect(() => {
     loadDefinitions();
     loadInstances();
+    loadPendingInputs();
+    const pendingInterval = setInterval(loadPendingInputs, 5000);
+    // 检测崩溃后残留的 running/paused 实例
+    invoke<Array<{ executionId: string; definitionName: string; status: string }>>('list_recoverable_executions')
+      .then(recoverable => {
+        if (recoverable.length > 0) {
+          showToast('检测到 ' + recoverable.length + ' 个未完成的执行记录（已自动标记为失败）', 'warning');
+        }
+      })
+      .catch(() => {});
+    return () => {
+      clearInterval(pendingInterval);
+    };
   }, []);
 
   const handleExportSingle = async (e: React.MouseEvent, id: string, name: string) => {
@@ -185,6 +198,8 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
     version: string;
     trigger: { triggerType: 'manual' | 'cron' | 'event'; cron?: string };
     enabled: boolean;
+    inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
+    outputSchema?: Record<string, { type: string; description?: string }>;
   }) => {
     setShowPropertyDialog(null);
     if (editingDef) {
@@ -196,6 +211,8 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           version: data.version,
           trigger: data.trigger,
           enabled: data.enabled,
+          ...(data.inputSchema !== undefined ? { inputSchema: data.inputSchema } : {}),
+          ...(data.outputSchema !== undefined ? { outputSchema: data.outputSchema } : {}),
         });
       } catch (err) {
         console.error('更新工作流属性失败:', err);
@@ -207,6 +224,8 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
       def.version = data.version;
       def.trigger = data.trigger;
       def.enabled = data.enabled;
+      if (data.inputSchema) def.inputSchema = data.inputSchema;
+      if (data.outputSchema) def.outputSchema = data.outputSchema;
       try {
         const id = await createDefinition(def);
         selectDefinition(id);
@@ -258,6 +277,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           showToast(`${defName} 已取消`, 'warning');
         }
         useWorkflowStore.getState().loadInstances();
+        useWorkflowStore.getState().loadPendingInputs();
       }
     }).then(fn => { unlisten = fn; });
 
@@ -281,6 +301,14 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
 
   const handleDelete = async (id: string, name: string) => {
     setConfirmDelete({ type: 'definition', id, name });
+  };
+
+  const handleDuplicate = async (id: string, name: string) => {
+    try {
+      await useWorkflowStore.getState().duplicateDefinition(id, name + ' (副本)');
+    } catch (err) {
+      console.error('复制失败:', err);
+    }
   };
 
   const handleDeleteExecution = async (executionId: string, name: string) => {
@@ -444,6 +472,14 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
                           <Upload size={14} />
                         </button>
                         <button
+                          onClick={(e) => { e.stopPropagation(); handleDuplicate(def.id, def.name); }}
+                          className="pd-btn p-1.5 rounded hover:opacity-80"
+                          style={{ color: 'var(--text-secondary)' }}
+                          title="复制"
+                        >
+                          <Copy size={14} />
+                        </button>
+                        <button
                           onClick={(e) => { e.stopPropagation(); handleDelete(def.id, def.name); }}
                           className="pd-btn p-1.5 rounded hover:opacity-80"
                           style={{ color: 'var(--text-secondary)' }}
@@ -492,6 +528,28 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
               </div>
             )}
           </>
+        )}
+
+        {/* 待审批提示条 */}
+        {pendingInputs.length > 0 && (
+          <div
+            className="p-3 rounded-lg mb-2"
+            style={{ backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)' }}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <UserCheck size={14} style={{ color: '#F59E0B' }} />
+              <span className="text-xs font-medium" style={{ color: '#F59E0B' }}>
+                待审批 ({pendingInputs.length})
+              </span>
+            </div>
+            {pendingInputs.map((item) => (
+              <PendingInputCard
+                key={`${item.execution_id}-${item.node_id}`}
+                item={item}
+                onSubmit={(response) => respondHumanInput(item.execution_id, item.node_id, response)}
+              />
+            ))}
+          </div>
         )}
 
         {!loading && activeTab === 'instances' && (
@@ -592,6 +650,81 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         onOpenSettings={() => navigate('/settings')}
         onOpenEnvSettings={() => navigate('/settings?tab=environment')}
       />
+    </div>
+  );
+}
+
+/** 待审批输入卡片 */
+function PendingInputCard({ item, onSubmit }: { item: PendingHumanInput; onSubmit: (response: string) => void }) {
+  const [value, setValue] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!value.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      await onSubmit(value.trim());
+      setValue('');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="p-2 rounded-md mb-2"
+      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+    >
+      <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>
+        节点: {item.node_label}
+      </div>
+      <div className="text-xs mb-2" style={{ color: 'var(--text-primary)' }}>
+        {item.prompt}
+      </div>
+      <div className="flex gap-2">
+        {item.input_type === 'select' ? (
+          <select
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="flex-1 text-xs px-2 py-1 rounded-md"
+            style={{
+              backgroundColor: 'var(--bg-primary)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-primary)',
+            }}
+          >
+            <option value="">请选择...</option>
+            <option value="approve">通过</option>
+            <option value="reject">拒绝</option>
+          </select>
+        ) : (
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="请输入响应内容..."
+            className="flex-1 text-xs px-2 py-1 rounded-md"
+            style={{
+              backgroundColor: 'var(--bg-primary)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-primary)',
+            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
+          />
+        )}
+        <button
+          onClick={handleSubmit}
+          disabled={!value.trim() || submitting}
+          className="text-xs px-3 py-1 rounded-md font-medium transition-colors"
+          style={{
+            backgroundColor: value.trim() ? 'var(--accent)' : 'var(--bg-tertiary)',
+            color: value.trim() ? '#fff' : 'var(--text-tertiary)',
+            cursor: value.trim() ? 'pointer' : 'not-allowed',
+          }}
+        >
+          {submitting ? '提交中...' : '提交'}
+        </button>
+      </div>
     </div>
   );
 }

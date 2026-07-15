@@ -75,7 +75,7 @@ async function readSSEStream(
 export function useAgentEvent(handlers?: AgentEventHandlers) {
   const { agents: registryAgents } = useAgentRegistry();
   const agentTypes = useMemo(() => registryAgents.map(a => a.agentType), [registryAgents]);
-  const defaultAgentType = useMemo(() => agentTypes[0] || 'claude', [agentTypes]);
+  const defaultAgentType = useMemo(() => agentTypes[0] || '', [agentTypes]);
   const handlersRef = useRef(handlers);
   useEffect(() => {
     handlersRef.current = handlers;

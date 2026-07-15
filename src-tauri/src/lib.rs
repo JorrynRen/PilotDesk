@@ -8,7 +8,6 @@ mod virtual_console;
 mod utils;
 
 use db::init::{init_db, DbPool};
-use std::sync::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
 use std::sync::Arc;
 use agent::AgentManager;
@@ -248,7 +247,7 @@ pub fn run() {
         .manage(AsyncMutex::new(AgentManager::new()))
         .manage(std::sync::Mutex::new(terminal::console_bridge::ConsoleBridge::new()))
         .manage(AsyncMutex::new(terminal::TerminalManager::new()))
-        .manage(Mutex::new(plugin::PluginHost::new()))
+
         .invoke_handler(tauri::generate_handler![
             commands::env::detect_env,
             commands::env::clear_env_detect_cache,
@@ -363,6 +362,7 @@ pub fn run() {
             commands::workflow::list_workflow_versions,
             commands::workflow::save_workflow_version,
             commands::workflow::restore_workflow_version,
+            commands::workflow::delete_workflow_version,
             commands::workflow::get_node_execution_logs,
             commands::workflow::list_recoverable_executions,
             commands::workflow::recover_execution,
@@ -397,12 +397,19 @@ pub fn run() {
 
             app.manage(ResourcePaths { builtin, user });
 
+            // 初始化共享 PluginHost（供插件 store 和工作流 NodeExecutor 共用）
+            let shared_plugin_host = std::sync::Mutex::new(plugin::PluginHost::new());
+            app.manage(shared_plugin_host);
+
             // 初始化 NodeExecutor（工作流节点执行器）
-            // 创建独立的 AgentManager 和 PluginHost 实例供工作流使用
             let agent_manager = Arc::new(AsyncMutex::new(AgentManager::new()));
-            let plugin_host = Arc::new(std::sync::Mutex::new(plugin::PluginHost::new()));
-            let node_executor = Arc::new(NodeExecutor::new(agent_manager, plugin_host, pool.clone()));
-            // 同步插件贡献的节点类型到工作流注册表
+            // NodeExecutor 通过 AppHandle 运行时访问 managed state 中的 PluginHost
+            let node_executor = Arc::new(NodeExecutor::new(
+                agent_manager,
+                app.handle().clone(),
+                pool.clone(),
+            ));
+            // 初始同步：此时 PluginHost 为空，后续 plugin_discover 会触发再次同步
             node_executor.sync_plugin_node_types();
             app.manage(node_executor.clone());
 

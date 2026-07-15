@@ -4,7 +4,6 @@ import { useSkillStore } from '../../stores/skillStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
-import { AGENT_THEMES } from '../../types';
 import type { SkillInfo } from '../../stores/skillStore';
 
 interface SkillBrowserProps {
@@ -14,7 +13,7 @@ interface SkillBrowserProps {
 
 export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
   const { skillsByAgent, isLoading, setAgentSkills, setLoading } = useSkillStore();
-  const { agents, getDisplayName } = useAgentRegistry();
+  const { agents, getDisplayName, getTheme } = useAgentRegistry();
   const { envInfo } = useEnvInfo();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSkill, setSelectedSkill] = useState<{ agent: string; name: string; description: string; category?: string } | null>(null);
@@ -134,7 +133,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
                   style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
                   onClick={() => toggleAgent(agt)}
                 >
-                  <Bot size={14} style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
+                  <Bot size={14} style={{ color: getTheme(agt).color }} />
                   <span className="text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--text-secondary)' }}>
                     {getDisplayName(agt)}
                   </span>
@@ -165,7 +164,7 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
                     >
                       <div className="flex-1 min-w-0">
                         <div className="text-xs flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
-                          <Cpu size={12} className="shrink-0" style={{ color: (AGENT_THEMES[agt] ?? AGENT_THEMES.claude).cssVar }} />
+                          <Cpu size={12} className="shrink-0" style={{ color: getTheme(agt).color }} />
                           <span className="truncate">{skill.name}</span>
                         </div>
                         <div className="text-[10px] truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>

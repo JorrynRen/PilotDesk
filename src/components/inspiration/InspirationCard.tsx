@@ -1,5 +1,5 @@
 import { Star, Send, Trash2 } from 'lucide-react';
-import { AGENT_THEMES } from '../../types';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { InspirationItem } from '../../stores/inspirationStore';
 
 interface InspirationCardProps {
@@ -11,9 +11,10 @@ interface InspirationCardProps {
 }
 
 export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession, onDelete, onEdit }: InspirationCardProps) {
-  const sourceTheme = AGENT_THEMES[inspiration.sourceAgent];
-  const sourceLabel = sourceTheme?.label ?? inspiration.sourceAgent;
-  const sourceColor = sourceTheme?.cssVar ?? 'var(--text-tertiary)';
+  const { getTheme } = useAgentRegistry();
+  const sourceTheme = getTheme(inspiration.sourceAgent);
+  const sourceLabel = sourceTheme.label;
+  const sourceColor = sourceTheme.color;
 
   const timeStr = new Date(inspiration.updatedAt * 1000).toLocaleDateString('zh-CN', {
     month: 'short',

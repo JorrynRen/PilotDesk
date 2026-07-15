@@ -46,7 +46,7 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
           className="flex items-center gap-2 px-3 py-2"
           style={{ borderBottom: '1px solid var(--border)' }}
         >
-          <PluginIcon icon={activePanel.contribution.icon} pluginId={activePanel.pluginId} size={16} />
+          <PluginIcon icon={activePanel.contribution.icon || activePanel.pluginIcon} pluginId={activePanel.pluginId} size={16} />
           <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
             {activePanel.contribution.title}
           </span>

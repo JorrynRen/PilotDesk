@@ -1,6 +1,5 @@
 import { useState, memo } from 'react';
 import { Archive, Trash2, Pencil, Check, X } from 'lucide-react';
-import { AGENT_THEMES } from '../../types';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { AgentBadge } from '../common/AgentBadge';
 import { useGeneratingStore } from '../../stores/generatingStore';
@@ -136,7 +135,7 @@ export const SessionListItem = memo(function SessionListItem({
                 <button
                   onClick={handleConfirmEdit}
                   className="pd-btn p-0.5 rounded"
-                  style={{ color: AGENT_THEMES.api.color }}
+                  style={{ color: getTheme('api').color }}
                   title="确认"
                 >
                   <Check size={11} />

@@ -6,6 +6,8 @@ import { useSessionStore } from './stores/sessionStore';
 import { useSkillStore } from './stores/skillStore';
 import { useAgentEvent } from './hooks/useAgentEvent';
 import { commandDispatcher } from './plugin/CommandDispatcher';
+import { usePluginStore } from './stores/pluginStore';
+import { pluginRegistry } from './plugin/PluginRegistry';
 import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
 import { VirtualConsolePanel } from './components/VirtualConsolePanel';
 import { MarketPage } from './components/inspiration/MarketPage';
@@ -63,6 +65,18 @@ function MainLayout() {
 
 function App() {
   const location = useLocation();
+
+  // 应用启动时自动发现并加载插件（确保工作流节点类型可用）
+  useEffect(() => {
+    (async () => {
+      try {
+        await usePluginStore.getState().discover();
+        await pluginRegistry.loadAllPlugins(usePluginStore.getState().plugins);
+      } catch (err) {
+        console.warn('[App] 插件发现失败:', err);
+      }
+    })();
+  }, []);
 
   // Update window title based on current route
   useEffect(() => {

@@ -18,7 +18,7 @@ pub const SERVER_SOURCES: &[&str] = &[
 
 /// 在线商店路径
 pub const AGENTS_CONFIG_PATH: &str = "/server/market/agents-config/agents-config.json";
-pub const PLUGINS_INDEX_PATH: &str = "/server/market/plugins/index.json";
+pub const PLUGINS_INDEX_PATH: &str = "/server/market/plugins/plugins-index.json";
 #[allow(dead_code)]
 pub const PLUGINS_DIR_PATH: &str = "/server/market/plugins";
 

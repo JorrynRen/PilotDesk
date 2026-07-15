@@ -87,6 +87,15 @@ pub struct PluginContributes {
     pub hooks: Option<Vec<HookContribution>>,
     #[serde(default)]
     pub node_types: Option<Vec<NodeTypeContribution>>,
+    #[serde(default)]
+    pub workflow_config: Option<WorkflowConfigContribution>,
+}
+
+/// Plugin-provided config component rendered inside workflow plugin node
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowConfigContribution {
+    /// Name of the exported component in plugin entry JS (e.g. "PluginNodeConfig")
+    pub component: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +109,12 @@ pub struct PanelContribution {
 pub struct CommandContribution {
     pub id: String,
     pub title: String,
+    #[serde(default)]
+    #[serde(rename = "input")]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    #[serde(rename = "output")]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -729,9 +744,17 @@ impl PluginHost {
 // ── Tauri Commands ──
 
 #[tauri::command]
-pub fn plugin_discover(host: tauri::State<'_, std::sync::Mutex<PluginHost>>) -> Result<Vec<PluginInstance>, String> {
-    let mut host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
-    Ok(host.discover())
+pub fn plugin_discover(
+    host: tauri::State<'_, std::sync::Mutex<PluginHost>>,
+    executor: tauri::State<'_, Arc<crate::workflow::executor::NodeExecutor>>,
+) -> Result<Vec<PluginInstance>, String> {
+    let plugins = {
+        let mut host = host.lock().map_err(|e| format!("锁定失败: {}", e))?;
+        host.discover()
+    }; // host 锁在此释放，避免 sync_plugin_node_types() 再次 lock 时死锁
+    // discover 后同步插件节点类型到工作流注册表（共享 PluginHost，数据已最新）
+    executor.sync_plugin_node_types();
+    Ok(plugins)
 }
 
 #[tauri::command]

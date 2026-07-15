@@ -35,7 +35,7 @@ jobs:
       - name: Generate index.json
         run: |
           # 生成索引文件头
-          echo '{"schemaVersion":"1.0","updatedAt":"'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'","plugins":[' > server/market/plugins/index.json
+          echo '{"schemaVersion":"1.0","updatedAt":"'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'","plugins":[' > server/market/plugins/plugins-index.json
 
           first=true
           # 扫描 server/market/plugins/<plugin-id>/<version>/manifest.json

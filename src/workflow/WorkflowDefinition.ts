@@ -25,19 +25,19 @@ interface NodeTypeMeta {
   nodeH: number;
 }
 
-const NODE_TYPE_META: Record<WorkflowNodeType, NodeTypeMeta> = {
+const NODE_TYPE_META: Record<string, NodeTypeMeta> = {
   agent: { label: 'Agent 任务', color: '#58a6ff', icon: '⚡', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
   api: { label: 'API 调用', color: '#a371f7', icon: '⬡', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
   transform: { label: '代码转换', color: '#d29922', icon: '⟲', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
   interact: { label: '人工交互', color: '#f85149', icon: '⚑', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
-  plugin: { label: '插件命令', color: '#3fb950', icon: '⊕', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
+  plugin: { label: '插件调用', color: '#3fb950', icon: '⊕', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
   start: { label: '起始', color: '#3fb950', icon: '▶', canHaveInputs: false, canHaveOutputs: true, maxInputs: 0, maxOutputs: 10, isBoundary: true, nodeW: 160, nodeH: 60 },
   end: { label: '结束', color: '#f85149', icon: '■', canHaveInputs: true, canHaveOutputs: false, maxInputs: 10, maxOutputs: 0, isBoundary: true, nodeW: 160, nodeH: 60 },
   subflow: { label: '子工作流', color: '#79c0ff', icon: '⧉', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
 };
 
 
-export function getNodeTypeMeta(type: WorkflowNodeType): NodeTypeMeta {
+export function getNodeTypeMeta(type: string): NodeTypeMeta {
   return NODE_TYPE_META[type] || { label: type, color: '#8b949e', icon: '❓', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 };
 }
 
@@ -202,7 +202,7 @@ export function findFreePosition(
  * @param existingPositions  阶段内已有节点位置列表（用于 findFreePosition）
  */
 export function createWorkflowNode(
-  type: WorkflowNodeType,
+  type: string,
   position?: { x: number; y: number },
   existingPositions?: { x: number; y: number }[],
   scale: number = 1,
@@ -229,7 +229,7 @@ export function createWorkflowNode(
 
   return {
     id: generateId(),
-    type,
+    type: type as WorkflowNodeType,
     label: meta.label,
     params: {},
     position: finalPosition,

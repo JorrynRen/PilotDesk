@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Search, X, Cpu, Loader2 } from 'lucide-react';
 import { useSkillStore, type SkillInfo } from '../../stores/skillStore';
-import { AGENT_THEMES } from '../../types';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
 interface SkillPickerProps {
   agentType: string;
@@ -134,7 +134,7 @@ export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) 
             >
               <div className="flex-1 min-w-0">
                 <div className="text-xs flex items-center gap-1.5" >
-                  <Cpu size={12} className="shrink-0" style={{ color: AGENT_THEMES.hermes.cssVar }} />
+                  <Cpu size={12} className="shrink-0" style={{ color: getTheme(agentType).color }} />
                   <span className="truncate">{skill.name}</span>
                 </div>
                 <div className="text-[10px] truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>

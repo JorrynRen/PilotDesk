@@ -1,27 +1,32 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { AgentConfig, AgentTheme } from '../types';
+import type { AgentConfig } from '../types';
 
-const FALLBACK_THEME: AgentTheme = {
-  color: '#6B7280',
-  bg: 'rgba(107,114,128,0.15)',
-  label: '未知',
-  initial: '?',
-  cssVar: 'var(--text-tertiary)',
+interface AgentTheme {
+  color: string;
+  bg: string;
+  label: string;
+  initial: string;
+  icon?: string;
+}
+
+/** 非注册 agent 类型（manual/api 等）的显示标签映射 */
+const SOURCE_LABELS: Record<string, string> = {
+  manual: '手动',
+  api: 'API',
 };
 
-function agentTypeToCssVar(agentType: string): string {
-  const map: Record<string, string> = {
-    claude: 'var(--claude-tag)',
-    hermes: 'var(--hermes-tag)',
-    codex: 'var(--codex-tag)',
-    api: 'var(--api-tag)',
+function fallbackTheme(agentType: string): AgentTheme {
+  const label = SOURCE_LABELS[agentType] || agentType;
+  return {
+    color: '#6B7280',
+    bg: 'rgba(107,114,128,0.15)',
+    label,
+    initial: agentTypeToInitial(agentType),
   };
-  return map[agentType] || 'var(--text-tertiary)';
 }
 
 function agentTypeToInitial(agentType: string): string {
-  if (agentType === 'codex') return 'X';
   if (agentType === 'api') return 'A';
   return agentType.charAt(0).toUpperCase();
 }
@@ -85,7 +90,7 @@ export function useAgentRegistry() {
     return globalAgents.find(a => a.agentType === agentType);
   }, []);
 
-  /** Get theme for an agent type (from DB color, fallback to AGENT_THEMES) */
+  /** Get theme for an agent type (from DB color, fallback to neutral gray) */
   const getTheme = useCallback((agentType: string): AgentTheme => {
     const agent = globalAgents.find(a => a.agentType === agentType);
     if (agent) {
@@ -95,17 +100,16 @@ export function useAgentRegistry() {
         bg: isValidHexColor(agent.color) ? hexToRgba(agent.color, 0.15) : 'rgba(59,130,246,0.15)',
         label: agent.displayName,
         initial: agentTypeToInitial(agentType),
-        cssVar: agentTypeToCssVar(agentType),
         icon: agent.icon || undefined,
       };
     }
-    return getBuiltinTheme(agentType);
+    return fallbackTheme(agentType);
   }, []);
 
   /** Get display name for an agent type */
   const getDisplayName = useCallback((agentType: string): string => {
     const agent = globalAgents.find(a => a.agentType === agentType);
-    return agent?.displayName || getBuiltinLabel(agentType);
+    return agent?.displayName || agentType;
   }, []);
 
   /** Get enabled agent types (for session creation dropdown) */
@@ -141,21 +145,4 @@ function hexToRgba(hex: string, alpha: number): string {
     return `rgba(${parseInt(result[1], 16)},${parseInt(result[2], 16)},${parseInt(result[3], 16)},${alpha})`;
   }
   return `rgba(107,114,128,${alpha})`;
-}
-
-/** Built-in fallback themes for types not yet in agents table */
-const BUILTIN_THEMES: Record<string, AgentTheme> = {
-  claude: { color: '#3B82F6', bg: 'rgba(59,130,246,0.15)', label: 'Claude Code', initial: 'C', cssVar: 'var(--claude-tag)', icon: 'file:claude_icon.ico' },
-  hermes: { color: '#8B5CF6', bg: 'rgba(139,92,246,0.15)', label: 'Hermes Agent', initial: 'H', cssVar: 'var(--hermes-tag)', icon: 'file:hermes_icon.ico' },
-  codex: { color: '#F59E0B', bg: 'rgba(245,158,11,0.15)', label: 'codeX', initial: 'X', cssVar: 'var(--codex-tag)', icon: 'file:codex_icon.ico' },
-  api: { color: '#10B981', bg: 'rgba(16,185,129,0.15)', label: 'API 直连', initial: 'A', cssVar: 'var(--api-tag)' },
-  manual: { color: '#6B7280', bg: 'rgba(107,114,128,0.15)', label: '手动', initial: 'M', cssVar: 'var(--text-tertiary)' },
-};
-
-function getBuiltinTheme(agentType: string): AgentTheme {
-  return BUILTIN_THEMES[agentType] || FALLBACK_THEME;
-}
-
-function getBuiltinLabel(agentType: string): string {
-  return BUILTIN_THEMES[agentType]?.label || agentType;
 }

@@ -124,7 +124,7 @@ function SandboxInfoPanel({ onClose }: { onClose?: () => void }) {
             return (
               <span
                 key={perm}
-                className="text-[10px] px-1.5 py-0.5 rounded"
+                className="text-[10px] px-1.5 py-0.5 rounded break-all"
                 style={{
                   backgroundColor: isHighRisk ? 'rgba(245,158,11,0.15)' : 'var(--accent-light)',
                   color: isHighRisk ? '#F59E0B' : 'var(--accent)',
@@ -585,6 +585,10 @@ export function PluginManager() {
                         {plugin.manifest.contributes.hooks && plugin.manifest.contributes.hooks.length > 0 && (
                           <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
                             {plugin.manifest.contributes.hooks.length} 钩子
+                          </span>)}
+                        {plugin.manifest.contributes.workflow_config && (
+                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22C55E' }}>
+                            1 工作流节点
                           </span>)}
                       </div>)}
                   </div>

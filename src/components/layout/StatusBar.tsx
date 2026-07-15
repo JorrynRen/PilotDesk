@@ -1,7 +1,8 @@
-import { Loader2 } from 'lucide-react';
-import { AGENT_THEMES } from '../../types';
+import { Loader2, Settings } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useEnvInfo, type AgentDetectStatus } from '../../hooks/useEnvInfo';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import type { AgentConfig } from '../../types';
 
 interface StatusBarProps {
   onOpenSettings?: () => void;
@@ -9,25 +10,24 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps) {
+  const navigate = useNavigate();
   const { envInfo, loading, agentStatus } = useEnvInfo();
   const { agents } = useAgentRegistry();
 
-  // Show all enabled agents from DB, with versions from envInfo
-  const agentEntries = agents
+  // Show all enabled agents from DB, sorted by sortOrder
+  const enabledAgents = agents
     .filter(a => a.isEnabled)
-    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-    .map(agent => [agent.agentType, envInfo?.agentVersions?.[agent.agentType] ?? null] as const);
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
 
-  // Determine per-agent display state
-  const getAgentState = (agentType: string, version: string | null): {
+  // Determine per-agent display state using the agent's own color from DB
+  const getAgentState = (agent: AgentConfig, version: string | null): {
     status: AgentDetectStatus;
     label: string;
     dotColor: string;
   } => {
-    const status = agentStatus[agentType];
+    const status = agentStatus[agent.agentType];
     if (status === 'done' && version) {
-      const theme = AGENT_THEMES[agentType];
-      return { status: 'done', label: version, dotColor: theme?.color ?? '#6366F1' };
+      return { status: 'done', label: version, dotColor: agent.color || '#9CA3AF' };
     }
     if (status === 'error' || (status === 'done' && !version)) {
       return { status: 'error', label: '未安装', dotColor: '#9CA3AF' };
@@ -43,16 +43,24 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
     >
       <div className="flex items-center gap-3">
         <span className="flex items-center gap-1">Agent:</span>
-        {agentEntries.length === 0 && (
-          <span style={{ color: 'var(--text-tertiary)' }}>未检测</span>
+        {enabledAgents.length === 0 && (
+          <button
+            onClick={() => navigate('/settings?tab=agents')}
+            className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
+            title="点击前往设置页配置 Agent 集成"
+            style={{ color: 'var(--text-tertiary)' }}
+          >
+            <Settings size={10} />
+            未安装或未集成配置
+          </button>
         )}
-        {agentEntries.map(([agentType, version]) => {
-          const { status, label, dotColor } = getAgentState(agentType, version);
-          const theme = AGENT_THEMES[agentType];
-          const displayName = theme?.label ?? agentType;
+        {enabledAgents.map((agent) => {
+          const version = envInfo?.agentVersions?.[agent.agentType] ?? null;
+          const { status, label, dotColor } = getAgentState(agent, version);
+          const displayName = agent.displayName || agent.agentType;
           return (
             <button
-              key={agentType}
+              key={agent.agentType}
               onClick={() => {
                 (onOpenEnvSettings ?? onOpenSettings)?.();
               }}

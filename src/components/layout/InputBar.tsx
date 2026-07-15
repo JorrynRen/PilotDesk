@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu, ChevronUp } from 'lucide-react';
 import type { ChatMode, Session } from '../../types';
-import { MODE_LABELS, MODE_COLORS, MODE_PROMPTS_DEFAULTS, getModePrompt } from '../../types';
+import { MODE_LABELS, MODE_COLORS, getModePrompt } from '../../types';
 import { InspirationPicker } from '../input/InspirationPicker';
 import { SkillPicker } from '../input/SkillPicker';
 import { showToast } from '../../utils/toast';
-import { AGENT_THEMES } from '../../types';
+
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
 
@@ -37,7 +37,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
   const modeDropdownRef = useRef<HTMLDivElement>(null);
 
   // Load prompt descriptions for tooltip
-  const { getTheme } = useAgentRegistry();
+  const { getTheme, getDisplayName } = useAgentRegistry();
   const [modeDescriptions, setModeDescriptions] = useState<Record<string, string>>({});
   useEffect(() => {
     (async () => {
@@ -120,7 +120,6 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
   }, [input, mode, session, onSend]);
 
   // Placeholder based on context
-  const { getDisplayName } = useAgentRegistry();
   const agentLabel = session ? getDisplayName(session.agentType) : '';
   const placeholder = !session
     ? '选择会话开始对话...'
@@ -212,7 +211,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
           onClick={() => { if (!session) { showToast('请先选择或创建一个会话', 'info'); return; } setShowSkillPicker((v) => !v); setShowInspirationPicker(false); }}
           className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
           style={{
-            color: showSkillPicker ? AGENT_THEMES.hermes.cssVar : 'var(--text-secondary)',
+            color: showSkillPicker ? getTheme(session?.agentType ?? '').color : 'var(--text-secondary)',
             backgroundColor: showSkillPicker ? 'var(--border)' : 'transparent',
           }}
           title="技能列表 (Ctrl+K)"

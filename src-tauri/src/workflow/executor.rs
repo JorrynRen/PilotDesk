@@ -1,10 +1,12 @@
+use tauri::Manager;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex as AsyncMutex, RwLock};
+use tokio::sync::{Mutex as AsyncMutex};
 use std::collections::HashMap;
 use crate::agent::AgentManager;
 use crate::plugin::PluginHost;
+use crate::workflow::executors::plugin_executor::PluginExecutor;
 use crate::utils::errors::AppError;
 use async_trait::async_trait;
 use super::registry::{
@@ -45,13 +47,13 @@ pub struct NodeExecutor {
     pub human_input_manager: Arc<InteractManager>,
     /// 插件节点执行通道管理器（前端回传结果时唤醒挂起的 oneshot）
     pub plugin_execute_manager: Arc<PluginExecuteManager>,
-    plugin_host: Arc<std::sync::Mutex<PluginHost>>,
+    app_handle: tauri::AppHandle,
     #[allow(dead_code)]
     pool: DbPool,
     /// Agent 管理器（供 cancel_workflow 等命令中止子进程）
     agent_manager: Arc<AsyncMutex<AgentManager>>,
     /// 运行中的执行注册表（execution_id -> ExecutionHandle）
-    running_executions: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
+    running_executions: Arc<std::sync::Mutex<HashMap<String, ExecutionHandle>>>,
 }
 
 impl NodeExecutor {
@@ -62,7 +64,7 @@ impl NodeExecutor {
 
     /// 注册执行句柄（执行开始时调用）
     pub fn register_execution(&self, execution_id: &str) -> Arc<AtomicBool> {
-        let mut map = self.running_executions.blocking_write();
+        let mut map = self.running_executions.lock().unwrap();
         let handle = ExecutionHandle {
             cancelled: Arc::new(AtomicBool::new(false)),
         };
@@ -73,13 +75,13 @@ impl NodeExecutor {
 
     /// 注销执行句柄（执行结束时调用）
     pub fn unregister_execution(&self, execution_id: &str) {
-        let mut map = self.running_executions.blocking_write();
+        let mut map = self.running_executions.lock().unwrap();
         map.remove(execution_id);
     }
 
     /// 取消执行（设置 cancelled 标志）
     pub fn cancel_execution(&self, execution_id: &str) -> bool {
-        let map = self.running_executions.blocking_read();
+        let map = self.running_executions.lock().unwrap();
         if let Some(handle) = map.get(execution_id) {
             handle.cancelled.store(true, Ordering::SeqCst);
             true
@@ -89,7 +91,7 @@ impl NodeExecutor {
     }
 
 
-    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, plugin_host: Arc<std::sync::Mutex<PluginHost>>, pool: DbPool) -> Self {
+    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, app_handle: tauri::AppHandle, pool: DbPool) -> Self {
         let agent_manager_clone = agent_manager.clone();
         let mut registry = WorkflowNodeTypeRegistry::new();
 
@@ -111,19 +113,28 @@ impl NodeExecutor {
             permissions: vec![],
         });
 
+
+        let human_input_manager = Arc::new(InteractManager::new());
+        let plugin_execute_manager = Arc::new(PluginExecuteManager::new());
+        let agent_manager_field = agent_manager_clone;
+
+
+
         registry.register(NodeTypeRegistration {
-            type_id: "transform".into(),
-            name: "代码转换".into(),
+            type_id: "interact".into(),
+            name: "人工交互".into(),
             category: NodeCategory::Builtin,
-            executor: Arc::new(TransformExecutor),
+            executor: Arc::new(InteractExecutor::new(human_input_manager.clone())),
             config_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "script": { "type": "string", "description": "JavaScript 转换脚本" },
+                    "prompt": { "type": "string" },
+                    "input_type": { "type": "string", "enum": ["text", "select", "confirm", "file"] },
                 }
             })),
             permissions: vec![],
         });
+
 
         registry.register(NodeTypeRegistration {
             type_id: "api".into(),
@@ -142,26 +153,37 @@ impl NodeExecutor {
             permissions: vec!["network:http".to_string()],
         });
 
-        let human_input_manager = Arc::new(InteractManager::new());
-        let plugin_execute_manager = Arc::new(PluginExecuteManager::new());
-        let agent_manager_field = agent_manager_clone;
 
         registry.register(NodeTypeRegistration {
-            type_id: "interact".into(),
-            name: "人工交互".into(),
+            type_id: "transform".into(),
+            name: "代码转换".into(),
             category: NodeCategory::Builtin,
-            executor: Arc::new(InteractExecutor::new(human_input_manager.clone())),
+            executor: Arc::new(TransformExecutor),
             config_schema: Some(serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "prompt": { "type": "string" },
-                    "input_type": { "type": "string", "enum": ["text", "select", "confirm", "file"] },
+                    "script": { "type": "string", "description": "JavaScript 转换脚本" },
                 }
             })),
             permissions: vec![],
         });
 
-        // 注册 start/end 边界节点（无操作，仅透传输入）
+        registry.register(NodeTypeRegistration {
+            type_id: "subflow".into(),
+            name: "子工作流".into(),
+            category: NodeCategory::Builtin,
+            executor: Arc::new(NoopExecutor),
+            config_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "definitionId": { "type": "string", "description": "子工作流定义 ID" },
+                    "input_mapping": { "type": "object", "description": "输入映射" },
+                    "output_mapping": { "type": "object", "description": "输出映射" },
+                }
+            })),
+            permissions: vec![],
+        });
+
         registry.register(NodeTypeRegistration {
             type_id: "start".into(),
             name: "开始".into(),
@@ -170,6 +192,7 @@ impl NodeExecutor {
             config_schema: None,
             permissions: vec![],
         });
+
         registry.register(NodeTypeRegistration {
             type_id: "end".into(),
             name: "结束".into(),
@@ -179,27 +202,42 @@ impl NodeExecutor {
             permissions: vec![],
         });
 
+        // 统一的插件调用节点（运行时从 node.config 读取 plugin_id / command_id）
+        registry.register(NodeTypeRegistration {
+            type_id: "plugin".into(),
+            name: "插件调用".into(),
+            category: NodeCategory::Builtin,
+            executor: Arc::new(PluginExecutor::new(
+                String::new(),
+                "plugin".into(),
+                plugin_execute_manager.clone(),
+            )),
+            config_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "plugin_id": { "type": "string", "description": "目标插件 ID" },
+                    "command_id": { "type": "string", "description": "目标命令 ID" },
+                },
+                "required": ["plugin_id", "command_id"]
+            })),
+            permissions: vec![],
+        });
+
+
         let registry_arc = Arc::new(std::sync::Mutex::new(registry));
 
-        // 设置插件节点类型注册回调 + 共享插件执行通道管理器
-        let reg_arc = registry_arc.clone();
-        let mut host_guard = plugin_host.lock().unwrap();
-        host_guard.set_plugin_execute_manager(plugin_execute_manager.clone());
-        host_guard.set_register_node_type(Box::new(move |registration: NodeTypeRegistration| {
-            if let Ok(mut reg) = reg_arc.lock() {
-                reg.register(registration);
-            }
-        }));
-        drop(host_guard);
+        // 注意：set_plugin_execute_manager / set_register_node_type 回调
+        // 在首次 sync_plugin_node_types() 中通过 AppHandle → managed state 设置（此处 PluginHost 为空，跳过）
+
 
         Self {
             registry: registry_arc,
             human_input_manager,
             plugin_execute_manager,
-            plugin_host,
+            app_handle,
             pool,
             agent_manager: agent_manager_field,
-            running_executions: Arc::new(RwLock::new(HashMap::new())),
+            running_executions: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -234,32 +272,28 @@ impl NodeExecutor {
         }
     }
 
+    /// 同步插件回调到 PluginHost（不注册独立节点类型，插件的命令选择在 plugin 节点配置中完成）
     pub fn sync_plugin_node_types(&self) {
-        let plugin_host = match self.plugin_host.lock() {
-            Ok(h) => h,
+        let host = self.app_handle.state::<std::sync::Mutex<PluginHost>>();
+        let _plugin_host = match host.lock() {
+            Ok(mut h) => {
+                // 设置回调供 JS 端 PluginAPI 使用
+                let reg_arc = self.registry.clone();
+                h.set_register_node_type(Box::new(move |registration: NodeTypeRegistration| {
+                    if let Ok(mut reg) = reg_arc.lock() {
+                        reg.register(registration);
+                    }
+                }));
+                h.set_plugin_execute_manager(self.plugin_execute_manager.clone());
+                h
+            },
             Err(e) => {
                 log::warn!("[NodeExecutor] 获取 PluginHost 锁失败: {}", e);
                 return;
             }
         };
-        let contributed = plugin_host.get_contributed_node_types();
-        if let Ok(mut reg) = self.registry.lock() {
-            for (plugin_id, nt) in contributed {
-                use crate::workflow::registry::NodeCategory;
-                reg.register(crate::workflow::registry::NodeTypeRegistration {
-                    type_id: nt.type_id.clone(),
-                    name: nt.name.clone(),
-                    category: NodeCategory::Plugin(plugin_id.clone()),
-                    executor: Arc::new(crate::workflow::executors::plugin_executor::PluginExecutor::new(
-                        plugin_id.clone(),
-                        nt.type_id.clone(),
-                        self.plugin_execute_manager.clone(),
-                    )),
-                    config_schema: nt.config_schema.clone(),
-                    permissions: nt.permissions.clone(),
-                });
-            }
-        }
+        // 插件命令通过 plugin 节点 + 用户选择 plugin_id/command_id 调用，
+        // 此处不再注册独立节点类型
     }
 
     pub fn list_node_types(&self) -> Vec<NodeTypeRegistrationInfo> {

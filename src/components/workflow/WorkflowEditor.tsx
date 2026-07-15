@@ -52,9 +52,28 @@ const SNAP_SIZE = 20;
 const PAN_THRESHOLD = 3;
 const NODE_DRAG_THRESHOLD = 3;
 
-/** 工具栏可拖拽的节点类型（从 NODE_TYPE_META 派生，排除边界节点） */
-const BUILTIN_NODE_TYPES = (['agent', 'api', 'transform', 'interact', 'plugin', 'subflow'] as WorkflowNodeType[])
-  .map(type => ({ type, ...getNodeTypeMeta(type) }));
+/** 获取工具栏节点类型列表（动态 + 内置 fallback） */
+function useNodePalette() {
+  const [palette, setPalette] = useState<Array<{ type: string; label: string; color: string; icon: string }>>(
+    ['agent', 'api', 'transform', 'interact', 'plugin', 'subflow'].map(type => ({ type, ...getNodeTypeMeta(type) }))
+  );
+  useEffect(() => {
+    invoke<Array<{ typeId: string; name: string; category: string; configSchema?: any }>>('list_node_types')
+      .then(types => {
+        if (types.length > 0) {
+          setPalette(types
+            .filter(t => !['start', 'end'].includes(t.typeId))
+            .map(t => ({
+              type: t.typeId,
+              ...getNodeTypeMeta(t.typeId),
+            }))
+          );
+        }
+      })
+      .catch(() => {}); // keep fallback
+  }, []);
+  return palette;
+}
 
 /** 连线拖拽时的实时预览状态 */
 interface ConnectingPreview {
@@ -171,6 +190,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [description, setDescription] = useState(def?.description || '');
   const [connecting, setConnecting] = useState<ConnectingPreview | null>(null);
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
+  const [condField, setCondField] = useState('__auto__');
+  const [condOperator, setCondOperator] = useState('==');
+  const [condValue, setCondValue] = useState('');
+  const [condLabel, setCondLabel] = useState('');
+  const [condAdvanced, setCondAdvanced] = useState(false);
+  const [condRawExpr, setCondRawExpr] = useState('');
   const [gateInput, setGateInput] = useState<{ stageId: string } | null>(null);
   const [gateError, setGateError] = useState<string | null>(null);
   const [gateStrategy, setGateStrategy] = useState<string>('all');
@@ -248,14 +273,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   // 工具栏节点模拟拖拽状态（替代HTML5 DnD，解决Tauri WebView2不触发dragstart问题）
   const [toolbarDrag, setToolbarDrag] = useState<{
-    type: WorkflowNodeType;
+    type: string;
     icon: string;
     label: string;
     color: string;
     ghostX: number;
     ghostY: number;
   } | null>(null);
-  const toolbarDragRef = useRef<WorkflowNodeType | null>(null);
+  const toolbarDragRef = useRef<string | null>(null);
 
 // Toolbar drag ghost element ref
   const ghostRef = useRef<HTMLDivElement | null>(null);
@@ -522,6 +547,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   definitionIdRef.current = definitionId;
   const [restoredExecutionId, setRestoredExecutionId] = useState<string | null>(null);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+  const [showVersions, setShowVersions] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState<{ id: string; version: number } | null>(null);
+  const palette = useNodePalette();
+  const [versions, setVersions] = useState<Array<{ id: string; workflowId: string; version: number; snapshot: string; createdAt: number }>>([]);
   const restoredSnapshotRef = useRef<any>(null);
   const restoredModCountRef = useRef<number>(0);
   const modCountRef = useRef<number>(0);
@@ -567,6 +596,69 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     await handleSave();
     isDirtyRef.current = false;
     prevStagesRef.current = JSON.stringify(stagesRef.current);
+  };
+
+  // 保存版本快照
+  const handleSaveVersion = async () => {
+    try {
+      if (!def) { showToast('无法获取工作流定义', 'error'); return; }
+      const fullDef = {
+        ...def,
+        stages: sanitizeMappingReferences(stages),
+        updatedAt: Math.floor(Date.now() / 1000),
+      };
+      const snapshot = JSON.stringify(fullDef);
+      await invoke('save_workflow_version', { workflowId: definitionId, snapshot });
+      setVersions(prev => [{ id: '', workflowId: definitionId, version: prev.length + 1, snapshot: '' as any, createdAt: Math.floor(Date.now() / 1000) }, ...prev]);
+      showToast('备份已保存', 'success');
+    } catch (err) {
+      console.error('[WorkflowEditor] 保存版本失败:', err);
+      showToast('备份失败', 'error');
+    }
+  };
+
+  // 加载版本列表
+  const handleLoadVersions = async () => {
+    try {
+      const result = await invoke<Array<{ id: string; workflowId: string; version: number; snapshot: string; createdAt: number }>>('list_workflow_versions', { workflowId: definitionId });
+      setVersions(result);
+      setShowVersions(true);
+    } catch (err) {
+      console.error('[WorkflowEditor] 加载版本列表失败:', err);
+    }
+  };
+
+  // 恢复版本
+  const handleRestoreVersion = async (versionData: { id: string; version: number }) => {
+    try {
+      const result = await invoke<{ snapshot: string }>('restore_workflow_version', {
+        workflowId: definitionId,
+        version: versionData.version,
+      });
+      const restored = JSON.parse(result.snapshot);
+      if (restored.stages) setStages(restored.stages);
+      // 刷新定义列表以同步名称/描述/trigger 等属性
+      await useWorkflowStore.getState().loadDefinitions();
+      setShowVersions(false);
+      showToast('已恢复到选中版本', 'success');
+    } catch (err) {
+      console.error('[WorkflowEditor] 恢复版本失败:', err);
+      showToast('恢复失败', 'error');
+    }
+  };
+
+  // 删除版本
+  const handleDeleteVersion = async (versionData: { id: string; version: number }) => {
+    if (!definitionId) return;
+    try {
+      await invoke('delete_workflow_version', { workflowId: definitionId, version: versionData.version });
+      setVersions(prev => prev.filter(v => v.version !== versionData.version));
+      if (selectedVersion?.version === versionData.version) setSelectedVersion(null);
+      showToast('版本已删除', 'success');
+    } catch (err) {
+      console.error('[WorkflowEditor] 删除版本失败:', err);
+      showToast('删除失败', 'error');
+    }
   };
 
   /** 恢复指定历史执行的节点状态 */
@@ -764,7 +856,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       unlistenProgress = await listen<ExecutionProgressPayload>('workflow:execution-progress', (event) => {
         const p = event.payload;
         // 过滤非当前工作流的进度事件（通过 definitionId 匹配）
-        if (p.definitionId !== definitionIdRef.current) return;
+        if ((p as any).definition_id !== definitionIdRef.current) return;
 
         // 处理节点状态变更
         if (p.node) {
@@ -995,7 +1087,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const boundaryIds = new Set<string>();
       for (const s of stages) {
         for (const n of s.nodes) {
-          if (n.isBoundary && selectedNodeIds.has(n.id)) boundaryIds.add(n.id);
+          if ((n.type === 'start' || n.type === 'end') && selectedNodeIds.has(n.id)) boundaryIds.add(n.id);
         }
       }
       // 如果选中的全部是边界节点，拒绝删除
@@ -1018,7 +1110,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setConfirmAction(null);
   };
 
-  const handleAddNode = (type: WorkflowNodeType, stageId: string) => {
+  const handleAddNode = (type: string, stageId: string) => {
     modCountRef.current++;
     // 收集阶段内已有节点位置，用于 findFreePosition
     const stage = stages.find(s => s.id === stageId);
@@ -1038,7 +1130,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     // 边界节点（Start/End）不允许删除，即使误触也拒绝
     for (const s of stages) {
       const node = s.nodes.find(n => n.id === nodeId);
-      if (node?.isBoundary) {
+      if (node?.type === 'start' || node?.type === 'end') {
         showToast('起始节点和结束节点不可删除', 'warning');
         return;
       }
@@ -1564,21 +1656,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     });
   };
 
-  // ── 从实例中提取节点执行结果（兜底：事件监听未覆盖的场景） ──
+  // ── 从节点执行记录中提取结果（兜底：事件监听未覆盖的场景） ──
   useEffect(() => {
     const instance = instances.find(i => i.definitionId === definitionId && i.status !== 'pending');
-    if (!instance || !instance.steps) return;
-    const results: Record<string, any> = {};
-    for (const [nodeId, step] of Object.entries(instance.steps)) {
-      if (step.output !== undefined) {
-        results[`node_${nodeId}`] = step.output;
-      } else if (step.error) {
-        results[`node_${nodeId}`] = { error: step.error };
+    if (!instance) return;
+    // 异步拉取节点执行记录
+    invoke<any[]>('get_node_executions', { executionId: instance.id }).then(nodeExecs => {
+      const results: Record<string, any> = {};
+      for (const ne of nodeExecs) {
+        if (ne.status === 'completed' && ne.output !== undefined) {
+          results[`node_${ne.nodeId}`] = ne.output;
+        } else if (ne.error) {
+          results[`node_${ne.nodeId}`] = { error: ne.error };
+        }
       }
-    }
-    if (Object.keys(results).length > 0) {
-      setNodeResults(prev => ({ ...prev, ...results }));
-    }
+      if (Object.keys(results).length > 0) {
+        setNodeResults(prev => ({ ...prev, ...results }));
+      }
+    }).catch(() => {});
   }, [instances, definitionId]);
 
   // ── 画布拖拽平移（含防误触阈值 + 中键支持） ──
@@ -1945,7 +2040,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           for (const dragId of draggedNodeIds) {
             const dragOrig = d.origPositions[dragId];
             if (!dragOrig) continue;
-            const dragMeta = getNodeTypeMeta(snapStageNodes.find(n => n.id === dragId)?.type || 'task');
+            const dragMeta = getNodeTypeMeta(snapStageNodes.find(n => n.id === dragId)?.type || 'agent');
             const dw = dragMeta.nodeW, dh = dragMeta.nodeH;
 
             const dLeft = dragOrig.x + deltaX, dRight = dLeft + dw, dCenterX = dLeft + dw / 2;
@@ -2569,48 +2664,53 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         {/* 节点类型拖拽区 */}
         <div className="flex items-center gap-1 flex-wrap">
-          {BUILTIN_NODE_TYPES.map((nt) => (
-            <div
-              key={nt.type}
-              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
-              style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                toolbarDragRef.current = nt.type;
-                setToolbarDrag({ type: nt.type, icon: nt.icon, label: nt.label, color: nt.color, ghostX: e.clientX, ghostY: e.clientY });
-                // 清理可能残留的旧 ghost（防止双击时残留透明节点）
-                if (ghostRef.current) {
-                  ghostRef.current.remove();
-                  ghostRef.current = null;
-                }
-                // Create ghost element
-                const ghost = document.createElement('div');
-                ghost.textContent = nt.icon + ' ' + nt.label;
-                ghost.style.cssText = `position:fixed;pointer-events:none;z-index:99999;padding:4px 12px;border-radius:6px;font-size:12px;opacity:0.85;white-space:nowrap;border:1px solid ${nt.color};background:${nt.color}22;color:${nt.color};transform:translate(-50%,-50%)`;
-                ghost.style.left = e.clientX + 'px';
-                ghost.style.top = e.clientY + 'px';
-                document.body.appendChild(ghost);
-                ghostRef.current = ghost;
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = 'var(--accent)';
-                e.currentTarget.style.background = 'var(--accent)';
-                e.currentTarget.style.color = '#fff';
-                e.currentTarget.style.transform = 'translateY(-1px)';
-                e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border)';
-                e.currentTarget.style.background = 'var(--bg-tertiary)';
-                e.currentTarget.style.color = 'var(--text-primary)';
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 4, fontSize: 11, background: `${nt.color}22`, color: nt.color }}>{nt.icon}</span>
-              <span>{nt.label}</span>
-            </div>
-          ))}
+          {(() => {
+            const renderNode = (nt: typeof palette[number]) => (
+              <div
+                key={nt.type}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  toolbarDragRef.current = nt.type;
+                  setToolbarDrag({ type: nt.type, icon: nt.icon, label: nt.label, color: nt.color, ghostX: e.clientX, ghostY: e.clientY });
+                  if (ghostRef.current) {
+                    ghostRef.current.remove();
+                    ghostRef.current = null;
+                  }
+                  const ghost = document.createElement('div');
+                  ghost.textContent = nt.icon + ' ' + nt.label;
+                  ghost.style.cssText = `position:fixed;pointer-events:none;z-index:99999;padding:4px 12px;border-radius:6px;font-size:12px;opacity:0.85;white-space:nowrap;border:1px solid ${nt.color};background:${nt.color}22;color:${nt.color};transform:translate(-50%,-50%)`;
+                  ghost.style.left = e.clientX + 'px';
+                  ghost.style.top = e.clientY + 'px';
+                  document.body.appendChild(ghost);
+                  ghostRef.current = ghost;
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--accent)';
+                  e.currentTarget.style.background = 'var(--accent)';
+                  e.currentTarget.style.color = '#fff';
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border)';
+                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 4, fontSize: 11, background: `${nt.color}22`, color: nt.color }}>{nt.icon}</span>
+                <span>{nt.label}</span>
+              </div>
+            );
+            return (
+              <>
+                {palette.map(renderNode)}
+              </>
+            );
+          })()}
         </div>
 
         <div className="w-px h-5" style={{ background: 'var(--border)' }} />
@@ -2678,6 +2778,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
           >
             保存
+          </button>
+          <button
+            onClick={handleSaveVersion}
+            className="pd-btn px-3 py-1 text-[11px] rounded"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          >
+            备份
+          </button>
+          <button
+            onClick={handleLoadVersions}
+            className="pd-btn px-3 py-1 text-[11px] rounded"
+            style={{ background: 'var(--bg-tertiary)', color: versions.length > 0 ? 'var(--accent)' : 'var(--text-tertiary)', border: '1px solid var(--border)' }}
+          >
+            恢复
           </button>
         </div>
       </div>
@@ -2813,7 +2927,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>节点</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalNodes}</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px solid var(--border)' }}><span>连线</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalEdges}</span></div>
                 {Object.entries(stats.nodeTypeCounts).map(([type, count]) => {
-                  const m = getNodeTypeMeta(type as WorkflowNodeType);
+                  const m = getNodeTypeMeta(type);
                   return (
                     <div key={type} className="flex justify-between items-center py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}>
                       <span className="flex items-center gap-1">
@@ -3458,11 +3572,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       style={{ color: 'var(--text-primary)', background: 'transparent', border: 'none' }}
                       onClick={() => {
                         setEdgeContextMenu(null);
-                        setConditionInput({
-                          source: edge.source,
-                          target: edge.target,
-                          stageId: edgeStage.id,
-                        });
+                        openConditionEditor(edge.source, edge.target, edgeStage.id);
                       }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-light)'; e.currentTarget.style.color = 'var(--accent)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-primary)'; }}
@@ -3533,56 +3643,151 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       )}
 
-      {/* ── 条件编辑弹窗 ── */}
+      {/* ── 条件编辑弹窗（结构化） ── */}
       {conditionInput && (
         <div className="absolute inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
           <div
-            className="rounded-xl p-6 w-[90%] max-w-[400px]"
+            className="rounded-xl p-5 w-[90%] max-w-[420px]"
             style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>编辑条件</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>编辑条件</h3>
+              <button
+                onClick={() => setCondAdvanced(!condAdvanced)}
+                className="text-[10px] px-2 py-0.5 rounded"
+                style={{
+                  border: '1px solid var(--border)',
+                  background: condAdvanced ? 'var(--accent)' : 'var(--bg-secondary)',
+                  color: condAdvanced ? '#fff' : 'var(--text-tertiary)',
+                  cursor: 'pointer',
+                }}
+              >
+                {condAdvanced ? '结构化' : '高级模式'}
+              </button>
+            </div>
+
+            {/* ── 结构化模式 ── */}
+            {!condAdvanced && (
+              <>
+                {/* 字段选择 */}
+                <div className="mb-2.5">
+                  <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>比较字段</label>
+                  <select
+                    value={condField}
+                    onChange={(e) => setCondField(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                    style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  >
+                    <option value="__auto__">自动（取第一个值）</option>
+                    {(() => {
+                      // 从源节点的 outputMapping 提取字段名
+                      const srcStage = stages.find(s => s.nodes.find(n => n.id === conditionInput.source));
+                      const srcNode = srcStage?.nodes.find(n => n.id === conditionInput.source);
+                      const outputMapping = srcNode?.outputMapping || {};
+                      return Object.keys(outputMapping).map(k => (
+                        <option key={k} value={k}>{k}</option>
+                      ));
+                    })()}
+                  </select>
+                </div>
+
+                {/* 运算符 */}
+                <div className="mb-2.5">
+                  <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>运算符</label>
+                  <select
+                    value={condOperator}
+                    onChange={(e) => setCondOperator(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                    style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  >
+                    <optgroup label="比较">
+                      <option value="==">等于 (==)</option>
+                      <option value="!=">不等于 (!=)</option>
+                      <option value="&gt;">大于 (&gt;)</option>
+                      <option value="&gt;=">大于等于 (&gt;=)</option>
+                      <option value="&lt;">小于 (&lt;)</option>
+                      <option value="&lt;=">小于等于 (&lt;=)</option>
+                    </optgroup>
+                    <optgroup label="文本匹配">
+                      <option value="contains">包含 (contains)</option>
+                      <option value="starts_with">开头是 (starts_with)</option>
+                      <option value="ends_with">结尾是 (ends_with)</option>
+                    </optgroup>
+                    <optgroup label="存在性判断">
+                      <option value="is_empty">为空 (is_empty)</option>
+                      <option value="is_not_empty">不为空 (is_not_empty)</option>
+                    </optgroup>
+                  </select>
+                </div>
+
+                {/* 值输入（仅非无值运算符显示） */}
+                {!['is_empty', 'is_not_empty'].includes(condOperator) && (
+                  <div className="mb-2.5">
+                    <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>比较值</label>
+                    <input
+                      value={condValue}
+                      onChange={(e) => setCondValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { handleConfirmCondition(buildConditionExpr(), condLabel || buildAutoLabel()); } }}
+                      placeholder={
+                        ['>', '>=', '<', '<='].includes(condOperator) ? '数值，如 60' :
+                        ['contains', 'starts_with', 'ends_with'].includes(condOperator) ? '文本，如 关键词' :
+                        '比较值'
+                      }
+                      className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                      autoFocus
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ── 高级模式 ── */}
+            {condAdvanced && (
+              <div className="mb-2.5">
+                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件表达式（原始格式）</label>
+                <input
+                  value={condRawExpr}
+                  onChange={(e) => setCondRawExpr(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { handleConfirmCondition(condRawExpr, condLabel); } }}
+                  placeholder="例如: == yes 或 contains 紧急"
+                  className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  autoFocus
+                />
+                <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
+                  格式：[字段名] 运算符 值，支持 ==, !=, &gt;, &lt;, &gt;=, &lt;=, contains, starts_with, ends_with, is_empty, is_not_empty
+                </div>
+              </div>
+            )}
+
+            {/* 标签 */}
             <div className="mb-3">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件表达式</label>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件标签（显示在边上，留空自动生成）</label>
               <input
-                id="condition-expr"
-                placeholder="例如: == approve 或 contains 紧急"
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-                defaultValue={(() => {
-                  const srcStage = stages.find(s => s.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target));
-                  const existingEdge = srcStage?.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target);
-                  return existingEdge?.condition || '';
-                })()}
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                autoFocus
-              />
-            </div>
-            <div className="mb-4">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>条件标签（显示在边上）</label>
-              <input
-                id="condition-label"
-                placeholder="例如: 审批通过 / 紧急"
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-                defaultValue={(() => {
-                  const srcStage = stages.find(s => s.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target));
-                  const existingEdge = srcStage?.edges.find(e => e.source === conditionInput.source && e.target === conditionInput.target);
-                  return existingEdge?.label || '';
-                })()}
+                value={condLabel}
+                onChange={(e) => setCondLabel(e.target.value)}
+                placeholder={buildAutoLabel() || '自动'}
+                className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
               />
             </div>
+
+            {/* 预览 */}
+            <div className="mb-3 px-3 py-1.5 rounded-lg text-[10px]" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+              预览: <code style={{ color: 'var(--accent)' }}>{condAdvanced ? condRawExpr || '(空)' : buildConditionExpr() || '(空)'}</code>
+            </div>
+
+            {/* 按钮 */}
             <div className="flex gap-2 justify-end">
               <button
-                onClick={() => setConditionInput(null)}
+                onClick={() => { setConditionInput(null); setCondAdvanced(false); }}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
               >取消</button>
               <button
-                onClick={() => {
-                  const expr = (document.getElementById('condition-expr') as HTMLInputElement)?.value || '';
-                  const label = (document.getElementById('condition-label') as HTMLInputElement)?.value || '';
-                  handleConfirmCondition(expr, label);
-                }}
+                onClick={() => handleConfirmCondition(buildConditionExpr(), condLabel || buildAutoLabel())}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
               >确认</button>
@@ -3857,6 +4062,73 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       )}
       </div>{/* end flex-row: canvas + panel */}
+      {/* 版本历史弹窗 */}
+      {showVersions && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => setShowVersions(false)}
+        >
+          <div
+            className="rounded-xl shadow-xl w-[400px] max-h-[60vh] flex flex-col"
+            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>备份历史</span>
+              <button onClick={() => setShowVersions(false)} className="pd-btn p-1 rounded" style={{ color: 'var(--text-tertiary)' }}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3l8 8M11 3l-8 8" /></svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3">
+              {versions.length === 0 ? (
+                <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无版本记录</div>
+              ) : (
+                <div className="space-y-2">
+                  {versions.map((v: any) => (
+                    <div
+                      key={v.id}
+                      className="flex items-center justify-between p-2 rounded"
+                      style={{
+                        backgroundColor: selectedVersion?.version === v.version ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                        border: selectedVersion?.version === v.version ? '1px solid var(--accent)' : '1px solid var(--border)',
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="version-select"
+                          checked={selectedVersion?.version === v.version}
+                          onChange={() => setSelectedVersion(v)}
+                          style={{ accentColor: 'var(--accent)' }}
+                        />
+<div className="flex items-center gap-2"><span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>v{v.version}</span><span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{new Date(v.createdAt * 1000).toLocaleString('zh-CN')}</span></div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => handleDeleteVersion(v)}
+                          className="pd-btn p-1 rounded"
+                          style={{ color: 'var(--text-tertiary)' }}
+                          title="删除此版本"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 4h10M5 4V3a1 1 0 011-1h2a1 1 0 011 1v1M11 4v8a1 1 0 01-1 1H4a1 1 0 01-1-1V4" /></svg>
+                        </button>
+                        <button
+                          onClick={() => handleRestoreVersion(v)}
+                          className="pd-btn px-2 py-1 text-[10px] rounded"
+                          style={{ background: 'var(--accent-light)', color: 'var(--accent)', border: '1px solid var(--accent)' }}
+                        >
+                          恢复
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

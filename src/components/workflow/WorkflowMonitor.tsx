@@ -1,15 +1,22 @@
 /**
  * WorkflowMonitor — 工作流执行监控面板
  *
- * 实时显示工作流实例状态、步骤执行进度和错误信息。
+ * 实时显示工作流实例状态、完成率进度、节点执行日志。
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
-import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
+import { invoke } from '@tauri-apps/api/core';
 
 interface Props {
   onViewDefinition: (definitionId: string) => void;
+}
+
+interface ExecutionLog {
+  timestamp: number;
+  level: string;
+  message: string;
+  metadata?: string;
 }
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -22,17 +29,36 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   'timeout': { label: '超时', color: '#EF4444' },
 };
 
-const STEP_STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  'pending': { label: '待执行', color: '#6B7280' },
-  'running': { label: '执行中', color: '#3B82F6' },
-  'success': { label: '成功', color: '#10B981' },
-  'failed': { label: '失败', color: '#EF4444' },
-  'skipped': { label: '已跳过', color: '#9CA3AF' },
-  'retrying': { label: '重试中', color: '#F59E0B' },
-};
+function useExecutionLogs(executionId: string | null) {
+  const [logs, setLogs] = useState<ExecutionLog[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!executionId) { setLogs([]); return; }
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const result = await invoke<ExecutionLog[]>('get_node_execution_logs', { executionId });
+        if (!cancelled) setLogs(result);
+      } catch {
+        if (!cancelled) setLogs([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    const interval = setInterval(load, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [executionId]);
+
+  return { logs, loading };
+}
 
 export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
   const { instances, loadInstances, cancelWorkflow, startWorkflow } = useWorkflowStore();
+  const [expandedInstance, setExpandedInstance] = useState<string | null>(null);
+  const { logs, loading: logsLoading } = useExecutionLogs(expandedInstance);
 
   useEffect(() => {
     loadInstances();
@@ -50,7 +76,7 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
         <div className="monitor-list">
           {instances.map((instance) => {
             const statusInfo = STATUS_LABELS[instance.status] || { label: instance.status, color: '#6B7280' };
-            const stepEntries = Object.entries(instance.steps ?? {});
+            const progress = instance.completionRate ?? 0;
 
             return (
               <div key={instance.id} className="monitor-card">
@@ -66,6 +92,39 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
                   </span>
                 </div>
 
+                {/* 完成率进度条 */}
+                {instance.status === 'running' && (
+                  <div className="monitor-progress">
+                    <div className="progress-info">
+                      <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                        完成率
+                      </span>
+                      <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>
+                        {Math.round(progress * 100)}%
+                      </span>
+                    </div>
+                    <div
+                      className="progress-bar"
+                      style={{
+                        height: 4,
+                        borderRadius: 2,
+                        backgroundColor: 'var(--bg-tertiary)',
+                        marginTop: 4,
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: '100%',
+                          borderRadius: 2,
+                          width: `${Math.round(progress * 100)}%`,
+                          backgroundColor: 'var(--accent)',
+                          transition: 'width 0.3s ease',
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div className="monitor-meta">
                   <span>创建: {new Date(Number(instance.createdAt) * 1000).toLocaleString()}</span>
                   {instance.startedAt && <span>开始: {new Date(Number(instance.startedAt) * 1000).toLocaleString()}</span>}
@@ -75,32 +134,6 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
                 {instance.error && (
                   <div className="monitor-error">
                     <strong>错误:</strong> {instance.error}
-                  </div>
-                )}
-
-                {/* 步骤列表 */}
-                {stepEntries.length > 0 && (
-                  <div className="monitor-steps">
-                    <h4>执行步骤 ({stepEntries.length})</h4>
-                    {stepEntries.map(([nodeId, step]) => {
-                      const stepStatus = STEP_STATUS_LABELS[step.status] || { label: step.status, color: '#6B7280' };
-                      return (
-                        <div key={nodeId} className="monitor-step">
-                          <div className="step-indicator" style={{ backgroundColor: stepStatus.color }} />
-                          <div className="step-info">
-                            <span className="step-label">{nodeId}</span>
-                            {step.error && <span className="step-error">{step.error}</span>}
-                          </div>
-                          <span className="step-status" style={{ color: stepStatus.color }}>
-                            {stepStatus.label}
-                            {step.retryCount > 0 && ` (${step.retryCount})`}
-                          </span>
-                          {step.duration !== undefined && (
-                            <span className="step-duration">{(step.duration / 1000).toFixed(1)}s</span>
-                          )}
-                        </div>
-                      );
-                    })}
                   </div>
                 )}
 
@@ -122,7 +155,48 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition }) => {
                     <button onClick={() => startWorkflow(instance.definitionId)} className="btn-primary">重试</button>
                   )}
                   <button onClick={() => onViewDefinition(instance.definitionId)}>查看定义</button>
+                  <button
+                    onClick={() => setExpandedInstance(expandedInstance === instance.id ? null : instance.id)}
+                    className="text-xs"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    {expandedInstance === instance.id ? '收起日志' : '查看日志'}
+                  </button>
                 </div>
+
+                {/* 节点执行日志 */}
+                {expandedInstance === instance.id && (
+                  <div className="monitor-logs" style={{ marginTop: 8 }}>
+                    {logsLoading && (
+                      <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>加载中...</span>
+                    )}
+                    {!logsLoading && logs.length === 0 && (
+                      <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无执行日志</span>
+                    )}
+                    {logs.map((log, idx) => (
+                      <div
+                        key={idx}
+                        className="log-entry"
+                        style={{
+                          fontSize: 11,
+                          padding: '3px 0',
+                          borderBottom: '1px solid var(--border)',
+                          color: log.level === 'warn' ? '#F59E0B' : 'var(--text-secondary)',
+                        }}
+                      >
+                        <span style={{ color: 'var(--text-tertiary)', marginRight: 8 }}>
+                          {new Date(log.timestamp * 1000).toLocaleTimeString()}
+                        </span>
+                        {log.message}
+                        {log.metadata && (
+                          <span style={{ color: 'var(--text-tertiary)', marginLeft: 8 }}>
+                            {log.metadata}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}

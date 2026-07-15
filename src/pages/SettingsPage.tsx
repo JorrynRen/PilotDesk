@@ -961,6 +961,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const urlTab = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
     if (urlTab === 'environment') return 'environment';
+    if (urlTab === 'agents') return 'agents';
     return 'general';
   });
 

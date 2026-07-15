@@ -1,7 +1,5 @@
 /**
  * PilotDesk 插件系统类型定义
- *
- * 设计文档: docs/PilotDesk-插件系统架构设计-v1.0.md
  */
 
 /** 插件清单 */
@@ -23,6 +21,8 @@ export interface PluginManifest {
     hooks?: HookContribution[];
     /** 工作流节点类型（v2.0 新增） */
     node_types?: NodeTypeContribution[];
+    /** 插件为工作流节点提供的配置组件 */
+    workflow_config?: WorkflowConfigContribution;
   };
 }
 
@@ -37,6 +37,12 @@ export type PluginPermission =
   | 'storage:*'
   | 'fs:read'
   | 'fs:write';
+
+/** 插件为工作流节点提供的配置组件 */
+export interface WorkflowConfigContribution {
+  /** 插件入口 JS 中导出的组件名 */
+  component: string;
+}
 
 /** 面板贡献点 */
 export interface PanelContribution {
