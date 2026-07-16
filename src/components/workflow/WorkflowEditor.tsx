@@ -100,7 +100,7 @@ interface ConfirmAction {
 }
 
 /** 执行状态枚举 */
-type StepRunState = 'idle' | 'running' | 'success' | 'failed';
+type StepRunState = 'idle' | 'running' | 'success' | 'failed' | 'cancelled';
 
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange, onSaveResult, onImported }) => {
   const { definitions, instances, selectedInstanceId, updateDefinition, loadDefinitions } = useWorkflowStore();
@@ -675,7 +675,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           results['node_' + ne.nodeId] = { error: ne.error || '执行失败' };
           states['node_' + ne.nodeId] = 'failed';
         } else if (ne.status === 'running') {
-          states['node_' + ne.nodeId] = 'running';
+          states['node_' + ne.nodeId] = 'cancelled';
+        } else if (ne.status === 'cancelled') {
+          states['node_' + ne.nodeId] = 'cancelled';
         } else if (ne.status === 'skipped') {
           states['node_' + ne.nodeId] = 'skipped';
         }
@@ -833,6 +835,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     try {
       // 1. 调用后端取消
       await invoke('cancel_workflow', { executionId: execId });
+      // 2. 将所有 running 状态节点标记为 cancelled（停止动画）
+      setStepStates(prev => {
+        const next = { ...prev };
+        for (const key of Object.keys(next)) {
+          if (next[key] === 'running') {
+            next[key] = 'cancelled';
+          }
+        }
+        return next;
+      });
       // 3. 重置前端状态
       setIsRunning(false);
       executionIdRef.current = null;
@@ -867,7 +879,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           } else if (status === 'failed') {
             setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: p.node.error || '执行失败' } }));
           }
-          setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : prev['node_' + nodeId] }));
+          setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : status === 'cancelled' ? 'cancelled' : prev['node_' + nodeId] }));
         }
 
         // 处理阶段状态变更
@@ -2586,6 +2598,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes flowDash { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -20; } }
         @keyframes pulseGlow { 0%, 100% { box-shadow: inset 0 0 6px #3b82f666, inset 0 0 12px #60a5fa33; } 50% { box-shadow: inset 0 0 14px #2563ebcc, inset 0 0 28px #3b82f666, 0 0 8px #60a5fa44; } }
+        .node-status-cancelled { box-shadow: inset 0 0 4px #f59e0b66, inset 0 0 8px #f59e0b22; border: 1.5px solid #f59e0b88 !important; }
       `}</style>
 
       {/* ── 工具栏 ── */}
@@ -3153,7 +3166,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     /* clipPath 移除：避免裁剪超出边界的节点 */
                     boxShadow: stageRunState === 'running'
                       ? '0 0 16px #58a6ff33'
-                      : 'var(--shadow-sm)',
+                      : stageRunState === 'cancelled' ? '0 0 8px #f59e0b22' : 'var(--shadow-sm)',
                     display: 'flex',
                     flexDirection: 'column',
                     zIndex: 2,

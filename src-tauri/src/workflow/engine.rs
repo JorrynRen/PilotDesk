@@ -4123,8 +4123,7 @@ impl WorkflowEngine {
 
 
                 let mode_owned = mode.clone();
-
-
+                let cancelled = cancelled.clone();
 
                 let handle = tokio::spawn(async move {
 
@@ -4193,6 +4192,16 @@ impl WorkflowEngine {
 
 
 
+
+
+                    // 取消检查：delay 后执行前
+                    if cancelled.load(Ordering::SeqCst) {
+                        log::info!("[WorkflowEngine] 节点 {} 在 delay 后检测到取消信号，跳过执行", nid);
+                        node_statuses_clone.lock().await.insert(nid.clone(), "cancelled".to_string());
+                        emit_node_status(&emitter, &exec_id, &def_id_owned, &nid, "cancelled", None, None, None, None, &mode_owned);
+                        completed_count.fetch_add(1, Ordering::SeqCst);
+                        return Ok(());
+                    }
 
                     let mut node_def = node_to_node_def(&node);
 
@@ -4290,7 +4299,19 @@ impl WorkflowEngine {
 
 
 
-                    let result = exec.execute(&node_def, resolved_input.clone(), &exec_id, &emitter).await;
+                    // 使用 tokio::select! 同时监听执行结果和取消信号
+                    let result = tokio::select! {
+                        r = exec.execute(&node_def, resolved_input.clone(), &exec_id, &emitter) => r,
+                        _ = async {
+                            // 轮询取消信号（200ms 间隔），正常执行路径几乎零开销
+                            while !cancelled.load(Ordering::SeqCst) {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                            }
+                        } => {
+                            log::info!("[WorkflowEngine] 节点 {} 执行被取消信号中断", nid);
+                            Err(AppError::External("工作流已被取消".into()))
+                        }
+                    };
 
 
 
@@ -4622,7 +4643,17 @@ impl WorkflowEngine {
 
 
 
-                            node_statuses_clone.lock().await.insert(nid.clone(), "failed".to_string());
+                            let final_status = if cancelled.load(Ordering::SeqCst) { "cancelled" } else { "failed" };
+
+
+
+                            let error_str = e.to_string();
+
+                            let error_msg: &str = if final_status == "cancelled" { "用户中止" } else { &error_str };
+
+
+
+                            node_statuses_clone.lock().await.insert(nid.clone(), final_status.to_string());
 
 
 
@@ -4630,11 +4661,11 @@ impl WorkflowEngine {
 
 
 
-                            record_node_execution(&emitter, &exec_id, &nid, "failed", None, None, Some(&e.to_string()), None, None, None);
+                            record_node_execution(&emitter, &exec_id, &nid, final_status, None, None, Some(error_msg), None, None, None);
 
 
 
-                            emit_node_status(&emitter, &exec_id, &def_id_owned, &nid, "failed", None, Some(&e.to_string()), Some(completed_count.load(Ordering::SeqCst)), Some(total), &mode_owned);
+                            emit_node_status(&emitter, &exec_id, &def_id_owned, &nid, final_status, None, Some(error_msg), Some(completed_count.load(Ordering::SeqCst)), Some(total), &mode_owned);
 
 
 
@@ -4644,11 +4675,19 @@ impl WorkflowEngine {
 
                             // 实时更新实例完成率（失败也计入进度）
 
+
+
                             if let Ok(conn) = get_db_conn(&emitter) {
+
+
 
                                 update_instance_progress(&conn, &exec_id, completed_count.load(Ordering::SeqCst), total, None);
 
+
+
                             }
+
+
 
                             return Ok(());
 
@@ -8080,29 +8119,27 @@ fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> 
 
                     Err(e) => {
 
-
-
-                        log::warn!(
-
-
-
-                            "[resolve_node_input] 节点 {} 的 inputMapping[{}] 模板解析失败: {} (模板=\"{}\")",
+       
 
 
 
-                            node.id, key, e, template
+                            log::warn!(
 
 
 
-                        );
+                                "[resolve_node_input] 节点 {} 的 inputMapping[{}] 模板解析失败: {} (模板=\"{}\")",
 
 
 
-                        // 解析失败时保留原始模板字符串，便于排查
+                                node.id, key, e, template
 
 
 
-                        resolved.insert(key.clone(), Value::String(template.clone()));
+                            );
+
+
+
+                            resolved.insert(key.clone(), Value::String(template.clone()));
 
 
 
