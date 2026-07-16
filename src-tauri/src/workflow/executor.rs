@@ -52,6 +52,8 @@ pub struct NodeExecutor {
     pool: DbPool,
     /// Agent 管理器（供 cancel_workflow 等命令中止子进程）
     agent_manager: Arc<AsyncMutex<AgentManager>>,
+    /// Agent 管理器的 shared 副本（持有相同的 processes Arc，无需 AsyncMutex 锁）
+    agent_manager_shared: AgentManager,
     /// 运行中的执行注册表（execution_id -> ExecutionHandle）
     running_executions: Arc<std::sync::Mutex<HashMap<String, ExecutionHandle>>>,
 }
@@ -89,9 +91,27 @@ impl NodeExecutor {
             false
         }
     }
+    /// 取消执行并立即终止 Agent 子进程（不获取 AgentManager 大锁）
+    ///
+    /// 解决 cancel_workflow 中 agent_manager.lock().await 与 AgentExecutor
+    /// 竞争 AsyncMutex 锁导致的取消延迟问题。
+    ///
+    /// 调用顺序：
+    /// 1. 先设置 cancelled AtomicBool（使 tokio::select! 能立即响应）
+    /// 2. 再通过 agent_manager_shared 的 processes HashMap 直接 kill 子进程
+    pub fn cancel_execution_and_kill_agents(&self, execution_id: &str, node_ids: &[String]) {
+        self.cancel_execution(execution_id);
+
+        for node_id in node_ids {
+            let session_id = format!("wf_{}_{}", execution_id, node_id);
+            self.agent_manager_shared.stop_generation_no_mut(&session_id);
+        }
+        log::info!("[NodeExecutor] cancel_and_kill: exec={}, nodes={:?}", execution_id, node_ids);
+    }
 
 
-    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, app_handle: tauri::AppHandle, pool: DbPool) -> Self {
+
+    pub fn new(agent_manager: Arc<AsyncMutex<AgentManager>>, agent_manager_shared: AgentManager, app_handle: tauri::AppHandle, pool: DbPool) -> Self {
         let agent_manager_clone = agent_manager.clone();
         let mut registry = WorkflowNodeTypeRegistry::new();
 
@@ -238,6 +258,7 @@ impl NodeExecutor {
             pool,
             agent_manager: agent_manager_field,
             running_executions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            agent_manager_shared,
         }
     }
 

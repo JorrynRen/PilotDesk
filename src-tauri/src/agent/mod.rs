@@ -846,6 +846,43 @@ impl AgentManager {
         log::info!("[Agent] Session created: {}", session_id);
     }
 
+        /// 停止 Agent 子进程（&self 版本，不需要 &mut self）
+    ///
+    /// 与 stop_generation 功能相同，但接受 &self 而非 &mut self，
+    /// 因此调用方不需要持有 AsyncMutex<AgentManager> 的可变锁。
+    /// 直接通过 processes Arc<HashMap> 操作进程表，用于 cancel_workflow
+    /// 等需要快速响应取消的场景。
+    pub fn stop_generation_no_mut(&self, session_id: &str) {
+        if let Ok(processes) = self.processes.lock() {
+            if let Some(process) = processes.get(session_id) {
+                process.aborted.store(true, Ordering::Relaxed);
+            }
+            if let Some(pid) = processes.get(session_id).and_then(|p| p.pid) {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(&["/PID", &pid.to_string(), "/F"])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = std::process::Command::new("kill")
+                        .arg("-9")
+                        .arg(pid.to_string())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
+            }
+        }
+        if let Ok(mut processes) = self.processes.lock() {
+            processes.remove(session_id);
+        }
+        log::info!("[Agent] Generation stopped (no_mut): {}", session_id);
+    }
+
     pub fn close_session(&mut self, session_id: &str) {
         self.stop_generation(session_id);
         log::info!("[Agent] Session closed: {}", session_id);

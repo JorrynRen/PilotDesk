@@ -650,44 +650,21 @@ pub async fn cancel_workflow(
 
 
 
-    // 2. 停止该执行关联的所有 Agent 子进程
-
-    // 工作流引擎的临时 session_id 格式为 wf_{execution_id}_{node_id}
-
+    // 2. 取消执行并立即终止 Agent 子进程（不获取 AgentManager 大锁）
+    //    先设置 cancelled AtomicBool 使 tokio::select! 立即响应，
+    //    再通过 processes HashMap 直接 kill 子进程（绕过 AsyncMutex 锁竞争）
     let node_ids: Vec<String> = {
-
         let mut stmt = conn.prepare(
-
             "SELECT DISTINCT node_id FROM node_executions WHERE execution_id = ?1"
-
         ).map_err(|e| format!("查询失败: {}", e))?;
-
         let rows = stmt.query_map(rusqlite::params![execution_id], |row| row.get::<_, String>(0))
-
             .map_err(|e| format!("查询失败: {}", e))?;
-
         rows.filter_map(|r| r.ok()).collect()
-
     };
 
+    executor.inner().cancel_execution_and_kill_agents(&execution_id, &node_ids);
 
-
-    let agent_manager = executor.inner().agent_manager();
-
-    let mut mgr = agent_manager.lock().await;
-
-    for node_id in &node_ids {
-
-        let session_id = format!("wf_{}_{}", execution_id, node_id);
-
-        mgr.stop_generation(&session_id);
-
-    }
-
-        // 3. 设置引擎层取消标志，使正在运行的工作流循环能检测到取消状态
-    executor.inner().cancel_execution(&execution_id);
-
-log::info!("[cancel_workflow] 已取消执行: {}, 关联节点: {:?}", execution_id, node_ids);
+    log::info!("[cancel_workflow] 已取消执行: {}, 关联节点: {:?}", execution_id, node_ids);
 
     Ok(())
 

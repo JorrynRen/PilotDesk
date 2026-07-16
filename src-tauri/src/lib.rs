@@ -403,9 +403,12 @@ pub fn run() {
 
             // 初始化 NodeExecutor（工作流节点执行器）
             let agent_manager = Arc::new(AsyncMutex::new(AgentManager::new()));
+            // 创建 AgentManager shared 副本（持有相同 processes Arc，用于取消时绕过 AsyncMutex 锁）
+            let agent_manager_shared = agent_manager.blocking_lock().shared();
             // NodeExecutor 通过 AppHandle 运行时访问 managed state 中的 PluginHost
             let node_executor = Arc::new(NodeExecutor::new(
                 agent_manager,
+                agent_manager_shared,
                 app.handle().clone(),
                 pool.clone(),
             ));
