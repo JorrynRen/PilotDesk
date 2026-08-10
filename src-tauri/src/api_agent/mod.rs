@@ -11,6 +11,7 @@
 pub mod agent_loop;
 pub mod client;
 pub mod context;
+pub mod db;
 pub mod memory;
 pub mod skills;
 pub mod system_prompt;

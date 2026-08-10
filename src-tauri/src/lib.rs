@@ -24,7 +24,7 @@ use api_agent::system_prompt::SystemPromptBuilder;
 use api_agent::skills::SkillLoader;
 use api_agent::context::SlidingWindow;
 use api_agent::context::DEFAULT_CONTEXT_TOKENS;
-use api_agent::memory::MemoryStore;
+use api_agent::db::MemoryStore;
 use serde_json::json;
 
 pub struct DbState {
@@ -350,13 +350,11 @@ async fn run_api_agent(
     let skills_dir = get_api_agent_skills_dir();
     let skill_loader = Arc::new(SkillLoader::new(skills_dir));
 
-    // 3.5 初始化记忆库（文件持久化: ~/.pilotdesk/memories.json）
+    // 3.5 初始化记忆库（SQLite: pilotdesk_agent.db，首次自动从 memories.json 迁移）
     let memory_store = {
         let config_dir = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
-            .unwrap_or_else(|| {
-                std::env::temp_dir().to_string_lossy().to_string()
-            });
-        MemoryStore::new(format!("{}/memories.json", config_dir))
+            .ok_or_else(|| "无法获取配置目录".to_string())?;
+        MemoryStore::new(&config_dir)?
     };
     let memory_store = Arc::new(memory_store);
 
