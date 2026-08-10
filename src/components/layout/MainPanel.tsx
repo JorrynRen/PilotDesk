@@ -135,6 +135,15 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
 
   const [state, dispatch] = useReducer(reducer, initialState);
 
+  // ── 审批状态 ──
+  const [approval, setApproval] = useState<{
+    sessionId: string;
+    callId: string;
+    toolName: string;
+    arguments: string;
+    riskDescription: string;
+  } | null>(null);
+
   // 已完成的会话 ID 集合（防止重复处理）
   const doneSessionIdsRef = useRef<Set<string>>(new Set());
   const createdSessionsRef = useRef<Set<string>>(new Set());
@@ -200,12 +209,60 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     }
   }, []);
 
+  // ── Approval handler: show dialog when tool needs user confirmation ──
+  const onApprovalRequired = useCallback(
+    (sessionId: string, callId: string, toolName: string, args: string, riskDescription: string) => {
+      setApproval({ sessionId, callId, toolName, arguments: args, riskDescription });
+    },
+    [],
+  );
+
+  // ── Tool event handlers: show tool calls as system messages ──
+  const onToolStart = useCallback(
+    (sessionId: string, _toolId: string, toolName: string, args: string) => {
+      let displayArgs = '';
+      try {
+        const parsed = JSON.parse(args);
+        displayArgs = Object.entries(parsed)
+          .map(([k, v]) => `${k}=${typeof v === 'string' ? v.slice(0, 50) : String(v).slice(0, 50)}`)
+          .join(', ');
+      } catch {
+        displayArgs = args.slice(0, 80);
+      }
+      addMessage({
+        id: `tool-${Date.now()}`,
+        sessionId,
+        role: 'system',
+        content: `🔧 调用工具: \`${toolName}\`${displayArgs ? ` (${displayArgs})` : ''}`,
+        mode: 'native',
+        timestamp: Math.floor(Date.now() / 1000),
+      });
+    },
+    [addMessage],
+  );
+
+  const onToolResult = useCallback(
+    (sessionId: string, _toolId: string, toolName: string, result: string, success: boolean) => {
+      const maxLen = 300;
+      const truncated = result.length > maxLen ? result.slice(0, maxLen) + '...' : result;
+      addMessage({
+        id: `tool-${Date.now()}`,
+        sessionId,
+        role: 'system',
+        content: `${success ? '✅' : '❌'} \`${toolName}\` 结果:\n\`\`\`\n${truncated}\n\`\`\``,
+        mode: 'native',
+        timestamp: Math.floor(Date.now() / 1000),
+      });
+    },
+    [addMessage],
+  );
+
   const {
     sendChat,
     stopGeneration,
     createAgentSession,
     respondToApproval,
-  } = useAgentEvent({ onChunk, onDone, onError, onSession });
+  } = useAgentEvent({ onChunk, onDone, onError, onSession, onApprovalRequired, onToolStart, onToolResult });
 
   // ── Layout effect: atomically persist completed streaming content ──
 
@@ -384,6 +441,101 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
       />
       </div>
       </div>
+
+      {/* ── 高风险操作审批对话框 ── */}
+      {approval && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div
+            className="rounded-lg shadow-2xl w-[440px] max-h-[80vh] overflow-hidden flex flex-col"
+            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-primary)' }}
+          >
+            {/* Header */}
+            <div
+              className="px-5 py-3.5 flex items-center gap-3 shrink-0"
+              style={{ borderBottom: '1px solid var(--border-primary)' }}
+            >
+              <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--warning-bg, rgba(234,179,8,0.15))' }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--warning, #eab308)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              </div>
+              <div>
+                <div className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>高风险操作确认</div>
+                <div className="text-xs mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                  {approval.riskDescription}
+                </div>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="px-5 py-4 overflow-y-auto">
+              <div className="space-y-3">
+                {/* Tool Name */}
+                <div>
+                  <div className="text-xs mb-1 font-medium" style={{ color: 'var(--text-tertiary)' }}>工具</div>
+                  <div className="text-sm font-mono px-3 py-2 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+                    {approval.toolName}
+                  </div>
+                </div>
+
+                {/* Arguments */}
+                {approval.arguments && approval.arguments !== 'null' && (
+                  <div>
+                    <div className="text-xs mb-1 font-medium" style={{ color: 'var(--text-tertiary)' }}>参数</div>
+                    <pre
+                      className="text-xs font-mono px-3 py-2 rounded overflow-x-auto whitespace-pre-wrap break-all"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', maxHeight: '200px' }}
+                    >
+                      {(() => {
+                        try {
+                          return JSON.stringify(JSON.parse(approval.arguments), null, 2);
+                        } catch {
+                          return approval.arguments;
+                        }
+                      })()}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div
+              className="px-5 py-3.5 flex justify-end gap-3 shrink-0"
+              style={{ borderTop: '1px solid var(--border-primary)' }}
+            >
+              <button
+                className="px-4 py-2 text-sm rounded-md font-medium transition-colors hover:opacity-80"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-secondary)',
+                }}
+                onClick={() => {
+                  respondToApproval(approval.sessionId, approval.callId, false);
+                  setApproval(null);
+                }}
+              >
+                拒绝
+              </button>
+              <button
+                className="px-4 py-2 text-sm rounded-md font-medium transition-colors hover:opacity-80"
+                style={{
+                  backgroundColor: 'var(--accent, #7c3aed)',
+                  color: '#fff',
+                }}
+                onClick={() => {
+                  respondToApproval(approval.sessionId, approval.callId, true);
+                  setApproval(null);
+                }}
+              >
+                允许执行
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,14 +9,15 @@ export function ModePromptSettings() {
     fast: '',
     think: '',
     expert: '',
+    plan: '',
   });
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      const loaded: Record<ChatMode, string> = { native: '', fast: '', think: '', expert: '' };
-      for (const m of ['native', 'fast', 'think', 'expert'] as ChatMode[]) {
+      const loaded: Record<ChatMode, string> = { native: '', fast: '', think: '', expert: '', plan: '' };
+      for (const m of ['native', 'fast', 'think', 'expert', 'plan'] as ChatMode[]) {
         loaded[m] = await getModePrompt(m);
       }
       setPrompts(loaded);
@@ -59,7 +60,7 @@ export function ModePromptSettings() {
       title="对话模式设置"
       description="自定义各对话模式的系统提示词。发送消息时将使用自定义系统提示词追加到用户消息的头部一同发出。"
     >
-      {(['native', 'fast', 'think', 'expert'] as ChatMode[]).map((mode) => (
+      {(['native', 'fast', 'think', 'expert', 'plan'] as ChatMode[]).map((mode) => (
         <div
           key={mode}
           className="mb-3 last:mb-0 rounded-lg p-3"

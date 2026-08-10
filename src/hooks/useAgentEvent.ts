@@ -19,6 +19,8 @@ export interface AgentEventHandlers {
   onSession?: (sessionId: string, agentSessionId: string) => void;
   onSkills?: (agentType: string, skills: Array<{ name: string; description: string; category?: string }>) => void;
   onApprovalRequired?: (sessionId: string, callId: string, toolName: string, arguments: string, riskDescription: string) => void;
+  onToolStart?: (sessionId: string, toolId: string, toolName: string, arguments: string) => void;
+  onToolResult?: (sessionId: string, toolId: string, toolName: string, result: string, success: boolean) => void;
 }
 
 export function useAgentEvent(handlers?: AgentEventHandlers) {
@@ -68,6 +70,18 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
         handlersRef.current?.onApprovalRequired?.(event.payload.sessionId, event.payload.toolId, event.payload.toolName, event.payload.arguments, event.payload.riskDescription);
       });
       unlisteners.push(approvalUnlisten);
+
+      const toolStartUnlisten = await listen<{ sessionId: string; toolId: string; toolName: string; arguments: string }>('agent-tool-start', (event) => {
+        if (cancelled) return;
+        handlersRef.current?.onToolStart?.(event.payload.sessionId, event.payload.toolId, event.payload.toolName, event.payload.arguments);
+      });
+      unlisteners.push(toolStartUnlisten);
+
+      const toolResultUnlisten = await listen<{ sessionId: string; toolId: string; toolName: string; result: string; success: boolean }>('agent-tool-result', (event) => {
+        if (cancelled) return;
+        handlersRef.current?.onToolResult?.(event.payload.sessionId, event.payload.toolId, event.payload.toolName, event.payload.result, event.payload.success);
+      });
+      unlisteners.push(toolResultUnlisten);
 
 
 

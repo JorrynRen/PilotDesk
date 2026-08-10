@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu, ChevronUp } from 'lucide-react';
+import { Send, Square, Zap, Brain, GraduationCap, ClipboardList } from 'lucide-react';
 import type { ChatMode, Session } from '../../types';
 import { MODE_LABELS, MODE_COLORS, getModePrompt } from '../../types';
 import { InspirationPicker } from '../input/InspirationPicker';
@@ -14,6 +14,7 @@ const MODE_ICONS: Record<ChatMode, typeof Send> = {
   fast: Zap,
   think: Brain,
   expert: GraduationCap,
+  plan: ClipboardList,
 };
 
 interface InputBarProps {

@@ -13,6 +13,7 @@ pub struct SystemPromptBuilder {
     base_prompt: String,
     memory_md: Option<String>,
     user_md: Option<String>,
+    kv_memories: Option<String>,
     skills: Vec<SkillEntry>,
 }
 
@@ -28,6 +29,7 @@ impl SystemPromptBuilder {
             base_prompt,
             memory_md: None,
             user_md: None,
+            kv_memories: None,
             skills: Vec::new(),
         }
     }
@@ -45,6 +47,12 @@ impl SystemPromptBuilder {
         if let Some(config_dir) = get_pilotdesk_config_dir() {
             self.user_md = read_file_if_exists(&config_dir, "USER.md");
         }
+        self
+    }
+
+    /// 设置 KV 记忆块（从 MemoryStore.format_for_prompt 获取）
+    pub fn with_kv_memories(mut self, kv_block: Option<String>) -> Self {
+        self.kv_memories = kv_block;
         self
     }
 
@@ -77,6 +85,11 @@ impl SystemPromptBuilder {
                 "<user_preferences>\n{}\n</user_preferences>",
                 user
             ));
+        }
+
+        // 3.5. KV 记忆 — 跨会话持久化知识
+        if let Some(ref kv) = self.kv_memories {
+            parts.push(kv.clone());
         }
 
         // 4. Skill 列表 — Progressive Disclosure

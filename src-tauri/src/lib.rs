@@ -24,6 +24,7 @@ use api_agent::system_prompt::SystemPromptBuilder;
 use api_agent::skills::SkillLoader;
 use api_agent::context::SlidingWindow;
 use api_agent::context::DEFAULT_CONTEXT_TOKENS;
+use api_agent::memory::MemoryStore;
 use serde_json::json;
 
 pub struct DbState {
@@ -349,10 +350,21 @@ async fn run_api_agent(
     let skills_dir = get_api_agent_skills_dir();
     let skill_loader = Arc::new(SkillLoader::new(skills_dir));
 
-    // 4. 组装 System Prompt（Base + MEMORY.md + USER.md + Skill 列表）
+    // 3.5 初始化记忆库（文件持久化: ~/.pilotdesk/memories.json）
+    let memory_store = {
+        let config_dir = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
+            .unwrap_or_else(|| {
+                std::env::temp_dir().to_string_lossy().to_string()
+            });
+        MemoryStore::new(format!("{}/memories.json", config_dir))
+    };
+    let memory_store = Arc::new(memory_store);
+
+    // 4. 组装 System Prompt（Base + MEMORY.md + USER.md + Skill 列表 + KV 记忆）
     let full_system_prompt = SystemPromptBuilder::new(system_prompt.to_string())
         .with_memory_md(Some(&session.cwd).filter(|c| !c.is_empty()).map(|c| c.as_str()))
         .with_user_md()
+        .with_kv_memories(memory_store.format_for_prompt(5))
         .with_skills(skill_loader.list_skills())
         .build();
 
@@ -400,6 +412,69 @@ async fn run_api_agent(
             skill_loader_clone
                 .load_skill(name)
                 .ok_or_else(|| format!("技能不存在: {}", name))
+        }
+    ));
+
+    // 注册 KV 记忆工具
+    let memory_clone = memory_store.clone();
+    tool_registry.register(builtin_tool_risky!(
+        "save_memory",
+        "保存一条键值对记忆到持久化知识库。格式：key=名称，value=内容，category=分类（fact/preference/skill/event）",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "记忆的键（唯一标识，如 project_language）"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "记忆的值（要保存的内容）"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "记忆分类：fact（事实）、preference（偏好）、skill（技能）、event（事件）",
+                    "enum": ["fact", "preference", "skill", "event"]
+                }
+            },
+            "required": ["key", "value", "category"]
+        }),
+        RiskLevel::Medium,
+        move |args| {
+            let key = args["key"].as_str().ok_or("缺少 key 参数")?;
+            let value = args["value"].as_str().ok_or("缺少 value 参数")?;
+            let category = args["category"].as_str().ok_or("缺少 category 参数")?;
+            let entry = memory_clone.save_memory(key, value, category);
+            Ok(format!("记忆已保存: [{}] {} = {}", entry.category, entry.key, entry.value))
+        }
+    ));
+
+    let memory_clone2 = memory_store.clone();
+    tool_registry.register(builtin_tool!(
+        "search_memory",
+        "在记忆库中搜索键值对。返回匹配的所有记忆，按访问频率排序。",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词（匹配 key 和 value）"
+                }
+            },
+            "required": ["query"]
+        }),
+        move |args| {
+            let query = args["query"].as_str().ok_or("缺少 query 参数")?;
+            let results = memory_clone2.search_memory(query);
+            if results.is_empty() {
+                Ok("未找到匹配的记忆。".to_string())
+            } else {
+                let formatted: Vec<String> = results
+                    .iter()
+                    .map(|e| format!("- [{}] {}: {}", e.category, e.key, e.value))
+                    .collect();
+                Ok(format!("找到 {} 条记忆：\n{}", results.len(), formatted.join("\n")))
+            }
         }
     ));
 

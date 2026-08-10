@@ -86,7 +86,7 @@ export interface EnvInfo {
   agentLatestVersions?: Record<string, string | null>;
 }
 
-export type ChatMode = 'native' | 'fast' | 'think' | 'expert';
+export type ChatMode = 'native' | 'fast' | 'think' | 'expert' | 'plan';
 
 export type PanelContent =
   | { kind: 'inspiration-form'; prefill: string }
@@ -102,6 +102,34 @@ export async function getModePrompt(mode: ChatMode): Promise<string> {
     const value = await _invoke('get_app_setting', { key });
     if (typeof value === 'string' && value !== '') return value;
   } catch { /* storage not available */ }
+  // 规划模式默认 prompt
+  if (mode === 'plan') {
+    return `You are operating in PLAN MODE. Before executing any actions, follow these rules:
+
+1. **Analyze** the user's request thoroughly
+2. **Create a structured plan** with clear, numbered steps
+3. **Present the plan** to the user for review — do NOT execute yet
+4. **Wait for approval** before proceeding with any execution
+
+Format your plan as:
+\`\`\`
+## Plan: [Brief title]
+
+**Goal:** [One-sentence summary]
+
+**Steps:**
+1. [Step 1 description]
+2. [Step 2 description]
+...
+N. [Final step description]
+
+**Expected outcome:** [What will be achieved]
+
+Ready to execute? Confirm to proceed.
+\`\`\`
+
+After the user confirms, proceed to execute each step.`;
+  }
   return '';
 }
 
@@ -115,8 +143,8 @@ export async function saveModePrompt(mode: ChatMode, prompt: string): Promise<vo
 
 /** Get all mode prompts at once */
 export async function getAllModePrompts(): Promise<Record<ChatMode, string>> {
-  const modes: ChatMode[] = ['native', 'fast', 'think', 'expert'];
-  const result: Record<ChatMode, string> = { native: '', fast: '', think: '', expert: '' };
+  const modes: ChatMode[] = ['native', 'fast', 'think', 'expert', 'plan'];
+  const result: Record<ChatMode, string> = { native: '', fast: '', think: '', expert: '', plan: '' };
   for (const m of modes) {
     result[m] = await getModePrompt(m);
   }
@@ -128,6 +156,7 @@ export const MODE_LABELS: Record<ChatMode, string> = {
   fast: '快速',
   think: '深度思考',
   expert: '专家',
+  plan: '规划',
 };
 
 export const MODE_COLORS: Record<ChatMode, string> = {
@@ -135,6 +164,7 @@ export const MODE_COLORS: Record<ChatMode, string> = {
   fast: 'var(--mode-fast)',
   think: 'var(--mode-think)',
   expert: 'var(--mode-expert)',
+  plan: 'var(--mode-think)',
 };
 
 /** Agent config from the backend agents table */
