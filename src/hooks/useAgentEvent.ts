@@ -2,14 +2,13 @@ import { useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useAgentRegistry } from './useAgentRegistry';
-import { getApiKey } from '../stores/apiProviderStore';
-import { inferApiFormat, resolveChatUrl, buildHeaders, buildBody } from '../utils/apiClient';
 
 /**
  * useAgentEvent — 替代 useWebSocket。
  *
  * 通过 Tauri Event 监听 Agent 流式输出，通过 invoke 发送命令。
  * 消除 WebSocket 中间层，前端直接与 Rust 后端通信。
+ * API Agent 和 CLI Agent 统一使用 agent_send_message_with_config。
  */
 
 export interface AgentEventHandlers {
@@ -19,57 +18,7 @@ export interface AgentEventHandlers {
   onStatus?: (sessionId: string, status: string) => void;
   onSession?: (sessionId: string, agentSessionId: string) => void;
   onSkills?: (agentType: string, skills: Array<{ name: string; description: string; category?: string }>) => void;
-}
-
-/**
- * 共享 SSE 流解析器 — 处理 API 直连模式的 SSE 响应
- */
-async function readSSEStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  onChunk: (text: string) => void,
-  onDone: () => void,
-  onError: (msg: string) => void,
-  parseDelta: (event: Record<string, unknown>) => string | null,
-  signal?: AbortSignal,
-): Promise<void> {
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    if (signal?.aborted) {
-      onDone();
-      return;
-    }
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6).trim();
-      if (data === '[DONE]') {
-        onDone();
-        return;
-      }
-
-      try {
-        const event = JSON.parse(data);
-        const delta = parseDelta(event);
-        if (delta) onChunk(delta);
-        if ((event as Record<string, unknown>).type === 'error') {
-          const errEvent = event as Record<string, { message?: string }>;
-          onError(errEvent.error?.message || 'Unknown API error');
-          return;
-        }
-      } catch {
-        // skip unparseable lines
-      }
-    }
-  }
-  onDone();
+  onApprovalRequired?: (sessionId: string, callId: string, toolName: string, arguments: string, riskDescription: string) => void;
 }
 
 export function useAgentEvent(handlers?: AgentEventHandlers) {
@@ -113,6 +62,12 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
         handlersRef.current?.onSession?.(event.payload.sessionId, event.payload.agentSessionId);
       });
       unlisteners.push(sessionUnlisten);
+
+      const approvalUnlisten = await listen<{ sessionId: string; toolId: string; toolName: string; arguments: string; riskDescription: string }>('agent-approval-required', (event) => {
+        if (cancelled) return;
+        handlersRef.current?.onApprovalRequired?.(event.payload.sessionId, event.payload.toolId, event.payload.toolName, event.payload.arguments, event.payload.riskDescription);
+      });
+      unlisteners.push(approvalUnlisten);
 
 
 
@@ -214,110 +169,55 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
     }
   }, [requestSkills, agentTypes]);
 
-  // ── API 直连（保持现有 fetch SSE 逻辑） ──
 
-  const abortRef = useRef<AbortController | null>(null);
-  const apiDoneFiredRef = useRef<string | null>(null);
+  // ── API Agent（统一路由到 Rust 后端 AgentLoop）──
 
   const sendApiChat = useCallback(
     async (
       sessionId: string,
       message: string,
-      apiEndpoint: string,
-      providerId: string,
-      model: string,
-      history?: Array<{ role: string; content: string }>,
-      providerName?: string,
     ) => {
-      const h = handlersRef.current;
-      apiDoneFiredRef.current = null;
-      const safeOnDone = (sid: string) => {
-        if (apiDoneFiredRef.current === sid) return;
-        apiDoneFiredRef.current = sid;
-        h?.onDone?.(sid);
-      };
-
-      const key = await getApiKey(providerId);
-      if (!key) {
-        h?.onError?.(sessionId, `未配置 API Key: ${providerName || providerId}`);
-        return;
-      }
-
-      const fmt = inferApiFormat(providerId, apiEndpoint);
-      const chatUrl = resolveChatUrl(apiEndpoint, fmt);
-
-      const abort = new AbortController();
-      abortRef.current = abort;
-
-      h?.onStatus?.(sessionId, `调用 ${model}...`);
-
-      const allMessages = [
-        ...(history || []).map((m) => ({ role: m.role, content: m.content })),
-        { role: 'user', content: message },
-      ];
-
+      // API Agent 统一通过 agent_send_message_with_config 路由到 Rust 后端
       try {
-        const res = await fetch(chatUrl, {
-          method: 'POST',
-          headers: buildHeaders(fmt, key),
-          body: JSON.stringify(buildBody(fmt, { model, messages: allMessages, stream: true, maxTokens: 4096 })),
-          signal: abort.signal,
+        await invoke('agent_send_message_with_config', {
+          sessionId,
+          agentType: 'api',
+          message,
+          mode: 'native',
+          cwd: null,
+          systemPrompt: null,
+          agentSessionId: null,
         });
-
-        if (!res.ok) {
-          const errText = await res.text();
-          h?.onError?.(sessionId, `API 错误 (${res.status}): ${errText}`);
-          return;
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) {
-          h?.onError?.(sessionId, '无法读取响应流');
-          return;
-        }
-
-        if (fmt === 'anthropic') {
-          await readSSEStream(
-            reader,
-            (text) => h?.onChunk?.(sessionId, text),
-            () => safeOnDone(sessionId),
-            (msg) => h?.onError?.(sessionId, msg),
-            (event) => {
-              const e = event as { type?: string; delta?: { text?: string } };
-              if (e.type === 'content_block_delta' && e.delta?.text) return e.delta.text;
-              return null;
-            },
-            abort.signal,
-          );
-        } else {
-          await readSSEStream(
-            reader,
-            (text) => h?.onChunk?.(sessionId, text),
-            () => safeOnDone(sessionId),
-            (msg) => h?.onError?.(sessionId, msg),
-            (event) => {
-              const e = event as { choices?: Array<{ delta?: { content?: string } }> };
-              return e.choices?.[0]?.delta?.content ?? null;
-            },
-            abort.signal,
-          );
-        }
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          safeOnDone(sessionId);
-        } else {
-          const msg = err instanceof Error ? err.message : String(err);
-          h?.onError?.(sessionId, `请求失败: ${msg}`);
-        }
+      } catch (err) {
+        handlersRef.current?.onError?.(sessionId, String(err));
       }
     },
     [],
   );
 
-  const stopApiChat = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-  }, []);
+  const stopApiChat = useCallback(
+    async (sessionId: string) => {
+      await stopGeneration(sessionId);
+    },
+    [stopGeneration],
+  );
+
+  // ── 审批响应 ──
+
+  const respondToApproval = useCallback(
+    async (sessionId: string, callId: string, approved: boolean) => {
+      try {
+        await invoke('agent_approve_tool', {
+          sessionId,
+          callId,
+          approved,
+        });
+      } catch (err) {
+        console.error('[Agent] approve failed:', err);
+      }
+    },
+    [],
+  );
 
   return {
     isConnected: true, // Tauri Event 始终可用
@@ -325,6 +225,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
     sendApiChat,
     stopGeneration,
     stopApiChat,
+    respondToApproval,
     requestSkills,
     requestAllSkills,
     createAgentSession,

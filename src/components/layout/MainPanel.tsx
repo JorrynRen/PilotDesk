@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MessageList } from '../message/MessageList';
 import { InputBar } from './InputBar';
@@ -202,10 +202,9 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
 
   const {
     sendChat,
-    sendApiChat,
     stopGeneration,
-    stopApiChat,
     createAgentSession,
+    respondToApproval,
   } = useAgentEvent({ onChunk, onDone, onError, onSession });
 
   // ── Layout effect: atomically persist completed streaming content ──
@@ -285,28 +284,14 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
 
 
       if (isApiSession(currentSession.agentType)) {
-        // API direct call
+        // API Agent: 路由通过 Rust 后端 AgentLoop（替代前端直接 HTTP）
         if (!currentSession.apiProvider || !currentSession.apiModel) {
           showToast('API 会话缺少提供商或模型配置', 'error');
           dispatch({ type: 'GENERATION_ERROR', sessionId: sid, error: '缺少 API 配置' });
           return;
         }
-        let apiEndpoint = '';
-        try {
-          const provider = await invoke<{ apiEndpoint: string } | null>('get_api_provider', { id: currentSession.apiProvider });
-          if (provider) {
-            apiEndpoint = provider.apiEndpoint;
-          }
-        } catch { /* ignore */ }
-        if (!apiEndpoint) {
-          showToast('未找到 API URL，请在设置中配置', 'error');
-          dispatch({ type: 'GENERATION_ERROR', sessionId: sid, error: '未找到 API URL' });
-          return;
-        }
-        const history = messages
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({ role: m.role, content: m.content }));
-        sendApiChat(sid, message, apiEndpoint, currentSession.apiProvider, currentSession.apiModel, history);
+        const systemPrompt = await getModePrompt(mode);
+        sendChat(sid, message, mode, 'api', currentSession.cwd || undefined, systemPrompt);
       } else {
         // Agent via Tauri Event
         const systemPrompt = await getModePrompt(mode);
@@ -315,21 +300,18 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         sendChat(sid, message, mode, currentSession.agentType, currentSession.cwd || undefined, systemPrompt, agentSessionId);
       }
     },
-    [currentSession, sendChat, sendApiChat, addMessage, stopApiChat, stopGeneration, messages],
+    [currentSession, sendChat, addMessage, stopGeneration, messages],
   );
 
   const handleStop = useCallback(() => {
     if (!currentSession) return;
     const sid = currentSession.id;
 
-    if (isApiSession(currentSession.agentType)) {
-      stopApiChat();
-    } else {
-      stopGeneration(sid);
-    }
+    // API 和 CLI Agent 统一通过 stopGeneration 停止（Rust 后端处理）
+    stopGeneration(sid);
 
     dispatch({ type: 'STOP_GENERATION', sessionId: sid });
-  }, [currentSession, stopGeneration, stopApiChat]);
+  }, [currentSession, stopGeneration]);
 
   // ── Stable callbacks for MessageList ──
 

@@ -1,4 +1,5 @@
 mod agent;
+mod api_agent;
 mod commands;
 mod db;
 mod plugin;
@@ -12,8 +13,18 @@ use tokio::sync::Mutex as AsyncMutex;
 use std::sync::Arc;
 use agent::AgentManager;
 use tauri::Manager;
+use tauri::Emitter;
 use workflow::executor::NodeExecutor;
 use workflow::scheduler::WorkflowScheduler;
+use api_agent::client::ApiClient;
+use api_agent::agent_loop::{AgentLoop, AgentLoopConfig, ToolRegistry, RiskLevel};
+use api_agent::agent_loop::ToolHandler;
+use api_agent::types::*;
+use api_agent::system_prompt::SystemPromptBuilder;
+use api_agent::skills::SkillLoader;
+use api_agent::context::SlidingWindow;
+use api_agent::context::DEFAULT_CONTEXT_TOKENS;
+use serde_json::json;
 
 pub struct DbState {
     pub pool: DbPool,
@@ -148,7 +159,8 @@ fn set_theme_cmd(state: tauri::State<'_, DbState>, theme: String) -> Result<Stri
 // ── Agent 命令 ──
 
 /// 使用 AgentConfig 元信息驱动的 send_message
-/// 从 DB 加载 AgentConfig，通过 StdioHandler 驱动进程交互
+/// API Agent（agent_type == "api"）使用 AgentLoop 编排，
+/// CLI Agent（claude/hermes/codex）使用子进程交互。
 #[tauri::command]
 async fn agent_send_message_with_config(
     app: tauri::AppHandle,
@@ -162,6 +174,19 @@ async fn agent_send_message_with_config(
     system_prompt: Option<String>,
     agent_session_id: Option<String>,
 ) -> Result<(), String> {
+    // ── API Agent 路径：使用 AgentLoop ──
+    if agent_type == "api" {
+        let app_clone = app.clone();
+        let pending = app.try_state::<PendingApprovals>()
+            .ok_or("PendingApprovals 状态未初始化")?.inner().clone();
+        return run_api_agent(
+            app_clone, &state, &session_id, &message,
+            &system_prompt.unwrap_or_default(),
+            pending,
+        ).await;
+    }
+
+    // ── CLI Agent 路径（原有逻辑）──
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
     let config = commands::agents::get_agent_inner(&conn, &agent_type)
         .map_err(|e| format!("查询 Agent 配置失败: {}", e))?
@@ -185,6 +210,49 @@ async fn agent_stop_generation(
     let mut mgr = agent_mgr.lock().await;
     mgr.stop_generation(&session_id);
     Ok(())
+}
+
+/// 工具调用审批（前端弹窗后回调）
+#[tauri::command]
+async fn agent_approve_tool(
+    pending: tauri::State<'_, PendingApprovals>,
+    session_id: String,
+    call_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    if pending.approve(&call_id, approved) {
+        log::info!("[Approval] session={}, call={}, approved={}", session_id, call_id, approved);
+    } else {
+        log::warn!("[Approval] 未找到审批请求: call={}", call_id);
+    }
+    Ok(())
+}
+
+/// 待审批工具调用管理（线程安全，可跨任务共享）
+#[derive(Clone)]
+pub struct PendingApprovals {
+    approvals: Arc<std::sync::Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<bool>>>>,
+}
+
+impl PendingApprovals {
+    pub fn new() -> Self {
+        Self { approvals: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())) }
+    }
+
+    pub fn register(&self, call_id: String) -> std::sync::mpsc::Receiver<bool> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.approvals.lock().unwrap().insert(call_id, tx);
+        rx
+    }
+
+    pub fn approve(&self, call_id: &str, approved: bool) -> bool {
+        if let Some(tx) = self.approvals.lock().unwrap().remove(call_id) {
+            let _ = tx.send(approved);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[tauri::command]
@@ -228,6 +296,225 @@ async fn agent_list_skills(state: tauri::State<'_, DbState>, agent_type: String)
     Ok(agent::AgentManager::list_skills(&agent_type, config.as_ref()).await)
 }
 
+// ════════════════════════════════════════════════════════════
+// API Agent 执行（AgentLoop 编排）
+// ════════════════════════════════════════════════════════════
+
+/// 获取 API Agent 技能目录路径
+/// 返回 ~/.pilotdesk/skills/ 如果存在
+fn get_api_agent_skills_dir() -> Option<String> {
+    let dir = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
+        .map(|d| format!("{}/skills", d))?;
+
+    if std::path::Path::new(&dir).is_dir() {
+        log::info!("[API Agent] 技能目录: {}", dir);
+        Some(dir)
+    } else {
+        log::debug!("[API Agent] 技能目录不存在: {}", dir);
+        None
+    }
+}
+
+/// 使用 AgentLoop 执行 API Agent 对话
+async fn run_api_agent(
+    app: tauri::AppHandle,
+    state: &DbState,
+    session_id: &str,
+    _message: &str,
+    system_prompt: &str,
+    pending_approvals: PendingApprovals,
+) -> Result<(), String> {
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+
+    // 1. 加载会话信息（获取 api_provider 和 api_model）
+    let session = commands::session::get_session_inner(&conn, session_id)
+        .map_err(|e| format!("查询会话失败: {}", e))?
+        .ok_or_else(|| "会话不存在".to_string())?;
+
+    let provider_id = session.api_provider
+        .ok_or_else(|| "API 会话缺少提供商配置".to_string())?;
+    let model = session.api_model
+        .ok_or_else(|| "API 会话缺少模型配置".to_string())?;
+
+    // 2. 获取 API 提供商配置
+    let provider = commands::api_provider::get_api_provider(&conn, &provider_id)
+        .map_err(|e| format!("查询提供商失败: {}", e))?
+        .ok_or_else(|| format!("API 提供商不存在: {}", provider_id))?;
+
+    let api_key = commands::api_provider::get_api_key(&conn, &provider_id)
+        .map_err(|e| format!("获取 API Key 失败: {}", e))?
+        .ok_or_else(|| format!("API Key 未配置: {}", provider_id))?;
+
+    // 3. 加载技能（Progressive Disclosure: 先注入 name+description）
+    let skills_dir = get_api_agent_skills_dir();
+    let skill_loader = Arc::new(SkillLoader::new(skills_dir));
+
+    // 4. 组装 System Prompt（Base + MEMORY.md + USER.md + Skill 列表）
+    let full_system_prompt = SystemPromptBuilder::new(system_prompt.to_string())
+        .with_memory_md(Some(&session.cwd).filter(|c| !c.is_empty()).map(|c| c.as_str()))
+        .with_user_md()
+        .with_skills(skill_loader.list_skills())
+        .build();
+
+    // 5. 加载会话消息历史（仅 user/assistant 角色）
+    let history = commands::session::get_session_messages_inner(&conn, session_id)
+        .map_err(|e| format!("加载消息历史失败: {}", e))?;
+
+    let messages: Vec<ChatMessage> = history
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .map(|m| {
+            match m.role.as_str() {
+                "user" => ChatMessage::user(&m.content),
+                "assistant" => ChatMessage::assistant(&m.content),
+                _ => ChatMessage::user(&m.content),
+            }
+        })
+        .collect();
+
+    // 5.1 应用滑动窗口截断（超出 token 限制时保留最近消息）
+    let window = SlidingWindow::new(DEFAULT_CONTEXT_TOKENS);
+    let messages = window.trim(&messages);
+
+    // 6. 创建 API 客户端
+    let client = ApiClient::new(provider.api_endpoint, api_key);
+
+    // 7. 构建工具注册表（含 load_skill 等内置工具）
+    let mut tool_registry = ToolRegistry::new();
+    let skill_loader_clone = skill_loader.clone();
+    tool_registry.register(builtin_tool!(
+        "load_skill",
+        "加载指定技能的完整内容。当需要详细了解某个技能的使用方法时调用此工具。",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "技能名称（来自 available_skills 列表）"
+                }
+            },
+            "required": ["name"]
+        }),
+        move |args| {
+            let name = args["name"].as_str().ok_or("缺少 name 参数")?;
+            skill_loader_clone
+                .load_skill(name)
+                .ok_or_else(|| format!("技能不存在: {}", name))
+        }
+    ));
+
+    let tool_registry = Arc::new(tool_registry);
+    let tools = tool_registry.get_definitions();
+
+    // 8. 创建 AgentLoop（含审批处理）
+    let pending_shared = pending_approvals;
+    
+    let agent_loop = AgentLoop::new(client, tool_registry, model)
+        .with_approval_handler(Box::new(move |call_id: &str, tool_name: &str, _args: &str, risk: RiskLevel| {
+            let rx = pending_shared.register(call_id.to_string());
+            
+            log::info!("[Approval] 等待用户审批: tool={}, risk={:?}", tool_name, risk);
+            
+            // 等待前端审批（阻塞当前任务，超时120秒后默认拒绝）
+            match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+                Ok(approved) => {
+                    log::info!("[Approval] 用户{}: {}", if approved { "批准" } else { "拒绝" }, tool_name);
+                    approved
+                }
+                Err(_) => {
+                    log::warn!("[Approval] 审批超时，默认拒绝: {}", tool_name);
+                    false
+                }
+            }
+        }));
+
+    // 9. 配置 Agent Loop
+    let config = AgentLoopConfig {
+        max_iterations: 10,
+        system_prompt: full_system_prompt,
+        tools,
+        messages,
+    };
+
+    // 10. 创建广播通道（AgentLoop → Tauri 事件转换）
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<AgentLoopEvent>(100);
+
+    // 11. 启动事件监听器（将 AgentLoop 事件转换为 Tauri 事件）
+    let app_listener = app.clone();
+    let sid_listener = session_id.to_string();
+    tokio::spawn(async move {
+        while let Ok(event) = rx.recv().await {
+            match event {
+                AgentLoopEvent::Chunk { content } => {
+                    let _ = app_listener.emit("agent-chunk", json!({
+                        "sessionId": sid_listener,
+                        "content": content,
+                    }));
+                }
+                AgentLoopEvent::ToolStart { id, name, arguments } => {
+                    let _ = app_listener.emit("agent-tool-start", json!({
+                        "sessionId": sid_listener,
+                        "toolId": id,
+                        "toolName": name,
+                        "arguments": arguments,
+                    }));
+                }
+                AgentLoopEvent::ToolResult { id, name, result, success } => {
+                    let _ = app_listener.emit("agent-tool-result", json!({
+                        "sessionId": sid_listener,
+                        "toolId": id,
+                        "toolName": name,
+                        "result": result,
+                        "success": success,
+                    }));
+                }
+                AgentLoopEvent::ApprovalRequired { call_id, tool_name, arguments, risk_description } => {
+                    let _ = app_listener.emit("agent-approval-required", json!({
+                        "sessionId": sid_listener,
+                        "toolId": call_id,
+                        "toolName": tool_name,
+                        "arguments": arguments,
+                        "riskDescription": risk_description,
+                    }));
+                }
+                AgentLoopEvent::Done { content: _ } => {
+                    let _ = app_listener.emit("agent-done", json!({
+                        "sessionId": sid_listener,
+                    }));
+                }
+                AgentLoopEvent::Error { message } => {
+                    let _ = app_listener.emit("agent-error", json!({
+                        "sessionId": sid_listener,
+                        "error": message,
+                    }));
+                }
+            }
+        }
+    });
+
+    // 12. 后台执行 Agent Loop
+    let app_done = app.clone();
+    let sid_done = session_id.to_string();
+    tokio::spawn(async move {
+        match agent_loop.run(config, tx).await {
+            Ok(_content) => {
+                // Done event already sent via broadcast
+                log::info!("[API Agent] 对话完成: session={}", sid_done);
+            }
+            Err(e) => {
+                // Error event already sent via broadcast
+                log::error!("[API Agent] 对话失败: session={}, error={}", sid_done, e);
+            }
+        }
+        // 确保最终发送 done（如果 run 出错未发送 done）
+        let _ = app_done.emit("agent-done", json!({
+            "sessionId": sid_done,
+        }));
+    });
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 进程启动时清除 Python 环境变量干扰
@@ -245,6 +532,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
                 .manage(DbState { pool: pool.clone() })
         .manage(AsyncMutex::new(AgentManager::new()))
+        .manage(PendingApprovals::new())
         .manage(std::sync::Mutex::new(terminal::console_bridge::ConsoleBridge::new()))
         .manage(AsyncMutex::new(terminal::TerminalManager::new()))
 
@@ -293,6 +581,7 @@ pub fn run() {
             set_theme_cmd,
             agent_send_message_with_config,
             agent_stop_generation,
+            agent_approve_tool,
             agent_create_session,
             agent_close_session,
             agent_list_skills,

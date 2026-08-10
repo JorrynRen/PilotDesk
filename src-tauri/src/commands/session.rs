@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection};
+use rusqlite::OptionalExtension;
 use crate::db::models::{Session, Message};
 use crate::utils::errors::AppError;
 use tauri::State;
@@ -262,6 +263,15 @@ pub fn get_session_messages_inner(conn: &Connection, session_id: &str) -> Result
         .collect::<Result<Vec<_>, _>>()?;
     
     Ok(messages)
+}
+
+pub fn get_session_inner(conn: &Connection, session_id: &str) -> Result<Option<Session>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id
+         FROM sessions WHERE id = ?1"
+    )?;
+    let session = stmt.query_row(params![session_id], row_to_session).optional()?;
+    Ok(session)
 }
 
 pub fn delete_session_inner(conn: &Connection, session_id: &str) -> Result<(), AppError> {
