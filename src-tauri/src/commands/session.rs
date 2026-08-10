@@ -254,15 +254,40 @@ pub fn list_sessions_inner(conn: &Connection) -> Result<Vec<Session>, AppError> 
 }
 
 pub fn get_session_messages_inner(conn: &Connection, session_id: &str) -> Result<Vec<Message>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name 
-         FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC"
-    )?;
-    
-    let messages = stmt.query_map(params![session_id], row_to_message)?
-        .collect::<Result<Vec<_>, _>>()?;
-    
-    Ok(messages)
+    // 优先尝试包含扩展列的查询（migration v6+）
+    let sql = "SELECT id, session_id, role, content, mode, timestamp, reasoning_content, tool_calls, tool_call_id, tool_name 
+         FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC";
+    match conn.prepare(sql) {
+        Ok(mut stmt) => {
+            let messages = stmt.query_map(params![session_id], row_to_message)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(messages)
+        }
+        Err(_) => {
+            // 扩展列不存在，回退到基础列查询
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, role, content, mode, timestamp
+                 FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC"
+            )?;
+            fn row_to_message_v0(row: &rusqlite::Row) -> rusqlite::Result<Message> {
+                Ok(Message {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    mode: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                })
+            }
+            let messages = stmt.query_map(params![session_id], row_to_message_v0)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(messages)
+        }
+    }
 }
 
 pub fn get_session_inner(conn: &Connection, session_id: &str) -> Result<Option<Session>, AppError> {
