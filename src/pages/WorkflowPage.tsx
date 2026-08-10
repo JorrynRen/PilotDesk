@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Trash2, UserCheck, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, Layout, FileText, Tag, Layers, Zap, Copy } from 'lucide-react';
+import { Play, Plus, Trash2, UserCheck, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, BarChart3, Layout, FileText, Tag, Layers, Zap, Copy, Slash, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, Sparkles } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -9,6 +9,9 @@ import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
 import { WorkflowPropertyDialog } from '../components/workflow/WorkflowPropertyDialog';
+import { WorkflowMonitor } from '../components/workflow/WorkflowMonitor';
+import { ExecutionStats } from '../components/workflow/ExecutionStats';
+import { WorkflowTemplateMarket } from '../components/workflow/WorkflowTemplateMarket';
 import type { WorkflowDefinition, WorkflowInstance, PendingHumanInput } from '../types/workflow';
 
 interface WorkflowPageProps {
@@ -114,9 +117,112 @@ function describeCron(expr: string): string {
 export function WorkflowPage({ onBack }: WorkflowPageProps) {
   const navigate = useNavigate();
   const { definitions, instances, pendingInputs, loading, error, loadDefinitions, loadInstances, loadPendingInputs, respondHumanInput, createDefinition, updateDefinition, deleteDefinition, deleteExecution, selectDefinition } = useWorkflowStore();
-  const [activeTab, setActiveTab] = useState<'definitions' | 'instances'>('definitions');
+  const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats' | 'templates'>('definitions');
   const [showPropertyDialog, setShowPropertyDialog] = useState<'create' | 'edit' | null>(null);
   const [editingDef, setEditingDef] = useState<WorkflowDefinition | null>(null);
+  const DEF_PAGE_SIZE = 8;
+  const [defPage, setDefPage] = useState(1);
+
+  // ---- 工作流定义筛选状态 ----
+  const [defFilterKeyword, setDefFilterKeyword] = useState<string>('');
+  const [defFilterEnabled, setDefFilterEnabled] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [defFilterTrigger, setDefFilterTrigger] = useState<'all' | 'manual' | 'cron' | 'event'>('all');
+  const [defSortKey, setDefSortKey] = useState<'updatedAt' | 'createdAt' | 'name' | 'stages'>('updatedAt');
+  const [defSortAsc, setDefSortAsc] = useState<boolean>(false);
+
+  const DEFINITION_TRIGGER_OPTIONS: Array<{ key: typeof defFilterTrigger; label: string }> = [
+    { key: 'all', label: '全部触发' },
+    { key: 'manual', label: '手动' },
+    { key: 'cron', label: '定时' },
+    { key: 'event', label: '事件' },
+  ];
+
+  const DEFINITION_ENABLED_OPTIONS: Array<{ key: typeof defFilterEnabled; label: string; color: string }> = [
+    { key: 'all', label: '全部', color: 'var(--text-secondary)' },
+    { key: 'enabled', label: '已启用', color: '#22c55e' },
+    { key: 'disabled', label: '已禁用', color: '#6B7280' },
+  ];
+
+  const DEFINITION_SORT_OPTIONS = [
+    { key: 'updatedAt', label: '更新时间' },
+    { key: 'createdAt', label: '创建时间' },
+    { key: 'name', label: '名称 A-Z' },
+    { key: 'stages', label: '阶段数量' },
+  ] as const;
+
+  const hasDefFilter =
+    defFilterKeyword.trim() !== '' ||
+    defFilterEnabled !== 'all' ||
+    defFilterTrigger !== 'all' ||
+    defSortKey !== 'updatedAt' ||
+    defSortAsc !== false;
+
+  const clearDefFilters = () => {
+    setDefFilterKeyword('');
+    setDefFilterEnabled('all');
+    setDefFilterTrigger('all');
+    setDefSortKey('updatedAt');
+    setDefSortAsc(false);
+  };
+
+  // 每个 def 的实例数快速汇总（从 instances 计算）
+  const defInstanceCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    instances.forEach(i => {
+      if (!i.definitionId) return;
+      map.set(i.definitionId, (map.get(i.definitionId) || 0) + 1);
+    });
+    return map;
+  }, [instances]);
+
+  // 筛选 + 排序（结果为 filteredDefs，分页基于它计算）
+  const filteredDefs = useMemo(() => {
+    const kw = defFilterKeyword.trim().toLowerCase();
+    const result = definitions.filter(def => {
+      // 启用状态
+      if (defFilterEnabled === 'enabled' && !def.enabled) return false;
+      if (defFilterEnabled === 'disabled' && def.enabled) return false;
+      // 触发方式
+      if (defFilterTrigger !== 'all') {
+        const tt = def.trigger?.triggerType || 'manual';
+        if (tt !== defFilterTrigger) return false;
+      }
+      // 关键字（匹配名称、描述、版本号、定义ID）
+      if (kw) {
+        const haystack = [
+          def.name,
+          def.description || '',
+          'v' + String(def.version || ''),
+          def.id,
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(kw)) return false;
+      }
+      return true;
+    });
+
+    // 排序
+    const sign = defSortAsc ? 1 : -1;
+    result.sort((a, b) => {
+      switch (defSortKey) {
+        case 'name':
+          return sign * (a.name || '').localeCompare(b.name || '', 'zh-CN');
+        case 'stages':
+          return sign * ((a.stages?.length || 0) - (b.stages?.length || 0));
+        case 'createdAt':
+          return sign * ((a.createdAt || 0) - (b.createdAt || 0));
+        case 'updatedAt':
+        default:
+          return sign * ((a.updatedAt || 0) - (b.updatedAt || 0));
+      }
+    });
+
+    return result;
+  }, [definitions, defFilterKeyword, defFilterEnabled, defFilterTrigger, defSortKey, defSortAsc]);
+
+  // 筛选条件/排序变化时回到第 1 页
+  useEffect(() => {
+    setDefPage(1);
+  }, [defFilterKeyword, defFilterEnabled, defFilterTrigger, defSortKey, defSortAsc]);
 
   useEffect(() => {
     loadDefinitions();
@@ -198,6 +304,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
     version: string;
     trigger: { triggerType: 'manual' | 'cron' | 'event'; cron?: string };
     enabled: boolean;
+    icon?: string;
     inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
     outputSchema?: Record<string, { type: string; description?: string }>;
   }) => {
@@ -211,6 +318,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           version: data.version,
           trigger: data.trigger,
           enabled: data.enabled,
+          ...(data.icon !== undefined ? { icon: data.icon } : {}),
           ...(data.inputSchema !== undefined ? { inputSchema: data.inputSchema } : {}),
           ...(data.outputSchema !== undefined ? { outputSchema: data.outputSchema } : {}),
         });
@@ -224,6 +332,7 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
       def.version = data.version;
       def.trigger = data.trigger;
       def.enabled = data.enabled;
+      if (data.icon) def.icon = data.icon;
       if (data.inputSchema) def.inputSchema = data.inputSchema;
       if (data.outputSchema) def.outputSchema = data.outputSchema;
       try {
@@ -335,9 +444,23 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
       case 'failed': return <XCircle size={14} className="text-red-500" />;
       case 'running': return <AlertCircle size={14} className="text-blue-500" />;
       case 'pending': return <Clock size={14} className="text-yellow-500" />;
+      case 'cancelled': return <Slash size={14} className="text-amber-500" />;
+      case 'timeout': return <AlertTriangle size={14} className="text-red-500" />;
       default: return <Clock size={14} className="text-gray-400" />;
     }
   };
+
+  // Computed pagination (moved outside JSX for oxc parser compatibility)
+  const totalDefPages = Math.max(1, Math.ceil(filteredDefs.length / DEF_PAGE_SIZE));
+  const safeDefPage = Math.min(defPage, totalDefPages);
+  const paginatedDefs = filteredDefs.slice((safeDefPage - 1) * DEF_PAGE_SIZE, safeDefPage * DEF_PAGE_SIZE);
+
+  // Auto-correct page when data changes shrink the list beyond current page
+  useEffect(() => {
+    if (defPage > totalDefPages) {
+      setDefPage(totalDefPages);
+    }
+  }, [filteredDefs.length, totalDefPages, defPage]);
 
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -361,12 +484,20 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           className={"pd-tab" + (activeTab === 'instances' ? " pd-tab-active" : "")}
         >
           <Activity size={12} />
-          执行记录 ({instances.length})
+          执行实例 ({instances.length})
         </button>
         <button
-          className="pd-tab pd-tab-disabled"
+          onClick={() => setActiveTab('stats')}
+          className={"pd-tab" + (activeTab === 'stats' ? " pd-tab-active" : "")}
         >
-          <Layout size={12} />
+          <BarChart3 size={12} />
+          统计
+        </button>
+        <button
+          onClick={() => setActiveTab('templates')}
+          className={"pd-tab" + (activeTab === 'templates' ? " pd-tab-active" : "")}
+        >
+          <Sparkles size={12} />
           模板市场
         </button>
 
@@ -414,121 +545,357 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
 
         {!loading && activeTab === 'definitions' && (
           <>
+            {/* ── 工作流定义筛选工具栏 ── */}
+            {definitions.length > 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                  padding: '10px 12px',
+                  marginBottom: 12,
+                  borderRadius: 6,
+                  backgroundColor: 'var(--bg-secondary)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                {/* Row：控件单行布局 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <Filter size={12} style={{ color: 'var(--text-tertiary)' }} />
+                    <span className="text-[11px]" style={{ color: 'var(--text-tertiary)', fontWeight: 500 }}>筛选：</span>
+                  </div>
+
+                  {/* 启用状态药丸 */}
+                  <div
+                    aria-label="启用状态"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      flexWrap: 'nowrap',
+                      padding: '2px 4px',
+                      border: '1px solid var(--border)',
+                      backgroundColor: 'var(--bg-primary)',
+                      borderRadius: 4,
+                      overflowX: 'auto',
+                      scrollbarWidth: 'thin',
+                    }}
+                  >
+                    {DEFINITION_ENABLED_OPTIONS.map(opt => {
+                      const active = defFilterEnabled === opt.key;
+                      return (
+                        <button
+                          key={opt.key}
+                          onClick={() => setDefFilterEnabled(opt.key)}
+                          className="text-[10px] px-2 py-0.5 rounded-full transition-colors whitespace-nowrap"
+                          style={{
+                            border: active ? '1px solid ' + opt.color : '1px solid transparent',
+                            backgroundColor: active ? (opt.key === 'all' ? 'rgba(var(--accent-rgb, var(--accent)), 0.1)' : opt.color + '22') : 'transparent',
+                            color: active ? (opt.key === 'all' ? 'var(--accent)' : opt.color) : 'var(--text-tertiary)',
+                            fontWeight: active ? 500 : 400,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* 触发方式下拉 */}
+                  <select
+                    value={defFilterTrigger}
+                    onChange={e => setDefFilterTrigger(e.target.value as typeof defFilterTrigger)}
+                    className="pd-btn text-[11px] rounded py-1 px-2"
+                    style={{
+                      border: '1px solid var(--border)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                      minWidth: 88,
+                    }}
+                    title="按触发方式筛选"
+                  >
+                    {DEFINITION_TRIGGER_OPTIONS.map(t => (
+                      <option key={t.key} value={t.key}>{t.label}</option>
+                    ))}
+                  </select>
+
+                  {/* 排序 */}
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span className="inline-flex items-center gap-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                      <Calendar size={11} />
+                      排序：
+                    </span>
+                    <select
+                      value={defSortKey}
+                      onChange={e => setDefSortKey(e.target.value as typeof defSortKey)}
+                      className="pd-btn text-[11px] rounded py-1 px-2"
+                      style={{
+                        border: '1px solid var(--border)',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                        outline: 'none',
+                        minWidth: 96,
+                      }}
+                      title="排序方式"
+                    >
+                      {DEFINITION_SORT_OPTIONS.map(s => (
+                        <option key={s.key} value={s.key}>{s.label}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setDefSortAsc(v => !v)}
+                      className="pd-btn p-1 rounded transition-colors inline-flex items-center gap-0.5"
+                      style={{
+                        border: '1px solid var(--border)',
+                        backgroundColor: defSortAsc ? 'var(--accent)' : 'var(--bg-primary)',
+                        color: defSortAsc ? '#fff' : 'var(--text-secondary)',
+                      }}
+                      title={defSortAsc ? '降序' : '升序'}
+                    >
+                      <ArrowUpDown size={11} />
+                      <span className="text-[10px] font-mono">{defSortAsc ? '↑' : '↓'}</span>
+                    </button>
+                  </div>
+
+                  {/* 关键字搜索 */}
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      border: '1px solid var(--border)',
+                      backgroundColor: 'var(--bg-primary)',
+                      borderRadius: 4,
+                      padding: '2px 6px',
+                      flex: '1 1 200px',
+                      minWidth: 180,
+                      maxWidth: 320,
+                    }}
+                  >
+                    <Search size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                    <input
+                      value={defFilterKeyword}
+                      onChange={e => setDefFilterKeyword(e.target.value)}
+                      placeholder="搜索名称 / 描述 / 版本 / ID..."
+                      className="flex-1 min-w-0 outline-none text-[11px]"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)' }}
+                    />
+                    {defFilterKeyword && (
+                      <button
+                        onClick={() => setDefFilterKeyword('')}
+                        className="pd-btn p-0.5 rounded hover:opacity-80 transition-opacity"
+                        style={{ color: 'var(--text-tertiary)', background: 'transparent' }}
+                        title="清除关键字"
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* 清除全部筛选 */}
+                  <button
+                    onClick={clearDefFilters}
+                    disabled={!hasDefFilter}
+                    className="pd-btn px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap"
+                    style={{
+                      border: '1px solid var(--border)',
+                      background: hasDefFilter ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
+                      color: hasDefFilter ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                      cursor: hasDefFilter ? 'pointer' : 'not-allowed',
+                      opacity: hasDefFilter ? 1 : 0.5,
+                    }}
+                  >
+                    清除筛选
+                  </button>
+                </div>
+              </div>
+            )}
+
             {definitions.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 gap-2">
                 <GitBranch size={32} style={{ opacity: 0.25, color: 'var(--text-tertiary)' }} />
                 <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无工作流定义</div>
               </div>
+            ) : filteredDefs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-32 gap-2" style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                <Filter size={20} style={{ color: 'var(--text-tertiary)', opacity: 0.5 }} />
+                <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>没有符合筛选条件的工作流</span>
+                <button
+                  onClick={clearDefFilters}
+                  className="pd-btn px-3 py-1 text-[11px] rounded transition-colors"
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--accent)' }}
+                >清除筛选条件</button>
+              </div>
             ) : (
               <div className="grid gap-3">
-                {definitions.map((def) => (
-                  <div
-                    key={def.id}
-                    className="p-3 rounded-lg transition-colors cursor-pointer hover:opacity-90"
-                    style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-                    onClick={() => navigate(`/workflow/editor?id=${def.id}`)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <GitBranch size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-                        <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{def.name}</span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{
-                          backgroundColor: def.enabled ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)',
-                          color: def.enabled ? '#22c55e' : 'var(--text-tertiary)',
-                        }}>
-                          {def.enabled ? '已启用' : '已禁用'}
+                {paginatedDefs.map((def) => {
+                  const instCount = defInstanceCounts.get(def.id) || 0;
+                  return (
+                    <div
+                      key={def.id}
+                      className="p-3 rounded-lg transition-colors cursor-pointer hover:opacity-90"
+                      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                      onClick={() => navigate(`/workflow/editor?id=${def.id}`)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-base" style={{ flexShrink: 0 }}>{def.icon || '🔀'}</span>
+                          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{def.name}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{
+                            backgroundColor: def.enabled ? 'rgba(34,197,94,0.15)' : 'rgba(107,114,128,0.15)',
+                            color: def.enabled ? '#22c55e' : 'var(--text-tertiary)',
+                          }}>
+                            {def.enabled ? '已启用' : '已禁用'}
+                          </span>
+                          {instCount > 0 && (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded" style={{
+                              backgroundColor: 'rgba(59,130,246,0.1)',
+                              color: '#3B82F6',
+                            }}>
+                              <Activity size={10} />
+                              {instCount} 次执行
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => { handleEditProperties(e, def); }}
+                            className="pd-btn p-1.5 rounded hover:opacity-80"
+                            style={{ color: 'var(--text-secondary)' }}
+                            title="编辑属性"
+                          >
+                            <Settings size={14} />
+                          </button>
+                          <button
+                            onClick={(e) => { handleExportSingle(e, def.id, def.name); }}
+                            className="pd-btn p-1.5 rounded hover:opacity-80"
+                            style={{ color: 'var(--text-secondary)' }}
+                            title="导出"
+                          >
+                            <Upload size={14} />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDuplicate(def.id, def.name); }}
+                            className="pd-btn p-1.5 rounded hover:opacity-80"
+                            style={{ color: 'var(--text-secondary)' }}
+                            title="复制"
+                          >
+                            <Copy size={14} />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDelete(def.id, def.name); }}
+                            className="pd-btn p-1.5 rounded hover:opacity-80"
+                            style={{ color: 'var(--text-secondary)' }}
+                            title="删除"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      {def.description && (
+                        <div className="mt-1 flex items-start gap-1.5 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                          <FileText size={11} style={{ flexShrink: 0, marginTop: 1 }} />
+                          <span>{def.description}</span>
+                        </div>
+                      )}
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        <span className="flex items-center gap-1">
+                          <Tag size={10} />
+                          v{def.version}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Layers size={10} />
+                          {def.stages?.length || 0} 阶段
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Zap size={10} />
+                          {(() => {
+                            const t = def.trigger;
+                            if (!t || t.triggerType === 'manual') return '手动';
+                            if (t.triggerType === 'cron') return `定时（${describeCron(t.cron || '')}）`;
+                            if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
+                            return t.triggerType;
+                          })()}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Clock size={10} />
+                          {new Date(Number(def.createdAt) * 1000).toLocaleString()}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Upload size={10} />
+                          {new Date(Number(def.updatedAt) * 1000).toLocaleString()}
                         </span>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={(e) => { handleStart(e, def.id, def.name); }}
-                          className="pd-btn p-1.5 rounded hover:opacity-80"
-                          style={{ color: runningIds.has(def.id) ? '#3fb950' : 'var(--text-secondary)' }}
-                          title={runningIds.has(def.id) ? '执行中...' : '执行'}
-                          disabled={runningIds.has(def.id)}
-                        >
-                          {runningIds.has(def.id) ? (
-                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="pd-animate-spin">
-                              <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="8 8" />
-                            </svg>
-                          ) : (
-                            <Play size={14} />
-                          )}
-                        </button>
-                        <button
-                          onClick={(e) => { handleEditProperties(e, def); }}
-                          className="pd-btn p-1.5 rounded hover:opacity-80"
-                          style={{ color: 'var(--text-secondary)' }}
-                          title="编辑属性"
-                        >
-                          <Settings size={14} />
-                        </button>
-                        <button
-                          onClick={(e) => { handleExportSingle(e, def.id, def.name); }}
-                          className="pd-btn p-1.5 rounded hover:opacity-80"
-                          style={{ color: 'var(--text-secondary)' }}
-                          title="导出"
-                        >
-                          <Upload size={14} />
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDuplicate(def.id, def.name); }}
-                          className="pd-btn p-1.5 rounded hover:opacity-80"
-                          style={{ color: 'var(--text-secondary)' }}
-                          title="复制"
-                        >
-                          <Copy size={14} />
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDelete(def.id, def.name); }}
-                          className="pd-btn p-1.5 rounded hover:opacity-80"
-                          style={{ color: 'var(--text-secondary)' }}
-                          title="删除"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
                     </div>
-                    {def.description && (
-                      <div className="mt-1 flex items-start gap-1.5 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                        <FileText size={11} style={{ flexShrink: 0, marginTop: 1 }} />
-                        <span>{def.description}</span>
-                      </div>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                      <span className="flex items-center gap-1">
-                        <Tag size={10} />
-                        v{def.version}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Layers size={10} />
-                        {def.stages?.length || 0} 阶段
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Zap size={10} />
-                        {(() => {
-                          const t = def.trigger;
-                          if (!t || t.triggerType === 'manual') return '手动';
-                          if (t.triggerType === 'cron') return `定时（${describeCron(t.cron || '')}）`;
-                          if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
-                          return t.triggerType;
-                        })()}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Clock size={10} />
-                        {new Date(Number(def.createdAt) * 1000).toLocaleString()}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Upload size={10} />
-                        {new Date(Number(def.updatedAt) * 1000).toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
-          </>
-        )}
+            {filteredDefs.length > 0 && (
+              <div className="flex items-center justify-between mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  {hasDefFilter ? (
+                    <>筛选结果 {filteredDefs.length} 条（共 {definitions.length} 条），第 {safeDefPage} / {totalDefPages} 页</>
+                  ) : (
+                    <>共 {filteredDefs.length} 条，第 {safeDefPage} / {totalDefPages} 页</>
+                  )}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDefPage(1); }}
+                    disabled={safeDefPage <= 1}
+                    className="pd-btn px-2 py-1 text-[10px] rounded transition-colors"
+                    style={{
+                      border: '1px solid var(--border)',
+                      background: safeDefPage <= 1 ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
+                      color: safeDefPage <= 1 ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                      cursor: safeDefPage <= 1 ? 'not-allowed' : 'pointer',
+                      opacity: safeDefPage <= 1 ? 0.5 : 1,
+                    }}
+                  >首页</button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDefPage(p => Math.max(1, p - 1)); }}
+                    disabled={safeDefPage <= 1}
+                    className="pd-btn px-2 py-1 text-[10px] rounded transition-colors"
+                    style={{
+                      border: '1px solid var(--border)',
+                      background: safeDefPage <= 1 ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
+                      color: safeDefPage <= 1 ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                      cursor: safeDefPage <= 1 ? 'not-allowed' : 'pointer',
+                      opacity: safeDefPage <= 1 ? 0.5 : 1,
+                    }}
+                  >上一页</button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDefPage(p => Math.min(totalDefPages, p + 1)); }}
+                    disabled={safeDefPage >= totalDefPages}
+                    className="pd-btn px-2 py-1 text-[10px] rounded transition-colors"
+                    style={{
+                      border: '1px solid var(--border)',
+                      background: safeDefPage >= totalDefPages ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
+                      color: safeDefPage >= totalDefPages ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                      cursor: safeDefPage >= totalDefPages ? 'not-allowed' : 'pointer',
+                      opacity: safeDefPage >= totalDefPages ? 0.5 : 1,
+                    }}
+                  >下一页</button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDefPage(totalDefPages); }}
+                    disabled={safeDefPage >= totalDefPages}
+                    className="pd-btn px-2 py-1 text-[10px] rounded transition-colors"
+                    style={{
+                      border: '1px solid var(--border)',
+                      background: safeDefPage >= totalDefPages ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
+                      color: safeDefPage >= totalDefPages ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                      cursor: safeDefPage >= totalDefPages ? 'not-allowed' : 'pointer',
+                      opacity: safeDefPage >= totalDefPages ? 0.5 : 1,
+                    }}
+                  >末页</button>
+                </div>
+              </div>
+            )}
+            </>)}
 
         {/* 待审批提示条 */}
         {pendingInputs.length > 0 && (
@@ -552,46 +919,28 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
           </div>
         )}
 
-        {!loading && activeTab === 'instances' && (
-          <>
-            {instances.length === 0 ? (
-              <div className="flex items-center justify-center h-48 text-xs" style={{ color: 'var(--text-tertiary)' }}>
-                暂无执行记录
-              </div>
-            ) : (
-              <div className="grid gap-2">
-                {instances.map((inst) => (
-                  <div
-                    key={inst.id}
-                    className="p-3 rounded-lg"
-                    style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        {statusIcon(inst.status)}
-                        <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{inst.definitionName}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                          {new Date(Number(inst.createdAt) * 1000).toLocaleString()}
-                        </span>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDeleteExecution(inst.id, inst.definitionName); }}
-                          className="p-1 rounded hover:bg-red-500/10 transition-colors"
-                          title="删除执行记录"
-                        >
-                          <Trash2 size={12} style={{ color: 'var(--text-tertiary)' }} className="hover:text-red-500" />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="mt-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                      ID: {inst.id.slice(0, 12)}... | 触发器: {inst.trigger}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
+        {activeTab === 'instances' && (
+          <WorkflowMonitor
+            onViewDefinition={(defId) => {
+              selectDefinition(defId);
+              navigate(`/workflow/editor?id=${defId}`);
+            }}
+            onDeleteExecution={(id, name) => handleDeleteExecution(id, name)}
+          />
+        )}
+
+        {!loading && activeTab === 'stats' && (
+          <ExecutionStats workflowId={undefined} />
+        )}
+
+        {activeTab === 'templates' && (
+          <WorkflowTemplateMarket
+            onBack={() => setActiveTab('definitions')}
+            onUseTemplate={(tplId) => {
+              showToast(`已安装模板 ${tplId}，可在"工作流定义"中查看`, 'success');
+              setActiveTab('definitions');
+            }}
+          />
         )}
       </div>
 
@@ -660,10 +1009,11 @@ function PendingInputCard({ item, onSubmit }: { item: PendingHumanInput; onSubmi
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-    if (!value.trim() || submitting) return;
+    // 允许空字符串响应（避免节点卡死在等待输入状态）
+    if (submitting) return;
     setSubmitting(true);
     try {
-      await onSubmit(value.trim());
+      await onSubmit(value);
       setValue('');
     } finally {
       setSubmitting(false);
@@ -714,12 +1064,12 @@ function PendingInputCard({ item, onSubmit }: { item: PendingHumanInput; onSubmi
         )}
         <button
           onClick={handleSubmit}
-          disabled={!value.trim() || submitting}
+          disabled={submitting}
           className="text-xs px-3 py-1 rounded-md font-medium transition-colors"
           style={{
-            backgroundColor: value.trim() ? 'var(--accent)' : 'var(--bg-tertiary)',
-            color: value.trim() ? '#fff' : 'var(--text-tertiary)',
-            cursor: value.trim() ? 'pointer' : 'not-allowed',
+            backgroundColor: 'var(--accent)',
+            color: '#fff',
+            cursor: 'pointer',
           }}
         >
           {submitting ? '提交中...' : '提交'}

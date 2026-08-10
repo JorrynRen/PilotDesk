@@ -212,6 +212,8 @@ export interface WorkflowDefinition {
 
   stages: Stage[];
 
+  icon?: string;                 // emoji 图标
+
   inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
 
   outputSchema?: Record<string, { type: string; description?: string }>;

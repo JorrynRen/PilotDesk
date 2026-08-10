@@ -11,16 +11,29 @@ interface Props {
     version: string;
     trigger: TriggerConfig;
     enabled: boolean;
+    icon?: string;
     inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
     outputSchema?: Record<string, { type: string; description?: string }>;
   }) => void;
   onClose: () => void;
 }
 
+// ── 预设 emoji 图标 ──
+const EMOJI_GROUPS: Array<{ label: string; emojis: string[] }> = [
+  { label: 'AI/Agent', emojis: ['🤖', '🧠', '💬', '✨', '⚡'] },
+  { label: '数据/报表', emojis: ['📊', '📈', '📋', '🔍', '📁'] },
+  { label: '自动化/运维', emojis: ['⚙️', '🔔', '🚀', '🔄', '🛡️'] },
+  { label: '内容/创作', emojis: ['✏️', '📝', '🎨', '📚'] },
+  { label: '通用/其他', emojis: ['🌐', '📌', '⭐', '💡', '🔗'] },
+];
+
+const ALL_EMOJIS = EMOJI_GROUPS.flatMap(g => g.emojis);
+
 export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Props) {
   const [name, setName] = useState(initial?.name || '');
   const [description, setDescription] = useState(initial?.description || '');
   const [version, setVersion] = useState(initial?.version || '1.0.0');
+  const [icon, setIcon] = useState<string | undefined>(initial?.icon);
   const [triggerType, setTriggerType] = useState<'manual' | 'cron' | 'event'>(initial?.trigger?.triggerType || 'manual');
   const [cronExpr, setCronExpr] = useState(initial?.trigger?.cron || '');
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
@@ -65,6 +78,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
       name: trimmedName,
       description: description.trim(),
       version: version.trim() || '1.0.0',
+      icon,
       trigger: triggerType === 'manual'
         ? { triggerType: 'manual' }
         : triggerType === 'cron'
@@ -88,7 +102,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
       onClick={onClose}
     >
       <div
-        className="w-[480px] rounded-xl shadow-2xl flex flex-col"
+        className="w-[540px] rounded-xl shadow-2xl flex flex-col"
         style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -124,6 +138,33 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
               placeholder="输入工作流名称"
               autoFocus
             />
+          </div>
+
+          {/* 图标选择 */}
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+              图标
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {EMOJI_GROUPS.map((group) => (
+                <div key={group.label} className="flex items-center gap-1.5">
+                  <span className="text-[10px] shrink-0 w-14 text-right" style={{ color: 'var(--text-tertiary)' }}>{group.label}</span>
+                  <div className="flex gap-0.5">
+                    {group.emojis.map((emoji) => (
+                      <button
+                        key={emoji}
+                        onClick={() => setIcon(emoji === icon ? undefined : emoji)}
+                        className="w-6 h-6 flex items-center justify-center rounded text-xs transition-colors"
+                        style={{
+                          backgroundColor: icon === emoji ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                          border: icon === emoji ? '1.5px solid var(--accent)' : '1px solid transparent',
+                        }}
+                      >{emoji}</button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* 描述 */}

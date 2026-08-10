@@ -25,7 +25,7 @@ interface NodeTypeMeta {
   nodeH: number;
 }
 
-const NODE_TYPE_META: Record<string, NodeTypeMeta> = {
+export const NODE_TYPE_META: Record<string, NodeTypeMeta> = {
   agent: { label: 'Agent 任务', color: '#58a6ff', icon: '⚡', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
   api: { label: 'API 调用', color: '#a371f7', icon: '⬡', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
   transform: { label: '代码转换', color: '#d29922', icon: '⟲', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
@@ -36,9 +36,23 @@ const NODE_TYPE_META: Record<string, NodeTypeMeta> = {
   subflow: { label: '子工作流', color: '#79c0ff', icon: '⧉', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 },
 };
 
+// 节点创建时的默认 params（对应 HumanInputConfig 的 camelCase 字段，
+// 与 NODE_TYPE_CONFIG_MAP 的 field.key 保持一致）
+export const NODE_DEFAULT_PARAMS: Record<string, Record<string, unknown>> = {
+  agent: { agent_type: 'claude', prompt_template: '' },
+  api: { method: 'GET', url: '', body_template: '' },
+  transform: { script: '' },
+  interact: { prompt: '请输入', inputType: 'text', timeoutMinutes: 30 },
+  plugin: {},
+  subflow: {},
+  start: {},
+  end: {},
+};
+
 
 export function getNodeTypeMeta(type: string): NodeTypeMeta {
-  return NODE_TYPE_META[type] || { label: type, color: '#8b949e', icon: '❓', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 };
+  const key = (type || '').toLowerCase();
+  return NODE_TYPE_META[key] || { label: type, color: '#8b949e', icon: '❓', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 };
 }
 
 // ── ID 生成 ──
@@ -231,9 +245,11 @@ export function createWorkflowNode(
     id: generateId(),
     type: type as WorkflowNodeType,
     label: meta.label,
-    params: {},
+    params: { ...(NODE_DEFAULT_PARAMS[type] ?? {}) },
     position: finalPosition,
     isBoundary: meta.isBoundary,
+    // interact 节点默认暴露用户输入为 output 字段，方便下游直接引用
+    ...(type === 'interact' ? { outputMapping: { output: '{{content}}' } } : {}),
   };
 }
 

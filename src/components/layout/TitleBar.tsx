@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Settings, PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare } from 'lucide-react';
 
 export type StatusHintState = 'loading' | 'ready' | 'error' | 'saving' | 'saved' | 'save-error' | 'idle';
 
@@ -180,10 +180,23 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       onMouseMove={handleHeaderMouseMove}
       onMouseLeave={handleHeaderMouseLeave}
     >
-      {/* Left: back button or logo + title */}
+      {/* Left: logo + app name (always) + optional back button + title */}
       <div className="flex items-center gap-2 h-full">
-        {showBackButton ? (
+        {/* 项目 Logo（所有页面统一显示） */}
+        <img
+          src="/logo.png"
+          alt=""
+          className="w-5 h-5 rounded pointer-events-none"
+          draggable={false}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        />
+        {/* 项目名称（所有页面统一显示） */}
+        <span className="text-xs font-medium pointer-events-none">PilotDesk</span>
+
+        {/* 分隔符 + 返回按钮 + 页面标题（当 showBackButton=true 时显示） */}
+        {showBackButton && (
           <>
+            <div className="w-px h-4 mx-0.5" style={{ backgroundColor: 'var(--border)' }} />
             <button
               onClick={onBack || onOpenSettings}
               className="pd-btn p-1 rounded transition-colors hover:opacity-80"
@@ -197,77 +210,189 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               <StatusHintBadge hint={statusHint} />
             )}
           </>
-        ) : (
-          <>
-            <img
-              src="/logo.png"
-              alt=""
-              className="w-5 h-5 rounded pointer-events-none"
-              draggable={false}
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-            />
-            <span className="text-xs font-medium pointer-events-none">PilotDesk</span>
-          </>
         )}
       </div>
 
-      {/* Right: settings + panel toggle + virtual console | window controls */}
+      {/* Right: 三段一体化滑轨控件
+         *  ── 布局（总 ~210px） ──────────────────────────────────────────
+         * │[🔧 工作流] ││[📝 客户端]  [⌨  终端]│
+         * │  永久紫段   ││  ←     紫色 thumb 在这里滑   → │
+         * └────────────┴┴─────────────────────────────────┘
+         *              ↑ 加粗阻断线（语义区分：左=跳转CTA，右=状态切换）
+         *  外框、描边、圆角、内阴影完全统一，高度与两侧其它按钮严格对齐。
+         */}
       <div className="flex items-center h-full">
-        {!showBackButton && onToggleVirtualConsole && (
-          <button
-            onClick={onToggleVirtualConsole}
-            className="pd-btn px-1.5 py-1 rounded transition-colors hover:opacity-80"
-            style={{
-              color: isVirtualConsoleOpen ? 'var(--accent)' : 'var(--text-secondary)',
-              background: isVirtualConsoleOpen ? 'var(--border)' : 'transparent',
-            }}
-            title={isVirtualConsoleOpen ? '客户端模式' : '终端模式'}
-          >
-            <span className="inline-flex items-center gap-1">
-              {isVirtualConsoleOpen ? <MessageSquare size={13} /> : <Terminal size={13} />}
-              <span className="text-[11px]">{isVirtualConsoleOpen ? '客户端模式' : '终端模式'}</span>
-            </span>
-          </button>
-        )}
-        {!showBackButton && onOpenWorkflow && (
-          <button
-            onClick={onOpenWorkflow}
-            className="pd-btn px-1.5 py-1 rounded transition-colors hover:opacity-80"
-            style={{ color: 'var(--text-secondary)', background: 'transparent' }}
-            title="工作流管理"
-          >
-            <span className="inline-flex items-center gap-1">
-              <Workflow size={13} />
-              <span className="text-[11px]">工作流</span>
-            </span>
-          </button>
-        )}
-        {!showBackButton && onOpenSettings && (
-          <button
-            onClick={onOpenSettings}
-            className="pd-btn p-1 rounded transition-colors hover:opacity-80"
-            style={{ color: 'var(--text-secondary)', background: 'transparent' }}
-            title="设置"
-          >
-            <span className="inline-flex items-center gap-1">
-              <Settings size={13} />
-              <span className="text-[11px]">设置</span>
-            </span>
-          </button>
-        )}
-        {onToggleRightPanel && (
-          <button
-            onClick={onToggleRightPanel}
-            className="pd-btn p-1 rounded transition-colors hover:opacity-80"
-            style={{
-              color: rightPanelOpen ? 'var(--accent)' : 'var(--text-secondary)',
-              background: rightPanelOpen ? 'var(--border)' : 'transparent',
-            }}
-            title={rightPanelOpen ? '关闭侧边栏' : '打开侧边栏'}
-          >
-            <PanelIcon size={13} />
-          </button>
-        )}
+        {/* ✦ 内层 stretch 包容器：组合开关 + 分隔符 + 折叠按钮 三者高度自动完全对齐，
+            无需手动计算 border/padding 像素；外层 items-center 保证整组在 header 垂直居中。 */}
+        <div className="flex items-stretch">
+          {!showBackButton && (onOpenWorkflow || onToggleVirtualConsole) && (
+            <div
+              className="relative flex items-center select-none"
+              role="group"
+              aria-label="工作流 / 视图模式"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-strong, rgba(0,0,0,0.12))',
+                padding: 2,
+                borderRadius: 6,
+                boxShadow: 'inset 0 1px 1px rgba(0,0,0,0.04)',
+                minHeight: 22,
+                width: onOpenWorkflow && onToggleVirtualConsole
+                  ? 210
+                  : onToggleVirtualConsole
+                    ? 130   // 只显示视图切换（退化模式：宽 130）
+                    : 82,   // 只显示工作流（退化模式：宽 82）
+              }}
+            >
+              {/* ─── 段 1：工作流 CTA（永久紫段，语义：跳转） ─── */}
+              {onOpenWorkflow && (
+                <div
+                  className="relative flex items-center h-full shrink-0"
+                  style={{
+                    width: onToggleVirtualConsole ? '38%' : '100%',
+                  }}
+                >
+                  {/* 紫色 thumb 占满此段槽位 */}
+                  <div
+                    aria-hidden
+                    data-role="workflow-thumb"
+                    className="absolute inset-0 rounded-[4px]"
+                    style={{
+                      backgroundColor: 'var(--accent)',
+                      boxShadow:
+                        '0 1px 2px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.15)',
+                      zIndex: 0,
+                      transition: 'background-color 160ms ease, transform 80ms ease',
+                    }}
+                  />
+                  <button
+                    onClick={onOpenWorkflow}
+                    className="relative z-10 w-full flex items-center justify-center gap-1 rounded-[4px] text-[11px] transition-all active:scale-[.97]"
+                    style={{
+                      paddingTop: 4,
+                      paddingBottom: 4,
+                      color: '#fff',
+                      fontWeight: 600,
+                    }}
+                    onMouseEnter={(e) => {
+                      const thumb = (e.currentTarget.parentElement?.querySelector('[data-role="workflow-thumb"]') || null) as HTMLElement | null;
+                      if (thumb) thumb.style.backgroundColor = 'color-mix(in srgb, var(--accent) 85%, #fff)';
+                    }}
+                    onMouseLeave={(e) => {
+                      const thumb = (e.currentTarget.parentElement?.querySelector('[data-role="workflow-thumb"]') || null) as HTMLElement | null;
+                      if (thumb) thumb.style.backgroundColor = 'var(--accent)';
+                    }}
+                    title="工作流管理"
+                  >
+                    <Workflow size={12} />
+                    工作流
+                  </button>
+                </div>
+              )}
+
+              {/* ─── 阻断线：区分左侧跳转 CTA / 右侧状态切换 ───
+                   只有两个区都存在时才渲染 */}
+              {onOpenWorkflow && onToggleVirtualConsole && (
+                <div
+                  aria-hidden
+                  className="shrink-0 h-full flex items-center"
+                  style={{ width: 3 }}
+                >
+                  <div
+                    className="rounded-full"
+                    style={{
+                      width: 1,
+                      height: 14,
+                      backgroundColor: 'rgba(0,0,0,0.2)',
+                      boxShadow: '0 0 0 1px rgba(255,255,255,0.08)',
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* ─── 段 2+3：客户端 / 终端 互斥切换（语义：状态） ─── */}
+              {onToggleVirtualConsole && (
+                <div
+                  className="relative flex items-center h-full flex-1 min-w-0"
+                  role="radiogroup"
+                  aria-label="视图模式切换"
+                >
+                  {/* 段 2：客户端 */}
+                  <button
+                    onClick={() => { if (isVirtualConsoleOpen) onToggleVirtualConsole(); }}
+                    className="relative z-10 flex items-center justify-center gap-1 flex-1 h-full rounded-[4px] text-[11px] transition-colors"
+                    style={{
+                      paddingTop: 4,
+                      paddingBottom: 4,
+                      color: !isVirtualConsoleOpen ? '#fff' : 'var(--text-secondary)',
+                      fontWeight: !isVirtualConsoleOpen ? 600 : 500,
+                    }}
+                    title="切换到客户端模式"
+                  >
+                    <MessageSquare size={11} />
+                    客户端
+                  </button>
+                  {/* 段 3：终端 */}
+                  <button
+                    onClick={() => { if (!isVirtualConsoleOpen) onToggleVirtualConsole(); }}
+                    className="relative z-10 flex items-center justify-center gap-1 flex-1 h-full rounded-[4px] text-[11px] transition-colors"
+                    style={{
+                      paddingTop: 4,
+                      paddingBottom: 4,
+                      color: isVirtualConsoleOpen ? '#fff' : 'var(--text-secondary)',
+                      fontWeight: isVirtualConsoleOpen ? 600 : 500,
+                    }}
+                    title="切换到终端模式"
+                  >
+                    <Terminal size={11} />
+                    终端
+                  </button>
+                  {/* 滑动 thumb：只在右侧 62% 区域内移动 */}
+                  <div
+                    aria-hidden
+                    data-role="mode-thumb"
+                    className="absolute top-0 rounded-[4px]"
+                    style={{
+                      height: '100%',
+                      width: 'calc(50% - 1px)',
+                      backgroundColor: 'var(--accent)',
+                      left: isVirtualConsoleOpen ? 'calc(50% + 1px)' : 0,
+                      transition: 'left 180ms cubic-bezier(.22,.61,.36,1)',
+                      boxShadow:
+                        '0 1px 2px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.15)',
+                      zIndex: 0,
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {/* 分组分隔符：功能导航 vs 布局操作（侧边栏折叠） — 设置按钮已移至 StatusBar 最左端 */}
+          {onToggleRightPanel && (!showBackButton && (onOpenWorkflow || onToggleVirtualConsole)) && (
+            <div className="w-px h-full mx-1 shrink-0 flex items-center" style={{ backgroundColor: 'transparent' }}>
+              <div className="w-px h-4 shrink-0" style={{ backgroundColor: 'var(--border)' }} />
+            </div>
+          )}
+          {onToggleRightPanel && (
+            <button
+              onClick={onToggleRightPanel}
+              className="flex items-center justify-center hover:opacity-80 transition-all shrink-0"
+              style={{
+                /* 在父级 flex items-stretch 容器中，此按钮自动撑满与组合开关相同的高度，
+                   含 border + padding 全尺寸完全匹配，无需再手动写死 height 值。 */
+                width: 26,
+                padding: 0,
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                color: rightPanelOpen ? 'var(--accent)' : 'var(--text-secondary)',
+                background: rightPanelOpen ? 'var(--border)' : 'transparent',
+              }}
+              title={rightPanelOpen ? '关闭侧边栏' : '打开侧边栏'}
+            >
+              <PanelIcon size={13} />
+            </button>
+          )}
+        </div>
 
         {/* Separator */}
         <div

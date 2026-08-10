@@ -1,0 +1,274 @@
+{
+  "name": "写小说工作流（测试）",
+  "version": "1.0.0",
+  "description": "",
+  "trigger": {
+    "triggerType": "manual",
+    "cron": null,
+    "eventName": null
+  },
+  "stages": [
+    {
+      "name": "起始阶段",
+      "order": 0,
+      "nodes": [
+        {
+          "type": "start",
+          "label": "起始",
+          "params": {},
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": {},
+          "outputMapping": {
+            "fengge": "古装、玄幻、修仙",
+            "shijieguan": "正义、惜生、爱民",
+            "zhuti": "凡人修仙"
+          },
+          "position": {
+            "x": 15,
+            "y": 15
+          }
+        },
+        {
+          "type": "agent",
+          "label": "Agent 任务1",
+          "params": {
+            "agent_type": "claude",
+            "prompt_template": "你是一个小说作家。\n小说设定：\n1. 小说主题：{{zhuti}}\n2. 世界观设定：{{shijieguan}}\n3. 小说风格：{{fengge}}\n4.题材：修仙\n5. 其他要求：\n请根据以上设定撰写一部短篇内容，小说名称自拟，字数 2000-3000字。注意开篇要有吸引力。\n6.输出格式为：\n# 标题：[小说的标题]\n- **小说主题**: [小说主题]\n- **世界观设定**:  [世界观设定]\n- **小说风格**:  [小说风格]\n- **题材**:  [题材]\n- **总字数**:  [总字数]\n[小说的内容]\n7.除了格式规定的内容外，不要有其他任何额外的字符；不要再向我进行交互，直接写稿。\n8.输出产物不要创建为任何文件，直接以文本形式输出。",
+            "session_mode": "new"
+          },
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": {
+            "fengge": "{{fengge.n1.a4ca3fa3-1c60-476a-b6cf-4d3f0b072336}}",
+            "shijieguan": "{{shijieguan.n1.a4ca3fa3-1c60-476a-b6cf-4d3f0b072336}}",
+            "zhuti": "{{zhuti.n1.a4ca3fa3-1c60-476a-b6cf-4d3f0b072336}}"
+          },
+          "outputMapping": {
+            "jieguo": "{{content}}",
+            "sessionID": "{{session_id}}"
+          },
+          "position": {
+            "x": 276,
+            "y": 15
+          }
+        }
+      ],
+      "edges": [
+        {
+          "source": "n1",
+          "target": "n2",
+          "label": null,
+          "condition": null
+        }
+      ],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "阶段 3",
+      "order": 1,
+      "nodes": [
+        {
+          "type": "api",
+          "label": "API 调用",
+          "params": {
+            "body_template": "{\"wd\":\"{{input}}\"}",
+            "url": "https://www.baidu.com/s?"
+          },
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": null,
+          "outputMapping": null,
+          "position": {
+            "x": 40,
+            "y": 27
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "阶段 4",
+      "order": 2,
+      "nodes": [
+        {
+          "type": "interact",
+          "label": "人工交互",
+          "params": {},
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": null,
+          "outputMapping": null,
+          "position": {
+            "x": 141,
+            "y": 118
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "阶段 5",
+      "order": 3,
+      "nodes": [
+        {
+          "type": "plugin",
+          "label": "插件命令",
+          "params": {},
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": null,
+          "outputMapping": null,
+          "position": {
+            "x": 160,
+            "y": 100
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "阶段 6",
+      "order": 4,
+      "nodes": [
+        {
+          "type": "subflow",
+          "label": "子工作流",
+          "params": {},
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": null,
+          "outputMapping": null,
+          "position": {
+            "x": 146,
+            "y": 111
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "阶段 7",
+      "order": 5,
+      "nodes": [
+        {
+          "type": "end",
+          "label": "结束",
+          "params": {},
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": null,
+          "outputMapping": {
+            "output": "content"
+          },
+          "position": {
+            "x": 174,
+            "y": 167
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    }
+  ],
+  "stageEdges": [
+    {
+      "source": "s1",
+      "target": "s2",
+      "label": null,
+      "condition": null
+    },
+    {
+      "source": "s2",
+      "target": "s3",
+      "label": null,
+      "condition": null
+    },
+    {
+      "source": "s3",
+      "target": "s4",
+      "label": null,
+      "condition": null
+    },
+    {
+      "source": "s4",
+      "target": "s5",
+      "label": null,
+      "condition": null
+    },
+    {
+      "source": "s5",
+      "target": "s6",
+      "label": null,
+      "condition": null
+    }
+  ],
+  "enabled": true,
+  "refCode": null
+}

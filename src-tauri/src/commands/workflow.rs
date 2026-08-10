@@ -96,6 +96,8 @@ input_schema: None,
 
         output_schema: None,
 
+        icon: None,
+
         created_at: ts,
 
         updated_at: ts,
@@ -516,20 +518,26 @@ pub async fn start_workflow(
 
             Ok(Err(e)) => {
 
-                log::error!("[WorkflowEngine] 工作流执行失败: id={}, error={}", instance_id_clone, e);
+                let err_str = e.to_string();
 
-                // 回滚：更新实例状态为 failed
+                let is_cancelled = err_str.contains("取消") || err_str.contains("cancel");
 
+                log::error!("[WorkflowEngine] 工作流执行{}: id={}, error={}", if is_cancelled { "已取消" } else { "失败" }, instance_id_clone, err_str);
+
+                // 仅在引擎未正确设置状态时才回写（引擎内部的 final_status 已处理 cancelled/failed/success）
+                // 此处仅作为兜底，避免覆盖引擎已写入的正确状态
                 if let Some(conn) = app_handle_clone.try_state::<crate::DbState>().and_then(|s| s.get_conn().ok()) {
-
-                    let _ = conn.execute(
-
-                        "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
-
-                        rusqlite::params![e.to_string(), crate::utils::now(), instance_id_clone],
-
-                    );
-
+                    if is_cancelled {
+                        let _ = conn.execute(
+                            "UPDATE workflow_instances SET status = 'cancelled', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
+                            rusqlite::params![crate::utils::now(), instance_id_clone],
+                        );
+                    } else {
+                        let _ = conn.execute(
+                            "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
+                            rusqlite::params![err_str, crate::utils::now(), instance_id_clone],
+                        );
+                    }
                 }
 
                 let _ = app_handle_clone.emit("workflow:execution-progress", serde_json::json!({
@@ -542,9 +550,9 @@ pub async fn start_workflow(
 
                     "execution": {
 
-                        "status": "failed",
+                        "status": if is_cancelled { "cancelled" } else { "failed" },
 
-                        "error": e.to_string(),
+                        "error": err_str,
 
                         "definition_name": def_clone.name,
 
@@ -638,15 +646,25 @@ pub async fn cancel_workflow(
 
     // 必须使用纯字符串字面量以符合 CHECK(status IN (...))
 
+    // 仅当实例仍处于 running 状态时才回写 cancelled，
+
+    // 避免编辑器卸载时的兜底取消调用覆盖已完成的 success/failed/cancelled 终态。
+
     let now = crate::utils::now();
 
-    conn.execute(
+    let affected = conn.execute(
 
-        "UPDATE workflow_instances SET status = 'cancelled', error = ?1, updated_at = ?2 WHERE id = ?3",
+        "UPDATE workflow_instances SET status = 'cancelled', error = ?1, updated_at = ?2 WHERE id = ?3 AND status = 'running'",
 
         rusqlite::params!["用户中止", now, execution_id],
 
     ).map_err(|e| format!("更新失败: {}", e))?;
+
+    if affected == 0 {
+
+        log::info!("[cancel_workflow] 实例 {} 非运行中状态，跳过状态回写", execution_id);
+
+    }
 
 
 
@@ -838,6 +856,30 @@ pub async fn respond_human_input(
 
         .map_err(|e| format!("响应失败: {}", e))
 
+}
+
+/// 读取指定文件路径的文本内容（供人工交互 file 类型使用）
+///
+/// 用户在 interact 节点运行时选择文件后，前端调用此命令读取文件内容，
+/// 将文本填入响应输入框，提交时把"文件内容"（而非路径）作为响应值传给工作流。
+#[tauri::command]
+pub fn read_file_content(path: String) -> Result<String, String> {
+    if path.trim().is_empty() {
+        return Err("文件路径为空".to_string());
+    }
+    // 限制读取大小（10MB），避免误读大文件导致 OOM
+    const MAX_BYTES: u64 = 10 * 1024 * 1024;
+    let metadata = std::fs::metadata(&path)
+        .map_err(|e| format!("无法读取文件信息: {}", e))?;
+    if metadata.len() > MAX_BYTES {
+        return Err(format!(
+            "文件过大（{} 字节，最大支持 {} 字节），请选择小于 10MB 的文本文件",
+            metadata.len(),
+            MAX_BYTES
+        ));
+    }
+    std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取文件失败: {}", e))
 }
 
 
@@ -1952,6 +1994,8 @@ impl ExportWorkflowDefinition {
 
             output_schema: None,
 
+            icon: None,
+
             created_at: now_ts,
 
             updated_at: now_ts,
@@ -2528,11 +2572,13 @@ pub fn get_workflow_stats(
 
     workflow_id: Option<String>,
 
+    days: Option<i64>,
+
 ) -> Result<crate::workflow::WorkflowStats, String> {
 
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
 
-    crate::workflow::get_workflow_stats(&conn, workflow_id.as_deref())
+    crate::workflow::get_workflow_stats(&conn, workflow_id.as_deref(), days)
 
         .map_err(|e| format!("查询统计失败: {}", e))
 
@@ -2574,13 +2620,65 @@ pub fn get_node_type_stats(
 
     workflow_id: Option<String>,
 
+    days: Option<i64>,
+
 ) -> Result<Vec<crate::workflow::NodeTypeStat>, String> {
 
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
 
-    crate::workflow::get_node_type_stats(&conn, workflow_id.as_deref())
+    crate::workflow::get_node_type_stats(&conn, workflow_id.as_deref(), days)
 
         .map_err(|e| format!("查询节点类型统计失败: {}", e))
+
+}
+
+
+
+/// 获取执行最频繁 / 失败率最高 Top N 工作流
+
+#[tauri::command]
+
+pub fn get_top_workflows(
+
+    state: tauri::State<'_, crate::DbState>,
+
+    days: Option<i64>,
+
+    limit: Option<i64>,
+
+    sort_by: Option<String>,
+
+) -> Result<Vec<crate::workflow::TopWorkflowStat>, String> {
+
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+
+    crate::workflow::get_top_workflows(&conn, days, limit, sort_by.as_deref())
+
+        .map_err(|e| format!("查询 Top 工作流失败: {}", e))
+
+}
+
+
+
+/// 获取失败实例最常见的错误文本 Top N
+
+#[tauri::command]
+
+pub fn get_top_errors(
+
+    state: tauri::State<'_, crate::DbState>,
+
+    days: Option<i64>,
+
+    limit: Option<i64>,
+
+) -> Result<Vec<crate::workflow::TopErrorStat>, String> {
+
+    let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
+
+    crate::workflow::get_top_errors(&conn, days, limit)
+
+        .map_err(|e| format!("查询 Top 错误失败: {}", e))
 
 }
 
@@ -2824,99 +2922,113 @@ pub fn list_recoverable_executions(
 
 
 
-/// 恢复执行（从 checkpoint 继续执行）
-
-#[tauri::command]
-
-pub async fn recover_execution(
-
-    app_handle: tauri::AppHandle,
-
-    execution_id: String,
-
-) -> Result<serde_json::Value, String> {
-
-    let conn = app_handle.state::<crate::DbState>().get_conn()
-
-        .map_err(|e| format!("数据库连接失败: {}", e))?;
-
-    // 按 ID 直接查询实例，避免全量扫描（block scope 隔离 stmt，确保 Send 安全）
-
-    let instance = {
-
-        let mut stmt = conn.prepare(
-
-            "SELECT id, definition_id, definition_name, status, context,
-
-                    trigger, trigger_detail,
-
-                    started_at, completed_at, completion_rate, error, created_at
-
-             FROM workflow_instances WHERE id = ?1"
-
-        ).map_err(|e| format!("查询失败: {}", e))?;
-
-        stmt.query_row(rusqlite::params![execution_id], |row| crate::workflow::instance_from_row(row))
-
-            .map_err(|e| format!("查询失败: {}", e))?
-
-    };
-
-    let def = crate::workflow::get_definition(&conn, &instance.definition_id)
-
-        .map_err(|e| format!("查询失败: {}", e))?
-
-        .ok_or_else(|| "工作流定义不存在".to_string())?;
-
-    let executor = app_handle.state::<std::sync::Arc<crate::workflow::executor::NodeExecutor>>();
-
-
-
-    // 从 app_settings 读取最大并发数（与 start_workflow 保持一致）
-
-    let max_concurrency: usize = conn
-
-        .query_row(
-
-            "SELECT value FROM app_settings WHERE key = 'workflow_max_concurrency'",
-
-            [],
-
-            |row| row.get::<_, String>(0),
-
-        )
-
-        .ok()
-
-        .and_then(|v| v.parse().ok())
-
-        .unwrap_or(10);
-
-
-
-    crate::workflow::engine::WorkflowEngine::recover_execution(
-
-        &executor.inner(),
-
-        &def,
-
-        &execution_id,
-
-        serde_json::Value::Object(serde_json::Map::new()),
-
-        &app_handle,
-
-        max_concurrency,
-
-    ).await.map_err(|e| e.to_string())
-
-        .map_err(|e| format!("恢复执行失败: {}", e))
-
-}
-
+// ════════════════════════════════════════════════════════════
 
 
 // ════════════════════════════════════════════════════════════
+// 断点执行（单点执行 / 链式执行 / 补全执行）
+// ════════════════════════════════════════════════════════════
+
+/// 统一断点执行命令
+///
+/// mode: "full" | "single" | "chain" | "completion"
+/// 断点模式下 execution_id 对应的实例必须已存在执行记录。
+#[tauri::command]
+pub async fn execute_workflow_mode(
+    app_handle: tauri::AppHandle,
+    executor: tauri::State<'_, Arc<crate::workflow::executor::NodeExecutor>>,
+    execution_id: String,
+    mode: String,
+    node_id: Option<String>,
+) -> Result<(), String> {
+    use crate::workflow::engine::ExecutionMode;
+
+    let exec_mode = match mode.as_str() {
+        "single" => {
+            let nid = node_id.ok_or_else(|| "单点执行需要指定 node_id".to_string())?;
+            ExecutionMode::SingleNode { node_id: nid }
+        }
+        "chain" => {
+            let nid = node_id.ok_or_else(|| "链式执行需要指定 node_id".to_string())?;
+            ExecutionMode::Chain { node_id: nid }
+        }
+        "completion" => ExecutionMode::Completion,
+        "full" => ExecutionMode::Full,
+        _ => return Err(format!("不支持的执行模式: {}", mode)),
+    };
+
+    let conn = app_handle.state::<crate::DbState>().get_conn()
+        .map_err(|e| format!("数据库连接失败: {}", e))?;
+
+    let instance = {
+        let mut stmt = conn.prepare(
+            "SELECT id, definition_id, definition_name, status, context,
+                    trigger, trigger_detail,
+                    started_at, completed_at, completion_rate, error, created_at
+             FROM workflow_instances WHERE id = ?1"
+        ).map_err(|e| format!("查询失败: {}", e))?;
+
+        stmt.query_row(rusqlite::params![execution_id], |row| crate::workflow::instance_from_row(row))
+            .map_err(|e| format!("实例不存在: {}", e))?
+    };
+
+    // 断点模式校验：实例必须已有执行记录
+    if !matches!(exec_mode, ExecutionMode::Full) {
+        let node_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM node_executions WHERE execution_id = ?1",
+            rusqlite::params![execution_id],
+            |row| row.get(0),
+        ).map_err(|e| format!("查询执行记录失败: {}", e))?;
+
+        if node_count == 0 {
+            return Err("该实例无执行记录，不支持断点执行。请先执行一次工作流。".to_string());
+        }
+    }
+
+    let def = crate::workflow::get_definition(&conn, &instance.definition_id)
+        .map_err(|e| format!("查询失败: {}", e))?
+        .ok_or_else(|| "工作流定义不存在".to_string())?;
+
+    let max_concurrency: usize = conn
+        .query_row("SELECT value FROM app_settings WHERE key = 'workflow_max_concurrency'", [], |row| row.get::<_, String>(0))
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+
+    let input_data = serde_json::from_str::<serde_json::Value>(
+        &instance.context.to_string()
+    ).unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+    let executor = executor.inner().clone();
+    let exec_id = execution_id.clone();
+    let def_clone = def.clone();
+
+    let inner_handle = tokio::spawn(async move {
+        crate::workflow::engine::WorkflowEngine::execute_with_mode(
+            &executor, &def_clone, &exec_id, input_data, &app_handle, max_concurrency, exec_mode,
+        ).await
+    });
+
+    match inner_handle.await {
+        Ok(Ok(_)) => {
+            log::info!("[execute_workflow_mode] 执行成功: id={}, mode={}", execution_id, mode);
+        }
+        Ok(Err(e)) => {
+            let err_str = e.to_string();
+            log::error!("[execute_workflow_mode] 执行失败: id={}, mode={}, error={}", execution_id, mode, err_str);
+        }
+        Err(join_err) => {
+            let msg = if join_err.is_panic() {
+                "任务 panic".to_string()
+            } else {
+                "任务被取消".to_string()
+            };
+            log::error!("[execute_workflow_mode] panic: id={}, error={}", execution_id, msg);
+        }
+    }
+
+    Ok(())
+}
 
 // 执行计划查询
 

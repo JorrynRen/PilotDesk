@@ -6,6 +6,39 @@ import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 const NODE_W = 160;
 const NODE_H = 60;
 
+/**
+ * 格式化节点执行结果用于展示：
+ * - 过滤内部字段（agent_session_id 等）
+ * - 单字段 content 对象自动解包（展示干净值，去掉 {} 包裹）
+ * - 多字段对象保持 JSON 格式
+ * - 非对象直接转字符串
+ */
+function formatNodeResult(result: unknown): string {
+  if (typeof result !== 'object' || result === null) {
+    return String(result);
+  }
+
+  const entries = Object.entries(result as Record<string, unknown>)
+    .filter(([k]) => !k.startsWith('__') && k !== 'agent_session_id');
+
+  // 单字段 content 对象：直接展示值，去掉 {} 包裹
+  if (entries.length === 1 && entries[0][0] === 'content') {
+    const val = entries[0][1];
+    if (typeof val === 'object' && val !== null) {
+      return JSON.stringify(val, null, 2);
+    }
+    return String(val);
+  }
+
+  // 空对象
+  if (entries.length === 0) {
+    return '(空)';
+  }
+
+  // 多字段：保持 JSON 格式
+  return JSON.stringify(Object.fromEntries(entries), null, 2);
+}
+
 interface WorkflowNodeItemProps {
   node: WorkflowNode;
   stageId: string;
@@ -104,7 +137,9 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
               ? '#3fb95010'
               : runState === 'failed'
                 ? '#f8514910'
-                : 'var(--bg-tertiary)',
+                : runState === 'cancelled'
+                  ? '#d2992210'
+                  : 'var(--bg-tertiary)',
         boxShadow: isDraggingThis || isSnapHighlight
           ? '0 8px 24px rgba(0,0,0,0.4), 0 0 0 1px var(--accent)'
           : selectedNodeIds.has(node.id) && !isSelected
@@ -142,7 +177,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
         <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
           {node.label}
         </span>
-        {(runState === 'success' || runState === 'failed') && (
+        {(runState === 'success' || runState === 'failed' || runState === 'cancelled') && (
           <span
             className="ml-auto shrink-0"
             style={{
@@ -156,15 +191,19 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
               lineHeight: 1,
               fontWeight: 700,
               color: '#fff',
-              background: runState === 'success'
+              background: runState === 'cancelled'
+                ? 'linear-gradient(135deg, #d29922, #b08800)'
+                : runState === 'success'
                 ? 'linear-gradient(135deg, #3fb950, #2ea043)'
                 : 'linear-gradient(135deg, #f85149, #da3633)',
-              boxShadow: runState === 'success'
+              boxShadow: runState === 'cancelled'
+                ? '0 1px 3px rgba(210,153,34,0.4)'
+                : runState === 'success'
                 ? '0 1px 3px rgba(63,185,80,0.4)'
                 : '0 1px 3px rgba(248,81,73,0.4)',
             }}
           >
-            {runState === 'success' ? '✓' : '✗'}
+            {runState === 'cancelled' ? '○' : runState === 'success' ? '✓' : '✗'}
           </span>
         )}
       </div>
@@ -210,11 +249,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             whiteSpace: 'pre-wrap',
             fontFamily: 'var(--font-mono)',
           }}>
-            {typeof nodeResult === 'object'
-              ? JSON.stringify(Object.fromEntries(
-                  Object.entries(nodeResult).filter(([k]) => k !== 'agent_session_id')
-                ), null, 2)
-              : String(nodeResult)}
+            {formatNodeResult(nodeResult)}
           </div>
           {/* 放大查看按钮 */}
           <div
@@ -292,7 +327,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
       )}
 
       {/* 删除按钮 */}
-      {!meta.isBoundary && (
+      {!(meta.isBoundary && node.type !== 'end') && (
         <div
           onClick={(e) => { e.stopPropagation(); onDeleteNode(node.id); }}
           className="absolute flex items-center justify-center rounded-full cursor-pointer"
@@ -412,11 +447,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
                 wordBreak: 'break-all',
               }}
             >
-              {typeof nodeResult === 'object'
-                ? JSON.stringify(Object.fromEntries(
-                    Object.entries(nodeResult).filter(([k]) => k !== 'agent_session_id')
-                  ), null, 2)
-                : String(nodeResult)}
+              {formatNodeResult(nodeResult)}
             </pre>
             {/* 右下角缩放提示 */}
             <div style={{

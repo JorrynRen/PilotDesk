@@ -394,6 +394,8 @@ pub struct WorkflowDefinition {
 
     pub stages: Vec<Stage>,
 
+    pub icon: Option<String>,
+
     pub input_schema: Option<serde_json::Value>,
 
     pub output_schema: Option<serde_json::Value>,
@@ -516,11 +518,13 @@ fn def_from_row(row: &rusqlite::Row) -> rusqlite::Result<WorkflowDefinition> {
 
             .and_then(|s| serde_json::from_str(&s).ok()),
 
-        created_at: row.get(8)?,
+        icon: row.get(8)?,
 
-        updated_at: row.get(9)?,
+        created_at: row.get(9)?,
 
-        enabled: row.get(10)?,
+        updated_at: row.get(10)?,
+
+        enabled: row.get(11)?,
 
     })
 
@@ -528,7 +532,7 @@ fn def_from_row(row: &rusqlite::Row) -> rusqlite::Result<WorkflowDefinition> {
 
 
 
-const DEF_COLUMNS: &str = "id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled";
+const DEF_COLUMNS: &str = "id, name, version, description, trigger, stages, input_schema, output_schema, icon, created_at, updated_at, enabled";
 
 
 
@@ -578,9 +582,9 @@ pub fn create_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
 
         "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages,
 
-         input_schema, output_schema, created_at, updated_at, enabled)
+         input_schema, output_schema, icon, created_at, updated_at, enabled)
 
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
 
         params![
 
@@ -593,6 +597,8 @@ pub fn create_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
             def.input_schema.as_ref().map(|v| v.to_string()),
 
             def.output_schema.as_ref().map(|v| v.to_string()),
+
+            def.icon.as_ref().map(|v| v.to_string()),
 
             now, now, def.enabled,
 
@@ -616,9 +622,9 @@ pub fn update_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
 
          trigger = ?4, stages = ?5, input_schema = ?6, output_schema = ?7,
 
-         updated_at = ?8, enabled = ?9
+         icon = ?8, updated_at = ?9, enabled = ?10
 
-         WHERE id = ?10",
+         WHERE id = ?11",
 
         params![
 
@@ -631,6 +637,8 @@ pub fn update_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
             def.input_schema.as_ref().map(|v| v.to_string()),
 
             def.output_schema.as_ref().map(|v| v.to_string()),
+
+            def.icon.as_ref().map(|v| v.to_string()),
 
             now, def.enabled, def.id,
 
@@ -826,6 +834,14 @@ pub struct WorkflowStats {
 
     pub cancelled_count: i64,
 
+    pub running_count: i64,
+
+    pub pending_count: i64,
+
+    pub paused_count: i64,
+
+    pub timeout_count: i64,
+
     pub success_rate: f64,
 
     pub avg_duration_ms: f64,
@@ -842,11 +858,55 @@ pub struct WorkflowStats {
 
     pub last_30_days_count: i64,
 
+    /// 最近 N 天执行次数（N 由 days 参数决定，未传则等于 30）
+    pub last_n_days_count: i64,
+
+    /// 统计所基于的天数窗口（前端用于显示标签）
+    pub days: i64,
+
+    /// 区间内（days 窗口）的执行次数（= last_n_days_count，冗余便于前端字段命名一致）
+    pub range_total: i64,
+
+    /// 区间内成功次数
+    pub range_success: i64,
+
+    /// 区间内失败次数
+    pub range_failed: i64,
+
+    /// 区间内取消次数
+    pub range_cancelled: i64,
+
+    /// 区间内运行中次数
+    pub range_running: i64,
+
+    /// 区间内待触发次数
+    pub range_pending: i64,
+
+    /// 区间内已暂停次数
+    pub range_paused: i64,
+
+    /// 区间内超时次数
+    pub range_timeout: i64,
+
+    /// 区间内成功率（0-100）
+    pub range_success_rate: f64,
+
+    /// 区间内平均耗时（ms）
+    pub range_avg_duration_ms: f64,
+
+    /// 区间内最长耗时（ms）
+    pub range_max_duration_ms: i64,
+
+    /// 区间内最短耗时（ms）
+    pub range_min_duration_ms: i64,
+
 }
 
 
 
 fn get_node_execution_count(conn: &Connection, workflow_id: Option<&str>) -> Result<i64, AppError> {
+
+    eprintln!("[get_node_type_stats] called workflow_id={:?}", workflow_id);
 
     let (filter_clause, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match workflow_id {
 
@@ -872,6 +932,8 @@ fn get_node_execution_count(conn: &Connection, workflow_id: Option<&str>) -> Res
 
 fn get_node_failed_count(conn: &Connection, workflow_id: Option<&str>) -> Result<i64, AppError> {
 
+    eprintln!("[get_node_type_stats] called workflow_id={:?}", workflow_id);
+
     let (filter_clause, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match workflow_id {
 
         Some(wid) => ("WHERE execution_id IN (SELECT id FROM workflow_instances WHERE definition_id = ?1) AND status = 'failed'".to_string(), vec![Box::new(wid.to_string())]),
@@ -894,7 +956,7 @@ fn get_node_failed_count(conn: &Connection, workflow_id: Option<&str>) -> Result
 
 
 
-pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Result<WorkflowStats, AppError> {
+pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>, days: Option<i64>) -> Result<WorkflowStats, AppError> {
 
     let now_ts = crate::utils::now();
 
@@ -902,7 +964,14 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Resul
 
     let thirty_days_ago = now_ts - 30 * 24 * 3600;
 
+    // days=0 或 None 表示全量统计，此时 lastNDaysCount = total
+    let days_value = days.unwrap_or(30);
+    let is_all = days_value <= 0;
+    let n_days_ago = if is_all { 0 } else { now_ts - days_value * 24 * 3600 };
 
+
+
+    eprintln!("[get_workflow_stats] called workflow_id={:?} days={:?} is_all={}", workflow_id, days_value, is_all);
 
     let (filter_clause, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match workflow_id {
 
@@ -920,7 +989,15 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Resul
 
         COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed, \
 
-        COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled \
+        COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled, \
+
+        COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as running, \
+
+        COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending, \
+
+        COALESCE(SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END), 0) as paused, \
+
+        COALESCE(SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END), 0) as timeout \
 
         FROM workflow_instances {}", filter_clause);
 
@@ -930,9 +1007,9 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Resul
 
     let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
 
-    let (total, success, failed, cancelled): (i64, i64, i64, i64) = stmt.query_row(params_refs.as_slice(), |row| {
+    let (total, success, failed, cancelled, running, pending, paused, timeout): (i64, i64, i64, i64, i64, i64, i64, i64) = stmt.query_row(params_refs.as_slice(), |row| {
 
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?))
 
     })?;
 
@@ -940,11 +1017,11 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Resul
 
     let duration_sql = format!(
 
-        "SELECT COALESCE(AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 ELSE NULL END), 0) as avg_dur, \
+        "SELECT COALESCE(AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as avg_dur, \
 
-                COALESCE(MAX(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 ELSE 0 END), 0) as max_dur, \
+                COALESCE(MAX(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as max_dur, \
 
-                COALESCE(MIN(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 ELSE 0 END), 0) as min_dur \
+                COALESCE(MIN(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as min_dur \
 
          FROM workflow_instances {}", filter_clause);
 
@@ -962,37 +1039,65 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Resul
 
 
 
+    // is_all 模式下 last_n 直接等于 COUNT(*)，否则按 created_at >= n_days_ago
     let recent_sql = format!(
-
         "SELECT COALESCE(SUM(CASE WHEN created_at >= ?1 THEN 1 ELSE 0 END), 0) as last_7, \
-
-                COALESCE(SUM(CASE WHEN created_at >= ?2 THEN 1 ELSE 0 END), 0) as last_30 \
-
+                COALESCE(SUM(CASE WHEN created_at >= ?2 THEN 1 ELSE 0 END), 0) as last_30, \
+                CASE WHEN ?3 = 1 THEN COUNT(*) ELSE COALESCE(SUM(CASE WHEN created_at >= ?4 THEN 1 ELSE 0 END), 0) END as last_n \
          FROM workflow_instances {}", filter_clause);
 
-
-
     let mut stmt3 = conn.prepare(&recent_sql)?;
-
-    let mut recent_params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(seven_days_ago), Box::new(thirty_days_ago)];
-
+    let all_flag: i64 = if is_all { 1 } else { 0 };
+    let mut recent_params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+        Box::new(seven_days_ago),
+        Box::new(thirty_days_ago),
+        Box::new(all_flag),
+        Box::new(n_days_ago),
+    ];
     if let Some(wid) = workflow_id {
-
         recent_params.push(Box::new(wid.to_string()));
-
     }
-
     let recent_refs: Vec<&dyn rusqlite::types::ToSql> = recent_params.iter().map(|p| p.as_ref()).collect();
-
-    let (last_7_days_count, last_30_days_count): (i64, i64) = stmt3.query_row(recent_refs.as_slice(), |row| {
-
-        Ok((row.get(0)?, row.get(1)?))
-
+    let (last_7_days_count, last_30_days_count, last_n_days_count): (i64, i64, i64) = stmt3.query_row(recent_refs.as_slice(), |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     })?;
 
-
-
     let success_rate = if total > 0 { (success as f64 / total as f64) * 100.0 } else { 0.0 };
+
+    // ========== 区间内统计（按 days 窗口） ==========
+    // 构造区间 WHERE：is_all 时 created_at 无条件，否则 created_at >= n_days_ago
+    // range_filter_clause / range_params 是对 workflow_instances 的区间过滤（同时保留 workflow_id 过滤）
+    let (range_filter, range_params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match (workflow_id, is_all) {
+        (Some(wid), false) => ("WHERE definition_id = ?1 AND created_at >= ?2".to_string(),
+            vec![Box::new(wid.to_string()), Box::new(n_days_ago)]),
+        (Some(wid), true) => ("WHERE definition_id = ?1".to_string(),
+            vec![Box::new(wid.to_string())]),
+        (None, false) => ("WHERE created_at >= ?1".to_string(),
+            vec![Box::new(n_days_ago)]),
+        (None, true) => ("".to_string(), vec![]),
+    };
+
+    let range_sql = format!(
+        "SELECT COUNT(*) as r_total, \
+                COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as r_success, \
+                COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as r_failed, \
+                COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as r_cancelled, \
+                COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as r_running, \
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as r_pending, \
+                COALESCE(SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END), 0) as r_paused, \
+                COALESCE(SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END), 0) as r_timeout, \
+                COALESCE(AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as r_avg_dur, \
+                COALESCE(MAX(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as r_max_dur, \
+                COALESCE(MIN(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as r_min_dur \
+         FROM workflow_instances {}", range_filter);
+    let mut stmt_r = conn.prepare(&range_sql)?;
+    let range_refs: Vec<&dyn rusqlite::types::ToSql> = range_params_vec.iter().map(|p| p.as_ref()).collect();
+    let (range_total, range_success, range_failed, range_cancelled, range_running, range_pending, range_paused, range_timeout, range_avg_duration_ms, range_max_duration_ms, range_min_duration_ms)
+        : (i64, i64, i64, i64, i64, i64, i64, i64, f64, i64, i64)
+        = stmt_r.query_row(range_refs.as_slice(), |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?))
+        })?;
+    let range_success_rate = if range_total > 0 { (range_success as f64 / range_total as f64) * 100.0 } else { 0.0 };
 
 
 
@@ -1005,6 +1110,14 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Resul
         failed_count: failed,
 
         cancelled_count: cancelled,
+
+        running_count: running,
+
+        pending_count: pending,
+
+        paused_count: paused,
+
+        timeout_count: timeout,
 
         success_rate,
 
@@ -1021,6 +1134,23 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>) -> Resul
         last_7_days_count,
 
         last_30_days_count,
+
+        last_n_days_count,
+
+        days: days_value,
+
+        range_total,
+        range_success,
+        range_failed,
+        range_cancelled,
+        range_running,
+        range_pending,
+        range_paused,
+        range_timeout,
+        range_success_rate,
+        range_avg_duration_ms,
+        range_max_duration_ms,
+        range_min_duration_ms,
 
     })
 
@@ -1050,7 +1180,12 @@ pub struct ExecutionTimelinePoint {
 
     pub failed: i64,
 
+    pub cancelled: i64,
+
     pub avg_duration_ms: f64,
+
+    /// Aggregation granularity: 'day' | 'week' | 'month'
+    pub granularity: String,
 
 }
 
@@ -1058,9 +1193,33 @@ pub struct ExecutionTimelinePoint {
 
 pub fn get_execution_timeline(conn: &Connection, workflow_id: Option<&str>, days: i64) -> Result<Vec<ExecutionTimelinePoint>, AppError> {
 
+    // days<=0 表示"全部"，但柱状图需要有上限，所以最多取 365 天
+    let effective_days = if days <= 0 { 365 } else { days };
+
+    // 根据跨度自动选择聚合粒度：≤90天按天，91~365按周，>365按月
+    let granularity: &str = if effective_days <= 90 { "day" }
+        else if effective_days <= 365 { "week" }
+        else { "month" };
+    // 不同粒度用不同的分组 SQL 表达式
+    let (date_expr, order_expr) = match granularity {
+        "month" => (
+            "strftime('%Y-%m', created_at, 'unixepoch') AS bucket",
+            "MIN(created_at)",
+        ),
+        "week" => (
+            // SQLite W周：2024-W01 形式，可排序
+            "strftime('%Y-W%W', created_at, 'unixepoch') AS bucket",
+            "MIN(created_at)",
+        ),
+        _ => (
+            "DATE(created_at, 'unixepoch') AS bucket",
+            "bucket",
+        ),
+    };
+
     let now_ts = crate::utils::now();
 
-    let start_ts = now_ts - days * 24 * 3600;
+    let start_ts = now_ts - effective_days * 24 * 3600;
 
     let (filter_clause, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match workflow_id {
 
@@ -1074,15 +1233,19 @@ pub fn get_execution_timeline(conn: &Connection, workflow_id: Option<&str>, days
 
     let sql = format!(
 
-        "SELECT DATE(created_at, 'unixepoch') as day, COUNT(*) as total, \
+        "SELECT {}, COUNT(*) as total, \
 
                 COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success, \
 
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed, \
 
-                COALESCE(AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 ELSE NULL END), 0) as avg_dur \
+                COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled, \
 
-         FROM workflow_instances {} GROUP BY day ORDER BY day ASC", filter_clause);
+                COALESCE(AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as avg_dur \
+
+         FROM workflow_instances {} GROUP BY bucket ORDER BY {} ASC",
+
+        date_expr, filter_clause, order_expr);
 
     let mut stmt = conn.prepare(&sql)?;
 
@@ -1094,7 +1257,9 @@ pub fn get_execution_timeline(conn: &Connection, workflow_id: Option<&str>, days
 
             date: row.get(0)?, total: row.get(1)?, success: row.get(2)?,
 
-            failed: row.get(3)?, avg_duration_ms: row.get(4)?,
+            failed: row.get(3)?, cancelled: row.get(4)?, avg_duration_ms: row.get(5)?,
+
+            granularity: granularity.to_string(),
 
         })
 
@@ -1132,60 +1297,268 @@ pub struct NodeTypeStat {
 
 
 
-pub fn get_node_type_stats(conn: &Connection, workflow_id: Option<&str>) -> Result<Vec<NodeTypeStat>, AppError> {
+pub fn get_node_type_stats(conn: &Connection, workflow_id: Option<&str>, days: Option<i64>) -> Result<Vec<NodeTypeStat>, AppError> {
 
-    let (filter_clause, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match workflow_id {
+    let days_value = days.unwrap_or(30);
+    let is_all = days_value <= 0;
 
-        Some(wid) => ("WHERE id = ?1".to_string(), vec![Box::new(wid.to_string())]),
+    let now_ts = crate::utils::now();
+    // 全量模式 start_ts=0（等于 unix 纪元前不会过滤任何记录）
+    let start_ts = if is_all { 0 } else { now_ts - days_value * 24 * 3600 };
 
-        None => ("".to_string(), vec![]),
+    eprintln!("[get_node_type_stats] called workflow_id={:?} days={} is_all={}", workflow_id, days_value, is_all);
 
+    // 1. Build (definition_id, node_id) → node_type map from workflow_definitions.stages
+    let def_sql = match workflow_id {
+        Some(_) => "SELECT id, stages FROM workflow_definitions WHERE id = ?1",
+        None => "SELECT id, stages FROM workflow_definitions",
     };
 
-    let sql = format!("SELECT stages FROM workflow_definitions {}", filter_clause);
-
-    let mut stmt = conn.prepare(&sql)?;
-
-    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-
-    let mut type_counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
-
-    let rows = stmt.query_map(params_refs.as_slice(), |row| {
-
-        let stages_str: String = row.get(0)?;
-
-        Ok(stages_str)
-
+    let mut stmt = conn.prepare(def_sql)?;
+    let def_params: Vec<Box<dyn rusqlite::types::ToSql>> = match workflow_id {
+        Some(wid) => vec![Box::new(wid.to_string())],
+        None => vec![],
+    };
+    let def_refs: Vec<&dyn rusqlite::types::ToSql> = def_params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt.query_map(def_refs.as_slice(), |row| {
+        let id: String = row.get(0)?;
+        let stages_str: String = row.get(1)?;
+        Ok((id, stages_str))
     })?.collect::<Result<Vec<_>, _>>()?;
 
-    for stages_str in &rows {
-
-        if let Ok(stages) = serde_json::from_str::<Vec<Stage>>(stages_str) {
-
-            for stage in &stages {
-
-                for node in &stage.nodes {
-
-                    let nt = format!("{:?}", node.node_type).to_lowercase();
-
-                    *type_counts.entry(nt).or_insert(0) += 1;
-
+    let mut node_type_map: std::collections::HashMap<(String, String), String> = std::collections::HashMap::new();
+    for (def_id, stages_str) in &rows {
+        match serde_json::from_str::<Vec<Stage>>(stages_str) {
+            Ok(stages) => {
+                for stage in &stages {
+                    for node in &stage.nodes {
+                        let nt = format!("{:?}", node.node_type).to_lowercase();
+                        node_type_map.insert((def_id.clone(), node.id.clone()), nt);
+                    }
                 }
-
             }
-
+            Err(e) => {
+                eprintln!("[get_node_type_stats] def {} parse error: {:?}", def_id, e);
+            }
         }
-
     }
 
-    let stats: Vec<NodeTypeStat> = type_counts.into_iter().map(|(node_type, count)| {
+    // 2. Query node_executions joined with workflow_instances for the time window
+    //    全量模式（is_all）去掉 created_at 过滤条件；否则加 created_at >= start_ts
+    let exec_sql = match (workflow_id, is_all) {
+        (Some(_), false) => "SELECT ne.node_id, ne.status, COALESCE(ne.duration_ms, 0), wi.definition_id \
+                    FROM node_executions ne JOIN workflow_instances wi ON ne.execution_id = wi.id \
+                    WHERE wi.definition_id = ?1 AND wi.created_at >= ?2",
+        (Some(_), true) => "SELECT ne.node_id, ne.status, COALESCE(ne.duration_ms, 0), wi.definition_id \
+                    FROM node_executions ne JOIN workflow_instances wi ON ne.execution_id = wi.id \
+                    WHERE wi.definition_id = ?1",
+        (None, false) => "SELECT ne.node_id, ne.status, COALESCE(ne.duration_ms, 0), wi.definition_id \
+                 FROM node_executions ne JOIN workflow_instances wi ON ne.execution_id = wi.id \
+                 WHERE wi.created_at >= ?1",
+        (None, true) => "SELECT ne.node_id, ne.status, COALESCE(ne.duration_ms, 0), wi.definition_id \
+                 FROM node_executions ne JOIN workflow_instances wi ON ne.execution_id = wi.id",
+    };
+    let mut stmt2 = conn.prepare(exec_sql)?;
+    let exec_params: Vec<Box<dyn rusqlite::types::ToSql>> = match (workflow_id, is_all) {
+        (Some(wid), false) => vec![Box::new(wid.to_string()), Box::new(start_ts)],
+        (Some(wid), true) => vec![Box::new(wid.to_string())],
+        (None, false) => vec![Box::new(start_ts)],
+        (None, true) => vec![],
+    };
+    let exec_refs: Vec<&dyn rusqlite::types::ToSql> = exec_params.iter().map(|p| p.as_ref()).collect();
+    let exec_rows = stmt2.query_map(exec_refs.as_slice(), |row| {
+        let node_id: String = row.get(0)?;
+        let status: String = row.get(1)?;
+        let duration_ms: i64 = row.get(2)?;
+        let definition_id: String = row.get(3)?;
+        Ok((node_id, status, duration_ms, definition_id))
+    })?.collect::<Result<Vec<_>, _>>()?;
 
-        NodeTypeStat { node_type, count, failed_count: 0, avg_duration_ms: 0.0 }
+    // 3. Aggregate by node_type: (count, failed_count, sum_duration_ms)
+    let mut agg: std::collections::HashMap<String, (i64, i64, f64)> = std::collections::HashMap::new();
+    for (node_id, status, duration_ms, definition_id) in &exec_rows {
+        if let Some(nt) = node_type_map.get(&(definition_id.clone(), node_id.clone())) {
+            let entry = agg.entry(nt.clone()).or_insert((0, 0, 0.0));
+            entry.0 += 1;
+            if status == "failed" {
+                entry.1 += 1;
+            }
+            entry.2 += *duration_ms as f64;
+        }
+    }
 
+    // 4. Build result
+    let stats: Vec<NodeTypeStat> = agg.into_iter().map(|(node_type, (count, failed_count, sum_duration))| {
+        let avg_duration_ms = if count > 0 { sum_duration / count as f64 } else { 0.0 };
+        NodeTypeStat { node_type, count, failed_count, avg_duration_ms }
     }).collect();
 
+    eprintln!("[get_node_type_stats] DONE: {} types, days={}", stats.len(), days_value);
     Ok(stats)
+}
 
+
+
+// ════════════════════════════════════════════════════════════
+
+// Top 工作流排行 / Top 错误聚合
+
+// ════════════════════════════════════════════════════════════
+
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+
+#[serde(rename_all = "camelCase")]
+
+pub struct TopWorkflowStat {
+
+    pub definition_id: String,
+
+    pub definition_name: String,
+
+    pub total: i64,
+
+    pub success: i64,
+
+    pub failed: i64,
+
+    pub cancelled: i64,
+
+    pub failed_rate: f64,
+
+}
+
+
+
+pub fn get_top_workflows(conn: &Connection, days: Option<i64>, limit: Option<i64>, sort_by: Option<&str>) -> Result<Vec<TopWorkflowStat>, AppError> {
+
+    let days_value = days.unwrap_or(30);
+    let is_all = days_value <= 0;
+    let limit_value = limit.unwrap_or(5).max(1) as i64;
+
+    let now_ts = crate::utils::now();
+    let start_ts = if is_all { 0 } else { now_ts - days_value * 24 * 3600 };
+
+    let order_clause = match sort_by {
+        Some("failed") => "failed DESC, total DESC",
+        _ => "total DESC",
+    };
+
+    // is_all: 不加 created_at 过滤
+    let sql = if is_all {
+        format!(
+            "SELECT definition_id, \
+                    COALESCE(MAX(definition_name), '') as name, \
+                    COUNT(*) as total, \
+                    COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success, \
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed, \
+                    COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled \
+             FROM workflow_instances WHERE definition_id != '' \
+             GROUP BY definition_id ORDER BY {} LIMIT ?1", order_clause)
+    } else {
+        format!(
+            "SELECT definition_id, \
+                    COALESCE(MAX(definition_name), '') as name, \
+                    COUNT(*) as total, \
+                    COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success, \
+                    COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed, \
+                    COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled \
+             FROM workflow_instances WHERE created_at >= ?1 AND definition_id != '' \
+             GROUP BY definition_id ORDER BY {} LIMIT ?2", order_clause)
+    };
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = if is_all {
+        stmt.query_map(params![limit_value], |row| {
+            let definition_id: String = row.get(0)?;
+            let definition_name: String = row.get(1)?;
+            let total: i64 = row.get(2)?;
+            let success: i64 = row.get(3)?;
+            let failed: i64 = row.get(4)?;
+            let cancelled: i64 = row.get(5)?;
+            let failed_rate = if total > 0 { (failed as f64 / total as f64) * 100.0 } else { 0.0 };
+            Ok(TopWorkflowStat { definition_id, definition_name, total, success, failed, cancelled, failed_rate })
+        })?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map(params![start_ts, limit_value], |row| {
+            let definition_id: String = row.get(0)?;
+            let definition_name: String = row.get(1)?;
+            let total: i64 = row.get(2)?;
+            let success: i64 = row.get(3)?;
+            let failed: i64 = row.get(4)?;
+            let cancelled: i64 = row.get(5)?;
+            let failed_rate = if total > 0 { (failed as f64 / total as f64) * 100.0 } else { 0.0 };
+            Ok(TopWorkflowStat { definition_id, definition_name, total, success, failed, cancelled, failed_rate })
+        })?.collect::<Result<Vec<_>, _>>()?
+    };
+
+    Ok(rows)
+}
+
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+
+#[serde(rename_all = "camelCase")]
+
+pub struct TopErrorStat {
+
+    pub error: String,
+
+    pub count: i64,
+
+    pub last_occurred_at: i64,
+
+}
+
+
+
+pub fn get_top_errors(conn: &Connection, days: Option<i64>, limit: Option<i64>) -> Result<Vec<TopErrorStat>, AppError> {
+
+    let days_value = days.unwrap_or(30);
+    let is_all = days_value <= 0;
+    let limit_value = limit.unwrap_or(5).max(1) as i64;
+
+    let now_ts = crate::utils::now();
+    let start_ts = if is_all { 0 } else { now_ts - days_value * 24 * 3600 };
+
+    // 聚合 error 文本：trim 防止空白差异；空 error 归类为 "(无错误信息)"
+    // is_all: 不加 created_at 过滤
+    let sql = if is_all {
+        "SELECT \
+            CASE WHEN TRIM(COALESCE(error, '')) = '' THEN '(无错误信息)' ELSE TRIM(error) END as err_text, \
+            COUNT(*) as cnt, \
+            MAX(created_at) as last_at \
+         FROM workflow_instances WHERE status = 'failed' \
+         GROUP BY err_text ORDER BY cnt DESC LIMIT ?1"
+    } else {
+        "SELECT \
+            CASE WHEN TRIM(COALESCE(error, '')) = '' THEN '(无错误信息)' ELSE TRIM(error) END as err_text, \
+            COUNT(*) as cnt, \
+            MAX(created_at) as last_at \
+         FROM workflow_instances WHERE created_at >= ?1 AND status = 'failed' \
+         GROUP BY err_text ORDER BY cnt DESC LIMIT ?2"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let rows = if is_all {
+        stmt.query_map(params![limit_value], |row| {
+            let error: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            let last_occurred_at: i64 = row.get::<_, Option<i64>>(2)?.unwrap_or(0);
+            Ok(TopErrorStat { error, count, last_occurred_at })
+        })?.collect::<Result<Vec<_>, _>>()?
+    } else {
+        stmt.query_map(params![start_ts, limit_value], |row| {
+            let error: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            let last_occurred_at: i64 = row.get::<_, Option<i64>>(2)?.unwrap_or(0);
+            Ok(TopErrorStat { error, count, last_occurred_at })
+        })?.collect::<Result<Vec<_>, _>>()?
+    };
+
+    Ok(rows)
 }
 
 

@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 70, 71, 72, 73, 74, 75];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 70, 71, 72, 73, 74, 75, 76];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -165,6 +165,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
             stages TEXT NOT NULL DEFAULT '[]',
             input_schema TEXT,
             output_schema TEXT,
+            icon TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1
@@ -1028,6 +1029,7 @@ fn migrate_cleanup_workflow_columns(conn: &Connection) -> Result<(), AppError> {
             stages TEXT NOT NULL DEFAULT '[]',
             input_schema TEXT,
             output_schema TEXT,
+            icon TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1
@@ -1037,8 +1039,8 @@ fn migrate_cleanup_workflow_columns(conn: &Connection) -> Result<(), AppError> {
     // 回填数据
     for (id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled) in &rows {
         conn.execute(
-            "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages, input_schema, output_schema, icon, created_at, updated_at, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11)",
             rusqlite::params![
                 id, name, version, description, trigger, stages,
                 input_schema, output_schema,
@@ -1087,6 +1089,7 @@ fn migrate_sync_resume_templates(conn: &Connection) -> Result<(), AppError> {
 
 /// v74: 内置 Agent 完整种子数据覆盖（所有字段与 pilotdesk-agents.json 一致）
 /// v75: workflow_instances schema -- add completion_rate, drop legacy columns
+/// v76: workflow_definitions -- add icon column
 fn migrate_workflow_instance_schema(conn: &Connection) -> Result<(), AppError> {
     let has_completion_rate = conn
         .prepare("SELECT completion_rate FROM workflow_instances LIMIT 0")
@@ -1115,6 +1118,22 @@ fn drop_old_workflow_instance_columns(conn: &Connection) {
             let _ = conn.execute(&format!("ALTER TABLE workflow_instances DROP COLUMN {}", col), []);
         }
     }
+}
+
+/// v76: workflow_definitions -- add icon column
+fn migrate_add_workflow_icon(conn: &Connection) -> Result<(), AppError> {
+    let has_icon = conn
+        .prepare("SELECT icon FROM workflow_definitions LIMIT 0")
+        .is_ok();
+    if has_icon {
+        log::info!("[migration v76] icon column already exists, skipping");
+        return Ok(());
+    }
+    log::info!("[migration v76] Adding icon column to workflow_definitions");
+    conn.execute_batch(
+        "ALTER TABLE workflow_definitions ADD COLUMN icon TEXT;"
+    )?;
+    Ok(())
 }
 
 fn migrate_full_agent_seeds(conn: &Connection) -> Result<(), AppError> {
@@ -1274,6 +1293,7 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 73 => migrate_update_agent_seeds(conn)?,
                 74 => migrate_full_agent_seeds(conn)?,
                 75 => migrate_workflow_instance_schema(conn)?,
+                76 => migrate_add_workflow_icon(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }

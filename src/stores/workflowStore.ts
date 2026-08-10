@@ -74,7 +74,13 @@ interface WorkflowStoreState {
 
   // 实例管理
 
-  loadInstances: (definitionId?: string) => Promise<void>;
+  /**
+   * @param definitionId 可选：仅拉取某个工作流下的实例
+   * @param silent       静默刷新：不显示 loading 状态，避免列表区域闪白。
+   *                     true = 后台静默刷新（用于定时器轮询 / 手动快速刷新）
+   *                     false（默认）= 首次加载或显式展示 loading
+   */
+  loadInstances: (definitionId?: string, silent?: boolean) => Promise<void>;
 
   loadSchedules: () => Promise<WorkflowSchedule[]>;
 
@@ -256,9 +262,12 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
 
 
 
-  loadInstances: async (definitionId?: string) => {
+  loadInstances: async (definitionId?: string, silent?: boolean) => {
 
-    set({ loading: true, error: null });
+    // 静默刷新不写 loading=true，避免列表闪白 / 展开状态丢失 / 滚动位置重置
+    if (!silent) {
+      set({ loading: true, error: null });
+    }
 
     try {
 
@@ -441,6 +450,24 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
 
     set({ selectedInstanceId: id });
 
+  },
+
+  /** 单点执行：仅执行选中节点 */
+  executeSingleNode: async (executionId: string, nodeId: string) => {
+    await invoke('execute_workflow_mode', { executionId, mode: 'single', nodeId });
+    await get().loadInstances();
+  },
+
+  /** 链式执行：从选中节点到后序链路末端 */
+  executeChain: async (executionId: string, nodeId: string) => {
+    await invoke('execute_workflow_mode', { executionId, mode: 'chain', nodeId });
+    await get().loadInstances();
+  },
+
+  /** 补全执行：跳过已完成节点，执行未完成节点 */
+  executeCompletion: async (executionId: string) => {
+    await invoke('execute_workflow_mode', { executionId, mode: 'completion' });
+    await get().loadInstances();
   },
 
 }));

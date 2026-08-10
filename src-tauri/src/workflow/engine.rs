@@ -770,7 +770,7 @@ fn update_instance_progress(
 
 
 
-    completed: usize,
+    _finished: usize,
 
 
 
@@ -778,6 +778,7 @@ fn update_instance_progress(
 
 
 
+    success: usize,
     context: Option<&serde_json::Value>,
 
 
@@ -786,7 +787,7 @@ fn update_instance_progress(
 
 
 
-    let rate = if total > 0 { completed as f64 / total as f64 } else { 0.0 };
+    let rate = if total > 0 { success as f64 / total as f64 } else { 0.0 };
 
 
 
@@ -890,7 +891,6 @@ pub enum ExecutionMode {
 
 
 
-    #[allow(dead_code)]
 
 
 
@@ -898,18 +898,17 @@ pub enum ExecutionMode {
 
 
 
-    /// 断点执行：从选中节点执行至 end 节点（预留）
+    /// 链式执行：从选中节点开始，执行含选中节点后所有链上的后序节点
 
 
 
-    #[allow(dead_code)]
 
 
 
-    FromNode { node_id: String },
+    Chain { node_id: String },
 
-
-
+    /// 补全执行：跳过已标记为 completed 的节点，按拓扑顺序执行所有未完成节点
+    Completion,
 }
 
 
@@ -1246,7 +1245,7 @@ impl WorkflowEngine {
 
 
 
-        let end_ok = end_nodes.len() == 1;
+        let end_ok = end_nodes.len() <= 1; // End 节点可选，0个或1个均可;
 
 
 
@@ -1258,11 +1257,13 @@ impl WorkflowEngine {
 
 
 
-            severity: if end_ok { "info".into() } else { "error".into() },
+            severity: if end_ok { "info".into() } else { "warning".into() },
 
 
 
-            message: if end_ok {
+                message: if end_nodes.len() == 0 {
+                    "未配置结束节点（可选，不影响执行）".into()
+                } else if end_ok {
 
 
 
@@ -1274,7 +1275,7 @@ impl WorkflowEngine {
 
 
 
-                format!("结束节点数量异常: 期望 1 个，实际 {} 个", end_nodes.len())
+                format!("结束节点数量异常: 发现 {} 个，建议仅保留1个", end_nodes.len())
 
 
 
@@ -1298,7 +1299,7 @@ impl WorkflowEngine {
 
 
 
-        if !end_ok { has_error = true; }
+                // End 节点不再作为强制校验，不设置 has_error
 
 
 
@@ -1310,7 +1311,7 @@ impl WorkflowEngine {
 
 
 
-        if start_ok && end_ok {
+        if start_ok && end_nodes.len() == 1 {
 
 
 
@@ -1346,7 +1347,7 @@ impl WorkflowEngine {
 
 
 
-                    "不存在从起始节点到结束节点的完整路径".into()
+                    "结束节点不可达（End 节点为可选节点，不影响执行）".into()
 
 
 
@@ -1362,7 +1363,7 @@ impl WorkflowEngine {
 
 
 
-            if !end_reachable { has_error = true; }
+                // End 可达性不再作为强制校验，不设置 has_error
 
 
 
@@ -2830,14 +2831,6 @@ impl WorkflowEngine {
 
 
 
-        match (start_stage_id, start_node_id) {
-
-
-
-            (Some(sid), Some(nid)) => {
-
-
-
                 let stage_id_set: std::collections::HashSet<String> =
 
 
@@ -2895,6 +2888,15 @@ impl WorkflowEngine {
 
 
                 };
+
+        match (start_stage_id, start_node_id) {
+
+
+
+            (Some(sid), Some(nid)) => {
+
+
+
 
 
 
@@ -3143,45 +3145,71 @@ impl WorkflowEngine {
 
 
             _ => {
-
-
-
-                // 没有 start 节点，fallback：所有阶段和节点
-
-
-
-                ExecutionPlan {
-
-
-
-                    reachable_node_ids: def.stages.iter()
-
-
-
-                        .flat_map(|s| s.nodes.iter().map(|n| n.id.clone()))
-
-
-
-                        .collect(),
-
-
-
-                    ordered_stage_ids: vec![def.stages.iter().map(|s| s.id.clone()).collect()],
-
-
-
+                // 没有 start 节点，按 stage_edges 拓扑排序阶段
+                // 构建入度表
+                let mut se_up: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                for stage in &def.stages {
+                    for edge in &stage.stage_edges {
+                        se_up.entry(edge.target.clone()).or_default().push(stage.id.clone());
+                    }
                 }
-
-
-
+                let non_empty_ids: std::collections::HashSet<String> = def.stages.iter()
+                    .filter(|s| !s.nodes.is_empty())
+                    .map(|s| s.id.clone())
+                    .collect();
+                // BFS 遍历所有阶段（含空阶段），只将非空阶段加入执行计划
+                let mut visited_stages: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut queue = std::collections::VecDeque::new();
+                let mut stage_depth: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                for stage in &def.stages {
+                    if stage_id_set.contains(&stage.id) && !se_up.contains_key(&stage.id) {
+                        queue.push_back(stage.id.clone());
+                        visited_stages.insert(stage.id.clone());
+                        stage_depth.insert(stage.id.clone(), 0);
+                    }
+                }
+                if queue.is_empty() {
+                    for stage in &def.stages {
+                        if stage_id_set.contains(&stage.id) {
+                            queue.push_back(stage.id.clone());
+                            visited_stages.insert(stage.id.clone());
+                            stage_depth.insert(stage.id.clone(), 0);
+                            break;
+                        }
+                    }
+                }
+                while let Some(cur) = queue.pop_front() {
+                    let cur_depth = *stage_depth.get(&cur).unwrap_or(&0);
+                    if let Some(downstream) = se_down.get(&cur) {
+                        for ds_id in downstream {
+                            if stage_id_set.contains(ds_id) && !visited_stages.contains(ds_id) {
+                                let new_depth = cur_depth + 1;
+                                visited_stages.insert(ds_id.clone());
+                                // 所有阶段都记录 depth（用于 BFS 传播），non_empty 决定是否加入 layer
+                                stage_depth.insert(ds_id.clone(), new_depth);
+                                queue.push_back(ds_id.clone());
+                            }
+                        }
+                    }
+                }
+                let max_depth = stage_depth.values().max().copied().unwrap_or(0);
+                let mut layers: Vec<Vec<String>> = (0..=max_depth).map(|_| Vec::new()).collect();
+                for (sid, depth) in &stage_depth {
+                    if non_empty_ids.contains(sid) {
+                    layers[*depth].push(sid.clone());
+                    }
+                }
+                ExecutionPlan {
+                    reachable_node_ids: def.stages.iter()
+                        .flat_map(|s| s.nodes.iter().map(|n| n.id.clone()))
+                        .collect(),
+                    ordered_stage_ids: layers,
+        }
             }
 
 
 
         }
-
-
-
     }
 
 
@@ -3467,9 +3495,7 @@ impl WorkflowEngine {
 
 
         completed_count: &Arc<AtomicUsize>,
-
-
-
+    success_count: &Arc<AtomicUsize>,
         total_count: usize,
 
 
@@ -3579,13 +3605,6 @@ impl WorkflowEngine {
 
 
                     node_statuses.lock().await.insert(node.id.clone(), "skipped".to_string());
-
-
-
-                    completed_count.fetch_add(1, Ordering::SeqCst);
-
-
-
                     continue;
 
 
@@ -3675,13 +3694,6 @@ impl WorkflowEngine {
 
 
                         node_statuses.lock().await.insert(node_id.clone(), "skipped".to_string());
-
-
-
-                        completed_count.fetch_add(1, Ordering::SeqCst);
-
-
-
                         record_node_execution(emitter, execution_id, node_id, "skipped", None, None, None, None, None, None);
 
 
@@ -3951,13 +3963,8 @@ impl WorkflowEngine {
 
 
                             raw_outputs.lock().await.insert(node_id.clone(), output.clone());
-
-
-
                             completed_count.fetch_add(1, Ordering::SeqCst);
-
-
-
+                            success_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(emitter, execution_id, node_id, "completed", None,
 
 
@@ -3974,7 +3981,7 @@ impl WorkflowEngine {
 
 
 
-                                update_instance_progress(&conn, execution_id, completed_count.load(Ordering::SeqCst), total_count, None);
+                                update_instance_progress(&conn, execution_id, completed_count.load(Ordering::SeqCst), total_count, success_count.load(Ordering::SeqCst), None);
 
 
 
@@ -3995,37 +4002,11 @@ impl WorkflowEngine {
 
 
                             node_statuses.lock().await.insert(node_id.clone(), "failed".to_string());
-
-
-
-                            completed_count.fetch_add(1, Ordering::SeqCst);
-
-
-
                             record_node_execution(emitter, execution_id, node_id, "failed", None, None, Some(&e.to_string()), None, None, None);
 
 
 
                             emit_node_status(emitter, execution_id, definition_id, node_id, "failed", None, Some(&e.to_string()), None, None, mode);
-
-
-
-                            // 实时更新实例完成率（失败也计入进度）
-
-
-
-                            if let Ok(conn) = get_db_conn(emitter) {
-
-
-
-                                update_instance_progress(&conn, execution_id, completed_count.load(Ordering::SeqCst), total_count, None);
-
-
-
-                            }
-
-
-
                             // 不再 return Err，让后续节点继续执行
 
 
@@ -4075,9 +4056,7 @@ impl WorkflowEngine {
 
 
                 let completed_count = completed_count.clone();
-
-
-
+                let success_count = success_count.clone();
                 let total = total_count;
 
 
@@ -4139,11 +4118,35 @@ impl WorkflowEngine {
 
                     let resolved_input = resolve_node_input(&node, &ctx_snapshot);
 
-
-
-
-
-
+                    // [DEBUG] transform 节点执行前打印 resolved_input 实际内容
+                    if node.node_type == WorkflowNodeType::Transform {
+                        log::info!(
+                            "[TransformExecutor][DEBUG] 节点 {} 执行前 resolved_input = {} (raw: {:?})",
+                            nid,
+                            serde_json::to_string_pretty(&resolved_input).unwrap_or_else(|_| "<序列化失败>".to_string()),
+                            resolved_input
+                        );
+                        // 检查是否存在常见字段名
+                        if let Some(obj) = resolved_input.as_object() {
+                            for (k, v) in obj {
+                                log::info!(
+                                    "[TransformExecutor][DEBUG]   input.{} = {:?} (type={})",
+                                    k, v,
+                                    match v {
+                                        Value::Null => "null",
+                                        Value::Bool(_) => "bool",
+                                        Value::Number(_) => "number",
+                                        Value::String(s) => if s.is_empty() { "string(EMPTY!)" } else { "string" },
+                                        Value::Array(_) => "array",
+                                        Value::Object(_) => "object",
+                                    }
+                                );
+                            }
+                            if obj.is_empty() {
+                                log::warn!("[TransformExecutor][DEBUG]   ⚠️ resolved_input 是空对象！inputMapping 可能未正确解析或上游节点未暴露输出");
+                            }
+                        }
+                    }
 
                     record_node_execution(&emitter, &exec_id, &nid, "running",
 
@@ -4199,7 +4202,6 @@ impl WorkflowEngine {
                         log::info!("[WorkflowEngine] 节点 {} 在 delay 后检测到取消信号，跳过执行", nid);
                         node_statuses_clone.lock().await.insert(nid.clone(), "cancelled".to_string());
                         emit_node_status(&emitter, &exec_id, &def_id_owned, &nid, "cancelled", None, None, None, None, &mode_owned);
-                        completed_count.fetch_add(1, Ordering::SeqCst);
                         return Ok(());
                     }
 
@@ -4401,13 +4403,14 @@ impl WorkflowEngine {
 
                                 // 非 Start 节点：暴露 outputMapping 声明的字段
 
-
-
                                 // 匹配逻辑：判断 path（下拉选择的值）而非 key（用户自定义字段名）
 
-
-
                                 let mut exposed = serde_json::Map::new();
+
+                                log::info!(
+                                    "[WorkflowEngine][DEBUG] 节点 {} (type={:?}) outputMapping 映射内容: {:?} | node_output.content = {:?}",
+                                    nid, node.node_type, mapping, node_output.get("content")
+                                );
 
 
 
@@ -4421,9 +4424,15 @@ impl WorkflowEngine {
 
                                         Some("{{content}}") => {
 
-
-
-                                            exposed.insert(key.clone(), output.output.clone());
+                                            // 修复：只取 node_output 中的 content 字段值，而非整个 output 对象
+                                            // 之前 bug：output.output 是 { content: "6" }，暴露后 context[nid] = { key: {content:"6"} }
+                                            // 导致模板 {{output.nid.key}} 拿到的是对象而非字符串 "6"
+                                            let content_val = node_output.get("content").cloned().unwrap_or(node_output.clone());
+                                            log::info!(
+                                                "[WorkflowEngine][DEBUG]   outputMapping[{}] -> {{content}}, node_output.content = {:?}, exposed_value = {:?}",
+                                                key, node_output.get("content"), content_val
+                                            );
+                                            exposed.insert(key.clone(), content_val);
 
 
 
@@ -4437,12 +4446,17 @@ impl WorkflowEngine {
 
                                             if let Some(ref sid) = output.session_id {
 
-
-
+                                                log::info!(
+                                                    "[WorkflowEngine][DEBUG]   outputMapping[{}] -> {{session_id}}, value = {:?}",
+                                                    key, sid
+                                                );
                                                 exposed.insert(key.clone(), Value::String(sid.clone()));
 
-
-
+                                            } else {
+                                                log::warn!(
+                                                    "[WorkflowEngine][DEBUG]   outputMapping[{}] -> {{session_id}}, 但无 session_id",
+                                                    key
+                                                );
                                             }
 
 
@@ -4481,16 +4495,20 @@ impl WorkflowEngine {
 
                                                         if let Some(val) = node_output.get(lookup) {
 
-
-
+                                                            log::info!(
+                                                                "[WorkflowEngine][DEBUG]   outputMapping[{}] -> {{{}}}, value = {:?}",
+                                                                key, lookup, val
+                                                            );
                                                             exposed.insert(key.clone(), val.clone());
 
 
 
                                                         } else {
 
-
-
+                                                            log::warn!(
+                                                                "[WorkflowEngine]   outputMapping[{}] -> {{{}}} 未找到，回退为整个 node_output = {:?}",
+                                                                key, lookup, node_output
+                                                            );
                                                             exposed.insert(key.clone(), node_output.clone());
 
 
@@ -4501,8 +4519,10 @@ impl WorkflowEngine {
 
                                                     } else {
 
-
-
+                                                        log::info!(
+                                                            "[WorkflowEngine][DEBUG]   outputMapping[{}] -> 空 {{}}, value = {:?}",
+                                                            key, node_output
+                                                        );
                                                         exposed.insert(key.clone(), node_output.clone());
 
 
@@ -4532,14 +4552,16 @@ impl WorkflowEngine {
 
 
                                 let exposed_keys: Vec<String> = exposed.keys().cloned().collect();
-
-
+                                let exposed_clone = exposed.clone();  // 在移动前先 clone 供日志用
 
                                 context.lock().await.insert(nid.clone(), Value::Object(exposed));
 
 
 
-                                log::info!("[WorkflowEngine] Node {} context (outputMapping): {:?}", nid, exposed_keys);
+                                log::info!(
+                                    "[WorkflowEngine][DEBUG] Node {} context (outputMapping): keys={:?}, context_value={:?}",
+                                    nid, exposed_keys, Value::Object(exposed_clone)
+                                );
 
 
 
@@ -4561,19 +4583,62 @@ impl WorkflowEngine {
 
                             } else {
 
+                                // 无 outputMapping：
+                                // - interact 节点：从 { content: xxx } 中提取 content 暴露为 output
+                                // - agent 节点：裸字符串直接暴露为 output
+                                // - 其他节点：默认不暴露任何字段（空对象）
 
+                                let exposed = if node.node_type == WorkflowNodeType::Interact {
+                                    let mut m = serde_json::Map::new();
+                                    let content_val = output.output.get("content");
+                                    let output_keys: Vec<String> = output.output.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
+                                    log::info!(
+                                        "[WorkflowEngine][DEBUG] interact 节点 {} 无 outputMapping，开始自动暴露 | node_output.content = {:?} | node_output 完整 keys: {:?}",
+                                        nid, content_val, output_keys
+                                    );
+                                    if let Some(val) = content_val {
+                                        m.insert("output".into(), val.clone());
+                                        log::info!(
+                                            "[WorkflowEngine][DEBUG]   ✅ interact 节点 {} 自动暴露 output = {:?} (type={})",
+                                            nid, val,
+                                            match val {
+                                                Value::Null => "null",
+                                                Value::Bool(_) => "bool",
+                                                Value::Number(_) => "number",
+                                                Value::String(s) => if s.is_empty() { "string(EMPTY!)" } else { "string" },
+                                                Value::Array(_) => "array",
+                                                Value::Object(_) => "object",
+                                            }
+                                        );
+                                    } else {
+                                        log::warn!(
+                                            "[WorkflowEngine][DEBUG]   ⚠️ interact 节点 {} node_output 中找不到 'content' 字段！完整 output: {:?}",
+                                            nid, output.output
+                                        );
+                                    }
+                                    m
+                                } else if node.node_type == WorkflowNodeType::Agent {
+                                    // Agent 节点输出是裸字符串（Value::String），无 outputMapping 时直接暴露为 output
+                                    let mut m = serde_json::Map::new();
+                                    log::info!(
+                                        "[WorkflowEngine][DEBUG] agent 节点 {} 无 outputMapping，自动暴露裸字符串为 output",
+                                        nid
+                                    );
+                                    m.insert("output".into(), node_output.clone());
+                                    m
+                                } else {
+                                    serde_json::Map::new()
+                                };
 
-                                // 无 outputMapping：默认不暴露任何字段（空对象）
+                                let exposed_keys: Vec<String> = exposed.keys().cloned().collect();
+                                let exposed_clone = exposed.clone();  // 在移动前先 clone 供日志用
+                                context.lock().await.insert(nid.clone(), Value::Object(exposed));
 
-
-
-                                context.lock().await.insert(nid.clone(), Value::Object(serde_json::Map::new()));
-
-
-
-                                log::info!("[WorkflowEngine] Node {} context: no outputMapping, empty", nid);
-
-
+                                log::info!(
+                                    "[WorkflowEngine][DEBUG] 节点 {} (type={:?}) 无 outputMapping，暴露到 context 的 keys: {:?} | 值: {:?}",
+                                    nid, node.node_type, exposed_keys,
+                                    if exposed_keys.is_empty() { Value::Object(serde_json::Map::new()) } else { Value::Object(exposed_clone) }
+                                );
 
                             }
 
@@ -4592,13 +4657,8 @@ impl WorkflowEngine {
 
 
                             node_statuses_clone.lock().await.insert(nid.clone(), "completed".to_string());
-
-
-
                             completed_count.fetch_add(1, Ordering::SeqCst);
-
-
-
+                            success_count.fetch_add(1, Ordering::SeqCst);
                             record_node_execution(&emitter, &exec_id, &nid, "completed", None,
 
 
@@ -4627,7 +4687,7 @@ impl WorkflowEngine {
 
                             if let Ok(conn) = get_db_conn(&emitter) {
 
-                                update_instance_progress(&conn, &exec_id, completed_count.load(Ordering::SeqCst), total, None);
+                                update_instance_progress(&conn, &exec_id, completed_count.load(Ordering::SeqCst), total, success_count.load(Ordering::SeqCst), None);
 
                             }
 
@@ -4654,13 +4714,6 @@ impl WorkflowEngine {
 
 
                             node_statuses_clone.lock().await.insert(nid.clone(), final_status.to_string());
-
-
-
-                            completed_count.fetch_add(1, Ordering::SeqCst);
-
-
-
                             record_node_execution(&emitter, &exec_id, &nid, final_status, None, None, Some(error_msg), None, None, None);
 
 
@@ -4681,7 +4734,7 @@ impl WorkflowEngine {
 
 
 
-                                update_instance_progress(&conn, &exec_id, completed_count.load(Ordering::SeqCst), total, None);
+                                update_instance_progress(&conn, &exec_id, completed_count.load(Ordering::SeqCst), total, success_count.load(Ordering::SeqCst), None);
 
 
 
@@ -6309,71 +6362,10 @@ impl WorkflowEngine {
 
 
 
-        // 更新子工作流实例状态
+        // 子工作流实例状态已由 execute_with_concurrency_impl 内部的 final_status 统一处理，
+// 此处不再二次覆盖，避免将 cancelled 错误覆盖为 success/failed
 
-
-
-        match &result {
-
-
-
-            Ok(_) => {
-
-
-
-                let _ = conn.execute(
-
-
-
-                    "UPDATE workflow_instances SET status = 'success', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
-
-
-
-                    rusqlite::params![crate::utils::now(), sub_execution_id],
-
-
-
-                );
-
-
-
-            }
-
-
-
-            Err(e) => {
-
-
-
-                let _ = conn.execute(
-
-
-
-                    "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
-
-
-
-                    rusqlite::params![e.to_string(), crate::utils::now(), sub_execution_id],
-
-
-
-                );
-
-
-
-            }
-
-
-
-        }
-
-
-
-
-
-
-
-        result
+result
 
 
 
@@ -6782,12 +6774,7 @@ impl WorkflowEngine {
 
 
         let completed_count = Arc::new(AtomicUsize::new(0));
-
-
-
-
-
-
+        let success_count = Arc::new(AtomicUsize::new(0));
 
         log::info!("[WorkflowEngine] 开始执行: id={}, stages={}, total_nodes={}", execution_id, def.stages.len(), total_count);
 
@@ -6962,7 +6949,7 @@ impl WorkflowEngine {
 
 
         let total_count = reachable_nodes.len();
-
+        let success_count = Arc::new(AtomicUsize::new(0));
 
 
 
@@ -6998,6 +6985,11 @@ impl WorkflowEngine {
 
 
                 let stage = def.stages.iter().find(|s| s.id == *stage_id).unwrap();
+
+                if stage.nodes.is_empty() {
+                    log::info!("[WorkflowEngine] 跳过空阶段: id={}, name={}", stage.id, stage.name);
+                    continue;
+                }
 
 
 
@@ -7054,9 +7046,7 @@ impl WorkflowEngine {
 
 
                 let completed_count = completed_count.clone();
-
-
-
+                let success_count = success_count.clone();
                 let semaphore = semaphore.clone();
 
 
@@ -7149,7 +7139,7 @@ impl WorkflowEngine {
 
 
 
-                        &completed_count, total_count, &semaphore,
+                        &completed_count, &success_count, total_count, &semaphore,
 
 
 
@@ -7537,11 +7527,19 @@ impl WorkflowEngine {
 
 
 
-            let completed = completed_count.load(Ordering::SeqCst);
-
-
-
-            let rate = if total > 0 { completed as f64 / total as f64 } else { 1.0 };
+            let success = success_count.load(Ordering::SeqCst);
+            let rate = if total > 0 { success as f64 / total as f64 } else { 1.0 };
+            // 判定最终状态优先级：
+            // 1. success == total → "success"（所有节点已完成，即使后续收到取消信号也视为成功）
+            // 2. cancelled → "cancelled"（取消信号导致部分节点未执行）
+            // 3. success < total → "failed"（有节点执行失败）
+            let final_status = if success == total {
+                "success"
+            } else if cancelled.load(Ordering::SeqCst) {
+                "cancelled"
+            } else {
+                "failed"
+            };
 
 
 
@@ -7553,11 +7551,11 @@ impl WorkflowEngine {
 
 
 
-                "UPDATE workflow_instances SET status = 'success', completed_at = ?1, completion_rate = ?2, context = ?3, updated_at = ?1 WHERE id = ?4",
+                "UPDATE workflow_instances SET status = ?1, completed_at = ?2, completion_rate = ?3, context = ?4, updated_at = ?2 WHERE id = ?5",
 
 
 
-                rusqlite::params![now, rate, serde_json::to_string(&final_ctx_json).unwrap_or_else(|_| "{}".to_string()), execution_id],
+                rusqlite::params![final_status, now, rate, serde_json::to_string(&final_ctx_json).unwrap_or_else(|_| "{}".to_string()), execution_id],
 
 
 
@@ -7653,356 +7651,386 @@ impl WorkflowEngine {
 
 
 
-    /// 从 checkpoint 恢复执行
 
 
-
-    pub async fn recover_execution(
-
-
-
-        executor: &Arc<NodeExecutor>,
-
-
-
-        def: &WorkflowDefinition,
-
-
-
-        execution_id: &str,
-
-
-
-        input_data: Value,
-
-
-
-        emitter: &tauri::AppHandle,
-
-
-
-        max_concurrency: usize,
-
-
-
-    ) -> Result<Value, AppError> {
-
-
-
-        let db_conn = get_db_conn(emitter)?;
-
-
-
-
-
-
-
-        let (_completed_nodes, recovered_stages) = {
-
-
-
-            let mut stmt = db_conn.prepare(
-
-
-
-                "SELECT node_id, status FROM node_executions WHERE execution_id = ?1"
-
-
-
-            ).map_err(|e| AppError::Db(e.to_string()))?;
-
-
-
-
-
-
-
-            let node_results: Vec<(String, String)> = stmt.query_map(
-
-
-
-                rusqlite::params![execution_id],
-
-
-
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-
-
-
-            ).map_err(|e| AppError::Db(e.to_string()))?
-
-
-
-            .collect::<Result<Vec<_>, _>>()
-
-
-
-            .map_err(|e| AppError::Db(e.to_string()))?;
-
-
-
-
-
-
-
-            let completed_nodes: std::collections::HashSet<String> = node_results.iter()
-
-
-
-                .filter(|(_, status)| status == "completed")
-
-
-
-                .map(|(id, _)| id.clone())
-
-
-
-                .collect();
-
-
-
-
-
-
-
-            let mut recovered_stages = Vec::new();
-
-
-
-            for stage in &def.stages {
-
-
-
-                let pending_nodes: Vec<WorkflowNode> = stage.nodes.iter()
-
-
-
-                    .filter(|n| !completed_nodes.contains(&n.id))
-
-
-
-                    .cloned()
-
-
-
-                    .collect();
-
-
-
-                if pending_nodes.is_empty() { continue; }
-
-
-
-                let pending_ids: std::collections::HashSet<&str> = pending_nodes.iter()
-
-
-
-                    .map(|n| n.id.as_str()).collect();
-
-
-
-                let filtered_edges: Vec<WorkflowEdge> = stage.edges.iter()
-
-
-
-                    .filter(|e| pending_ids.contains(e.source.as_str()) && pending_ids.contains(e.target.as_str()))
-
-
-
-                    .cloned()
-
-
-
-                    .collect();
-
-
-
-                recovered_stages.push(Stage {
-
-
-
-                    id: stage.id.clone(), name: stage.name.clone(), order: stage.order,
-
-
-
-                    nodes: pending_nodes, edges: filtered_edges, stage_edges: stage.stage_edges.clone(), gate: stage.gate.clone(),
-
-
-
-                    collapsed: stage.collapsed, offset_x: stage.offset_x, offset_y: stage.offset_y,
-
-
-
-                });
-
-
-
+    // ════════════════════════════════════════════════════════════
+    // 断点执行基础设施（单点执行 / 链式执行 / 补全执行）
+    // ════════════════════════════════════════════════════════════
+
+    /// 从 node_executions 表重建前序已完成节点的 context
+    ///
+    /// 读取所有 status='completed' 的节点的 output_data，以 node_id 为 key 注入 HashMap。
+    /// 用于断点执行时恢复前序执行上下文。
+    fn rebuild_context_from_history(execution_id: &str, conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>) -> Result<std::collections::HashMap<String, serde_json::Value>, AppError> {
+        let mut stmt = conn.prepare(
+            "SELECT node_id, output_data FROM node_executions WHERE execution_id = ?1 AND status = 'completed'"
+        ).map_err(|e| AppError::Db(e.to_string()))?;
+
+        let rows: Vec<(String, Option<String>)> = stmt.query_map(
+            rusqlite::params![execution_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        ).map_err(|e| AppError::Db(e.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Db(e.to_string()))?;
+
+        let mut context = std::collections::HashMap::new();
+        for (node_id, output_data_opt) in rows {
+            if let Some(output_data_str) = output_data_opt {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&output_data_str) {
+                    context.insert(node_id, val);
+                }
             }
-
-
-
-            (completed_nodes, recovered_stages)
-
-
-
-        };
-
-
-
-
-
-
-
-
-
-
-
-        if recovered_stages.is_empty() {
-
-
-
-            emit_progress(
-
-
-
-                emitter, execution_id, &def.id, &ExecutionMode::default(),
-
-
-
-                None, None,
-
-
-
-                Some(serde_json::json!({
-
-
-
-                    "status": "completed",
-
-
-
-                    "definition_name": &def.name,
-
-
-
-                    "message": "所有节点已完成",
-
-
-
-                })),
-
-
-
-                None,
-
-
-
-            );
-
-
-
-            return Ok(Value::Null);
-
-
-
         }
 
-
-
-
-
-
-
-        let recovered_def = WorkflowDefinition {
-
-
-
-            id: def.id.clone(),
-
-
-
-            name: format!("{} (恢复)", def.name),
-
-
-
-            version: def.version.clone(),
-
-
-
-            description: def.description.clone(),
-
-
-
-            trigger: def.trigger.clone(),
-
-
-
-            stages: recovered_stages,
-
-
-
-            input_schema: def.input_schema.clone(),
-
-
-
-            output_schema: def.output_schema.clone(),
-
-
-
-            created_at: def.created_at,
-
-
-
-            updated_at: crate::utils::now(),
-
-
-
-            enabled: def.enabled,
-
-
-
-        };
-
-
-
-
-
-
-
-        let _ = db_conn.execute(
-
-
-
-            "UPDATE workflow_instances SET status = 'running', error = NULL, updated_at = ?1 WHERE id = ?2",
-
-
-
-            rusqlite::params![crate::utils::now(), execution_id],
-
-
-
-        );
-
-
-
-
-
-
-
-        Self::execute_with_concurrency_impl(executor, &recovered_def, execution_id, input_data, emitter, max_concurrency, &[]).await
-
-
-
+        // 注入 __input__ 占位（兼容 TemplateEngine 回退逻辑）
+        if !context.contains_key("__input__") {
+            context.insert("__input__".to_string(), serde_json::Value::Object(serde_json::Map::new()));
+        }
+
+        log::info!("[WorkflowEngine] rebuild_context: execution_id={}, recovered {} nodes", execution_id, context.len());
+        Ok(context)
     }
 
+    /// 计算断点执行的节点范围
+    ///
+    /// 返回需要执行的节点 ID 集合。
+    /// - Full: 所有可达节点
+    /// - SingleNode: 仅指定节点
+    /// - Chain: 从指定节点 BFS 到所有后序可达节点
+    /// - Completion: 所有非 completed 状态的可达节点
+    fn compute_execution_scope(
+        def: &WorkflowDefinition,
+        mode: &ExecutionMode,
+        execution_id: &str,
+        conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+    ) -> Result<std::collections::HashSet<String>, AppError> {
+        let plan = Self::compute_execution_plan(def);
+        let all_reachable: std::collections::HashSet<String> = plan.reachable_node_ids.iter().cloned().collect();
 
+        let scope = match mode {
+            ExecutionMode::Full => all_reachable,
 
+            ExecutionMode::SingleNode { node_id } => {
+                if !all_reachable.contains(node_id) {
+                    return Err(AppError::InvalidInput(format!("节点 {} 不可达，无法执行", node_id)));
+                }
+                let mut set = std::collections::HashSet::new();
+                set.insert(node_id.clone());
+                set
+            }
 
+            ExecutionMode::Chain { node_id } => {
+                if !all_reachable.contains(node_id) {
+                    return Err(AppError::InvalidInput(format!("节点 {} 不可达，无法执行", node_id)));
+                }
+                // BFS 从指定节点沿节点连线 + 阶段连线遍历所有后序可达节点。
+                // 遍历逻辑与 compute_execution_plan 保持一致，支持跨阶段链式传播：
+                //   - 沿当前节点所在阶段的 stage.edges 找阶段内下游节点
+                //   - 沿该阶段的 stage_edges 找下游阶段，并将其入口节点（阶段内入度为 0 的节点）加入队列
+                let stage_map: std::collections::HashMap<String, &Stage> =
+                    def.stages.iter().map(|s| (s.id.clone(), s)).collect();
+                let se_down: std::collections::HashMap<String, Vec<String>> = {
+                    let mut m: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                    for stage in &def.stages {
+                        for edge in &stage.stage_edges {
+                            m.entry(edge.source.clone()).or_default().push(edge.target.clone());
+                        }
+                    }
+                    m
+                };
+                let mut downstream: std::collections::HashSet<String> = std::collections::HashSet::new();
+                downstream.insert(node_id.clone());
+                let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+                queue.push_back(node_id.clone());
+                while let Some(cur) = queue.pop_front() {
+                    let cur_stage = def.stages.iter().find(|s| s.nodes.iter().any(|n| n.id == cur));
+                    let Some(stage) = cur_stage else { continue; };
+                    // 阶段内节点连线
+                    for edge in &stage.edges {
+                        if edge.source == cur && all_reachable.contains(&edge.target) && downstream.insert(edge.target.clone()) {
+                            queue.push_back(edge.target.clone());
+                        }
+                    }
+                    // 阶段连线 → 下游阶段的入口节点
+                    if let Some(downstreams) = se_down.get(&stage.id) {
+                        for ds_id in downstreams {
+                            let Some(ds) = stage_map.get(ds_id) else { continue; };
+                            // has_incoming = 阶段内存在入边的节点集合（即 stage.edge 的 target）
+                            let has_incoming: std::collections::HashSet<&str> =
+                                ds.edges.iter().map(|e| e.target.as_str()).collect();
+                            // 下游阶段的入口节点：不在 has_incoming 中（阶段内入度为 0）
+                            // （与 compute_execution_plan 的入口判定一致）
+                            for node in &ds.nodes {
+                                if all_reachable.contains(&node.id)
+                                    && !has_incoming.contains(node.id.as_str())
+                                    && downstream.insert(node.id.clone())
+                                {
+                                    queue.push_back(node.id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                log::info!("[WorkflowEngine] Chain scope: from {}, downstream {} nodes", node_id, downstream.len());
+                downstream
+            }
 
+            ExecutionMode::Completion => {
+                // 查询已完成的节点
+                let mut stmt = conn.prepare(
+                    "SELECT node_id FROM node_executions WHERE execution_id = ?1 AND status = 'completed'"
+                ).map_err(|e| AppError::Db(e.to_string()))?;
 
+                let completed: std::collections::HashSet<String> = stmt.query_map(
+                    rusqlite::params![execution_id],
+                    |row| row.get::<_, String>(0),
+                ).map_err(|e| AppError::Db(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AppError::Db(e.to_string()))?
+                .into_iter()
+                .collect();
 
+                // 非完成的可达节点
+                let pending: std::collections::HashSet<String> = all_reachable.difference(&completed).cloned().collect();
+                log::info!("[WorkflowEngine] Completion scope: reachable={}, completed={}, pending={}", all_reachable.len(), completed.len(), pending.len());
+                pending
+            }
+        };
 
+        Ok(scope)
+    }
 
+    /// 重置目标范围内节点的执行状态
+    ///
+    /// 将 scope 内节点的 node_executions 状态重置为 pending（清空 output_data、error_message）。
+    /// scope 外的已完成节点保持不变。
+    fn reset_nodes_for_reexecution(
+        execution_id: &str,
+        scope: &std::collections::HashSet<String>,
+        conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+    ) -> Result<(), AppError> {
+        // 构建 IN 子句参数
+        let placeholders: String = scope.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = scope.iter().map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>).collect();
+
+        let sql = format!(
+            "UPDATE node_executions SET status = 'pending', output_data = NULL, error_message = NULL, \
+             finished_at = NULL, duration_ms = NULL, updated_at = ?1 \
+             WHERE execution_id = ?2 AND node_id IN ({})",
+            placeholders
+        );
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(crate::utils::now()),
+            Box::new(execution_id.to_string()),
+        ];
+        param_values.extend(params);
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+
+        let affected = conn.execute(&sql, param_refs.as_slice()).map_err(|e| AppError::Db(e.to_string()))?;
+        log::info!("[WorkflowEngine] reset_nodes: execution_id={}, scope={}, affected_rows={}", execution_id, scope.len(), affected);
+
+        Ok(())
+    }
+
+    /// 重置实例状态为 running
+    fn reset_instance_for_reexecution(
+        execution_id: &str,
+        conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+    ) -> Result<(), AppError> {
+        let now = crate::utils::now();
+        conn.execute(
+            "UPDATE workflow_instances SET status = 'running', error = NULL, completed_at = NULL, updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, execution_id],
+        ).map_err(|e| AppError::Db(e.to_string()))?;
+
+        log::info!("[WorkflowEngine] reset_instance: execution_id={}", execution_id);
+        Ok(())
+    }
+
+    /// 统一断点执行入口
+    ///
+    /// 支持 Full / SingleNode / Chain / Completion 四种模式。
+    /// 对于断点模式（非 Full），从 node_executions 重建 context，计算执行范围，
+    /// 重置目标节点状态，然后调用 execute_with_concurrency_impl 执行。
+    pub async fn execute_with_mode(
+        executor: &Arc<NodeExecutor>,
+        def: &WorkflowDefinition,
+        execution_id: &str,
+        input_data: Value,
+        emitter: &tauri::AppHandle,
+        max_concurrency: usize,
+        mode: ExecutionMode,
+    ) -> Result<Value, AppError> {
+        match mode {
+            ExecutionMode::Full => {
+                // 全量执行：直接调用原有逻辑
+                Self::execute_with_concurrency(executor, def, execution_id, input_data, emitter, max_concurrency).await
+            }
+
+            _ => {
+                // 断点执行模式
+                let conn = get_db_conn(emitter)?;
+
+                // 1. 计算执行范围
+                let scope = Self::compute_execution_scope(def, &mode, execution_id, &conn)?;
+
+                if scope.is_empty() {
+                    log::info!("[WorkflowEngine] execute_with_mode: scope 为空，无需执行");
+                    // 更新实例状态为 success（所有节点都已完成）
+                    let now = crate::utils::now();
+                    let _ = conn.execute(
+                        "UPDATE workflow_instances SET status = 'success', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
+                        rusqlite::params![now, execution_id],
+                    );
+                    return Ok(Value::Null);
+                }
+
+                // 2. 重置目标范围内节点状态
+                Self::reset_nodes_for_reexecution(execution_id, &scope, &conn)?;
+
+                // 3. 重置实例状态
+                Self::reset_instance_for_reexecution(execution_id, &conn)?;
+
+                // 4. 重建 context（从已完成节点的历史输出）
+                let history_context = Self::rebuild_context_from_history(execution_id, &conn)?;
+
+                // 5. 构建 recovered_def：仅包含目标范围内的节点
+                let recovered_stages: Vec<Stage> = def.stages.iter().map(|stage| {
+                    let pending_nodes: Vec<WorkflowNode> = stage.nodes.iter()
+                        .filter(|n| scope.contains(&n.id))
+                        .cloned()
+                        .collect();
+
+                    let pending_ids: std::collections::HashSet<&str> = pending_nodes.iter()
+                        .map(|n| n.id.as_str())
+                        .collect();
+
+                    let filtered_edges: Vec<WorkflowEdge> = stage.edges.iter()
+                        .filter(|e| pending_ids.contains(e.source.as_str()) && pending_ids.contains(e.target.as_str()))
+                        .cloned()
+                        .collect();
+
+                    Stage {
+                        id: stage.id.clone(), name: stage.name.clone(), order: stage.order,
+                        nodes: pending_nodes, edges: filtered_edges, stage_edges: stage.stage_edges.clone(),
+                        gate: stage.gate.clone(),
+                        collapsed: stage.collapsed, offset_x: stage.offset_x, offset_y: stage.offset_y,
+                    }
+                }).filter(|s| !s.nodes.is_empty()).collect();
+
+                let recovered_def = WorkflowDefinition {
+                    id: def.id.clone(),
+                    name: format!("{} ({})", def.name, match &mode {
+                        ExecutionMode::SingleNode { .. } => "单点执行",
+                        ExecutionMode::Chain { .. } => "链式执行",
+                        ExecutionMode::Completion => "补全执行",
+                        _ => "执行",
+                    }),
+                    version: def.version.clone(),
+                    description: def.description.clone(),
+                    trigger: def.trigger.clone(),
+                    stages: recovered_stages,
+                    input_schema: def.input_schema.clone(),
+                    output_schema: def.output_schema.clone(),
+                    icon: def.icon.clone(),
+                    created_at: def.created_at,
+                    updated_at: crate::utils::now(),
+                    enabled: def.enabled,
+                };
+
+                // 6. 发送开始事件
+                let mode_str = match &mode {
+                    ExecutionMode::SingleNode { node_id } => format!("single:{}", node_id),
+                    ExecutionMode::Chain { node_id } => format!("chain:{}", node_id),
+                    ExecutionMode::Completion => "completion".to_string(),
+                    _ => "full".to_string(),
+                };
+                let _ = emitter.emit("workflow:execution-progress", serde_json::json!({
+                    "execution_id": execution_id,
+                    "definition_id": &def.id,
+                    "mode": mode_str,
+                    "execution": {
+                        "status": "running",
+                        "definition_name": &def.name,
+                    },
+                }));
+
+                // 7. 将历史 context 注入到执行中
+                // 调用 execute_with_concurrency_impl，传入重建的 input_data 作为 context 种子
+                // 注意：impl 内部会用 input_data 初始化 context 的 __input__，但已完成的节点输出
+                // 需要在预填充阶段注入。这里将 history_context 合并到 input_data 中传递。
+                let mut seed_input = input_data.clone();
+                if let Some(obj) = seed_input.as_object_mut() {
+                    for (k, v) in history_context {
+                        obj.insert(k, v);
+                    }
+                }
+
+                let impl_result = Self::execute_with_concurrency_impl(executor, &recovered_def, execution_id, seed_input, emitter, max_concurrency, &[]).await;
+
+                // 8. 重新计算整个工作流的 completion_rate 和 status（基于所有可达节点，而非仅 scope 内）
+                {
+                    let conn = get_db_conn(emitter)?;
+                    let all_reachable = Self::compute_execution_plan(def).reachable_node_ids;
+                    let all_total = all_reachable.len();
+                    let reachable_set: std::collections::HashSet<&str> =
+                        all_reachable.iter().map(|s| s.as_str()).collect();
+                    let mut completed_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    let mut failed_count: usize = 0;
+                    let mut cancelled_count: usize = 0;
+                    {
+                        let mut stmt = conn.prepare(
+                            "SELECT node_id, status FROM node_executions WHERE execution_id = ?1"
+                        ).map_err(|e| AppError::Db(e.to_string()))?;
+                        let rows: Vec<(String, String)> = stmt.query_map(
+                            rusqlite::params![execution_id],
+                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                        ).map_err(|e| AppError::Db(e.to_string()))?
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| AppError::Db(e.to_string()))?;
+                        for (nid, status) in rows {
+                            if !reachable_set.contains(nid.as_str()) { continue; }
+                            match status.as_str() {
+                                "completed" => { completed_nodes.insert(nid); },
+                                "failed" => { failed_count += 1; },
+                                "cancelled" => { cancelled_count += 1; },
+                                _ => {}
+                            }
+                        }
+                    }
+                    let all_success = completed_nodes.len();
+                    let rate = if all_total > 0 { all_success as f64 / all_total as f64 } else { 1.0 };
+                    // 断点执行已结束（impl 已返回），状态必须是终态：
+                    //   1. all_success == all_total → "success"
+                    //   2. 存在 failed 节点 → "failed"
+                    //   3. 存在 cancelled 节点 → "cancelled"
+                    //   4. 兜底 → "running"（理论上不应到达，保留以防异常态卡死）
+                    let recalc_status = if all_success == all_total {
+                        "success"
+                    } else if failed_count > 0 {
+                        "failed"
+                    } else if cancelled_count > 0 {
+                        "cancelled"
+                    } else {
+                        "running"
+                    };
+                    let now = crate::utils::now();
+                    let _ = conn.execute(
+                        "UPDATE workflow_instances SET status = ?1, completion_rate = ?2, updated_at = ?3 WHERE id = ?4",
+                        rusqlite::params![recalc_status, rate, now, execution_id],
+                    );
+                    log::info!(
+                        "[WorkflowEngine] 断点执行后重算: total={}, completed={}, failed={}, cancelled={}, rate={:.2}, status={}",
+                        all_total, all_success, failed_count, cancelled_count, rate, recalc_status
+                    );
+                }
+
+                impl_result
+            }
+        }
+    }
 
 
 }
@@ -8073,6 +8101,59 @@ fn node_to_node_def(node: &WorkflowNode) -> NodeDef {
 
 
 
+/// 根据字符串内容智能推断原始类型（数字/布尔/null/字符串）
+///
+/// 策略：
+/// - 空字符串 → Value::Null（避免 JS 中 "" * 3 = 0 的反直觉行为）
+/// - "true" / "false" → Value::Bool
+/// - 纯数字（整数/浮点/正负号）→ Value::Number
+/// - 其他情况保持 Value::String
+fn infer_typed_value(raw: &str) -> Value {
+    let trimmed = raw.trim();
+
+    if trimmed.is_empty() {
+        return Value::Null;
+    }
+
+    if trimmed == "true" {
+        return Value::Bool(true);
+    }
+    if trimmed == "false" {
+        return Value::Bool(false);
+    }
+
+    // 尝试解析为数字（严格匹配，不接受前后空格——前面 trim 过了）
+    // 先尝试整数（i64 / u64 避免精度丢失）
+    if let Ok(n) = trimmed.parse::<i64>() {
+        return Value::Number(serde_json::Number::from(n));
+    }
+    if let Ok(n) = trimmed.parse::<u64>() {
+        return Value::Number(serde_json::Number::from(n));
+    }
+    // 再尝试 f64（注意 NaN/Inf 无法序列化为 JSON Number，需排除）
+    if let Ok(f) = trimmed.parse::<f64>() {
+        if f.is_finite() {
+            if let Some(num) = serde_json::Number::from_f64(f) {
+                return Value::Number(num);
+            }
+        }
+    }
+
+    Value::String(raw.to_string())
+}
+
+/// 调试用：返回 Value 的类型名
+fn value_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(n) => if n.is_i64() || n.is_u64() { "number(int)" } else { "number(float)" },
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 /// 解析节点输入（模板变量替换）
 
 
@@ -8093,6 +8174,11 @@ fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> 
 
 
 
+            log::info!(
+                "[resolve_node_input][DEBUG] 节点 {} (type={:?}) 开始解析 inputMapping: {:?} | context keys: {:?}",
+                node.id, node.node_type, map, context.keys().collect::<Vec<_>>()
+            );
+
             for (key, template) in &map {
 
 
@@ -8107,9 +8193,20 @@ fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> 
 
                     Ok(value) => {
 
+                        // 【优化 A】智能推断原始类型，而非一律转字符串
+                        // 目的：transform 节点脚本中 input.x * 3 能直接得到数字结果，
+                        // 而不会因为 "6" * 3 = NaN 导致用户困惑。
+                        let typed_value = infer_typed_value(&value);
 
+                        log::info!(
+                            "[resolve_node_input][DEBUG]   ✅ inputMapping[{}] 解析成功: {:?} -> raw_str=\"{}\" | 类型推断后: {:?} (type={})",
+                            key, template,
+                            if value.len() > 50 { format!("{}...", &value[..50]) } else { value.clone() },
+                            typed_value,
+                            value_type_name(&typed_value)
+                        );
 
-                        resolved.insert(key.clone(), Value::String(value));
+                        resolved.insert(key.clone(), typed_value);
 
 
 
@@ -8118,8 +8215,6 @@ fn resolve_node_input(node: &WorkflowNode, context: &HashMap<String, Value>) -> 
 
 
                     Err(e) => {
-
-       
 
 
 

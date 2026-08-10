@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { Plus, X, Monitor, ChevronDown, Palette } from 'lucide-react';
+import { Plus, X, Monitor, ChevronDown, Palette, Terminal as TerminalIcon, Command, Keyboard, Sparkles } from 'lucide-react';
 import '@xterm/xterm/css/xterm.css';
 import { useVirtualConsole } from '../VirtualConsoleManager';
 
@@ -429,28 +429,18 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     }
   }, [activeTerminalTabId]);
 
-  // ── ResizeObserver: auto-create terminal only ──
+  // ── ResizeObserver: track container size (NO auto-create) ──
   //    Terminal cols/rows are FIXED at creation time — never changed.
   //    No fit/resize on container change — avoids xterm reflow vs ConPTY VT redraw conflicts.
+  //    ✦ 重要：终端模式切换后不会自动创建默认终端 tab，
+  //       由用户手动点击「新建终端」或 Ctrl+Shift+T 创建（与空态首页 CTA 一致）。
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const observer = new ResizeObserver(() => {
-      if (creatingRef.current) return;
-
-      const w = container.offsetWidth;
-      const h = container.offsetHeight;
-
-      // Auto-create first terminal when panel becomes visible with no tabs
-      if (tabsCountRef.current === 0 && w > 0 && h > 0) {
-        observer.disconnect();
-        createTerminal();
-        return;
-      }
-
-
+      // 仅用于当前活动终端尺寸检测；无终端时保持空态（不自动创建）
     });
 
     observerRef.current = observer;
@@ -459,7 +449,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
       observer.disconnect();
       observerRef.current = null;
     };
-  }, [activeTerminalTabId, createTerminal]);
+  }, [createTerminal]);
 
   // ── 1s poll: direct state updates from refs (recursive setTimeout, no setInterval) ──
   const [tick, setTick] = useState(0);
@@ -570,15 +560,19 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
               onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
             >
-              <Monitor className="w-3.5 h-3.5" />
-              <span>{terminalShellType === 'powershell' ? 'PS' : 'CMD'}</span>
+              {terminalShellType === 'powershell' ? (
+                <Command className="w-3.5 h-3.5" />
+              ) : (
+                <TerminalIcon className="w-3.5 h-3.5" />
+              )}
+              <span>{terminalShellType === 'powershell' ? 'PowerShell' : 'CMD'}</span>
               <ChevronDown className="w-3 h-3" />
             </button>
             {showShellMenu && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowShellMenu(false)} />
                 <div
-                  className="absolute top-full left-0 mt-1 z-20 rounded-md shadow-lg py-1 min-w-[120px]"
+                  className="absolute top-full left-0 mt-1 z-20 rounded-md shadow-lg py-1 min-w-[140px]"
                   style={{
                     background: '#2a2a3a',
                     border: '1px solid rgba(255,255,255,0.1)',
@@ -596,6 +590,11 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
                       onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                     >
+                      {opt.value === 'powershell' ? (
+                        <Command className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                      ) : (
+                        <TerminalIcon className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                      )}
                       {opt.label}
                       {opt.value === terminalShellType && (
                         <span className="text-[10px] ml-auto" style={{ color: 'rgba(255,255,255,0.4)' }}>active</span>
@@ -708,15 +707,148 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
 
       {/* Terminal content area — scrollable parent for oversized terminal; xterm handles scrollback internally */}
       <div className="flex-1 relative overflow-x-hidden overflow-y-auto terminal-viewport-area" style={{ background: TERMINAL_THEMES[terminalTheme].background }}>
-        {/* Empty state — centered in the entire content area */}
+        {/* Empty state — Terminal 欢迎首页：零状态不自动创建终端，由用户手动发起 */}
         {terminalTabs.length === 0 && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4" style={{ color: 'rgba(255,255,255,0.3)' }}>
-            <Monitor className="w-12 h-12" />
-            <div className="text-center">
-              <p className="text-sm font-medium">No active terminals</p>
-              <p className="text-xs mt-1">
-                Press <kbd className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: 'rgba(255,255,255,0.1)' }}>Ctrl+Shift+T</kbd> to open a terminal
-              </p>
+          <div className="absolute inset-0 flex items-center justify-center p-6 overflow-y-auto">
+            <div className="w-full max-w-xl flex flex-col items-center gap-7 text-center" style={{ color: 'rgba(255,255,255,0.85)' }}>
+              {/* Logo / Title */}
+              <div className="flex flex-col items-center gap-3">
+                <div
+                  className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg"
+                  style={{
+                    background: 'linear-gradient(135deg, #5B7FFF 0%, #8B5CF6 100%)',
+                    boxShadow: '0 8px 24px rgba(91,127,255,0.35)',
+                  }}
+                >
+                  <TerminalIcon className="w-8 h-8 text-white" strokeWidth={2} />
+                </div>
+                <div className="flex flex-col items-center gap-1">
+                  <h2 className="text-xl font-semibold tracking-tight">虚拟终端</h2>
+                  <p className="text-xs opacity-60" style={{ color: 'rgba(255,255,255,0.55)' }}>
+                    请手动创建一个终端标签页以开始使用
+                  </p>
+                </div>
+              </div>
+
+              {/* Primary CTA + Secondary shell picker */}
+              <div className="flex flex-col items-center gap-3">
+                <button
+                  onClick={() => createTerminal()}
+                  className="group inline-flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-sm text-white transition-all active:scale-[.98]"
+                  style={{
+                    background: 'linear-gradient(135deg, #5B7FFF 0%, #8B5CF6 100%)',
+                    boxShadow: '0 4px 14px rgba(91,127,255,0.4)',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.filter = 'brightness(1.08)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.filter = 'brightness(1)')}
+                  title="新建终端 (Ctrl + Shift + T)"
+                >
+                  <Plus className="w-4 h-4" />
+                  新建终端
+                </button>
+
+                {/* Shell 快捷选择：和顶部 Toolbar 同步 */}
+                <div className="flex items-center gap-1.5 p-1 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <span className="text-[10px] opacity-50 px-1.5 pr-2">使用</span>
+                  {SHELL_OPTIONS.map((s) => (
+                    <button
+                      key={s.value}
+                      onClick={() => {
+                        setTerminalShellType(s.value as 'powershell' | 'cmd');
+                        createTerminal();
+                      }}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all"
+                      style={{
+                        background: terminalShellType === s.value ? 'rgba(255,255,255,0.12)' : 'transparent',
+                        color: terminalShellType === s.value ? '#fff' : 'rgba(255,255,255,0.55)',
+                        fontWeight: terminalShellType === s.value ? 600 : 500,
+                      }}
+                      onMouseEnter={(e) => { if (terminalShellType !== s.value) e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                      onMouseLeave={(e) => { if (terminalShellType !== s.value) e.currentTarget.style.background = 'transparent'; }}
+                      title={`新建 ${s.label} 终端`}
+                    >
+                      {s.value === 'powershell' ? <Command className="w-3 h-3" /> : <TerminalIcon className="w-3 h-3" />}
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div className="w-full flex items-center gap-3">
+                <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
+                <span className="text-[10px] opacity-40 uppercase tracking-wider">或使用快捷键</span>
+                <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.08)' }} />
+              </div>
+
+              {/* Keyboard shortcut hint */}
+              <div
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg"
+                style={{
+                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  fontFamily: 'Cascadia Code, Consolas, monospace',
+                  fontSize: 12,
+                }}
+              >
+                <Keyboard className="w-3.5 h-3.5 opacity-60" />
+                <kbd className="px-1.5 py-0.5 rounded border text-[10px]" style={{ background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)' }}>Ctrl</kbd>
+                <span className="opacity-30">+</span>
+                <kbd className="px-1.5 py-0.5 rounded border text-[10px]" style={{ background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)' }}>Shift</kbd>
+                <span className="opacity-30">+</span>
+                <kbd className="px-1.5 py-0.5 rounded border text-[10px]" style={{ background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.12)' }}>T</kbd>
+                <span className="opacity-50 ml-1 text-[11px]">新建终端</span>
+              </div>
+
+              {/* Info cards: 主题 + 说明 */}
+              <div className="grid grid-cols-2 gap-3 w-full mt-1">
+                <div
+                  className="p-3 rounded-xl text-left"
+                  style={{
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                  }}
+                >
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <Palette className="w-3.5 h-3.5 opacity-60" />
+                    <span className="text-xs font-medium">主题</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {['Catppuccin Dark', 'One Dark', 'Light', 'Blue'].slice(0, 4).map((name) => {
+                      const active = terminalTheme === name;
+                      return (
+                        <button
+                          key={name}
+                          onClick={() => setTerminalTheme(name)}
+                          className="w-6 h-6 rounded-md border transition-transform hover:scale-110"
+                          style={{
+                            background: TERMINAL_THEMES[name as keyof typeof TERMINAL_THEMES].background,
+                            borderColor: active ? '#5B7FFF' : 'rgba(255,255,255,0.1)',
+                            boxShadow: active ? '0 0 0 2px rgba(91,127,255,0.3)' : 'none',
+                          }}
+                          title={`切换到 ${name}`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+                <div
+                  className="p-3 rounded-xl text-left"
+                  style={{
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                  }}
+                >
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <Sparkles className="w-3.5 h-3.5 opacity-60" />
+                    <span className="text-xs font-medium">提示</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed opacity-55">
+                    终端会话创建后尺寸固定，不会随面板拉伸重新排版；
+                    可随时在标签栏「+」新建更多会话并行使用。
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         )}

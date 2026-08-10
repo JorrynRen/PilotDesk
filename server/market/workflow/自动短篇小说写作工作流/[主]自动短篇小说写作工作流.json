@@ -1,0 +1,437 @@
+{
+  "name": "自动短篇小说写作工作流",
+  "version": "1.0.0",
+  "description": "自动短篇小说写作工作流：用户输入设定 → AI策划故事 → 分章创作 → 合稿输出完整小说",
+  "trigger": {
+    "triggerType": "manual",
+    "cron": null,
+    "eventName": null
+  },
+  "stages": [
+    {
+      "name": "起始阶段",
+      "order": 0,
+      "nodes": [
+        {
+          "type": "start",
+          "label": "开始",
+          "params": {},
+          "delayMs": 0,
+          "timeoutMs": 0,
+          "retryCount": 0,
+          "retryDelayMs": 0,
+          "inputMapping": {},
+          "outputMapping": {
+            "style": "古代，玄幻风",
+            "theme": "凡人修仙",
+            "worldview": "家国情怀"
+          },
+          "position": {
+            "x": 160,
+            "y": 220
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "故事策划",
+      "order": 1,
+      "nodes": [
+        {
+          "type": "agent",
+          "label": "分析热门话题",
+          "params": {
+            "agent_type": "claude",
+            "prompt_template": "你是一个热门话题分析师。\n\n当前小说设定：\n- 主题：{{theme}}\n- 世界观：{{worldview}}\n- 风格：{{style}}\n\n请分析当前与该主题相关的热门话题和读者关注点，输出 JSON 格式：\n{\n  \"trending_topics\": [\"话题1\", \"话题2\", ...],\n  \"reader_interests\": [\"兴趣点1\", \"兴趣点2\", ...],\n  \"suggested_direction\": \"建议融入的故事方向\"\n}"
+          },
+          "delayMs": 0,
+          "timeoutMs": 120000,
+          "retryCount": 1,
+          "retryDelayMs": 5000,
+          "inputMapping": {
+            "style": "{{style.n1.s1}}",
+            "theme": "{{theme.n1.s1}}",
+            "worldview": "{{worldview.n1.s1}}"
+          },
+          "outputMapping": {
+            "reader_interests": "{{content}}"
+          },
+          "position": {
+            "x": 42,
+            "y": 21
+          }
+        },
+        {
+          "type": "agent",
+          "label": "为小说取名",
+          "params": {
+            "agent_type": "claude",
+            "prompt_template": "你是一个小说命名专家。\n\n小说设定：\n- 主题：{{theme}}\n- 世界观：{{worldview}}\n- 风格：{{style}}\n- 热门话题：{{hothuati}}\n\n请生成 1个富有吸引力的小说标题。\n输出为 JSON 格式：\n{\n  \"小说标题\":\"小说标题\"\n}"
+          },
+          "delayMs": 0,
+          "timeoutMs": 60000,
+          "retryCount": 1,
+          "retryDelayMs": 3000,
+          "inputMapping": {
+            "hothuati": "{{reader_interests.n2.s2}}",
+            "style": "{{style.n1.s1}}",
+            "theme": "{{theme.n1.s1}}",
+            "worldview": "{{worldview.n1.s1}}"
+          },
+          "outputMapping": {
+            "title": "{{content}}"
+          },
+          "position": {
+            "x": 102,
+            "y": 133
+          }
+        },
+        {
+          "type": "agent",
+          "label": "设计章节与情节",
+          "params": {
+            "agent_type": "claude",
+            "prompt_template": "你是一个小说情节架构师。\n\n小说设定：\n- 主题：{{theme}}\n- 世界观：{{worldview}}\n- 风格：{{style}}\n- 热门话题：{{hothuati}}\n- 小说标题：{{title}}\n- 角色设计：{{jiaose}}\n\n请设计 3个章节，包含：\n- 章节标题\n- 章节概要\n- 涉及的角色\n- 情节发展要点\n- 字数建议（每章 2000-5000 字）\n\n输出 JSON 格式。"
+          },
+          "delayMs": 0,
+          "timeoutMs": 180000,
+          "retryCount": 1,
+          "retryDelayMs": 5000,
+          "inputMapping": {
+            "hothuati": "{{reader_interests.n2.s2}}",
+            "jiaose": "{{jiaose.n5.s2}}",
+            "style": "{{style.n1.s1}}",
+            "theme": "{{theme.n1.s1}}",
+            "title": "{{title.n3.s2}}",
+            "worldview": "{{worldview.n1.s1}}"
+          },
+          "outputMapping": {
+            "sessionID": "{{session_id}}"
+          },
+          "position": {
+            "x": 279,
+            "y": 366
+          }
+        },
+        {
+          "type": "agent",
+          "label": "角色设计",
+          "params": {
+            "prompt_template": "你是一个角色设计专家。\n\n小说设定：\n- 主题：{{theme}}\n- 世界观：{{worldview}}\n- 风格：{{style}}\n- 热门话题：{{hothuati}}\n- 小说标题：{{title}}\n\n请设计主要角色和配角，包含姓名、年龄、性格、背景故事、在故事中的定位。\n输出 JSON 格式，包含至少 3 个主要角色和 2 个配角。"
+          },
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": {
+            "hothuati": "{{reader_interests.n2.s2}}",
+            "style": "{{style.n1.s1}}",
+            "theme": "{{theme.n1.s1}}",
+            "title": "{{title.n3.s2}}",
+            "worldview": "{{worldview.n1.s1}}"
+          },
+          "outputMapping": {
+            "jiaose": "{{content}}"
+          },
+          "position": {
+            "x": 174,
+            "y": 254
+          }
+        }
+      ],
+      "edges": [
+        {
+          "source": "n1",
+          "target": "n2",
+          "label": null,
+          "condition": null
+        },
+        {
+          "source": "n2",
+          "target": "n4",
+          "label": null,
+          "condition": null
+        },
+        {
+          "source": "n4",
+          "target": "n3",
+          "label": null,
+          "condition": null
+        }
+      ],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "章节创作",
+      "order": 2,
+      "nodes": [
+        {
+          "type": "agent",
+          "label": "撰写第1章",
+          "params": {
+            "agent_type": "claude",
+            "prompt_template": "你是一个小说作家。\n\n请根据小说设定、章节规划撰写第1章内容，字数 2000-5000 字。注意开篇要有吸引力，引入主要角色和世界观。\n\n输出为 JOSN 格式：\n{\n   “章节标题”：\"第1章 章节标题\"，\n   “章节内容”：“章节内容”\n}",
+            "resume_session_ref": "{{sessionID.d9925cf1-33dc-4d91-a457-be63b73c1665.716424ad-23d2-45e4-9ca6-c0643cb25556}}",
+            "session_mode": "resume"
+          },
+          "delayMs": 0,
+          "timeoutMs": 300000,
+          "retryCount": 2,
+          "retryDelayMs": 10000,
+          "inputMapping": {},
+          "outputMapping": {
+            "chapter_1": "{{content}}"
+          },
+          "position": {
+            "x": 160,
+            "y": 59
+          }
+        },
+        {
+          "type": "agent",
+          "label": "撰写第2章",
+          "params": {
+            "agent_type": "claude",
+            "prompt_template": "你是一个小说作家。\n\n请根据小说设定、章节规划和第一章节内容，撰写第2章内容，字数 2000-5000 字，注意情节推进和角色发展。\n\n输出为 JOSN 格式：\n{\n   “章节标题”：\"第2章 章节标题\"，\n   “章节内容”：“章节内容”\n}",
+            "resume_session_ref": "{{sessionID.d9925cf1-33dc-4d91-a457-be63b73c1665.716424ad-23d2-45e4-9ca6-c0643cb25556}}",
+            "session_mode": "resume"
+          },
+          "delayMs": 0,
+          "timeoutMs": 300000,
+          "retryCount": 2,
+          "retryDelayMs": 10000,
+          "inputMapping": {},
+          "outputMapping": {
+            "chapter_2": "{{content}}"
+          },
+          "position": {
+            "x": 160,
+            "y": 220
+          }
+        },
+        {
+          "type": "agent",
+          "label": "撰写第3章",
+          "params": {
+            "agent_type": "claude",
+            "prompt_template": "你是一个小说作家。\n\n请根据小说设定、章节规划和第一章节内容，第3章（最终章）内容，字数 2000-5000 字。注意收束所有情节线，给出令人满意的结局。\n\n\n输出为 JOSN 格式：\n{\n   “章节标题”：\"第3章 章节标题\"，\n   “章节内容”：“章节内容”\n}",
+            "resume_session_ref": "{{sessionID.d9925cf1-33dc-4d91-a457-be63b73c1665.716424ad-23d2-45e4-9ca6-c0643cb25556}}",
+            "session_mode": "resume"
+          },
+          "delayMs": 0,
+          "timeoutMs": 300000,
+          "retryCount": 2,
+          "retryDelayMs": 10000,
+          "inputMapping": {},
+          "outputMapping": {
+            "chapter_3": "{{content}}"
+          },
+          "position": {
+            "x": 160,
+            "y": 380
+          }
+        }
+      ],
+      "edges": [
+        {
+          "source": "n1",
+          "target": "n2",
+          "label": "",
+          "condition": null
+        },
+        {
+          "source": "n2",
+          "target": "n3",
+          "label": "",
+          "condition": null
+        }
+      ],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "concat",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "合稿输出",
+      "order": 3,
+      "nodes": [
+        {
+          "type": "agent",
+          "label": "合稿生成完整小说",
+          "params": {
+            "prompt_template": "请将小说进行合稿：\n\n- 小说标题：{{title}}\n- 章节内容：{{input}}{{input2}}{{input3}}\n\n输出格式为：\n\n# [标题]\n\n---\n\n## [第一章标题]\n\n[第一章内容]\n\n……\n\n---\n\n全文完"
+          },
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": null,
+          "outputMapping": {
+            "output": "{{content}}"
+          },
+          "position": {
+            "x": 52,
+            "y": 27
+          }
+        },
+        {
+          "type": "subflow",
+          "label": "子工作流",
+          "params": {
+            "refCode": "ref_1"
+          },
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": {
+            "input": "{{chapter_1.n6.s3}}"
+          },
+          "outputMapping": {
+            "output": "{{content}}"
+          },
+          "position": {
+            "x": 52,
+            "y": 123
+          }
+        },
+        {
+          "type": "subflow",
+          "label": "子工作流",
+          "params": {
+            "refCode": "ref_2"
+          },
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": {
+            "input": "{{chapter_2.n7.s3}}"
+          },
+          "outputMapping": {
+            "output": "{{content}}"
+          },
+          "position": {
+            "x": 52,
+            "y": 213
+          }
+        },
+        {
+          "type": "subflow",
+          "label": "子工作流",
+          "params": {
+            "refCode": "ref_3"
+          },
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": {
+            "input": "{{chapter_3.n8.s3}}"
+          },
+          "outputMapping": {
+            "output": "{{content}}"
+          },
+          "position": {
+            "x": 52,
+            "y": 305
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "结束阶段",
+      "order": 4,
+      "nodes": [
+        {
+          "type": "end",
+          "label": "结束",
+          "params": {},
+          "delayMs": 0,
+          "timeoutMs": 0,
+          "retryCount": 0,
+          "retryDelayMs": 0,
+          "inputMapping": {
+            "input": "{{output.n9.s4}}"
+          },
+          "outputMapping": {},
+          "position": {
+            "x": 163,
+            "y": 201
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    }
+  ],
+  "stageEdges": [
+    {
+      "source": "s1",
+      "target": "s2",
+      "label": null,
+      "condition": null
+    },
+    {
+      "source": "s2",
+      "target": "s3",
+      "label": null,
+      "condition": null
+    },
+    {
+      "source": "s3",
+      "target": "s4",
+      "label": null,
+      "condition": null
+    },
+    {
+      "source": "s4",
+      "target": "s5",
+      "label": null,
+      "condition": null
+    }
+  ],
+  "enabled": true,
+  "refCode": null
+}

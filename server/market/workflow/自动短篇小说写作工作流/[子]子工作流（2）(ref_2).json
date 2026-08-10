@@ -1,0 +1,88 @@
+{
+  "name": "子工作流（2）",
+  "version": "1.0.0",
+  "description": "",
+  "trigger": {
+    "triggerType": "manual",
+    "cron": null,
+    "eventName": null
+  },
+  "stages": [
+    {
+      "name": "起始阶段",
+      "order": 0,
+      "nodes": [
+        {
+          "type": "start",
+          "label": "起始",
+          "params": {},
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": null,
+          "outputMapping": {
+            "output": "{{output}}"
+          },
+          "position": {
+            "x": 160,
+            "y": 220
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    },
+    {
+      "name": "结束阶段",
+      "order": 1,
+      "nodes": [
+        {
+          "type": "end",
+          "label": "结束",
+          "params": {},
+          "delayMs": null,
+          "timeoutMs": null,
+          "retryCount": null,
+          "retryDelayMs": null,
+          "inputMapping": {
+            "input": "{{output.n1.s1}}"
+          },
+          "outputMapping": null,
+          "position": {
+            "x": 160,
+            "y": 220
+          }
+        }
+      ],
+      "edges": [],
+      "gate": {
+        "strategy": "all",
+        "mergeStrategy": "merge",
+        "threshold": null,
+        "customScript": null
+      },
+      "collapsed": false,
+      "offsetX": 0.0,
+      "offsetY": 0.0
+    }
+  ],
+  "stageEdges": [
+    {
+      "source": "s1",
+      "target": "s2",
+      "label": null,
+      "condition": null
+    }
+  ],
+  "enabled": true,
+  "refCode": "ref_2"
+}

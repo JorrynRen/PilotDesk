@@ -62,7 +62,7 @@ function useNodePalette() {
       .then(types => {
         if (types.length > 0) {
           setPalette(types
-            .filter(t => !['start', 'end'].includes(t.typeId))
+            .filter(t => !['start'].includes(t.typeId))
             .map(t => ({
               type: t.typeId,
               ...getNodeTypeMeta(t.typeId),
@@ -102,8 +102,21 @@ interface ConfirmAction {
 /** 执行状态枚举 */
 type StepRunState = 'idle' | 'running' | 'success' | 'failed' | 'cancelled';
 
+/** 人工交互弹窗状态 */
+interface AwaitingInputPayload {
+  execution_id: string;
+  node_id: string;
+  prompt: string;
+  input_type: string;              // text / select / confirm / file
+  options?: Array<{ label: string; value: string }>;
+  allow_custom?: boolean;
+  placeholder?: string;
+  timeout_minutes: number;
+  default_value?: string;
+}
+
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange, onSaveResult, onImported }) => {
-  const { definitions, instances, selectedInstanceId, updateDefinition, loadDefinitions } = useWorkflowStore();
+  const { definitions, instances, selectedInstanceId, updateDefinition, loadDefinitions, respondHumanInput, loadPendingInputs, pendingInputs } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
@@ -231,6 +244,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // 删除二次确认
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
 
+  // 人工交互等待输入弹窗
+  const [awaitingInput, setAwaitingInput] = useState<AwaitingInputPayload | null>(null);
+  const [awaitingInputValue, setAwaitingInputValue] = useState<string>('');
+  const [awaitingSubmitting, setAwaitingSubmitting] = useState(false);
+
   // 执行状态（模拟/预览用，key: nodeId | stageId:stepIndex）
   const [stepStates, setStepStates] = useState<Record<string, StepRunState>>({});
   const [nodeResults, setNodeResults] = useState<Record<string, any>>({});
@@ -238,6 +256,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // 画布平移和缩放状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
+
+  // 备份下拉：点击展开状态（解决点击后鼠标移动导致hover断裂无法选择的问题）
+  const [backupDropdownOpen, setBackupDropdownOpen] = useState(false);
+  const backupDropdownRef = useRef<HTMLDivElement>(null);
   
   // 同步状态到 boxStateRef（必须在 pan/scale/stages/isBoxSelecting 声明之后）
   useEffect(() => { boxStateRef.current.pan = pan; }, [pan]);
@@ -247,6 +269,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   useEffect(() => { boxStateRef.current.collapsedStages = collapsedStages; }, [collapsedStages]);
   useEffect(() => { boxStateRef.current.stageOffsets = stageOffsets; }, [stageOffsets]);
   useEffect(() => { boxStateRef.current.stageOffsetsY = stageOffsetsY; }, [stageOffsetsY]);
+
+  // 备份下拉：点击容器外部自动关闭
+  useEffect(() => {
+    if (!backupDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (backupDropdownRef.current && !backupDropdownRef.current.contains(e.target as Node)) {
+        setBackupDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [backupDropdownOpen]);
   
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -774,7 +808,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   /** 单点执行：只执行选中的单个节点 */
   const handleExecuteSingleNode = async () => {
-    if (!selectedNodeId || !selectedInstanceId) {
+    if (!selectedNodeId || !selectedHistoryId) {
       showToast('请先选择一个节点，且存在执行记录', 'warning');
       return;
     }
@@ -782,25 +816,26 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       showToast('当前有工作流正在执行，请等待完成', 'warning');
       return;
     }
-    // 清除节点状态
-    setStepStates({});
-    setNodeResults({});
+    // 断点执行：不清空已有节点视觉状态。
+    // scope 外节点（已完成的）保持原状态，scope 内节点由 progress 事件驱动更新。
+    // 提前设置 executionIdRef 以便执行期间可通过终止按钮取消。
+    executionIdRef.current = selectedHistoryId;
     setIsRunning(true);
     try {
-      await useWorkflowStore.getState().executeSingleNode(selectedInstanceId, selectedNodeId);
-      executionIdRef.current = selectedInstanceId;
+      await useWorkflowStore.getState().executeSingleNode(selectedHistoryId, selectedNodeId);
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
       console.error('单点执行失败:', err);
       showToast(`单点执行失败: ${err}`, 'error');
     } finally {
       setIsRunning(false);
+      executionIdRef.current = null;
     }
   };
 
   /** 断点执行：从选中节点开始执行后续所有拓扑节点 */
   const handleExecuteFromNode = async () => {
-    if (!selectedNodeId || !selectedInstanceId) {
+    if (!selectedNodeId || !selectedHistoryId) {
       showToast('请先选择一个节点，且存在执行记录', 'warning');
       return;
     }
@@ -808,19 +843,45 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       showToast('当前有工作流正在执行，请等待完成', 'warning');
       return;
     }
-    // 清除节点状态
-    setStepStates({});
-    setNodeResults({});
+    // 链式执行：不清空已有节点视觉状态，前序节点保持原状态。
+    // scope 内节点（选中节点 + 后序链路）由 progress 事件驱动更新。
+    executionIdRef.current = selectedHistoryId;
     setIsRunning(true);
     try {
-      await useWorkflowStore.getState().executeFromNode(selectedInstanceId, selectedNodeId);
-      executionIdRef.current = selectedInstanceId;
+      await useWorkflowStore.getState().executeChain(selectedHistoryId, selectedNodeId);
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
       console.error('断点执行失败:', err);
       showToast(`断点执行失败: ${err}`, 'error');
     } finally {
       setIsRunning(false);
+      executionIdRef.current = null;
+    }
+  };
+
+  /** 补全执行：跳过已完成节点，按拓扑顺序执行所有未完成节点 */
+  const handleExecuteCompletion = async () => {
+    if (!selectedHistoryId) {
+      showToast('请先选择一个执行实例', 'warning');
+      return;
+    }
+    if (isRunning) {
+      showToast('当前有工作流正在执行，请等待完成', 'warning');
+      return;
+    }
+    // 补全执行：不清空已有节点视觉状态，已完成节点保持 success 状态。
+    // 仅未完成节点（scope 内）由 progress 事件驱动更新。
+    executionIdRef.current = selectedHistoryId;
+    setIsRunning(true);
+    try {
+      await useWorkflowStore.getState().executeCompletion(selectedHistoryId);
+      await useWorkflowStore.getState().loadInstances();
+    } catch (err) {
+      console.error('补全执行失败:', err);
+      showToast(`补全执行失败: ${err}`, 'error');
+    } finally {
+      setIsRunning(false);
+      executionIdRef.current = null;
     }
   };
 
@@ -862,9 +923,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // 监听器通过 executionIdRef（ref）动态匹配当前执行，无需每次执行重新注册
   useEffect(() => {
     let unlistenProgress: UnlistenFn | null = null;
+    let unlistenAwaiting: UnlistenFn | null = null;
 
     const setupListeners = async () => {
       console.log('[WorkflowEditor] setupListeners: registering unified progress listener...');
+      // 人工交互节点等待用户输入
+      unlistenAwaiting = await listen<AwaitingInputPayload>('workflow:awaiting-input', (event) => {
+        const p = event.payload;
+        // 匹配当前编辑器对应的 executionId（只处理当前正在执行的实例）
+        if (executionIdRef.current && p.execution_id !== executionIdRef.current) return;
+        setAwaitingInput(p);
+        setAwaitingInputValue(p.default_value ?? '');
+        console.log('[WorkflowEditor] 收到 awaiting-input:', p);
+      });
+
       unlistenProgress = await listen<ExecutionProgressPayload>('workflow:execution-progress', (event) => {
         const p = event.payload;
         // 过滤非当前工作流的进度事件（通过 definitionId 匹配）
@@ -893,6 +965,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             setStepStates(prev => ({ ...prev, ['stage_' + stageId]: 'failed' }));
             const detail = reason || error || '';
             showToast(`${name || '阶段'} 门控策略未通过${detail ? ': ' + detail : ''}`, 'error');
+          } else if (status === 'cancelled') {
+            setStepStates(prev => ({ ...prev, ['stage_' + stageId]: 'cancelled' }));
           }
         }
 
@@ -902,6 +976,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           if (status === 'completed' || status === 'failed' || status === 'cancelled') {
             console.log('[WorkflowEditor] execution', status, ', setting isRunning=false');
             setIsRunning(false);
+            // 取消时：将所有 running 状态的阶段和节点标记为 cancelled
+            if (status === 'cancelled') {
+              setStepStates(prev => {
+                const next = { ...prev };
+                for (const key of Object.keys(next)) {
+                  if (next[key] === 'running') {
+                    next[key] = 'cancelled';
+                  }
+                }
+                return next;
+              });
+            }
             useWorkflowStore.getState().loadInstances();
           }
         }
@@ -914,6 +1000,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
     return () => {
       unlistenProgress?.();
+      unlistenAwaiting?.();
     };
   }, []);
 
@@ -929,6 +1016,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
     };
   }, []);
+
+  // 运行中定期拉取 pending inputs，应对用户中途打开编辑器的场景
+  // （awaiting-input 事件之前已经发出，监听器无法获取到历史事件）
+  useEffect(() => {
+    if (!isRunning && !awaitingInput) return;
+    loadPendingInputs();
+    const timer = setInterval(loadPendingInputs, 2500);
+    return () => clearInterval(timer);
+  }, [isRunning]);
+
+  // 根据 pendingInputs 同步打开输入弹窗（仅当未通过事件方式打开时）
+  useEffect(() => {
+    if (awaitingInput) return;
+    const cur = executionIdRef.current;
+    if (!cur) return;
+    const match = pendingInputs.find(p => p.execution_id === cur);
+    if (!match) return;
+    setAwaitingInput({
+      execution_id: match.execution_id,
+      node_id: match.node_id,
+      prompt: match.prompt,
+      input_type: match.input_type,
+      timeout_minutes: 30,
+    });
+    setAwaitingInputValue('');
+  }, [pendingInputs]);
 
   const handleNameChangeLocal = useCallback((newName: string) => {
     setName(newName);
@@ -1095,20 +1208,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       showToast(`已删除阶段连线「${srcLabel} → ${tgtLabel}」`, 'success');
       setConfirmAction(null);
     } else if (confirmAction.type === 'deleteNodes') {
-      // 批量删除选中节点（排除边界节点）
-      const boundaryIds = new Set<string>();
+      // 批量删除选中节点（仅保护起始节点，End 节点可删除）
+      const startIds = new Set<string>();
       for (const s of stages) {
         for (const n of s.nodes) {
-          if ((n.type === 'start' || n.type === 'end') && selectedNodeIds.has(n.id)) boundaryIds.add(n.id);
+          if (n.type === 'start' && selectedNodeIds.has(n.id)) startIds.add(n.id);
         }
       }
-      // 如果选中的全部是边界节点，拒绝删除
-      if (boundaryIds.size === selectedNodeIds.size) {
-        showToast('起始节点和结束节点不可删除', 'warning');
+      // 如果选中的全部是起始节点，拒绝删除
+      if (startIds.size === selectedNodeIds.size) {
+        showToast('起始节点不可删除', 'warning');
         setConfirmAction(null);
         return;
       }
-      const toDelete = new Set([...selectedNodeIds].filter(id => !boundaryIds.has(id)));
+      const toDelete = new Set([...selectedNodeIds].filter(id => !startIds.has(id)));
       const afterDeleteNodes = stages.map(s => ({
         ...s,
         nodes: s.nodes.filter(n => !toDelete.has(n.id)),
@@ -1139,11 +1252,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
   const handleDeleteNode = (nodeId: string) => {
     modCountRef.current++;
-    // 边界节点（Start/End）不允许删除，即使误触也拒绝
+    // 仅起始节点不允许删除，End 节点可删除
     for (const s of stages) {
       const node = s.nodes.find(n => n.id === nodeId);
-      if (node?.type === 'start' || node?.type === 'end') {
-        showToast('起始节点和结束节点不可删除', 'warning');
+      if (node?.type === 'start') {
+        showToast('起始节点不可删除', 'warning');
         return;
       }
     }
@@ -2306,6 +2419,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       if (tgtState === 'running') return 'running';
       if (tgtState === 'success') return 'success';
       if (tgtState === 'failed') return 'failed';
+      if (tgtState === 'cancelled') return 'cancelled';
       // 历史查看模式下，不存在的目标节点视为 idle 而非 running
       if (srcState === 'success' && !tgtState) return restoredExecutionId ? 'idle' : 'running';
       return 'idle';
@@ -2326,7 +2440,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const arrowPoints = `${pathEndX},${TY - arrowSize} ${TX},${TY} ${pathEndX},${TY + arrowSize}`;
 
     const lineColor = isHovered ? '#58a6ff' : edgeRunState === 'running' ? '#58a6ff' : edgeRunState === 'success' ? '#3fb950'
-      : edgeRunState === 'failed' ? '#f85149' : 'var(--border)';
+      : edgeRunState === 'cancelled' ? '#d29922' : edgeRunState === 'failed' ? '#f85149' : 'var(--border)';
 
     return (
       <g key={edge.id}>
@@ -2434,8 +2548,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const srcState = stepStates[`stage_${srcStage.id}`];
       const tgtState = stepStates[`stage_${tgtStage.id}`];
             // 历史查看模式下，不存在的目标阶段视为 idle 而非 running
-      const rs = tgtState === 'running' ? 'running' : tgtState === 'success' ? 'success' : tgtState === 'failed' ? 'failed' : srcState === 'success' && !tgtState ? (restoredExecutionId ? 'idle' : 'running') : 'idle';
-      const lc = rs === 'running' ? '#58a6ff' : rs === 'success' ? '#3fb950' : rs === 'failed' ? '#f85149' : 'var(--border)';
+      const rs = tgtState === 'running' ? 'running' : tgtState === 'success' ? 'success' : tgtState === 'failed' ? 'failed' : tgtState === 'cancelled' ? 'cancelled' : srcState === 'success' && !tgtState ? (restoredExecutionId ? 'idle' : isRunning ? 'running' : 'idle') : 'idle';
+      const lc = rs === 'running' ? '#58a6ff' : rs === 'success' ? '#3fb950' : rs === 'failed' ? '#f85149' : rs === 'cancelled' ? '#d29922' : 'var(--border)';
       const sw = (rs === 'running' ? 2.5 : 2) * invScale;
       const as = 5 * invScale;
 
@@ -2657,7 +2771,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   const icon = statusMap[inst.status] || '?';
                   return (
                     <option key={inst.id} value={inst.id}>
-                      {icon} {dateStr} — {inst.status}
+                      {icon} {dateStr} — {inst.status}({Math.round((inst.completionRate || 0) * 100)}%)
                     </option>
                   );
                 })}
@@ -2682,7 +2796,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               <div
                 key={nt.type}
                 className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+                style={{ border: `1px solid ${nt.color}44`, background: `${nt.color}15`, color: 'var(--text-primary)' }}
                 onMouseDown={(e) => {
                   e.preventDefault();
                   toolbarDragRef.current = nt.type;
@@ -2707,8 +2821,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--border)';
-                  e.currentTarget.style.background = 'var(--bg-tertiary)';
+                  e.currentTarget.style.borderColor = `${nt.color}44`;
+                  e.currentTarget.style.background = `${nt.color}15`;
                   e.currentTarget.style.color = 'var(--text-primary)';
                   e.currentTarget.style.transform = 'translateY(0)';
                   e.currentTarget.style.boxShadow = 'none';
@@ -2792,20 +2906,57 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           >
             保存
           </button>
-          <button
-            onClick={handleSaveVersion}
-            className="pd-btn px-3 py-1 text-[11px] rounded"
-            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-          >
-            备份
-          </button>
-          <button
-            onClick={handleLoadVersions}
-            className="pd-btn px-3 py-1 text-[11px] rounded"
-            style={{ background: 'var(--bg-tertiary)', color: versions.length > 0 ? 'var(--accent)' : 'var(--text-tertiary)', border: '1px solid var(--border)' }}
-          >
-            恢复
-          </button>
+          {/* 备份/恢复 下拉分组 */}
+          <div ref={backupDropdownRef} className="relative group">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setBackupDropdownOpen(prev => !prev);
+              }}
+              className="pd-btn px-2 py-1 text-[11px] rounded flex items-center gap-1"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            >
+              备份
+              <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 3L4 5 6 3"/></svg>
+            </button>
+            {/* 方案 B 热桥：覆盖按钮与下拉之间的 mt-1 (4px) 空隙，确保 hover 路径连续不中断 */}
+            <div className="absolute left-0 right-0 top-full h-1" aria-hidden />
+            <div
+              className={`absolute top-full right-0 mt-1 w-[88px] rounded-lg overflow-hidden z-50 transition-opacity duration-200 ${
+                backupDropdownOpen
+                  ? 'opacity-100 visible pointer-events-auto'
+                  : 'opacity-0 invisible pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:pointer-events-auto'
+              }`}
+              style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
+            >
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setBackupDropdownOpen(false);
+                  handleSaveVersion();
+                }}
+                className="w-full text-left px-2.5 py-1.5 text-[11px] transition-colors"
+                style={{ color: 'var(--text-secondary)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                保存备份
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setBackupDropdownOpen(false);
+                  handleLoadVersions();
+                }}
+                className="w-full text-left px-2.5 py-1.5 text-[11px] transition-colors"
+                style={{ color: versions.length > 0 ? 'var(--accent)' : 'var(--text-tertiary)' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-tertiary)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                恢复版本{versions.length > 0 ? `(${versions.length})` : ''}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -2874,6 +3025,60 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               </svg>
             )}
           </button>
+          {/* 单点执行按钮（仅在有选中节点和实例且未执行时显示） */}
+          {!isRunning && selectedHistoryId && selectedNodeId && (
+            <button
+              onClick={handleExecuteSingleNode}
+              className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+              style={{
+                background: '#d2992222',
+                color: '#d29922',
+                border: 'none',
+              }}
+              title="单点执行（仅执行选中节点）"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" strokeWidth="1.5"/>
+                <polygon points="5,3.5 8,6 5,8.5" fill="currentColor"/>
+              </svg>
+            </button>
+          )}
+          {/* 链式执行按钮（仅在有选中节点和实例且未执行时显示） */}
+          {!isRunning && selectedHistoryId && selectedNodeId && (
+            <button
+              onClick={handleExecuteFromNode}
+              className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+              style={{
+                background: '#58a6ff22',
+                color: '#58a6ff',
+                border: 'none',
+              }}
+              title="链式执行（从选中节点向后）"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <polygon points="3,1 10,6 3,11" />
+                <rect x="8" y="9" width="2" height="2" rx="0.3" />
+              </svg>
+            </button>
+          )}
+          {/* 补全执行按钮（仅在有实例且未执行时显示） */}
+          {!isRunning && selectedHistoryId && (
+            <button
+              onClick={handleExecuteCompletion}
+              className="pd-btn w-6 h-6 flex items-center justify-center rounded"
+              style={{
+                background: '#bc8cff22',
+                color: '#bc8cff',
+                border: 'none',
+              }}
+              title="补全执行（跳过已完成节点）"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <path d="M2 6h6m0 0L6 4m2 2L6 8" stroke="currentColor" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M10 2v8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+              </svg>
+            </button>
+          )}
           {/* 终止执行按钮（仅在执行中显示） */}
           {isRunning && (
             <button
@@ -2902,6 +3107,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><circle cx="6" cy="6" r="4.5" /><path d="M4.5 5a1.5 1.5 0 0 1 3 0c0 1-1.5 1-1.5 2.5" /><circle cx="6" cy="9" r="0.5" fill="currentColor" /></svg>
             </button>
+            {/* 热桥：覆盖弹窗 mb-2 (8px) 空隙，确保 hover 路径从按钮顶部连续到弹窗底部 */}
+            <div className="absolute left-0 right-0 bottom-full h-2" aria-hidden />
             <div className="absolute bottom-full right-0 mb-2 w-[310px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
               <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}><span className="inline-flex items-center gap-1"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><circle cx="6" cy="6" r="4.5" /><path d="M4.5 5a1.5 1.5 0 0 1 3 0c0 1-1.5 1-1.5 2.5" /><circle cx="6" cy="9" r="0.5" fill="currentColor" /></svg>操作帮助</span></div>
               <div className="space-y-0 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
@@ -2933,6 +3140,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <rect x="1" y="6" width="2.5" height="5" rx="0.5" /><rect x="4.75" y="3" width="2.5" height="8" rx="0.5" /><rect x="8.5" y="1" width="2.5" height="10" rx="0.5" />
               </svg>
             </button>
+            {/* 热桥：覆盖弹窗 mb-2 (8px) 空隙 */}
+            <div className="absolute left-0 right-0 bottom-full h-2" aria-hidden />
             <div className="absolute bottom-full right-0 mb-2 w-[220px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
               <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}><span className="inline-flex items-center gap-1"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="1" y="6" width="2.5" height="5" rx="0.5" /><rect x="4.75" y="3" width="2.5" height="8" rx="0.5" /><rect x="8.5" y="1" width="2.5" height="10" rx="0.5" /></svg>工作流统计</span></div>
               <div className="space-y-0 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
@@ -3406,7 +3615,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                           </span>
                           <span className="text-[10px] flex items-center gap-1" style={{ color: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)' }}>
                             <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: stageRunState === 'running' ? '#58a6ff' : stageRunState === 'success' ? '#3fb950' : 'var(--status-success)', animation: 'none' }} />
-                            {(() => { const r = stage.nodes.filter(n => n.type !== 'start'); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; return `${r.length - u}/${r.length}`; })()} 就绪
+                            {(() => { const hasStart = stage.nodes.some(s => s.type === 'start'); const hasEnd = stage.nodes.some(s => s.type === 'end'); const r = stage.nodes.filter(n => (hasStart || n.type !== 'start') && (hasEnd || n.type !== 'end')); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; return r.length > 0 ? `${r.length - u}/${r.length} 就绪` : ''; })()}
                           </span>
                         </div>
                         <div style={{borderTop: '1px solid var(--border)', marginBottom: '6px'}}></div>
@@ -3435,7 +3644,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     <div className="flex flex-col items-center justify-center px-1" style={{ color: 'var(--text-tertiary)', fontSize: 10, height: 100, gap: 3, lineHeight: '16px', paddingTop: 10 }}>
                       <span>{stage.nodes.length} 节点</span>
                       <span>{stage.edges.length} 连线</span>
-                      <span>{(() => { const r = stage.nodes.filter(n => n.type !== 'start' && n.type !== 'end'); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; const color = u === 0 ? '#3fb950' : '#d29922'; return <span style={{ color }}>{r.length - u}/{r.length} 就绪</span>; })()}</span>
+                      <span>{(() => { const hasStart = stage.nodes.some(s => s.type === 'start'); const hasEnd = stage.nodes.some(s => s.type === 'end'); const r = stage.nodes.filter(n => (hasStart || n.type !== 'start') && (hasEnd || n.type !== 'end')); const u = r.filter(n => unreachableNodeIds.has(n.id)).length; if (r.length === 0) return null; const color = u === 0 ? '#3fb950' : '#d29922'; return <span style={{ color }}>{r.length - u}/{r.length} 就绪</span>; })()}</span>
                       <span>{gateStrategyLabel(stage.gate.strategy)}</span>
                       <span>{mergeStrategyLabel(stage.gate.mergeStrategy)}</span>
                     </div>
@@ -3585,7 +3794,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       style={{ color: 'var(--text-primary)', background: 'transparent', border: 'none' }}
                       onClick={() => {
                         setEdgeContextMenu(null);
-                        openConditionEditor(edge.source, edge.target, edgeStage.id);
+                        setConditionInput({ source: edge.source, target: edge.target, stageId: edgeStage.id });
                       }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-light)'; e.currentTarget.style.color = 'var(--accent)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-primary)'; }}
@@ -4138,6 +4347,256 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 人工交互输入弹窗 */}
+      {awaitingInput && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}>
+          <div
+            className="rounded-xl shadow-2xl w-[480px] max-w-[90vw] flex flex-col"
+            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center justify-center rounded-md text-[10px] font-bold w-6 h-6" style={{ background: 'var(--status-warning-light)', color: 'var(--status-warning)' }}>⚑</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>人工交互 — 等待输入</span>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+                超时: {awaitingInput.timeout_minutes} 分钟
+              </span>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div>
+                <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>提示文案</div>
+                <div className="text-sm leading-5" style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
+                  {awaitingInput.prompt || '请输入响应'}
+                </div>
+              </div>
+
+              {/* text 类型 */}
+              {(awaitingInput.input_type === 'text' || !awaitingInput.input_type) && (
+                <div>
+                  <label className="text-[10px] mb-1 block" style={{ color: 'var(--text-tertiary)' }}>文本输入</label>
+                  <textarea
+                    value={awaitingInputValue}
+                    onChange={(e) => setAwaitingInputValue(e.target.value)}
+                    placeholder={awaitingInput.placeholder || '请输入...'}
+                    rows={5}
+                    style={{
+                      width: '100%',
+                      resize: 'vertical',
+                      minHeight: 96,
+                      fontSize: 'var(--fs-12)',
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                      fontFamily: 'inherit',
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* select 类型 */}
+              {awaitingInput.input_type === 'select' && (
+                <div>
+                  <label className="text-[10px] mb-1 block" style={{ color: 'var(--text-tertiary)' }}>选项</label>
+                  <select
+                    value={awaitingInput.options?.some(o => o.value === awaitingInputValue) ? awaitingInputValue : ''}
+                    onChange={(e) => setAwaitingInputValue(e.target.value)}
+                    style={{
+                      width: '100%',
+                      fontSize: 'var(--fs-12)',
+                      padding: '6px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                    }}
+                  >
+                    <option value="">请选择...</option>
+                    {(awaitingInput.options && awaitingInput.options.length > 0
+                      ? awaitingInput.options
+                      : [{ label: '通过', value: 'approve' }, { label: '拒绝', value: 'reject' }]
+                    ).map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                  {awaitingInput.allow_custom && (
+                    <div className="mt-3">
+                      <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>自定义值（可选，与上面二选一）</div>
+                      <input
+                        type="text"
+                        value={awaitingInput.options?.some(o => o.value === awaitingInputValue) ? '' : awaitingInputValue}
+                        onChange={(e) => setAwaitingInputValue(e.target.value)}
+                        placeholder={awaitingInput.placeholder || '或输入自定义值...'}
+                        style={{
+                          width: '100%',
+                          fontSize: 'var(--fs-12)',
+                          padding: '6px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border)',
+                          backgroundColor: 'var(--bg-primary)',
+                          color: 'var(--text-primary)',
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* confirm 类型 */}
+              {awaitingInput.input_type === 'confirm' && (
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setAwaitingInputValue('confirm')}
+                    className="flex-1 text-sm font-medium px-4 py-2 rounded-md transition-colors"
+                    style={{
+                      backgroundColor: awaitingInputValue === 'confirm' ? 'var(--accent)' : 'var(--bg-tertiary)',
+                      color: awaitingInputValue === 'confirm' ? '#fff' : 'var(--text-primary)',
+                      border: awaitingInputValue === 'confirm' ? '1px solid var(--accent)' : '1px solid var(--border)',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >确认</button>
+                  <button
+                    onClick={() => setAwaitingInputValue('cancel')}
+                    className="flex-1 text-sm font-medium px-4 py-2 rounded-md transition-colors"
+                    style={{
+                      backgroundColor: awaitingInputValue === 'cancel' ? 'var(--status-danger)' : 'var(--bg-tertiary)',
+                      color: awaitingInputValue === 'cancel' ? '#fff' : 'var(--text-primary)',
+                      border: awaitingInputValue === 'cancel' ? '1px solid var(--status-danger)' : '1px solid var(--border)',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >取消</button>
+                </div>
+              )}
+
+              {/* file 类型：读取文件内容（非路径）作为响应值 */}
+              {awaitingInput.input_type === 'file' && (
+                <div>
+                  <label className="text-[10px] mb-1 block" style={{ color: 'var(--text-tertiary)' }}>文件内容</label>
+                  <textarea
+                    value={awaitingInputValue}
+                    onChange={(e) => setAwaitingInputValue(e.target.value)}
+                    placeholder={awaitingInput.placeholder || '点击"选择文件"读取内容，或直接粘贴文本...'}
+                    rows={6}
+                    style={{
+                      width: '100%',
+                      resize: 'vertical',
+                      minHeight: 120,
+                      fontSize: 'var(--fs-12)',
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                      fontFamily: 'var(--font-mono)',
+                    }}
+                  />
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      onClick={async () => {
+                        try {
+                          const picked = await openDialog({
+                            multiple: false,
+                            title: '选择文本文件',
+                          });
+                          if (picked && typeof picked === 'string') {
+                            // 调用后端命令读取文件内容（而非路径）
+                            const content = await invoke<string>('read_file_content', { path: picked });
+                            setAwaitingInputValue(content);
+                            showToast(`已读取文件内容（${content.length} 字符）`, 'success');
+                          }
+                        } catch (e: any) {
+                          console.error('[WorkflowEditor] 读取文件内容失败:', e);
+                          showToast(`读取文件失败: ${e}`, 'error');
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-md text-xs font-medium"
+                      style={{
+                        backgroundColor: 'var(--accent-light)',
+                        color: 'var(--accent)',
+                        border: '1px solid var(--accent)',
+                        cursor: 'pointer',
+                      }}
+                    >选择文件...</button>
+                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      响应值 = 文件内容（非路径）
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={() => {
+                  // 不提交：给空响应（用户相当于跳过，后端会用 default_value 或空）
+                  setAwaitingInput(null);
+                  setAwaitingInputValue('');
+                  setAwaitingSubmitting(false);
+                }}
+                className="px-4 py-1.5 rounded-md text-xs font-medium"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-secondary)',
+                  border: '1px solid var(--border)',
+                  cursor: 'pointer',
+                }}
+              >跳过</button>
+              <button
+                disabled={awaitingSubmitting || (awaitingInput.input_type === 'confirm' ? !awaitingInputValue : false)}
+                onClick={async () => {
+                  if (!awaitingInput || awaitingSubmitting) return;
+                  // confirm 必须点选按钮（值为 'confirm'/'cancel'），其他类型允许空字符串
+                  if (awaitingInput.input_type === 'confirm' && !awaitingInputValue) return;
+                  const value = awaitingInput.input_type === 'confirm'
+                    ? awaitingInputValue
+                    : awaitingInputValue;
+                  setAwaitingSubmitting(true);
+                  try {
+                    await respondHumanInput(awaitingInput.execution_id, awaitingInput.node_id, value);
+                    setAwaitingInput(null);
+                    setAwaitingInputValue('');
+                  } catch (err: any) {
+                    console.error('[WorkflowEditor] 提交人工输入失败:', err);
+                    showToast(`提交失败: ${err}`, 'error');
+                  } finally {
+                    setAwaitingSubmitting(false);
+                  }
+                }}
+                className="px-5 py-1.5 rounded-md text-xs font-semibold"
+                style={{
+                  backgroundColor: (awaitingSubmitting || (awaitingInput.input_type === 'confirm' ? !awaitingInputValue : false))
+                    ? 'var(--bg-tertiary)'
+                    : 'var(--accent)',
+                  color: (awaitingSubmitting || (awaitingInput.input_type === 'confirm' ? !awaitingInputValue : false))
+                    ? 'var(--text-tertiary)'
+                    : '#fff',
+                  border: (awaitingSubmitting || (awaitingInput.input_type === 'confirm' ? !awaitingInputValue : false))
+                    ? '1px solid var(--border)'
+                    : '1px solid var(--accent)',
+                  cursor: (awaitingSubmitting || (awaitingInput.input_type === 'confirm' ? !awaitingInputValue : false))
+                    ? 'not-allowed'
+                    : 'pointer',
+                  transition: 'all 150ms',
+                }}
+              >
+                {awaitingSubmitting ? '提交中...' : '提交'}
+              </button>
             </div>
           </div>
         </div>

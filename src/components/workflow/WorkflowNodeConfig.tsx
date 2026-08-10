@@ -27,7 +27,7 @@ interface Props {
   definitionId?: string;
 }
 
-const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; label: string; type: string; placeholder?: string }[] }> = {
+const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; label: string; type: string; placeholder?: string; rows?: number }[] }> = {
   agent: {
     fields: [
       { key: 'agent_type', label: 'Agent 类型', type: 'select', placeholder: 'claude' },
@@ -43,14 +43,14 @@ const NODE_TYPE_CONFIG_MAP: Record<WorkflowNodeType, { fields: { key: string; la
   },
   transform: {
     fields: [
-      { key: 'script', label: '转换脚本', type: 'textarea', placeholder: 'JavaScript 转换脚本\n参数: context, input\n返回值作为输出' },
+      { key: 'script', label: '转换脚本', type: 'textarea', rows: 14, placeholder: '// JavaScript 转换脚本\n// ⚠️ 不支持 {{}} 模板语法，必须用 JS 语法访问变量\n//\n// 可访问变量：\n//   input    — 上游"输入映射"解析后的对象\n//   inputs   — input 的别名\n//   context  — input 的别名\n//\n//   例如输入映射配置了 { name: "{{prev.name}}", age: "{{prev.age}}" }\n//   则脚本中 input.name = "alice", input.age = 30\n//\n//   类型自动推断（从输入映射值智能判断）：\n//     "6"     → 数字 6     (typeof = number)\n//     "3.14"  → 数字 3.14  (typeof = number)\n//     "true"  → 布尔 true  (typeof = boolean)\n//     "false" → 布尔 false (typeof = boolean)\n//     ""      → null       (typeof = object)\n//     "hello" → 字符串     (typeof = string)\n//\n//   若需强制转换，可用 Number() / String() / Boolean()\n//\n// 返回值（二选一）：\n//   1. 使用 return 语句\n//   2. 最后一个表达式的值\n\n// ===== 示例 =====\n\n// 示例 1：重组字段\nreturn {\n  label: input.name,\n  value: input.age  // 已自动推断为数字，无需 Number()\n};\n\n// 示例 2：简单计算（数字类型自动支持，直接计算）\ninput.age * 2\n\n// 示例 3：条件分支（布尔类型直接用于判断）\nif (input.is_admin === true) {\n  return { role: "管理员" };\n}\nreturn { role: "普通用户" };\n\n// 示例 4：数组转换（字符串用 split）\nreturn String(input.tags ?? "").split(",").map(t => t.trim());' },
     ],
   },
   interact: {
     fields: [
-      { key: 'prompt', label: '提示文案', type: 'text', placeholder: '请输入提示用户的内容' },
+      { key: 'prompt', label: '提示文案', type: 'textarea', placeholder: '请输入提示用户的内容' },
       { key: 'inputType', label: '输入类型', type: 'select', placeholder: 'text' },
-      { key: 'timeoutMinutes', label: '超时时间(分钟)', type: 'number', placeholder: '1440' },
+      { key: 'timeoutMinutes', label: '超时时间(分钟)', type: 'number', placeholder: '30' },
     ],
   },
   plugin: {
@@ -1067,6 +1067,10 @@ useEffect(() => {
 
   const handleTextareaChange = (key: string, value: string, cursorPos: number, textarea?: HTMLTextAreaElement) => {
     handleParamChange(key, value);
+    // transform 节点的 script 是 JS 代码，不能用 {{}} 模板变量，应直接用 input.xxx 访问
+    if (node.type === 'transform' && key === 'script') {
+      return;
+    }
     // 检测光标前是否刚输入了 {{
     const textBefore = value.slice(0, cursorPos);
     if (textBefore.endsWith('{{') && stages) {
@@ -1193,7 +1197,8 @@ useEffect(() => {
           onChange={(e) => onUpdate({ label: e.target.value })}
           style={S.input()}
         />
-        {configFields.length > 0 && (
+        {/* textarea 类型的第一个字段（如 transform 的 script）延后到输入映射之后渲染 */}
+        {configFields.length > 0 && configFields[0].type !== 'textarea' && (
           <div style={{ marginTop: 10 }}>
             <label style={S.label()}>{configFields[0].label}</label>
             {configFields[0].type === 'select' ? (
@@ -1498,6 +1503,20 @@ useEffect(() => {
       </div>
       )}
 
+      {/* ===== textarea 类型的第一个字段（如 transform 的转换脚本） — 在输入映射之后渲染 ===== */}
+      {configFields.length > 0 && configFields[0].type === 'textarea' && (
+        <div style={S.sectionGap}>
+          <div style={S.sectionTitle}>{configFields[0].label}</div>
+          <textarea
+            value={params[configFields[0].key] || ''}
+            onChange={(e) => handleTextareaChange(configFields[0].key, e.target.value, e.target.selectionStart || 0, e.target)}
+            placeholder={configFields[0].placeholder}
+            rows={(configFields[0] as SchemaConfigField & { rows?: number }).rows ?? 4}
+            style={S.textarea}
+          />
+        </div>
+      )}
+
       {/* ===== 节点配置 ===== */}
       {configFields.slice(1).length > 0 && (
         <div style={S.sectionGap}>
@@ -1513,7 +1532,7 @@ useEffect(() => {
                     value={params[field.key] || ''}
                     onChange={(e) => handleTextareaChange(field.key, e.target.value, e.target.selectionStart || 0, e.target)}
                     placeholder={field.placeholder}
-                    rows={4}
+                    rows={(field as SchemaConfigField & { rows?: number }).rows ?? 4}
                     style={S.textarea}
                   />
                   {/* {{ 触发选择器 — 跟随光标 + 可拖动 */}
@@ -1661,6 +1680,109 @@ useEffect(() => {
           ))}
         </div>
       )}
+
+{/* ===== Interact 节点专属配置（按 inputType 动态显示） ===== */}
+{node.type === 'interact' && (() => {
+  const inputType = (params['inputType'] as string) || 'text';
+
+  // ---- options 文本 <-> JSON 转换 ----
+  // 存储格式：params.optionsJson = JSON 字符串 '[{"label":"通过","value":"approve"},...]'
+  // 展示格式：每行一条 "label:value"
+  const optionsText = (() => {
+    const raw = params['optionsJson'] as string | undefined;
+    if (!raw) return '';
+    try {
+      const arr = JSON.parse(raw) as Array<{ label: string; value: string }>;
+      if (!Array.isArray(arr)) return '';
+      return arr.map(o => `${o.label || ''}:${o.value || ''}`).join('\n');
+    } catch { return ''; }
+  })();
+
+  const setOptionsFromText = (text: string) => {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const arr = lines.map(line => {
+      // 支持两种分隔符：英文冒号 ":" 或中文全角 "："
+      const sep = line.includes('：') ? '：' : ':';
+      const idx = line.indexOf(sep);
+      if (idx === -1) {
+        // 整行既是 label 又是 value
+        return { label: line, value: line };
+      }
+      const label = line.substring(0, idx).trim();
+      const value = line.substring(idx + sep.length).trim();
+      return { label, value };
+    });
+    handleParamChange('optionsJson', arr.length > 0 ? JSON.stringify(arr) : '');
+  };
+
+  return (
+    <div style={S.sectionGap}>
+      <div style={S.sectionTitle}>交互专属配置 ({inputType})</div>
+
+      {/* text / file 类型：显示占位符 + 默认值 */}
+      {(inputType === 'text' || inputType === 'file') && (
+        <>
+          <div style={S.fieldGap}>
+            <label style={S.label()}>输入框占位符</label>
+            <input
+              type="text"
+              value={(params['placeholder'] as string) || ''}
+              onChange={(e) => handleParamChange('placeholder', e.target.value)}
+              placeholder={inputType === 'file' ? '运行时读取文件内容的占位提示...' : '请输入...'}
+              style={S.input()}
+            />
+          </div>
+          <div style={S.fieldGap}>
+            <label style={S.label()}>默认值（超时或跳过时使用）</label>
+            <input
+              type="text"
+              value={(params['defaultValue'] as string) || ''}
+              onChange={(e) => handleParamChange('defaultValue', e.target.value)}
+              placeholder="默认响应内容"
+              style={S.input()}
+            />
+          </div>
+        </>
+      )}
+
+      {/* select 类型：选项列表 + 允许自定义 */}
+      {inputType === 'select' && (
+        <>
+          <div style={S.fieldGap}>
+            <label style={S.label()}>选项列表（每行一条，格式：显示文本:值）</label>
+            <textarea
+              value={optionsText}
+              onChange={(e) => setOptionsFromText(e.target.value)}
+              placeholder={'通过:approve\n拒绝:reject\n（不填冒号时，整行同时作为显示和值）'}
+              rows={5}
+              style={S.textarea}
+            />
+            <div style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginTop: 4 }}>
+              支持分隔符：英文 ":" 或中文 "："
+            </div>
+          </div>
+          <div style={S.fieldGap}>
+            <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: 'var(--fs-12)', color: 'var(--text-secondary)' }}>
+              <input
+                type="checkbox"
+                checked={!!params['allowCustom']}
+                onChange={(e) => handleParamChange('allowCustom', e.target.checked)}
+              />
+              允许用户自定义值（除预设选项外的自由输入）
+            </label>
+          </div>
+        </>
+      )}
+
+      {/* confirm 类型：无额外字段，仅展示说明 */}
+      {inputType === 'confirm' && (
+        <div style={{ fontSize: 'var(--fs-11)', color: 'var(--text-tertiary)', padding: '6px 0' }}>
+          确认类型无需额外配置：运行时弹出"确认 / 取消"两个按钮，响应值分别为 <code>confirm</code> / <code>cancel</code>。
+        </div>
+      )}
+    </div>
+  );
+})()}
 
 
 {/* ===== 插件配置组件（PluginNodeConfig） ===== */}

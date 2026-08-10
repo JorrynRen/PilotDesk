@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
+import { MessageSquare, Terminal } from 'lucide-react';
 
 type ViewMode = 'session' | 'terminal';
 
@@ -75,25 +76,65 @@ export const VirtualConsoleProvider: React.FC<VirtualConsoleProviderProps> = ({ 
   );
 };
 
-// Virtual console toggle button (for TitleBar)
+// Virtual console toggle button (外观与 TitleBar 的 segmented 滑动开关完全一致：尺寸略放大版)
 export const VirtualConsoleButton: React.FC = () => {
   const { toggleConsole, viewMode } = useVirtualConsole();
+  const isTerminal = viewMode === 'terminal';
 
   return (
-    <button
-      onClick={toggleConsole}
-      className={`flex items-center space-x-2 px-3 py-2 text-sm font-medium rounded-md transition-colors ${
-        viewMode === 'terminal'
-          ? 'bg-primary text-primary-foreground'
-          : 'hover:bg-primary/10 text-[var(--text-secondary)]'
-      }`}
-      title={viewMode === 'terminal' ? '客户端模式' : '终端模式'}
+    <div
+      className="relative flex items-center select-none"
+      role="group"
+      aria-label="视图模式切换"
+      style={{
+        backgroundColor: 'var(--bg-tertiary)',
+        border: '1px solid var(--border-strong, rgba(0,0,0,0.12))',
+        padding: 2,
+        borderRadius: 8,
+        height: 30,
+        width: 164,
+        boxShadow: 'inset 0 1px 1px rgba(0,0,0,0.04)',
+      }}
     >
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-      </svg>
-      <span>{viewMode === 'terminal' ? '客户端模式' : '终端模式'}</span>
-    </button>
+      <button
+        onClick={() => { if (isTerminal) toggleConsole(); }}
+        className="relative z-10 flex items-center justify-center gap-1.5 flex-1 h-full rounded-[6px] text-[12px] transition-colors"
+        style={{
+          color: !isTerminal ? '#fff' : 'var(--text-secondary)',
+          fontWeight: !isTerminal ? 600 : 500,
+        }}
+        title="切换到客户端模式"
+      >
+        <MessageSquare size={13} />
+        客户端
+      </button>
+      <button
+        onClick={() => { if (!isTerminal) toggleConsole(); }}
+        className="relative z-10 flex items-center justify-center gap-1.5 flex-1 h-full rounded-[6px] text-[12px] transition-colors"
+        style={{
+          color: isTerminal ? '#fff' : 'var(--text-secondary)',
+          fontWeight: isTerminal ? 600 : 500,
+        }}
+        title="切换到终端模式"
+      >
+        <Terminal size={13} />
+        终端
+      </button>
+      <div
+        aria-hidden
+        className="absolute top-[2px] rounded-[6px]"
+        style={{
+          height: 'calc(100% - 4px)',
+          width: 'calc(50% - 2px)',
+          backgroundColor: 'var(--accent)',
+          left: isTerminal ? 'calc(50% + 1px)' : 2,
+          transition: 'left 180ms cubic-bezier(.22,.61,.36,1)',
+          boxShadow:
+            '0 1px 3px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.18)',
+          zIndex: 0,
+        }}
+      />
+    </div>
   );
 };
 
