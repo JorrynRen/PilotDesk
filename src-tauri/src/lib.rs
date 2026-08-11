@@ -566,23 +566,18 @@ async fn run_api_agent(
     });
 
     // 12. 后台执行 Agent Loop
-    let app_done = app.clone();
     let sid_done = session_id.to_string();
     tokio::spawn(async move {
         match agent_loop.run(config, tx).await {
             Ok(_content) => {
-                // Done event already sent via broadcast
+                // Done 事件已通过广播通道发送，确保与 chunk 事件的顺序
                 log::info!("[API Agent] 对话完成: session={}", sid_done);
             }
             Err(e) => {
-                // Error event already sent via broadcast
+                // Error 事件已通过广播通道发送
                 log::error!("[API Agent] 对话失败: session={}, error={}", sid_done, e);
             }
         }
-        // 确保最终发送 done（如果 run 出错未发送 done）
-        let _ = app_done.emit("agent-done", json!({
-            "sessionId": sid_done,
-        }));
     });
 
     Ok(())
