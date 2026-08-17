@@ -1,105 +1,64 @@
-//! 虚拟控制台工厂模块
+//! 异步进程控制台（Agent 会话执行专用）
 //!
-//! 提供工厂模式创建跨平台虚拟控制台实例，
-//! 根据 ConsoleType 自动选择对应平台实现。
+//! 自已删除的 virtual_console 模块迁移而来，仅保留异步路径（TokioConsole + AsyncConsole）。
+//! `AsyncConsole` 接口签名保持不变，作为未来跨平台升级（如 portable-pty 替换）的替换契约。
 
 use std::io;
-use crate::virtual_console::traits::{VirtualConsole, AsyncConsole};
-use crate::virtual_console::config::{ConsoleType, ConsoleConfig, detect_os_type};
 
-#[cfg(target_os = "windows")]
-use crate::virtual_console::windows::WindowsConpty;
-
-#[cfg(target_os = "macos")]
-use crate::virtual_console::macos::MacVirtualConsole;
-
-#[cfg(target_os = "linux")]
-use crate::virtual_console::linux::LinuxVirtualConsole;
-
-/// 虚拟控制台工厂
+/// 异步进程接口 — 基于 tokio::process::Command
 ///
-/// 根据配置或自动检测的操作系统类型，创建对应平台的虚拟控制台实例。
-pub struct ConsoleFactory;
+/// 提供 async 版本的进程生命周期管理和 IO 操作能力。
+/// 实现基于 tokio::process::Command + tokio channel。
+#[async_trait::async_trait]
+pub trait AsyncConsole: Send {
+    /// 异步启动进程，返回 (pid, stdout_rx, stderr_rx)
+    async fn spawn(
+        &mut self,
+        command: &str,
+        args: &[&str],
+        cwd: &str,
+    ) -> io::Result<(u32, tokio::sync::mpsc::Receiver<String>, tokio::sync::mpsc::Receiver<String>)>;
 
-impl ConsoleFactory {
-    /// 自动检测操作系统并创建对应的虚拟控制台
-    pub fn auto_create() -> io::Result<Box<dyn VirtualConsole>> {
-        let os_type = detect_os_type();
-        Self::create(os_type)
-    }
+    /// 等待进程结束，返回退出码
+    async fn wait(&mut self) -> io::Result<i32>;
 
-    /// 自动检测操作系统并创建对应的虚拟控制台（带配置，当前仅做日志）
+    /// 非阻塞尝试等待进程结束。
+    ///
+    /// 返回 `Some(exit_code)` 表示进程已退出，
+    /// `None` 表示仍在运行。
+    /// 基于 `tokio::process::Child::try_wait()` 实现。
+    fn try_wait(&mut self) -> Option<i32>;
+
+    /// 强制终止进程
+    async fn kill(&mut self) -> io::Result<()>;
+
+    /// 检查进程是否仍在运行。
+    ///
+    /// 基于 `child.try_wait()` 实现：
+    /// - `try_wait()` 返回 `None` → 仍在运行 → true
+    /// - `try_wait()` 返回 `Some(...)` → 已退出 → false
+    /// - child 已被 take（未 spawn 或已 wait）→ false
+    ///
+    /// 当前 execute_async 未使用（状态判断走 try_wait），保留作为跨平台替换契约的一部分。
     #[allow(dead_code)]
-    pub fn auto_create_with_config(_config: &ConsoleConfig) -> io::Result<Box<dyn VirtualConsole>> {
-        let os_type = _config.console_type.unwrap_or_else(detect_os_type);
-        Self::create(os_type)
-    }
+    fn is_running(&mut self) -> bool;
 
-    /// 根据指定的控制台类型创建虚拟控制台
-    pub fn create(console_type: ConsoleType) -> io::Result<Box<dyn VirtualConsole>> {
-        match console_type {
-            #[cfg(target_os = "windows")]
-            ConsoleType::Windows => {
-                let console = WindowsConpty::new()?;
-                Ok(Box::new(console))
-            }
-
-            #[cfg(target_os = "macos")]
-            ConsoleType::MacOS => {
-                let console = MacVirtualConsole::new()?;
-                Ok(Box::new(console))
-            }
-
-            #[cfg(target_os = "linux")]
-            ConsoleType::Linux => {
-                let console = LinuxVirtualConsole::new()?;
-                Ok(Box::new(console))
-            }
-
-            #[cfg(not(target_os = "windows"))]
-            ConsoleType::Windows => {
-                Err(io::Error::new(io::ErrorKind::Unsupported, "Windows ConPTY not available on this platform"))
-            }
-
-            #[cfg(not(target_os = "macos"))]
-            ConsoleType::MacOS => {
-                Err(io::Error::new(io::ErrorKind::Unsupported, "macOS PTY not available on this platform"))
-            }
-
-            #[cfg(not(target_os = "linux"))]
-            ConsoleType::Linux => {
-                Err(io::Error::new(io::ErrorKind::Unsupported, "Linux PTY not available on this platform"))
-            }
-        }
-    }
-
-    /// 获取当前平台支持的控制系统列表
+    /// 获取进程 PID
+    ///
+    /// 当前 execute_async 未使用（PID 由 spawn 返回值提供），保留作为跨平台替换契约的一部分。
     #[allow(dead_code)]
-    pub fn supported_types() -> Vec<ConsoleType> {
-        let mut types = Vec::new();
-        #[cfg(target_os = "windows")]
-        types.push(ConsoleType::Windows);
-        #[cfg(target_os = "macos")]
-        types.push(ConsoleType::MacOS);
-        #[cfg(target_os = "linux")]
-        types.push(ConsoleType::Linux);
-        types
-    }
-
-    /// 创建异步控制台（基于 tokio::process::Command）
-    pub async fn create_async() -> io::Result<Box<dyn AsyncConsole>> {
-        Ok(Box::new(TokioConsole::new()))
-    }
+    fn pid(&self) -> u32;
 }
 
-// ── 异步控制台实现（tokio::process::Command 封装） ──
-
-struct TokioConsole {
+/// 基于 tokio::process::Command 的异步控制台实现。
+///
+/// stdout/stderr 通过双通道逐行推送；进程退出后管道 EOF 会关闭对应 channel。
+pub struct TokioConsole {
     child: Option<tokio::process::Child>,
 }
 
 impl TokioConsole {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { child: None }
     }
 }

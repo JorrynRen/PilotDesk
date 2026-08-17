@@ -12,6 +12,7 @@ interface SkillPickerProps {
 
 export function SkillPicker({ agentType, onSelect, onClose }: SkillPickerProps) {
   const { skillsByAgent, isLoading } = useSkillStore();
+  const { getTheme } = useAgentRegistry();
   const skills = skillsByAgent[agentType] || [];
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);

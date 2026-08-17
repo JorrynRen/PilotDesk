@@ -24,6 +24,7 @@ interface ApiProviderState {
     apiEndpoint: string;
     apiKey?: string;
     models: string[];
+    apiFormat?: string;
     sortOrder?: number;
   }) => Promise<ApiProvider>;
   deleteProvider: (id: string) => Promise<void>;

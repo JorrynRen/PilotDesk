@@ -104,12 +104,40 @@ pub fn resolve_workspace_path(
     }
 }
 
-/// 解析路径中的 ~ 为用户 home 目录
+/// 解析会话工作目录：`session.cwd` 优先，为空则回退到全局工作区（含 app_data_dir 兜底）
+pub fn resolve_session_cwd(conn: &rusqlite::Connection, session_cwd: Option<&str>) -> String {
+    match session_cwd {
+        Some(dir) if !dir.is_empty() => resolve_tilde(dir),
+        _ => resolve_workspace_path(None, "", conn).to_string_lossy().to_string(),
+    }
+}
+
+/// 会话附件落盘目录：`<工作目录>/attachments/<session_id>`
+pub fn resolve_attachments_dir(
+    conn: &rusqlite::Connection,
+    session_cwd: Option<&str>,
+    session_id: &str,
+) -> PathBuf {
+    PathBuf::from(resolve_session_cwd(conn, session_cwd))
+        .join("attachments")
+        .join(session_id)
+}
+
+/// 解析路径中的 `~` 与 `%USERPROFILE%` 为用户 home 目录
+/// （`~` 同时支持 `~/` 与 `~\` 两种分隔符）
 fn resolve_tilde(path: &str) -> String {
-    if path.starts_with("~/") {
+    if path.starts_with("~/") || path.starts_with("~\\") {
         if let Some(home) = dirs::home_dir() {
             let rest = &path[2..];
             return home.join(rest).to_string_lossy().to_string();
+        }
+    } else if path.to_lowercase().starts_with("%userprofile%") {
+        if let Some(home) = dirs::home_dir() {
+            let rest = &path[14..]; // len("%USERPROFILE%") == 14
+            return home
+                .join(rest.trim_start_matches('\\').trim_start_matches('/'))
+                .to_string_lossy()
+                .to_string();
         }
     }
     path.to_string()

@@ -41,6 +41,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const [useCustomModel, setUseCustomModel] = useState(false);
   const [customTitle, setCustomTitle] = useState('');
   const [customCwd, setCustomCwd] = useState('');
+  const [sessionTemperature, setSessionTemperature] = useState(0.7);
+  const [sessionMaxTokens, setSessionMaxTokens] = useState<number | undefined>(undefined);
   const [creating, setCreating] = useState(false);
 
   const { agents, getTheme, getDisplayName, getEnabledAgentTypes, fetchAgents } = useAgentRegistry();
@@ -51,14 +53,31 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   // API providers from SQLite via store
   const { providers: apiProviders, fetchProviders } = useApiProviderStore();
 
+  // 初始加载：拉取会话列表 + 恢复上次会话
+  const hasRestoredRef = useRef(false);
   useEffect(() => {
-    fetchSessions().catch((err) => {
+    const init = async () => {
+      await fetchSessions();
+      fetchProviders().catch(() => {});
+
+      // 重启时自动恢复上次打开的会话
+      if (!hasRestoredRef.current) {
+        hasRestoredRef.current = true;
+        try {
+          const lastId = await invoke<string | null>('get_app_setting', { key: 'last_session_id' });
+          if (lastId) {
+            const sessions = useSessionStore.getState().sessions;
+            if (sessions.some(s => s.id === lastId)) {
+              selectSession(lastId);
+            }
+          }
+        } catch { /* 忽略恢复失败 */ }
+      }
+    };
+    init().catch((err) => {
       showToast(`加载会话失败: ${err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err)}`, 'error');
     });
-
-    fetchProviders().catch(() => {});
-
-  }, [fetchSessions, fetchProviders]);
+  }, [fetchSessions, fetchProviders, selectSession]);
 
   // Sync installed agents from envInfo (shared singleton, no extra detect_env call)
   const { envInfo } = useEnvInfo();
@@ -77,7 +96,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
     if (showNewDialog) {
       invoke<string | null>('get_app_setting', { key: 'pilotdesk-workspace' })
         .then((val) => {
-          if (val && !customCwd) {
+          if (val) {
             setCustomCwd(val);
           }
         })
@@ -182,6 +201,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       setCustomModel('');
       setCustomTitle('');
       setCustomCwd('');
+      setSessionTemperature(0.7);
+      setSessionMaxTokens(undefined);
 
       // Auto-select first enabled agent
       const enabled = getEnabledAgentTypes().filter(t => t !== 'api');
@@ -275,6 +296,8 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
           customTitle.trim() || null,
           selectedApiProvider,
           model,
+          sessionTemperature,
+          sessionMaxTokens,
         );
         setShowNewDialog(false);
         selectSession(session.id);
@@ -705,6 +728,39 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                     )}
                   </div>
                 )}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>
+                      温度 (Temperature)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={sessionTemperature}
+                      onChange={(e) => setSessionTemperature(parseFloat(e.target.value) || 0.7)}
+                      className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>
+                      最大 Token (可选)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={sessionMaxTokens ?? ''}
+                      onChange={(e) => setSessionMaxTokens(e.target.value ? parseInt(e.target.value) : undefined)}
+                      placeholder="不限制"
+                      className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                    />
+                  </div>
+                </div>
 
                 <div>
                   <label className="block text-xs  mb-1" style={{ color: 'var(--text-secondary)' }}>

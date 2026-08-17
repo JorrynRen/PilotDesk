@@ -32,7 +32,6 @@ import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, 
 
 interface Props {
   definitionId: string;
-  onClose: () => void;
   onNameChange?: (name: string) => void;
   onSaveResult?: (success: boolean) => void;
   onImported?: (newId: string) => void;
@@ -52,22 +51,29 @@ const SNAP_SIZE = 20;
 const PAN_THRESHOLD = 3;
 const NODE_DRAG_THRESHOLD = 3;
 
-/** 获取工具栏节点类型列表（动态 + 内置 fallback） */
+/** 工具栏节点类型固定显示顺序（Agent任务、插件调用、人工交互、API调用、代码转换、子工作流、结束） */
+const PALETTE_ORDER = ['agent', 'plugin', 'interact', 'api', 'transform', 'subflow', 'end'];
+
+/** 获取工具栏节点类型列表（固定顺序，动态类型追加在末尾） */
 function useNodePalette() {
   const [palette, setPalette] = useState<Array<{ type: string; label: string; color: string; icon: string }>>(
-    ['agent', 'api', 'transform', 'interact', 'plugin', 'subflow'].map(type => ({ type, ...getNodeTypeMeta(type) }))
+    PALETTE_ORDER.map(type => ({ type, ...getNodeTypeMeta(type) }))
   );
   useEffect(() => {
     invoke<Array<{ typeId: string; name: string; category: string; configSchema?: any }>>('list_node_types')
       .then(types => {
         if (types.length > 0) {
-          setPalette(types
-            .filter(t => !['start'].includes(t.typeId))
+          const known = PALETTE_ORDER.filter(id => types.some(t => t.typeId === id));
+          const extra = types
+            .filter(t => !['start', ...PALETTE_ORDER].includes(t.typeId))
             .map(t => ({
               type: t.typeId,
               ...getNodeTypeMeta(t.typeId),
-            }))
-          );
+            }));
+          setPalette([
+            ...known.map(id => ({ type: id, ...getNodeTypeMeta(id) })),
+            ...extra,
+          ]);
         }
       })
       .catch(() => {}); // keep fallback
@@ -100,7 +106,7 @@ interface ConfirmAction {
 }
 
 /** 执行状态枚举 */
-type StepRunState = 'idle' | 'running' | 'success' | 'failed' | 'cancelled';
+type StepRunState = 'idle' | 'running' | 'success' | 'failed' | 'cancelled' | 'skipped';
 
 /** 人工交互弹窗状态 */
 interface AwaitingInputPayload {
@@ -169,7 +175,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (measuredNodeTypesRef.current.has(type)) return;
     measuredNodeTypesRef.current.add(type);
     requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-node-type="${type}"]`);
+      const el = document.querySelector(`[data-node-type="${type}"]`) as HTMLElement | null;
       if (el) {
         nodeSizesRef.current.set(type, {
           width: el.offsetWidth,
@@ -459,6 +465,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     started: boolean;
     startX: number;
     startY: number;
+    multiSelect: boolean;
     origPositions?: Record<string, { x: number; y: number }>;
   } | null>(null);
 
@@ -944,12 +951,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         // 处理节点状态变更
         if (p.node) {
-          const nodeId = p.node.id;
-          const status = p.node.status;
-          if (status === 'completed' && p.node.output !== undefined) {
-            setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: p.node.output }));
+          const node = p.node;
+          const nodeId = node.id;
+          const status = node.status;
+          if (status === 'completed' && node.output !== undefined) {
+            setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: node.output }));
           } else if (status === 'failed') {
-            setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: p.node.error || '执行失败' } }));
+            setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: node.error || '执行失败' } }));
           }
           setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : status === 'cancelled' ? 'cancelled' : prev['node_' + nodeId] }));
         }
@@ -1484,8 +1492,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const stageTop = 20 + yOffset;
       // 阶段内节点的实际范围（取最大节点位置）
       for (const node of stage.nodes) {
-        const nx = stageLeft + node.position.x + node.position.width;
-        const ny = stageTop + TITLE_H + node.position.y + node.position.height;
+        const size = nodeSizesRef.current.get(node.type);
+        const nw = size?.width ?? NODE_W;
+        const nh = size?.height ?? NODE_H;
+        const nx = stageLeft + (node.position?.x ?? 0) + nw;
+        const ny = stageTop + TITLE_H + (node.position?.y ?? 0) + nh;
         if (nx > maxRight) maxRight = nx;
         if (ny > maxBottom) maxBottom = ny;
       }
@@ -1728,6 +1739,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedNodeIds, connecting, handleBatchDelete, handleClearSelection]);
 
+  const buildConditionExpr = () => {
+    const field = condField !== '__auto__' ? `${condField} ` : '';
+    return `${field}${condOperator} ${condValue}`.trim();
+  };
+
+  const buildAutoLabel = () => {
+    const field = condField === '__auto__' ? '输出' : condField;
+    return `${field} ${condOperator} ${condValue}`.trim();
+  };
+
   const handleConfirmCondition = (condition: string, label: string) => {
     if (!conditionInput) return;
     // 检查是否已有相同source→target的edge，有则更新，无则新建
@@ -1804,7 +1825,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // ── 画布拖拽平移（含防误触阈值 + 中键支持） ──
 
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
-    console.log('[CANVAS-MDOWN] handleCanvasMouseDown called, target:', (e.target as HTMLElement).tagName, e.target.className);
+    console.log('[CANVAS-MDOWN] handleCanvasMouseDown called, target:', (e.target as HTMLElement).tagName, (e.target as HTMLElement).className);
     if ((e.target as HTMLElement).closest('[data-stage-gate-output]')) {
       return;
     }
@@ -2043,7 +2064,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // P0-3: 拖拽快照ref — mousedown时存储stages/stagePositionsMap/stageOffsetsY，
   //   使handleMouseMove不依赖闭包stages，避免每帧setStages触发useEffect重建
   const dragSnapshotRef = useRef<{
-    stages: WorkflowStage[];
+    stages: Stage[];
     stageLeft: number;
     stageOffsetY: number;
     stageNodes: { id: string; position: { x: number; y: number }; type: string }[];
@@ -2116,6 +2137,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       started: false,
       startX: e.clientX,
       startY: e.clientY,
+      multiSelect: isMulti,
       origPositions: allOrigPositions,
     });
     setSelectedNodeId(nodeId);
@@ -2789,55 +2811,83 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
         <div className="w-px h-5" style={{ background: 'var(--border)' }} />
 
-        {/* 节点类型拖拽区 */}
-        <div className="flex items-center gap-1 flex-wrap">
-          {(() => {
-            const renderNode = (nt: typeof palette[number]) => (
-              <div
-                key={nt.type}
-                className="flex items-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
-                style={{ border: `1px solid ${nt.color}44`, background: `${nt.color}15`, color: 'var(--text-primary)' }}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  toolbarDragRef.current = nt.type;
-                  setToolbarDrag({ type: nt.type, icon: nt.icon, label: nt.label, color: nt.color, ghostX: e.clientX, ghostY: e.clientY });
-                  if (ghostRef.current) {
-                    ghostRef.current.remove();
-                    ghostRef.current = null;
-                  }
-                  const ghost = document.createElement('div');
-                  ghost.textContent = nt.icon + ' ' + nt.label;
-                  ghost.style.cssText = `position:fixed;pointer-events:none;z-index:99999;padding:4px 12px;border-radius:6px;font-size:12px;opacity:0.85;white-space:nowrap;border:1px solid ${nt.color};background:${nt.color}22;color:${nt.color};transform:translate(-50%,-50%)`;
-                  ghost.style.left = e.clientX + 'px';
-                  ghost.style.top = e.clientY + 'px';
-                  document.body.appendChild(ghost);
-                  ghostRef.current = ghost;
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--accent)';
-                  e.currentTarget.style.background = 'var(--accent)';
-                  e.currentTarget.style.color = '#fff';
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = `${nt.color}44`;
-                  e.currentTarget.style.background = `${nt.color}15`;
-                  e.currentTarget.style.color = 'var(--text-primary)';
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 4, fontSize: 11, background: `${nt.color}22`, color: nt.color }}>{nt.icon}</span>
-                <span>{nt.label}</span>
-              </div>
-            );
-            return (
-              <>
-                {palette.map(renderNode)}
-              </>
-            );
-          })()}
+        {/* 节点类型库：悬停展开节点面板（压缩工具栏宽度，保留拖拽添加） */}
+        <div className="relative group">
+          <button
+            className="pd-btn px-2.5 py-1 text-[11px] rounded flex items-center gap-1.5 whitespace-nowrap"
+            style={{
+              minWidth: 118,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+            }}
+            title="节点类型库：悬停展开后拖拽节点到画布"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" className="shrink-0">
+              <rect x="1.5" y="1.5" width="3.6" height="3.6" rx="0.8" />
+              <rect x="6.9" y="1.5" width="3.6" height="3.6" rx="0.8" />
+              <rect x="1.5" y="6.9" width="3.6" height="3.6" rx="0.8" />
+              <rect x="6.9" y="6.9" width="3.6" height="3.6" rx="0.8" />
+            </svg>
+            节点类型库
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" className="shrink-0"><path d="M2 3L4 5 6 3"/></svg>
+          </button>
+          {/* 透明 hover 桥：覆盖按钮与面板之间的 mt-1 空隙，保证悬停连续 */}
+          <div className="absolute left-0 right-0 top-full h-1" aria-hidden />
+          <div
+            className={`absolute left-0 top-full mt-1 z-50 flex items-center gap-1 flex-wrap p-2 rounded-lg transition-opacity duration-200 ${
+              'opacity-0 invisible pointer-events-none group-hover:opacity-100 group-hover:visible group-hover:pointer-events-auto'
+            }`}
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', maxWidth: 560 }}
+          >
+              {(() => {
+                const renderNode = (nt: typeof palette[number]) => (
+                  <div
+                    key={nt.type}
+                    className="flex items-center justify-center gap-1 px-2 py-1 rounded text-[11px] cursor-grab select-none transition-all duration-150"
+                    style={{ border: `1px solid ${nt.color}44`, background: `${nt.color}15`, color: 'var(--text-primary)', width: 96, whiteSpace: 'nowrap' }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      toolbarDragRef.current = nt.type;
+                      setToolbarDrag({ type: nt.type, icon: nt.icon, label: nt.label, color: nt.color, ghostX: e.clientX, ghostY: e.clientY });
+                      if (ghostRef.current) {
+                        ghostRef.current.remove();
+                        ghostRef.current = null;
+                      }
+                      const ghost = document.createElement('div');
+                      ghost.textContent = nt.icon + ' ' + nt.label;
+                      ghost.style.cssText = `position:fixed;pointer-events:none;z-index:99999;padding:4px 12px;border-radius:6px;font-size:12px;opacity:0.85;white-space:nowrap;border:1px solid ${nt.color};background:${nt.color}22;color:${nt.color};transform:translate(-50%,-50%)`;
+                      ghost.style.left = e.clientX + 'px';
+                      ghost.style.top = e.clientY + 'px';
+                      document.body.appendChild(ghost);
+                      ghostRef.current = ghost;
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--accent)';
+                      e.currentTarget.style.background = 'var(--accent)';
+                      e.currentTarget.style.color = '#fff';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = `${nt.color}44`;
+                      e.currentTarget.style.background = `${nt.color}15`;
+                      e.currentTarget.style.color = 'var(--text-primary)';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 4, fontSize: 11, background: `${nt.color}22`, color: nt.color }} className="shrink-0">{nt.icon}</span>
+                    <span className="truncate">{nt.label}</span>
+                  </div>
+                );
+                return (
+                  <>
+                    {palette.map(renderNode)}
+                  </>
+                );
+              })()}
+            </div>
         </div>
 
         <div className="w-px h-5" style={{ background: 'var(--border)' }} />
@@ -2869,16 +2919,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <line x1="0" y1="3" x2="14" y2="3" /><line x1="0" y1="7" x2="14" y2="7" /><line x1="0" y1="11" x2="14" y2="11" />
           </svg>
         </button>
-          <button
-            onClick={onClose}
-            className="pd-btn px-1.5 py-1 text-[11px] rounded"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-            title="返回列表"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 3L5 7l4 4" />
-            </svg>
-          </button>
           <button
             onClick={handleImportWorkflow}
             className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
@@ -3546,7 +3586,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                                   connecting={connecting}
                                   stepStates={stepStates}
                                   nodeResults={nodeResults}
-                                  selectedNodeId={selectedNodeId}
+                                  snapHighlightNodeId={snapHighlightNodeId}
                                   isUnreachable={unreachableNodeIds.has(node.id)}
                                   isRestoredResult={restoredExecutionId !== null}
                                   isConfigChanged={isConfigChangedMap.get(node.id) ?? false}
@@ -3575,7 +3615,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                                 stepStates={stepStates}
                                 nodeResults={nodeResults}
                                 snapHighlightNodeId={snapHighlightNodeId}
-                                selectedNodeId={selectedNodeId}
                                 isUnreachable={unreachableNodeIds.has(node.id)}
                                 isRestoredResult={restoredExecutionId !== null}
                                 isConfigChanged={isConfigChangedMap.get(node.id) ?? false}
@@ -4243,10 +4282,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     return;
                   }
                   const threshold = strategy === 'count'
-                    ? (countInput ? parseInt(countInput, 10) : undefined)
+                    ? (countInput ? String(parseInt(countInput, 10)) : undefined)
                     : (thresholdInput ? `${thresholdOp} ${thresholdInput}`.trim() : undefined);
                   setGateError(null);
-                  handleUpdateGate(gateInput.stageId, { strategy, mergeStrategy, threshold, customScript: customScript || undefined, customMode: mergeStrategy === 'custom' ? customMode : undefined });
+                  handleUpdateGate(gateInput.stageId, {
+                    strategy: strategy as GateConfig['strategy'],
+                    mergeStrategy,
+                    threshold,
+                    customScript: customScript || undefined,
+                    customMode: mergeStrategy === 'custom' ? (customMode as NonNullable<GateConfig['customMode']>) : undefined,
+                  });
                   setGateInput(null);
                 }}
                 className="pd-btn px-4 py-1.5 text-xs rounded"

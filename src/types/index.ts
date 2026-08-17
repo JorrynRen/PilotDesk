@@ -17,6 +17,24 @@ export interface Session {
   apiModel?: string;
   /** Agent-side session ID (e.g. Claude Code session UUID) for session continuity */
   agentSessionId?: string;
+  /** 模型温度 (0.0-2.0) */
+  temperature?: number;
+  /** 最大生成 token 数 */
+  maxTokens?: number;
+}
+
+/** 附件（图片/文件，落盘 + 路径引用） */
+export interface Attachment {
+  /** "image" 或 "file" */
+  kind: 'image' | 'file';
+  /** 原始文件名 */
+  name: string;
+  /** 落盘后的绝对路径 */
+  path: string;
+  /** MIME 类型 */
+  mime: string;
+  /** 文件大小（字节） */
+  size: number;
 }
 
 export interface Message {
@@ -24,16 +42,16 @@ export interface Message {
   sessionId: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
-  mode: 'native' | 'fast' | 'think' | 'expert';
+  mode: 'native' | 'fast' | 'think' | 'expert' | 'plan';
   timestamp: number;
-  /** Reasoning/thinking content (e.g. DeepSeek reasoning_content) */
-  reasoningContent?: string;
-  /** Tool calls requested by the model (JSON array string) */
+  /** 完整思维链（reasoning + tool 调用 + file_diff 步骤，JSON 数组字符串） */
   toolCalls?: string;
   /** Tool call ID for role='tool' messages */
   toolCallId?: string;
   /** Tool name for role='tool' messages */
   toolName?: string;
+  /** 附件（图片/文件，落盘 + 路径引用），仅用于 user 消息 */
+  attachments?: Attachment[];
 }
 
 /** Tool definition following OpenAI function calling format */

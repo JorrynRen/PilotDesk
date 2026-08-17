@@ -16,6 +16,8 @@ import type { WorkflowDefinition, WorkflowInstance, PendingHumanInput } from '..
 
 interface WorkflowPageProps {
   onBack?: () => void;
+  /** 嵌入主布局模式：不渲染自身 TitleBar/StatusBar（由外层提供） */
+  embedded?: boolean;
 }
 
 /** 将 Cron 表达式转换为用户友好描述 */
@@ -114,7 +116,7 @@ function describeCron(expr: string): string {
   return `${fmtTime(hour, min)}`;
 }
 
-export function WorkflowPage({ onBack }: WorkflowPageProps) {
+export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
   const navigate = useNavigate();
   const { definitions, instances, pendingInputs, loading, error, loadDefinitions, loadInstances, loadPendingInputs, respondHumanInput, createDefinition, updateDefinition, deleteDefinition, deleteExecution, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats' | 'templates'>('definitions');
@@ -464,12 +466,14 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
 
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      <TitleBar
-        showBackButton={true}
-        titleText="工作流管理"
-        onBack={() => navigate('/')}
-        onOpenSettings={() => navigate('/settings')}
-      />
+      {!embedded && (
+        <TitleBar
+          showBackButton={true}
+          titleText="工作流管理"
+          onBack={() => navigate('/')}
+          onOpenSettings={() => navigate('/settings')}
+        />
+      )}
       {/* Tab navigation — 与设置页同一套UI */}
       <div className="shrink-0 px-4 pt-1 flex items-center gap-0.5 overflow-x-clip" style={{ borderBottom: '1px solid var(--border)' }}>
         <button
@@ -995,10 +999,12 @@ export function WorkflowPage({ onBack }: WorkflowPageProps) {
         </div>
       )}
 
-      <StatusBar
-        onOpenSettings={() => navigate('/settings')}
-        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
-      />
+      {!embedded && (
+        <StatusBar
+          onOpenSettings={() => navigate('/settings')}
+          onOpenEnvSettings={() => navigate('/settings?tab=environment')}
+        />
+      )}
     </div>
   );
 }

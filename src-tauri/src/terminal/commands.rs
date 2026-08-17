@@ -90,18 +90,34 @@ pub async fn terminal_list(
     Ok(mgr.list_sessions())
 }
 
+/// 操作系统检测（原 virtual_console::config::detect_os_type 迁移而来）
+///
+/// 返回与前端 console_type 约定一致的字符串（serde 枚举名）。
+fn detect_os_type() -> &'static str {
+    #[cfg(target_os = "windows")]
+    return "Windows";
+
+    #[cfg(target_os = "macos")]
+    return "MacOS";
+
+    #[cfg(target_os = "linux")]
+    return "Linux";
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    panic!("Unsupported operating system");
+}
+
 /// Get console configuration info for status bar
 #[tauri::command]
 pub async fn terminal_get_config() -> Result<serde_json::Value, String> {
-    let config = crate::virtual_console::config::ConsoleConfig::default();
-    let console_type = crate::virtual_console::config::detect_os_type();
+    // 原 ConsoleConfig::default() 的常量值（virtual_console 模块已删除，直接内联）
     Ok(serde_json::json!({
-        "console_type": console_type,
-        "buffer_size": config.buffer_size,
-        "timeout_ms": config.timeout_ms,
-        "event_driven": config.event_driven,
-        "output_encoding": config.output_encoding,
-        "merge_output": config.merge_output,
-        "max_lines": config.max_lines,
+        "console_type": detect_os_type(),
+        "buffer_size": 1024 * 1024,
+        "timeout_ms": 30000,
+        "event_driven": true,
+        "output_encoding": "utf-8",
+        "merge_output": false,
+        "max_lines": 10000,
     }))
 }

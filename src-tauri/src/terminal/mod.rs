@@ -1,25 +1,29 @@
-//  Terminal Module — Persistent Shell Terminal (ConPTY + xterm.js)
+//  Terminal Module — Persistent Shell Terminal (PTY + xterm.js)
 //  ──────────────────────────────────────────────────────
-//  Provides real terminal experience: user types any command, ConPTY provides
+//  Provides real terminal experience: user types any command, PTY provides
 //  full console environment, stdout/stderr streamed to frontend xterm.js
 //  via Tauri events.
+//  Windows 使用 ConPTY（conpty_process.rs），Linux/macOS 使用 portable-pty（unix_pty.rs），
+//  经 pty.rs 统一抽象分发。
 
 pub mod commands;
 pub mod conpty_process;
 pub mod console_bridge;
+pub mod pty;
+pub mod unix_pty;
 
 use std::collections::HashMap;
 use tauri::Emitter;
 
-use crate::terminal::conpty_process::{spawn_with_conpty, ConptyProcess};
+use crate::terminal::pty::{StdoutStream, TerminalProcess};
 
 /// Single terminal session state
 pub struct TerminalSession {
     pub id: String,
     pub shell_type: String,
-    pub process: ConptyProcess,
-    /// stdout pipe (moved out when read_loop starts via terminal_attach)
-    pub stdout: Option<tokio::fs::File>,
+    pub process: TerminalProcess,
+    /// stdout stream (moved out when read_loop starts via terminal_attach)
+    pub stdout: Option<StdoutStream>,
 }
 
 /// Terminal manager: manages all active terminal sessions
@@ -65,19 +69,19 @@ impl TerminalManager {
             _ => "cmd /K".to_string(),
         };
 
-let cmdline_owned = cmdline.clone();
+        let cmdline_owned = cmdline.clone();
         let cwd_owned = cwd.to_string();
         let init_cols = initial_cols.unwrap_or(80);
         let init_rows = initial_rows.unwrap_or(30);
-        let (process, stdout, _stderr, _conpty_mode) = tokio::task::spawn_blocking(move || {
-            spawn_with_conpty(&cmdline_owned, &cwd_owned, init_cols, init_rows)
+        let (process, stdout) = tokio::task::spawn_blocking(move || {
+            TerminalProcess::spawn(&cmdline_owned, &cwd_owned, init_cols, init_rows)
         }).await.map_err(|e| format!("Spawn blocking failed: {}", e))?.map_err(|e| {
             format!("Failed to start terminal: {}", e)
         })?;
 
         let pid = process.id();
 
-let session = TerminalSession {
+        let session = TerminalSession {
             id: id.clone(),
             shell_type: shell_type.to_string(),
             process,
@@ -105,31 +109,10 @@ let session = TerminalSession {
             .get(id)
             .ok_or_else(|| format!("terminal session {} not found", id))?;
 
-        unsafe {
-            use windows_sys::Win32::Storage::FileSystem::WriteFile;
-            use windows_sys::Win32::Foundation::GetLastError;
-
-            let handle = session.process.stdin_handle();
-            let data_bytes = data.as_bytes();
-            let mut bytes_written: u32 = 0;
-            let result = WriteFile(
-                handle,
-                data_bytes.as_ptr() as *const _,
-                data_bytes.len() as u32,
-                &mut bytes_written,
-                std::ptr::null_mut(),
-            );
-
-            if result == 0 {
-                let err = GetLastError();
-                return Err(format!("Failed to write to terminal: system error {}", err));
-            }
-        }
-
-        Ok(())
+        session.process.write(data)
     }
 
-    /// Resize terminal session (sync ConPTY window size)
+    /// Resize terminal session (sync PTY window size)
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let session = self.sessions.get(id).ok_or_else(|| {
             format!("terminal session {} not found", id)
@@ -164,9 +147,22 @@ let session = TerminalSession {
         let session_id = id.to_string();
         let app = app_handle.clone();
 
-        tauri::async_runtime::spawn(async move {
-            terminal_read_loop(stdout, &session_id, &app, pid).await;
-        });
+        match stdout {
+            #[cfg(target_os = "windows")]
+            StdoutStream::Windows(file) => {
+                tauri::async_runtime::spawn(async move {
+                    terminal_read_loop(file, &session_id, &app, pid).await;
+                });
+            }
+            #[cfg(not(target_os = "windows"))]
+            StdoutStream::Unix(reader) => {
+                tauri::async_runtime::spawn(async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        terminal_unix_read_loop(reader, &session_id, &app, pid);
+                    }).await;
+                });
+            }
+        }
 
         Ok(())
     }
@@ -205,6 +201,50 @@ async fn terminal_read_loop(
 
     loop {
         match stdout.read(&mut buf).await {
+            Ok(0) => {
+                let _ = app_handle.emit(
+                    "terminal://exited",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "pid": pid,
+                    }),
+                );
+                break;
+            }
+            Ok(n) => {
+                let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                let _ = app_handle.emit(&event_name, data);
+            }
+            Err(e) => {
+                let _ = app_handle.emit(
+                    "terminal://exited",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "pid": pid,
+                        "error": format!("{}", e),
+                    }),
+                );
+                break;
+            }
+        }
+    }
+}
+
+/// Unix 终端读取循环：同步读 portable-pty master reader，推送前端。
+/// 运行在 spawn_blocking 中（master reader 是同步 Read）。
+#[cfg(not(target_os = "windows"))]
+fn terminal_unix_read_loop(
+    mut reader: Box<dyn std::io::Read + Send>,
+    session_id: &str,
+    app_handle: &tauri::AppHandle,
+    pid: u32,
+) {
+    use std::io::Read;
+    let event_name = format!("terminal://output/{}", session_id);
+    let mut buf = [0u8; 4096];
+
+    loop {
+        match reader.read(&mut buf) {
             Ok(0) => {
                 let _ = app_handle.emit(
                     "terminal://exited",

@@ -46,6 +46,7 @@ interface WorkflowStoreState {
 
   instances: WorkflowInstance[];
   pendingInputs: PendingHumanInput[];
+  schedules: WorkflowSchedule[];
 
   selectedDefinitionId: string | null;
 
@@ -99,6 +100,13 @@ interface WorkflowStoreState {
   deleteExecution: (executionId: string) => Promise<void>;
 
   selectInstance: (id: string | null) => void;
+
+  /** 单点执行：仅执行选中节点 */
+  executeSingleNode: (executionId: string, nodeId: string) => Promise<void>;
+  /** 链式执行：从选中节点到后序链路末端 */
+  executeChain: (executionId: string, nodeId: string) => Promise<void>;
+  /** 补全执行：跳过已完成节点，执行未完成节点 */
+  executeCompletion: (executionId: string) => Promise<void>;
 
 }
 

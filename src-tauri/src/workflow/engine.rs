@@ -6774,7 +6774,6 @@ result
 
 
         let completed_count = Arc::new(AtomicUsize::new(0));
-        let success_count = Arc::new(AtomicUsize::new(0));
 
         log::info!("[WorkflowEngine] 开始执行: id={}, stages={}, total_nodes={}", execution_id, def.stages.len(), total_count);
 

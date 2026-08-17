@@ -61,7 +61,7 @@ impl ProcessHandler for StdioHandler {
                 sid,
                 self.config.resume_arg_template
             );
-            self.config.resume_arg_template.replace("{session_id}", &format!("\"{}\"", sid))
+            self.config.resume_arg_template.replace("{session_id}", sid)
         } else {
             log::info!("[Handler] build_command: no session_id, using run_cmd_template");
             self.config.run_cmd_template.clone()
@@ -88,20 +88,18 @@ impl ProcessHandler for StdioHandler {
         // 检测前缀最后一个参数是否使用 = 语法（如 --query= 或 -q=）
         let uses_equals_syntax = args.last().map_or(false, |a| a.ends_with('='));
 
-        // 消息内容作为单个原子参数（用双引号包裹，避免 cmd.exe 错误解析换行/特殊字符）
-        // 换行符→字面 \\n，双引号→""（cmd.exe 转义），再用双引号包裹
+        // 消息内容作为单个原子参数：换行符→字面 \\n；引号/空格交由进程启动时的 argv 转义统一处理，
+        // 不再手动加双引号（手动加引号会在 Windows 上经二次转义，导致中文消息被错误拆分）。
         let sanitized = message
             .replace("\r\n", "\n")
             .replace('\r', "\n")
-            .replace('\n', "\\n")
-            .replace('"', "\"\"");
-        let quoted_msg = format!("\"{}\"", sanitized);
+            .replace('\n', "\\n");
         if uses_equals_syntax {
             if let Some(last) = args.last_mut() {
-                last.push_str(&quoted_msg);
+                last.push_str(&sanitized);
             }
         } else {
-            args.push(quoted_msg);
+            args.push(sanitized);
         }
 
         // 追加后缀固定参数

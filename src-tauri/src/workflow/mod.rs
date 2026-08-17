@@ -984,21 +984,13 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>, days: Op
 
 
     let total_sql = format!("SELECT COUNT(*) as total, \
-
         COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success, \
-
         COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed, \
-
         COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled, \
-
         COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) as running, \
-
         COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pending, \
-
         COALESCE(SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END), 0) as paused, \
-
         COALESCE(SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END), 0) as timeout \
-
         FROM workflow_instances {}", filter_clause);
 
 
@@ -1018,11 +1010,8 @@ pub fn get_workflow_stats(conn: &Connection, workflow_id: Option<&str>, days: Op
     let duration_sql = format!(
 
         "SELECT COALESCE(AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as avg_dur, \
-
                 COALESCE(MAX(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as max_dur, \
-
                 COALESCE(MIN(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as min_dur \
-
          FROM workflow_instances {}", filter_clause);
 
 
@@ -1232,19 +1221,12 @@ pub fn get_execution_timeline(conn: &Connection, workflow_id: Option<&str>, days
     };
 
     let sql = format!(
-
         "SELECT {}, COUNT(*) as total, \
-
                 COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) as success, \
-
                 COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) as failed, \
-
                 COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0) as cancelled, \
-
                 COALESCE(AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL THEN (completed_at - started_at) * 1000 END), 0) as avg_dur \
-
          FROM workflow_instances {} GROUP BY bucket ORDER BY {} ASC",
-
         date_expr, filter_clause, order_expr);
 
     let mut stmt = conn.prepare(&sql)?;

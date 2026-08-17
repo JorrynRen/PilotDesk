@@ -5,24 +5,30 @@ import { MessageBubble } from './MessageBubble';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { Message, Session } from '../../types';
 import { isApiSession } from '../../utils/sessionType';
+import type { ThinkingChainStep } from '../layout/MainPanel';
+import type { ConfirmationBlockData } from '../confirmation/ConfirmationCard';
 
 interface MessageListProps {
   messages: Message[];
   session: Session | null;
   isGenerating?: boolean;
   streamingStatus?: string;
+  thinkingChain?: ThinkingChainStep[];
+  /** ask_user 确认块（内嵌到最后一条 assistant 消息）。 */
+  confirmation?: ConfirmationBlockData | null;
   onEditMessage?: (content: string) => void;
   onSaveInspiration?: (content: string) => void;
   onResendMessage?: (content: string) => void;
 }
 
-export function MessageList({ messages, session, isGenerating, streamingStatus, onEditMessage, onSaveInspiration, onResendMessage }: MessageListProps) {
+export function MessageList({ messages, session, isGenerating, streamingStatus, thinkingChain, confirmation, onEditMessage, onSaveInspiration, onResendMessage }: MessageListProps) {
   const { getTheme } = useAgentRegistry();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
   const [isSearchingMessages, setIsSearchingMessages] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -35,6 +41,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
     }
     if (!query.trim()) {
       setSearchResults(null);
+      setHighlightedMessageId(null);
       return;
     }
     // Debounce search to avoid invoke on every keystroke
@@ -78,18 +85,24 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
   const itemContent = useCallback((index: number) => {
     const msg = messages[index];
     if (!msg) return null;
+    // 仅在流式生成中且是最后一条 assistant 消息时传入思维链
+    const isLastAssistant = isGenerating && index === messages.length - 1 && msg.role === 'assistant';
     return (
       <MessageBubble
         message={msg}
         agentType={session?.agentType ?? ''}
         apiProviderId={session?.apiProvider}
         apiModel={session?.apiModel}
+        thinkingChain={isLastAssistant ? thinkingChain : undefined}
+        confirmation={isLastAssistant ? confirmation : null}
+        isStreaming={isLastAssistant}
+        isHighlighted={highlightedMessageId === msg.id}
         onEdit={onEditMessage}
         onSaveInspiration={onSaveInspiration}
         onResend={onResendMessage}
       />
     );
-  }, [messages, session, onEditMessage, onSaveInspiration]);
+  }, [messages, session, thinkingChain, isGenerating, confirmation, highlightedMessageId, onEditMessage, onSaveInspiration, onResendMessage]);
 
 
   if (!session) {
@@ -172,7 +185,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
               />
               {searchQuery && (
                 <button
-                  onClick={() => { setSearchQuery(''); setSearchResults(null); }}
+                  onClick={() => { setSearchQuery(''); setSearchResults(null); setHighlightedMessageId(null); }}
                   className="absolute right-2 top-1/2 -translate-y-1/2"
                   style={{ color: 'var(--text-tertiary)' }}
                 >
@@ -198,8 +211,9 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
                       onClick={() => {
                         const next = Math.max(0, searchResultIndex - 1);
                         setSearchResultIndex(next);
+                        setHighlightedMessageId(searchResults[next].id);
                         const target = messages.findIndex(m => m.id === searchResults[next].id);
-                        if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'smooth', align: 'center' });
+                        if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'auto', align: 'center' });
                       }}
                       className="pd-btn pd-text-10 px-1 py-0.5 rounded transition-colors hover:opacity-80"
                       style={{ color: searchResultIndex === 0 ? 'var(--text-quaternary)' : 'var(--text-secondary)' }}
@@ -211,8 +225,9 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
                       onClick={() => {
                         const next = Math.min(searchResults.length - 1, searchResultIndex + 1);
                         setSearchResultIndex(next);
+                        setHighlightedMessageId(searchResults[next].id);
                         const target = messages.findIndex(m => m.id === searchResults[next].id);
-                        if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'smooth', align: 'center' });
+                        if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'auto', align: 'center' });
                       }}
                       className="pd-btn pd-text-10 px-1 py-0.5 rounded transition-colors hover:opacity-80"
                       style={{ color: searchResultIndex >= searchResults.length - 1 ? 'var(--text-quaternary)' : 'var(--text-secondary)' }}
@@ -226,8 +241,9 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
                   <button
                     onClick={() => {
                       setSearchResultIndex(0);
+                      setHighlightedMessageId(searchResults[0].id);
                       const target = messages.findIndex(m => m.id === searchResults[0].id);
-                      if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'smooth', align: 'center' });
+                      if (target >= 0) virtuosoRef.current?.scrollToIndex({ index: target, behavior: 'auto', align: 'center' });
                     }}
                     className="pd-btn pd-text-10 px-1.5 py-0.5 rounded transition-colors hover:opacity-80"
                     style={{ color: 'var(--accent)' }}

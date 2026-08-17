@@ -506,6 +506,7 @@ impl PluginHost {
     }
 
     /// 获取所有插件贡献的工作流节点类型
+    #[allow(dead_code)]
     pub fn get_contributed_node_types(&self) -> Vec<(String, NodeTypeContribution)> {
         let mut result = Vec::new();
         for (_, instance) in &self.plugins {

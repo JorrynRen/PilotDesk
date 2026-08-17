@@ -7,7 +7,7 @@
 
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { PluginInstance } from '../types/plugin';
+import type { PluginInstance, WorkflowConfigProps } from '../types/plugin';
 import { DefaultPluginPanel } from '../components/plugin/DefaultPluginPanel';
 import { PluginAPI } from './PluginAPI';
 import { workflowNodeTypeRegistry } from '../utils/WorkflowNodeTypeRegistry';

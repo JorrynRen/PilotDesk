@@ -1,9 +1,11 @@
 #![allow(dead_code)]
+#![cfg(target_os = "windows")]
 //  Windows ConPTY Process Manager
 //  ──────────────────────────────────────────────
 // 为终端 UI 模块提供 Windows ConPTY 进程管理能力。
 // ConPTY 为子进程提供虚拟控制台环境，同时允许宿主通过管道读取合并的输出，
 // 配合前端 xterm.js 提供真实终端体验。
+// 整个文件仅编译于 Windows（非 Windows 平台由 unix_pty.rs 提供实现）。
 
 use std::ffi::OsStr;
 use std::mem;
@@ -325,6 +327,31 @@ impl ConptyProcess {
     /// 获取 stdin 管道句柄（用于写入用户输入）
     pub fn stdin_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
         self.stdin_pipe.0
+    }
+
+    /// 写入用户输入到 stdin 管道
+    pub fn write(&self, data: &str) -> Result<(), String> {
+        unsafe {
+            use windows_sys::Win32::Storage::FileSystem::WriteFile;
+            use windows_sys::Win32::Foundation::GetLastError;
+
+            let handle = self.stdin_pipe.0;
+            let data_bytes = data.as_bytes();
+            let mut bytes_written: u32 = 0;
+            let result = WriteFile(
+                handle,
+                data_bytes.as_ptr() as *const _,
+                data_bytes.len() as u32,
+                &mut bytes_written,
+                std::ptr::null_mut(),
+            );
+
+            if result == 0 {
+                let err = GetLastError();
+                return Err(format!("写入终端失败: system error {}", err));
+            }
+        }
+        Ok(())
     }
 
 

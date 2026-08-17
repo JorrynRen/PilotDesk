@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [ "tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -30,10 +30,13 @@ env_logger = "0.11"
 dirs = "6"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", features = ["json", "gzip", "native-tls"] }
+reqwest = { version = "0.12", features = ["json", "gzip", "native-tls", "stream", "multipart"] }
+scraper = "0.20"
+url = "2"
 tauri-plugin-dialog = "2.7.1"
 aes-gcm = "0.10"
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 semver = "1.0"
 async-trait = "0.1"
 boa_engine = "0.19"
@@ -42,7 +45,9 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 cron = "0.15"
 async-recursion = "1.1"
 futures = "0.3"
+portable-pty = "0.9"
+percent-encoding = "2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Memory"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Memory", "Win32_Globalization"] }
 [target.'cfg(not(target_os = "windows"))'.dependencies]

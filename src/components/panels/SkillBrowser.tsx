@@ -53,15 +53,18 @@ export function SkillBrowser({ agentType, onSkillSelect }: SkillBrowserProps) {
         const installed = Object.entries(agentVersions)
           .filter(([, version]) => version !== null && version !== undefined)
           .map(([agentType]) => agentType);
-        for (const agent of installed) {
+        // API Agent 独立于 DB/detect_env，需显式纳入技能请求
+        const targets = Array.from(new Set([...installed, 'api']));
+        for (const agent of targets) {
           const cached = skillsByAgent[agent];
           if (!cached) {
             await requestSkills(agent);
           }
         }
       } catch {
-        // Fallback: try enabled agents from DB
-        for (const agent of agentOrder) {
+        // Fallback: try enabled agents from DB（并补上 API Agent）
+        const targets = Array.from(new Set([...agentOrder, 'api']));
+        for (const agent of targets) {
           const cached = skillsByAgent[agent];
           if (!cached) {
             await requestSkills(agent);

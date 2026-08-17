@@ -8,6 +8,71 @@
 //!
 //! 技能完整内容通过 load_skill 工具按需加载（B4 实现）。
 
+pub struct GitContext {
+    pub branch: Option<String>,
+    pub latest_commit: Option<String>,
+    pub has_uncommitted: bool,
+}
+
+impl GitContext {
+    pub fn format_prompt(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push("## Git 仓库上下文".to_string());
+        if let Some(ref branch) = self.branch {
+            lines.push(format!("- 当前分支: {}", branch));
+        }
+        if let Some(ref commit) = self.latest_commit {
+            lines.push(format!("- 最新提交: {}", commit));
+        }
+        if self.has_uncommitted {
+            lines.push("- 注意: 工作区有未提交的变更".to_string());
+        }
+        lines.join("\n")
+    }
+
+    /// 从 cwd 执行 git 命令获取仓库上下文（失败时返回 None）
+    pub fn from_cwd(cwd: &str) -> Option<Self> {
+        let branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(cwd)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let latest_commit = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%h"])
+            .current_dir(cwd)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let has_uncommitted = std::process::Command::new("git")
+            .args(["diff", "--stat"])
+            .current_dir(cwd)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(false);
+
+        if branch.is_none() && latest_commit.is_none() {
+            return None;
+        }
+
+        Some(Self {
+            branch,
+            latest_commit,
+            has_uncommitted,
+        })
+    }
+}
+
 /// System Prompt 构建器
 pub struct SystemPromptBuilder {
     base_prompt: String,
@@ -15,6 +80,8 @@ pub struct SystemPromptBuilder {
     user_md: Option<String>,
     kv_memories: Option<String>,
     skills: Vec<SkillEntry>,
+    git_context: Option<String>,
+    project_context: Option<String>,
 }
 
 /// 技能条目（仅 name + description，Progressive Disclosure）
@@ -31,6 +98,8 @@ impl SystemPromptBuilder {
             user_md: None,
             kv_memories: None,
             skills: Vec::new(),
+            git_context: None,
+            project_context: None,
         }
     }
 
@@ -62,6 +131,18 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// 注入 Git 仓库上下文
+    pub fn with_git_context(mut self, git: &GitContext) -> Self {
+        self.git_context = Some(git.format_prompt());
+        self
+    }
+
+    /// 注入项目级上下文文件（CLAUDE.md、README.md 等）
+    pub fn with_project_context(mut self, cwd: &str) -> Self {
+        self.project_context = ProjectContext::from_cwd(cwd).format_prompt();
+        self
+    }
+
     /// 组装最终 system prompt
     pub fn build(self) -> String {
         let mut parts: Vec<String> = Vec::new();
@@ -77,6 +158,16 @@ impl SystemPromptBuilder {
                 "<project_memory>\n{}\n</project_memory>",
                 memory
             ));
+        }
+
+        // 2.5. Git 仓库上下文
+        if let Some(ref git) = self.git_context {
+            parts.push(git.clone());
+        }
+
+        // 2.6. 项目上下文文件
+        if let Some(ref ctx) = self.project_context {
+            parts.push(ctx.clone());
         }
 
         // 3. USER.md — 用户偏好
@@ -108,6 +199,58 @@ impl SystemPromptBuilder {
         }
 
         parts.join("\n\n")
+    }
+}
+
+/// 项目上下文文件扫描
+pub struct ProjectContext {
+    pub claude_md: Option<String>,
+    pub readme: Option<String>,
+}
+
+impl ProjectContext {
+    /// 扫描工作区递归查找配置文档（最多向上查找 2 层）
+    pub fn from_cwd(cwd: &str) -> Self {
+        let mut ctx = Self {
+            claude_md: None,
+            readme: None,
+        };
+
+        // 读取根目录 README.md
+        ctx.readme = read_file_if_exists(cwd, "README.md");
+
+        // 递归查找 CLAUDE.md（向上最多 2 层）
+        let mut dir = std::path::PathBuf::from(cwd);
+        for _ in 0..=2 {
+            if let Some(parent) = dir.parent() {
+                dir = parent.to_path_buf();
+            } else {
+                break;
+            }
+            if ctx.claude_md.is_none() {
+                ctx.claude_md = read_file_if_exists(dir.to_string_lossy().as_ref(), "CLAUDE.md");
+            }
+        }
+
+        ctx
+    }
+
+    /// 格式化为 system prompt 块
+    pub fn format_prompt(&self) -> Option<String> {
+        let mut lines = Vec::new();
+        if let Some(ref claude) = self.claude_md {
+            lines.push("## 项目配置文档 (CLAUDE.md)".to_string());
+            lines.push(claude.clone());
+        }
+        if let Some(ref readme) = self.readme {
+            lines.push("## 项目说明文档 (README.md)".to_string());
+            lines.push(readme.clone());
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n\n"))
+        }
     }
 }
 

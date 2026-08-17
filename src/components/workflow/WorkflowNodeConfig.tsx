@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import type { WorkflowNode, WorkflowNodeType, Stage } from '../../types/workflow';
+import type { WorkflowNode, WorkflowNodeType, Stage, WorkflowEdge, GateConfig } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { invoke } from '@tauri-apps/api/core';
 import { useWorkflowStore } from '../../stores/workflowStore';
@@ -738,7 +738,7 @@ const MappingEditor: React.FC<{
                                   padding: '6px 8px 6px 16px',
                                   cursor: 'pointer',
                                   color: 'var(--text-primary)',
-                                    ...(opt.value === value[key] ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}),
+                                    ...(opt.value === value?.[key] ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}),
                                   borderBottom: '1px solid var(--border)',
                                 }}
                                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
@@ -782,7 +782,7 @@ const MappingEditor: React.FC<{
                                       padding: '5px 8px 5px 32px',
                                       cursor: 'pointer',
                                       color: 'var(--text-primary)',
-                                      ...(opt.value === value[key] ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}),
+                                      ...(opt.value === value?.[key] ? { background: 'color-mix(in srgb, var(--accent) 10%, transparent)', fontWeight: 600, color: 'var(--accent)' } : {}),
                                       borderBottom: '1px solid var(--border)',
                                     }}
                                     onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
@@ -1835,7 +1835,7 @@ useEffect(() => {
             keyPlaceholder="输出字段名"
             valuePlaceholder={'输入文本或选择输出字段'}
             baseKeyRef={outputBaseKeyRef}
-            valueOptions={getOutputFieldOptions(node.type)} />
+            valueOptions={getOutputFieldOptions(node.type as WorkflowNodeType)} />
       </div>
       )}
 

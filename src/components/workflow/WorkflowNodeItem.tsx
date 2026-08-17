@@ -54,7 +54,6 @@ interface WorkflowNodeItemProps {
   connecting: unknown;
   stepStates: Record<string, string>;
   nodeResults: Record<string, any>;
-  selectedNodeId: string | null;
   isUnreachable?: boolean;
   isRestoredResult?: boolean;
   isConfigChanged?: boolean;

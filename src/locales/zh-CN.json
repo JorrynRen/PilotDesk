@@ -39,7 +39,7 @@
   "status.ready": "Agent: 就绪",
   "status.thinking": "思考中...",
   "status.sending": "发送中...",
-  "status.timeout": "请求超时：智能体未在 60 秒内响应",
+  "status.timeout": "请求超时：智能体未在 180 秒内响应",
   "status.error": "错误: {error}",
   "status.requestFailed": "请求失败: {error}",
 

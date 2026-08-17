@@ -1,13 +1,12 @@
 //! 进程超时策略与状态判断
 //!
-//! 提供基于虚拟控制台状态能力的超时检测基础设施。
-//! 核心原则：超时检测通过虚拟控制台提供的 `try_wait` / `is_running` 判断进程状态，
+//! 提供基于进程状态能力的超时检测基础设施。
+//! 核心原则：超时检测通过 tokio::process::Child 的 `try_wait` 判断进程状态，
 //! 不旁路 OS API（如 OpenProcess / kill(pid, 0)）。
 //!
 //! 本模块提供：
 //! - `TimeoutPolicy`：可配置的超时策略（检查间隔、最大等待时间）
 //! - `TimeoutError`：超时错误类型（进程已退出 / 仍在运行 / 超过上限）
-//! - `poll_console_alive`：基于 AsyncConsole 的轮询检测纯函数
 //! - `check_process_state`：基于 try_wait 结果判断进程状态并生成错误消息
 
 use std::time::Duration;
@@ -44,28 +43,11 @@ impl TimeoutPolicy {
         }
     }
 
-    /// 创建标准超时策略（适用于版本检测等中等耗时命令）
-    #[allow(dead_code)]
-    pub fn standard() -> Self {
-        Self {
-            check_interval: Duration::from_millis(500),
-            max_wait: Duration::from_secs(120),
-        }
-    }
-
     /// 创建 LLM 推理超时策略（适用于 Agent 会话交互）
     pub fn llm_inference() -> Self {
         Self {
             check_interval: Duration::from_millis(500),
             max_wait: Duration::from_secs(600),
-        }
-    }
-
-    /// 自定义超时策略
-    pub fn custom(check_interval_secs: u64, max_wait_secs: u64) -> Self {
-        Self {
-            check_interval: Duration::from_secs(check_interval_secs),
-            max_wait: Duration::from_secs(max_wait_secs),
         }
     }
 }
@@ -116,7 +98,7 @@ impl std::fmt::Display for TimeoutError {
 
 impl std::error::Error for TimeoutError {}
 
-/// 基于虚拟控制台的 try_wait 结果判断进程状态。
+/// 基于 tokio::process::Child::try_wait 结果判断进程状态。
 ///
 /// 纯函数，不持有任何状态，便于测试。
 ///

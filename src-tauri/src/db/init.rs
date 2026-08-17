@@ -8,7 +8,7 @@ use std::fs;
 /// 所有迁移版本号（必须保持升序排列）
 /// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
 /// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 70, 71, 72, 73, 74, 75, 76];
+const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88];
 
 /// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
 /// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
@@ -57,7 +57,8 @@ pub fn init_db() -> Result<DbPool, AppError> {
             message_count INTEGER DEFAULT 0,
             status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
             api_provider TEXT,
-            api_model TEXT
+            api_model TEXT,
+            agent_session_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS messages (
@@ -66,7 +67,11 @@ pub fn init_db() -> Result<DbPool, AppError> {
             role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
             content TEXT NOT NULL DEFAULT '',
             mode TEXT DEFAULT 'native' CHECK(mode IN ('native', 'fast', 'think', 'expert')),
-            timestamp INTEGER NOT NULL
+            timestamp INTEGER NOT NULL,
+            tool_calls TEXT DEFAULT NULL,
+            tool_call_id TEXT DEFAULT NULL,
+            tool_name TEXT DEFAULT NULL,
+            attachments TEXT DEFAULT NULL
         );
 
         CREATE TABLE IF NOT EXISTS inspirations (
@@ -248,6 +253,92 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
         CREATE INDEX IF NOT EXISTS idx_wf_exec_status ON workflow_instances(status, created_at DESC);"#
     )?;
 
+    // Agent 文件修改历史（write_file / edit_file 的撤销备份）
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS file_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL DEFAULT '',
+            file_path TEXT NOT NULL,
+            backup_content TEXT,
+            file_existed INTEGER DEFAULT 1,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_file_history_session ON file_history(session_id, created_at DESC);"
+    )?;
+
+    // ===== 群聊多 Agent（v82，初始建表块；增量迁移见 migrate_add_groupchat_tables） =====
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS groupchat_rooms (
+            id            TEXT PRIMARY KEY,
+            title         TEXT NOT NULL DEFAULT '',
+            topic         TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'idle',
+            strategy      TEXT NOT NULL DEFAULT 'round_robin',
+            max_rounds    INTEGER NOT NULL DEFAULT 5,
+            max_parallel  INTEGER NOT NULL DEFAULT 2,
+            director_id   TEXT,
+            current_task_id TEXT,
+            created_at    INTEGER NOT NULL,
+            updated_at    INTEGER NOT NULL,
+            goal_notes    TEXT NOT NULL DEFAULT '[]'
+        );
+
+        CREATE TABLE IF NOT EXISTS groupchat_participants (
+            id              TEXT NOT NULL,
+            room_id         TEXT NOT NULL,
+            participant_type TEXT NOT NULL,
+            agent_config    TEXT NOT NULL DEFAULT '{}',
+            display_name    TEXT NOT NULL DEFAULT '',
+            system_role     TEXT NOT NULL DEFAULT '',
+            status          TEXT NOT NULL DEFAULT 'active',
+            PRIMARY KEY (room_id, id),
+            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS groupchat_messages (
+            id          TEXT PRIMARY KEY,
+            room_id     TEXT NOT NULL,
+            round       INTEGER NOT NULL DEFAULT 0,
+            seq         INTEGER NOT NULL DEFAULT 0,
+            sender      TEXT NOT NULL,
+            recipients  TEXT NOT NULL DEFAULT '[]',
+            kind        TEXT NOT NULL,
+            reply_to    TEXT,
+            content     TEXT NOT NULL DEFAULT '',
+            attachments TEXT NOT NULL DEFAULT '[]',
+            tool_calls  TEXT NOT NULL DEFAULT '[]',
+            extra       TEXT NOT NULL DEFAULT '{}',
+            timestamp   INTEGER NOT NULL,
+            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS groupchat_stances (
+            room_id      TEXT NOT NULL,
+            participant_id TEXT NOT NULL,
+            stance       TEXT NOT NULL DEFAULT '',
+            updated_at   INTEGER NOT NULL,
+            PRIMARY KEY (room_id, participant_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS groupchat_tasks (
+            id              TEXT PRIMARY KEY,
+            room_id         TEXT NOT NULL,
+            task_no         INTEGER NOT NULL,
+            description     TEXT NOT NULL,
+            assignee        TEXT,
+            depends_on      TEXT NOT NULL DEFAULT '[]',
+            status          TEXT NOT NULL DEFAULT 'discussing',
+            result_summary  TEXT,
+            error           TEXT,
+            started_at      INTEGER,
+            completed_at    INTEGER,
+            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_gcm_room ON groupchat_messages(room_id, round, seq);
+        CREATE INDEX IF NOT EXISTS idx_gct_room ON groupchat_tasks(room_id, status);"
+    )?;
+
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
     let now = crate::utils::now();
 
@@ -326,6 +417,48 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
             "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
             rusqlite::params![key, value, now],
         )?;
+    }
+
+    // ── 启动时 schema 修复 ──
+    // 修复因初始 CREATE TABLE 缺失列导致查询失败的数据库
+    // （user_version 已升至最新，不会触发迁移，需显式修复）
+    {
+        // sessions 表缺少 agent_session_id 列
+        let has_agent_sid = conn
+            .prepare("SELECT agent_session_id FROM sessions LIMIT 0")
+            .is_ok();
+        if !has_agent_sid {
+            log::info!("[startup repair] 检测到 sessions 表缺少 agent_session_id 列，正在修复...");
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN agent_session_id TEXT DEFAULT NULL;"
+            )?;
+            log::info!("[startup repair] agent_session_id 列已添加");
+        }
+
+        // messages 表缺少 tool_calls / tool_call_id / tool_name 列
+        let has_tool_calls = conn
+            .prepare("SELECT tool_calls FROM messages LIMIT 0")
+            .is_ok();
+        if !has_tool_calls {
+            log::info!("[startup repair] 检测到 messages 表缺少扩展列，正在修复...");
+            conn.execute_batch(
+                "ALTER TABLE messages ADD COLUMN tool_calls TEXT DEFAULT NULL;
+                 ALTER TABLE messages ADD COLUMN tool_call_id TEXT DEFAULT NULL;
+                 ALTER TABLE messages ADD COLUMN tool_name TEXT DEFAULT NULL;"
+            )?;
+            log::info!("[startup repair] messages 扩展列已添加");
+        }
+
+        // 清理废弃的 reasoning_content 列（旧版本遗留，若存在则删除）
+        let has_reasoning = conn
+            .prepare("SELECT reasoning_content FROM messages LIMIT 0")
+            .is_ok();
+        if has_reasoning {
+            match conn.execute_batch("ALTER TABLE messages DROP COLUMN reasoning_content;") {
+                Ok(_) => log::info!("[startup repair] reasoning_content 列已清理"),
+                Err(e) => log::warn!("[startup repair] 无法删除 reasoning_content 列（可忽略）: {}", e),
+            }
+        }
     }
 
     // Versioned migrations — 由 MIGRATION_VERSIONS 数组驱动
@@ -452,14 +585,13 @@ fn migrate_add_type(conn: &Connection) -> Result<(), AppError> {
 }
 
 fn migrate_add_message_extensions(conn: &Connection) -> Result<(), AppError> {
-    let has_reasoning = conn
-        .prepare("SELECT reasoning_content FROM messages LIMIT 0")
+    let has_tool_calls = conn
+        .prepare("SELECT tool_calls FROM messages LIMIT 0")
         .is_ok();
 
-    if !has_reasoning {
+    if !has_tool_calls {
         conn.execute_batch(
-            "ALTER TABLE messages ADD COLUMN reasoning_content TEXT DEFAULT NULL;
-             ALTER TABLE messages ADD COLUMN tool_calls TEXT DEFAULT NULL;
+            "ALTER TABLE messages ADD COLUMN tool_calls TEXT DEFAULT NULL;
              ALTER TABLE messages ADD COLUMN tool_call_id TEXT DEFAULT NULL;
              ALTER TABLE messages ADD COLUMN tool_name TEXT DEFAULT NULL;"
         )?;
@@ -714,6 +846,92 @@ fn migrate_remove_agent_type_check(conn: &Connection) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);"
     )?;
+    Ok(())
+}
+
+/// Migration v78 — 新增 session_contexts 表，存储 API Agent 会话上下文（conversation history）
+fn migrate_add_session_context(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS session_contexts (
+            session_id TEXT PRIMARY KEY,
+            api_provider_id TEXT NOT NULL,
+            api_model TEXT NOT NULL,
+            conversation_messages TEXT NOT NULL DEFAULT '[]',
+            last_updated_at INTEGER NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        );"
+    )?;
+    Ok(())
+}
+
+/// Migration v79 — session_contexts 新增 summary / summary_updated_at 列
+/// summary 用于存储被保留窗口裁剪掉的早期对话的 LLM 压缩摘要（滚动摘要）。
+fn migrate_add_session_summary(conn: &Connection) -> Result<(), AppError> {
+    let has_summary = conn
+        .prepare("SELECT summary FROM session_contexts LIMIT 0")
+        .is_ok();
+    if !has_summary {
+        conn.execute_batch(
+            "ALTER TABLE session_contexts ADD COLUMN summary TEXT NOT NULL DEFAULT '';
+             ALTER TABLE session_contexts ADD COLUMN summary_updated_at INTEGER NOT NULL DEFAULT 0;"
+        )?;
+        log::info!("[migration v79] session_contexts 新增 summary / summary_updated_at 列");
+    }
+    Ok(())
+}
+
+/// Migration v80 — messages 新增 images 列（多模态图片输入，JSON 数组字符串）
+fn migrate_add_message_images(conn: &Connection) -> Result<(), AppError> {
+    let has_images = conn
+        .prepare("SELECT images FROM messages LIMIT 0")
+        .is_ok();
+    if !has_images {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN images TEXT DEFAULT NULL;")?;
+        log::info!("[migration v80] messages 新增 images 列");
+    }
+    Ok(())
+}
+
+/// Migration v81 — messages.images 重命名为 attachments（图片与文件统一存储）
+fn migrate_rename_images_to_attachments(conn: &Connection) -> Result<(), AppError> {
+    let has_attachments = conn
+        .prepare("SELECT attachments FROM messages LIMIT 0")
+        .is_ok();
+    if !has_attachments {
+        let has_images = conn
+            .prepare("SELECT images FROM messages LIMIT 0")
+            .is_ok();
+        if has_images {
+            conn.execute_batch("ALTER TABLE messages RENAME COLUMN images TO attachments;")?;
+            log::info!("[migration v81] messages.images 已重命名为 attachments");
+        } else {
+            conn.execute_batch("ALTER TABLE messages ADD COLUMN attachments TEXT DEFAULT NULL;")?;
+            log::info!("[migration v81] messages 新增 attachments 列");
+        }
+    }
+    Ok(())
+}
+
+fn migrate_add_api_params(conn: &Connection) -> Result<(), AppError> {
+    // api_providers 增加 api_format（openai/anthropic）
+    let has_api_format = conn
+        .prepare("SELECT api_format FROM api_providers LIMIT 0")
+        .is_ok();
+    if !has_api_format {
+        conn.execute_batch(
+            "ALTER TABLE api_providers ADD COLUMN api_format TEXT NOT NULL DEFAULT 'openai';"
+        )?;
+    }
+    // sessions 增加 temperature 和 max_tokens
+    let has_temperature = conn
+        .prepare("SELECT temperature FROM sessions LIMIT 0")
+        .is_ok();
+    if !has_temperature {
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN temperature REAL DEFAULT 0.7;
+             ALTER TABLE sessions ADD COLUMN max_tokens INTEGER DEFAULT NULL;"
+        )?;
+    }
     Ok(())
 }
 
@@ -1258,6 +1476,194 @@ fn migrate_update_agent_seeds(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+/// v82: 群聊多 Agent 五表（需与 init_db 初始建表块保持同步）
+fn migrate_add_groupchat_tables(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(
+        r#"CREATE TABLE IF NOT EXISTS groupchat_rooms (
+            id            TEXT PRIMARY KEY,
+            title         TEXT NOT NULL DEFAULT '',
+            topic         TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'idle',
+            strategy      TEXT NOT NULL DEFAULT 'round_robin',
+            max_rounds    INTEGER NOT NULL DEFAULT 5,
+            max_parallel  INTEGER NOT NULL DEFAULT 2,
+            director_id   TEXT,
+            current_task_id TEXT,
+            created_at    INTEGER NOT NULL,
+            updated_at    INTEGER NOT NULL,
+            goal_notes    TEXT NOT NULL DEFAULT '[]'
+        );
+
+        CREATE TABLE IF NOT EXISTS groupchat_participants (
+            id              TEXT NOT NULL,
+            room_id         TEXT NOT NULL,
+            participant_type TEXT NOT NULL,
+            agent_config    TEXT NOT NULL DEFAULT '{}',
+            display_name    TEXT NOT NULL DEFAULT '',
+            system_role     TEXT NOT NULL DEFAULT '',
+            status          TEXT NOT NULL DEFAULT 'active',
+            PRIMARY KEY (room_id, id),
+            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS groupchat_messages (
+            id          TEXT PRIMARY KEY,
+            room_id     TEXT NOT NULL,
+            round       INTEGER NOT NULL DEFAULT 0,
+            seq         INTEGER NOT NULL DEFAULT 0,
+            sender      TEXT NOT NULL,
+            recipients  TEXT NOT NULL DEFAULT '[]',
+            kind        TEXT NOT NULL,
+            reply_to    TEXT,
+            content     TEXT NOT NULL DEFAULT '',
+            attachments TEXT NOT NULL DEFAULT '[]',
+            tool_calls  TEXT NOT NULL DEFAULT '[]',
+            extra       TEXT NOT NULL DEFAULT '{}',
+            timestamp   INTEGER NOT NULL,
+            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS groupchat_stances (
+            room_id      TEXT NOT NULL,
+            participant_id TEXT NOT NULL,
+            stance       TEXT NOT NULL DEFAULT '',
+            updated_at   INTEGER NOT NULL,
+            PRIMARY KEY (room_id, participant_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS groupchat_tasks (
+            id              TEXT PRIMARY KEY,
+            room_id         TEXT NOT NULL,
+            task_no         INTEGER NOT NULL,
+            description     TEXT NOT NULL,
+            assignee        TEXT,
+            depends_on      TEXT NOT NULL DEFAULT '[]',
+            status          TEXT NOT NULL DEFAULT 'discussing',
+            result_summary  TEXT,
+            error           TEXT,
+            started_at      INTEGER,
+            completed_at    INTEGER,
+            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_gcm_room ON groupchat_messages(room_id, round, seq);
+        CREATE INDEX IF NOT EXISTS idx_gct_room ON groupchat_tasks(room_id, status);"#,
+    )?;
+    Ok(())
+}
+
+/// v83: 修复 groupchat_participants 主键——从全局唯一 `id` 改为 `(room_id, id)` 复合主键。
+/// 否则前端为每个房间固定使用 'director'/'user' 作为参与者 id，创建第二个房间会触发
+/// `UNIQUE constraint failed: groupchat_participants.id`。
+fn migrate_groupchat_participants_pk(conn: &Connection) -> Result<(), AppError> {
+    let pk_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('groupchat_participants') WHERE pk > 0",
+        [],
+        |r| r.get(0),
+    )?;
+    if pk_count > 1 {
+        log::info!("[migration v83] groupchat_participants 已使用复合主键，跳过");
+        return Ok(());
+    }
+
+    log::info!("[migration v83] 重建 groupchat_participants 主键为 (room_id, id)");
+    conn.execute_batch(
+        r#"DROP TABLE IF EXISTS groupchat_participants_new;
+        CREATE TABLE groupchat_participants_new (
+            id              TEXT NOT NULL,
+            room_id         TEXT NOT NULL,
+            participant_type TEXT NOT NULL,
+            agent_config    TEXT NOT NULL DEFAULT '{}',
+            display_name    TEXT NOT NULL DEFAULT '',
+            system_role     TEXT NOT NULL DEFAULT '',
+            status          TEXT NOT NULL DEFAULT 'active',
+            PRIMARY KEY (room_id, id),
+            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
+        );
+        INSERT INTO groupchat_participants_new
+            (id, room_id, participant_type, agent_config, display_name, system_role, status)
+            SELECT id, room_id, participant_type, agent_config, display_name, system_role, status
+            FROM groupchat_participants;
+        DROP TABLE groupchat_participants;
+        ALTER TABLE groupchat_participants_new RENAME TO groupchat_participants;"#,
+    )?;
+    Ok(())
+}
+
+/// v84: groupchat_messages 新增 attachments 列（复用普通会话附件模型，JSON 数组字符串）。
+fn migrate_groupchat_message_attachments(conn: &Connection) -> Result<(), AppError> {
+    let has_attachments = conn
+        .prepare("SELECT attachments FROM groupchat_messages LIMIT 0")
+        .is_ok();
+    if !has_attachments {
+        conn.execute_batch(
+            "ALTER TABLE groupchat_messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';"
+        )?;
+        log::info!("[migration v84] groupchat_messages 新增 attachments 列");
+    }
+    Ok(())
+}
+
+/// v85: 拆除 groupchat_rooms.summary / summary_updated_at。
+/// 结论统一以 `groupchat_messages` 中 `kind='conclusion'` 消息为准，房间表不再冗余存储。
+fn migrate_groupchat_rooms_drop_summary(conn: &Connection) -> Result<(), AppError> {
+    let cols: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT name FROM pragma_table_info('groupchat_rooms')")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    for col in ["summary", "summary_updated_at"] {
+        if cols.iter().any(|c| c == col) {
+            conn.execute_batch(&format!("ALTER TABLE groupchat_rooms DROP COLUMN {col};"))?;
+            log::info!("[migration v85] groupchat_rooms 删除列 {col}");
+        }
+    }
+    Ok(())
+}
+
+/// v86: groupchat_messages 新增 tool_calls 列（参与者本轮工具调用链，JSON 数组字符串，可溯源）。
+fn migrate_groupchat_message_tool_calls(conn: &Connection) -> Result<(), AppError> {
+    let has_tool_calls = conn
+        .prepare("SELECT tool_calls FROM groupchat_messages LIMIT 0")
+        .is_ok();
+    if !has_tool_calls {
+        conn.execute_batch(
+            "ALTER TABLE groupchat_messages ADD COLUMN tool_calls TEXT NOT NULL DEFAULT '[]';"
+        )?;
+        log::info!("[migration v86] groupchat_messages 新增 tool_calls 列");
+    }
+    Ok(())
+}
+
+/// v87: groupchat_messages 新增 extra 列（附加结构化数据，如用户确认请求，JSON 对象字符串）。
+fn migrate_groupchat_message_extra(conn: &Connection) -> Result<(), AppError> {
+    let has_extra = conn
+        .prepare("SELECT extra FROM groupchat_messages LIMIT 0")
+        .is_ok();
+    if !has_extra {
+        conn.execute_batch(
+            "ALTER TABLE groupchat_messages ADD COLUMN extra TEXT NOT NULL DEFAULT '{}';"
+        )?;
+        log::info!("[migration v87] groupchat_messages 新增 extra 列");
+    }
+    Ok(())
+}
+
+/// v88: groupchat_rooms 新增 goal_notes 列（累积的补充/细化约束，JSON 数组字符串）。
+fn migrate_groupchat_room_goal_notes(conn: &Connection) -> Result<(), AppError> {
+    let has_goal_notes = conn
+        .prepare("SELECT goal_notes FROM groupchat_rooms LIMIT 0")
+        .is_ok();
+    if !has_goal_notes {
+        conn.execute_batch(
+            "ALTER TABLE groupchat_rooms ADD COLUMN goal_notes TEXT NOT NULL DEFAULT '[]';"
+        )?;
+        log::info!("[migration v88] groupchat_rooms 新增 goal_notes 列");
+    }
+    Ok(())
+}
+
 fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppError> {
     for &ver in MIGRATION_VERSIONS {
         if current_version < ver {
@@ -1294,6 +1700,18 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
                 74 => migrate_full_agent_seeds(conn)?,
                 75 => migrate_workflow_instance_schema(conn)?,
                 76 => migrate_add_workflow_icon(conn)?,
+                77 => migrate_add_api_params(conn)?,
+                78 => migrate_add_session_context(conn)?,
+                79 => migrate_add_session_summary(conn)?,
+                80 => migrate_add_message_images(conn)?,
+                81 => migrate_rename_images_to_attachments(conn)?,
+                82 => migrate_add_groupchat_tables(conn)?,
+                83 => migrate_groupchat_participants_pk(conn)?,
+                84 => migrate_groupchat_message_attachments(conn)?,
+                85 => migrate_groupchat_rooms_drop_summary(conn)?,
+                86 => migrate_groupchat_message_tool_calls(conn)?,
+                87 => migrate_groupchat_message_extra(conn)?,
+                88 => migrate_groupchat_room_goal_notes(conn)?,
                 _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
             }
         }

@@ -201,7 +201,6 @@ export function WorkflowEditorPage() {
       <div className="flex-1 overflow-hidden">
         <WorkflowEditor
           definitionId={readyId}
-          onClose={handleBack}
           onNameChange={handleNameChange}
           onSaveResult={(success) => {
             updateStatusHint({

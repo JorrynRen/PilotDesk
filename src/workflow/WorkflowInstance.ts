@@ -43,6 +43,7 @@ export function createInstance(
     context: {},
     trigger,
     triggerDetail,
+    completionRate: 0,
     createdAt: Math.floor(Date.now() / 1000),
   };
 }

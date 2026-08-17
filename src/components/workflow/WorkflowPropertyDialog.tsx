@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X, Settings, Plus, HelpCircle } from 'lucide-react';
-import type { WorkflowDefinition, TriggerConfig } from '../types/workflow';
+import type { WorkflowDefinition, TriggerConfig } from '../../types/workflow';
 
 interface Props {
   mode: 'create' | 'edit';

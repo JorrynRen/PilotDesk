@@ -12,6 +12,7 @@ pub struct ApiProvider {
     pub api_key_masked: String,
     pub api_key_set: bool,
     pub models: Vec<String>,
+    pub api_format: String,
     pub sort_order: i64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -25,12 +26,14 @@ pub struct CreateOrUpdateProvider {
     pub api_endpoint: String,
     pub api_key: Option<String>,
     pub models: Vec<String>,
+    pub api_format: Option<String>,
     pub sort_order: Option<i64>,
 }
 
 fn row_to_provider(row: &rusqlite::Row) -> rusqlite::Result<ApiProvider> {
     let models_json: String = row.get("models")?;
     let models: Vec<String> = serde_json::from_str(&models_json).unwrap_or_default();
+    let api_format: String = row.get("api_format").unwrap_or_else(|_| "openai".to_string());
     Ok(ApiProvider {
         id: row.get("id")?,
         name: row.get("name")?,
@@ -38,6 +41,7 @@ fn row_to_provider(row: &rusqlite::Row) -> rusqlite::Result<ApiProvider> {
         api_key_masked: row.get("api_key_masked")?,
         api_key_set: row.get::<_, i64>("api_key_set")? != 0,
         models,
+        api_format,
         sort_order: row.get("sort_order")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -109,16 +113,18 @@ pub fn upsert_api_provider(conn: &rusqlite::Connection, data: &CreateOrUpdatePro
         }
     };
 
+    let api_format = data.api_format.clone().unwrap_or_else(|| "openai".to_string());
+
     conn.execute(
-        "INSERT INTO api_providers (id, name, api_endpoint, api_key, api_key_masked, api_key_set, models, sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, NULLIF(?4, ''), ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO api_providers (id, name, api_endpoint, api_key, api_key_masked, api_key_set, models, api_format, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, NULLIF(?4, ''), ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(id) DO UPDATE SET
             name = ?2, api_endpoint = ?3, api_key = COALESCE(NULLIF(?4, ''), api_key),
-            api_key_masked = ?5, api_key_set = ?6, models = ?7,
-            sort_order = ?8, updated_at = ?10",
+            api_key_masked = ?5, api_key_set = ?6, models = ?7, api_format = ?8,
+            sort_order = ?9, updated_at = ?11",
         params![
             data.id, data.name, data.api_endpoint,
-            encrypted_key, masked, key_set, models_json, sort_order, now, now
+            encrypted_key, masked, key_set, models_json, api_format, sort_order, now, now
         ],
     )?;
 

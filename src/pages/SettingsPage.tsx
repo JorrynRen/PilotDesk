@@ -1,10 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Settings, Globe, Key, Info, Bot,
   Sun, Moon, Monitor, FolderOpen, ChevronDown,
   Plus, Trash2, Edit3, Check, X, Pencil,
-  Loader2, Zap, GripVertical,
+  Loader2, Zap, GripVertical, ShieldCheck, Plug, Search, Bookmark,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -31,15 +31,19 @@ import { EnvManager } from '../components/env/EnvManager';
 import { AgentManager } from '../components/env/AgentManager';
 import { UpdateChecker } from '../components/panels/UpdateChecker';
 import { ModePromptSettings } from '../components/panels/ModePromptSettings';
+import { AgentPermissionSettings } from '../components/settings/AgentPermissionSettings';
+import { McpSettings } from '../components/settings/McpSettings';
+import { SearchSettings } from '../components/settings/SearchSettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
 import { sendApiRequest } from '../utils/apiClient';
 import type { ApiProvider as StoreApiProvider } from '../stores/apiProviderStore';
+import { useTerminal, type ViewMode } from '../TerminalManager';
 
 interface SettingsPageProps {
   onBack: () => void;
 }
 
-type SettingsTab = 'general' | 'environment' | 'agents' | 'api' | 'mode' | 'about';
+type SettingsTab = 'general' | 'environment' | 'agents' | 'api' | 'mode' | 'permission' | 'mcp' | 'search' | 'customtabs' | 'about';
 
 const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[] = [
   { id: 'general', icon: Settings, label: '通用设置' },
@@ -47,12 +51,17 @@ const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[]
   { id: 'agents', icon: Bot, label: 'Agent集成配置' },
   { id: 'api', icon: Key, label: 'API集成配置' },
   { id: 'mode', icon: Zap, label: '对话模式' },
+  { id: 'permission', icon: ShieldCheck, label: '权限与历史' },
+  { id: 'mcp', icon: Plug, label: 'MCP 服务器' },
+  { id: 'search', icon: Search, label: '联网搜索' },
+  { id: 'customtabs', icon: Bookmark, label: '自定义标签' },
   { id: 'about', icon: Info, label: '关于' },
 ];
 
 
 
 import { SettingsSection, SettingsButton } from '../components/settings';
+import { CustomTabsSettings } from '../components/settings/CustomTabsSettings';
 import { TitleBar, StatusBar } from '../components/layout';
 
 // ============================================================
@@ -254,6 +263,7 @@ interface EditingProvider {
   apiEndpoint: string;
   apiKey: string;
   models: string;
+  apiFormat?: 'openai' | 'anthropic';
 }
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
@@ -632,6 +642,30 @@ function SortableProviderCard({
                   </div>
                 </div>
               )}
+
+              {/* API Format */}
+              {isEditing && (
+                <div>
+                  <label className="text-[10px] " style={{ color: 'var(--text-tertiary)' }}>
+                    API 协议格式
+                  </label>
+                  <select
+                    value={editingProvider!.apiFormat}
+                    onChange={(e) =>
+                      onSetEditingProvider({ ...editingProvider!, apiFormat: e.target.value as 'openai' | 'anthropic' })
+                    }
+                    className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
+                    style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <option value="openai">OpenAI 兼容（默认）</option>
+                    <option value="anthropic">Anthropic 原生</option>
+                  </select>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -733,6 +767,7 @@ function ApiConfig() {
       apiEndpoint: endpoint,
       apiKey: editingProvider.apiKey.trim() || undefined,
       models,
+      apiFormat: editingProvider.apiFormat,
     });
 
     setEditingProvider(null);
@@ -962,17 +997,33 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
     if (urlTab === 'environment') return 'environment';
     if (urlTab === 'agents') return 'agents';
+    if (urlTab === 'customtabs') return 'customtabs';
     return 'general';
   });
+  // URL 中 tab 参数变化时同步激活对应 tab（支持 /settings?tab=xxx 直接定位）
+  useEffect(() => {
+    if (urlTab === 'environment' || urlTab === 'agents' || urlTab === 'customtabs') {
+      setActiveTab(urlTab);
+    }
+  }, [urlTab]);
+
+  const { viewMode, setMode } = useTerminal();
+  const navigate = useNavigate();
+  // 组合开关点击：切换模式并回到主布局（设置页不再提供返回按钮）
+  const handleModeChange = useCallback((mode: ViewMode) => {
+    setMode(mode);
+    navigate('/');
+  }, [setMode, navigate]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* TitleBar with back button */}
+      {/* TitleBar：复用组合开关显示（返回按钮 + “设置”已移除） */}
       <TitleBar
-        onOpenSettings={onBack}
+        mode={viewMode}
+        onModeChange={handleModeChange}
         onToggleRightPanel={undefined}
         rightPanelOpen={false}
-        showBackButton={true}
+        showBackButton={false}
       />
 
       {/* Tab navigation */}
@@ -1000,6 +1051,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           {activeTab === 'agents' && <AgentManager />}
           {activeTab === 'api' && <ApiConfig />}
           {activeTab === 'mode' && <ModePromptSettings />}
+          {activeTab === 'permission' && <AgentPermissionSettings />}
+          {activeTab === 'mcp' && <McpSettings />}
+          {activeTab === 'search' && <SearchSettings />}
+          {activeTab === 'customtabs' && <CustomTabsSettings />}
           {activeTab === 'about' && <AboutSection />}
         </div>
       </div>

@@ -22,6 +22,8 @@ interface SessionState {
     title?: string | null,
     apiProvider?: string,
     apiModel?: string,
+    temperature?: number,
+    maxTokens?: number,
   ) => Promise<Session>;
   renameSession: (id: string, newTitle: string) => Promise<void>;
   archiveSession: (id: string) => Promise<void>;
@@ -39,10 +41,10 @@ async function persistMessage(msg: Message): Promise<void> {
       role: msg.role,
       content: msg.content,
       mode: msg.mode,
-      reasoningContent: msg.reasoningContent ?? null,
       toolCalls: msg.toolCalls ?? null,
       toolCallId: msg.toolCallId ?? null,
       toolName: msg.toolName ?? null,
+      attachments: msg.attachments ?? null,
     });
     // 不再调用 fetchSessions()，避免每次消息持久化时刷新整个会话列表
     // 会话预览通过其他机制更新（如 selectSession 时加载最新数据）
@@ -97,6 +99,8 @@ export const useSessionStore = create<SessionState>((set) => ({
         messages,
         messageIds: new Set(messages.map((m) => m.id)),
       });
+      // 持久化当前会话 ID，重启时自动恢复
+      invoke('set_app_setting', { key: 'last_session_id', value: id }).catch(() => {});
     } catch (err) {
       console.error('Failed to load messages:', err);
     } finally {
@@ -104,13 +108,15 @@ export const useSessionStore = create<SessionState>((set) => ({
     }
   },
 
-  createSession: async (agentType, cwd, title, apiProvider, apiModel) => {
+  createSession: async (agentType, cwd, title, apiProvider, apiModel, temperature, maxTokens) => {
     const session = await invoke<Session>('create_session', {
       agentType,
       cwd: cwd || null,
       title: title || null,
       apiProvider: apiProvider || null,
       apiModel: apiModel || null,
+      temperature: temperature ?? null,
+      maxTokens: maxTokens ?? null,
     });
     set((state) => ({
       sessions: [session, ...state.sessions],
@@ -190,42 +196,37 @@ export const useSessionStore = create<SessionState>((set) => ({
     const session = state.sessions.find(s => s.id === msg.sessionId);
     const isFirstUserMessage = msg.role === 'user' && session && session.messageCount === 0 && !session.title;
 
-    // 仅当消息属于当前会话时才更新 UI 消息列表
-    // 后台会话的消息仅持久化，不污染当前显示
-    if (msg.sessionId === state.currentSessionId) {
-      set((state) => {
-        // 更新标题（首条用户消息）
-        let updatedSessions = state.sessions.map((s) =>
-          s.id === msg.sessionId
-            ? { ...s, lastMessagePreview: preview, messageCount: s.messageCount + 1 }
-            : s
+    // ── 始终更新目标会话的 lastMessagePreview（修复"每个会话都显示同一内容"）──
+    // 之前只在 currentSession 时更新，导致后台会话预览永远停留在初始加载值
+    set((state) => {
+      let updatedSessions = state.sessions.map((s) =>
+        s.id === msg.sessionId
+          ? { ...s, lastMessagePreview: preview, messageCount: s.messageCount + 1 }
+          : s
+      );
+
+      // 更新标题（首条用户消息）
+      if (isFirstUserMessage) {
+        const titlePreview = msg.content.length > 30
+          ? msg.content.slice(0, 30) + '...'
+          : msg.content;
+        updatedSessions = updatedSessions.map((s) =>
+          s.id === msg.sessionId ? { ...s, title: titlePreview } : s
         );
+        // 异步持久化标题更新
+        invoke('rename_session', { sessionId: msg.sessionId, newTitle: titlePreview }).catch(console.error);
+      }
 
-        if (isFirstUserMessage) {
-          const titlePreview = msg.content.length > 30
-            ? msg.content.slice(0, 30) + '...'
-            : msg.content;
-          updatedSessions = updatedSessions.map((s) =>
-            s.id === msg.sessionId ? { ...s, title: titlePreview } : s
-          );
-          // 异步持久化标题更新
-          invoke('rename_session', { sessionId: msg.sessionId, newTitle: titlePreview }).catch(console.error);
-        }
-
-        return {
-          messages: [...state.messages, msg],
-          messageIds: new Set(state.messageIds).add(msg.id),
-          sessions: updatedSessions,
-        };
-      });
-    } else {
-      // 非当前会话：仅记录 ID 防重，不更新 UI
-      set((state) => ({
+      // 仅当前会话才追加到 messages 列表
+      const isCurrent = msg.sessionId === state.currentSessionId;
+      return {
+        sessions: updatedSessions,
         messageIds: new Set(state.messageIds).add(msg.id),
-      }));
-    }
+        ...(isCurrent ? { messages: [...state.messages, msg] } : {}),
+      };
+    });
 
-    // 异步持久化（分离关注点）
+    // 异步持久化到 SQLite
     persistMessage(msg);
   },
 }));

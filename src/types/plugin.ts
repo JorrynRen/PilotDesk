@@ -44,6 +44,13 @@ export interface WorkflowConfigContribution {
   component: string;
 }
 
+/** 插件工作流节点配置组件的 props（由 PluginRegistry 透传给 PluginNodeConfig） */
+export interface WorkflowConfigProps {
+  params: Record<string, any>;
+  onParamsChange: (key: string, value: any) => void;
+  api?: any;
+}
+
 /** 面板贡献点 */
 export interface PanelContribution {
   id: string;

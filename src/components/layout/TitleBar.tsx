@@ -1,6 +1,8 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe } from 'lucide-react';
+import type { ViewMode } from '../../TerminalManager';
+import { useCustomTabsStore } from '../../stores/customTabsStore';
 
 export type StatusHintState = 'loading' | 'ready' | 'error' | 'saving' | 'saved' | 'save-error' | 'idle';
 
@@ -22,9 +24,12 @@ interface TitleBarProps {
   onBack?: () => void;
   /** 标题栏状态提示 */
   statusHint?: StatusHint | null;
-  /** 虚拟控制台开关 */
-  onToggleVirtualConsole?: () => void;
-  isVirtualConsoleOpen?: boolean;
+  /** 虚拟控制台开关（兼容旧用法：仅切换会话/终端） */
+  onToggleTerminal?: () => void;
+  isTerminalOpen?: boolean;
+  /** 四模式组合开关（工作流/会话/群聊/终端） */
+  mode?: ViewMode;
+  onModeChange?: (mode: ViewMode) => void;
 }
 
 /** 标题栏状态提示徽标组件 */
@@ -61,10 +66,48 @@ function StatusHintBadge({ hint }: { hint: StatusHint }) {
   );
 }
 
-export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleVirtualConsole, isVirtualConsoleOpen }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
+  const customTabs = useCustomTabsStore((s) => s.tabs);
+  const activeCustomTabId = useCustomTabsStore((s) => s.activeTabId);
+  const setActiveCustomTab = useCustomTabsStore((s) => s.setActiveTab);
   const [isMaximized, setIsMaximized] = useState(false);
   const [tauriReady, setTauriReady] = useState(true);
+
+  // 组合开关段：固定 4 模式 + 自定义标签（动态并入，参与 thumb 滑动）
+  const segments: { key: string; icon: ReactNode; label: string; title: string; tabId?: string }[] = [
+    { key: 'workflow', icon: <Workflow size={11} />, label: '工作流', title: '工作流管理' },
+    { key: 'session', icon: <MessageSquare size={11} />, label: '会话', title: '切换到会话模式' },
+    { key: 'groupchat', icon: <Users size={11} />, label: '群聊', title: '多 Agent 群聊' },
+    { key: 'terminal', icon: <Terminal size={11} />, label: '终端', title: '切换到终端模式' },
+    ...customTabs.map((t) => ({
+      key: `custom:${t.id}`,
+      tabId: t.id,
+      icon: <Globe size={11} />,
+      label: t.label,
+      title: t.url,
+    })),
+  ];
+  // 当前激活段的 key：custom 模式时按 activeCustomTabId 精确定位到对应标签段
+  const activeSegmentKey = mode === 'custom'
+    ? (activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
+    : mode;
+  const modeIndex = mode ? segments.findIndex((s) => s.key === activeSegmentKey) : -1;
+
+  // 组合开关 thumb 像素定位：按钮宽度自适应（左右内边距），按实际段位置滑动
+  const segRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const thumbRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const thumb = thumbRef.current;
+    const el = modeIndex >= 0 ? segRefs.current[modeIndex] : null;
+    if (thumb && el) {
+      thumb.style.left = `${el.offsetLeft}px`;
+      thumb.style.width = `${el.offsetWidth}px`;
+      thumb.style.opacity = '1';
+    } else if (thumb) {
+      thumb.style.opacity = '0';
+    }
+  }, [modeIndex, customTabs]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -213,19 +256,88 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         )}
       </div>
 
-      {/* Right: 三段一体化滑轨控件
-         *  ── 布局（总 ~210px） ──────────────────────────────────────────
-         * │[🔧 工作流] ││[📝 客户端]  [⌨  终端]│
-         * │  永久紫段   ││  ←     紫色 thumb 在这里滑   → │
-         * └────────────┴┴─────────────────────────────────┘
-         *              ↑ 加粗阻断线（语义区分：左=跳转CTA，右=状态切换）
+      {/* Right: 动态分段滑动开关
+         *  ── 布局 ──────────────────────────────────────
+         * │[工作流] [会话] [群聊] [终端] [自定义标签...]│
+         * │  ←    紫色 thumb 在这里滑    →  │
+         * └────────────────────────────┘
+         *  固定 4 模式 + 自定义标签（设置页「自定义标签」tab 管理）动态并入，参与 thumb 滑动。
          *  外框、描边、圆角、内阴影完全统一，高度与两侧其它按钮严格对齐。
+         *  兼容旧用法：未提供 mode/onModeChange 时回退到 工作流CTA+会话/终端切换。
          */}
       <div className="flex items-center h-full">
         {/* ✦ 内层 stretch 包容器：组合开关 + 分隔符 + 折叠按钮 三者高度自动完全对齐，
             无需手动计算 border/padding 像素；外层 items-center 保证整组在 header 垂直居中。 */}
         <div className="flex items-stretch">
-          {!showBackButton && (onOpenWorkflow || onToggleVirtualConsole) && (
+          {!showBackButton && (mode && onModeChange) && (
+            <div
+              className="relative flex items-center select-none"
+              role="radiogroup"
+              aria-label="工作模式切换"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-strong, rgba(0,0,0,0.12))',
+                padding: 2,
+                borderRadius: 6,
+                boxShadow: 'inset 0 1px 1px rgba(0,0,0,0.04)',
+                minHeight: 22,
+                width: 'fit-content',
+              }}
+            >
+              {segments.map((seg, index) => {
+                const isActive = seg.tabId
+                  ? mode === 'custom' && activeCustomTabId === seg.tabId
+                  : mode === seg.key;
+                return (
+                  <button
+                    key={seg.key}
+                    ref={(el) => { segRefs.current[index] = el; }}
+                    onClick={() => {
+                      if (seg.tabId) {
+                        setActiveCustomTab(seg.tabId);
+                        onModeChange('custom');
+                      } else {
+                        onModeChange(seg.key as ViewMode);
+                      }
+                    }}
+                    className="relative z-10 flex items-center justify-center gap-1 h-full rounded-[4px] text-[11px] transition-colors"
+                    style={{
+                      paddingTop: 4,
+                      paddingBottom: 4,
+                      paddingLeft: 10,
+                      paddingRight: 10,
+                      color: isActive ? '#fff' : 'var(--text-secondary)',
+                      fontWeight: isActive ? 600 : 500,
+                    }}
+                    title={seg.title}
+                  >
+                    {seg.icon}
+                    <span className="truncate max-w-[96px]">{seg.label}</span>
+                  </button>
+                );
+              })}
+              {/* 滑动 thumb：像素定位，跟随当前段实际位置 */}
+              <div
+                ref={thumbRef}
+                aria-hidden
+                data-role="mode-thumb"
+                className="absolute top-[2px] rounded-[4px]"
+                style={{
+                  height: 'calc(100% - 4px)',
+                  width: 0,
+                  left: 0,
+                  opacity: 0,
+                  backgroundColor: 'var(--accent)',
+                  transition: 'left 180ms cubic-bezier(.22,.61,.36,1), width 180ms cubic-bezier(.22,.61,.36,1), opacity 120ms',
+                  boxShadow:
+                    '0 1px 2px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.15)',
+                  zIndex: 0,
+                }}
+              />
+            </div>
+          )}
+          {/* 旧用法：工作流 CTA + 会话/终端 切换（mode 未启用时回退） */}
+          {!showBackButton && !(mode && onModeChange) && (onOpenWorkflow || onToggleTerminal) && (
             <div
               className="relative flex items-center select-none"
               role="group"
@@ -237,9 +349,9 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 borderRadius: 6,
                 boxShadow: 'inset 0 1px 1px rgba(0,0,0,0.04)',
                 minHeight: 22,
-                width: onOpenWorkflow && onToggleVirtualConsole
+                width: onOpenWorkflow && onToggleTerminal
                   ? 210
-                  : onToggleVirtualConsole
+                  : onToggleTerminal
                     ? 130   // 只显示视图切换（退化模式：宽 130）
                     : 82,   // 只显示工作流（退化模式：宽 82）
               }}
@@ -249,7 +361,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 <div
                   className="relative flex items-center h-full shrink-0"
                   style={{
-                    width: onToggleVirtualConsole ? '38%' : '100%',
+                    width: onToggleTerminal ? '38%' : '100%',
                   }}
                 >
                   {/* 紫色 thumb 占满此段槽位 */}
@@ -290,28 +402,13 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 </div>
               )}
 
-              {/* ─── 阻断线：区分左侧跳转 CTA / 右侧状态切换 ───
-                   只有两个区都存在时才渲染 */}
-              {onOpenWorkflow && onToggleVirtualConsole && (
-                <div
-                  aria-hidden
-                  className="shrink-0 h-full flex items-center"
-                  style={{ width: 3 }}
-                >
-                  <div
-                    className="rounded-full"
-                    style={{
-                      width: 1,
-                      height: 14,
-                      backgroundColor: 'rgba(0,0,0,0.2)',
-                      boxShadow: '0 0 0 1px rgba(255,255,255,0.08)',
-                    }}
-                  />
-                </div>
+              {/* 工作流 CTA 与状态切换区之间的间距（无可见竖线） */}
+              {onOpenWorkflow && onToggleTerminal && (
+                <div aria-hidden className="shrink-0 self-stretch" style={{ width: 3 }} />
               )}
 
               {/* ─── 段 2+3：客户端 / 终端 互斥切换（语义：状态） ─── */}
-              {onToggleVirtualConsole && (
+              {onToggleTerminal && (
                 <div
                   className="relative flex items-center h-full flex-1 min-w-0"
                   role="radiogroup"
@@ -319,13 +416,13 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 >
                   {/* 段 2：客户端 */}
                   <button
-                    onClick={() => { if (isVirtualConsoleOpen) onToggleVirtualConsole(); }}
+                    onClick={() => { if (isTerminalOpen) onToggleTerminal(); }}
                     className="relative z-10 flex items-center justify-center gap-1 flex-1 h-full rounded-[4px] text-[11px] transition-colors"
                     style={{
                       paddingTop: 4,
                       paddingBottom: 4,
-                      color: !isVirtualConsoleOpen ? '#fff' : 'var(--text-secondary)',
-                      fontWeight: !isVirtualConsoleOpen ? 600 : 500,
+                      color: !isTerminalOpen ? '#fff' : 'var(--text-secondary)',
+                      fontWeight: !isTerminalOpen ? 600 : 500,
                     }}
                     title="切换到客户端模式"
                   >
@@ -334,13 +431,13 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                   </button>
                   {/* 段 3：终端 */}
                   <button
-                    onClick={() => { if (!isVirtualConsoleOpen) onToggleVirtualConsole(); }}
+                    onClick={() => { if (!isTerminalOpen) onToggleTerminal(); }}
                     className="relative z-10 flex items-center justify-center gap-1 flex-1 h-full rounded-[4px] text-[11px] transition-colors"
                     style={{
                       paddingTop: 4,
                       paddingBottom: 4,
-                      color: isVirtualConsoleOpen ? '#fff' : 'var(--text-secondary)',
-                      fontWeight: isVirtualConsoleOpen ? 600 : 500,
+                      color: isTerminalOpen ? '#fff' : 'var(--text-secondary)',
+                      fontWeight: isTerminalOpen ? 600 : 500,
                     }}
                     title="切换到终端模式"
                   >
@@ -356,7 +453,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                       height: '100%',
                       width: 'calc(50% - 1px)',
                       backgroundColor: 'var(--accent)',
-                      left: isVirtualConsoleOpen ? 'calc(50% + 1px)' : 0,
+                      left: isTerminalOpen ? 'calc(50% + 1px)' : 0,
                       transition: 'left 180ms cubic-bezier(.22,.61,.36,1)',
                       boxShadow:
                         '0 1px 2px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.15)',
@@ -368,10 +465,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             </div>
           )}
           {/* 分组分隔符：功能导航 vs 布局操作（侧边栏折叠） — 设置按钮已移至 StatusBar 最左端 */}
-          {onToggleRightPanel && (!showBackButton && (onOpenWorkflow || onToggleVirtualConsole)) && (
-            <div className="w-px h-full mx-1 shrink-0 flex items-center" style={{ backgroundColor: 'transparent' }}>
-              <div className="w-px h-4 shrink-0" style={{ backgroundColor: 'var(--border)' }} />
-            </div>
+          {onToggleRightPanel && (!showBackButton && ((mode && onModeChange) || onOpenWorkflow || onToggleTerminal)) && (
+            <div className="w-px h-4 mx-1 shrink-0 self-center" style={{ backgroundColor: 'var(--border)' }} />
           )}
           {onToggleRightPanel && (
             <button

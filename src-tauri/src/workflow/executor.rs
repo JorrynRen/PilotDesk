@@ -60,6 +60,7 @@ pub struct NodeExecutor {
 
 impl NodeExecutor {
     /// 获取 Agent 管理器的 Arc clone（供外部命令中止 Agent 子进程）
+    #[allow(dead_code)]
     pub fn agent_manager(&self) -> Arc<AsyncMutex<AgentManager>> {
         self.agent_manager.clone()
     }

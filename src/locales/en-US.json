@@ -39,7 +39,7 @@
   "status.ready": "Agent: Ready",
   "status.thinking": "Thinking...",
   "status.sending": "Sending...",
-  "status.timeout": "Request timeout: Agent did not respond within 60 seconds",
+  "status.timeout": "Request timeout: Agent did not respond within 180 seconds",
   "status.error": "Error: {error}",
   "status.requestFailed": "Request failed: {error}",
 

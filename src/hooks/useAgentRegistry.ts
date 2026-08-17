@@ -13,17 +13,32 @@ interface AgentTheme {
 /** 非注册 agent 类型（manual/api 等）的显示标签映射 */
 const SOURCE_LABELS: Record<string, string> = {
   manual: '手动',
-  api: 'API',
+  api: 'API Agent',
+};
+
+/** 非注册 agent 的品牌色（Tailwind CSS 品牌色系） */
+const BRAND_COLORS: Record<string, string> = {
+  api: '#10B981',  // Emerald-500 — 代表连接与 API
 };
 
 function fallbackTheme(agentType: string): AgentTheme {
   const label = SOURCE_LABELS[agentType] || agentType;
+  const color = BRAND_COLORS[agentType] || '#6B7280';
   return {
-    color: '#6B7280',
-    bg: 'rgba(107,114,128,0.15)',
+    color,
+    bg: hexToRgbaFallback(color, 0.15),
     label,
     initial: agentTypeToInitial(agentType),
   };
+}
+
+/** hexToRgba 的独立版本（不依赖全局状态，用于 fallbackTheme） */
+function hexToRgbaFallback(hex: string, alpha: number): string {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (result) {
+    return `rgba(${parseInt(result[1], 16)},${parseInt(result[2], 16)},${parseInt(result[3], 16)},${alpha})`;
+  }
+  return `rgba(107,114,128,${alpha})`;
 }
 
 function agentTypeToInitial(agentType: string): string {
@@ -109,7 +124,7 @@ export function useAgentRegistry() {
   /** Get display name for an agent type */
   const getDisplayName = useCallback((agentType: string): string => {
     const agent = globalAgents.find(a => a.agentType === agentType);
-    return agent?.displayName || agentType;
+    return agent?.displayName || SOURCE_LABELS[agentType] || agentType;
   }, []);
 
   /** Get enabled agent types (for session creation dropdown) */

@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Plus, X, Monitor, ChevronDown, Palette, Terminal as TerminalIcon, Command, Keyboard, Sparkles } from 'lucide-react';
 import '@xterm/xterm/css/xterm.css';
-import { useVirtualConsole } from '../VirtualConsoleManager';
+import { useTerminal } from '../TerminalManager';
 
 // ── Preset Themes ──
 
@@ -81,7 +81,7 @@ const SHELL_OPTIONS = [
 
 // ── Types ──
 
-interface VirtualConsolePanelProps {
+interface TerminalPanelProps {
   onClose?: () => void;
 }
 
@@ -90,13 +90,13 @@ interface VirtualConsolePanelProps {
 // It is always mounted. The parent controls display via CSS.
 // The only "auto" behavior is: create a terminal when no tabs exist and container has size.
 
-export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
+export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   const {
     terminalTabs, setTerminalTabs,
     activeTerminalTabId, setActiveTerminalTabId,
     terminalShellType, setTerminalShellType,
     terminalTheme, setTerminalTheme,
-  } = useVirtualConsole();
+  } = useTerminal();
 
   const [showShellMenu, setShowShellMenu] = useState(false);
   const [showThemeMenu, setShowThemeMenu] = useState(false);
@@ -169,7 +169,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
 
     // Create xterm with placeholder cols (80), rows fixed at 150
     const term = new Terminal({
-      theme: TERMINAL_THEMES[terminalTheme],
+      theme: TERMINAL_THEMES[terminalTheme as keyof typeof TERMINAL_THEMES],
       fontFamily: 'Cascadia Code, Consolas, "Courier New", monospace',
       fontSize: 14, lineHeight: 1.2,
       cols: 80, rows: 150,
@@ -251,7 +251,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
     }
 
     // 5. Add tab to state
-    const tab: import('../VirtualConsoleManager').TerminalTabData = {
+    const tab: import('../TerminalManager').TerminalTabData = {
       id: sessionId,
       shellType,
       title: shellType.toUpperCase(),
@@ -527,9 +527,8 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
   // ── Theme update ──
 
   useEffect(() => {
-    const theme = TERMINAL_THEMES[terminalTheme];
+    const theme = TERMINAL_THEMES[terminalTheme as keyof typeof TERMINAL_THEMES];
     terminalRef.current.forEach(({ term }) => {
-      // @ts-expect-error xterm.js internal API
       term.options.theme = theme;
     });
   }, [terminalTheme]);
@@ -541,7 +540,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
   const activeTab = terminalTabs.find((t) => t.id === activeTerminalTabId);
 
   return (
-    <div className="h-full flex flex-col" style={{ background: TERMINAL_THEMES[terminalTheme].background }}>
+    <div className="h-full flex flex-col" style={{ background: TERMINAL_THEMES[terminalTheme as keyof typeof TERMINAL_THEMES].background }}>
       {/* Tab bar */}
       <div
         className="flex items-center h-9 shrink-0 px-1 gap-1"
@@ -706,7 +705,7 @@ export const VirtualConsolePanel: React.FC<VirtualConsolePanelProps> = () => {
       </div>
 
       {/* Terminal content area — scrollable parent for oversized terminal; xterm handles scrollback internally */}
-      <div className="flex-1 relative overflow-x-hidden overflow-y-auto terminal-viewport-area" style={{ background: TERMINAL_THEMES[terminalTheme].background }}>
+      <div className="flex-1 relative overflow-x-hidden overflow-y-auto terminal-viewport-area" style={{ background: TERMINAL_THEMES[terminalTheme as keyof typeof TERMINAL_THEMES].background }}>
         {/* Empty state — Terminal 欢迎首页：零状态不自动创建终端，由用户手动发起 */}
         {terminalTabs.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center p-6 overflow-y-auto">

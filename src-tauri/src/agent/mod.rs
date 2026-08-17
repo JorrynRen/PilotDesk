@@ -6,11 +6,12 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 use crate::agent::config::AgentConfig;
 use crate::agent::handler::ProcessHandler;
+use crate::agent::async_process::AsyncConsole;
 use crate::utils::errors::AppError;
 use crate::utils::process::{TimeoutPolicy, check_process_state, make_still_alive_error, summarize_stderr};
 
-use crate::virtual_console::factory::ConsoleFactory;
-// AsyncConsole trait 已通过 ConsoleFactory::create_async() 内部使用，无需直接导入
+use crate::decode_windows_output;
+pub mod async_process;
 pub mod handler;
 pub mod line_processor;
 pub mod list_skills;
@@ -47,24 +48,6 @@ fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> Strin
 //  统一执行参数与结果类型
 // ------------------------------------------------------------------
 
-/// 同步命令执行参数（简单模式）
-///
-/// 用于版本查询、安装/卸载等短生命周期命令。
-/// 通过同步虚拟控制台 (VirtualConsole) 执行，智能超时轮询。
-#[derive(Debug, Clone)]
-pub struct ExecuteOptions {
-    /// 命令字符串（将被 cmd /C 或 sh -c 包装）
-    pub command: String,
-    /// 工作目录（空字符串使用当前目录）
-    pub cwd: String,
-    /// 前端会话 ID（用于控制台桥接跟踪）
-    pub session_id: String,
-    /// 来源类型（agent 类型、插件名称等）
-    pub source_type: String,
-    /// 超时策略
-    pub timeout: TimeoutPolicy,
-}
-
 /// 同步命令执行结果
 #[derive(Debug, Clone)]
 pub struct ExecuteResult {
@@ -79,7 +62,7 @@ pub struct ExecuteResult {
 /// 异步会话执行参数（会话模式）
 ///
 /// 用于 Agent LLM 交互等长生命周期会话。
-/// 通过异步虚拟控制台 (AsyncConsole) 执行，双通道 IO 循环。
+/// 通过 async_process::TokioConsole 执行，双通道 IO 循环。
 #[derive(Debug, Clone)]
 pub struct AsyncOptions {
     /// 工作目录（会话启动前先 CD 到此目录）
@@ -141,34 +124,30 @@ impl AgentManager {
     //  统一命令执行入口
     // ------------------------------------------------------------------
     //
-    // execute_command 是唯一的命令执行入口。
-    //
-    //   - 同步路径（opts.async_opts == None）：
-    //     通过 ConsoleFactory::auto_create() 创建同步虚拟控制台，
-    //     执行简单命令（版本查询、安装等），智能超时轮询。
-    //     返回 ExecuteResult。
+    // execute_command 是唯一的命令执行入口（当前仅异步路径有效）。
     //
     //   - 异步路径（opts.async_opts == Some(...)）：
-    //     通过 ConsoleFactory::create_async() 创建异步虚拟控制台，
+    //     通过 async_process::TokioConsole 创建异步进程控制台，
     //     使用 ProcessHandler 驱动双通道 IO 循环，
     //     提取 session_id，推送输出片段到前端。
     //     返回 AsyncResult。
+    //
+    //   - 同步路径已移除：短命令请用 execute_command_output_async。
     //
     // 恢复会话与首次会话除多一个 agent_session_id 参数外完全相同。
 
     /// 统一命令执行入口
     ///
-    /// # 同步路径
-    /// - 创建同步虚拟控制台 → spawn → 读取 stdout → wait → 返回 ExecuteResult
-    /// - 超时轮询：通过 channel 传递结果，外层按 TimeoutPolicy 轮询
-    ///
     /// # 异步路径
-    /// - 创建异步虚拟控制台 → ProcessHandler.build_command → spawn → 双通道 IO 循环
+    /// - 通过 async_process::TokioConsole 创建异步进程控制台，
+    ///   再由 ProcessHandler.build_command 构建命令并执行，双通道 IO 循环
     /// - session_id 由 ProcessHandler.extract_session_id 根据 session_id_source 自动提取
     /// - cwd 会话前先 CD 到指定目录
+    ///
+    /// 同步路径已随 virtual_console 模块一并移除（原仅死代码触达），
+    /// 短命令请使用 execute_command_output_async。
     pub async fn execute_command(
         &self,
-        opts: ExecuteOptions,
         async_opts: Option<AsyncOptions>,
         callbacks: Option<AsyncCallbacks>,
         config: Option<&AgentConfig>,
@@ -176,117 +155,9 @@ impl AgentManager {
         agent_session_id: Option<&str>,
     ) -> Result<ExecuteResult, String> {
         if async_opts.is_some() {
-            // ── 异步路径 ──
             self.execute_async(async_opts.unwrap(), callbacks.unwrap(), config.unwrap(), message.unwrap(), agent_session_id).await
         } else {
-            // ── 同步路径 ──
-            self.execute_sync(opts).await
-        }
-    }
-
-    // ------------------------------------------------------------------
-    //  同步路径实现
-    // ------------------------------------------------------------------
-
-    /// 同步命令执行（简单模式）
-    ///
-    /// 通过 ConsoleFactory::auto_create() 创建同步虚拟控制台，
-    /// 在 spawn_blocking 中执行命令并读取输出，通过 channel 返回结果。
-    /// 外层按 TimeoutPolicy 轮询 channel，并检查进程状态。
-    async fn execute_sync(&self, opts: ExecuteOptions) -> Result<ExecuteResult, String> {
-        let command = opts.command.clone();
-        let command_for_log = command.clone();
-        let work_dir = if opts.cwd.is_empty() {
-            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
-        } else {
-            opts.cwd.clone()
-        };
-        let timeout = opts.timeout;
-        let session_id = opts.session_id.clone();
-        let _source_type = opts.source_type.clone();
-
-        log::info!("[Agent/execute_sync] session='{}' cmd='{}' cwd='{}'",
-            session_id, command, work_dir);
-
-        let (tx, rx) = std::sync::mpsc::channel::<Result<ExecuteResult, String>>();
-
-
-        // spawn_blocking 中执行同步虚拟控制台
-        tokio::task::spawn_blocking(move || {
-            let result = (|| -> Result<ExecuteResult, String> {
-                #[cfg(target_os = "windows")]
-                let (exe, args): (&str, &[&str]) = ("cmd", &["/C", &command]);
-                #[cfg(not(target_os = "windows"))]
-                let (exe, args): (&str, &[&str]) = ("sh", &["-c", &command]);
-
-                let mut console = ConsoleFactory::auto_create()
-                    .map_err(|e| format!("创建虚拟控制台失败: {}", e))?;
-
-                let mut handle = console.spawn(exe, args, &work_dir)
-                    .map_err(|e| format!("启动进程失败: {}", e))?;
-
-                let pid = handle.pid;
-                log::info!("[Agent/execute_sync] console spawned: pid={} cmd='{}'", pid, command);
-
-                // 注册 PID 到桥接（同步路径无法回调，直接设置）
-                // PID 注册通过结果传递回外层处理
-
-                // 读取 stdout
-                let mut output_lines = Vec::new();
-                loop {
-                    match handle.stdout.read_line() {
-                        Ok(line) if line.is_empty() => break,
-                        Ok(line) => output_lines.push(line),
-                        Err(_) => break,
-                    }
-                }
-
-                let exit_code = match console.wait(None) {
-                    Ok(status) => status.code().unwrap_or(-1),
-                    Err(e) => return Err(format!("等待进程失败: {}", e)),
-                };
-
-                let combined = output_lines.join("");
-                Ok(ExecuteResult {
-                    stdout: combined.trim().to_string(),
-                    exit_code,
-                    stderr: String::new(),
-                })
-            })();
-
-            let _ = tx.send(result);
-        });
-
-        // 智能超时轮询
-        let start = Instant::now();
-        loop {
-            match rx.try_recv() {
-                Ok(Ok(result)) => {
-                    return Ok(result);
-                }
-                Ok(Err(e)) => {
-                    return Err(e);
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    // 尚未完成，检查超时
-                    let elapsed = start.elapsed();
-                    if elapsed >= timeout.max_wait {
-                        // 超过最大等待时间，报告超时
-                        // 注意：同步控制台不支持 try_wait，无法精确判断进程状态
-                        return Err(make_still_alive_error(
-                            &format!("execute_sync:{}", command_for_log),
-                            elapsed,
-                            timeout.max_wait,
-                        ));
-                    }
-
-                    tokio::time::sleep(timeout.check_interval).await;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    // channel 断开（spawn_blocking 任务 panic）
-                    return Err(format!("执行通道异常断开"));
-                }
-            }
+            Err("同步执行路径已移除，请使用 execute_command_output_async".to_string())
         }
     }
 
@@ -296,7 +167,7 @@ impl AgentManager {
 
     /// 异步会话执行（会话模式）
     ///
-    /// 通过 AsyncConsole 创建异步虚拟控制台，
+    /// 通过 async_process::TokioConsole 创建异步进程控制台，
     /// ProcessHandler 驱动命令构建和输出解析，
     /// 双通道（stdout + stderr）IO 循环提取 session_id 和输出片段。
     ///
@@ -323,25 +194,15 @@ impl AgentManager {
         log::info!("[Agent/execute_async] session='{}' agent_type='{}' cwd='{}' msg_len={}",
             session_id, agent_type, cwd, message.len());
 
-        // 创建异步控制台
-        let mut console = ConsoleFactory::create_async().await
-            .map_err(|e| format!("创建异步控制台失败: {}", e))?;
+        // 创建异步进程控制台
+        let mut console = async_process::TokioConsole::new();
 
         let process_handler = handler::StdioHandler::from_config(config.clone());
 
 
-        // 构建命令
-        let (effective_cmd, args) = process_handler.build_command(message, agent_session_id);
-
-        // 统一 cmd /C 包装（Windows）或直接执行（非 Windows）
-        #[cfg(target_os = "windows")]
-        let (exe, spawn_args): (String, Vec<String>) = {
-            let mut a = vec!["/C".to_string(), effective_cmd];
-            a.extend(args.iter().cloned());
-            ("C:\\Windows\\System32\\cmd.exe".to_string(), a)
-        };
-        #[cfg(not(target_os = "windows"))]
-        let (exe, spawn_args): (String, Vec<String>) = (effective_cmd, args);
+        // 构建命令：直接启动 CLI 进程（不经 cmd.exe /C），交由 Rust 的 argv 转义统一处理，
+        // 避免手动引号 + cmd.exe 二次转义导致中文消息被错误拆分。
+        let (exe, spawn_args): (String, Vec<String>) = process_handler.build_command(message, agent_session_id);
 
         log::info!("[Agent/execute_async] CMD: {} {} | session_id={:?}", exe, spawn_args.join(" "), agent_session_id);
 
@@ -522,34 +383,10 @@ impl AgentManager {
     //  高层便捷方法（基于 execute_command 统一入口）
     // ------------------------------------------------------------------
 
-    /// 便捷方法：执行同步命令并返回 stdout
-    pub async fn execute_command_output(
-        &self, command: &str, cwd: &str, timeout_secs: u64,
-        label: &str,
-    ) -> Result<String, String> {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis()).unwrap_or(0);
-        let opts = ExecuteOptions {
-            command: command.to_string(),
-            cwd: cwd.to_string(),
-            session_id: format!("cmd_{}_{}", label, ts),
-            source_type: label.to_string(),
-            timeout: TimeoutPolicy::custom(timeout_secs, timeout_secs * 10),
-        };
-
-        let result = self.execute_command(opts, None, None, None, None, None).await?;
-        if result.exit_code != 0 {
-            Err(format!("命令执行失败 (exit code {}): {}", result.exit_code, result.stderr))
-        } else {
-            Ok(result.stdout)
-        }
-    }
-
     /// 异步便捷方法：执行命令并返回 stdout（纯 tokio::process，不经过虚拟控制台）
     ///
     /// 用于环境检测、版本查询等短命令场景。
-    /// 比 execute_sync 更轻量：无 ConPTY 开销、无 spawn_blocking 线程开销。
+    /// 轻量实现：无 ConPTY 开销、无 spawn_blocking 线程开销。
     /// 与 execute_async 同路径：tokio 原生异步 I/O。
     pub async fn execute_command_output_async(
         &self,
@@ -596,10 +433,10 @@ impl AgentManager {
         match result {
             Ok(Ok(output)) => {
                 if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stdout = decode_windows_output(&output.stdout);
                     Ok(stdout.trim().to_string())
                 } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let stderr = decode_windows_output(&output.stderr);
                     Err(format!("命令执行失败 (exit code {:?}): {}", output.status.code(), stderr.trim()))
                 }
             }
@@ -679,13 +516,6 @@ impl AgentManager {
         let source_type_for_error = source_type.clone();
 
         let result = self.execute_command(
-            ExecuteOptions {
-                command: String::new(), // 异步路径不使用
-                cwd: String::new(),
-                session_id: session_id.clone(),
-                source_type: source_type.clone(),
-                timeout: TimeoutPolicy::llm_inference(),
-            },
             Some(async_opts),
             Some(callbacks),
             Some(&config),
@@ -696,7 +526,16 @@ impl AgentManager {
         match result {
             Ok(exec_result) => {
                 if exec_result.exit_code != 0 {
-                    let err_msg = friendly_agent_error(&source_type_for_error, exec_result.exit_code, &exec_result.stderr);
+                    // 某些 CLI 工具（如 Codex、Claude）将错误写入 stdout（JSON 流）
+                    // 而非 stderr，因此需合并两路输出查找错误详情
+                    let combined_error = if exec_result.stderr.is_empty() && !exec_result.stdout.is_empty() {
+                        exec_result.stdout.clone()
+                    } else if !exec_result.stderr.is_empty() {
+                        exec_result.stderr.clone()
+                    } else {
+                        "（stdout 和 stderr 均为空，请检查 CLI 工具是否已安装并正确配置 API Key 和模型）".to_string()
+                    };
+                    let err_msg = friendly_agent_error(&source_type_for_error, exec_result.exit_code, &combined_error);
                     let _ = app_for_result.emit("agent-error", serde_json::json!({
                         "sessionId": sid_for_result,
                         "error": err_msg,
@@ -783,13 +622,6 @@ impl AgentManager {
         };
 
         let result = self.execute_command(
-            ExecuteOptions {
-                command: String::new(),
-                cwd: String::new(),
-                session_id: _temp_session_id.to_string(),
-                source_type: source_type.clone(),
-                timeout: TimeoutPolicy::llm_inference(),
-            },
             Some(async_opts),
             Some(callbacks),
             Some(config),
@@ -798,8 +630,13 @@ impl AgentManager {
         ).await.map_err(|e| AppError::External(e))?;
 
         if result.exit_code != 0 {
+            let combined_error = if result.stderr.is_empty() && !result.stdout.is_empty() {
+                result.stdout.clone()
+            } else {
+                result.stderr.clone()
+            };
             return Err(AppError::External(friendly_agent_error(
-                &source_type, result.exit_code, &result.stderr,
+                &source_type, result.exit_code, &combined_error,
             )));
         }
 

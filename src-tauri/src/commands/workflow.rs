@@ -2144,6 +2144,7 @@ impl ExportWorkflowDefinition {
 
 /// 从 JSON 导入工作流
 
+#[allow(dead_code)]
 #[tauri::command]
 
 pub fn import_workflow(

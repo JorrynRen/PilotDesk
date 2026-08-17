@@ -11,9 +11,9 @@
     "windows": [
       {
         "title": "PilotDesk",
-        "width": 1460,
+        "width": 1280,
         "height": 815,
-        "minWidth": 1460,
+        "minWidth": 1100,
         "minHeight": 815,
         "decorations": false,
         "shadow": false,
@@ -22,7 +22,11 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:1420 http://localhost:1420; style-src 'self' 'unsafe-inline' http://127.0.0.1:1420; img-src 'self' data: https:; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:1420"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:1420 http://localhost:1420; style-src 'self' 'unsafe-inline' http://127.0.0.1:1420; img-src 'self' data: https: asset: http://asset.localhost; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:1420; frame-src https: http: asset: http://asset.localhost http://dirindex.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
     }
   },
   "bundle": {

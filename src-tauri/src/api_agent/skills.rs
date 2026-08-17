@@ -63,6 +63,7 @@ impl SkillLoader {
     }
 
     /// 获取技能数量
+    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.skills.len()
     }

@@ -115,7 +115,7 @@ export const GateConfigPanel: React.FC<Props> = ({ gate, stageName, nodeCount, o
           <input
             type="number"
             value={gate.threshold ?? Math.ceil(nodeCount / 2)}
-            onChange={(e) => onUpdate({ threshold: Number(e.target.value) })}
+            onChange={(e) => onUpdate({ threshold: e.target.value })}
             min={1}
             max={nodeCount}
             style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #30363d', background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none' }}
