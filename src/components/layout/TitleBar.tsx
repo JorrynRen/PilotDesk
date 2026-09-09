@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe, Settings } from 'lucide-react';
 import type { ViewMode } from '../../TerminalManager';
 import { useCustomTabsStore } from '../../stores/customTabsStore';
 
@@ -30,6 +30,8 @@ interface TitleBarProps {
   /** 四模式组合开关（工作流/会话/群聊/终端） */
   mode?: ViewMode;
   onModeChange?: (mode: ViewMode) => void;
+  /** 设置在组合开关中作为独立段显示（设置页传 true，thumb 定位到该段） */
+  settingsOpen?: boolean;
 }
 
 /** 标题栏状态提示徽标组件 */
@@ -66,7 +68,7 @@ function StatusHintBadge({ hint }: { hint: StatusHint }) {
   );
 }
 
-export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const customTabs = useCustomTabsStore((s) => s.tabs);
   const activeCustomTabId = useCustomTabsStore((s) => s.activeTabId);
@@ -74,7 +76,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   const [isMaximized, setIsMaximized] = useState(false);
   const [tauriReady, setTauriReady] = useState(true);
 
-  // 组合开关段：固定 4 模式 + 自定义标签（动态并入，参与 thumb 滑动）
+  // 组合开关段：固定 4 模式 + 自定义标签（动态并入，参与 thumb 滑动）+ 设置段（仅设置页）
   const segments: { key: string; icon: ReactNode; label: string; title: string; tabId?: string }[] = [
     { key: 'workflow', icon: <Workflow size={11} />, label: '工作流', title: '工作流管理' },
     { key: 'session', icon: <MessageSquare size={11} />, label: '会话', title: '切换到会话模式' },
@@ -87,11 +89,16 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       label: t.label,
       title: t.url,
     })),
+    ...(settingsOpen
+      ? [{ key: 'settings', icon: <Settings size={11} />, label: '设置', title: '设置页面' }]
+      : []),
   ];
-  // 当前激活段的 key：custom 模式时按 activeCustomTabId 精确定位到对应标签段
-  const activeSegmentKey = mode === 'custom'
-    ? (activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
-    : mode;
+  // 当前激活段的 key：设置页固定为设置段；custom 模式时按 activeCustomTabId 精确定位到对应标签段
+  const activeSegmentKey = settingsOpen
+    ? 'settings'
+    : (mode === 'custom'
+      ? (activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
+      : mode);
   const modeIndex = mode ? segments.findIndex((s) => s.key === activeSegmentKey) : -1;
 
   // 组合开关 thumb 像素定位：按钮宽度自适应（左右内边距），按实际段位置滑动
@@ -285,14 +292,22 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               }}
             >
               {segments.map((seg, index) => {
-                const isActive = seg.tabId
-                  ? mode === 'custom' && activeCustomTabId === seg.tabId
-                  : mode === seg.key;
+                // 设置页打开时只有「设置」段激活，其它段（含原模式段）一律取消高亮，
+                // 否则进入设置页后上一个按钮的文本仍保持白色。
+                const isActive = settingsOpen
+                  ? seg.key === 'settings'
+                  : seg.tabId
+                    ? mode === 'custom' && activeCustomTabId === seg.tabId
+                    : mode === seg.key;
                 return (
                   <button
                     key={seg.key}
                     ref={(el) => { segRefs.current[index] = el; }}
                     onClick={() => {
+                      if (seg.key === 'settings') {
+                        onOpenSettings?.();
+                        return;
+                      }
                       if (seg.tabId) {
                         setActiveCustomTab(seg.tabId);
                         onModeChange('custom');

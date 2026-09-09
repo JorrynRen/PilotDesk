@@ -53,24 +53,31 @@ impl ToolHandler for GlobTool {
     }
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
-        let pattern = arguments["pattern"].as_str().ok_or("缺少 pattern 参数")?;
-        let raw_path = arguments["path"].as_str().unwrap_or(".");
-        let abs_path = crate::resolve_workspace_path(raw_path, &self.cwd);
-        let re = crate::glob_to_regex(&pattern.replace('\\', "/"));
-        let files = crate::collect_files(&abs_path, 5000);
-        let mut matched = Vec::new();
-        for f in files {
-            if re.is_match(&f) {
-                matched.push(f);
-                if matched.len() >= 200 {
-                    break;
+        // R3（v3.5c）：同步文件系统扫描迁出 tokio worker，恢复外层 timeout 有效性（防大目录占死 worker）。
+        let cwd = self.cwd.clone();
+        let res = tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let pattern = arguments["pattern"].as_str().ok_or("缺少 pattern 参数")?;
+            let raw_path = arguments["path"].as_str().unwrap_or(".");
+            let abs_path = crate::resolve_workspace_path(raw_path, &cwd);
+            let re = crate::glob_to_regex(&pattern.replace('\\', "/"));
+            let files = crate::collect_files(&abs_path, 5000);
+            let mut matched = Vec::new();
+            for f in files {
+                if re.is_match(&f) {
+                    matched.push(f);
+                    if matched.len() >= 200 {
+                        break;
+                    }
                 }
             }
-        }
-        if matched.is_empty() {
-            Ok(format!("未找到匹配 \"{}\" 的文件", pattern))
-        } else {
-            Ok(format!("找到 {} 个匹配文件：\n{}", matched.len(), matched.join("\n")))
-        }
+            if matched.is_empty() {
+                Ok(format!("未找到匹配 \"{}\" 的文件", pattern))
+            } else {
+                Ok(format!("找到 {} 个匹配文件：\n{}", matched.len(), matched.join("\n")))
+            }
+        })
+        .await
+        .map_err(|e| format!("glob 执行线程异常: {}", e))?;
+        res
     }
 }

@@ -426,13 +426,19 @@ pub async fn start_workflow(
 
                     if let Some(conn) = app_handle_clone.try_state::<crate::DbState>().and_then(|s| s.get_conn().ok()) {
 
-                        let _ = conn.execute(
+                        let err_preview = errors.join("; ");
+                        let now = crate::utils::now();
 
-                            "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
-
-                            rusqlite::params![errors.join("; "), crate::utils::now(), instance_id_clone],
-
-                        );
+                        // 事件化：实例进入 failed（校验失败路径）。
+                        let event = serde_json::json!({
+                            "executionId": instance_id_clone,
+                            "status": "failed",
+                            "errorMessage": err_preview.chars().take(2000).collect::<String>(),
+                            "completionRate": 0.0,
+                            "completedAt": now,
+                            "timestamp": now,
+                        });
+                        let _ = crate::eventlog::append_workflow_event(&conn, &instance_id_clone, "execution/status", &event, true);
 
                     }
 
@@ -524,19 +530,29 @@ pub async fn start_workflow(
 
                 log::error!("[WorkflowEngine] 工作流执行{}: id={}, error={}", if is_cancelled { "已取消" } else { "失败" }, instance_id_clone, err_str);
 
-                // 仅在引擎未正确设置状态时才回写（引擎内部的 final_status 已处理 cancelled/failed/success）
-                // 此处仅作为兜底，避免覆盖引擎已写入的正确状态
+                // 兜底事件化：引擎内部 final_status 已写终态事件，此处仅当引擎异常退出时补 cancelled/failed 事件。
                 if let Some(conn) = app_handle_clone.try_state::<crate::DbState>().and_then(|s| s.get_conn().ok()) {
+                    let now = crate::utils::now();
                     if is_cancelled {
-                        let _ = conn.execute(
-                            "UPDATE workflow_instances SET status = 'cancelled', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
-                            rusqlite::params![crate::utils::now(), instance_id_clone],
-                        );
+                        let event = serde_json::json!({
+                            "executionId": &instance_id_clone,
+                            "status": "cancelled",
+                            "errorMessage": "用户中止",
+                            "completionRate": 0.0,
+                            "completedAt": now,
+                            "timestamp": now,
+                        });
+                        let _ = crate::eventlog::append_workflow_event(&conn, &instance_id_clone, "execution/status", &event, true);
                     } else {
-                        let _ = conn.execute(
-                            "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
-                            rusqlite::params![err_str, crate::utils::now(), instance_id_clone],
-                        );
+                        let event = serde_json::json!({
+                            "executionId": instance_id_clone,
+                            "status": "failed",
+                            "errorMessage": err_str.chars().take(2000).collect::<String>(),
+                            "completionRate": 0.0,
+                            "completedAt": now,
+                            "timestamp": now,
+                        });
+                        let _ = crate::eventlog::append_workflow_event(&conn, &instance_id_clone, "execution/status", &event, true);
                     }
                 }
 
@@ -576,17 +592,22 @@ pub async fn start_workflow(
 
                 log::error!("[WorkflowEngine] 工作流执行 panic: id={}, error={}", instance_id_clone, msg);
 
-                // 回滚：更新实例状态为 failed
+                // 回滚：panic 兜底追加 failed 事件。
 
                 if let Some(conn) = app_handle_clone.try_state::<crate::DbState>().and_then(|s| s.get_conn().ok()) {
 
-                    let _ = conn.execute(
+                    let now = crate::utils::now();
 
-                        "UPDATE workflow_instances SET status = 'failed', error = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3",
-
-                        rusqlite::params![msg, crate::utils::now(), instance_id_clone],
-
-                    );
+                    // 事件化：panic 回滚路径实例 failed。
+                    let event = serde_json::json!({
+                        "executionId": &instance_id_clone,
+                        "status": "failed",
+                        "errorMessage": msg.chars().take(2000).collect::<String>(),
+                        "completionRate": 0.0,
+                        "completedAt": now,
+                        "timestamp": now,
+                    });
+                    let _ = crate::eventlog::append_workflow_event(&conn, &instance_id_clone, "execution/status", &event, true);
 
                 }
 
@@ -640,29 +661,32 @@ pub async fn cancel_workflow(
 
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
 
-    // 1. 标记数据库状态为已取消
-
-    // 注意：serde_json::to_string 输出 JSON 字符串（带引号），不能用于 SQL CHECK 约束
-
-    // 必须使用纯字符串字面量以符合 CHECK(status IN (...))
-
-    // 仅当实例仍处于 running 状态时才回写 cancelled，
-
-    // 避免编辑器卸载时的兜底取消调用覆盖已完成的 success/failed/cancelled 终态。
+    // 1. 事件化：用户中止 → cancelled（workflow_events 唯一事实源）。
+    //    仅当实例仍处于 Running 状态时才追加 cancelled 事件，
+    //    避免编辑器卸载时的兜底取消调用覆盖已完成的 success/failed/cancelled 终态。
 
     let now = crate::utils::now();
 
-    let affected = conn.execute(
+    let is_running = crate::workflow::events::derive_instance(&conn, &execution_id)
+        .map_err(|e| format!("查询失败: {}", e))?
+        .map(|inst| inst.status == crate::workflow::WorkflowInstanceStatus::Running)
+        .unwrap_or(false);
 
-        "UPDATE workflow_instances SET status = 'cancelled', error = ?1, updated_at = ?2 WHERE id = ?3 AND status = 'running'",
+    if !is_running {
 
-        rusqlite::params!["用户中止", now, execution_id],
+        log::info!("[cancel_workflow] 实例 {} 非运行中状态，跳过取消事件", execution_id);
 
-    ).map_err(|e| format!("更新失败: {}", e))?;
+    } else {
 
-    if affected == 0 {
-
-        log::info!("[cancel_workflow] 实例 {} 非运行中状态，跳过状态回写", execution_id);
+        let event = serde_json::json!({
+            "executionId": &execution_id,
+            "status": "cancelled",
+            "errorMessage": "用户中止",
+            "completionRate": 0.0,
+            "completedAt": now,
+            "timestamp": now,
+        });
+        let _ = crate::eventlog::append_workflow_event(&conn, &execution_id, "execution/status", &event, true);
 
     }
 
@@ -672,12 +696,11 @@ pub async fn cancel_workflow(
     //    先设置 cancelled AtomicBool 使 tokio::select! 立即响应，
     //    再通过 processes HashMap 直接 kill 子进程（绕过 AsyncMutex 锁竞争）
     let node_ids: Vec<String> = {
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT node_id FROM node_executions WHERE execution_id = ?1"
-        ).map_err(|e| format!("查询失败: {}", e))?;
-        let rows = stmt.query_map(rusqlite::params![execution_id], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("查询失败: {}", e))?;
-        rows.filter_map(|r| r.ok()).collect()
+        // 节点列表改经事件派生（workflow_events → 已知节点集合）。
+        crate::workflow::events::derive_node_statuses(&conn, &execution_id)
+            .map_err(|e| e.to_string())?
+            .into_keys()
+            .collect()
     };
 
     executor.inner().cancel_execution_and_kill_agents(&execution_id, &node_ids);
@@ -704,7 +727,7 @@ pub fn delete_execution(
 
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
 
-    conn.execute("DELETE FROM workflow_instances WHERE id = ?1", rusqlite::params![execution_id])
+    conn.execute("DELETE FROM workflow_events WHERE execution_id = ?1", rusqlite::params![execution_id])
 
         .map_err(|e| format!("删除执行记录失败: {}", e))?;
 
@@ -728,33 +751,9 @@ pub fn get_execution(
 
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
 
-    // 按 ID 直接查询，避免全量扫描
-
-    let mut stmt = conn.prepare(
-
-        "SELECT id, definition_id, definition_name, status, context,
-
-                trigger, trigger_detail,
-
-                started_at, completed_at, completion_rate, error, created_at
-
-         FROM workflow_instances WHERE id = ?1"
-
-    ).map_err(|e| format!("查询失败: {}", e))?;
-
-    let mut rows = stmt.query_map(rusqlite::params![execution_id], |row| workflow::instance_from_row(row))
-
-        .map_err(|e| format!("查询失败: {}", e))?;
-
-    match rows.next() {
-
-        Some(Ok(inst)) => Ok(Some(inst)),
-
-        Some(Err(e)) => Err(format!("解析失败: {}", e)),
-
-        None => Ok(None),
-
-    }
+    // 按事件派生实例（workflow_events 为唯一事实源）。
+    crate::workflow::events::derive_instance(&conn, &execution_id)
+        .map_err(|e| format!("查询失败: {}", e))
 
 }
 
@@ -794,43 +793,9 @@ pub fn get_node_executions(
 
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
 
-    // 从 node_executions 表查询（而非废弃的 instance.steps JSON）
-
-    let mut stmt = conn.prepare(
-
-        "SELECT node_id, status, input_data, output_data, error_message, started_at, finished_at
-
-         FROM node_executions WHERE execution_id = ?1 ORDER BY started_at ASC"
-
-    ).map_err(|e| format!("查询失败: {}", e))?;
-
-    let rows = stmt.query_map(rusqlite::params![execution_id], |row| {
-
-        Ok(serde_json::json!({
-
-            "nodeId": row.get::<_, String>(0)?,
-
-            "status": row.get::<_, String>(1)?,
-
-            "input": row.get::<_, Option<String>>(2)?.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
-
-            "output": row.get::<_, Option<String>>(3)?.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
-
-            "error": row.get::<_, Option<String>>(4)?,
-
-            "startedAt": row.get::<_, Option<i64>>(5)?,
-
-            "finishedAt": row.get::<_, Option<i64>>(6)?,
-
-        }))
-
-    }).map_err(|e| format!("查询失败: {}", e))?
-
-    .collect::<Result<Vec<_>, _>>()
-
-    .map_err(|e| format!("解析失败: {}", e))?;
-
-    Ok(rows)
+    // 节点执行详情改经事件派生（workflow_events → 折叠行；读切点迁移）。
+    crate::workflow::events::derive_node_details(&conn, &execution_id)
+        .map_err(|e| format!("查询失败: {}", e))
 
 }
 
@@ -2961,25 +2926,15 @@ pub async fn execute_workflow_mode(
     let conn = app_handle.state::<crate::DbState>().get_conn()
         .map_err(|e| format!("数据库连接失败: {}", e))?;
 
-    let instance = {
-        let mut stmt = conn.prepare(
-            "SELECT id, definition_id, definition_name, status, context,
-                    trigger, trigger_detail,
-                    started_at, completed_at, completion_rate, error, created_at
-             FROM workflow_instances WHERE id = ?1"
-        ).map_err(|e| format!("查询失败: {}", e))?;
-
-        stmt.query_row(rusqlite::params![execution_id], |row| crate::workflow::instance_from_row(row))
-            .map_err(|e| format!("实例不存在: {}", e))?
-    };
+    let instance = crate::workflow::events::derive_instance(&conn, &execution_id)
+        .map_err(|e| format!("查询失败: {}", e))?
+        .ok_or_else(|| "实例不存在".to_string())?;
 
     // 断点模式校验：实例必须已有执行记录
     if !matches!(exec_mode, ExecutionMode::Full) {
-        let node_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM node_executions WHERE execution_id = ?1",
-            rusqlite::params![execution_id],
-            |row| row.get(0),
-        ).map_err(|e| format!("查询执行记录失败: {}", e))?;
+        let node_count: i64 = crate::workflow::events::derive_node_statuses(&conn, &execution_id)
+            .map_err(|e| format!("查询执行记录失败: {}", e))?
+            .len() as i64;
 
         if node_count == 0 {
             return Err("该实例无执行记录，不支持断点执行。请先执行一次工作流。".to_string());

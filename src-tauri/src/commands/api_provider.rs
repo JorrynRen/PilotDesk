@@ -1,7 +1,9 @@
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use crate::utils::errors::AppError;
 use crate::utils::crypto;
+use crate::tools::{ModelSpec, ProviderModelInfo};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -30,9 +32,31 @@ pub struct CreateOrUpdateProvider {
     pub sort_order: Option<i64>,
 }
 
+/// 解析 models 列：对象数组 [{name, note}]（A 方案，唯一事实源）；兼容旧格式字符串数组 ["a","b"]。
+fn parse_model_entries(models_json: &str) -> Vec<(String, String)> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(models_json) {
+        if let Some(arr) = v.as_array() {
+            let mut entries = Vec::with_capacity(arr.len());
+            for x in arr {
+                if let Some(name) = x.get("name").and_then(|n| n.as_str()) {
+                    let note = x.get("note").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                    entries.push((name.to_string(), note));
+                }
+            }
+            return entries;
+        }
+    }
+    // 兼容旧格式：纯模型名字符串数组
+    serde_json::from_str::<Vec<String>>(models_json)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|n| (n, String::new()))
+        .collect()
+}
+
 fn row_to_provider(row: &rusqlite::Row) -> rusqlite::Result<ApiProvider> {
     let models_json: String = row.get("models")?;
-    let models: Vec<String> = serde_json::from_str(&models_json).unwrap_or_default();
+    let models: Vec<String> = parse_model_entries(&models_json).into_iter().map(|(n, _)| n).collect();
     let api_format: String = row.get("api_format").unwrap_or_else(|_| "openai".to_string());
     Ok(ApiProvider {
         id: row.get("id")?,
@@ -89,8 +113,28 @@ pub fn get_api_key(conn: &rusqlite::Connection, id: &str) -> Result<Option<Strin
 /// Create or update an API provider
 pub fn upsert_api_provider(conn: &rusqlite::Connection, data: &CreateOrUpdateProvider) -> Result<ApiProvider, AppError> {
     let now = crate::utils::now();
-    let models_json = serde_json::to_string(&data.models).unwrap_or_else(|_| "[]".to_string());
     let sort_order = data.sort_order.unwrap_or(now);
+
+    // models 列 = 模型清单+备注（对象数组，唯一事实源）：按 data.models 重建，
+    // 保留已有模型备注；被移除的模型备注随之丢弃，消除孤儿数据。
+    let existing_notes: HashMap<String, String> = {
+        let cur: Option<String> = conn
+            .query_row("SELECT models FROM api_providers WHERE id = ?", params![data.id], |r| r.get(0))
+            .optional()?;
+        cur.as_deref()
+            .map(parse_model_entries)
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    };
+    let models_json = serde_json::to_string(
+        &data
+            .models
+            .iter()
+            .map(|name| serde_json::json!({ "name": name, "note": existing_notes.get(name).cloned().unwrap_or_default() }))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or_else(|_| "[]".to_string());
 
     let (encrypted_key, masked, key_set) = match &data.api_key {
         Some(key) if !key.is_empty() => {
@@ -149,4 +193,94 @@ pub fn reorder_api_providers(conn: &rusqlite::Connection, ids: &[String]) -> Res
         )?;
     }
     Ok(())
+}
+
+// ── 模型备注（model_notes）──
+// 模型清单与备注统一存于 api_providers.models 列（对象数组 [{name,note}]，A 方案唯一事实源）。
+// get/set 命令签名不变，前端零改动。
+
+/// 读取全部模型备注（providerId → modelName → 备注，含空备注）。
+pub fn get_model_notes(conn: &rusqlite::Connection) -> Result<HashMap<String, HashMap<String, String>>, AppError> {
+    let mut stmt = conn.prepare("SELECT id, models FROM api_providers")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for r in rows {
+        let (pid, models_json) = r?;
+        map.insert(pid, parse_model_entries(&models_json).into_iter().collect());
+    }
+    Ok(map)
+}
+
+/// 保存模型备注（逐模型更新 models 列中对应 name 的 note；不存在的模型行自动补齐）。
+pub fn set_model_notes(
+    conn: &rusqlite::Connection,
+    notes: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), AppError> {
+    let now = crate::utils::now();
+    for (pid, mnotes) in notes {
+        let cur: Option<String> = conn
+            .query_row("SELECT models FROM api_providers WHERE id = ?", params![pid], |r| r.get(0))
+            .optional()?;
+        let mut entries: Vec<(String, String)> = cur.as_deref().map(parse_model_entries).unwrap_or_default();
+        for (name, note) in mnotes {
+            match entries.iter_mut().find(|(n, _)| n == name) {
+                Some(e) => e.1 = note.clone(),
+                None => entries.push((name.clone(), note.clone())),
+            }
+        }
+        let json = serde_json::to_string(
+            &entries
+                .iter()
+                .map(|(n, note)| serde_json::json!({ "name": n, "note": note }))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "UPDATE api_providers SET models = ?1, updated_at = ?2 WHERE id = ?3",
+            params![json, now, pid],
+        )?;
+    }
+    Ok(())
+}
+
+/// 收集所有提供商的模型清单（合并备注），供 list_models 工具使用；**不含 key**。
+pub fn collect_provider_models(conn: &rusqlite::Connection) -> Vec<ProviderModelInfo> {
+    let all_notes = get_model_notes(conn).unwrap_or_default();
+    list_api_providers(conn)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| {
+            let p_notes = all_notes.get(&p.id).cloned().unwrap_or_default();
+            let models = p
+                .models
+                .iter()
+                .map(|name| ModelSpec {
+                    name: name.clone(),
+                    description: p_notes.get(name).cloned(),
+                })
+                .collect();
+            ProviderModelInfo {
+                provider_id: p.id,
+                provider_name: p.name,
+                endpoint: p.api_endpoint,
+                api_format: p.api_format,
+                models,
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn get_model_notes_cmd(state: tauri::State<'_, crate::DbState>) -> Result<HashMap<String, HashMap<String, String>>, AppError> {
+    let conn = state.get_conn()?;
+    get_model_notes(&conn)
+}
+
+#[tauri::command]
+pub fn set_model_notes_cmd(
+    state: tauri::State<'_, crate::DbState>,
+    notes: HashMap<String, HashMap<String, String>>,
+) -> Result<(), AppError> {
+    let conn = state.get_conn()?;
+    set_model_notes(&conn, &notes)
 }

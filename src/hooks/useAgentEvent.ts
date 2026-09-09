@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useAgentRegistry } from './useAgentRegistry';
+import { subscribeAgentBus } from './agentEventBus';
 import type { Attachment } from '../types';
 
 /**
@@ -31,6 +31,8 @@ export interface AgentEventHandlers {
   }) => void;
   onToolStart?: (sessionId: string, toolId: string, toolName: string, toolArgs: string) => void;
   onToolResult?: (sessionId: string, toolId: string, toolName: string, result: string, success: boolean) => void;
+  /** 工具执行进度提示（如 generate_video 任务创建成功 / 每 30s 状态）。 */
+  onToolProgress?: (sessionId: string, toolName: string, message: string) => void;
   onFileDiff?: (sessionId: string, path: string, diff: string) => void;
   onReasoning?: (sessionId: string, content: string) => void;
   onIterationLimit?: (sessionId: string, current: number, max: number) => void;
@@ -46,103 +48,10 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
     handlersRef.current = handlers;
   }, [handlers]);
 
-  const unlistenRef = useRef<UnlistenFn[]>([]);
-
-  // 注册 Tauri Event 监听器（仅一次）
+  // 前端统一投影阶段①：agent-* 事件改经模块级单例总线广播（见 agentEventBus），
+  // 各组件无需各自 listen —— 本组件只订阅一次，随卸载退订。
   useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      const unlisteners: UnlistenFn[] = [];
-
-      const chunkUnlisten = await listen<{ sessionId: string; content: string }>('agent-chunk', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onChunk?.(event.payload.sessionId, event.payload.content);
-      });
-      unlisteners.push(chunkUnlisten);
-
-      const doneUnlisten = await listen<{ sessionId: string; content?: string }>('agent-done', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onDone?.(event.payload.sessionId, event.payload.content);
-      });
-      unlisteners.push(doneUnlisten);
-
-      const errorUnlisten = await listen<{ sessionId: string; error: string }>('agent-error', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onError?.(event.payload.sessionId, event.payload.error);
-      });
-      unlisteners.push(errorUnlisten);
-
-      const sessionUnlisten = await listen<{ sessionId: string; agentSessionId: string }>('agent-session', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onSession?.(event.payload.sessionId, event.payload.agentSessionId);
-      });
-      unlisteners.push(sessionUnlisten);
-
-      const approvalUnlisten = await listen<{ sessionId: string; toolId: string; toolName: string; arguments: string; riskDescription: string }>('agent-approval-required', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onApprovalRequired?.(event.payload.sessionId, event.payload.toolId, event.payload.toolName, event.payload.arguments, event.payload.riskDescription);
-      });
-      unlisteners.push(approvalUnlisten);
-
-      const confirmationUnlisten = await listen<{
-        sessionId: string; callId: string; title?: string; prompt: string; replyMode: 'open' | 'structured';
-        items: Array<{ id: string; label: string; inputType: 'text' | 'select' | 'confirm'; options: string[]; required: boolean; placeholder?: string }>;
-      }>('agent-confirmation-request', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onConfirmationRequest?.(event.payload);
-      });
-      unlisteners.push(confirmationUnlisten);
-
-      const toolStartUnlisten = await listen<{ sessionId: string; toolId: string; toolName: string; arguments: string }>('agent-tool-start', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onToolStart?.(event.payload.sessionId, event.payload.toolId, event.payload.toolName, event.payload.arguments);
-      });
-      unlisteners.push(toolStartUnlisten);
-
-      const toolResultUnlisten = await listen<{ sessionId: string; toolId: string; toolName: string; result: string; success: boolean }>('agent-tool-result', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onToolResult?.(event.payload.sessionId, event.payload.toolId, event.payload.toolName, event.payload.result, event.payload.success);
-      });
-      unlisteners.push(toolResultUnlisten);
-
-      const fileDiffUnlisten = await listen<{ sessionId: string; path: string; diff: string }>('agent-file-diff', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onFileDiff?.(event.payload.sessionId, event.payload.path, event.payload.diff);
-      });
-      unlisteners.push(fileDiffUnlisten);
-
-      const reasoningUnlisten = await listen<{ sessionId: string; content: string }>('agent-reasoning', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onReasoning?.(event.payload.sessionId, event.payload.content);
-      });
-      unlisteners.push(reasoningUnlisten);
-
-      const iterLimitUnlisten = await listen<{ sessionId: string; current: number; max: number }>('agent-iteration-limit', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onIterationLimit?.(event.payload.sessionId, event.payload.current, event.payload.max);
-      });
-      unlisteners.push(iterLimitUnlisten);
-
-      const usageUnlisten = await listen<{ sessionId: string; promptTokens: number; completionTokens: number; totalTokens: number }>('agent-usage', (event) => {
-        if (cancelled) return;
-        handlersRef.current?.onUsage?.(event.payload.sessionId, {
-          prompt: event.payload.promptTokens,
-          completion: event.payload.completionTokens,
-          total: event.payload.totalTokens,
-        });
-      });
-      unlisteners.push(usageUnlisten);
-
-      unlistenRef.current = unlisteners;
-    })();
-
-    return () => {
-      cancelled = true;
-      for (const unlisten of unlistenRef.current) {
-        unlisten();
-      }
-    };
+    return subscribeAgentBus(() => handlersRef.current);
   }, []);
 
   // ── Agent 命令 ──
@@ -159,6 +68,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
       temperature?: number,
       maxTokens?: number,
       attachments?: Attachment[],
+      securityMode?: string,
     ) => {
       try {
         await invoke('agent_send_message_with_config', {
@@ -172,6 +82,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
           temperature: temperature ?? null,
           maxTokens: maxTokens ?? null,
           attachments: attachments && attachments.length > 0 ? attachments : null,
+          securityMode: securityMode || 'standard',
         });
       } catch (err) {
         handlersRef.current?.onError?.(sessionId, String(err));

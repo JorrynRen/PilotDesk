@@ -1,0 +1,1 @@
+- 【本场可补充空位】{{VAR:max_new_participants}} 名：本次 new_participants 数量不得超过该值；空位为 0 时禁止新增（new_participants 必须输出空数组 []）；

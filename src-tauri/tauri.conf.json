@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "identifier": "com.pilotdesk.app",
   "build": {
+    "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
@@ -11,9 +12,9 @@
     "windows": [
       {
         "title": "PilotDesk",
-        "width": 1280,
+        "width": 1220,
         "height": 815,
-        "minWidth": 1100,
+        "minWidth": 1040,
         "minHeight": 815,
         "decorations": false,
         "shadow": false,
@@ -22,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:1420 http://localhost:1420; style-src 'self' 'unsafe-inline' http://127.0.0.1:1420; img-src 'self' data: https: asset: http://asset.localhost; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:1420; frame-src https: http: asset: http://asset.localhost http://dirindex.localhost",
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:1420 http://localhost:1420; style-src 'self' 'unsafe-inline' http://127.0.0.1:1420; img-src 'self' data: https: asset: http://asset.localhost; media-src 'self' data: https: asset: http://asset.localhost; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:1420; frame-src https: http: asset: http://asset.localhost http://dirindex.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]

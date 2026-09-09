@@ -1,22 +1,22 @@
-import { useState, useEffect, useRef } from 'react';
-import { Lightbulb, Cpu, Bot, ChevronDown } from 'lucide-react';
+import { useState } from 'react';
+import { Lightbulb, Cpu, Brain, Package } from 'lucide-react';
 import { SkillBrowser } from '../panels/SkillBrowser';
-import { MemoryBrowser } from '../panels/MemoryBrowser';
+import { ProjectMemoryPreview } from '../panels/ProjectMemoryPreview';
 import { useSessionStore } from '../../stores/sessionStore';
 import { InspirationPanel } from './InspirationPanel';
-import { PluginManager } from '../plugin/PluginManager';
+import { PluginManager, type PluginPanelEntry } from '../plugin/PluginManager';
 import { PluginPanelRenderer } from '../plugin/PluginPanelRenderer';
-import { PluginIcon } from '../plugin/PluginIcon';
 import { usePluginStore } from '../../stores/pluginStore';
 
 interface RightPanelProps {
   isOpen: boolean;
+  /** 当前主视图模式：终端模式下隐藏与 Agent 会话无关的 tab（记忆/插件） */
+  mode: 'session' | 'terminal';
 }
 
-export function RightPanel({ isOpen }: RightPanelProps) {
+export function RightPanel({ isOpen, mode }: RightPanelProps) {
+  const isTerminalMode = mode === 'terminal';
   const [activeTab, setActiveTab] = useState<string>('inspiration');
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // 直接从 store 订阅 registeredPanels（精确订阅，仅当面板变化时重渲染）
   const registeredPanels = usePluginStore((s) => s.registeredPanels);
@@ -25,31 +25,24 @@ export function RightPanel({ isOpen }: RightPanelProps) {
     return cs;
   });
 
-  // 将 Map 转为数组供渲染
-  const pluginPanels = Array.from(registeredPanels.values()).map((p) => ({
-    id: p.contribution.id,
-    title: p.contribution.title,
-    pluginId: p.pluginId,
-    pluginPath: p.pluginPath,
-    icon: p.contribution.icon || p.pluginIcon,
-    uniqueKey: p.pluginId + ':' + p.contribution.id,
-  }));
-
-  // 点击外部关闭下拉
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
+  // 将面板按插件分组，供「插件」管理列表直接跳转打开（替代原头部「面板」下拉入口）
+  const panelsByPlugin = new Map<string, PluginPanelEntry[]>();
+  for (const p of registeredPanels.values()) {
+    const entry: PluginPanelEntry = {
+      uniqueKey: p.pluginId + ':' + p.contribution.id,
+      panelId: p.contribution.id,
+      title: p.contribution.title,
+      icon: p.contribution.icon || p.pluginIcon,
+      pluginId: p.pluginId,
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    const arr = panelsByPlugin.get(p.pluginId);
+    if (arr) arr.push(entry);
+    else panelsByPlugin.set(p.pluginId, [entry]);
+  }
 
   if (!isOpen) return null;
 
   const isPluginPanelActive = activeTab.startsWith('plugin:');
-  const activePluginPanel = pluginPanels.find((p) => 'plugin:' + p.uniqueKey === activeTab);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -63,23 +56,27 @@ export function RightPanel({ isOpen }: RightPanelProps) {
           />
         );
       case 'memory':
+        return <ProjectMemoryPreview />;
+      case 'plugins':
         return (
-          <MemoryBrowser
-            agentType={currentSession?.agentType}
-            onSelect={(content) => {
-              console.log('Memory selected:', content.slice(0, 50));
-            }}
+          <PluginManager
+            panelsByPluginId={panelsByPlugin}
+            onOpenPanel={(uniqueKey) => setActiveTab('plugin:' + uniqueKey)}
           />
         );
-      case 'plugins':
-        return <PluginManager />;
       case 'inspiration':
         return <InspirationPanel />;
       default:
         if (isPluginPanelActive) {
           const parts = activeTab.split(':');
           const panelId = parts.slice(2).join(':');
-          return <PluginPanelRenderer activePanelId={panelId} onPanelChange={(id) => setActiveTab('plugin:' + parts[1] + ':' + id)} />;
+          return (
+            <PluginPanelRenderer
+              activePanelId={panelId}
+              onPanelChange={(id) => setActiveTab('plugin:' + parts[1] + ':' + id)}
+              onBack={() => setActiveTab('plugins')}
+            />
+          );
         }
         return <InspirationPanel />;
     }
@@ -87,7 +84,7 @@ export function RightPanel({ isOpen }: RightPanelProps) {
 
   return (
     <aside
-      className="w-[340px] flex flex-col shrink-0"
+      className="w-[280px] flex flex-col shrink-0"
       style={{ borderLeft: '1px solid var(--border)', backgroundColor: 'var(--bg-primary)' }}
     >
       {/* Header */}
@@ -115,77 +112,32 @@ export function RightPanel({ isOpen }: RightPanelProps) {
           <Cpu size={12} />
           技能
         </button>
-        <button
-          onClick={() => setActiveTab('memory')}
-          className="pd-btn px-2 py-1 rounded text-xs shrink-0"
-          style={{
-            color: activeTab === 'memory' ? 'var(--accent)' : 'var(--text-secondary)',
-            backgroundColor: activeTab === 'memory' ? 'var(--accent-light)' : 'transparent',
-          }}
-        >
-          <Bot size={12} />
-          记忆
-        </button>
-        <button
-          onClick={() => setActiveTab('plugins')}
-          className="pd-btn px-2 py-1 rounded text-xs shrink-0"
-          style={{
-            color: activeTab === 'plugins' ? 'var(--accent)' : 'var(--text-secondary)',
-            backgroundColor: activeTab === 'plugins' ? 'var(--accent-light)' : 'transparent',
-          }}
-        >
-          <Cpu size={12} />
-          插件
-        </button>
-
-        {/* Plugin panels dropdown */}
-        {pluginPanels.length > 0 && (
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="pd-btn px-2 py-1 rounded text-xs"
-              style={{
-                color: isPluginPanelActive ? 'var(--accent)' : 'var(--text-secondary)',
-                backgroundColor: isPluginPanelActive ? 'var(--accent-light)' : 'transparent',
-              }}
-            >
-              <PluginIcon icon={activePluginPanel ? activePluginPanel.icon : undefined} pluginId={activePluginPanel ? activePluginPanel.pluginId : ""} size={12} />
-              <span title={activePluginPanel ? activePluginPanel.title : '面板'} className="truncate" style={{ maxWidth: '5ch', display: 'inline-block', verticalAlign: 'middle' }}>
-                {activePluginPanel ? activePluginPanel.title : '面板'}
-              </span>
-              <ChevronDown size={10} />
-            </button>
-            {dropdownOpen && (
-              <div
-                className="absolute top-full right-0 mt-1 w-56 py-1 rounded-lg shadow-lg z-50"
-                style={{
-                  backgroundColor: 'var(--bg-primary)',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                {pluginPanels.map((panel) => (
-                  <button
-                    key={panel.id}
-                    onClick={() => {
-                      setActiveTab('plugin:' + panel.uniqueKey);
-                      setDropdownOpen(false);
-                    }}
-                    className="w-full text-left px-3 py-1.5 text-xs transition-colors"
-                    style={{
-                      color: activeTab === 'plugin:' + panel.uniqueKey ? 'var(--accent)' : 'var(--text-primary)',
-                      backgroundColor: activeTab === 'plugin:' + panel.uniqueKey ? 'var(--accent-light)' : 'transparent',
-                    }}
-                  >
-                    <PluginIcon icon={panel.icon} pluginId={panel.pluginId} size={12} />
-                    <span className="truncate">{panel.title}</span>
-                    <span className="text-[9px] ml-auto shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                      · {panel.pluginId}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+        {!isTerminalMode && (
+          <button
+            onClick={() => setActiveTab('memory')}
+            className="pd-btn px-2 py-1 rounded text-xs shrink-0"
+            style={{
+              color: activeTab === 'memory' ? 'var(--accent)' : 'var(--text-secondary)',
+              backgroundColor: activeTab === 'memory' ? 'var(--accent-light)' : 'transparent',
+            }}
+          >
+            <Brain size={12} />
+            记忆
+          </button>
+        )}
+        {!isTerminalMode && (
+          <button
+            onClick={() => setActiveTab('plugins')}
+            className="pd-btn px-2 py-1 rounded text-xs shrink-0"
+            style={{
+              // 插件面板为插件列表的二级视图，切到面板时高亮「插件」tab
+              color: activeTab === 'plugins' || isPluginPanelActive ? 'var(--accent)' : 'var(--text-secondary)',
+              backgroundColor: activeTab === 'plugins' || isPluginPanelActive ? 'var(--accent-light)' : 'transparent',
+            }}
+          >
+            <Package size={12} />
+            插件
+          </button>
         )}
       </div>
 

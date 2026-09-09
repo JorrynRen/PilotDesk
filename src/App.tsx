@@ -19,11 +19,25 @@ import { GroupChatPage } from './pages/GroupChatPage';
 import { subscribeGroupChat } from './stores/groupChatStore';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
 import { TerminalProvider, useTerminal } from './TerminalManager';
+import { ImagePreview } from './components/message/ImagePreview';
 import './styles/ui.css';
 
 function MainLayout() {
-  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  // 各模式各自的右侧面板开合状态（会话/终端用 RightPanel；群聊用其页内专属右侧面板；
+  // 工作流/自定义无右栏，不显示折叠按钮）
+  const [sidePanelOpen, setSidePanelOpen] = useState<{ session: boolean; terminal: boolean; groupchat: boolean }>({
+    session: true,
+    terminal: true,
+    groupchat: true,
+  });
   const { viewMode, setMode } = useTerminal();
+  const rightPanelMode =
+    viewMode === 'session' || viewMode === 'terminal' || viewMode === 'groupchat' ? viewMode : null;
+  const rightPanelOpen = rightPanelMode ? sidePanelOpen[rightPanelMode] : false;
+  const toggleRightPanel = () => {
+    if (!rightPanelMode) return;
+    setSidePanelOpen((prev) => ({ ...prev, [rightPanelMode]: !prev[rightPanelMode] }));
+  };
   const navigate = useNavigate();
   const currentSession = useSessionStore((s) => {
     const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
@@ -55,14 +69,14 @@ function MainLayout() {
           mode={viewMode}
           onModeChange={setMode}
           onOpenSettings={() => navigate('/settings')}
-          onToggleRightPanel={() => setRightPanelOpen((v) => !v)}
-          rightPanelOpen={rightPanelOpen}
+          onToggleRightPanel={rightPanelMode ? toggleRightPanel : undefined}
+          rightPanelOpen={rightPanelMode ? rightPanelOpen : undefined}
         />
         <div className="flex-1 flex overflow-hidden relative">
-          {/* 群聊模式：原型页面（独立路由 /groupchat 复用同一页面），全宽无右侧面板 */}
+          {/* 群聊模式：全宽嵌入（页面内含专属右侧「讨论/文件历史」面板，由折叠按钮控制） */}
           {isGroupChat && (
             <div className="flex-1 flex flex-col overflow-hidden">
-              <GroupChatPage />
+              <GroupChatPage rightPanelOpen={sidePanelOpen.groupchat} />
             </div>
           )}
           {/* 工作流模式：嵌入主布局（复用工作流管理页，去除自身 TitleBar/StatusBar），全宽 */}
@@ -71,27 +85,24 @@ function MainLayout() {
               <WorkflowPage embedded />
             </div>
           )}
-          {/* 自定义标签模式：固定壳（TitleBar/StatusBar），内容区渲染标签 iframe */}
-          {isCustom && (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <CustomTabHost />
-            </div>
-          )}
-          {/* 终端模式：中间终端 + 右侧面板（保留原始布局：会话列表隐藏） */}
-          {isTerminal && (
-            <>
-              <div className="flex-1 flex flex-col overflow-hidden">
-                <TerminalPanel />
-              </div>
-              <RightPanel isOpen={rightPanelOpen} />
-            </>
-          )}
+          {/* 自定义标签模式：固定壳。CustomTabHost 常挂载（CSS 隐藏切换），
+              避免每次进出卸载导致已打开标签页的 iframe 状态丢失 */}
+          <div className={isCustom ? 'flex-1 flex flex-col overflow-hidden' : 'hidden'}>
+            <CustomTabHost />
+          </div>
+          {/* 终端模式：中间终端 + 右侧面板（保留原始布局：会话列表隐藏）。
+              TerminalPanel 必须常挂载——xterm 会话 DOM/内容由组件实例持有，
+              卸载即丢失；非终端模式仅用 display:none 隐藏，切回时内容原样保留。 */}
+          <div className={isTerminal ? 'flex-1 flex flex-col overflow-hidden' : 'hidden'}>
+            <TerminalPanel />
+          </div>
+          {isTerminal && <RightPanel isOpen={rightPanelOpen} mode="terminal" />}
           {/* 会话模式（默认）：三栏布局 */}
           {isSession && (
             <>
               <SessionList style={undefined} />
               <MainPanel style={undefined} />
-              <RightPanel isOpen={rightPanelOpen} />
+              <RightPanel isOpen={rightPanelOpen} mode="session" />
             </>
           )}
         </div>
@@ -197,6 +208,8 @@ function App() {
 
   return (
     <TerminalProvider>
+      {/* 全局图片放大预览（会话/群聊/工作流等所有页面共用） */}
+      <ImagePreview />
       <Routes>
         <Route path="/" element={<MainLayout />} />
         <Route path="/market" element={<MarketPage onBack={() => window.history.back()} />} />

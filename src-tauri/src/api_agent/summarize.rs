@@ -74,12 +74,16 @@ pub fn split_recent_window(messages: &[ChatMessage]) -> (Vec<ChatMessage>, Vec<C
 }
 
 /// 生成滚动摘要：将旧摘要与超出保留窗口的早期对话合并，压缩为一段新摘要。
+///
+/// `on_usage`：摘要请求产生的用量回调（prompt/completion/total/cache_read/cache_write），
+/// 由调用方决定落库口径（计入会话用量统计）。
 pub async fn generate_rolling_summary(
     client: &ApiClient,
     model: &str,
     format: &ApiFormat,
     old_summary: &str,
     older_messages: &[ChatMessage],
+    mut on_usage: impl FnMut(u32, u32, u32, u32, u32),
 ) -> Result<String, String> {
     let prompt = build_summary_prompt(old_summary, older_messages);
 
@@ -98,8 +102,39 @@ pub async fn generate_rolling_summary(
         _ => client.chat(&request).await?,
     };
 
+    if let Some(u) = response.usage {
+        on_usage(u.prompt, u.completion, u.total, u.cache_read, u.cache_write);
+    }
+
+    // ── 摘要 fail-closed 守卫：宁可不更新、保留旧摘要，也不接受半截/失真产物 ──
     let summary = response.content.trim().to_string();
-    Ok(truncate_to_chars(&summary, SUMMARY_MAX_CHARS))
+    if summary.is_empty() {
+        return Err("摘要生成为空文本，已拒绝（保留旧摘要）。".to_string());
+    }
+    if matches!(response.finish_reason.as_str(), "max_tokens" | "length") {
+        return Err(format!(
+            "摘要生成被 max_tokens 截断（finish_reason={}），已拒绝半截摘要（保留旧摘要）。",
+            response.finish_reason
+        ));
+    }
+    if summary.chars().count() > SUMMARY_MAX_CHARS {
+        return Err(format!(
+            "摘要超过长度上限（{} 字，实际 {} 字），已拒绝而非静默截断（保留旧摘要）。",
+            SUMMARY_MAX_CHARS,
+            summary.chars().count()
+        ));
+    }
+    // 摘要必须比被压缩的早期对话更小，否则说明压缩失败、写入只会挤占上下文。
+    let older_tokens: usize = older_messages.iter().map(|m| TokenEstimator::estimate_message(m)).sum();
+    let summary_tokens = TokenEstimator::estimate(&summary);
+    if older_tokens > 0 && summary_tokens >= older_tokens {
+        return Err(format!(
+            "摘要未比原文更小（摘要 ~{} tokens >= 早期对话 ~{} tokens），已拒绝（保留旧摘要）。",
+            summary_tokens, older_tokens
+        ));
+    }
+
+    Ok(summary)
 }
 
 /// 组装摘要生成 prompt
@@ -147,6 +182,7 @@ fn build_summary_prompt(old_summary: &str, older_messages: &[ChatMessage]) -> St
         1. 用户的原始目标与需求；\n\
         2. 关键决策、方向切换或重要结论；\n\
         3. 尚未完成的待办事项。\n\
+        只输出纯文本（不要 Markdown 代码块、不要复述工具调用细节）；新摘要应合并吸收下方[已有摘要]再补入本轮要点，不要照搬旧文。\n\
         不要逐句复述，只保留对未来对话仍有长期价值的信息。摘要不得超过 {} 字。\n\n\
         [已有摘要]\n{}\n\n[本轮需要合并的早期对话]\n{}",
         SUMMARY_MAX_CHARS,

@@ -4,6 +4,8 @@
 //! 支持 Progressive Disclosure 模式（先注入 name+description，按需加载完整内容）。
 
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// SKILL.md frontmatter 结构
 #[derive(Debug, Clone, Deserialize)]
@@ -21,9 +23,12 @@ pub struct LoadedSkill {
 }
 
 /// 技能加载器
+#[derive(Clone)]
 pub struct SkillLoader {
     skills_dir: Option<String>,
     skills: Vec<LoadedSkill>,
+    /// 技能名 → 技能所在目录（用于 load_skill 返回时注入技能根目录，供脚本绝对路径定位）
+    dirs: HashMap<String, PathBuf>,
 }
 
 impl SkillLoader {
@@ -32,6 +37,7 @@ impl SkillLoader {
         let mut loader = Self {
             skills_dir,
             skills: Vec::new(),
+            dirs: HashMap::new(),
         };
         loader.scan();
         loader
@@ -66,6 +72,20 @@ impl SkillLoader {
     #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.skills.len()
+    }
+
+    /// 获取技能所在目录的绝对路径（精确匹配，回退忽略大小写）。
+    /// 供 `load_skill` 返回内容时注入技能根目录，模型据此以绝对路径调用技能脚本。
+    pub fn skill_dir(&self, name: &str) -> Option<PathBuf> {
+        self.dirs
+            .get(name)
+            .cloned()
+            .or_else(|| {
+                self.dirs
+                    .iter()
+                    .find(|(k, _)| k.to_lowercase() == name.to_lowercase())
+                    .map(|(_, v)| v.clone())
+            })
     }
 
     /// 扫描技能目录
@@ -108,6 +128,11 @@ impl SkillLoader {
 
         // 解析 YAML frontmatter（--- ... ---）
         let (name, description) = parse_frontmatter(&content);
+
+        // 记录技能所在目录（SKILL.md 的父目录）
+        if let Some(dir) = path.parent() {
+            self.dirs.insert(name.clone(), dir.to_path_buf());
+        }
 
         self.skills.push(LoadedSkill {
             name,

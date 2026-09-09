@@ -21,6 +21,18 @@ impl FromStr for ApiFormat {
     }
 }
 
+/// LLM 调用用量明细（四桶互斥口径）：`prompt`=未命中输入、`cache_read`=缓存命中读取、
+/// `cache_write`=缓存写入（如 Anthropic cache_creation）；`cached_tokens` 落库时取其两者之和。
+/// 供主请求流式/非流式、滚动摘要、意图路由等所有 LLM 调用统一解析与落库。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UsageRecord {
+    pub prompt: u32,
+    pub completion: u32,
+    pub total: u32,
+    pub cache_read: u32,
+    pub cache_write: u32,
+}
+
 /// OpenAI 兼容的 Chat Completion 请求
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatRequest {
@@ -32,7 +44,7 @@ pub struct ChatRequest {
     pub tool_choice: Option<String>,
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
+    pub temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
 }
@@ -52,6 +64,10 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// 思考模式（如 DeepSeek）要求：assistant 消息必须原样回传上轮的 reasoning_content，
+    /// 否则服务端校验上下文不完整返回 HTTP 400。仅 assistant 消息携带。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reasoning_content: Option<String>,
 }
 
 impl ChatMessage {
@@ -63,6 +79,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            reasoning_content: None,
         }
     }
 
@@ -74,6 +91,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            reasoning_content: None,
         }
     }
 
@@ -85,9 +103,11 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            reasoning_content: None,
         }
     }
 
+    #[allow(dead_code)]
     pub fn assistant(content: &str) -> Self {
         Self {
             role: "assistant".into(),
@@ -96,9 +116,23 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             name: None,
+            reasoning_content: None,
         }
     }
 
+    pub fn assistant_with_reasoning(content: &str, reasoning: &str) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: Some(content.into()),
+            images: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning.to_string()) },
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn assistant_with_tools(tool_calls: Vec<ToolCall>) -> Self {
         Self {
             role: "assistant".into(),
@@ -107,6 +141,19 @@ impl ChatMessage {
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             name: None,
+            reasoning_content: None,
+        }
+    }
+
+    pub fn assistant_with_tools_and_reasoning(tool_calls: Vec<ToolCall>, reasoning: &str) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: None,
+            images: None,
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+            name: None,
+            reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning.to_string()) },
         }
     }
 
@@ -118,6 +165,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             name: None,
+            reasoning_content: None,
         }
     }
 }
@@ -190,6 +238,19 @@ pub struct StreamUsage {
     pub completion_tokens: Option<u32>,
     #[serde(default)]
     pub total_tokens: Option<u32>,
+    /// OpenAI 兼容：`prompt_tokens_details.cached_tokens`
+    #[serde(default)]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+    /// DeepSeek 等兼容实现：`prompt_cache_hit_tokens`（顶层）
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: Option<u32>,
+}
+
+/// OpenAI 兼容的 `prompt_tokens_details`（缓存命中 token 数，前缀缓存命中率观测用）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct PromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -254,9 +315,15 @@ pub enum AgentLoopEvent {
     /// 迭代达到上限，请求用户确认是否继续
     #[serde(rename = "iteration_limit")]
     IterationLimit { current: usize, max: usize },
-    /// Token 用量统计
+    /// Token 用量统计（`cached_tokens`：总缓存 = 缓存读取 + 缓存写入，缺失为 0）
     #[serde(rename = "usage")]
-    Usage { prompt_tokens: u32, completion_tokens: u32, total_tokens: u32 },
+    Usage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+        #[serde(default)]
+        cached_tokens: u32,
+    },
 }
 
 /// 思维链/工具调用步骤（与前端 `ThinkingChainStep` 及会话模式 `messages.tool_calls` 持久化格式对齐）。

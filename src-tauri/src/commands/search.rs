@@ -1,7 +1,7 @@
 //! 联网搜索配置持久化
 //!
 //! 配置以 JSON 形式存储在 `app_settings` 表的 `search_config` key 下，
-//! 由 AgentLoop 在构建 WebSearchTool 时加载。
+//! 由 AgentLoop 在构建 SearchWebTool 时加载。
 
 use crate::api_agent::web::SearchConfig;
 use crate::utils::errors::AppError;

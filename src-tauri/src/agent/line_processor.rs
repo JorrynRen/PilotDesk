@@ -21,10 +21,11 @@ use std::sync::LazyLock;
 
 /// 预编译的 ConPTY 路径噪声正则
 /// 匹配两类噪声：
-///   1. 带 BEL 字符的路径噪声：`C:Users\x07...`、`:Users\x07...`
+///   1. 带 BEL 字符的路径噪声：`C:Users\x07...`、`:Users\x07...`（可选盘符前缀 + 冒号开头，
+///      冒号前可为单字母盘符 C: 或直接为前缀冒号，二者后含 BEL 即视为平台路径噪声）
 ///   2. distlib launcher 输出的短行噪声（含 .exe 且长度 < 100）
 static CONPTY_PATH_NOISE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:^[:A-Za-z]:.*?[\x07]|.*?\.exe[\x07]|^.{0,99}\.exe$)").unwrap()
+    Regex::new(r"(?:^[A-Za-z]?:.*?[\x07]|.*?\.exe[\x07]|^.{0,99}\.exe$)").unwrap()
 });
 
 /// 预编译的 ANSI 转义序列正则

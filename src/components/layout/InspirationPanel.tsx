@@ -4,10 +4,15 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
+import { useTerminal, injectToActiveTerminal } from '../../TerminalManager';
+import { showToast } from '../../utils/toast';
 
 import { EMOJI_OPTIONS } from '../../constants';
 
 export function InspirationPanel() {
+  const { viewMode } = useTerminal();
+  const isTerminalMode = viewMode === 'terminal';
+
   const currentSession = useSessionStore((s) => {
     const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
     return cs;
@@ -55,6 +60,16 @@ export function InspirationPanel() {
   };
 
   const handleSendToSession = (content: string) => {
+    // 终端模式：注入到当前活跃终端输入点（term.paste）；无终端时提示先新建
+    if (isTerminalMode) {
+      if (injectToActiveTerminal(content)) {
+        showToast('已发送到终端输入点', 'success');
+      } else {
+        showToast('请先新建终端，再发送到终端', 'warning');
+      }
+      return;
+    }
+    // 会话模式：写入共享 store，由会话输入框消费
     usePendingInputStore.getState().set(content);
   };
 
@@ -164,6 +179,7 @@ export function InspirationPanel() {
                 setEditingInspiration(insp);
                 setShowForm(true);
               }}
+              sendLabel={isTerminalMode ? '发送到终端' : '发送到会话'}
             />
           ))
         )}
@@ -180,9 +196,11 @@ interface InspirationRowProps {
   onSendToSession: (content: string) => void;
   onDelete: (id: string) => void;
   onEdit: (insp: InspirationItem) => void;
+  /** 发送按钮文案：会话模式「发送到会话」，终端模式「发送到终端」 */
+  sendLabel: string;
 }
 
-function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDelete, onEdit }: InspirationRowProps) {
+function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDelete, onEdit, sendLabel }: InspirationRowProps) {
   const { getTheme } = useAgentRegistry();
   const sourceTheme = getTheme(inspiration.sourceAgent ?? '');
   const sourceLabel = sourceTheme?.label ?? inspiration.sourceAgent;
@@ -249,7 +267,7 @@ function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDele
         style={{ color: 'var(--accent)' }}
       >
         <Send size={10} />
-        发送到会话
+        {sendLabel}
       </button>
     </div>
   );

@@ -64,86 +64,93 @@ limit（读取字节数）分段读取。"
     }
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
-        let raw_path = arguments["path"].as_str().ok_or("缺少 path 参数")?;
-        let offset = arguments["offset"].as_u64().unwrap_or(0) as usize;
-        let limit = arguments["limit"].as_u64().map(|v| v as usize);
+        // R3（v3.5c）：同步文件读取迁出 tokio worker，恢复外层 timeout 有效性（防超大文件读阻塞）。
+        let cwd = self.cwd.clone();
+        let res = tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let raw_path = arguments["path"].as_str().ok_or("缺少 path 参数")?;
+            let offset = arguments["offset"].as_u64().unwrap_or(0) as usize;
+            let limit = arguments["limit"].as_u64().map(|v| v as usize);
 
-        // 安全检查：拒绝读取系统关键文件
-        let path_lower = raw_path.to_lowercase();
-        if path_lower.contains("\\windows\\system32\\config")
-            || path_lower.contains("\\windows\\system32\\drivers")
-        {
-            return Err("安全限制：不允许读取系统关键文件".to_string());
-        }
+            // 安全检查：拒绝读取系统关键文件
+            let path_lower = raw_path.to_lowercase();
+            if path_lower.contains("\\windows\\system32\\config")
+                || path_lower.contains("\\windows\\system32\\drivers")
+            {
+                return Err("安全限制：不允许读取系统关键文件".to_string());
+            }
 
-        // 路径预处理：展开 ~/ 与 %USERPROFILE%
-        let expanded = expand_user_path(raw_path);
+            // 路径预处理：展开 ~/ 与 %USERPROFILE%
+            let expanded = expand_user_path(raw_path);
 
-        let file_path = std::path::Path::new(&expanded);
-        let abs_path = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            std::path::Path::new(&self.cwd).join(&expanded)
-        };
-
-        let bytes = std::fs::read(&abs_path)
-            .map_err(|e| format!("读取文件失败 ({}): {}", abs_path.display(), e))?;
-
-        // 二进制文件（图片/压缩包等）按文本读取只会产生乱码，明确拒绝
-        if crate::is_binary_bytes(&bytes) {
-            return Ok(format!(
-                "该文件是二进制内容（总大小 {} KB），read_file 仅支持文本文件，无法按文本读取。",
-                bytes.len() / 1024
-            ));
-        }
-
-        let total = bytes.len();
-
-        // 指定 offset/limit 时按字节范围分段读取
-        if limit.is_some() || offset > 0 {
-            let start = offset.min(total);
-            let end = match limit {
-                Some(l) => (offset + l).min(total),
-                None => total,
+            let file_path = std::path::Path::new(&expanded);
+            let abs_path = if file_path.is_absolute() {
+                file_path.to_path_buf()
+            } else {
+                std::path::Path::new(&cwd).join(&expanded)
             };
-            let slice = if start < end { &bytes[start..end] } else { &[] };
-            let text = String::from_utf8_lossy(slice).into_owned();
-            return Ok(format!(
-                "文件字节范围 [{}, {})，总大小 {} 字节:\n{}",
-                start, end, total, text
-            ));
-        }
 
-        let content = String::from_utf8_lossy(&bytes).into_owned();
-        // ── 智能截断：head + tail 策略 ──
-        const MAX_READ: usize = 131_072; // 128KB
-        if content.len() > MAX_READ {
-            // 安全地找到字符边界，避免在 UTF-8 多字节字符中间截断
-            let head_size = MAX_READ / 2;
-            let tail_size = MAX_READ - head_size;
-            let head_end = content
-                .char_indices()
-                .take_while(|&(i, _)| i < head_size)
-                .last()
-                .map_or(0, |(i, c)| i + c.len_utf8());
-            let tail_start = content
-                .char_indices()
-                .filter(|&(i, _)| i >= content.len() - tail_size)
-                .next()
-                .map_or(content.len(), |(i, _)| i);
-            let head = &content[..head_end];
-            let tail = &content[tail_start..];
-            Ok(format!(
-                "文件内容（前{}KB + 后{}KB，完整大小{}KB）:\n{}\n\n... (中间 {} 字节已省略，可用 offset/limit 分段读取) ...\n\n{}",
-                head_end / 1024,
-                (content.len() - tail_start) / 1024,
-                content.len() / 1024,
-                head,
-                content.len() - head_end - (content.len() - tail_start),
-                tail
-            ))
-        } else {
-            Ok(content)
-        }
+            let bytes = std::fs::read(&abs_path)
+                .map_err(|e| format!("读取文件失败 ({}): {}", abs_path.display(), e))?;
+
+            // 二进制文件（图片/压缩包等）按文本读取只会产生乱码，明确拒绝
+            if crate::is_binary_bytes(&bytes) {
+                return Ok(format!(
+                    "该文件是二进制内容（总大小 {} KB），read_file 仅支持文本文件，无法按文本读取。",
+                    bytes.len() / 1024
+                ));
+            }
+
+            let total = bytes.len();
+
+            // 指定 offset/limit 时按字节范围分段读取
+            if limit.is_some() || offset > 0 {
+                let start = offset.min(total);
+                let end = match limit {
+                    Some(l) => (offset + l).min(total),
+                    None => total,
+                };
+                let slice = if start < end { &bytes[start..end] } else { &[] };
+                let text = String::from_utf8_lossy(slice).into_owned();
+                return Ok(format!(
+                    "文件字节范围 [{}, {})，总大小 {} 字节:\n{}",
+                    start, end, total, text
+                ));
+            }
+
+            let content = String::from_utf8_lossy(&bytes).into_owned();
+            // ── 智能截断：head + tail 策略 ──
+            const MAX_READ: usize = 131_072; // 128KB
+            if content.len() > MAX_READ {
+                // 安全地找到字符边界，避免在 UTF-8 多字节字符中间截断
+                let head_size = MAX_READ / 2;
+                let tail_size = MAX_READ - head_size;
+                let head_end = content
+                    .char_indices()
+                    .take_while(|&(i, _)| i < head_size)
+                    .last()
+                    .map_or(0, |(i, c)| i + c.len_utf8());
+                let tail_start = content
+                    .char_indices()
+                    .filter(|&(i, _)| i >= content.len() - tail_size)
+                    .next()
+                    .map_or(content.len(), |(i, _)| i);
+                let head = &content[..head_end];
+                let tail = &content[tail_start..];
+                Ok(format!(
+                    "文件内容（前{}KB + 后{}KB，完整大小{}KB）:\n{}\n\n... (中间 {} 字节已省略，可用 offset/limit 分段读取) ...\n\n{}",
+                    head_end / 1024,
+                    (content.len() - tail_start) / 1024,
+                    content.len() / 1024,
+                    head,
+                    content.len() - head_end - (content.len() - tail_start),
+                    tail
+                ))
+            } else {
+                Ok(content)
+            }
+        })
+        .await
+        .map_err(|e| format!("read_file 执行线程异常: {}", e))?;
+        res
     }
 }

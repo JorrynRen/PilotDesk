@@ -13,6 +13,8 @@ interface MessageListProps {
   session: Session | null;
   isGenerating?: boolean;
   streamingStatus?: string;
+  /** 工具执行进度（generate_video 等），在流式助手消息气泡内展示 */
+  streamingProgress?: string;
   thinkingChain?: ThinkingChainStep[];
   /** ask_user 确认块（内嵌到最后一条 assistant 消息）。 */
   confirmation?: ConfirmationBlockData | null;
@@ -21,7 +23,7 @@ interface MessageListProps {
   onResendMessage?: (content: string) => void;
 }
 
-export function MessageList({ messages, session, isGenerating, streamingStatus, thinkingChain, confirmation, onEditMessage, onSaveInspiration, onResendMessage }: MessageListProps) {
+export function MessageList({ messages, session, isGenerating, streamingStatus, streamingProgress, thinkingChain, confirmation, onEditMessage, onSaveInspiration, onResendMessage }: MessageListProps) {
   const { getTheme } = useAgentRegistry();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
@@ -94,6 +96,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
         apiProviderId={session?.apiProvider}
         apiModel={session?.apiModel}
         thinkingChain={isLastAssistant ? thinkingChain : undefined}
+        streamingProgress={isLastAssistant ? streamingProgress : undefined}
         confirmation={isLastAssistant ? confirmation : null}
         isStreaming={isLastAssistant}
         isHighlighted={highlightedMessageId === msg.id}
@@ -102,7 +105,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
         onResend={onResendMessage}
       />
     );
-  }, [messages, session, thinkingChain, isGenerating, confirmation, highlightedMessageId, onEditMessage, onSaveInspiration, onResendMessage]);
+  }, [messages, session, thinkingChain, isGenerating, streamingProgress, confirmation, highlightedMessageId, onEditMessage, onSaveInspiration, onResendMessage]);
 
 
   if (!session) {

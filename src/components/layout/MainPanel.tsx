@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { MessageList } from '../message/MessageList';
 import { InputBar } from './InputBar';
+import type { SecurityModeValue } from '../security/SecurityModeSelector';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
@@ -20,6 +21,8 @@ import { isApiSession } from '../../utils/sessionType';
 interface SessionGenerationState {
   streamingContent: string;
   streamingStatus: string;
+  /** 工具执行进度（如 generate_video 任务创建/轮询状态），在流式助手消息气泡内展示，生成结束后不落库 */
+  streamingProgress: string;
 }
 
 /** A single step in the thinking chain (reasoning or tool call) */
@@ -49,6 +52,8 @@ interface MainPanelState {
 
 type Action =
   | { type: 'SEND_START'; sessionId: string; status: string }
+  | { type: 'SET_STREAMING_STATUS'; sessionId: string; status: string }
+  | { type: 'SET_STREAMING_PROGRESS'; sessionId: string; content: string }
   | { type: 'APPEND_CHUNK'; sessionId: string; content: string }
   | { type: 'GENERATION_DONE'; sessionId: string; fallbackContent?: string; systemMessage?: string }
   | { type: 'GENERATION_ERROR'; sessionId: string; error: string }
@@ -78,7 +83,7 @@ function reducer(state: MainPanelState, action: Action): MainPanelState {
         ...state,
         generatingSessions: {
           ...state.generatingSessions,
-          [action.sessionId]: { streamingContent: '', streamingStatus: action.status },
+          [action.sessionId]: { streamingContent: '', streamingStatus: action.status, streamingProgress: '' },
         },
         thinkingChains: {
           ...state.thinkingChains,
@@ -98,6 +103,30 @@ function reducer(state: MainPanelState, action: Action): MainPanelState {
             ...session,
             streamingContent: session.streamingContent + action.content,
           },
+        },
+      };
+    }
+
+    case 'SET_STREAMING_STATUS': {
+      const session = state.generatingSessions[action.sessionId];
+      if (!session) return state;
+      return {
+        ...state,
+        generatingSessions: {
+          ...state.generatingSessions,
+          [action.sessionId]: { ...session, streamingStatus: action.status },
+        },
+      };
+    }
+
+    case 'SET_STREAMING_PROGRESS': {
+      const session = state.generatingSessions[action.sessionId];
+      if (!session) return state;
+      return {
+        ...state,
+        generatingSessions: {
+          ...state.generatingSessions,
+          [action.sessionId]: { ...session, streamingProgress: action.content },
         },
       };
     }
@@ -261,7 +290,8 @@ function reducer(state: MainPanelState, action: Action): MainPanelState {
           [action.sessionId]: [
             ...chain,
             {
-              id: `diff-${Date.now()}`,
+              // id 唯一化：同毫秒可能收到多个 file_diff 事件（一次改多文件），Date.now() 会重复，加随机后缀。
+              id: `diff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               type: 'file_diff' as const,
               filePath: action.path,
               fileDiff: action.diff,
@@ -302,6 +332,9 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     riskDescription: string;
     deadline: number; // 超时时间戳（ms）
   } | null>(null);
+
+  // ── 会话安全模式（本消息有效；默认标准，随发送传参，不持久化）──
+  const [securityMode, setSecurityMode] = useState<SecurityModeValue>('standard');
 
   // ── ask_user 确认状态（内嵌到最后一条 assistant 消息；提交/超时后即移除，不持久化）──
   const [confirmation, setConfirmation] = useState<{
@@ -487,6 +520,16 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     [],
   );
 
+  // ── 工具执行进度（generate_video 等长耗时工具）：写入流式助手消息气泡（生成结束后不落库）──
+  const onToolProgress = useCallback(
+    (sessionId: string, _toolName: string, message: string) => {
+      dispatch({ type: 'SET_STREAMING_PROGRESS', sessionId, content: message });
+      // 同步更新状态文本（保留既有机制，供其他状态展示消费）
+      dispatch({ type: 'SET_STREAMING_STATUS', sessionId, status: message });
+    },
+    [],
+  );
+
   // ── ask_user 确认请求：内嵌到最后一条 assistant 消息 ──
   const onConfirmationRequest = useCallback(
     (payload: {
@@ -533,7 +576,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     respondToApproval,
     respondToIterLimit,
     respondToConfirmation,
-  } = useAgentEvent({ onChunk, onDone, onError, onSession, onApprovalRequired, onIterationLimit, onToolStart, onToolResult, onFileDiff, onReasoning, onConfirmationRequest });
+  } = useAgentEvent({ onChunk, onDone, onError, onSession, onApprovalRequired, onIterationLimit, onToolStart, onToolResult, onToolProgress, onFileDiff, onReasoning, onConfirmationRequest });
 
   // ── Layout effect: atomically persist completed streaming content + system notification ──
   // 将 pendingComplete 和 pendingSystemMessage 合并写入，确保系统消息（超时/空响应）始终
@@ -699,16 +742,17 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
           currentSession.temperature,
           currentSession.maxTokens,
           attachments,
+          securityMode,
         );
       } else {
         // Agent via Tauri Event
         const systemPrompt = await getModePrompt(mode);
         // Pass agent_session_id for session continuity (Claude Code --resume)
         const agentSessionId = currentSession.agentSessionId || undefined;
-        sendChat(sid, message, mode, currentSession.agentType, currentSession.cwd || undefined, systemPrompt, agentSessionId, undefined, undefined, attachments);
+        sendChat(sid, message, mode, currentSession.agentType, currentSession.cwd || undefined, systemPrompt, agentSessionId, undefined, undefined, attachments, securityMode);
       }
     },
-    [currentSession, sendChat, addMessage, stopGeneration, messages],
+    [currentSession, sendChat, addMessage, stopGeneration, messages, securityMode],
   );
 
   const handleStop = useCallback(() => {
@@ -785,6 +829,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
           session={currentSession}
           isGenerating={!!currentGenState}
           streamingStatus={currentGenState?.streamingStatus ?? ''}
+          streamingProgress={currentGenState?.streamingProgress ?? ''}
           thinkingChain={currentThinkingChain}
           confirmation={confirmation ? {
             request: confirmation.request,
@@ -812,6 +857,8 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         streamingStatus={currentGenState?.streamingStatus ?? ''}
         pendingInput={state.pendingInput}
         onPendingConsumed={() => dispatch({ type: 'SET_PENDING_INPUT', content: null })}
+        securityMode={securityMode}
+        onSecurityModeChange={setSecurityMode}
       />
       </div>
       </div>

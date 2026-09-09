@@ -6,6 +6,7 @@
  */
 
 import { useCallback } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import { usePluginStore } from '../../stores/pluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
 import { PluginIcon } from './PluginIcon';
@@ -15,9 +16,11 @@ interface PluginPanelRendererProps {
   activePanelId?: string;
   /** 面板切换回调 */
   onPanelChange?: (panelId: string) => void;
+  /** 返回插件列表（面板二级视图的返回入口） */
+  onBack?: () => void;
 }
 
-export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPanelRendererProps) {
+export function PluginPanelRenderer({ activePanelId, onPanelChange, onBack }: PluginPanelRendererProps) {
   const registeredPanels = usePluginStore((s) => s.registeredPanels);
   const panels = Array.from(registeredPanels.values());
 
@@ -46,6 +49,16 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange }: PluginPane
           className="flex items-center gap-2 px-3 py-2"
           style={{ borderBottom: '1px solid var(--border)' }}
         >
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="pd-btn px-1.5 py-0.5 rounded shrink-0"
+              style={{ color: 'var(--text-secondary)' }}
+              title="返回插件列表"
+            >
+              <ArrowLeft size={12} />
+            </button>
+          )}
           <PluginIcon icon={activePanel.contribution.icon || activePanel.pluginIcon} pluginId={activePanel.pluginId} size={16} />
           <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
             {activePanel.contribution.title}

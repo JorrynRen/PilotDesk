@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Plus, X, Monitor, ChevronDown, Palette, Terminal as TerminalIcon, Command, Keyboard, Sparkles } from 'lucide-react';
 import '@xterm/xterm/css/xterm.css';
-import { useTerminal } from '../TerminalManager';
+import { useTerminal, registerTerminalInjector } from '../TerminalManager';
 
 // ── Preset Themes ──
 
@@ -220,6 +220,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       initialData = result.initial_data || '';
     } catch (err) {
       console.error('[Terminal] Failed to create session:', err);
+      // 创建失败时清理刚挂载的 xterm DOM，避免空输入块残留覆盖后续欢迎页按钮
+      try {
+        term.dispose();
+      } catch { /* ignore */ }
+      tabDiv?.parentNode?.removeChild(tabDiv);
       return;
     }
 
@@ -392,6 +397,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       tabDiv.parentNode.removeChild(tabDiv);
     }
 
+    // 最后一个终端关闭后：重置 scaleWrapper 尺寸并清掉可能残留的终端容器。
+    // 否则其固定高度残留会以透明空块覆盖在「默认引导页」之上，导致页面按钮全部无法点击。
+    if (tabsCountRef.current === 1) {
+      const wrapper = scaleWrapperRef.current;
+      if (wrapper) {
+        wrapper.style.height = '';
+        wrapper.style.marginTop = '';
+        wrapper.querySelectorAll('[id^="xterm-tab-"]').forEach((el) => el.remove());
+      }
+    }
+
     // Use functional update to read latest state — avoids stale closure on activeTerminalTabId
     setTerminalTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
@@ -428,6 +444,23 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       }
     }
   }, [activeTerminalTabId]);
+
+  // ── 注入桥注册：把「向当前活跃终端输入点注入文本」能力暴露给外部组件（如灵感面板） ──
+  useEffect(() => {
+    const entry = activeTerminalTabId ? terminalRef.current.get(activeTerminalTabId) : undefined;
+    if (entry) {
+      const term = entry.term;
+      registerTerminalInjector((text: string) => {
+        term.paste(text);
+        return true;
+      });
+    } else {
+      registerTerminalInjector(null);
+    }
+    // terminalTabs 参与依赖：创建/关闭 tab 后以最新 terminalRef 重算活跃注入目标
+  }, [activeTerminalTabId, terminalTabs]);
+  // 组件卸载（如进入 /settings 独立路由）时清空，避免注入器指向已销毁实例
+  useEffect(() => () => registerTerminalInjector(null), []);
 
   // ── ResizeObserver: track container size (NO auto-create) ──
   //    Terminal cols/rows are FIXED at creation time — never changed.
@@ -605,7 +638,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
             )}
           </div>
           <button
-            onClick={createTerminal}
+            onClick={() => createTerminal()}
             className="flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors"
             style={{ color: 'rgba(255,255,255,0.7)' }}
             onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
@@ -746,16 +779,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
                   新建终端
                 </button>
 
-                {/* Shell 快捷选择：和顶部 Toolbar 同步 */}
+                {/* Shell 快捷选择：仅切换默认终端类型（与顶部 Toolbar 同步），新建由上方 CTA/快捷键发起 */}
                 <div className="flex items-center gap-1.5 p-1 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
                   <span className="text-[10px] opacity-50 px-1.5 pr-2">使用</span>
                   {SHELL_OPTIONS.map((s) => (
                     <button
                       key={s.value}
-                      onClick={() => {
-                        setTerminalShellType(s.value as 'powershell' | 'cmd');
-                        createTerminal();
-                      }}
+                      onClick={() => setTerminalShellType(s.value as 'powershell' | 'cmd')}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all"
                       style={{
                         background: terminalShellType === s.value ? 'rgba(255,255,255,0.12)' : 'transparent',
@@ -764,7 +794,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
                       }}
                       onMouseEnter={(e) => { if (terminalShellType !== s.value) e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
                       onMouseLeave={(e) => { if (terminalShellType !== s.value) e.currentTarget.style.background = 'transparent'; }}
-                      title={`新建 ${s.label} 终端`}
+                      title={`选择默认终端类型：${s.label}`}
                     >
                       {s.value === 'powershell' ? <Command className="w-3 h-3" /> : <TerminalIcon className="w-3 h-3" />}
                       {s.label}
@@ -812,8 +842,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
                     <Palette className="w-3.5 h-3.5 opacity-60" />
                     <span className="text-xs font-medium">主题</span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {['Catppuccin Dark', 'One Dark', 'Light', 'Blue'].slice(0, 4).map((name) => {
+                  {/* 与右上角主题下拉同一数据源（THEME_NAMES 全量） */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {THEME_NAMES.map((name) => {
                       const active = terminalTheme === name;
                       return (
                         <button
@@ -821,7 +852,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
                           onClick={() => setTerminalTheme(name)}
                           className="w-6 h-6 rounded-md border transition-transform hover:scale-110"
                           style={{
-                            background: TERMINAL_THEMES[name as keyof typeof TERMINAL_THEMES].background,
+                            background: TERMINAL_THEMES[name].background,
                             borderColor: active ? '#5B7FFF' : 'rgba(255,255,255,0.1)',
                             boxShadow: active ? '0 0 0 2px rgba(91,127,255,0.3)' : 'none',
                           }}

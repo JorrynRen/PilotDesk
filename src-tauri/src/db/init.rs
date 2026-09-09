@@ -1,28 +1,210 @@
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use crate::utils::paths::db_path;
 use crate::utils::errors::AppError;
 use std::fs;
 
-/// 所有迁移版本号（必须保持升序排列）
-/// 新增迁移时：1) 在此数组末尾追加版本号  2) 在 run_migrations match 中添加对应分支
-/// MIGRATION_VERSION 自动取数组最大值，无需手动维护
-const MIGRATION_VERSIONS: &[i64] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 65, 66, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88];
+/// 对外 schema 版本：v5 起从"版本不一致即整库重置"改为增量迁移，历史库一律保留；
+/// 打开到比当前更新的库时明确报错，绝不 wipe。v1-v4 为预发布期整库重置，无独立旧库留存。
+/// 约定：每次修改 FINAL_SCHEMA_SQL 都必须把 SCHEMA_VERSION +1，
+/// 否则 user_version 相等的旧库走快速路径、不会补齐缺表/缺列。
+pub const SCHEMA_VERSION: i64 = 5;
 
-/// MIGRATION_VERSION 自动从 MIGRATION_VERSIONS 数组计算最大值
-/// 新增迁移时只需在数组中追加版本号，此值自动同步，无需手动维护
-const MIGRATION_VERSION: i64 = {
-    let mut max = 0i64;
-    let mut i = 0;
-    while i < MIGRATION_VERSIONS.len() {
-        if MIGRATION_VERSIONS[i] > max {
-            max = MIGRATION_VERSIONS[i];
-        }
-        i += 1;
-    }
-    max
-};
+/// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
+/// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
+/// - v5 起老库按列增量补齐（见 migrate_schema/ensure_column），新列一律带 DEFAULT 回填历史行。
+/// 额外的基础兜底表（file_history、inspirations_fts）仍在 init_db 中执行。
+pub const FINAL_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS agents (
+            agent_type TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            cli_command TEXT NOT NULL DEFAULT '',
+            npm_package TEXT,
+            pip_package TEXT,
+            version_flag TEXT NOT NULL DEFAULT '--version',
+            install_cmd TEXT NOT NULL DEFAULT '',
+            uninstall_cmd TEXT NOT NULL DEFAULT '',
+            update_cmd TEXT NOT NULL DEFAULT '',
+            version_cmd TEXT NOT NULL DEFAULT '',
+            latest_version_cmd TEXT NOT NULL DEFAULT '',
+            run_cmd_template TEXT NOT NULL DEFAULT '',
+            output_parser TEXT NOT NULL DEFAULT 'raw-text',
+            output_filter_regex TEXT NOT NULL DEFAULT '',
+            version_pattern TEXT NOT NULL DEFAULT 'v?(\d+\.\d+\.\d+[\w.-]*)',
+            supports_session_continuity INTEGER NOT NULL DEFAULT 0,
+            session_id_source TEXT NOT NULL DEFAULT 'none',
+            session_id_event_type TEXT NOT NULL DEFAULT '',
+            session_id_field TEXT NOT NULL DEFAULT '',
+            resume_arg_template TEXT NOT NULL DEFAULT '',
+            skills_dir TEXT NOT NULL DEFAULT '',
+            skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
+            skill_display_mode TEXT NOT NULL DEFAULT 'collection',
+            color TEXT NOT NULL DEFAULT '#6366F1',
+            icon TEXT NOT NULL DEFAULT '\U0001f916',
+            sort_order INTEGER DEFAULT 0,
+            is_enabled INTEGER DEFAULT 1,
+            is_builtin INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        , version TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS api_providers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            api_endpoint TEXT NOT NULL DEFAULT '',
+            api_key TEXT DEFAULT '',
+            api_key_masked TEXT DEFAULT '',
+            api_key_set INTEGER DEFAULT 0,
+            models TEXT NOT NULL DEFAULT '[]',
+            sort_order INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        , api_format TEXT NOT NULL DEFAULT 'openai');
+CREATE TABLE IF NOT EXISTS api_usage_log (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id        TEXT NOT NULL,
+            provider          TEXT NOT NULL DEFAULT '',
+            model             TEXT NOT NULL DEFAULT '',
+            api_format        TEXT NOT NULL DEFAULT '',
+            prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tokens      INTEGER NOT NULL DEFAULT 0,
+            cached_tokens     INTEGER NOT NULL DEFAULT 0, -- 总缓存 = cache_read_tokens + cache_write_tokens（兼容既有汇总/展示）
+            cache_read_tokens  INTEGER NOT NULL DEFAULT 0, -- 缓存命中读取 token
+            cache_write_tokens INTEGER NOT NULL DEFAULT 0, -- 缓存写入 token
+            created_at        INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS groupchat_participants (
+            id              TEXT NOT NULL,
+            room_id         TEXT NOT NULL,
+            participant_type TEXT NOT NULL,
+            agent_config    TEXT NOT NULL DEFAULT '{}',
+            display_name    TEXT NOT NULL DEFAULT '',
+            system_role     TEXT NOT NULL DEFAULT '',
+            status          TEXT NOT NULL DEFAULT 'active',
+            PRIMARY KEY (room_id, id),
+            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id));
+CREATE TABLE IF NOT EXISTS groupchat_rooms (
+            id            TEXT PRIMARY KEY,
+            title         TEXT NOT NULL DEFAULT '',
+            topic         TEXT NOT NULL DEFAULT '',
+            status        TEXT NOT NULL DEFAULT 'idle',
+            strategy      TEXT NOT NULL DEFAULT 'round_robin',
+            max_rounds    INTEGER NOT NULL DEFAULT 5,
+            max_parallel  INTEGER NOT NULL DEFAULT 2,
+            director_id   TEXT,
+            current_task_id TEXT,
+            created_at    INTEGER NOT NULL,
+            updated_at    INTEGER NOT NULL,
+            goal_notes    TEXT NOT NULL DEFAULT '[]',
+            allow_auto_cli INTEGER NOT NULL DEFAULT 1,
+            output_dir    TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS groupchat_stances (
+            room_id      TEXT NOT NULL,
+            participant_id TEXT NOT NULL,
+            stance       TEXT NOT NULL DEFAULT '',
+            attitude     TEXT NOT NULL DEFAULT '',
+            updated_at   INTEGER NOT NULL,
+            PRIMARY KEY (room_id, participant_id));
+CREATE TABLE IF NOT EXISTS inspiration_tags (
+            inspiration_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (inspiration_id, tag),
+            FOREIGN KEY (inspiration_id) REFERENCES inspirations(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS inspirations (
+            id TEXT PRIMARY KEY,
+            icon TEXT NOT NULL DEFAULT '💡',
+            title TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            source_agent TEXT DEFAULT 'manual',
+            is_favorite INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS install_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('info', 'warn', 'error', 'success')));
+CREATE TABLE IF NOT EXISTS room_events (
+    seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id        TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    payload        TEXT NOT NULL DEFAULT '{}',
+    model_visible  INTEGER NOT NULL DEFAULT 1,
+    created_at     INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS session_events (
+    seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id     TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    payload        TEXT NOT NULL DEFAULT '{}',
+    model_visible  INTEGER NOT NULL DEFAULT 1,
+    created_at     INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS "sessions" (
+            id TEXT PRIMARY KEY,
+            agent_type TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            cwd TEXT DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_message_preview TEXT DEFAULT '',
+            message_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+            api_provider TEXT,
+            api_model TEXT,
+            agent_session_id TEXT
+        , temperature REAL DEFAULT 0.7, max_tokens INTEGER DEFAULT NULL);
+CREATE TABLE IF NOT EXISTS workflow_definitions (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            version TEXT NOT NULL DEFAULT '1.0.0',
+            description TEXT NOT NULL DEFAULT '',
+            trigger TEXT NOT NULL DEFAULT '{"triggerType":"manual"}',
+            stages TEXT NOT NULL DEFAULT '[]',
+            input_schema TEXT,
+            output_schema TEXT,
+            icon TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS workflow_events (
+    seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+    execution_id   TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    payload        TEXT NOT NULL DEFAULT '{}',
+    model_visible  INTEGER NOT NULL DEFAULT 1,
+    created_at     INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS workflow_schedules (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            cron_expression TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            input_data TEXT DEFAULT '{}',
+            last_run_at INTEGER,
+            next_run_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS workflow_versions (
+            id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+            version INTEGER NOT NULL,
+            snapshot TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(workflow_id, version));
+CREATE INDEX IF NOT EXISTS idx_api_usage_session ON api_usage_log (session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_install_logs_time ON install_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_room_events_room_seq ON room_events (room_id, seq);
+CREATE INDEX IF NOT EXISTS idx_session_events_session_seq ON session_events (session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_wf_schedule_next ON workflow_schedules(next_run_at, enabled);
+CREATE INDEX IF NOT EXISTS idx_wf_versions_workflow ON workflow_versions(workflow_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);
+CREATE INDEX IF NOT EXISTS idx_workflow_events_exec ON workflow_events (execution_id, seq);
+"#;
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
@@ -37,7 +219,7 @@ pub fn init_db() -> Result<DbPool, AppError> {
         .max_size(8)
         .build(manager)?;
 
-    // Run migrations on a single connection
+    // 数据库操作在单连接上进行
     let conn = pool.get()?;
 
     conn.execute_batch(
@@ -45,212 +227,15 @@ pub fn init_db() -> Result<DbPool, AppError> {
          PRAGMA foreign_keys = ON;"
     )?;
 
+    // ── schema 增量迁移（v5 起）──
+    // 历史库一律保留：旧版库逐项补列升级；比当前更新的库（由更新版本应用创建/打开过）
+    // 明确报错拒绝打开，绝不整库重置。先执行幂等终态建表脚本兜底缺表，再补老库缺列。
+    migrate_schema(&conn)?;
+
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            agent_type TEXT NOT NULL DEFAULT '',
-            title TEXT NOT NULL DEFAULT '',
-            cwd TEXT DEFAULT '',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            last_message_preview TEXT DEFAULT '',
-            message_count INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
-            api_provider TEXT,
-            api_model TEXT,
-            agent_session_id TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-            role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-            content TEXT NOT NULL DEFAULT '',
-            mode TEXT DEFAULT 'native' CHECK(mode IN ('native', 'fast', 'think', 'expert')),
-            timestamp INTEGER NOT NULL,
-            tool_calls TEXT DEFAULT NULL,
-            tool_call_id TEXT DEFAULT NULL,
-            tool_name TEXT DEFAULT NULL,
-            attachments TEXT DEFAULT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS inspirations (
-            id TEXT PRIMARY KEY,
-            icon TEXT NOT NULL DEFAULT '💡',
-            title TEXT NOT NULL,
-            content TEXT NOT NULL DEFAULT '',
-            source_agent TEXT DEFAULT 'manual',
-            is_favorite INTEGER DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS inspiration_tags (
-            inspiration_id TEXT NOT NULL REFERENCES inspirations(id) ON DELETE CASCADE,
-            tag TEXT NOT NULL,
-            PRIMARY KEY (inspiration_id, tag)
-        );
-
-CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);
-        CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
-        CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);
-        CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+        "CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);
         CREATE INDEX IF NOT EXISTS idx_inspirations_favorite ON inspirations(is_favorite, updated_at);
         CREATE INDEX IF NOT EXISTS idx_inspirations_tags ON inspiration_tags(tag);"
-    )?;
-
-    conn.execute_batch(
-        r#"CREATE TABLE IF NOT EXISTS api_providers (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            api_endpoint TEXT NOT NULL DEFAULT '',
-            api_key TEXT DEFAULT '',
-            api_key_masked TEXT DEFAULT '',
-            api_key_set INTEGER DEFAULT 0,
-            models TEXT NOT NULL DEFAULT '[]',
-            sort_order INTEGER DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS app_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL DEFAULT '',
-            updated_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS install_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp INTEGER NOT NULL,
-            message TEXT NOT NULL DEFAULT '',
-            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('info', 'warn', 'error', 'success'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_install_logs_time ON install_logs(timestamp);
-
-        CREATE TABLE IF NOT EXISTS agents (
-            agent_type TEXT PRIMARY KEY,
-            display_name TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL DEFAULT '',
-            cli_command TEXT NOT NULL DEFAULT '',
-            npm_package TEXT,
-            pip_package TEXT,
-            install_cmd TEXT NOT NULL DEFAULT '',
-            uninstall_cmd TEXT NOT NULL DEFAULT '',
-            update_cmd TEXT NOT NULL DEFAULT '',
-            version_cmd TEXT NOT NULL DEFAULT '',
-            latest_version_cmd TEXT NOT NULL DEFAULT '',
-            run_cmd_template TEXT NOT NULL DEFAULT '',
-            output_parser TEXT NOT NULL DEFAULT 'raw-text',
-            output_filter_regex TEXT NOT NULL DEFAULT '',
-            version_pattern TEXT NOT NULL DEFAULT 'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)',
-            supports_session_continuity INTEGER NOT NULL DEFAULT 0,
-            session_id_source TEXT NOT NULL DEFAULT 'none',
-            session_id_event_type TEXT NOT NULL DEFAULT '',
-            session_id_field TEXT NOT NULL DEFAULT '',
-            resume_arg_template TEXT NOT NULL DEFAULT '',
-            skills_dir TEXT NOT NULL DEFAULT '',
-            skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
-            skill_display_mode TEXT NOT NULL DEFAULT 'collection',
-            color TEXT NOT NULL DEFAULT '#6366F1',
-            icon TEXT NOT NULL DEFAULT '\\U0001f916',
-            sort_order INTEGER DEFAULT 0,
-            is_enabled INTEGER DEFAULT 1,
-            is_builtin INTEGER DEFAULT 0,
-            version TEXT NOT NULL DEFAULT '',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS workflow_definitions (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            version TEXT NOT NULL DEFAULT '1.0.0',
-            description TEXT NOT NULL DEFAULT '',
-            trigger TEXT NOT NULL DEFAULT '{"triggerType":"manual"}',
-            stages TEXT NOT NULL DEFAULT '[]',
-            input_schema TEXT,
-            output_schema TEXT,
-            icon TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS workflow_instances (
-            id TEXT PRIMARY KEY,
-            definition_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
-            definition_name TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'paused', 'success', 'failed', 'cancelled', 'timeout')),
-            context TEXT NOT NULL DEFAULT '{}',
-            trigger TEXT NOT NULL DEFAULT 'manual' CHECK(trigger IN ('manual', 'cron', 'event')),
-            trigger_detail TEXT,
-            started_at INTEGER,
-            completed_at INTEGER,
-            error TEXT,
-            completion_rate REAL NOT NULL DEFAULT 0.0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS node_executions (
-            id TEXT PRIMARY KEY,
-            execution_id TEXT NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
-            node_id TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')),
-            input_data TEXT DEFAULT NULL,
-            output_data TEXT DEFAULT NULL,
-            error_message TEXT DEFAULT NULL,
-            started_at INTEGER,
-            finished_at INTEGER,
-            retry_count INTEGER DEFAULT 0,
-            duration_ms INTEGER DEFAULT 0,
-            artifacts_path TEXT DEFAULT NULL,
-            agent_session_id TEXT DEFAULT NULL,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS node_execution_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            execution_id TEXT NOT NULL,
-            node_execution_id TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug', 'info', 'warn', 'error')),
-            message TEXT NOT NULL,
-            metadata TEXT DEFAULT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_node_exec_execution ON node_executions(execution_id);
-        CREATE INDEX IF NOT EXISTS idx_node_exec_status ON node_executions(execution_id, status);
-        CREATE INDEX IF NOT EXISTS idx_node_logs_exec ON node_execution_logs(node_execution_id, timestamp);
-
-        CREATE TABLE IF NOT EXISTS workflow_schedules (
-            id TEXT PRIMARY KEY,
-            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
-            cron_expression TEXT NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            input_data TEXT DEFAULT '{}',
-            last_run_at INTEGER,
-            next_run_at INTEGER,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_wf_schedule_next ON workflow_schedules(next_run_at, enabled);
-
-        CREATE TABLE IF NOT EXISTS workflow_versions (
-            id TEXT PRIMARY KEY,
-            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
-            version INTEGER NOT NULL,
-            snapshot TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            UNIQUE(workflow_id, version)
-        );
-        CREATE INDEX IF NOT EXISTS idx_wf_versions_workflow ON workflow_versions(workflow_id, version DESC);
-        CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);
-        CREATE INDEX IF NOT EXISTS idx_workflow_instances_completed ON workflow_instances(completed_at, status);
-        CREATE INDEX IF NOT EXISTS idx_node_executions_node ON node_executions(node_id, execution_id);
-        CREATE INDEX IF NOT EXISTS idx_node_execution_logs_level ON node_execution_logs(node_execution_id, level, timestamp);
-        CREATE INDEX IF NOT EXISTS idx_wf_exec_workflow ON workflow_instances(definition_id, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_wf_exec_status ON workflow_instances(status, created_at DESC);"#
     )?;
 
     // Agent 文件修改历史（write_file / edit_file 的撤销备份）
@@ -264,79 +249,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
             created_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_file_history_session ON file_history(session_id, created_at DESC);"
-    )?;
-
-    // ===== 群聊多 Agent（v82，初始建表块；增量迁移见 migrate_add_groupchat_tables） =====
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS groupchat_rooms (
-            id            TEXT PRIMARY KEY,
-            title         TEXT NOT NULL DEFAULT '',
-            topic         TEXT NOT NULL DEFAULT '',
-            status        TEXT NOT NULL DEFAULT 'idle',
-            strategy      TEXT NOT NULL DEFAULT 'round_robin',
-            max_rounds    INTEGER NOT NULL DEFAULT 5,
-            max_parallel  INTEGER NOT NULL DEFAULT 2,
-            director_id   TEXT,
-            current_task_id TEXT,
-            created_at    INTEGER NOT NULL,
-            updated_at    INTEGER NOT NULL,
-            goal_notes    TEXT NOT NULL DEFAULT '[]'
-        );
-
-        CREATE TABLE IF NOT EXISTS groupchat_participants (
-            id              TEXT NOT NULL,
-            room_id         TEXT NOT NULL,
-            participant_type TEXT NOT NULL,
-            agent_config    TEXT NOT NULL DEFAULT '{}',
-            display_name    TEXT NOT NULL DEFAULT '',
-            system_role     TEXT NOT NULL DEFAULT '',
-            status          TEXT NOT NULL DEFAULT 'active',
-            PRIMARY KEY (room_id, id),
-            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS groupchat_messages (
-            id          TEXT PRIMARY KEY,
-            room_id     TEXT NOT NULL,
-            round       INTEGER NOT NULL DEFAULT 0,
-            seq         INTEGER NOT NULL DEFAULT 0,
-            sender      TEXT NOT NULL,
-            recipients  TEXT NOT NULL DEFAULT '[]',
-            kind        TEXT NOT NULL,
-            reply_to    TEXT,
-            content     TEXT NOT NULL DEFAULT '',
-            attachments TEXT NOT NULL DEFAULT '[]',
-            tool_calls  TEXT NOT NULL DEFAULT '[]',
-            extra       TEXT NOT NULL DEFAULT '{}',
-            timestamp   INTEGER NOT NULL,
-            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS groupchat_stances (
-            room_id      TEXT NOT NULL,
-            participant_id TEXT NOT NULL,
-            stance       TEXT NOT NULL DEFAULT '',
-            updated_at   INTEGER NOT NULL,
-            PRIMARY KEY (room_id, participant_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS groupchat_tasks (
-            id              TEXT PRIMARY KEY,
-            room_id         TEXT NOT NULL,
-            task_no         INTEGER NOT NULL,
-            description     TEXT NOT NULL,
-            assignee        TEXT,
-            depends_on      TEXT NOT NULL DEFAULT '[]',
-            status          TEXT NOT NULL DEFAULT 'discussing',
-            result_summary  TEXT,
-            error           TEXT,
-            started_at      INTEGER,
-            completed_at    INTEGER,
-            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_gcm_room ON groupchat_messages(room_id, round, seq);
-        CREATE INDEX IF NOT EXISTS idx_gct_room ON groupchat_tasks(room_id, status);"
     )?;
 
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
@@ -403,1318 +315,95 @@ CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, c
     }
 
     // App Settings 种子数据
-    let settings_seeds: Vec<(&str, &str)> = vec![
-        ("mode_prompt_native", ""),
-        ("mode_prompt_fast", "快速简洁回答，直接给出结论，无需详细解释推理过程"),
-        ("mode_prompt_think", "逐步分析推理，详细解释你的思路和过程，给出完整的推理链"),
-        ("mode_prompt_expert", "以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案"),
-        ("pilotdesk-workspace", "~\\AppData\\Roaming\\PilotDesk"),
-        ("workflow_max_concurrency", "10"),
-        ("workflow_max_subflow_depth", "3"),
+    let workspace_default = crate::utils::paths::app_data_dir().to_string_lossy().into_owned();
+    let settings_seeds: Vec<(String, String)> = vec![
+        ("mode_prompt_native".into(), String::new()),
+        ("mode_prompt_fast".into(), "快速简洁回答，直接给出结论，无需详细解释推理过程".into()),
+        ("mode_prompt_think".into(), "逐步分析推理，详细解释你的思路和过程，给出完整的推理链".into()),
+        ("mode_prompt_expert".into(), "以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案".into()),
+        ("mode_prompt_plan".into(), "先分析需求并制定清晰的分步执行计划，先向用户呈现完整计划等待确认，未经确认不要执行任何操作。".into()),
+        ("pilotdesk-workspace".into(), workspace_default),
+        ("workflow_max_concurrency".into(), "10".into()),
+        ("workflow_max_subflow_depth".into(), "3".into()),
     ];
-    for (key, value) in settings_seeds {
+    for (key, value) in &settings_seeds {
         conn.execute(
             "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
             rusqlite::params![key, value, now],
         )?;
     }
 
-    // ── 启动时 schema 修复 ──
-    // 修复因初始 CREATE TABLE 缺失列导致查询失败的数据库
-    // （user_version 已升至最新，不会触发迁移，需显式修复）
-    {
-        // sessions 表缺少 agent_session_id 列
-        let has_agent_sid = conn
-            .prepare("SELECT agent_session_id FROM sessions LIMIT 0")
-            .is_ok();
-        if !has_agent_sid {
-            log::info!("[startup repair] 检测到 sessions 表缺少 agent_session_id 列，正在修复...");
-            conn.execute_batch(
-                "ALTER TABLE sessions ADD COLUMN agent_session_id TEXT DEFAULT NULL;"
-            )?;
-            log::info!("[startup repair] agent_session_id 列已添加");
-        }
-
-        // messages 表缺少 tool_calls / tool_call_id / tool_name 列
-        let has_tool_calls = conn
-            .prepare("SELECT tool_calls FROM messages LIMIT 0")
-            .is_ok();
-        if !has_tool_calls {
-            log::info!("[startup repair] 检测到 messages 表缺少扩展列，正在修复...");
-            conn.execute_batch(
-                "ALTER TABLE messages ADD COLUMN tool_calls TEXT DEFAULT NULL;
-                 ALTER TABLE messages ADD COLUMN tool_call_id TEXT DEFAULT NULL;
-                 ALTER TABLE messages ADD COLUMN tool_name TEXT DEFAULT NULL;"
-            )?;
-            log::info!("[startup repair] messages 扩展列已添加");
-        }
-
-        // 清理废弃的 reasoning_content 列（旧版本遗留，若存在则删除）
-        let has_reasoning = conn
-            .prepare("SELECT reasoning_content FROM messages LIMIT 0")
-            .is_ok();
-        if has_reasoning {
-            match conn.execute_batch("ALTER TABLE messages DROP COLUMN reasoning_content;") {
-                Ok(_) => log::info!("[startup repair] reasoning_content 列已清理"),
-                Err(e) => log::warn!("[startup repair] 无法删除 reasoning_content 列（可忽略）: {}", e),
-            }
-        }
-    }
-
-    // Versioned migrations — 由 MIGRATION_VERSIONS 数组驱动
-    let current_version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap_or(0);
-
-    // 新数据库：初始建表已包含所有表的最终 schema，种子数据已插入，跳过增量迁移
-    if current_version > 0 {
-        run_migrations(&conn, current_version)?;
-    }
-
-    if current_version < MIGRATION_VERSION {
-        conn.pragma_update(None, "user_version", MIGRATION_VERSION)?;
-    }
-
+    // 权限规则默认种子：首启写入默认清单（原增量迁移的职责移交至此），已有自定义规则不被覆盖。
+    let rules_json = serde_json::to_string(
+        &crate::api_agent::agent_loop::default_permission_rules(),
+    )
+    .unwrap_or_else(|_| "{}".to_string());
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
+        rusqlite::params![
+            crate::commands::permission::PERMISSION_RULES_KEY,
+            rules_json,
+            now
+        ],
+    )?;
 
     Ok(pool)
 }
 
-
-fn migrate_add_api_providers(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS api_providers (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            api_endpoint TEXT NOT NULL DEFAULT '',
-            api_key TEXT DEFAULT '',
-            api_key_masked TEXT DEFAULT '',
-            api_key_set INTEGER DEFAULT 0,
-            models TEXT NOT NULL DEFAULT '[]',
-            sort_order INTEGER DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        )"
-    )?;
-    Ok(())
-}
-
-fn migrate_add_app_settings(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS app_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL DEFAULT '',
-            updated_at INTEGER NOT NULL
-        )"
-    )?;
-
-    let seeds: Vec<(&str, &str)> = vec![
-        ("mode_prompt_native", ""),
-        ("mode_prompt_fast", "快速简洁回答，直接给出结论，无需详细解释推理过程"),
-        ("mode_prompt_think", "逐步分析推理，详细解释你的思路和过程，给出完整的推理链"),
-        ("mode_prompt_expert", "以资深专家的视角，全面深入分析，考虑各种边界情况和潜在风险，给出专业的建议和方案"),
-        ("pilotdesk-workspace", "~\\AppData\\Roaming\\PilotDesk"),
-        ("workflow_max_concurrency", "10"),
-        ("workflow_max_subflow_depth", "3"),
-    ];
-    let now = crate::utils::now();
-    for (key, value) in seeds {
-        conn.execute(
-            "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
-            params![key, value, now],
+/// 幂等 schema 迁移入口（v5 起）。三步：
+/// 1. current > SCHEMA_VERSION：拒绝打开（库来自更新版本的应用），绝不 wipe；
+/// 2. 执行 FINAL_SCHEMA_SQL（IF NOT EXISTS，可重复执行）；
+/// 3. current < SCHEMA_VERSION：逐项迁移补列，成功后把 user_version 提升到 SCHEMA_VERSION。
+fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
+    let current_version: i64 = conn
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap_or(0);
+    if current_version > SCHEMA_VERSION {
+        return Err(AppError::Config(format!(
+            "数据库 schema 版本（v{}）高于当前应用支持的最高版本（v{}）：该数据库由更新版本的 PilotDesk 创建或打开过。\
+             为避免数据损坏，本次启动拒绝打开该库；请升级应用到最新版本后再试（不会清除任何数据）。",
+            current_version, SCHEMA_VERSION
+        )));
+    }
+    conn.execute_batch(FINAL_SCHEMA_SQL)?;
+    if current_version < SCHEMA_VERSION {
+        // v4 → v5：api_usage_log 缓存读/写拆分。cache_read_tokens=缓存命中读取，
+        // cache_write_tokens=缓存写入；cached_tokens 保留并恒等于两者之和（兼容既有汇总）。
+        ensure_column(
+            conn,
+            "api_usage_log",
+            "cache_read_tokens",
+            "INTEGER NOT NULL DEFAULT 0",
         )?;
-    }
-
-    Ok(())
-}
-
-fn migrate_add_api_columns(conn: &Connection) -> Result<(), AppError> {
-    let has_api_provider = conn
-        .prepare("SELECT api_provider FROM sessions LIMIT 0")
-        .is_ok();
-
-    if !has_api_provider {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN api_provider TEXT;
-             ALTER TABLE sessions ADD COLUMN api_model TEXT;"
+        ensure_column(
+            conn,
+            "api_usage_log",
+            "cache_write_tokens",
+            "INTEGER NOT NULL DEFAULT 0",
         )?;
-    }
-
-    Ok(())
-}
-
-fn migrate_add_type(conn: &Connection) -> Result<(), AppError> {
-    let accepts_api = conn
-        .execute("INSERT INTO sessions (id, agent_type, title, cwd, created_at, updated_at) VALUES ('__migration_test_api', 'api', '', '', 0, 0)", [])
-        .is_ok();
-    let accepts_codex = conn
-        .execute("INSERT INTO sessions (id, agent_type, title, cwd, created_at, updated_at) VALUES ('__migration_test_codex', 'codex', '', '', 0, 0)", [])
-        .is_ok();
-
-    if accepts_api && accepts_codex {
-        conn.execute("DELETE FROM sessions WHERE id IN ('__migration_test_api', '__migration_test_codex')", [])?;
-        return Ok(());
-    }
-
-    conn.execute("DELETE FROM sessions WHERE id IN ('__migration_test_api', '__migration_test_codex')", [])?;
-
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sessions_new (
-            id TEXT PRIMARY KEY,
-            agent_type TEXT NOT NULL DEFAULT '',
-            title TEXT NOT NULL DEFAULT '',
-            cwd TEXT DEFAULT '',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            last_message_preview TEXT DEFAULT '',
-            message_count INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
-            api_provider TEXT,
-            api_model TEXT
-        );
-        
-
-        INSERT OR IGNORE INTO sessions_new (id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model)
-        SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model FROM sessions;
-
-        DROP TABLE sessions;
-        ALTER TABLE sessions_new RENAME TO sessions;
-
-        CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
-        CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);"
-    )?;
-
-    Ok(())
-}
-
-fn migrate_add_message_extensions(conn: &Connection) -> Result<(), AppError> {
-    let has_tool_calls = conn
-        .prepare("SELECT tool_calls FROM messages LIMIT 0")
-        .is_ok();
-
-    if !has_tool_calls {
-        conn.execute_batch(
-            "ALTER TABLE messages ADD COLUMN tool_calls TEXT DEFAULT NULL;
-             ALTER TABLE messages ADD COLUMN tool_call_id TEXT DEFAULT NULL;
-             ALTER TABLE messages ADD COLUMN tool_name TEXT DEFAULT NULL;"
-        )?;
-    }
-
-    Ok(())
-}
-
-fn migrate_add_install_logs(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS install_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp INTEGER NOT NULL,
-            message TEXT NOT NULL DEFAULT '',
-            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('info', 'warn', 'error', 'success'))
-        );
-        
-
-        CREATE INDEX IF NOT EXISTS idx_install_logs_time ON install_logs(timestamp);"
-    )?;
-    Ok(())
-}
-
-fn migrate_add_agent_session_id(conn: &Connection) -> Result<(), AppError> {
-    let has_column = conn
-        .prepare("SELECT agent_session_id FROM sessions LIMIT 0")
-        .is_ok();
-
-    if !has_column {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN agent_session_id TEXT DEFAULT NULL;"
-        )?;
-    }
-
-    Ok(())
-}
-
-fn migrate_add_agents_table(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS agents (
-            agent_type TEXT PRIMARY KEY,
-            display_name TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL DEFAULT '',
-            cli_command TEXT NOT NULL DEFAULT '',
-            npm_package TEXT,
-            pip_package TEXT,
-            version_flag TEXT NOT NULL DEFAULT '--version',
-            install_cmd TEXT NOT NULL DEFAULT '',
-            uninstall_cmd TEXT NOT NULL DEFAULT '',
-            update_cmd TEXT NOT NULL DEFAULT '',
-            version_cmd TEXT NOT NULL DEFAULT '',
-            latest_version_cmd TEXT NOT NULL DEFAULT '',
-            run_cmd_template TEXT NOT NULL DEFAULT '',
-            output_parser TEXT NOT NULL DEFAULT 'raw-text',
-            output_filter_regex TEXT NOT NULL DEFAULT '',
-            version_pattern TEXT NOT NULL DEFAULT 'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)',
-            supports_session_continuity INTEGER NOT NULL DEFAULT 0,
-            session_id_source TEXT NOT NULL DEFAULT 'none',
-            session_id_event_type TEXT NOT NULL DEFAULT '',
-            session_id_field TEXT NOT NULL DEFAULT '',
-            resume_arg_template TEXT NOT NULL DEFAULT '',
-            skills_dir TEXT NOT NULL DEFAULT '',
-            skill_display_mode TEXT NOT NULL DEFAULT 'collection',
-            color TEXT NOT NULL DEFAULT '#6366F1',
-            icon TEXT NOT NULL DEFAULT '\\U0001f916',
-            sort_order INTEGER DEFAULT 0,
-            is_enabled INTEGER DEFAULT 1,
-            is_builtin INTEGER DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        "
-    )?;
-
-    let now = crate::utils::now();
-    let seeds: Vec<(&str, &str, &str, &str, Option<&str>, Option<&str>, &str, &str, &str, &str, &str, &str, &str, &str, i64, &str, &str, &str, &str, &str, &str, &str, &str, i64)> = vec![
-        ("claude", "Claude Code", "Anthropic 官方 AI 编程助手，支持代码生成、调试、重构",
-         "claude", Some("@anthropic-ai/claude-code"), None,
-         "npm install -g @anthropic-ai/claude-code",
-         "npm uninstall -g @anthropic-ai/claude-code",
-         "claude update",
-         "claude --version",
-         "npm view @anthropic-ai/claude-code version",
-         "claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
-         "json-stream", "", 1, "stdout-json", "system", "session_id", "claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}",
-         "#3B82F6", "file:claude_icon.ico", "~/.claude/skills/", "collection", 1),
-        ("codex", "Codex CLI", "OpenAI 出品的终端 AI 编程助手",
-         "codex", Some("@openai/codex"), None,
-         "npm install -g @openai/codex",
-         "npm uninstall -g @openai/codex",
-         "codex update",
-         "codex --version",
-         "npm view @openai/codex version",
-         "codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
-         "json-stream", "", 1, "stdout-json", "thread.started", "thread_id", "codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}",
-         "#F59E0B", "file:codex_icon.ico", "~/.codex/skills/", "collection", 2),
-        ("hermes", "Hermes Agent", "轻量级通用 AI Agent",
-         "hermes", None, Some("hermes-agent"),
-         "pip install hermes-agent",
-         "pip uninstall hermes-agent -y",
-         "hermes update",
-         "hermes --version",
-         "powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version",
-         "hermes chat --query={message} -Q",
-         "ansi-text",
-         "^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)", 1,
-         "stderr-text", "", "session_id: ", "hermes --resume {session_id} chat --query={message} -Q",
-         "#8B5CF6", "file:hermes_icon.ico", "~/AppData/Local/hermes/skills/", "collection", 4),
-    ];
-
-    for (agent_type, display_name, description, cli_command, npm_package, pip_package,
-         install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-         output_parser, output_filter_regex, supports_session_continuity,
-         session_id_source, session_id_event_type, session_id_field, resume_arg_template,
-         skills_dir, skill_display_mode,
-         color, icon, sort_order) in seeds {
-        conn.execute(
-            "INSERT OR IGNORE INTO agents (agent_type, display_name, description, cli_command, npm_package, pip_package,
-             version_flag, install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-             output_parser, output_filter_regex, version_pattern, supports_session_continuity,
-             session_id_source, session_id_event_type, session_id_field, resume_arg_template,
-             skills_dir, skill_display_mode,
-             color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, '--version', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-             'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)', ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, 1, 1, ?25, ?25)",
-            rusqlite::params![agent_type, display_name, description, cli_command, npm_package, pip_package,
-                install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-                output_parser, output_filter_regex, supports_session_continuity,
-                session_id_source, session_id_event_type, session_id_field, resume_arg_template,
-                skills_dir, skill_display_mode,
-                color, icon, sort_order, now],
-        )?;
-    }
-
-    Ok(())
-}
-
-fn migrate_add_skill_fields(conn: &Connection) -> Result<(), AppError> {
-    // Add skills_dir, skill_entry_file, skill_display_mode columns
-    // Remove version_flag column (SQLite doesn't support DROP COLUMN before 3.35.0,
-    // so we recreate the table)
-    let has_skills_dir = conn.prepare("SELECT skills_dir FROM agents LIMIT 0").is_ok();
-    if !has_skills_dir {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS agents_new (
-                agent_type TEXT PRIMARY KEY,
-                display_name TEXT NOT NULL DEFAULT '',
-                description TEXT NOT NULL DEFAULT '',
-                cli_command TEXT NOT NULL DEFAULT '',
-                npm_package TEXT,
-                pip_package TEXT,
-                install_cmd TEXT NOT NULL DEFAULT '',
-                uninstall_cmd TEXT NOT NULL DEFAULT '',
-                update_cmd TEXT NOT NULL DEFAULT '',
-                version_cmd TEXT NOT NULL DEFAULT '',
-                latest_version_cmd TEXT NOT NULL DEFAULT '',
-                run_cmd_template TEXT NOT NULL DEFAULT '',
-                output_parser TEXT NOT NULL DEFAULT 'raw-text',
-                output_filter_regex TEXT NOT NULL DEFAULT '',
-                version_pattern TEXT NOT NULL DEFAULT 'v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)',
-                supports_session_continuity INTEGER NOT NULL DEFAULT 0,
-                session_id_source TEXT NOT NULL DEFAULT 'none',
-                session_id_event_type TEXT NOT NULL DEFAULT '',
-                session_id_field TEXT NOT NULL DEFAULT '',
-                resume_arg_template TEXT NOT NULL DEFAULT '',
-                skills_dir TEXT NOT NULL DEFAULT '',
-                skill_entry_file TEXT NOT NULL DEFAULT 'SKILL.md',
-                skill_display_mode TEXT NOT NULL DEFAULT 'collection',
-                color TEXT NOT NULL DEFAULT '#6366F1',
-                icon TEXT NOT NULL DEFAULT '\\U0001f916',
-                sort_order INTEGER DEFAULT 0,
-                is_enabled INTEGER DEFAULT 1,
-                is_builtin INTEGER DEFAULT 0,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-        
-            INSERT OR IGNORE INTO agents_new (
-                agent_type, display_name, description, cli_command,
-                npm_package, pip_package,
-                install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd,
-                run_cmd_template, output_parser, output_filter_regex, version_pattern,
-                supports_session_continuity, session_id_source, session_id_event_type,
-                session_id_field, resume_arg_template,
-                skills_dir, skill_entry_file, skill_display_mode,
-                color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at
-            )
-            SELECT agent_type, display_name, description, cli_command,
-                npm_package, pip_package,
-                install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd,
-                run_cmd_template, output_parser, output_filter_regex, version_pattern,
-                supports_session_continuity, session_id_source, session_id_event_type,
-                session_id_field, resume_arg_template,
-                '', 'SKILL.md', 'recursive',
-                color, icon, sort_order, is_enabled, is_builtin, created_at, updated_at
-            FROM agents;
-            DROP TABLE agents;
-            ALTER TABLE agents_new RENAME TO agents;"
-        )?;
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
     Ok(())
 }
 
-fn migrate_agents_full_schema(conn: &Connection) -> Result<(), AppError> {
-    // Drop old table and recreate with full schema
-    conn.execute_batch("DROP TABLE IF EXISTS agents;")?;
-    // Reuse the full schema from migrate_add_agents_table
-    migrate_add_agents_table(conn)
-}
-
-
-/// Migration v12 — 更新预置 Agent 图标字段（Emoji -> file:xxx.ico）
-fn migrate_update_agent_icons(conn: &Connection) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE agents SET icon = ?1 WHERE agent_type = ?2",
-        rusqlite::params!["file:claude_icon.ico", "claude"],
-    )?;
-    conn.execute(
-        "UPDATE agents SET icon = ?1 WHERE agent_type = ?2",
-        rusqlite::params!["file:hermes_icon.ico", "hermes"],
-    )?;
-    conn.execute(
-        "UPDATE agents SET icon = ?1 WHERE agent_type = ?2",
-        rusqlite::params!["file:codex_icon.ico", "codex"],
-    )?;
-    Ok(())
-}
-
-/// Migration v13 — 移除 sessions 表对 agent_type 的 CHECK 约束
-/// 确保自定义 Agent 类型可以正常创建会话
-fn migrate_remove_agent_type_check(conn: &Connection) -> Result<(), AppError> {
-    // SQLite cannot ALTER TABLE DROP CHECK, so recreate the table
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS sessions_v13 (
-            id TEXT PRIMARY KEY,
-            agent_type TEXT NOT NULL DEFAULT '',
-            title TEXT NOT NULL DEFAULT '',
-            cwd TEXT DEFAULT '',
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            last_message_preview TEXT DEFAULT '',
-            message_count INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active' CHECK(status IN ('active', 'archived')),
-            api_provider TEXT,
-            api_model TEXT,
-            agent_session_id TEXT
-        );
-        
-        INSERT OR IGNORE INTO sessions_v13 SELECT * FROM sessions;
-        DROP TABLE sessions;
-        ALTER TABLE sessions_v13 RENAME TO sessions;
-        CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_type, updated_at);
-        CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);"
-    )?;
-    Ok(())
-}
-
-/// Migration v78 — 新增 session_contexts 表，存储 API Agent 会话上下文（conversation history）
-fn migrate_add_session_context(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS session_contexts (
-            session_id TEXT PRIMARY KEY,
-            api_provider_id TEXT NOT NULL,
-            api_model TEXT NOT NULL,
-            conversation_messages TEXT NOT NULL DEFAULT '[]',
-            last_updated_at INTEGER NOT NULL,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-        );"
-    )?;
-    Ok(())
-}
-
-/// Migration v79 — session_contexts 新增 summary / summary_updated_at 列
-/// summary 用于存储被保留窗口裁剪掉的早期对话的 LLM 压缩摘要（滚动摘要）。
-fn migrate_add_session_summary(conn: &Connection) -> Result<(), AppError> {
-    let has_summary = conn
-        .prepare("SELECT summary FROM session_contexts LIMIT 0")
-        .is_ok();
-    if !has_summary {
-        conn.execute_batch(
-            "ALTER TABLE session_contexts ADD COLUMN summary TEXT NOT NULL DEFAULT '';
-             ALTER TABLE session_contexts ADD COLUMN summary_updated_at INTEGER NOT NULL DEFAULT 0;"
-        )?;
-        log::info!("[migration v79] session_contexts 新增 summary / summary_updated_at 列");
-    }
-    Ok(())
-}
-
-/// Migration v80 — messages 新增 images 列（多模态图片输入，JSON 数组字符串）
-fn migrate_add_message_images(conn: &Connection) -> Result<(), AppError> {
-    let has_images = conn
-        .prepare("SELECT images FROM messages LIMIT 0")
-        .is_ok();
-    if !has_images {
-        conn.execute_batch("ALTER TABLE messages ADD COLUMN images TEXT DEFAULT NULL;")?;
-        log::info!("[migration v80] messages 新增 images 列");
-    }
-    Ok(())
-}
-
-/// Migration v81 — messages.images 重命名为 attachments（图片与文件统一存储）
-fn migrate_rename_images_to_attachments(conn: &Connection) -> Result<(), AppError> {
-    let has_attachments = conn
-        .prepare("SELECT attachments FROM messages LIMIT 0")
-        .is_ok();
-    if !has_attachments {
-        let has_images = conn
-            .prepare("SELECT images FROM messages LIMIT 0")
-            .is_ok();
-        if has_images {
-            conn.execute_batch("ALTER TABLE messages RENAME COLUMN images TO attachments;")?;
-            log::info!("[migration v81] messages.images 已重命名为 attachments");
-        } else {
-            conn.execute_batch("ALTER TABLE messages ADD COLUMN attachments TEXT DEFAULT NULL;")?;
-            log::info!("[migration v81] messages 新增 attachments 列");
-        }
-    }
-    Ok(())
-}
-
-fn migrate_add_api_params(conn: &Connection) -> Result<(), AppError> {
-    // api_providers 增加 api_format（openai/anthropic）
-    let has_api_format = conn
-        .prepare("SELECT api_format FROM api_providers LIMIT 0")
-        .is_ok();
-    if !has_api_format {
-        conn.execute_batch(
-            "ALTER TABLE api_providers ADD COLUMN api_format TEXT NOT NULL DEFAULT 'openai';"
-        )?;
-    }
-    // sessions 增加 temperature 和 max_tokens
-    let has_temperature = conn
-        .prepare("SELECT temperature FROM sessions LIMIT 0")
-        .is_ok();
-    if !has_temperature {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN temperature REAL DEFAULT 0.7;
-             ALTER TABLE sessions ADD COLUMN max_tokens INTEGER DEFAULT NULL;"
-        )?;
-    }
-    Ok(())
-}
-
-/// Migration v14 — agents 表增加 version 字段，用于 Agent 市场版本管理
-fn migrate_add_agent_version(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "ALTER TABLE agents ADD COLUMN version TEXT NOT NULL DEFAULT '';"
-    )?;
-    // 为内置 Agent 设置初始版本号
-    conn.execute(
-        "UPDATE agents SET version = '1.0' WHERE is_builtin = 1 AND (version IS NULL OR version = '')",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Migration v15 — 更新内置 Agent 技能配置（skills_dir / skill_display_mode）
-fn migrate_update_builtin_skills(conn: &Connection) -> Result<(), AppError> {
-    // 更新 skill_display_mode 为 collection（只显示集合名）
-    conn.execute(
-        "UPDATE agents SET skill_display_mode = 'collection' WHERE is_builtin = 1",
-        [],
-    )?;
-    // 所有内置 Agent 显式设置 skills_dir（后端在 skills_dir 为空时也会回退 ~/.{agent_type}/skills/）
-    conn.execute(
-        "UPDATE agents SET skills_dir = '~/.claude/skills/' WHERE agent_type = 'claude'",
-        [],
-    )?;
-    conn.execute(
-        "UPDATE agents SET skills_dir = '~/AppData/Local/hermes/skills/' WHERE agent_type = 'hermes'",
-        [],
-    )?;
-    // 内置 Agent 卸载命令改用包管理器直接卸载（-y 自动确认），避免交互式终端检测
-    conn.execute(
-        "UPDATE agents SET uninstall_cmd = 'pip uninstall hermes-agent -y' WHERE agent_type = 'hermes'",
-        [],
-    )?;
-    conn.execute(
-        "UPDATE agents SET uninstall_cmd = 'npm uninstall -g @anthropic-ai/claude-code' WHERE agent_type = 'claude'",
-        [],
-    )?;
-    conn.execute(
-        "UPDATE agents SET uninstall_cmd = 'npm uninstall -g @openai/codex' WHERE agent_type = 'codex'",
-        [],
-    )?;
-    conn.execute(
-        "UPDATE agents SET skills_dir = '~/.codex/skills/' WHERE agent_type = 'codex'",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Migration v16 — 修复 claude 技能配置种子数据（v15 执行时未覆盖）
-fn migrate_fix_claude_skills(conn: &Connection) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE agents SET skills_dir = '~/.claude/skills/', skill_display_mode = 'collection' WHERE agent_type = 'claude'",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Migration v17 — 修复 Hermes 消息参数注入问题
-/// 将 run_cmd_template 从 -q {message} 改为 --query={message}
-/// 配合 handler.rs 的 = 拼接逻辑，确保 --help 等不被 argparse 拦截
-fn migrate_fix_hermes_template(conn: &Connection) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE agents SET run_cmd_template = 'hermes chat --query={message} -Q' WHERE agent_type = 'hermes'",
-        [],
-    )?;
-    Ok(())
-}
-
-
-/// Migration v18 — 修复 Claude 和 Codex 消息参数注入问题
-/// Claude: -p {message} → --prompt={message}（= 语法，yargs 将 = 后内容作为值）
-/// Codex: 末尾添加 -- 分隔符，告诉 argparse 停止解析标志
-fn migrate_fix_claude_codex_templates(conn: &Connection) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
-        [],
-    )?;
-    conn.execute(
-        "UPDATE agents SET run_cmd_template = 'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}' WHERE agent_type = 'codex'",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Migration v19 — 修复 Claude 模板：末尾添加 -- 分隔符（-p 是布尔标志，{message} 是位置参数）
-fn migrate_fix_claude_prompt_template(conn: &Connection) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Migration v20 — 修复 Claude 模板 --prompt= → -- {message}（v19 执行时 SQL 仍为 --prompt=）
-fn migrate_fix_claude_dash_dash(conn: &Connection) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
-        [],
-    )?;
-    Ok(())
-}
-
-
-fn migrate_add_workflow_tables(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        r#"CREATE TABLE IF NOT EXISTS workflow_definitions (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            version TEXT NOT NULL DEFAULT '1.0.0',
-            description TEXT NOT NULL DEFAULT '',
-            trigger TEXT NOT NULL DEFAULT '{"triggerType":"manual"}',
-            stages TEXT NOT NULL DEFAULT '[]',
-            input_schema TEXT,
-            output_schema TEXT,
-            max_depth INTEGER DEFAULT 10,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1
-        );
-        
-
-        CREATE TABLE IF NOT EXISTS workflow_instances (
-            id TEXT PRIMARY KEY,
-            definition_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
-            definition_name TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'paused', 'success', 'failed', 'cancelled', 'timeout')),
-            context TEXT NOT NULL DEFAULT '{}',
-            trigger TEXT NOT NULL DEFAULT 'manual' CHECK(trigger IN ('manual', 'cron', 'event')),
-            trigger_detail TEXT,
-            started_at INTEGER,
-            completed_at INTEGER,
-            error TEXT,
-            completion_rate REAL NOT NULL DEFAULT 0.0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-        );
-        
-
-        "#,
-    )?;
-    Ok(())
-}
-/// v22: 节点执行记录表
-fn migrate_add_node_execution_tables(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS node_executions (
-            id TEXT PRIMARY KEY,
-            execution_id TEXT NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
-            node_id TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed', 'skipped', 'cancelled')),
-            input_data TEXT DEFAULT NULL,
-            output_data TEXT DEFAULT NULL,
-            error_message TEXT DEFAULT NULL,
-            started_at INTEGER,
-            finished_at INTEGER,
-            retry_count INTEGER DEFAULT 0,
-            duration_ms INTEGER DEFAULT 0,
-            artifacts_path TEXT DEFAULT NULL,
-            agent_session_id TEXT DEFAULT NULL,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        
-
-        CREATE TABLE IF NOT EXISTS node_execution_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            execution_id TEXT NOT NULL,
-            node_execution_id TEXT NOT NULL,
-            timestamp INTEGER NOT NULL,
-            level TEXT NOT NULL DEFAULT 'info' CHECK(level IN ('debug', 'info', 'warn', 'error')),
-            message TEXT NOT NULL,
-            metadata TEXT DEFAULT NULL
-        );
-        
-
-        CREATE INDEX IF NOT EXISTS idx_node_exec_execution ON node_executions(execution_id);
-        CREATE INDEX IF NOT EXISTS idx_node_exec_status ON node_executions(execution_id, status);
-        CREATE INDEX IF NOT EXISTS idx_node_logs_exec ON node_execution_logs(node_execution_id, timestamp);"
-    )?;
-    Ok(())
-}
-
-/// v23: 定时调度表
-fn migrate_add_workflow_schedule(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS workflow_schedules (
-            id TEXT PRIMARY KEY,
-            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
-            cron_expression TEXT NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            input_data TEXT DEFAULT '{}',
-            last_run_at INTEGER,
-            next_run_at INTEGER,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        
-
-        CREATE INDEX IF NOT EXISTS idx_wf_schedule_next ON workflow_schedules(next_run_at, enabled);"
-    )?;
-    Ok(())
-}
-
-/// v65: 性能优化索引
-fn migrate_add_performance_indexes(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);
-         CREATE INDEX IF NOT EXISTS idx_workflow_instances_completed ON workflow_instances(completed_at, status);
-         CREATE INDEX IF NOT EXISTS idx_node_executions_node ON node_executions(node_id, execution_id);
-         CREATE INDEX IF NOT EXISTS idx_node_execution_logs_level ON node_execution_logs(node_execution_id, level, timestamp);
-         ANALYZE;"
-    )?;
-    Ok(())
-}
-
-/// v66: 缺失的工作流表和索引
-fn migrate_add_workflow_missing_tables(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS workflow_versions (
-            id TEXT PRIMARY KEY,
-            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
-            version INTEGER NOT NULL,
-            snapshot TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            UNIQUE(workflow_id, version)
-        );
-        
-
-        
-        
-        CREATE INDEX IF NOT EXISTS idx_wf_versions_workflow ON workflow_versions(workflow_id, version DESC);
-        CREATE INDEX IF NOT EXISTS idx_wf_exec_workflow ON workflow_instances(definition_id, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_wf_exec_status ON workflow_instances(status, created_at DESC);"
-    )?;
-    Ok(())
-}
-
-
-
-/// Migration v70 — 标准化 session_id_source 为五种来源类型
-/// 将 agents 表中的 session_id_source 规范化为以下五种之一：
-///   none, stdout-text, stderr-text, stdout-json, stderr-json
-/// 空字符串和无效值统一转为 "none"
-fn migrate_normalize_session_id_source(conn: &Connection) -> Result<(), AppError> {
-    // 将空字符串或 NULL 转为 "none"
-    conn.execute(
-        "UPDATE agents SET session_id_source = 'none' WHERE session_id_source IS NULL OR session_id_source = ''",
-        [],
-    )?;
-    // 将非标准值转为 "none"
-    conn.execute(
-        "UPDATE agents SET session_id_source = 'none' WHERE session_id_source NOT IN ('none', 'stdout-text', 'stderr-text', 'stdout-json', 'stderr-json')",
-        [],
-    )?;
-    Ok(())
-}
-
-/// v72: 清除 workflow_definitions 表中的遗留列
-/// - stage_edges: 旧版遗留独立列（阶段连线已改为存储在 stages JSON 内）
-/// - max_depth: 移至 app_settings 全局设置（workflow_max_subflow_depth），不再按工作流定义存储
-fn migrate_cleanup_workflow_columns(conn: &Connection) -> Result<(), AppError> {
-    // 检查是否存在需要清除的遗留列
-    let has_stage_edges_col = conn
-        .prepare("SELECT stage_edges FROM workflow_definitions LIMIT 0")
-        .is_ok();
-    let has_max_depth_col = conn
-        .prepare("SELECT max_depth FROM workflow_definitions LIMIT 0")
-        .is_ok();
-
-    if !has_stage_edges_col && !has_max_depth_col {
-        return Ok(());
-    }
-
-    let mut cleanup_reasons = Vec::new();
-    if has_stage_edges_col { cleanup_reasons.push("stage_edges"); }
-    if has_max_depth_col { cleanup_reasons.push("max_depth"); }
-    log::info!("[migration v72] 检测到 workflow_definitions 遗留列: {:?}", cleanup_reasons);
-
-    // 读取所有现有数据（根据列存在情况动态构建 SELECT）
-    let select_sql = if has_stage_edges_col && has_max_depth_col {
-        "SELECT id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled FROM workflow_definitions"
-    } else if has_stage_edges_col {
-        "SELECT id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled FROM workflow_definitions"
-    } else {
-        "SELECT id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled FROM workflow_definitions"
-    };
-    let mut stmt = conn.prepare(select_sql)?;
-    let rows: Vec<(String, String, String, String, String, String, Option<String>, Option<String>, i64, i64, bool)> = stmt.query_map([], |row| {
-        Ok((
-            row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
-            row.get::<_, String>(4)?, row.get::<_, String>(5)?,
-            row.get(6)?, row.get(7)?,
-            row.get(8)?, row.get(9)?, row.get(10)?,
-        ))
-    })?.filter_map(|r| r.ok()).collect();
-
-    // 重建表：旧表 → 新表（10列标准 schema，不含 stage_edges / max_depth）
-    conn.execute_batch(
-        "ALTER TABLE workflow_definitions RENAME TO workflow_definitions_v72_old;"
-    )?;
-
-    conn.execute_batch(
-        r#"CREATE TABLE IF NOT EXISTS workflow_definitions (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            version TEXT NOT NULL DEFAULT '1.0.0',
-            description TEXT NOT NULL DEFAULT '',
-            trigger TEXT NOT NULL DEFAULT '{"triggerType":"manual"}',
-            stages TEXT NOT NULL DEFAULT '[]',
-            input_schema TEXT,
-            output_schema TEXT,
-            icon TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1
-        );"#
-    )?;
-
-    // 回填数据
-    for (id, name, version, description, trigger, stages, input_schema, output_schema, created_at, updated_at, enabled) in &rows {
-        conn.execute(
-            "INSERT INTO workflow_definitions (id, name, version, description, trigger, stages, input_schema, output_schema, icon, created_at, updated_at, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11)",
-            rusqlite::params![
-                id, name, version, description, trigger, stages,
-                input_schema, output_schema,
-                created_at, updated_at, enabled,
-            ],
-        )?;
-    }
-
-    // 删除旧表
-    conn.execute_batch("DROP TABLE IF EXISTS workflow_definitions_v72_old;")?;
-
-    // 重建索引
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_workflow_defs_enabled ON workflow_definitions(enabled, updated_at);"
-    )?;
-
-    // 补种新增的全局设置（旧用户 v4 已运行，INSERT OR IGNORE 不会覆盖）
-    let now = crate::utils::now();
-    conn.execute(
-        "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('workflow_max_subflow_depth', '3', ?1)",
-        rusqlite::params![now],
-    )?;
-
-    log::info!("[migration v72] workflow_definitions 清除完成，已移除列: {:?}，迁移数据 {} 行", cleanup_reasons, rows.len());
-    Ok(())
-}
-
-fn migrate_sync_resume_templates(conn: &Connection) -> Result<(), AppError> {
-    // Hermes: stderr-text, session_id: , 完整 resume 模板
-    conn.execute(
-        "UPDATE agents SET run_cmd_template = 'hermes chat --query={message} -Q', session_id_source = 'stderr-text', session_id_field = 'session_id: ', resume_arg_template = 'hermes --resume {session_id} chat --query={message} -Q' WHERE agent_type = 'hermes'",
-        [],
-    )?;
-    // Claude: stdout-json, system, session_id, 完整 resume 模板
-    conn.execute(
-        "UPDATE agents SET run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}', session_id_source = 'stdout-json', session_id_event_type = 'system', session_id_field = 'session_id', resume_arg_template = 'claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}' WHERE agent_type = 'claude'",
-        [],
-    )?;
-    // Codex: stdout-json, thread.started, thread_id, 完整 resume 模板
-    conn.execute(
-        "UPDATE agents SET run_cmd_template = 'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}', session_id_source = 'stdout-json', session_id_event_type = 'thread.started', session_id_field = 'thread_id', resume_arg_template = 'codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}' WHERE agent_type = 'codex'",
-        [],
-    )?;
-    Ok(())
-}
-
-/// v74: 内置 Agent 完整种子数据覆盖（所有字段与 pilotdesk-agents.json 一致）
-/// v75: workflow_instances schema -- add completion_rate, drop legacy columns
-/// v76: workflow_definitions -- add icon column
-fn migrate_workflow_instance_schema(conn: &Connection) -> Result<(), AppError> {
-    let has_completion_rate = conn
-        .prepare("SELECT completion_rate FROM workflow_instances LIMIT 0")
-        .is_ok();
-
-    if has_completion_rate {
-        log::info!("[migration v75] completion_rate already exists, skipping");
-        drop_old_workflow_instance_columns(conn);
-        return Ok(());
-    }
-
-    log::info!("[migration v75] Adding completion_rate column to workflow_instances");
-    conn.execute_batch(
-        "ALTER TABLE workflow_instances ADD COLUMN completion_rate REAL NOT NULL DEFAULT 0.0;"
-    )?;
-
-    drop_old_workflow_instance_columns(conn);
-    Ok(())
-}
-
-fn drop_old_workflow_instance_columns(conn: &Connection) {
-    let old_cols = ["steps", "current_node_id", "estimated_remaining", "trigger_detail"];
-    for col in &old_cols {
-        if conn.prepare(&format!("SELECT {} FROM workflow_instances LIMIT 0", col)).is_ok() {
-            log::info!("[migration v75] Dropping old column: {}", col);
-            let _ = conn.execute(&format!("ALTER TABLE workflow_instances DROP COLUMN {}", col), []);
-        }
-    }
-}
-
-/// v76: workflow_definitions -- add icon column
-fn migrate_add_workflow_icon(conn: &Connection) -> Result<(), AppError> {
-    let has_icon = conn
-        .prepare("SELECT icon FROM workflow_definitions LIMIT 0")
-        .is_ok();
-    if has_icon {
-        log::info!("[migration v76] icon column already exists, skipping");
-        return Ok(());
-    }
-    log::info!("[migration v76] Adding icon column to workflow_definitions");
-    conn.execute_batch(
-        "ALTER TABLE workflow_definitions ADD COLUMN icon TEXT;"
-    )?;
-    Ok(())
-}
-
-fn migrate_full_agent_seeds(conn: &Connection) -> Result<(), AppError> {
-    let now = crate::utils::now();
-
-    conn.execute(
-        "UPDATE agents SET
-            display_name = 'Claude Code',
-            description = 'Anthropic 官方 AI 编程助手，支持代码生成、调试、重构',
-            cli_command = 'claude',
-            npm_package = '@anthropic-ai/claude-code',
-            pip_package = NULL,
-            install_cmd = 'npm install -g @anthropic-ai/claude-code',
-            uninstall_cmd = 'npm uninstall -g @anthropic-ai/claude-code',
-            update_cmd = 'claude update',
-            version_cmd = 'claude --version',
-            latest_version_cmd = 'npm view @anthropic-ai/claude-code version',
-            run_cmd_template = 'claude -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}',
-            output_parser = 'json-stream',
-            output_filter_regex = '',
-            supports_session_continuity = 1,
-            session_id_source = 'stdout-json',
-            session_id_event_type = 'system',
-            session_id_field = 'session_id',
-            resume_arg_template = 'claude --resume {session_id} -p --output-format stream-json --verbose --dangerously-skip-permissions -- {message}',
-            skills_dir = '~/.claude/skills/',
-            skill_display_mode = 'collection',
-            color = '#3B82F6',
-            icon = 'file:claude_icon.ico',
-            sort_order = 1,
-            is_enabled = 1,
-            is_builtin = 1,
-            updated_at = ?1
-         WHERE agent_type = 'claude'",
-        params![now],
-    )?;
-
-    conn.execute(
-        "UPDATE agents SET
-            display_name = 'Codex CLI',
-            description = 'OpenAI 出品的终端 AI 编程助手',
-            cli_command = 'codex',
-            npm_package = '@openai/codex',
-            pip_package = NULL,
-            install_cmd = 'npm install -g @openai/codex',
-            uninstall_cmd = 'npm uninstall -g @openai/codex',
-            update_cmd = 'codex update',
-            version_cmd = 'codex --version',
-            latest_version_cmd = 'npm view @openai/codex version',
-            run_cmd_template = 'codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}',
-            output_parser = 'json-stream',
-            output_filter_regex = '',
-            supports_session_continuity = 1,
-            session_id_source = 'stdout-json',
-            session_id_event_type = 'thread.started',
-            session_id_field = 'thread_id',
-            resume_arg_template = 'codex exec resume {session_id} --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -- {message}',
-            skills_dir = '~/.codex/skills/',
-            skill_display_mode = 'collection',
-            color = '#F59E0B',
-            icon = 'file:codex_icon.ico',
-            sort_order = 3,
-            is_enabled = 1,
-            is_builtin = 1,
-            updated_at = ?1
-         WHERE agent_type = 'codex'",
-        params![now],
-    )?;
-
-    conn.execute(
-        "UPDATE agents SET
-            display_name = 'Hermes Agent',
-            description = '轻量级通用 AI Agent',
-            cli_command = 'hermes',
-            npm_package = NULL,
-            pip_package = 'hermes-agent',
-            install_cmd = 'pip install hermes-agent',
-            uninstall_cmd = 'pip uninstall hermes-agent -y',
-            update_cmd = 'hermes update',
-            version_cmd = 'hermes --version',
-            latest_version_cmd = 'powershell -NoProfile -Command (Invoke-RestMethod https://pypi.org/pypi/hermes-agent/json).info.version',
-            run_cmd_template = 'hermes chat --query={message} -Q',
-            output_parser = 'ansi-text',
-            output_filter_regex = '^(Initializing agent|Resume this session|Session:|Duration:|Messages:|Query:)',
-            supports_session_continuity = 1,
-            session_id_source = 'stderr-text',
-            session_id_event_type = '',
-            session_id_field = 'session_id: ',
-            resume_arg_template = 'hermes --resume {session_id} chat --query={message} -Q',
-            skills_dir = '~/AppData/Local/hermes/skills/',
-            skill_display_mode = 'collection',
-            color = '#8B5CF6',
-            icon = 'file:hermes_icon.ico',
-            sort_order = 2,
-            is_enabled = 1,
-            is_builtin = 1,
-            updated_at = ?1
-         WHERE agent_type = 'hermes'",
-        params![now],
-    )?;
-
-    log::info!("[migration v74] 内置 Agent 完整种子数据已覆盖（claude/codex/hermes 全部字段）");
-    Ok(())
-}
-
-fn migrate_update_agent_seeds(conn: &Connection) -> Result<(), AppError> {
-    // 更新 Claude Code 描述
-    conn.execute(
-        "UPDATE agents SET description = ?1 WHERE agent_type = 'claude' AND is_builtin = 1",
-        rusqlite::params!["Anthropic 官方 AI 编程助手，支持代码生成、调试、重构"],
-    )?;
-    // 更新排序顺序：Claude=1, Codex=2, Hermes=4
-    conn.execute(
-        "UPDATE agents SET sort_order = 2 WHERE agent_type = 'codex' AND is_builtin = 1",
-        [],
-    )?;
-    conn.execute(
-        "UPDATE agents SET sort_order = 4 WHERE agent_type = 'hermes' AND is_builtin = 1",
-        [],
-    )?;
-    log::info!("[migration v73] 内置 Agent 种子数据已更新（描述/排序）");
-    Ok(())
-}
-
-/// v82: 群聊多 Agent 五表（需与 init_db 初始建表块保持同步）
-fn migrate_add_groupchat_tables(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(
-        r#"CREATE TABLE IF NOT EXISTS groupchat_rooms (
-            id            TEXT PRIMARY KEY,
-            title         TEXT NOT NULL DEFAULT '',
-            topic         TEXT NOT NULL DEFAULT '',
-            status        TEXT NOT NULL DEFAULT 'idle',
-            strategy      TEXT NOT NULL DEFAULT 'round_robin',
-            max_rounds    INTEGER NOT NULL DEFAULT 5,
-            max_parallel  INTEGER NOT NULL DEFAULT 2,
-            director_id   TEXT,
-            current_task_id TEXT,
-            created_at    INTEGER NOT NULL,
-            updated_at    INTEGER NOT NULL,
-            goal_notes    TEXT NOT NULL DEFAULT '[]'
-        );
-
-        CREATE TABLE IF NOT EXISTS groupchat_participants (
-            id              TEXT NOT NULL,
-            room_id         TEXT NOT NULL,
-            participant_type TEXT NOT NULL,
-            agent_config    TEXT NOT NULL DEFAULT '{}',
-            display_name    TEXT NOT NULL DEFAULT '',
-            system_role     TEXT NOT NULL DEFAULT '',
-            status          TEXT NOT NULL DEFAULT 'active',
-            PRIMARY KEY (room_id, id),
-            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS groupchat_messages (
-            id          TEXT PRIMARY KEY,
-            room_id     TEXT NOT NULL,
-            round       INTEGER NOT NULL DEFAULT 0,
-            seq         INTEGER NOT NULL DEFAULT 0,
-            sender      TEXT NOT NULL,
-            recipients  TEXT NOT NULL DEFAULT '[]',
-            kind        TEXT NOT NULL,
-            reply_to    TEXT,
-            content     TEXT NOT NULL DEFAULT '',
-            attachments TEXT NOT NULL DEFAULT '[]',
-            tool_calls  TEXT NOT NULL DEFAULT '[]',
-            extra       TEXT NOT NULL DEFAULT '{}',
-            timestamp   INTEGER NOT NULL,
-            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS groupchat_stances (
-            room_id      TEXT NOT NULL,
-            participant_id TEXT NOT NULL,
-            stance       TEXT NOT NULL DEFAULT '',
-            updated_at   INTEGER NOT NULL,
-            PRIMARY KEY (room_id, participant_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS groupchat_tasks (
-            id              TEXT PRIMARY KEY,
-            room_id         TEXT NOT NULL,
-            task_no         INTEGER NOT NULL,
-            description     TEXT NOT NULL,
-            assignee        TEXT,
-            depends_on      TEXT NOT NULL DEFAULT '[]',
-            status          TEXT NOT NULL DEFAULT 'discussing',
-            result_summary  TEXT,
-            error           TEXT,
-            started_at      INTEGER,
-            completed_at    INTEGER,
-            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_gcm_room ON groupchat_messages(room_id, round, seq);
-        CREATE INDEX IF NOT EXISTS idx_gct_room ON groupchat_tasks(room_id, status);"#,
-    )?;
-    Ok(())
-}
-
-/// v83: 修复 groupchat_participants 主键——从全局唯一 `id` 改为 `(room_id, id)` 复合主键。
-/// 否则前端为每个房间固定使用 'director'/'user' 作为参与者 id，创建第二个房间会触发
-/// `UNIQUE constraint failed: groupchat_participants.id`。
-fn migrate_groupchat_participants_pk(conn: &Connection) -> Result<(), AppError> {
-    let pk_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('groupchat_participants') WHERE pk > 0",
-        [],
-        |r| r.get(0),
-    )?;
-    if pk_count > 1 {
-        log::info!("[migration v83] groupchat_participants 已使用复合主键，跳过");
-        return Ok(());
-    }
-
-    log::info!("[migration v83] 重建 groupchat_participants 主键为 (room_id, id)");
-    conn.execute_batch(
-        r#"DROP TABLE IF EXISTS groupchat_participants_new;
-        CREATE TABLE groupchat_participants_new (
-            id              TEXT NOT NULL,
-            room_id         TEXT NOT NULL,
-            participant_type TEXT NOT NULL,
-            agent_config    TEXT NOT NULL DEFAULT '{}',
-            display_name    TEXT NOT NULL DEFAULT '',
-            system_role     TEXT NOT NULL DEFAULT '',
-            status          TEXT NOT NULL DEFAULT 'active',
-            PRIMARY KEY (room_id, id),
-            FOREIGN KEY (room_id) REFERENCES groupchat_rooms(id)
-        );
-        INSERT INTO groupchat_participants_new
-            (id, room_id, participant_type, agent_config, display_name, system_role, status)
-            SELECT id, room_id, participant_type, agent_config, display_name, system_role, status
-            FROM groupchat_participants;
-        DROP TABLE groupchat_participants;
-        ALTER TABLE groupchat_participants_new RENAME TO groupchat_participants;"#,
-    )?;
-    Ok(())
-}
-
-/// v84: groupchat_messages 新增 attachments 列（复用普通会话附件模型，JSON 数组字符串）。
-fn migrate_groupchat_message_attachments(conn: &Connection) -> Result<(), AppError> {
-    let has_attachments = conn
-        .prepare("SELECT attachments FROM groupchat_messages LIMIT 0")
-        .is_ok();
-    if !has_attachments {
-        conn.execute_batch(
-            "ALTER TABLE groupchat_messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';"
-        )?;
-        log::info!("[migration v84] groupchat_messages 新增 attachments 列");
-    }
-    Ok(())
-}
-
-/// v85: 拆除 groupchat_rooms.summary / summary_updated_at。
-/// 结论统一以 `groupchat_messages` 中 `kind='conclusion'` 消息为准，房间表不再冗余存储。
-fn migrate_groupchat_rooms_drop_summary(conn: &Connection) -> Result<(), AppError> {
-    let cols: Vec<String> = {
-        let mut stmt = conn.prepare("SELECT name FROM pragma_table_info('groupchat_rooms')")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
-
-    for col in ["summary", "summary_updated_at"] {
-        if cols.iter().any(|c| c == col) {
-            conn.execute_batch(&format!("ALTER TABLE groupchat_rooms DROP COLUMN {col};"))?;
-            log::info!("[migration v85] groupchat_rooms 删除列 {col}");
-        }
-    }
-    Ok(())
-}
-
-/// v86: groupchat_messages 新增 tool_calls 列（参与者本轮工具调用链，JSON 数组字符串，可溯源）。
-fn migrate_groupchat_message_tool_calls(conn: &Connection) -> Result<(), AppError> {
-    let has_tool_calls = conn
-        .prepare("SELECT tool_calls FROM groupchat_messages LIMIT 0")
-        .is_ok();
-    if !has_tool_calls {
-        conn.execute_batch(
-            "ALTER TABLE groupchat_messages ADD COLUMN tool_calls TEXT NOT NULL DEFAULT '[]';"
-        )?;
-        log::info!("[migration v86] groupchat_messages 新增 tool_calls 列");
-    }
-    Ok(())
-}
-
-/// v87: groupchat_messages 新增 extra 列（附加结构化数据，如用户确认请求，JSON 对象字符串）。
-fn migrate_groupchat_message_extra(conn: &Connection) -> Result<(), AppError> {
-    let has_extra = conn
-        .prepare("SELECT extra FROM groupchat_messages LIMIT 0")
-        .is_ok();
-    if !has_extra {
-        conn.execute_batch(
-            "ALTER TABLE groupchat_messages ADD COLUMN extra TEXT NOT NULL DEFAULT '{}';"
-        )?;
-        log::info!("[migration v87] groupchat_messages 新增 extra 列");
-    }
-    Ok(())
-}
-
-/// v88: groupchat_rooms 新增 goal_notes 列（累积的补充/细化约束，JSON 数组字符串）。
-fn migrate_groupchat_room_goal_notes(conn: &Connection) -> Result<(), AppError> {
-    let has_goal_notes = conn
-        .prepare("SELECT goal_notes FROM groupchat_rooms LIMIT 0")
-        .is_ok();
-    if !has_goal_notes {
-        conn.execute_batch(
-            "ALTER TABLE groupchat_rooms ADD COLUMN goal_notes TEXT NOT NULL DEFAULT '[]';"
-        )?;
-        log::info!("[migration v88] groupchat_rooms 新增 goal_notes 列");
-    }
-    Ok(())
-}
-
-fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppError> {
-    for &ver in MIGRATION_VERSIONS {
-        if current_version < ver {
-            match ver {
-                1 => migrate_add_api_columns(conn)?,
-                2 => migrate_add_type(conn)?,
-                3 => migrate_add_api_providers(conn)?,
-                4 => migrate_add_app_settings(conn)?,
-                5 => migrate_add_install_logs(conn)?,
-                6 => migrate_add_message_extensions(conn)?,
-                7 => migrate_add_agent_session_id(conn)?,
-                8 => migrate_add_agents_table(conn)?,
-                9 => migrate_agents_full_schema(conn)?,
-                11 => migrate_add_skill_fields(conn)?,
-                12 => migrate_update_agent_icons(conn)?,
-                13 => migrate_remove_agent_type_check(conn)?,
-                14 => migrate_add_agent_version(conn)?,
-                15 => migrate_update_builtin_skills(conn)?,
-                16 => migrate_fix_claude_skills(conn)?,
-                17 => migrate_fix_hermes_template(conn)?,
-                18 => migrate_fix_claude_codex_templates(conn)?,
-                19 => migrate_fix_claude_prompt_template(conn)?,
-                20 => migrate_fix_claude_dash_dash(conn)?,
-                21 => migrate_add_workflow_tables(conn)?,
-                22 => migrate_add_node_execution_tables(conn)?,
-                23 => migrate_add_workflow_schedule(conn)?,
-                65 => migrate_add_performance_indexes(conn)?,
-                66 => migrate_add_workflow_missing_tables(conn)?,
-
-                70 => migrate_normalize_session_id_source(conn)?,
-                71 => migrate_sync_resume_templates(conn)?,
-                72 => migrate_cleanup_workflow_columns(conn)?,
-                73 => migrate_update_agent_seeds(conn)?,
-                74 => migrate_full_agent_seeds(conn)?,
-                75 => migrate_workflow_instance_schema(conn)?,
-                76 => migrate_add_workflow_icon(conn)?,
-                77 => migrate_add_api_params(conn)?,
-                78 => migrate_add_session_context(conn)?,
-                79 => migrate_add_session_summary(conn)?,
-                80 => migrate_add_message_images(conn)?,
-                81 => migrate_rename_images_to_attachments(conn)?,
-                82 => migrate_add_groupchat_tables(conn)?,
-                83 => migrate_groupchat_participants_pk(conn)?,
-                84 => migrate_groupchat_message_attachments(conn)?,
-                85 => migrate_groupchat_rooms_drop_summary(conn)?,
-                86 => migrate_groupchat_message_tool_calls(conn)?,
-                87 => migrate_groupchat_message_extra(conn)?,
-                88 => migrate_groupchat_room_goal_notes(conn)?,
-                _ => return Err(AppError::Config(format!("未知的迁移版本号: {}", ver))),
-            }
-        }
+/// 幂等补列：目标表已有该列则跳过，否则 `ALTER TABLE ADD COLUMN`。
+/// 新列一律带 DEFAULT，历史行自动回填默认值，不触发全表重写。
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> Result<(), AppError> {
+    let exists = conn
+        .prepare(&format!("PRAGMA table_info({})", table))?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == column);
+    if !exists {
+        conn.execute_batch(&format!(
+            "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {};",
+            table, column, decl
+        ))?;
     }
     Ok(())
 }
@@ -1723,73 +412,11 @@ fn run_migrations(conn: &Connection, current_version: i64) -> Result<(), AppErro
 mod tests {
     use super::*;
 
-    /// 确保 MIGRATION_VERSIONS 数组是严格升序的
-    /// 新增迁移时如果忘记按升序插入，此测试会失败
+    /// 终态校验：FINAL_SCHEMA_SQL 能完整建出事件表与核心表，且不含任何旧表。
     #[test]
-    fn migration_versions_ascending() {
-        for i in 1..MIGRATION_VERSIONS.len() {
-            assert!(
-                MIGRATION_VERSIONS[i] > MIGRATION_VERSIONS[i - 1],
-                "MIGRATION_VERSIONS[{}] ({}) 必须大于 MIGRATION_VERSIONS[{}] ({})",
-                i, MIGRATION_VERSIONS[i], i - 1, MIGRATION_VERSIONS[i - 1]
-            );
-        }
-    }
-
-    /// 确保 MIGRATION_VERSIONS 中每个版本号在 run_migrations 中都有对应 match 分支
-    /// 使用空数据库运行所有迁移，验证不会 panic 且所有表正确创建
-    #[test]
-    fn migration_versions_have_handlers() {
+    fn final_schema_creates_final_state() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-
-        // 只创建最基础的 sessions 表（v1 迁移依赖它）
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                agent_type TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL DEFAULT '',
-                cwd TEXT DEFAULT '',
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                last_message_preview TEXT DEFAULT '',
-                message_count INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'active',
-                api_provider TEXT,
-                api_model TEXT
-            );
-        
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL DEFAULT '',
-                mode TEXT DEFAULT 'native',
-                timestamp INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS inspirations (
-                id TEXT PRIMARY KEY,
-                icon TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL,
-                content TEXT NOT NULL DEFAULT '',
-                source_agent TEXT DEFAULT 'manual',
-                is_favorite INTEGER DEFAULT 0,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS inspiration_tags (
-                inspiration_id TEXT NOT NULL,
-                tag TEXT NOT NULL,
-                PRIMARY KEY (inspiration_id, tag)
-            );
-"
-        ).unwrap();
-
-        // 从版本 0 开始运行所有迁移
-        let result = run_migrations(&conn, 0);
-        assert!(result.is_ok(), "迁移执行失败: {:?}", result.err());
-
-        // 验证关键工作流表已创建
+        conn.execute_batch(FINAL_SCHEMA_SQL).unwrap();
         let tables: Vec<String> = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
             .unwrap()
@@ -1797,13 +424,149 @@ mod tests {
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
+        for t in [
+            "sessions",
+            "agents",
+            "workflow_definitions",
+            "workflow_events",
+            "room_events",
+            "session_events",
+            "api_usage_log",
+            "groupchat_rooms",
+            "groupchat_participants",
+        ] {
+            assert!(tables.contains(&t.to_string()), "终态缺少表 {}", t);
+        }
+        for t in [
+            "messages",
+            "session_contexts",
+            "groupchat_messages",
+            "groupchat_tasks",
+            "workflow_instances",
+            "node_executions",
+            "node_execution_logs",
+        ] {
+            assert!(!tables.contains(&t.to_string()), "终态不应包含旧表 {}", t);
+        }
+        // 外键修正回归：workflow_schedules/versions 引用真实 workflow_definitions。
+        for name in ["workflow_schedules", "workflow_versions"] {
+            let sql: String = conn
+                .prepare(&format!(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='{}'",
+                    name
+                ))
+                .unwrap()
+                .query_row([], |r| r.get(0))
+                .unwrap();
+            assert!(
+                sql.contains("REFERENCES workflow_definitions(id)"),
+                "{} 外键应指向 workflow_definitions",
+                name
+            );
+        }
+        // agents 种子插入依赖的列必须齐全（skill_entry_file 等）。
+        let agents_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='agents'")
+            .unwrap()
+            .query_row([], |r| r.get(0))
+            .unwrap();
+        for col in [
+            "skill_entry_file",
+            "skill_display_mode",
+            "skills_dir",
+            "session_id_source",
+        ] {
+            assert!(agents_sql.contains(col), "agents 表缺少种子依赖列 {}", col);
+        }
+        // api_usage_log 缓存读/写拆分列必须出现在终态建表脚本中。
+        let usage_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='api_usage_log'")
+            .unwrap()
+            .query_row([], |r| r.get(0))
+            .unwrap();
+        for col in ["cache_read_tokens", "cache_write_tokens"] {
+            assert!(usage_sql.contains(col), "api_usage_log 缺少终态列 {}", col);
+        }
+    }
 
-        assert!(tables.contains(&"workflow_definitions".to_string()), "workflow_definitions 表未创建 ");
-        assert!(tables.contains(&"workflow_instances".to_string()), "workflow_instances 表未创建 ");
-        assert!(tables.contains(&"node_executions".to_string()), "node_executions 表未创建 ");
-        assert!(tables.contains(&"node_execution_logs".to_string()), "node_execution_logs 表未创建 ");
-        assert!(tables.contains(&"workflow_schedules".to_string()), "workflow_schedules 表未创建 ");
-        assert!(tables.contains(&"workflow_versions".to_string()), "workflow_versions 表未创建 ");
+    /// wipe_all_tables 已随 v5 整库重置策略一并删除；无 wipe 相关用例。
+    ///
+    /// v4 → v5 增量迁移：老库保留历史数据，仅补 cache_read/cache_write 两列并提升 user_version。
+    #[test]
+    fn migrate_adds_cache_read_write_columns_keeping_rows() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        // 模拟 v4 老库：api_usage_log 无缓存拆分列，且已有历史行。
+        conn.execute_batch(
+            "CREATE TABLE api_usage_log (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id        TEXT NOT NULL,
+                provider          TEXT NOT NULL DEFAULT '',
+                model             TEXT NOT NULL DEFAULT '',
+                api_format        TEXT NOT NULL DEFAULT '',
+                prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens      INTEGER NOT NULL DEFAULT 0,
+                cached_tokens     INTEGER NOT NULL DEFAULT 0,
+                created_at        INTEGER NOT NULL);
+            INSERT INTO api_usage_log (session_id, provider, model, prompt_tokens, cached_tokens, created_at)
+            VALUES ('s1', 'deepseek', 'deepseek-chat', 100, 40, 1);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 4i64).unwrap();
 
+        migrate_schema(&conn).unwrap();
+
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(api_usage_log)")
+            .unwrap()
+            .query_map([], |r| r.get(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            columns.contains(&"cache_read_tokens".to_string()),
+            "应补 cache_read_tokens 列"
+        );
+        assert!(
+            columns.contains(&"cache_write_tokens".to_string()),
+            "应补 cache_write_tokens 列"
+        );
+        // 历史行保留，新增列按 DEFAULT 0 回填；cached_tokens 原值不受影响。
+        let (prompt, cached, cache_read, cache_write): (i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT prompt_tokens, cached_tokens, cache_read_tokens, cache_write_tokens
+                 FROM api_usage_log WHERE session_id = 's1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((prompt, cached, cache_read, cache_write), (100, 40, 0, 0));
+        // 迁移后 user_version 提升到当前终态；再次执行保持幂等。
+        let ver: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, SCHEMA_VERSION);
+        migrate_schema(&conn).unwrap();
+    }
+
+    /// 比当前更新的库（未来版本应用创建）拒绝打开，绝不 wipe。
+    #[test]
+    fn migrate_rejects_newer_version_without_wiping() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE keep_me (id INTEGER);").unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+
+        let err = migrate_schema(&conn).unwrap_err();
+        assert!(err.to_string().contains("升级"), "错误应提示升级应用: {}", err);
+        let kept: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='keep_me'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 1, "未来版本库不得被清除");
     }
 }
+

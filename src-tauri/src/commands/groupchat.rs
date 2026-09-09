@@ -7,6 +7,7 @@ use crate::db::models::Attachment;
 use crate::groupchat::models::{MessageRow, ParticipantRow, Room, TaskRow};
 use crate::groupchat::room::{ConfirmationResponse, RoomCommand, RoomRegistry};
 use crate::groupchat::store;
+use crate::api_agent::agent_loop::SecurityMode;
 use crate::DbState;
 
 #[derive(Deserialize)]
@@ -16,6 +17,16 @@ pub struct CreateRoomInput {
     pub topic: String,
     pub participants: Vec<ParticipantInput>,
     pub director_id: String,
+    /// 是否允许主持人在自动补人时添加 CLI 参与者（缺省 1=允许；按任务差异化限制）
+    #[serde(default = "default_allow_auto_cli")]
+    pub allow_auto_cli: i64,
+    /// 房间统一产物目录（绝对路径；缺省空=运行时回退 `<工作目录>/outputs/<房间标题>/`）
+    #[serde(default)]
+    pub output_dir: String,
+}
+
+fn default_allow_auto_cli() -> i64 {
+    1
 }
 
 #[derive(Deserialize)]
@@ -42,6 +53,9 @@ pub struct SendMessageInput {
     /// 已落盘的附件元数据（图片/文件）。
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// 会话安全模式（本波次有效；strict/standard/relaxed/unrestricted，缺省标准）。
+    #[serde(default)]
+    pub security_mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -82,6 +96,8 @@ pub fn groupchat_create_room(
         created_at: now,
         updated_at: now,
         goal_notes: "[]".into(),
+        allow_auto_cli: input.allow_auto_cli,
+        output_dir: input.output_dir,
     };
 
     store::insert_room(&conn, &room).map_err(|e| e.to_string())?;
@@ -177,18 +193,26 @@ pub fn groupchat_send_message(
     registry: State<'_, RoomRegistry>,
     input: SendMessageInput,
 ) -> Result<(), String> {
-    let handle = registry
-        .get_or_spawn(state.pool.clone(), app.clone(), &input.room_id)
-        .map_err(|e| e.to_string())?;
-    handle.send(RoomCommand::Send {
-        sender: "user".into(),
-        content: input.content,
-        recipients: input.recipients.unwrap_or_default(),
-        reply_to: input.reply_to,
-        mention: input.mention,
-        attachments: input.attachments,
-    });
-    Ok(())
+    // 自愈投递：句柄缺失或失效（Actor 异常退出残留）时自动重建再投，杜绝"消息被静默丢弃"。
+    let content = input.content.clone();
+    let recipients = input.recipients.unwrap_or_default();
+    let reply_to = input.reply_to.clone();
+    let mention = input.mention.clone();
+    let attachments = input.attachments.clone();
+    let security_mode = input.security_mode.as_deref().and_then(SecurityMode::from_str);
+    registry
+        .send_resilient(state.pool.clone(), app.clone(), &input.room_id, move || {
+            RoomCommand::Send {
+                sender: "user".into(),
+                content: content.clone(),
+                recipients: recipients.clone(),
+                reply_to: reply_to.clone(),
+                mention: mention.clone(),
+                attachments: attachments.clone(),
+                security_mode,
+            }
+        })
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -198,9 +222,6 @@ pub fn groupchat_respond_confirmation(
     registry: State<'_, RoomRegistry>,
     input: RespondConfirmationInput,
 ) -> Result<(), String> {
-    let handle = registry
-        .get_or_spawn(state.pool.clone(), app.clone(), &input.room_id)
-        .map_err(|e| e.to_string())?;
     let responses = input
         .responses
         .into_iter()
@@ -208,12 +229,23 @@ pub fn groupchat_respond_confirmation(
             item_id: r.item_id,
             value: r.value,
         })
-        .collect();
-    handle.send(RoomCommand::RespondConfirmation {
-        request_id: input.request_id,
-        responses,
-    });
-    Ok(())
+        .collect::<Vec<_>>();
+    let request_id = input.request_id.clone();
+    registry
+        .send_resilient(state.pool.clone(), app.clone(), &input.room_id, move || {
+            RoomCommand::RespondConfirmation {
+                request_id: request_id.clone(),
+                responses: responses.clone(),
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// 房间 Actor（进程内运行实例）是否存活。用于区分"真 running"（Actor 在跑）与
+/// "假 running"（DB 仍标 running 但进程内无 Actor，如异常退出后未恢复）。
+#[tauri::command]
+pub fn groupchat_room_actor_alive(registry: State<'_, RoomRegistry>, room_id: String) -> bool {
+    registry.get(&room_id).is_some()
 }
 
 #[tauri::command]
@@ -234,6 +266,23 @@ pub fn groupchat_set_director(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "房间不存在".to_string())?;
     Ok(room)
+}
+
+#[tauri::command]
+pub fn groupchat_set_output_dir(
+    state: State<'_, DbState>,
+    registry: State<'_, RoomRegistry>,
+    room_id: String,
+    output_dir: String,
+) -> Result<Room, String> {
+    let conn = state.get_conn().map_err(|e| e.to_string())?;
+    store::update_room_output_dir(&conn, &room_id, &output_dir).map_err(|e| e.to_string())?;
+    if let Some(handle) = registry.get(&room_id) {
+        handle.send(RoomCommand::SetOutputDir(output_dir));
+    }
+    store::get_room(&conn, &room_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "房间不存在".to_string())
 }
 
 #[tauri::command]
@@ -260,12 +309,22 @@ pub fn groupchat_resume(
     registry: State<'_, RoomRegistry>,
     room_id: String,
 ) -> Result<Room, String> {
-    // 重启后 Actor 可能已不存在，需 get_or_spawn 重建；随后 Resume 命令触发续跑未完成任务。
-    let handle = registry
-        .get_or_spawn(state.pool.clone(), app.clone(), &room_id)
-        .map_err(|e| e.to_string())?;
-    handle.resume();
-    handle.send(RoomCommand::Resume);
+    // 恢复/重启：先确保 Actor 存活（缺失则 spawn；句柄残留失效则移除重建），再解除暂停
+    // （外部 notify，覆盖 actor 卡在 wait_if_paused 的情形），最后投 Resume 触发续跑/清终止标记。
+    let (handle, respawned) = {
+        let handle = registry.get_or_spawn(state.pool.clone(), app.clone(), &room_id).map_err(|e| e.to_string())?;
+        if !handle.send(RoomCommand::Resume) {
+            // Actor 已异常退出但句柄残留：移除并重建后重投。
+            log::warn!("[GroupChat] 房间 {} resume 投递失败，移除残留句柄并重建 Actor", room_id);
+            registry.remove(&room_id);
+            let handle = registry.spawn(state.pool.clone(), app.clone(), &room_id).map_err(|e| e.to_string())?;
+            (handle, true)
+        } else {
+            (handle, false)
+        }
+    };
+    let _ = respawned;
+    handle.resume(); // 解除暂停并 notify（actor 若阻塞在 wait_if_paused 则立即恢复）
     let conn = state.get_conn().map_err(|e| e.to_string())?;
     store::update_room_status(&conn, &room_id, "running").map_err(|e| e.to_string())?;
     Ok(store::get_room(&conn, &room_id)
@@ -330,6 +389,23 @@ pub fn groupchat_get_tasks(
 ) -> Result<Vec<TaskRow>, String> {
     let conn = state.get_conn().map_err(|e| e.to_string())?;
     store::list_tasks(&conn, &room_id).map_err(|e| e.to_string())
+}
+
+/// 房间「消息事件」全局水位：该房间最大 message 事件 seq（无记录为 0）。
+/// 前端在整页加载后把投影水位同步到该值，使已应用/已加载的消息在重复/乱序
+/// 派发时可按 seq 直接丢弃（投影水位阶段②/③）。
+#[tauri::command]
+pub fn groupchat_message_watermark(
+    state: State<'_, DbState>,
+    room_id: String,
+) -> Result<i64, String> {
+    let conn = state.get_conn().map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT COALESCE(MAX(seq), 0) FROM room_events WHERE room_id = ?1 AND kind = 'message'",
+        rusqlite::params![room_id],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

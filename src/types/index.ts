@@ -23,6 +23,112 @@ export interface Session {
   maxTokens?: number;
 }
 
+/** 项目级记忆（<记忆根>/MEMORY.md）读取结果 */
+export interface ProjectMemoryInfo {
+  root: string;
+  exists: boolean;
+  content: string;
+  charCount: number;
+}
+
+/** 已使用项目根列表（会话 cwd 去重 + 兜底工作区） */
+export async function listProjectRoots(): Promise<string[]> {
+  return await _invoke('list_project_roots');
+}
+
+/** 读取指定记忆根 MEMORY.md；cwd 为空=兜底记忆根 */
+export async function getProjectMemory(cwd?: string): Promise<ProjectMemoryInfo> {
+  return await _invoke('get_project_memory', { cwd: cwd || null });
+}
+
+/** 写入指定记忆根 MEMORY.md */
+export async function updateProjectMemory(cwd: string | undefined, content: string): Promise<ProjectMemoryInfo> {
+  return await _invoke('update_project_memory', { cwd: cwd || null, content });
+}
+
+/** MEMORY.md 新建模板 */
+export async function projectMemoryTemplate(): Promise<string> {
+  return await _invoke('project_memory_template');
+}
+
+/** 读取用户偏好 USER.md（统一配置根；不存在时 exists=false） */
+export async function getUserPreferences(): Promise<ProjectMemoryInfo> {
+  return await _invoke('get_user_preferences');
+}
+
+/** 写入用户偏好 USER.md */
+export async function updateUserPreferences(content: string): Promise<ProjectMemoryInfo> {
+  return await _invoke('update_user_preferences', { content });
+}
+
+/** USER.md 新建模板 */
+export async function userPreferencesTemplate(): Promise<string> {
+  return await _invoke('user_preferences_template');
+}
+
+/** 全局 KV 记忆条目 */
+export interface MemoryEntryView {
+  key: string;
+  value: string;
+  category: string;
+  createdAt: number;
+  updatedAt: number;
+  accessCount: number;
+  /** 最近一次被检索/读取的时间（内容编辑不刷新） */
+  lastAccessedAt: number;
+  /** 重要标记：置位后永不参与自动清理 */
+  pin: boolean;
+  /** 逗号分隔的检索标签（可选，补充 key 词面的检索面） */
+  tags: string;
+}
+
+/** KV 记忆自动维护策略（后端常量同源） */
+export interface MemoryPolicy {
+  maxEntries: number;
+  idleDays: number;
+  minAccess: number;
+}
+
+/** 全局 KV 记忆统计（总数/pin 数/注入 top-5/可清理候选数 + 策略） */
+export interface MemoryStats {
+  total: number;
+  pinned: number;
+  candidates: number;
+  injected: MemoryEntryView[];
+  policy: MemoryPolicy;
+}
+
+export async function listMemoryEntries(category?: string, query?: string): Promise<MemoryEntryView[]> {
+  return await _invoke('list_memory_entries', { category: category || null, query: query || null });
+}
+
+export async function saveMemoryEntry(key: string, value: string, category: string, important?: boolean, tags?: string): Promise<MemoryEntryView> {
+  return await _invoke('save_memory_entry', { key, value, category, important: important ?? false, tags: tags ?? null });
+}
+
+export async function deleteMemoryEntry(key: string): Promise<boolean> {
+  return await _invoke('delete_memory_entry', { key });
+}
+
+/** 置/取消某条 KV 记忆的 pin（重要）标记 */
+export async function setMemoryPin(key: string, pin: boolean): Promise<void> {
+  return await _invoke('set_memory_pin', { key, pin });
+}
+
+/** 预览自动维护将清理的候选条目（不删除） */
+export async function previewMemoryMaintenance(): Promise<MemoryEntryView[]> {
+  return await _invoke('preview_memory_maintenance');
+}
+
+/** 执行一次自动维护（僵尸清理 + 配额驱逐），返回被删除的 key 列表 */
+export async function runMemoryMaintenance(): Promise<string[]> {
+  return await _invoke('run_memory_maintenance');
+}
+
+export async function getMemoryStats(): Promise<MemoryStats> {
+  return await _invoke('get_memory_stats');
+}
+
 /** 附件（图片/文件，落盘 + 路径引用） */
 export interface Attachment {
   /** "image" 或 "file" */
@@ -184,6 +290,58 @@ export const MODE_COLORS: Record<ChatMode, string> = {
   expert: 'var(--mode-expert)',
   plan: 'var(--mode-think)',
 };
+
+// ── 全局用量统计（api_usage_log） ──
+
+export interface UsageTotals {
+  callCount: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** 总缓存 = cacheReadTokens + cacheWriteTokens（兼容旧展示）。 */
+  cachedTokens: number;
+  /** 缓存命中读取 token（未命中输入见 promptTokens）。 */
+  cacheReadTokens: number;
+  /** 缓存写入 token（如 Anthropic cache_creation）。 */
+  cacheWriteTokens: number;
+  /** 0-100 缓存命中率 = cacheReadTokens / (promptTokens + cacheReadTokens + cacheWriteTokens)。 */
+  cacheHitRate: number;
+}
+
+export interface UsageGroup {
+  name: string;
+  totals: UsageTotals;
+}
+
+export interface UsageDay {
+  date: string;
+  promptTokens: number;
+  cachedTokens: number;
+  cacheHitRate: number;
+}
+
+export interface UsageSummary {
+  totals: UsageTotals;
+  byProvider: UsageGroup[];
+  byModel: UsageGroup[];
+  trend: UsageDay[];
+}
+
+/** 拉取全局用量汇总。days<=0 表示全量，否则为近 N 天窗口。 */
+export async function getUsageSummary(days = 30): Promise<UsageSummary> {
+  return await _invoke('get_usage_summary', { days });
+}
+
+/** 群聊房间用量（director + 各参与者，按 model/provider 聚合）。 */
+export interface RoomUsage {
+  totals: UsageTotals;
+  byModel: UsageGroup[];
+  byProvider: UsageGroup[];
+}
+
+export async function getRoomUsage(roomId: string): Promise<RoomUsage> {
+  return await _invoke('get_room_usage', { roomId });
+}
 
 /** Agent config from the backend agents table */
 export interface AgentConfig {

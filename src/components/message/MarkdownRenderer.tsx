@@ -5,6 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { showToast } from '../../utils/toast';
+import { useImagePreviewStore } from '../../stores/imagePreviewStore';
 
 interface MarkdownRendererProps {
   content: string;
@@ -33,53 +34,116 @@ function CopyButton({ code }: { code: string }) {
   return (
     <button
       onClick={handleCopy}
-      className="pd-btn absolute top-2 right-2 p-1 rounded transition-colors"
+      className="pd-btn p-1 rounded transition-colors"
       style={{
-        backgroundColor: copied ? 'var(--accent)' : 'var(--border)',
+        backgroundColor: copied ? 'var(--accent)' : 'transparent',
         color: copied ? '#fff' : 'var(--text-secondary)',
-        opacity: 0,
       }}
-      title="复制代码"
-      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
-      onMouseLeave={(e) => { if (!copied) (e.currentTarget as HTMLElement).style.opacity = '0'; }}
+      title={copied ? '已复制' : '复制代码'}
     >
       {copied ? <Check size={12} /> : <Copy size={12} />}
     </button>
   );
 }
 
-/** 代码块容器：为 HTML/SVG 代码块提供「预览」切换，作为轻量 Artifacts 输出 */
+/** 语言别名归一化：py→python、yml→yaml、sh/zsh→bash 等，供徽标着色使用 */
+function normalizeLang(lang: string): string {
+  const alias: Record<string, string> = {
+    py: 'python',
+    yml: 'yaml',
+    sh: 'bash', zsh: 'bash', shell: 'bash',
+    js: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript',
+    cc: 'cpp',
+    htm: 'html', html5: 'html',
+    rs: 'rust',
+    golang: 'go',
+    jsonc: 'json',
+    docker: 'dockerfile',
+    scss: 'css', less: 'css',
+  };
+  return alias[lang] ?? lang;
+}
+
+/** 语言品牌主色（GitHub 徽标风格）：未收录语言回退为中性灰 */
+const LANG_COLORS: Record<string, string> = {
+  javascript: '#f7df1e',
+  typescript: '#3178c6',
+  python: '#3776ab',
+  rust: '#dea584',
+  go: '#00add8',
+  java: '#e76f00',
+  c: '#00599c',
+  cpp: '#00599c',
+  html: '#e34f26',
+  css: '#1572b6',
+  json: '#7bc500',
+  bash: '#4eaa25',
+  sql: '#e38c00',
+  yaml: '#cb171e',
+  dockerfile: '#2496ed',
+};
+
+/** 代码块容器：为 HTML/SVG/Markdown 代码块提供「预览」切换，作为轻量 Artifacts 输出 */
 function CodeBlock({ language, codeText, children }: { language: string; codeText: string; children: React.ReactNode }) {
   const [showPreview, setShowPreview] = useState(false);
   const isHtml = language === 'html' || language === 'htm' || language === 'html5' || language === 'xml';
   const isSvg = language === 'svg';
-  const previewable = isHtml || isSvg;
+  const isMarkdown = language === 'markdown' || language === 'md' || language === 'mdx';
+  const previewable = isHtml || isSvg || isMarkdown;
 
   return (
-    <div className="group relative">
-      {previewable && (
-        <button
-          onClick={() => setShowPreview((v) => !v)}
-          className="pd-btn absolute top-2 right-10 p-1 rounded transition-colors flex items-center gap-0.5"
-          style={{
-            backgroundColor: showPreview ? 'var(--accent)' : 'var(--border)',
-            color: showPreview ? '#fff' : 'var(--text-secondary)',
-            opacity: 0,
-          }}
-          title={showPreview ? '查看代码' : '预览渲染结果'}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; }}
-          onMouseLeave={(e) => { if (!showPreview) (e.currentTarget as HTMLElement).style.opacity = '0'; }}
-        >
-          {showPreview ? <Code2 size={12} /> : <Eye size={12} />}
-        </button>
-      )}
-      <CopyButton code={codeText} />
-      {previewable && showPreview && (
-        <div
-          className="rounded-lg overflow-hidden mb-2"
-          style={{ border: '1px solid var(--border)', backgroundColor: '#fff' }}
-        >
-          {isSvg ? (
+    <div
+      className="group relative my-2 overflow-hidden"
+      style={{ border: '1px solid var(--border)' }}
+    >
+      {/* 头部栏：语言标注 + 操作按钮（固定布局，不遮挡代码内容） */}
+      <div
+        className="flex items-center gap-1.5 px-2 h-7"
+        style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
+      >
+        {language && (
+          (() => {
+            const langColor = LANG_COLORS[normalizeLang(language)] ?? '';
+            return (
+              <span
+                className="text-[10px] px-1 py-px rounded select-none"
+                style={{
+                  color: langColor || 'var(--text-tertiary)',
+                  backgroundColor: langColor ? `${langColor}22` : 'var(--bg-tertiary)',
+                  border: langColor ? `1px solid ${langColor}44` : 'none',
+                }}
+              >
+                {language}
+              </span>
+            );
+          })()
+        )}
+        <div className="flex-1" />
+        {previewable && (
+          <button
+            onClick={() => setShowPreview((v) => !v)}
+            className="pd-btn p-1 rounded transition-colors flex items-center gap-0.5"
+            style={{
+              backgroundColor: showPreview ? 'var(--accent)' : 'transparent',
+              color: showPreview ? '#fff' : 'var(--text-secondary)',
+            }}
+            title={showPreview ? '查看代码' : '预览渲染结果'}
+          >
+            {showPreview ? <Code2 size={12} /> : <Eye size={12} />}
+          </button>
+        )}
+        <CopyButton code={codeText} />
+      </div>
+      {/* 预览时只显示渲染结果（隐藏源码）；未预览/不可预览时显示源码 */}
+      {previewable && showPreview ? (
+        <div style={{ backgroundColor: isMarkdown ? 'var(--bg-primary)' : '#fff' }}>
+          {isMarkdown ? (
+            // Markdown 预览：等价于"去掉围栏标记"，复用主渲染器按正文渲染（样式与消息主体完全一致）
+            <div className="px-3 py-2">
+              <MarkdownRenderer content={codeText} />
+            </div>
+          ) : isSvg ? (
             <div
               className="w-full flex items-center justify-center p-2"
               dangerouslySetInnerHTML={{ __html: codeText }}
@@ -94,36 +158,60 @@ function CodeBlock({ language, codeText, children }: { language: string; codeTex
             />
           )}
         </div>
+      ) : (
+        <div
+          className="flex"
+          style={{ fontSize: '12px', lineHeight: '1.6', fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace" }}
+        >
+          {/* 行号列：编辑器风格，不随代码横向滚动 */}
+          <div
+            className="shrink-0 select-none text-right"
+            style={{
+              color: 'var(--text-tertiary)',
+              backgroundColor: 'var(--bg-tertiary)',
+              padding: '12px 8px 12px 12px',
+              borderRight: '1px solid var(--border)',
+            }}
+          >
+            {codeText.split('\n').map((_, i) => (
+              <div key={i} style={{ fontSize: '12px', lineHeight: '1.6' }}>{i + 1}</div>
+            ))}
+          </div>
+          <pre
+            className="p-3 overflow-x-auto m-0 flex-1"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              fontSize: '12px',
+              lineHeight: '1.6',
+              fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
+            }}
+          >
+            {children}
+          </pre>
+        </div>
       )}
-      <pre
-        className="rounded-lg p-3 overflow-x-auto"
-        style={{
-          backgroundColor: 'var(--bg-tertiary)',
-          border: '1px solid var(--border)',
-          fontSize: '12px',
-          lineHeight: '1.6',
-          fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
-        }}
-      >
-        {children}
-      </pre>
     </div>
   );
 }
 
-// 识别常见文件路径（Windows 盘符绝对路径 / ./ ../ 相对路径），转成可点击的自定义协议链接。
-// 路径字符仅允许 ASCII 字母数字与常见路径分隔符（\ / . _ -），不包含空白、括号、标点与中文，
-// 从而避免把标点、中文正文误吞进路径（如 "E:\tem。"、"E:\tem）"、"E:\tem目录"）。
-// 盘符后加 (?![\\/]) 前瞻排除 URL scheme（如 http:// https://），避免把 URL 误识别为 "p://..." 本地路径。
-const PATH_LINK_RE = /(`?)((?:[A-Za-z]:[\\/](?![\\/])|\.{1,2}[\\/])[A-Za-z0-9\\/._\-]+)\1/g;
+// 识别文件路径并转成可点击的自定义协议链接（open_path 打开文件）。
+// 约束：
+// - 以盘符绝对路径（E:\...）或 ./ ../ 相对路径开头，且**含至少一个目录分隔符**；
+// - **必须以文件扩展名结尾**（\.[A-Za-z][A-Za-z0-9]{0,5}，扩展名**字母开头**，避免把
+//   `_v1.0.md` 中的 `.0` 误认作扩展名）——避免把"纯目录 + 中文正文/文件名"
+//   截断成半截链接（原正则字符集不含中文，会把 `E:\tmp\Agent\中文名.docx` 拆成
+//   `[E:\tmp\Agent](...)中文名.docx` 的污染输出）；
+// - 路径字符排除空白、括号、引号与全/半角标点（文件名部分**允许 `.`**，如版本号
+//   `_v1.0.md`），避免吞进正文标点；
+// - 前缀负向断言排除已存在于 Markdown 链接语法（`[x](path)` / `<path>`）中的路径。
+const PATH_LINK_RE = /(`?)((?<![(\[<])(?:[A-Za-z]:[\\/](?![\\/])|\.{1,2}[\\/])[^\s\[\](){}<>"'`，。；：！？,;:!?]*[\\/][^\s\[\](){}<>"'`，。；：！？,;:!?]*\.[A-Za-z][A-Za-z0-9]{0,5})\1/g;
 
 function linkifyPaths(content: string): string {
   return content.replace(PATH_LINK_RE, (full, tick, path) => {
-    // 去掉尾部标点，避免把句号/逗号吞进路径
-    const clean = path.replace(/[.,;:!?，。；：！？]+$/, '');
-    if (!clean || clean.length < 2) return full;
-    const label = tick ? `\`${clean}\`` : clean;
-    return `[${label}](pilotdesk-path://${encodeURIComponent(clean)})`;
+    // 正则已排除边界标点与空白，无需二次裁剪
+    if (!path || path.length < 2) return full;
+    const label = tick ? `\`${path}\`` : path;
+    return `[${label}](pilotdesk-path://${encodeURIComponent(path)})`;
   });
 }
 
@@ -167,10 +255,11 @@ export function collapseBlankLines(content: string): string {
 /**
  * 裸 URL（http/https）识别：
  * - 边界排除空白、尖/方/花括号、引号与括号（含全角 `（）`），避免把正文标点（句号、全角右括号等）吞进链接
+ * - 排除中文全角标点（，。；：！？、），防止 URL 后紧跟中文正文时被整体吞入链接
  * - 前缀排除 `(` / `[` / `<`，使已存在于 Markdown 链接语法（`[text](url)` / `<url>`）中的 URL 不被重复处理
  * - 带捕获组（group 1 = URL），供 split 直接切分
  */
-const BARE_URL_RE = /(?<![(\[<])(https?:\/\/[^\s<>{}[\]"'(（）)]+)/gi;
+const BARE_URL_RE = /(?<![(\[<])(https?:\/\/[^\s<>{}[\]"'(（）)，。；：！？、]+)/gi;
 
 /** 清理链接尾部常见标点（端口号 / 路径字符不受影响） */
 function trimUrlTrailingPunct(url: string): string {
@@ -194,7 +283,9 @@ export function linkifyUrls(text: string): React.ReactNode {
         href={clean}
         target="_blank"
         rel="noopener noreferrer"
-        style={{ color: 'var(--accent)', textDecoration: 'underline' }}
+        // 用 currentColor 继承所在气泡文字色（用户消息气泡背景为 --accent，固定 accent 会与背景同色无法辨别），
+        // 用下划线保持链接可辨识。
+        style={{ color: 'currentColor', textDecoration: 'underline', wordBreak: 'break-all' }}
       >
         {clean}
       </a>
@@ -217,12 +308,38 @@ function preprocessMarkdown(content: string): string {
   result = result.replace(/^(\s*)(-{3,})(\s*)$/gm, '\n\n$1$2$3\n\n');
   // 折叠因保护 --- 而新增/叠加的连续空行
   result = collapseBlankLines(result);
-  // 去除 fenced code block 内容首行的前导空白（部分模型输出会在代码块首行带缩进）
-  result = result.replace(/(```[^\n]*\n)[ \t]+(?=\S)/g, '$1');
-  // 识别文件路径并转成可点击链接
-  result = linkifyPaths(result);
-  // 裸 URL 转成 Markdown 链接（统一处理全角括号等 gfm autolink 不覆盖的边界）
-  return linkifyUrlsMarkdown(result);
+  // 代码围栏块（```…```）内保持原文：列表 tight 化与路径/URL 链接化只作用于正文
+  return result
+    .split(/(```[\s\S]*?```)/g)
+    .map((part, i) => (i % 2 === 1 ? part : processPlainText(part)))
+    .join('');
+}
+
+/**
+ * 删除列表项之间的空行（loose list → tight list）。
+ * 项间空行会使列表解析为 loose list（li 内包裹块级 <p>），导致序号与内容分行、
+ * 项间空行放大；删除后 li 直接文本，序号与内容同行、项间紧凑。
+ * 供 markdown 渲染与流式占位显示共用。
+ *
+ * 正则结构说明：整个「列表标记 + 标记后空白」必须都写在 lookahead 内，
+ * 替换才以 `\n\n` 为匹配主体成立；若把 `[ \t]+` 移到 lookahead 外，
+ * 有序标记（`2.` 数字前无空白）将永远匹配失败，有序项间空行无法删除。
+ * `(?=[^\s])` 断言标记后还有非空白内容，避免误删「行尾孤立的列表标记」。
+ */
+export function tightenListGaps(text: string): string {
+  // [-*+•∘○★☆] 覆盖 ASCII 与常见 Unicode bullet；\d+[.)] 覆盖有序列表（1. / 1) / 10. 等）
+  const re = new RegExp(
+    String.raw`\n\n(?=(?:[ \t]*)(?:[-*+•∘○★☆]|\d+[.)])[ \t]+(?=[^\s]))`,
+    'g'
+  );
+  return text.replace(re, '\n');
+}
+
+/** 对正文（非代码围栏）部分做列表与链接处理 */
+function processPlainText(part: string): string {
+  const tightened = tightenListGaps(part);
+  // 识别文件路径与裸 URL 并转成链接
+  return linkifyUrlsMarkdown(linkifyPaths(tightened));
 }
 
 
@@ -236,19 +353,45 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
         urlTransform={(url) => {
           // 放行自定义路径协议，并保留安全的外部/相对链接，其余（javascript: 等）置空
           if (url.startsWith('pilotdesk-path:')) return url;
-          if (/^(https?:|mailto:|tel:)/i.test(url)) return url;
+          if (/^(https?:|mailto:|tel:|data:)/i.test(url)) return url;
           if (url.startsWith('#') || url.startsWith('/') || url.startsWith('./') || url.startsWith('../')) return url;
           return '';
         }}
         components={{
+          img({ src, alt, ...props }) {
+            // 视频：工具返回 `![视频](<url>)`（或视频扩展名 URL）→ 渲染可播放的视频控件
+            const isVideo = alt === '视频' || /\.(mp4|webm|mov|m4v)([?#]|$)/i.test(src || '');
+            if (isVideo && src) {
+              return (
+                <video
+                  src={src}
+                  controls
+                  preload="metadata"
+                  style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }}
+                />
+              );
+            }
+            // Markdown 图片：点击放大（全局 ImagePreview），保留悬浮提示与圆角样式
+            return (
+              <img
+                src={src}
+                alt={alt}
+                title={alt}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (src) useImagePreviewStore.getState().open(src);
+                }}
+                style={{ maxWidth: '100%', borderRadius: 8, cursor: 'zoom-in', display: 'block' }}
+                {...props}
+              />
+            );
+          },
           code({ className, children, ...props }) {
             const isInline = !className;
             if (isInline) {
               return (
                 <code
-                  className="px-1 py-0.5 rounded"
                   style={{
-                    backgroundColor: 'var(--bg-tertiary)',
                     color: 'var(--accent)',
                     fontSize: 'inherit',
                     fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
@@ -376,6 +519,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
                     color: 'var(--accent)',
                     textDecoration: 'underline',
                     cursor: 'pointer',
+                    wordBreak: 'break-all',
                     fontFamily: "'Cascadia Code', 'Fira Code', Consolas, monospace",
                   }}
                   {...props}
@@ -389,7 +533,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ color: 'var(--accent)' }}
+                style={{ color: 'var(--accent)', wordBreak: 'break-all' }}
                 {...props}
               >
                 {children}
@@ -418,8 +562,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
             );
           },
           li({ children, ...props }) {
+            // 不要设置 white-space: pre-wrap：react-markdown 会在块级子元素（含嵌套列表 li）之间
+            // 输出换行文本节点，pre-wrap 会把这些换行渲染为可见空行——这正是嵌套列表项间空行的根源。
+            // 外层 .pilotdesk-markdown 为 white-space: normal，会把换行折叠为空格，列表项保持紧凑。
             return (
-              <li style={{ margin: '2px 0', whiteSpace: 'pre-wrap' }} {...props}>
+              <li style={{ margin: '2px 0' }} {...props}>
                 {children}
               </li>
             );

@@ -32,6 +32,7 @@ import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, 
 
 interface Props {
   definitionId: string;
+  onClose?: () => void;
   onNameChange?: (name: string) => void;
   onSaveResult?: (success: boolean) => void;
   onImported?: (newId: string) => void;

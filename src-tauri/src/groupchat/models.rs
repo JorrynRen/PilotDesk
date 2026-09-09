@@ -26,10 +26,21 @@ pub struct Room {
     /// 累积的补充/细化约束（JSON 数组字符串，随初始目标一起注入 Director 决策）
     #[serde(default = "default_goal_notes")]
     pub goal_notes: String,
+    /// 是否允许主持人在自动补人时添加 CLI 参与者（1=允许，0=禁止；按任务差异化限制，默认允许）
+    #[serde(default = "default_allow_auto_cli")]
+    pub allow_auto_cli: i64,
+    /// 房间统一产物目录（绝对路径；空则运行时回退 `<工作目录>/outputs/<房间标题>/`）。
+    /// 所有参与者产出的文件必须写入该目录，保证位置一致、房间内全局感知（v3.4ao）。
+    #[serde(default)]
+    pub output_dir: String,
 }
 
 fn default_goal_notes() -> String {
     "[]".to_string()
+}
+
+fn default_allow_auto_cli() -> i64 {
+    1
 }
 
 /// 群聊参与者（groupchat_participants）
@@ -70,6 +81,8 @@ pub struct MessageRow {
     pub attachments: String,
     /// 参与者本轮工具调用链（reasoning/tool_start/tool_result 步骤，JSON 数组字符串，可溯源）
     pub tool_calls: String,
+    /// 思考模式（DeepSeek 等）的 reasoning_content；assistant 消息下一轮请求原样回传
+    pub reasoning_content: String,
     /// 附加结构化数据（如用户确认请求/回复，JSON 对象字符串），普通消息为 "{}"
     pub extra: String,
     pub timestamp: i64,
@@ -83,6 +96,8 @@ pub struct StanceRow {
     pub participant_id: String,
     /// 该参与者当前立场（支持/反对/提案要点）
     pub stance: String,
+    /// 立场态度（agree/disagree/neutral，由 stance 文本派生）
+    pub attitude: String,
     pub updated_at: i64,
 }
 

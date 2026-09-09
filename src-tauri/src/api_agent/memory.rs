@@ -1,12 +1,8 @@
-//! KV 记忆库
+//! [遗留] JSON 文件版 KV 记忆库（已弃用）
 //!
-//! 轻量级键值对记忆系统，为 API Agent 提供跨会话的持久化知识存储。
-//! 使用 JSON 文件持久化（~/.pilotdesk/memories.json），线程安全。
-//!
-//! 设计原则（对齐 Hermes 记忆隔离）：
-//!   - 不替代 CLI Agent 内部记忆（Claude/Hermes/CodeX 有自己的记忆系统）
-//!   - 不读取/写入 CLI Agent 的 MEMORY.md
-//!   - 仅限于 API Agent 使用
+//! 曾用于 API Agent 跨会话持久化记忆（~/.pilotdesk/memories.json）。
+//! 生产路径已被 [`crate::api_agent::db::MemoryStore`]（SQLite `MEMORY.db`）取代。
+//! 本模块仅保留自测与历史对照使用，不作为生产存储；新功能请基于 `api_agent::db`。
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

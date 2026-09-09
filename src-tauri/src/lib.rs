@@ -2,6 +2,7 @@ mod agent;
 mod api_agent;
 mod commands;
 mod db;
+mod eventlog;
 mod groupchat;
 mod plugin;
 mod tools;
@@ -11,25 +12,24 @@ mod utils;
 
 use db::init::{init_db, DbPool};
 use tokio::sync::Mutex as AsyncMutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use agent::AgentManager;
 use tauri::Manager;
 use tauri::Emitter;
 use rusqlite::params;
-use rusqlite::OptionalExtension;
 use workflow::executor::NodeExecutor;
 use workflow::scheduler::WorkflowScheduler;
 use api_agent::client::ApiClient;
-use api_agent::agent_loop::{AgentLoop, AgentLoopConfig, ToolRegistry, RiskLevel};
-use api_agent::agent_loop::ToolHandler;
+use api_agent::agent_loop::{AgentLoop, AgentLoopConfig, RiskLevel, SecurityMode};
 use api_agent::types::*;
 use api_agent::system_prompt::{SystemPromptBuilder, GitContext};
 use api_agent::skills::SkillLoader;
 use api_agent::context::{SlidingWindow, DEFAULT_CONTEXT_TOKENS, infer_context_window};
 use api_agent::summarize::{split_recent_window, generate_rolling_summary};
+use api_agent::compaction::{CompactionPolicy, conversation_stats, DefaultCompactionPolicy};
 use api_agent::db::MemoryStore;
 use crate::db::models::Attachment;
-use std::os::windows::process::CommandExt;
 
 /// Windows 控制台输出编码解码：先尝试 UTF-8，失败则用系统 ANSI/OEM 代码页（如 CP 936/GBK）解码。
 /// cmd.exe 在中文 Windows 上默认以 GBK 输出，直接 from_utf8_lossy 会导致乱码。
@@ -88,171 +88,6 @@ pub(crate) fn is_binary_bytes(bytes: &[u8]) -> bool {
         }
     }
     invalid > 0
-}
-
-/// 检测命令中是否包含危险操作（供 write_file 脚本内容检查使用）
-fn check_dangerous_command(cmd: &str) -> Option<&'static str> {
-    let lower = cmd.to_lowercase();
-    let blocked: &[&str] = &[
-        "format c:", "format d:", "format e:", "format /",
-        "del /f /s c:\\", "del /f /s d:\\",
-        "rmdir /s c:\\", "rmdir /s d:\\",
-        "rd /s c:\\", "rd /s d:\\",
-        "taskkill /f /im wininit", "taskkill /f /im csrss", "taskkill /f /im lsass",
-        "taskkill /f /im smss", "taskkill /f /im svchost",
-        "shutdown /s", "shutdown /r",
-        "bcdedit /delete", "diskpart",
-    ];
-    for pat in blocked {
-        if lower.contains(pat) {
-            return Some(pat);
-        }
-    }
-    None
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommandRisk {
-    /// 安全：读操作，直接执行，无需审批
-    Safe,
-    /// 中等：写/改操作，需用户确认
-    Medium,
-    /// 高危：系统破坏性操作，直接拦截
-    Blocked,
-}
-
-/// 分析一条 Shell 命令，返回其风险等级。
-/// 同时返回越界路径（若有），供调用方决定是否额外提示用户确认。
-pub fn classify_command(cmd: &str) -> (CommandRisk, Option<String>) {
-    let cmd_stripped = cmd.trim();
-    if cmd_stripped.is_empty() {
-        return (CommandRisk::Safe, None);
-    }
-
-    // ── 提取实际执行的命令名 ──
-    let cmd_lower = cmd_stripped.to_lowercase();
-
-    // 取"&&"/"||"/";之前或第一个单词作为主命令
-    let primary_cmd = cmd_stripped
-        .split(|c| c == '&' || c == '|' || c == ';')
-        .next()
-        .unwrap_or(cmd_stripped)
-        .trim()
-        .to_lowercase();
-
-    // 去掉 cmd /c 等前缀
-    let exe = if primary_cmd.starts_with("cmd /c") {
-        primary_cmd["cmd /c".len()..].trim().to_string()
-    } else {
-        primary_cmd.clone()
-    };
-
-    // ── 危险黑名单：绝对拦截 ──
-    let blocked_patterns: &[&str] = &[
-        // 磁盘/分区
-        "format c:", "format d:", "format e:", "format /",
-        "diskpart", "clean all",
-        // 批量删除系统
-        "del /f /s c:\\", "del /f /s d:\\", "del /f /s e:\\",
-        "del /f /s %systemdrive%", "del /f /s %windir%", "del /f /s %systemroot%",
-        "rmdir /s c:\\", "rmdir /s d:\\",
-        "rd /s c:\\", "rd /s d:\\",
-        // 终止关键进程
-        "taskkill /f /im wininit", "taskkill /f /im csrss", "taskkill /f /im lsass",
-        "taskkill /f /im smss", "taskkill /f /im winlogon", "taskkill /f /im services",
-        "taskkill /f /im svchost", "taskkill /f /im system", "taskkill /f /im idle",
-        "taskkill /f /im explorer", "taskkill /f /im dwm", "taskkill /f /im spoolsv",
-        "taskkill /f /im taskmgr",
-        // 终止全部运行进程
-        "taskkill /f /fi \"status eq running\"",
-        "taskkill /f /fi \"session eq", "taskkill /f /fi \"username eq",
-        // 注册表/启动项破坏
-        "reg delete hklm", "reg delete hkey_local_machine",
-        "reg delete hkcr", "reg delete hkey_classes_root",
-        "reg add hklm\\system\\currentcontrolset\\control",
-        "bcdedit /delete", "bcdedit /set {default}",
-        "bootsect /nt60", "bootrec /fixmbr",
-        // 关机/重启
-        "shutdown /s", "shutdown /r", "shutdown /g",
-        "shutdown /p", "shutdown /t 0",
-        // 系统任务计划/用户账户破坏
-        "schtasks /delete /tn \\microsoft", "schtasks /delete /f /tn \\microsoft",
-        "net user administrator /delete",
-        // 权限篡改系统目录
-        "takeown /f c:\\windows", "takeown /f %windir%",
-        "icacls c:\\windows /grant", "icacls %windir% /grant",
-        "cacls c:\\windows", "cacls %windir%",
-        // 覆写系统文件（高危重定向）
-        "echo > c:\\", "echo > %windir%", "echo > %systemroot%",
-        "> c:\\windows\\", "> %windir%\\", ">> c:\\windows\\", ">> %windir%\\",
-    ];
-    for pat in blocked_patterns {
-        if cmd_lower.contains(pat) {
-            return (CommandRisk::Blocked, None);
-        }
-    }
-
-    // ── 工作目录越界检查 ──
-    if let Some(workspace) = std::env::current_dir().ok().and_then(|p| p.canonicalize().ok()) {
-        let workspace_str = workspace.to_string_lossy().to_lowercase();
-        // 在命令字符串中检测绝对路径引用
-        let path_candidates: Vec<&str> = cmd_stripped
-            .split_whitespace()
-            .filter(|w| w.starts_with("c:\\") || w.starts_with("d:\\") || w.starts_with("e:\\"))
-            .collect();
-        for candidate in path_candidates {
-            if let Ok(abs) = std::path::Path::new(candidate).canonicalize() {
-                let abs_str = abs.to_string_lossy().to_lowercase();
-                if !abs_str.starts_with(&workspace_str) {
-                    return (CommandRisk::Medium, Some(format!(
-                        "命令引用的路径 {} 超出工作区目录，是否仍要执行？", candidate
-                    )));
-                }
-            }
-        }
-    }
-
-    // ── 中等风险：写入/修改/删除操作 ──
-    let medium_patterns: &[&str] = &[
-        " del ", " rd ", " rmdir ",
-        " copy ", " xcopy ", " move ", " robocopy ",
-        " ren ", " rename ", " attrib ", " mklink ",
-        " > ", " >> ",
-        "reg add ", "reg delete ", "reg import ",
-        "schtasks /create", "schtasks /change",
-        "net user ", "net localgroup ",
-        "powershell", "powershell.exe",
-        "start ",
-    ];
-    for pat in medium_patterns {
-        if cmd_lower.contains(pat) {
-            return (CommandRisk::Medium, None);
-        }
-    }
-
-    // ── 安全白名单：只读/信息类操作 ──
-    let safe_tokens: &[&str] = &[
-        "dir", "type", "echo", "findstr", "find ",
-        "where", "which", "assoc", "ftype",
-        "tasklist", "taskmgr", "systeminfo", "ver",
-        "vol", "fsutil", "fsstor",
-        "ipconfig", "ping", "nslookup", "tracert",
-        "netstat", "route", "net ",
-        "sc query", "sc config",
-        "title", "set", "cls", "color",
-        "tree", "fc", "certutil", "signtool",
-        "git ", "npm ", "pip ", "python ", "py ",
-        "curl ", "wget ",
-    ];
-    let first_word = exe.split_whitespace().next().unwrap_or("");
-    for safe in safe_tokens {
-        if first_word == safe.trim_end_matches(' ') || first_word.starts_with(safe.trim_end_matches(' ')) {
-            return (CommandRisk::Safe, None);
-        }
-    }
-
-    // 未匹配任何规则 → 保守判定为中等风险
-    (CommandRisk::Medium, None)
 }
 
 pub struct DbState {
@@ -374,6 +209,24 @@ fn set_app_setting(state: tauri::State<'_, DbState>, key: String, value: String)
 }
 
 #[tauri::command]
+fn get_usage_summary(state: tauri::State<'_, DbState>, days: Option<i64>) -> Result<commands::usage::UsageSummary, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::usage::usage_summary(&conn, days)
+}
+
+#[tauri::command]
+fn get_session_usage(state: tauri::State<'_, DbState>, session_id: String) -> Result<commands::usage::UsageTotals, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::usage::session_usage(&conn, &session_id)
+}
+
+#[tauri::command]
+fn get_room_usage(state: tauri::State<'_, DbState>, room_id: String) -> Result<commands::usage::RoomUsage, crate::utils::errors::AppError> {
+    let conn = state.get_conn()?;
+    commands::usage::room_usage(&conn, &room_id)
+}
+
+#[tauri::command]
 fn get_theme(state: tauri::State<'_, DbState>) -> Result<String, crate::utils::errors::AppError> {
     let conn = state.get_conn()?;
     commands::theme::get_theme(&conn)
@@ -402,9 +255,11 @@ async fn agent_send_message_with_config(
     cwd: Option<String>,
     system_prompt: Option<String>,
     agent_session_id: Option<String>,
-    temperature: Option<f32>,
+    temperature: Option<f64>,
     max_tokens: Option<u32>,
     attachments: Option<Vec<Attachment>>,
+    // 会话安全模式（strict/standard/relaxed/unrestricted，缺省标准；本消息有效）
+    security_mode: Option<String>,
 ) -> Result<(), String> {
     // ── API Agent 路径：使用 AgentLoop ──
     if agent_type == "api" {
@@ -420,6 +275,7 @@ async fn agent_send_message_with_config(
             pending,
             temperature,
             max_tokens,
+            security_mode,
         ).await;
     }
 
@@ -563,6 +419,23 @@ impl PendingApprovals {
             false
         }
     }
+
+    /// 丢弃审批超时后残留的 sender（approvals map 静默移除，避免超时条目泄漏；
+    /// 之后前端再响应会按"未找到"处理，与其它已超时请求语义一致）。
+    pub fn discard(&self, call_id: &str) {
+        self.approvals.lock().unwrap().remove(call_id);
+    }
+
+    /// 丢弃迭代上限确认超时后残留的 sender（continue_reqs map 静默移除）。
+    pub fn discard_continue(&self, session_id: &str) {
+        self.continue_reqs.lock().unwrap().remove(session_id);
+    }
+
+    /// 丢弃 ask_user 确认等待超时后残留的 sender（confirmation_reqs map 静默移除；
+    /// 与 respond_confirmation 的 remove 路径互补，覆盖超时不再等待回复的场景）。
+    pub fn discard_confirmation(&self, call_id: &str) {
+        self.confirmation_reqs.lock().unwrap().remove(call_id);
+    }
 }
 
 #[tauri::command]
@@ -622,7 +495,7 @@ async fn agent_list_skills(state: tauri::State<'_, DbState>, agent_type: String)
 
 /// 获取 API Agent 技能目录路径
 /// 返回 ~/.pilotdesk/skills/ 如果存在
-fn get_api_agent_skills_dir() -> Option<String> {
+pub(crate) fn get_api_agent_skills_dir() -> Option<String> {
     let dir = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
         .map(|d| format!("{}/skills", d))?;
 
@@ -637,7 +510,7 @@ fn get_api_agent_skills_dir() -> Option<String> {
 
 /// 将附件拆分为图片 base64 列表与文件引用说明。
 /// - `kind == "image"`：读取落盘文件转 `data:<mime>;base64,...`，送入多模态输入；
-///   同时记录落盘路径，供图生图工具（edit_image / image_variation）引用；
+///   同时记录落盘路径，供图生图工具（generate_image / edit_image）引用；
 /// - 其余：仅生成路径说明，供模型通过 read_file 按需读取。
 fn split_attachments(attachments: &[Attachment]) -> (Vec<String>, String) {
     use base64::Engine;
@@ -673,7 +546,7 @@ fn split_attachments(attachments: &[Attachment]) -> (Vec<String>, String) {
     }
     if !image_lines.is_empty() {
         notes.push(format!(
-            "用户附加了以下图片，如需图生图可调用 edit_image / image_variation，其 image 参数可填这些路径：\n{}",
+            "用户附加了以下图片，如需图生图可调用 generate_image（image 数组）或 edit_image，其图片参数可填这些路径：\n{}",
             image_lines.join("\n")
         ));
     }
@@ -687,6 +560,19 @@ fn split_attachments(attachments: &[Attachment]) -> (Vec<String>, String) {
     (images, note)
 }
 
+/// 从消息持久化的思维链（ThinkingChainStep[] JSON）中提取 reasoning 步骤内容，
+/// 供思考模式模型（DeepSeek 等）随下一轮 assistant 消息原样回传。
+fn extract_reasoning_from_tool_calls(tool_calls: &Option<String>) -> String {
+    let Some(json) = tool_calls else { return String::new() };
+    let Ok(steps) = serde_json::from_str::<Vec<serde_json::Value>>(json) else { return String::new() };
+    steps
+        .iter()
+        .filter(|s| s["type"].as_str() == Some("reasoning"))
+        .filter_map(|s| s["content"].as_str().map(String::from))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// 使用 AgentLoop 执行 API Agent 对话
 async fn run_api_agent(
     app: tauri::AppHandle,
@@ -696,12 +582,13 @@ async fn run_api_agent(
     attachments: &[Attachment],
     system_prompt: &str,
     pending_approvals: PendingApprovals,
-    temperature: Option<f32>,
+    temperature: Option<f64>,
     max_tokens: Option<u32>,
+    security_mode: Option<String>,
 ) -> Result<(), String> {
     let conn = state.get_conn().map_err(|e| format!("数据库连接失败: {}", e))?;
 
-    // 0. 加载持久化权限规则（allow/deny 列表）
+    // 0. 加载持久化权限规则（清单分类：高风险/风险/安全）+ 会话安全模式（本消息有效）
     let permission_rules = commands::permission::load_rules(&conn).unwrap_or_default();
 
     // 1. 加载会话信息（获取 api_provider 和 api_model）
@@ -745,7 +632,7 @@ async fn run_api_agent(
     let skills_dir = get_api_agent_skills_dir();
     let skill_loader = Arc::new(SkillLoader::new(skills_dir));
 
-    // 3.5 初始化记忆库（SQLite: pilotdesk_agent.db，首次自动从 memories.json 迁移）
+    // 3.5 初始化记忆库（SQLite: MEMORY.db）
     let memory_store = {
         let config_dir = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
             .ok_or_else(|| "无法获取配置目录".to_string())?;
@@ -753,7 +640,42 @@ async fn run_api_agent(
     };
     let memory_store = Arc::new(memory_store);
 
-    // 4. 组装 System Prompt（Base + MEMORY.md + USER.md + Skill 列表 + KV 记忆）
+    // 3.6 KV 记忆注入块：意图路由（启用时一次轻量 LLM 解析意图 → 分域检索注入；
+    //   0 命中不注入；路由不可用自动降级为统一评分 ranked-top）
+    // 设置同步读取（避免 &Connection 跨 await 破坏 Send）
+    let memory_intent_enabled = crate::api_agent::memory_intent::read_enabled(&conn);
+    let memory_intent_model = crate::api_agent::memory_intent::read_model_override(&conn);
+    let (kv_memories_block, kv_intent_usage) = crate::api_agent::memory_intent::memory_injection_block(
+        memory_intent_enabled,
+        memory_intent_model,
+        &provider.api_format,
+        &provider.api_endpoint,
+        &api_key,
+        &model,
+        message,
+        &memory_store,
+    )
+    .await;
+    // 意图路由是一次真实 LLM 调用：把其用量计入本会话统计（决策：摘要/意图调用一并计费）。
+    if let Some(u) = kv_intent_usage {
+        let intent_api_format = provider.api_format.parse::<ApiFormat>().unwrap_or_default();
+        if let Ok(usage_conn) = state.pool.get() {
+            let _ = crate::api_agent::agent_loop::record_usage_row(
+                &usage_conn,
+                &session_id,
+                &provider.name,
+                &model,
+                &intent_api_format,
+                u.prompt,
+                u.completion,
+                u.total,
+                u.cache_read,
+                u.cache_write,
+            );
+        }
+    }
+
+    // 4. 组装 System Prompt（Base + MEMORY.md + USER.md + Skill 列表；KV 记忆块随后以 user 上下文注入）
     let api_agent_base_prompt = concat!(
         "<agent_role>\n",
         "你是一个智能编程助手（PilotDesk Agent）。你可以：\n",
@@ -765,13 +687,12 @@ async fn run_api_agent(
         "6. 调用 search_memory 查找用户保存的偏好和项目事实——仅在需要了解用户背景时使用\n",
         "7. 调用 load_skill 加载特定技能——仅在确定需要该技能执行任务时使用\n",
         "8. 调用 save_memory 保存重要信息供后续对话使用\n",
-        "9. 调用 web_search 联网搜索（默认 Bing 中国版，返回标题/链接/摘要）——低风险\n",
-        "10. 调用 web_fetch 抓取指定网页的正文文本——低风险\n",
+        "9. 调用 search_web 联网搜索（默认 Bing 中国版，返回标题/链接/摘要）——低风险\n",
+        "10. 调用 fetch_web 抓取指定网页的正文文本——低风险\n",
         "11. 调用 browser 工具访问网页（action=fetch 抓取渲染后页面 / action=screenshot 截图）——中风险需确认\n",
-        "12. 调用 generate_image 根据文字描述生成图片（仅 OpenAI 兼容提供商可用）\n",
-        "13. 调用 edit_image 编辑已有图片（图生图，需提供图片路径/URL，仅 OpenAI 兼容提供商可用）\n",
-        "14. 调用 image_variation 生成已有图片的风格变体（图生图，仅 OpenAI 兼容提供商可用）\n",
-        "15. 调用 task 把独立子任务交给子代理处理（调研、分析、规划、写作等）\n",
+        "12. 调用 generate_image 根据文字描述生成图片（也支持传入 image 数组做图生图/编辑/变体，仅 OpenAI 兼容提供商可用）\n",
+        "13. 调用 edit_image 编辑已有图片（图生图/遮罩编辑，需提供图片路径/URL，仅 OpenAI 兼容提供商可用）\n",
+        "14. 调用 task 把独立子任务交给子代理处理（调研、分析、规划、写作等）\n",
         "\n",
         "重要规则：\n",
         "- 优先使用你的内置知识回答问题，不要为了使用工具而使用工具\n",
@@ -781,7 +702,10 @@ async fn run_api_agent(
         "- 写入文件时请使用 <environment> 中提供的真实路径，不要猜测用户名\n",
         "- execute_command 仅用于运行脚本、git 操作、系统信息查询等真正需要执行的场景\n",
         "- search_memory 仅用于查找用户之前保存的个性化信息，不是通用搜索引擎\n",
-        "- 当需要最新信息、实时数据或事实核查时，使用 web_search 联网搜索；无法联网获取时如实告知用户\n",
+        "- USER.md / MEMORY.md 是应用级记忆文件，由系统在合适时机注入并自动维护，\n",
+        "  不要用 read_file / list_files 猜测这些记忆文件存放在哪里；\n",
+        "  需要查询用户已保存的偏好/事实时调用 search_memory，需要补充长期记忆时调用 save_memory\n",
+        "- 当需要最新信息、实时数据或事实核查时，使用 search_web 联网搜索；无法联网获取时如实告知用户\n",
         "- save_memory 仅在以下场景使用：\n",
         "  a) 用户明确要求你记住某事（如\"记住我喜欢用 TypeScript\"）\n",
         "  b) 发现用户的个人偏好、项目决策或重要上下文（如\"我的项目数据库使用 PostgreSQL\"）\n",
@@ -816,11 +740,23 @@ async fn run_api_agent(
     };
 
     let full_system_prompt = {
+        // 记忆根与记忆管理面板一致：session.cwd 为空时回退兜底工作区（resolve_session_cwd）。
+        let memory_root = crate::commands::memory::resolve_memory_root(
+            &conn,
+            if session.cwd.trim().is_empty() { None } else { Some(&session.cwd) },
+        );
+        // session 作用域技能禁用集：被禁技能只从 `<available_skills>` 目录隐藏，
+        // 不注入模型（load_skill 工具仍可点名加载，见 run_api_agent 下方 skill_loader 透传）。
+        let disabled_skills = crate::commands::app_settings::load_skill_scope_disabled(&conn).session;
+        let visible_skills: Vec<_> = skill_loader
+            .list_skills()
+            .into_iter()
+            .filter(|e| !disabled_skills.contains(&e.name))
+            .collect();
         let mut builder = SystemPromptBuilder::new(full_base_prompt)
-            .with_memory_md(Some(&session.cwd).filter(|c| !c.is_empty()).map(|c| c.as_str()))
+            .with_memory_md(Some(memory_root.as_str()))
             .with_user_md()
-            .with_kv_memories(memory_store.format_for_prompt(5))
-            .with_skills(skill_loader.list_skills());
+            .with_skills(visible_skills);
 
         // Git 仓库上下文
         if !session.cwd.is_empty() {
@@ -829,34 +765,19 @@ async fn run_api_agent(
             }
         }
 
-        // 项目上下文文件（CLAUDE.md、README.md）
-        if !session.cwd.is_empty() {
-            builder = builder.with_project_context(&session.cwd);
-        }
-
         builder.build()
     };
 
-    // 5. 加载会话消息历史（用于首次请求时的回退）
+    // 5. 加载会话消息历史（事件为唯一事实源，session_contexts 不再存消息快照）
     let history = commands::session::get_session_messages_inner(&conn, session_id)
         .map_err(|e| format!("加载消息历史失败: {}", e))?;
+    let has_history = !history.is_empty();
 
-    // 5.5 会话连续性：加载持久化上下文快照（滚动摘要 + 最近 N 轮完整对话）
-    // 注意：session_contexts 不存 system prompt，system prompt 每次动态构建。
-    let (saved_summary, saved_recent): (String, Vec<ChatMessage>) = {
-        let ctx_sql = "SELECT conversation_messages, summary FROM session_contexts WHERE session_id = ?1";
-        match conn.query_row(ctx_sql, params![session_id], |row| {
-            let recent_json: String = row.get(0)?;
-            let summary: String = row.get(1)?;
-            Ok((recent_json, summary))
-        }).optional() {
-            Ok(Some((recent_json, summary))) => {
-                let recent: Vec<ChatMessage> = serde_json::from_str(&recent_json).unwrap_or_default();
-                (summary, recent)
-            }
-            _ => (String::new(), Vec::new()),
-        }
-    };
+    // 5.5 会话连续性：读取滚动摘要（summary/result 事件为唯一事实源；recent 由事件派生重建）
+    // 注意：不存 system prompt，system prompt 每次动态构建。
+    let saved_summary: String = crate::eventlog::latest_session_summary(&conn, session_id)
+        .map_err(|e| format!("加载会话摘要失败: {}", e))?
+        .unwrap_or_default();
 
     let mut messages: Vec<ChatMessage> = Vec::new();
 
@@ -868,35 +789,105 @@ async fn run_api_agent(
         )));
     }
 
-    if saved_recent.is_empty() {
-        // 首次请求：从 messages 表构建历史（仅 user/assistant 角色）
-        let mut msgs: Vec<ChatMessage> = history
+    // 模型可见历史 = 事件派生的 user/assistant 消息（映射与旧"首次请求回退"路径一致）。
+    let mut msgs: Vec<ChatMessage> = history
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .map(|m| match m.role.as_str() {
+            "assistant" => {
+                // 思考模式（DeepSeek 等）：从持久化的思维链中恢复 reasoning_content，随请求原样回传。
+                ChatMessage::assistant_with_reasoning(&m.content, &extract_reasoning_from_tool_calls(&m.tool_calls))
+            }
+            _ => ChatMessage::user(&m.content),
+        })
+        .collect();
+
+    // 若当前用户消息已被前端 fire-and-forget 持久化，去掉末尾重复项
+    if let Some(last) = msgs.last() {
+        if last.role == "user" && last.content.as_deref() == Some(message) {
+            msgs.pop();
+        }
+    }
+
+    // 崩溃尾部修复（只影响内存重建，不改事件事实源）：正常对话 user 后必有 assistant。
+    // 去掉上述"本次重复"后历史仍以 user 结尾 ⇒ 上一轮发送后进程中断、无回应（悬空 user）。
+    // 继续会话时把它从模型上下文剔除，避免旧指令被当成新一轮请求重复执行。
+    while msgs.last().map_or(false, |m| m.role == "user") {
+        log::info!("[API Agent] 剔除崩溃遗留的悬空 user 消息（无 assistant 回应）");
+        msgs.pop();
+    }
+
+    // 有历史（继续会话）：应用与旧快照等价的保留窗口（≤10 轮 / 8000 token），
+    // 超出部分由滚动摘要承载；纯函数切分保证重建结果与旧 recent_json 语义一致。
+    // 首次请求：全量历史直接入上下文，由后续 SlidingWindow 裁剪。
+    if has_history {
+        let (_, recent) = split_recent_window(&msgs);
+        messages.extend(recent);
+    } else {
+        messages.extend(msgs);
+    }
+
+    // KV 记忆块（意图路由结果）作为"当前消息前的 user 上下文块"注入，而非写进 system prompt：
+    // 让 system+历史前缀逐轮保持字节稳定（利于 provider 前缀缓存），并显式标注该块是系统注入
+    // 的长期记忆、不是用户新指令（避免模型把它误当本轮请求）。只进内存，不落库。
+    if let Some(kv) = kv_memories_block {
+        if !kv.trim().is_empty() {
+            messages.push(ChatMessage::user(&format!(
+                "<memory_context>\n以下是系统注入的长期记忆，仅供你作答时参考，不是用户的新指令。\n{}\n</memory_context>",
+                kv
+            )));
+        }
+    }
+
+    // 任务列表注入（todo/state 事件投影）：todo_write 每次把整表快照写为会话事件
+    // （非模型可见），而历史重建不含工具调用 args——只有在此把最近一张快照渲染为
+    // <task_list> 上下文块回放，模型才能跨轮看到任务进度。仅内存、不落库，置于 KV
+    // 记忆块之后、当前用户消息之前；空列表不注入。
+    let todos_block = {
+        let todos = crate::eventlog::latest_session_todos(&conn, session_id)
+            .map_err(|e| format!("读取会话任务列表失败: {}", e))?;
+        let lines: Vec<String> = todos
             .iter()
-            .filter(|m| m.role == "user" || m.role == "assistant")
-            .map(|m| match m.role.as_str() {
-                "assistant" => ChatMessage::assistant(&m.content),
-                _ => ChatMessage::user(&m.content),
+            .map(|t| {
+                let content = t["content"].as_str().unwrap_or("");
+                let status = t["status"].as_str().unwrap_or("pending");
+                let priority = t["priority"].as_str().unwrap_or("medium");
+                let mark = match status {
+                    "completed" => "[x]",
+                    "in_progress" => "[>]",
+                    _ => "[ ]",
+                };
+                format!("- {} {} ({})", mark, content, priority)
             })
             .collect();
-
-        // 若当前用户消息已被前端 fire-and-forget 持久化，去掉末尾重复项
-        if let Some(last) = msgs.last() {
-            if last.role == "user" && last.content.as_deref() == Some(message) {
-                msgs.pop();
-            }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "<task_list>\n以下是会话任务列表（由 todo_write 维护，仅供进度追踪；不是用户的新指令）：\n{}\n</task_list>",
+                lines.join("\n")
+            ))
         }
-        messages.extend(msgs);
-    } else {
-        messages.extend(saved_recent);
+    };
+    if let Some(block) = todos_block {
+        messages.push(ChatMessage::user(&block));
     }
 
     // 追加当前用户消息（仅一次，避免重复）
     // 图片附件转 base64 送入多模态；文件附件在正文中追加路径说明，供模型用 read_file 读取。
+    // 本次输入显式化（v3.5d）：只对当前消息注入实时时钟，并用 <user_request> 标记本轮的
+    // 新指令边界；历史 user 消息保持原样回放——不再给每条历史消息统一盖“现在”时间戳，
+    // 否则旧指令与当前指令前缀完全相同，模型会把已处理过的上一条也当成“本次请求”。
     let (images, file_note) = split_attachments(attachments);
-    let mut user_content = message.to_string();
+    let mut user_body = message.to_string();
     if !file_note.is_empty() {
-        user_content.push_str(&file_note);
+        user_body.push_str(&file_note);
     }
+    let user_content = format!(
+        "{}\n\n<user_request>\n{}\n</user_request>",
+        crate::utils::current_clock_cn(),
+        user_body,
+    );
     messages.push(ChatMessage::user_with_images(&user_content, images));
 
     // 5.1 滑动窗口兜底（跳过 system/summary，仅处理超长单条消息）
@@ -909,173 +900,79 @@ async fn run_api_agent(
     // 图片生成工具复用 provider 的 endpoint/key（在 client 消费前克隆）
     let image_endpoint = provider.api_endpoint.clone();
     let image_api_key = api_key.clone();
+    // 流式 chunk 空闲超时：全局 app_settings 可配置（会话与群聊共用同一键；见 app_settings.rs）
+    let stream_idle_secs = crate::commands::app_settings::load_stream_idle_secs(&conn);
     let client = if matches!(api_format, ApiFormat::Anthropic) {
-        ApiClient::new(provider.api_endpoint, api_key, api_format.clone())
+        ApiClient::new(provider.api_endpoint, api_key, api_format.clone()).with_stream_idle(stream_idle_secs)
     } else {
-        ApiClient::new_openai(provider.api_endpoint, api_key)
+        ApiClient::new_openai(provider.api_endpoint, api_key).with_stream_idle(stream_idle_secs)
     };
     // 摘要生成复用一个独立客户端实例（AgentLoop 会独占消费 client）
     let summary_client = client.clone();
     let summary_model = model.clone();
     let summary_format = api_format.clone();
 
-    // 7. 构建工具注册表（含 load_skill 等内置工具）
-    let mut tool_registry = ToolRegistry::new();
-    let skill_loader_clone = skill_loader.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::skills::LoadSkillTool::new(skill_loader_clone),
-    ));
+    // 7. 构建工具注册表（全量装配 + 会话清单，见 tools/mod.rs 装配层）
+    // 先合并工具管理页的会话模式 overrides（追加禁用，新会话生效），
+    // 供能力项（文件历史）等按场景差异化禁用判断使用。
+    let mut profile = crate::tools::ToolProfile::session();
+    let overrides = crate::commands::tools::load_tool_overrides(&conn);
+    profile.add_extra_disable(overrides.session);
 
-    // 注册 KV 记忆工具（实现见 tools/memory.rs）
-    let memory_clone = memory_store.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::memory::SaveMemoryTool::new(memory_clone),
-    ));
+    // 文件历史能力项：被用户按场景禁用时不注入（新会话生效）
+    let file_history = if crate::tools::is_disabled(&profile, crate::tools::FILE_HISTORY_CAP) {
+        None
+    } else {
+        Some(Arc::new(crate::tools::history::FileHistoryService {
+            app: app.clone(),
+            scope: session_id.to_string(),
+            pool: state.pool.clone(),
+            enabled: Arc::new(AtomicBool::new(true)),
+        }))
+    };
 
-    let memory_clone2 = memory_store.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::memory::SearchMemoryTool::new(memory_clone2),
-    ));
+    // 模型能力查询与跨 provider 解析（闭包持有连接池；key 只在后端解析，绝不进 LLM 上下文）。
+    let pool_for_providers = state.pool.clone();
+    let list_providers: Option<Arc<dyn Fn() -> Vec<crate::tools::ProviderModelInfo> + Send + Sync>> = Some(Arc::new(move || {
+        let Ok(conn) = pool_for_providers.get() else { return Vec::new() };
+        crate::commands::api_provider::collect_provider_models(&conn)
+    }));
+    let pool_for_resolve = state.pool.clone();
+    let resolve_provider: Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>> = Some(Arc::new(move |pid| {
+        let Ok(conn) = pool_for_resolve.get() else { return None };
+        let Ok(Some(p)) = crate::commands::api_provider::get_api_provider(&conn, pid) else { return None };
+        let Ok(Some(key)) = crate::commands::api_provider::get_api_key(&conn, pid) else { return None };
+        Some((p.api_endpoint, key, p.api_format))
+    }));
 
-    // 注册读文件工具（Low 风险 — 只读，不修改任何文件；工具实现见 tools/read_file.rs）
-    let cwd_for_read = session.cwd.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::read_file::ReadFileTool::new(cwd_for_read),
-    ));
-
-    // 注册列出文件工具（Low 风险 — 只读；工具实现见 tools/list_files.rs）
-    let cwd_for_list = session.cwd.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::list_files::ListFilesTool::new(cwd_for_list),
-    ));
-
-    // 注册 Glob 工具（Low 风险 — 文件名/路径模式匹配；工具实现见 tools/glob.rs）
-    let cwd_for_glob = session.cwd.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::glob::GlobTool::new(cwd_for_glob),
-    ));
-
-    // 注册 Grep 工具（Low 风险 — 内容搜索；工具实现见 tools/grep.rs）
-    let cwd_for_grep = session.cwd.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::grep::GrepTool::new(cwd_for_grep),
-    ));
-
-    // 注册写文件工具（Medium 风险 — 修改文件需确认；工具实现见 tools/write_file.rs）
-    let cwd_for_write = session.cwd.clone(); // 工作目录（用于路径解析）
-    let app_for_write = app.clone();
-    let sid_for_write = session_id.to_string();
-    let pool_for_write = state.pool.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::write_file::WriteFileTool::new(cwd_for_write).with_hooks(
-            crate::tools::write_file::WriteFileHooks {
-                app: app_for_write,
-                session_id: sid_for_write,
-                pool: pool_for_write,
-            },
-        ),
-    ));
-
-    // 注册 Edit 工具（精确字符串替换，与 write_file 同风险；工具实现见 tools/edit_file.rs）
-    let cwd_for_edit = session.cwd.clone();
-    let app_for_edit = app.clone();
-    let sid_for_edit = session_id.to_string();
-    let pool_for_edit = state.pool.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::edit_file::EditFileTool::new(cwd_for_edit).with_hooks(
-            crate::tools::write_file::WriteFileHooks {
-                app: app_for_edit,
-                session_id: sid_for_edit,
-                pool: pool_for_edit,
-            },
-        ),
-    ));
-
-    // 注册命令执行工具（High 风险，每次强制用户确认；工具实现见 tools/execute_command.rs）
-    let cwd_for_exec = session.cwd.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::execute_command::ExecuteCommandTool::new(cwd_for_exec),
-    ));
-
-    // 注册 Python 代码执行工具（Low 风险 — 仅执行代码，副作用由 Python 脚本自行决定；实现见 tools/execute_python.rs）
-    let cwd_for_py = session.cwd.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::execute_python::ExecutePythonTool::new(cwd_for_py),
-    ));
-
-    // 注册 TodoWrite 工具（Low 风险 — 会话内任务追踪，无文件副作用；实现见 tools/todo_write.rs）
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::todo_write::TodoWriteTool::new(),
-    ));
-
-    // 图片生成 / 图生图工具（仅 OpenAI 兼容格式，复用当前 provider 的 endpoint/key）
-    if !matches!(api_format, ApiFormat::Anthropic) {
-        tool_registry.register(std::sync::Arc::new(
-            crate::tools::image_gen::ImageGenTool::new(image_endpoint.clone(), image_api_key.clone()),
-        ));
-        tool_registry.register(std::sync::Arc::new(
-            crate::tools::image_to_image::ImageEditTool::new(image_endpoint.clone(), image_api_key.clone()),
-        ));
-        tool_registry.register(std::sync::Arc::new(
-            crate::tools::image_to_image::ImageVariationTool::new(image_endpoint, image_api_key),
-        ));
-    }
-
-    // 注册 MCP 服务器工具（stdio 子进程，握手后暴露 tools）
-    let mcp_servers = commands::mcp::load_servers(&conn).unwrap_or_default();
-    for server in &mcp_servers {
-        let mut client = match crate::tools::mcp::McpClient::connect(server).await {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("[MCP] 连接服务器 {} 失败: {}", server.name, e);
-                continue;
-            }
-        };
-        let tools = match client.list_tools().await {
-            Ok(t) => t,
-            Err(e) => {
-                log::warn!("[MCP] 列出工具失败 {}: {}", server.name, e);
-                continue;
-            }
-        };
-        let tool_count = tools.len();
-        let shared = std::sync::Arc::new(tokio::sync::Mutex::new(client));
-        for info in tools {
-            tool_registry.register(std::sync::Arc::new(
-                crate::tools::mcp::McpToolHandler::new(shared.clone(), &server.name, info),
-            ));
-        }
-        log::info!("[MCP] 已加载服务器 {}（{} 个工具）", server.name, tool_count);
-    }
-
-    // 注册子代理 task 工具（单次 LLM 调用，聚焦子任务）
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::subagent::TaskTool::new(client.clone(), model.clone(), api_format.clone()),
-    ));
-
-    // 注册浏览器自动化工具（本机 Edge/Chrome 无头模式，抓取/截图）
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::browser::BrowserTool::new(session.cwd.clone()),
-    ));
-
-    // 注册联网搜索工具（默认 Bing 中国版，可在设置中切换 Tavily/Bing API）
-    let search_config = commands::search::load_search_config(&conn);
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::web_search::WebSearchTool::new(search_config),
-    ));
-
-    // 注册网页抓取工具
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::web_fetch::WebFetchTool::new(),
-    ));
-
-    // 注册 ask_user 工具（模型向用户发起确认请求；确认通道与审批共用 PendingApprovals）
-    let ask_user_pending = pending_approvals.clone();
-    tool_registry.register(std::sync::Arc::new(
-        crate::tools::ask_user::AskUserTool::new(app.clone(), session_id.to_string(), ask_user_pending),
-    ));
-
-    let tool_registry = Arc::new(tool_registry);
+    let env = crate::tools::ToolEnv {
+        cwd: session.cwd.clone(),
+        api_format: api_format.clone(),
+        image: if matches!(api_format, ApiFormat::Anthropic) {
+            None
+        } else {
+            Some((image_endpoint.clone(), image_api_key.clone()))
+        },
+        audio: if matches!(api_format, ApiFormat::Anthropic) {
+            None
+        } else {
+            Some((image_endpoint, image_api_key))
+        },
+        list_providers,
+        resolve_provider,
+        search_config: commands::search::load_search_config(&conn),
+        client: Some(client.clone()),
+        model: model.clone(),
+        skill_loader: Some(skill_loader),
+        memory_store: Some(memory_store),
+        app: Some(app.clone()),
+        session_id: session_id.to_string(),
+        pending: Some(pending_approvals.clone()),
+        file_history,
+        permission_rules: Some(std::sync::Arc::new(permission_rules.clone())),
+    };
+    let ctx = crate::tools::BuildContext { env: &env, pool: &state.pool };
+    let tool_registry = crate::tools::build_registry(&profile, &ctx).await?;
     let tools = tool_registry.get_definitions();
 
     // 8. 创建 AgentLoop（直接发送 Tauri 事件到前端，确保审批前实时送达）
@@ -1087,6 +984,13 @@ async fn run_api_agent(
     let agent_loop = AgentLoop::new(client, tool_registry, model, app_for_agent, sid_for_agent)
         .with_api_format(api_format)
         .with_permission_rules(permission_rules)
+        .with_workspace(Some(session.cwd.clone()))
+        .with_security_mode(
+            security_mode
+                .as_deref()
+                .and_then(SecurityMode::from_str)
+                .unwrap_or_default(),
+        )
         .with_approval_handler(Box::new(move |call_id: &str, tool_name: &str, _args: &str, risk: RiskLevel| {
             let rx = pending_shared.register(call_id.to_string());
             
@@ -1105,6 +1009,8 @@ async fn run_api_agent(
                 }
                 _ => {
                     log::warn!("[Approval] 审批超时，默认允许: {}", tool_name);
+                    // 丢弃超时后残留的 sender，避免 PendingApprovals.approvals 泄漏
+                    pending_shared.discard(call_id);
                     true
                 }
             }
@@ -1128,6 +1034,8 @@ async fn run_api_agent(
             }
             _ => {
                 log::warn!("[ContinueLoop] 超时，默认继续执行");
+                // 丢弃超时后残留的 sender，避免 PendingApprovals.continue_reqs 泄漏
+                pending_continue.discard_continue(&sid_continue);
                 true // 超时默认继续
             }
         }
@@ -1145,14 +1053,15 @@ async fn run_api_agent(
     };
 
     // 10. 后台执行 Agent Loop（AgentLoop 内部直接发射 Tauri 事件到前端）
-    // 整体超时保护：180s，防止工具调用场景多轮往返导致会话永久挂起
-    const AGENT_LOOP_TIMEOUT_SECS: u64 = 180;
+    // 绝对兜底保护（30min）：真正的“卡死”已由请求层检测（流式 chunk 空闲 90s / reqwest 总超时 /
+    // 工具自管超时 / 用户取消 / 迭代上限）。此兜底仅防“全链路黑洞”等病态场景，不再承担
+    // 合法长任务（长思考、多轮工具、等待用户确认）的误杀。
+    const AGENT_LOOP_TIMEOUT_SECS: u64 = 1800;
     let sid_done = session_id.to_string();
-    // 会话上下文持久化（AgentLoop 完成后保存滚动摘要 + 最近 N 轮，不存 system prompt）
+    // 会话上下文持久化（AgentLoop 完成后只保存滚动摘要；recent 由事件派生重建）
     let pool_for_ctx = state.pool.clone();
     let session_id_for_ctx = session_id.to_string();
-    let api_provider_id_for_ctx = provider_id.clone();
-    let api_model_for_ctx = summary_model.clone();
+    let summary_provider_name = provider.name.clone();
     tokio::spawn(async move {
         match tokio::time::timeout(
             std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS),
@@ -1163,43 +1072,54 @@ async fn run_api_agent(
             Ok(Ok(output)) => {
                 log::info!("[API Agent] 对话完成: session={}", sid_done);
 
-                // 1. 双阈值切分：older（需语义压缩）+ recent（完整保留）
-                let (older, recent) = split_recent_window(&output.messages);
+                // 1. 上下文统计 + 策略判定（P0-2）：滚动摘要触发经 CompactionPolicy 决策。
+                //    DefaultCompactionPolicy 与 split 阈值同源（行为不变），后续可换可配置策略。
+                let older = split_recent_window(&output.messages).0;
+                let compaction_stats = conversation_stats(&output.messages);
+                let compaction_policy = DefaultCompactionPolicy::current();
 
-                // 2. 读取旧摘要（增量式合并的基础）
-                let (mut new_summary, mut summary_updated_at): (String, i64) = (String::new(), 0);
-                if let Ok(ctx_conn) = pool_for_ctx.get() {
-                    if let Ok(Some((s, ts))) = ctx_conn
-                        .query_row(
-                            "SELECT summary, summary_updated_at FROM session_contexts WHERE session_id = ?1",
-                            params![&session_id_for_ctx],
-                            |row| {
-                                let s: String = row.get(0)?;
-                                let ts: i64 = row.get(1)?;
-                                Ok((s, ts))
-                            },
-                        )
-                        .optional()
-                    {
-                        new_summary = s;
-                        summary_updated_at = ts;
-                    }
-                }
+                // 2. 读取旧摘要（滚动摘要事实源 = session_events 的 summary/result 事件；此处为增量合并基础）
+                let old_summary: String = match pool_for_ctx.get() {
+                    Ok(ctx_conn) => crate::eventlog::latest_session_summary(&ctx_conn, &session_id_for_ctx)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default(),
+                    Err(_) => String::new(),
+                };
+                let mut new_summary = old_summary.clone();
+                let mut summary_changed = false;
 
-                // 3. 存在超出保留窗口的早期消息时，触发增量摘要（复用当前会话模型）
-                if !older.is_empty() {
+                // 3. 策略命中且存在超出保留窗口的早期消息时，触发增量摘要（复用当前会话模型）
+                if !older.is_empty() && compaction_policy.should_compact(&compaction_stats) {
                     match generate_rolling_summary(
                         &summary_client,
                         &summary_model,
                         &summary_format,
                         &new_summary,
                         &older,
+                        // 摘要调用计入本会话用量统计（与主请求同表同 scope）。
+                        |p, c, t, cr, cw| {
+                            if let Ok(ctx_conn) = pool_for_ctx.get() {
+                                let _ = crate::api_agent::agent_loop::record_usage_row(
+                                    &ctx_conn,
+                                    &session_id_for_ctx,
+                                    &summary_provider_name,
+                                    &summary_model,
+                                    &summary_format,
+                                    p,
+                                    c,
+                                    t,
+                                    cr,
+                                    cw,
+                                );
+                            }
+                        },
                     )
                     .await
                     {
                         Ok(s) if !s.trim().is_empty() => {
                             new_summary = s;
-                            summary_updated_at = crate::utils::now();
+                            summary_changed = true;
                         }
                         Ok(_) => {
                             log::warn!("[API Agent] 摘要生成为空，保留旧摘要");
@@ -1210,28 +1130,20 @@ async fn run_api_agent(
                     }
                 }
 
-                // 4. 持久化 summary + recent（不含 system prompt）
-                let recent_json = serde_json::to_string(&recent).unwrap_or_default();
-                let now = crate::utils::now();
-                let _ = pool_for_ctx.get()
-                    .map_err(|e| log::error!("获取数据库连接失败: {}", e))
-                    .and_then(|ctx_conn| {
-                        ctx_conn.execute(
-                            "INSERT INTO session_contexts (session_id, api_provider_id, api_model, conversation_messages, summary, summary_updated_at, last_updated_at)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                             ON CONFLICT(session_id) DO UPDATE SET
-                                 conversation_messages = ?4, summary = ?5, summary_updated_at = ?6, last_updated_at = ?7",
-                            params![
-                                &session_id_for_ctx,
-                                &api_provider_id_for_ctx,
-                                &api_model_for_ctx,
-                                recent_json,
-                                new_summary,
-                                summary_updated_at,
-                                now,
-                            ],
-                        ).map_err(|e| log::error!("保存会话上下文失败: {}", e))
-                    });
+                // 4. 摘要变更时追加 summary/result 事件（未变更不落，避免事件噪音）
+                if summary_changed && !new_summary.trim().is_empty() {
+                    let now = crate::utils::now();
+                    if let Ok(ctx_conn) = pool_for_ctx.get() {
+                        let event = serde_json::json!({
+                            "sessionId": &session_id_for_ctx,
+                            "text": new_summary,
+                            "timestamp": now,
+                        });
+                        if let Err(e) = crate::eventlog::append_session_event(&ctx_conn, &session_id_for_ctx, "summary/result", &event, true) {
+                            log::error!("[API Agent] 保存会话滚动摘要失败: {}", e);
+                        }
+                    }
+                }
             }
             Ok(Err(e)) => {
                 log::error!("[API Agent] 对话失败: session={}, error={}", sid_done, e);
@@ -1242,7 +1154,7 @@ async fn run_api_agent(
             }
             Err(_) => {
                 let timeout_msg = format!(
-                    "模型响应超时（超过 {} 秒），已自动终止。请重试或检查 API 提供商状态。",
+                    "任务执行超过最大保护时长（{} 秒），已终止（正常长任务由无进展/上游无数据/工具超时等真实信号终止，此分支仅作兜底）。请重试或检查 API 提供商状态。",
                     AGENT_LOOP_TIMEOUT_SECS
                 );
                 log::warn!(
@@ -1451,6 +1363,7 @@ pub fn run() {
             commands::session::get_session,
             commands::session::get_session_messages,
             commands::session::rename_session,
+            commands::session::update_session_cwd,
             commands::session::archive_session,
             commands::session::delete_session,
             commands::session::save_message,
@@ -1479,17 +1392,43 @@ pub fn run() {
             reorder_api_providers,
             get_app_setting,
             set_app_setting,
+            commands::memory::list_project_roots,
+            commands::memory::get_project_memory,
+            commands::memory::update_project_memory,
+            commands::memory::project_memory_template,
+            commands::memory::get_user_preferences,
+            commands::memory::update_user_preferences,
+            commands::memory::user_preferences_template,
+            commands::memory::list_memory_entries,
+            commands::memory::save_memory_entry,
+            commands::memory::delete_memory_entry,
+            commands::memory::set_memory_pin,
+            commands::memory::preview_memory_maintenance,
+            commands::memory::run_memory_maintenance,
+            commands::memory::get_memory_stats,
             commands::permission::get_permission_rules,
             commands::permission::set_permission_rules,
             commands::search::get_search_config,
             commands::search::set_search_config,
             commands::mcp::get_mcp_servers,
             commands::mcp::set_mcp_servers,
+            commands::api_provider::get_model_notes_cmd,
+            commands::api_provider::set_model_notes_cmd,
+            commands::tools::tool_catalog,
+            commands::tools::get_tool_overrides,
+            commands::tools::set_tool_overrides,
+            commands::tools::groupchat_get_file_history_enabled,
+            commands::tools::groupchat_set_file_history,
             commands::file_history::list_file_history,
+            commands::file_history::list_file_history_sessions,
             commands::file_history::undo_file_history,
+            commands::file_history::delete_file_history,
             commands::fs_util::write_text_file,
             get_theme,
             set_theme_cmd,
+            get_usage_summary,
+            get_session_usage,
+            get_room_usage,
             agent_send_message_with_config,
             agent_stop_generation,
             agent_approve_tool,
@@ -1506,10 +1445,10 @@ pub fn run() {
             plugin::plugin_get_sandbox_info,
             plugin::plugin_install_zip,
             plugin::plugin_uninstall,
-    plugin::plugin_set_sandbox_enabled,
-    plugin::plugin_get_panel_content,
-    plugin::plugin_read_entry,
-    plugin::plugin_read_icon_file,
+            plugin::plugin_set_sandbox_enabled,
+            plugin::plugin_get_panel_content,
+            plugin::plugin_read_entry,
+            plugin::plugin_read_icon_file,
             commands::agents::list_agents,
             commands::agents::get_agent,
             commands::agents::add_agent,
@@ -1584,11 +1523,14 @@ pub fn run() {
             commands::groupchat::groupchat_send_message,
             commands::groupchat::groupchat_respond_confirmation,
             commands::groupchat::groupchat_set_director,
+            commands::groupchat::groupchat_set_output_dir,
             commands::groupchat::groupchat_pause,
             commands::groupchat::groupchat_resume,
             commands::groupchat::groupchat_abort,
+            commands::groupchat::groupchat_room_actor_alive,
             commands::groupchat::groupchat_get_room,
             commands::groupchat::groupchat_get_messages,
+            commands::groupchat::groupchat_message_watermark,
             commands::groupchat::groupchat_get_tasks,
             commands::groupchat::groupchat_list_rooms,
             commands::groupchat::groupchat_get_participants,

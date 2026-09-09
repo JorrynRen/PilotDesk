@@ -1,5 +1,8 @@
+use std::collections::BTreeMap;
+
 use rusqlite::{params, Connection};
 use rusqlite::OptionalExtension;
+use serde_json::Value;
 use crate::db::models::{Session, Message, Attachment};
 use crate::utils::errors::AppError;
 use tauri::State;
@@ -78,23 +81,89 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
     })
 }
 
-fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<Message> {
+/// 角色 → 会话事件 kind + 模型可见性（system 不进模型上下文，user/assistant/tool 可见）。
+fn role_event_kind(role: &str) -> (&'static str, bool) {
+    match role {
+        "user" => ("user/message", true),
+        "assistant" => ("assistant/message", true),
+        "tool" => ("tool/result", true),
+        _ => ("system/message", false),
+    }
+}
+
+fn opt_str(v: &Value) -> Option<String> {
+    v.as_str().map(|s| s.to_string())
+}
+
+/// 从会话事件 payload 反解 Message。payload 键为 camelCase；attachments 兼容
+/// JSON 字符串（历史回放/存量）与数组两种形态。
+fn message_from_payload(raw: &str) -> Result<Message, AppError> {
+    let v: Value = serde_json::from_str(raw)?;
+    let attachments = match &v["attachments"] {
+        Value::String(s) => serde_json::from_str::<Vec<Attachment>>(s).ok(),
+        Value::Array(_) => serde_json::from_value(v["attachments"].clone()).ok(),
+        _ => None,
+    };
     Ok(Message {
-        id: row.get(0)?,
-        session_id: row.get(1)?,
-        role: row.get(2)?,
-        content: row.get(3)?,
-        mode: row.get(4)?,
-        timestamp: row.get(5)?,
-        tool_calls: row.get(6).ok(),
-        tool_call_id: row.get(7).ok(),
-        tool_name: row.get(8).ok(),
-        attachments: row
-            .get::<_, Option<String>>(9)
-            .ok()
-            .flatten()
-            .and_then(|s| serde_json::from_str::<Vec<Attachment>>(&s).ok()),
+        id: v["id"].as_str().unwrap_or_default().to_string(),
+        session_id: v["sessionId"].as_str().unwrap_or_default().to_string(),
+        role: v["role"].as_str().unwrap_or_default().to_string(),
+        content: v["content"].as_str().unwrap_or_default().to_string(),
+        mode: v["mode"].as_str().unwrap_or_default().to_string(),
+        timestamp: v["timestamp"].as_i64().unwrap_or(0),
+        tool_calls: opt_str(&v["toolCalls"]),
+        tool_call_id: opt_str(&v["toolCallId"]),
+        tool_name: opt_str(&v["toolName"]),
+        attachments,
     })
+}
+
+/// 构建会话消息事件 payload（与 `message_from_payload` 键一一对应）。
+fn build_msg_payload(
+    id: &str,
+    session_id: &str,
+    role: &str,
+    content: &str,
+    mode: &str,
+    timestamp: i64,
+    tool_calls: &Option<String>,
+    tool_call_id: &Option<String>,
+    tool_name: &Option<String>,
+    attachments: &str,
+) -> Value {
+    serde_json::json!({
+        "id": id,
+        "sessionId": session_id,
+        "role": role,
+        "content": content,
+        "mode": mode,
+        "timestamp": timestamp,
+        "toolCalls": tool_calls,
+        "toolCallId": tool_call_id,
+        "toolName": tool_name,
+        "attachments": attachments,
+    })
+}
+
+/// 从 `session_events` 派生会话全部消息：同 id 多事件（创建 + 编辑）取最新一条，
+/// 按原 timestamp 升序返回（编辑保留原 timestamp 以维持消息位置）。
+/// 仅取消息类事件：summary/result（滚动摘要）与 todo/state（todo_write 状态快照，
+/// 非模型可见，跨轮任务列表改由 lib.rs 读 latest_session_todos 注入）不入消息投影。
+fn load_session_messages(conn: &Connection, session_id: &str) -> Result<Vec<Message>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT payload FROM session_events
+         WHERE session_id = ?1 AND kind NOT IN ('summary/result', 'todo/state')
+         ORDER BY seq ASC",
+    )?;
+    let rows = stmt.query_map(params![session_id], |r| r.get::<_, String>(0))?;
+    let mut by_id: BTreeMap<String, Message> = BTreeMap::new();
+    for row in rows {
+        let msg = message_from_payload(&row?)?;
+        by_id.insert(msg.id.clone(), msg);
+    }
+    let mut out: Vec<Message> = by_id.into_values().collect();
+    out.sort_by_key(|m| m.timestamp);
+    Ok(out)
 }
 
 #[tauri::command]
@@ -136,7 +205,7 @@ pub fn create_session(
     api_provider: Option<String>,
     api_model: Option<String>,
     agent_session_id: Option<String>,
-    temperature: Option<f32>,
+    temperature: Option<f64>,
     max_tokens: Option<u32>,
 ) -> Result<Session, AppError> {
     let id = crate::utils::new_id();
@@ -191,19 +260,12 @@ pub fn get_session_messages(
     limit: Option<i64>,
 ) -> Result<Vec<Message>, AppError> {
     let conn = state.get_conn()?;
-    
-    let offset = offset.unwrap_or(0);
-    let limit = limit.unwrap_or(100);
-    
-    let mut stmt = conn.prepare(
-        "SELECT id, session_id, role, content, mode, timestamp, tool_calls, tool_call_id, tool_name, attachments 
-         FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC LIMIT ?2 OFFSET ?3"
-    )?;
-    
-    let messages = stmt.query_map(params![session_id, limit, offset], row_to_message)?
-        .collect::<Result<Vec<_>, _>>()?;
-    
-    Ok(messages)
+
+    let offset = offset.unwrap_or(0).max(0) as usize;
+    let limit = limit.unwrap_or(100).max(0) as usize;
+
+    let all = load_session_messages(&conn, &session_id)?;
+    Ok(all.into_iter().skip(offset).take(limit).collect())
 }
 
 /// Save a message to the database and update the session's last_message_preview and message_count.
@@ -229,11 +291,23 @@ pub fn save_message(
     let attachments_json = attachments
         .as_ref()
         .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
-    
-    conn.execute(
-        "INSERT INTO messages (id, session_id, role, content, mode, timestamp, tool_calls, tool_call_id, tool_name, attachments) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![id, session_id, role, content, mode, now, tool_calls, tool_call_id, tool_name, attachments_json],
-    )?;
+
+    // 会话消息事件化（唯一写入口）：消息只追加 session_events，不再写 messages 旧表。
+    // kind 按角色归类；model_visible 仅对会进入模型上下文的 user/assistant/tool 记 true。
+    let (ev_kind, model_visible) = role_event_kind(&role);
+    let payload = build_msg_payload(
+        &id,
+        &session_id,
+        &role,
+        &content,
+        &mode,
+        now,
+        &tool_calls,
+        &tool_call_id,
+        &tool_name,
+        attachments_json.as_deref().unwrap_or("[]"),
+    );
+    crate::eventlog::append_session_event(&conn, &session_id, ev_kind, &payload, model_visible)?;
     
     // Update session preview and count (UTF-8 safe truncation)
     let preview = if content.chars().count() > 100 {
@@ -322,8 +396,10 @@ pub fn delete_session(
     
     cleanup_session_attachments(&conn, &session_id);
     conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
-    // CASCADE will delete related messages
-    
+    // 事件/用量无外键级联，删除会话时一并显式清理；滚动摘要存于 summary/result 事件中随之删除。
+    conn.execute("DELETE FROM session_events WHERE session_id = ?1", params![session_id])?;
+    conn.execute("DELETE FROM api_usage_log WHERE session_id = ?1", params![session_id])?;
+
     Ok(())
 }
 
@@ -344,44 +420,11 @@ pub fn list_sessions_inner(conn: &Connection) -> Result<Vec<Session>, AppError> 
 }
 
 pub fn get_session_messages_inner(conn: &Connection, session_id: &str) -> Result<Vec<Message>, AppError> {
-    // 优先尝试包含扩展列的查询（migration v6+）
-    let sql = "SELECT id, session_id, role, content, mode, timestamp, tool_calls, tool_call_id, tool_name, attachments 
-         FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC";
-    match conn.prepare(sql) {
-        Ok(mut stmt) => {
-            let messages = stmt.query_map(params![session_id], row_to_message)?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(messages)
-        }
-        Err(_) => {
-            // 扩展列不存在，回退到基础列查询
-            let mut stmt = conn.prepare(
-                "SELECT id, session_id, role, content, mode, timestamp
-                 FROM messages WHERE session_id = ?1 ORDER BY timestamp ASC"
-            )?;
-            fn row_to_message_v0(row: &rusqlite::Row) -> rusqlite::Result<Message> {
-                Ok(Message {
-                    id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    role: row.get(2)?,
-                    content: row.get(3)?,
-                    mode: row.get(4)?,
-                    timestamp: row.get(5)?,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                    attachments: None,
-                })
-            }
-            let messages = stmt.query_map(params![session_id], row_to_message_v0)?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(messages)
-        }
-    }
+    load_session_messages(conn, session_id)
 }
 
 pub fn get_session_inner(conn: &Connection, session_id: &str) -> Result<Option<Session>, AppError> {
-    // 优先尝试包含 agent_session_id 的查询（migration v7+）
+    // sessions 为 v1 终态列，直接查询含 agent_session_id / temperature / max_tokens。
     let sql = "SELECT id, agent_type, title, cwd, created_at, updated_at, last_message_preview, message_count, status, api_provider, api_model, agent_session_id, temperature, max_tokens
          FROM sessions WHERE id = ?1";
     match conn.prepare(sql) {
@@ -425,6 +468,8 @@ pub fn get_session_inner(conn: &Connection, session_id: &str) -> Result<Option<S
 pub fn delete_session_inner(conn: &Connection, session_id: &str) -> Result<(), AppError> {
     cleanup_session_attachments(conn, session_id);
     conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
+    conn.execute("DELETE FROM session_events WHERE session_id = ?1", params![session_id])?;
+    conn.execute("DELETE FROM api_usage_log WHERE session_id = ?1", params![session_id])?;
     Ok(())
 }
 
@@ -443,6 +488,37 @@ pub fn update_session_agent_id(
     Ok(())
 }
 
+/// 更新会话的工作目录（项目根）：对后续消息生效（每次发消息动态读取 cwd）。
+#[tauri::command]
+pub fn update_session_cwd(
+    state: State<'_, DbState>,
+    session_id: String,
+    cwd: String,
+) -> Result<(), AppError> {
+    let cwd = cwd.trim().to_string();
+    let conn = state.get_conn()?;
+    conn.execute(
+        "UPDATE sessions SET cwd = ?1, updated_at = ?2 WHERE id = ?3",
+        params![cwd, crate::utils::now(), session_id],
+    )?;
+    Ok(())
+}
+
+/// 从 `session_events` 取指定消息的最新快照（事件为唯一事实源，按 seq 取最新）。
+fn session_message_by_id(conn: &Connection, message_id: &str) -> Result<Option<Message>, AppError> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT payload FROM session_events WHERE json_extract(payload, '$.id') = ?1 ORDER BY seq DESC LIMIT 1",
+            params![message_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match raw {
+        Some(r) => message_from_payload(&r).map(Some),
+        None => Ok(None),
+    }
+}
+
 /// Update an existing message's content
 #[tauri::command]
 pub fn update_message(
@@ -453,31 +529,39 @@ pub fn update_message(
     let content = normalize_message_content(&content);
     let conn = state.get_conn()?;
 
-    // Get existing message
-    let msg = conn.query_row(
-        "SELECT id, session_id, role, content, mode, timestamp, tool_calls, tool_call_id, tool_name, attachments
-         FROM messages WHERE id = ?1",
-        params![message_id],
-        row_to_message,
-    )?;
+    // 编辑 = 追加一条同 id 的事件（保留原 timestamp 以维持消息位置），投影取最新。
+    let Some(mut msg) = session_message_by_id(&conn, &message_id)? else {
+        return Err(AppError::Db(format!("消息不存在: {}", message_id)));
+    };
+    msg.content = content;
 
-    // Update content
-    let now = crate::utils::now();
-    conn.execute(
-        "UPDATE messages SET content = ?1 WHERE id = ?2",
-        params![content, message_id],
-    )?;
+    let attachments_json = msg
+        .attachments
+        .as_ref()
+        .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string()));
+    let (ev_kind, model_visible) = role_event_kind(&msg.role);
+    let payload = build_msg_payload(
+        &msg.id,
+        &msg.session_id,
+        &msg.role,
+        &msg.content,
+        &msg.mode,
+        msg.timestamp,
+        &msg.tool_calls,
+        &msg.tool_call_id,
+        &msg.tool_name,
+        attachments_json.as_deref().unwrap_or("[]"),
+    );
+    crate::eventlog::append_session_event(&conn, &msg.session_id, ev_kind, &payload, model_visible)?;
 
     // Update session timestamp
+    let now = crate::utils::now();
     conn.execute(
         "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
         params![now, msg.session_id],
     )?;
 
-    Ok(Message {
-        content,
-        ..msg
-    })
+    Ok(msg)
 }
 
 /// Search sessions by title (fuzzy match)
@@ -509,27 +593,35 @@ pub fn search_messages(
     limit: Option<u32>,
 ) -> Result<Vec<Message>, AppError> {
     let conn = state.get_conn()?;
-    let limit = limit.unwrap_or(50) as i64;
-    let pattern = format!("%{}%", query);
+    let limit = limit.unwrap_or(50) as usize;
+    let pattern = query.to_string();
 
-    let sql = match session_id {
-        Some(_) => "SELECT id, session_id, role, content, mode, timestamp, tool_calls, tool_call_id, tool_name, attachments
-                    FROM messages WHERE session_id = ?1 AND content LIKE ?2
-                    ORDER BY timestamp ASC LIMIT ?3",
-        None => "SELECT id, session_id, role, content, mode, timestamp, tool_calls, tool_call_id, tool_name, attachments
-                 FROM messages WHERE content LIKE ?1
-                 ORDER BY timestamp ASC LIMIT ?2",
-    };
-
-    let mut stmt = conn.prepare(sql)?;
-
-    let messages = match &session_id {
-        Some(sid) => stmt.query_map(params![sid, pattern, limit], row_to_message)?
-            .collect::<Result<Vec<_>, _>>()?,
-        None => stmt.query_map(params![pattern, limit], row_to_message)?
-            .collect::<Result<Vec<_>, _>>()?,
-    };
-
-    Ok(messages)
+    // 事件为唯一事实源：在派生消息上做内容过滤（数据量小，逐会话扫描足够）。
+    let mut hits: Vec<Message> = Vec::new();
+    match &session_id {
+        Some(sid) => {
+            for m in load_session_messages(&conn, sid)? {
+                if m.content.contains(&pattern) {
+                    hits.push(m);
+                }
+            }
+        }
+        None => {
+            let mut stmt = conn.prepare("SELECT id FROM sessions")?;
+            let ids = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            for sid in ids {
+                for m in load_session_messages(&conn, &sid)? {
+                    if m.content.contains(&pattern) {
+                        hits.push(m);
+                    }
+                }
+            }
+        }
+    }
+    hits.sort_by_key(|m| m.timestamp);
+    hits.truncate(limit);
+    Ok(hits)
 }
 

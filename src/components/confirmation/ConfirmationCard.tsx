@@ -32,6 +32,25 @@ export function parseConfirmation(raw: string | undefined | null): GroupChatConf
   }
 }
 
+/** 判断选项是否属于"其他类"（选中后需补充自由文本，避免再来一轮确认）。 */
+function isOtherOption(value: string): boolean {
+  return /^(其他|其它|自定义|另[外他]|Other)/i.test((value || '').trim());
+}
+
+/** 确认项的有效提交值：选中"其他类"选项且填写了补充文本时，用补充文本作为 value。 */
+function effectiveValue(
+  item: GroupChatConfirmationRequest['items'][number],
+  values: Record<string, string>,
+  customValues: Record<string, string>,
+): string {
+  const v = values[item.id] ?? '';
+  if (item.inputType !== 'text' && isOtherOption(v)) {
+    const custom = (customValues[item.id] ?? '').trim();
+    if (custom) return custom;
+  }
+  return v;
+}
+
 interface ConfirmationCardProps {
   confirmation: GroupChatConfirmationRequest;
   /** 数据驱动的「已提交」态（群聊跨会话恢复用；会话模式无需传）。 */
@@ -40,6 +59,8 @@ interface ConfirmationCardProps {
   onSubmit: (responses: GroupChatConfirmationResponseInput[]) => Promise<void>;
   /** 提交后的提示文案（默认「已提交，等待继续…」）。 */
   submittedText?: string;
+  /** 已提交时的结构化回复（confirmation_response 的 extra.responses）：恢复勾选态与输入/选择值到控件。 */
+  submittedResponses?: GroupChatConfirmationResponseInput[];
   /** open 模式下的提示文案（默认「需要你的决定，请直接回复。」）。 */
   openHint?: string;
   /** 等待超时（会话模式 60s 未回复时置位，禁用控件）。 */
@@ -61,15 +82,52 @@ export function ConfirmationCard({
   responded = false,
   onSubmit,
   submittedText = '已提交，等待继续…',
+  submittedResponses,
   openHint = '需要你的决定，请直接回复。',
   timeout = false,
   countdown,
 }: ConfirmationCardProps) {
-  // 每项一个勾选开关：默认全部勾选，用户可取消勾选以跳过不回复的项。
-  const [checked, setChecked] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(confirmation.items.map((it) => [it.id, true])),
-  );
-  const [values, setValues] = useState<Record<string, string>>({});
+  // 已提交且存在结构化回复时，还原勾选态（有回复的项勾选）与输入/选择值；否则默认全勾选、空值。
+  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
+    if (responded && submittedResponses) {
+      const replied = new Set(submittedResponses.map((r) => r.itemId));
+      return Object.fromEntries(confirmation.items.map((it) => [it.id, replied.has(it.id)]));
+    }
+    return Object.fromEntries(confirmation.items.map((it) => [it.id, true]));
+  });
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    if (responded && submittedResponses) {
+      // 自定义补充还原：提交值不在选项内时，把 select 回填到"其他类"选项，原值进 customValues。
+      return Object.fromEntries(
+        submittedResponses.map((r) => {
+          const item = confirmation.items.find((it) => it.id === r.itemId);
+          if (item && item.inputType !== 'text' && r.value && !(item.options ?? []).includes(r.value)) {
+            const otherOpt = (item.options ?? []).find((o) => isOtherOption(o));
+            return [r.itemId, otherOpt ?? ''];
+          }
+          return [r.itemId, r.value];
+        }),
+      );
+    }
+    return {};
+  });
+  // 选中"其他类"选项时补充的自由文本（提交时作为该确认项的 value）。
+  const [customValues, setCustomValues] = useState<Record<string, string>>(() => {
+    if (responded && submittedResponses) {
+      return Object.fromEntries(
+        submittedResponses
+          .map((r) => {
+            const item = confirmation.items.find((it) => it.id === r.itemId);
+            if (item && item.inputType !== 'text' && r.value && !(item.options ?? []).includes(r.value)) {
+              return [r.itemId, r.value];
+            }
+            return null;
+          })
+          .filter((e): e is [string, string] => e !== null),
+      );
+    }
+    return {};
+  });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
@@ -95,7 +153,7 @@ export function ConfirmationCard({
       return;
     }
     const missing = active
-      .filter((it) => it.required && !(values[it.id] ?? '').trim())
+      .filter((it) => it.required && !effectiveValue(it, values, customValues).trim())
       .map((it) => it.label);
     if (missing.length > 0) {
       showToast(`请完成必填项：${missing.join('、')}`, 'info');
@@ -104,7 +162,7 @@ export function ConfirmationCard({
     // 只提交被勾选的项，未勾选项不参与回复。
     const responses: GroupChatConfirmationResponseInput[] = active.map((it) => ({
       itemId: it.id,
-      value: values[it.id] ?? '',
+      value: effectiveValue(it, values, customValues),
     }));
     setSubmitting(true);
     try {
@@ -124,7 +182,7 @@ export function ConfirmationCard({
       <div className="mt-2 rounded-lg overflow-hidden" style={{ border: '1px solid var(--accent)' }}>
         <div className="flex items-center gap-1.5 px-3 h-8" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
           <HelpCircle size={12} className="shrink-0" />
-          <span className="text-[11px] font-medium truncate" title={confirmation.prompt || '确认请求'}>{title}</span>
+          <span className="text-[11px] font-medium truncate">{title}</span>
           {typeof countdown === 'number' && countdown > 0 && (
             <span className="ml-auto text-[10px] opacity-80 shrink-0">{countdown}s</span>
           )}
@@ -141,7 +199,7 @@ export function ConfirmationCard({
       {/* 确认块标题栏 */}
       <div className="flex items-center gap-1.5 px-3 h-8 shrink-0" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
         <HelpCircle size={12} className="shrink-0" />
-        <span className="text-[11px] font-medium truncate shrink-0" title={confirmation.prompt || '确认请求'}>{title}</span>
+        <span className="text-[11px] font-medium truncate shrink-0">{title}</span>
         {isSubmitted && (
           <span className="ml-auto text-[10px] opacity-80 shrink-0">已提交</span>
         )}
@@ -190,6 +248,7 @@ export function ConfirmationCard({
                 style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
               />
             ) : (
+              <>
               <select
                 value={values[it.id] ?? ''}
                 onChange={(e) => setValue(it.id, e.target.value)}
@@ -202,6 +261,19 @@ export function ConfirmationCard({
                   <option key={opt} value={opt}>{opt}</option>
                 ))}
               </select>
+              {/* 选中"其他类"选项时展开自由文本输入，避免需再经一轮确认补充细节 */}
+              {isOtherOption(values[it.id] ?? '') && (
+                <input
+                  type="text"
+                  value={customValues[it.id] ?? ''}
+                  onChange={(e) => setCustomValues((v) => ({ ...v, [it.id]: e.target.value }))}
+                  disabled={locked}
+                  placeholder="请补充具体内容（提交后将作为该项回复）"
+                  className="px-3 py-2 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                />
+              )}
+              </>
             ))}
           </div>
         );

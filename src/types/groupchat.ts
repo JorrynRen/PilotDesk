@@ -15,6 +15,9 @@ export interface GroupChatRoom {
   createdAt: number;
   updatedAt: number;
   goalNotes?: string;
+  allowAutoCli?: number;
+  /** 房间统一产物目录（绝对路径；空=运行时回退 <工作目录>/outputs/<房间标题>/） */
+  outputDir?: string;
 }
 
 export type ParticipantType = 'api' | 'cli' | 'user' | 'director';
@@ -43,6 +46,8 @@ export interface GroupChatMessage {
   attachments: string;
   /** 参与者本轮工具调用链（reasoning/tool_start/tool_result 步骤，JSON 数组字符串，可溯源） */
   toolCalls: string;
+  /** 思考链文本（DeepSeek 等 reasoning_content；主持人决策消息与参与者一致，前端无差异展示） */
+  reasoningContent?: string;
   /** 附加结构化数据（如用户确认请求，JSON 对象字符串），普通消息为 "{}" */
   extra: string;
   timestamp: number;
@@ -79,6 +84,8 @@ export interface GroupChatStance {
   roomId: string;
   participantId: string;
   stance: string;
+  /** 立场态度：agree / disagree / neutral（后端 LLM 预处理给出，失败时文本分类兜底） */
+  attitude: string;
   updatedAt: number;
 }
 
@@ -121,6 +128,10 @@ export interface CreateGroupChatRoomInput {
   topic: string;
   participants: GroupChatParticipantInput[];
   directorId: string;
+  /** 是否允许主持人自动补人时添加 CLI 参与者（1=允许，0=禁止） */
+  allowAutoCli: number;
+  /** 房间统一产物目录（绝对路径；缺省空=运行时回退 <工作目录>/outputs/<房间标题>/） */
+  outputDir?: string;
 }
 
 // 事件 payload（对应后端 groupchat-event 单通道）
@@ -130,7 +141,9 @@ export type GroupChatEvent =
   | { roomId: string; type: 'floor_granted'; speaker: string; round: number }
   | { roomId: string; type: 'token_stream'; speaker: string; delta: string }
   | { roomId: string; type: 'message'; message: GroupChatMessage }
-  | { roomId: string; type: 'stance_updated'; participantId: string; stance: string }
+  | { roomId: string; type: 'stance_updated'; participantId: string; stance: string; attitude: string }
   | { roomId: string; type: 'role_updated'; participantId: string; role: string }
   | { roomId: string; type: 'task_updated'; task: GroupChatTask }
+  | { roomId: string; type: 'participant_updated' }
+  | { roomId: string; type: 'output_dir_updated'; outputDir: string }
   | { roomId: string; type: 'finished' };

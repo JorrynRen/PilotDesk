@@ -5,7 +5,7 @@
 //!   - `tavily`    ：Tavily Search API（需 API Key）
 //!   - `bing_api`  ：Bing Web Search API（需 API Key，需在 Azure 开通）
 //!
-//! 本模块不负责工具注册（见 `web_search.rs` / `web_fetch.rs`）与配置持久化（见 `commands/search.rs`）。
+//! 本模块不负责工具注册（见 `search_web.rs` / `fetch_web.rs`）与配置持久化（见 `commands/search.rs`）。
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -393,7 +393,7 @@ async fn fetch_web_text_http(url: &str) -> Result<String, String> {
         .to_string();
     if is_binary_content_type(&content_type) {
         return Err(format!(
-            "该 URL 是二进制资源（Content-Type: {}），web_fetch 仅支持文本/HTML 页面",
+            "该 URL 是二进制资源（Content-Type: {}），fetch_web 仅支持文本/HTML 页面",
             content_type
         ));
     }
@@ -405,7 +405,7 @@ async fn fetch_web_text_http(url: &str) -> Result<String, String> {
 
     // 兜底：Content-Type 缺失/伪装时，按字节内容判定二进制
     if looks_binary(&bytes) {
-        return Err("该 URL 返回的是二进制内容，web_fetch 仅支持文本/HTML 页面".to_string());
+        return Err("该 URL 返回的是二进制内容，fetch_web 仅支持文本/HTML 页面".to_string());
     }
 
     let html = String::from_utf8_lossy(&bytes).to_string();
@@ -416,7 +416,7 @@ async fn fetch_web_text_http(url: &str) -> Result<String, String> {
     Ok(browser::truncate_utf8(&text, MAX_FETCH_OUTPUT).to_string())
 }
 
-/// 判断 Content-Type 是否为二进制类型（web_fetch 无法提取文本）。
+/// 判断 Content-Type 是否为二进制类型（fetch_web 无法提取文本）。
 fn is_binary_content_type(ct: &str) -> bool {
     let ct = ct.to_lowercase();
     ct.starts_with("image/")

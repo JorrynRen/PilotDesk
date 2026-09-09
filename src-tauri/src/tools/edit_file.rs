@@ -5,25 +5,22 @@
 //! - 群聊版（原 `groupchat/adapter/tools.rs`）：精简替换（无历史记录）
 //!
 //! 统一决策：风险等级统一为 **Medium**（与 write_file 一致，修改文件即触发审批）。
+//! 文件历史记录/diff 事件由 `FileHistoryService` 提供（经 ToolEnv 统一注入，会话/群聊共用）。
 
-use crate::tools::write_file::WriteFileHooks;
+use crate::tools::history::FileHistoryService;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 use async_trait::async_trait;
+use std::sync::Arc;
 
 /// 精确字符串替换工具
 pub struct EditFileTool {
     cwd: String,
-    hooks: Option<WriteFileHooks>,
+    history: Option<Arc<FileHistoryService>>,
 }
 
 impl EditFileTool {
-    pub fn new(cwd: String) -> Self {
-        Self { cwd, hooks: None }
-    }
-
-    pub fn with_hooks(mut self, hooks: WriteFileHooks) -> Self {
-        self.hooks = Some(hooks);
-        self
+    pub fn new(cwd: String, history: Option<Arc<FileHistoryService>>) -> Self {
+        Self { cwd, history }
     }
 }
 
@@ -97,21 +94,10 @@ impl ToolHandler for EditFileTool {
         std::fs::write(&abs_path, &new_content)
             .map_err(|e| format!("写入文件失败 ({}): {}", abs_path.display(), e))?;
 
-        // 会话模式：记录文件修改历史（用于撤销）+ 发送 diff 事件
-        if let Some(hooks) = &self.hooks {
-            crate::commands::file_history::record_file_change(
-                &hooks.pool,
-                &hooks.session_id,
-                &abs_path.to_string_lossy(),
-                &content,
-                true,
-            );
-            let diff = format!("- {}\n+ {}\n", old_string, new_string);
-            let _ = hooks.app.emit("agent-file-diff", serde_json::json!({
-                "sessionId": hooks.session_id,
-                "path": abs_path.to_string_lossy(),
-                "diff": diff,
-            }));
+        // 文件历史 + diff 事件（经 FileHistoryService，会话/群聊共用）
+        if let Some(history) = &self.history {
+            history.record(&abs_path.to_string_lossy(), &content, &new_content, true);
+            history.emit_diff(&abs_path.to_string_lossy(), &content, &new_content);
         }
 
         Ok(format!("已替换文件中的 1 处内容: {}", abs_path.display()))

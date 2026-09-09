@@ -5,6 +5,7 @@
 use serde::Serialize;
 
 use super::models::{MessageRow, TaskRow};
+use super::participant::Attitude;
 
 /// 群聊事件。除 `roomId` 与 `type` 外，各 type 专属字段均用 Option 承载，
 /// 序列化时跳过 None，保证每种事件只带必要字段。
@@ -30,9 +31,13 @@ pub struct GroupChatEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stance: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub attitude: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<TaskRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
 }
 
 impl GroupChatEvent {
@@ -47,8 +52,10 @@ impl GroupChatEvent {
             message: None,
             participant_id: None,
             stance: None,
+            attitude: None,
             role: None,
             task: None,
+            output_dir: None,
         }
     }
 
@@ -82,10 +89,11 @@ impl GroupChatEvent {
         e
     }
 
-    pub fn stance_updated(room_id: &str, participant_id: &str, stance: &str) -> Self {
+    pub fn stance_updated(room_id: &str, participant_id: &str, stance: &str, attitude: Attitude) -> Self {
         let mut e = Self::new(room_id, "stance_updated");
         e.participant_id = Some(participant_id.to_string());
         e.stance = Some(stance.to_string());
+        e.attitude = Some(attitude.as_str().to_string());
         e
     }
 
@@ -102,7 +110,19 @@ impl GroupChatEvent {
         e
     }
 
+    /// 主持人按需自动补充参与者（前端收到后刷新名册，无需携带参与者数据）。
+    pub fn participant_updated(room_id: &str) -> Self {
+        Self::new(room_id, "participant_updated")
+    }
+
     pub fn finished(room_id: &str) -> Self {
         Self::new(room_id, "finished")
+    }
+
+    /// 产物目录已确定/变更（前端据此动态刷新右侧面板显示当前值）。
+    pub fn output_dir_updated(room_id: &str, output_dir: &str) -> Self {
+        let mut e = Self::new(room_id, "output_dir_updated");
+        e.output_dir = Some(output_dir.to_string());
+        e
     }
 }

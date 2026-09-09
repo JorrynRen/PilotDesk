@@ -342,6 +342,34 @@ button:disabled:hover {
   box-shadow: none !important;
 }
 
+/* ═══════════════════════════════════════════════════
+   Sidebar Navigation — 左侧侧边栏导航项
+   用于设置页左侧分组导航（图标 + 文字，垂直排列）
+   ═══════════════════════════════════════════════════ */
+.pd-side-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background-color: transparent;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+.pd-side-item:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+}
+.pd-side-item-active {
+  color: var(--accent) !important;
+  background-color: var(--bg-tertiary) !important;
+}
+
 /* ── Button size variants ── */
 .pd-btn-sm {
   font-size: 12px;
@@ -372,6 +400,34 @@ button:disabled:hover {
 
 .pd-animate-breathe {
   animation: pd-breathe 1.5s ease-in-out infinite;
+}
+
+/* 思考/打字三个圆点的依次跳动动画（配合 0/0.2/0.4s 延迟实现波浪效果） */
+@keyframes pd-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* 实时活动图标的"放大缩小"呼吸脉冲动画（循环，无位移抖动） */
+@keyframes pd-activity {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.35);
+  }
+  60% {
+    transform: scale(0.9);
+  }
 }
 
 @keyframes pd-spin {
@@ -440,6 +496,12 @@ body {
 ::selection {
   background-color: var(--accent-light);
   color: inherit;
+}
+
+/* 用户消息（accent 实底 + 白字）：选中高亮用白色半透明，与蓝色气泡底色区分 */
+.message-bubble-user ::selection {
+  background-color: rgba(255, 255, 255, 0.38);
+  color: #fff;
 }
 
 /* Scrollbar */
@@ -585,6 +647,8 @@ textarea {
 .pilotdesk-markdown {
   font-size: 13px;
   line-height: 1.7;
+  /* 防止外层容器 pre-wrap 泄漏：markdown 块级结构（列表项等）源码换行符不被显示为空行 */
+  white-space: normal;
 }
 
 .pilotdesk-markdown > *:first-child {
@@ -593,6 +657,33 @@ textarea {
 
 .pilotdesk-markdown > *:last-child {
   margin-bottom: 0;
+}
+
+/* Tailwind preflight 重置了 ol/ul 的 list-style 与 padding，此处恢复列表序号/符号与缩进 */
+.pilotdesk-markdown ol {
+  list-style: decimal;
+  padding-left: 1.5em;
+  margin: 8px 0;
+}
+.pilotdesk-markdown ul {
+  list-style: disc;
+  padding-left: 1.5em;
+  margin: 8px 0;
+}
+.pilotdesk-markdown ol ol,
+.pilotdesk-markdown ol ul,
+.pilotdesk-markdown ul ol,
+.pilotdesk-markdown ul ul {
+  /* !important：组件内联样式 ul/ol margin 4px 0 优先级更高，嵌套列表需强制归零，
+     否则父项标题与嵌套 bullet、嵌套 bullet 与后续项之间空隙偏大（视觉空行） */
+  margin: 0 !important;
+}
+/* 列表项内段落 margin 归零（覆盖嵌套结构中任意层级的 p），使 loose/tight 列表项间均紧凑 */
+.pilotdesk-markdown li p {
+  margin: 0;
+}
+.pilotdesk-markdown li {
+  margin: 2px 0;
 }
 
 /* ═══════════════════════════════════════════════════

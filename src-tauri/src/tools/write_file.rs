@@ -8,35 +8,29 @@
 //! 统一决策：
 //! - 风险等级统一为 **Medium**（修改文件是有副作用操作，双端一致触发审批）
 //! - 危险命令检查按扩展名限定（bat/cmd/ps1），避免普通代码/文档误伤（有审批兜底）
-//! - 文件历史记录/diff 事件为会话模式专属（`hooks: Option<WriteFileHooks>`），群聊传 None
+//! - 文件历史记录/diff 事件由 `FileHistoryService` 提供（经 ToolEnv 统一注入，会话/群聊共用）
 
-use crate::db::init::DbPool;
 use crate::tools::deps::expand_user_path;
+use crate::tools::history::FileHistoryService;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 use async_trait::async_trait;
-
-/// 会话模式专属的文件写入钩子（历史记录 + diff 事件）。
-/// 群聊模式无此能力，构造时传 `None`。
-pub struct WriteFileHooks {
-    pub app: tauri::AppHandle,
-    pub session_id: String,
-    pub pool: DbPool,
-}
+use std::sync::Arc;
 
 /// 写入文件工具
 pub struct WriteFileTool {
     cwd: String,
-    hooks: Option<WriteFileHooks>,
+    history: Option<Arc<FileHistoryService>>,
+    /// 权限规则（deny_paths 系统目录 + deny 命令模式内容检查；经 ToolEnv 注入，会话/群聊共用）
+    rules: Option<Arc<crate::api_agent::agent_loop::PermissionRules>>,
 }
 
 impl WriteFileTool {
-    pub fn new(cwd: String) -> Self {
-        Self { cwd, hooks: None }
-    }
-
-    pub fn with_hooks(mut self, hooks: WriteFileHooks) -> Self {
-        self.hooks = Some(hooks);
-        self
+    pub fn new(
+        cwd: String,
+        history: Option<Arc<FileHistoryService>>,
+        rules: Option<Arc<crate::api_agent::agent_loop::PermissionRules>>,
+    ) -> Self {
+        Self { cwd, history, rules }
     }
 }
 
@@ -79,12 +73,6 @@ impl ToolHandler for WriteFileTool {
         let raw_path = arguments["path"].as_str().ok_or("缺少 path 参数")?;
         let content = arguments["content"].as_str().ok_or("缺少 content 参数")?;
 
-        // 安全检查：拒绝写入系统关键目录
-        let path_lower = raw_path.to_lowercase();
-        if path_lower.starts_with("c:\\windows") || path_lower.starts_with("c:\\windows\\system32") {
-            return Err("安全限制：不允许写入系统目录 (C:\\Windows)".to_string());
-        }
-
         // 路径预处理：展开 ~ 和 %USERPROFILE%
         let expanded = expand_user_path(raw_path);
 
@@ -95,18 +83,30 @@ impl ToolHandler for WriteFileTool {
             std::path::Path::new(&self.cwd).join(&expanded)
         };
 
+        // ── 权限规则安全检查：风险路径拦截（路径子策略决定 deny 是否生效，无限制模式放行）──
+        if let Some(rules) = &self.rules {
+            if rules.decide_path(&abs_path.to_string_lossy(), false)
+                == crate::api_agent::agent_loop::Action::Deny
+            {
+                return Err("安全限制：路径命中风险路径，拒绝写入。".to_string());
+            }
+        }
+
         // ── 脚本文件内容安全检查（限定可执行脚本扩展名，避免普通代码/文档误伤）──
+        // deny 命令模式命中即拒绝（risky/allow 不适用于文件内容检查）
         let ext = abs_path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
         if ext == "bat" || ext == "cmd" || ext == "ps1" {
-            if let Some(pat) = crate::check_dangerous_command(content) {
-                return Err(format!(
-                    "安全限制：脚本文件中包含危险操作，拒绝写入。\n被拦截的关键词: {}\n请移除相关命令后重试。",
-                    pat
-                ));
+            if let Some(rules) = &self.rules {
+                if let Some(pat) = rules.deny_hit(content) {
+                    return Err(format!(
+                        "安全限制：脚本文件中包含危险操作，拒绝写入。\n被拦截的关键词: {}\n请移除相关命令后重试。",
+                        pat
+                    ));
+                }
             }
         }
 
@@ -139,25 +139,10 @@ impl ToolHandler for WriteFileTool {
 
         match std::fs::write(&abs_path, content) {
             Ok(()) => {
-                // 会话模式：记录文件历史 + 发送 diff 事件
-                if let Some(hooks) = &self.hooks {
-                    if old_content != content {
-                        crate::commands::file_history::record_file_change(
-                            &hooks.pool,
-                            &hooks.session_id,
-                            &abs_path.to_string_lossy(),
-                            &old_content,
-                            existed_before,
-                        );
-                    }
-                    let diff = crate::compute_diff(&old_content, content);
-                    if !diff.is_empty() {
-                        let _ = hooks.app.emit("agent-file-diff", serde_json::json!({
-                            "sessionId": hooks.session_id,
-                            "path": abs_path.to_string_lossy(),
-                            "diff": diff,
-                        }));
-                    }
+                // 文件历史 + diff 事件（经 FileHistoryService，会话/群聊共用）
+                if let Some(history) = &self.history {
+                    history.record(&abs_path.to_string_lossy(), &old_content, content, existed_before);
+                    history.emit_diff(&abs_path.to_string_lossy(), &old_content, content);
                 }
                 Ok(format!("文件已成功写入: {}", abs_path.display()))
             }

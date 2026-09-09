@@ -39,6 +39,10 @@ interface GroupChatStoreState {
   currentRound: number;
   /** 参与者工具调用实时状态（participantId → 调用链），会话结束后清空 */
   toolCalls: Record<string, GroupChatToolCall[]>;
+  /** 参与者实时推理文本（participantId → 累积内容，agent-reasoning 事件驱动），发言落库后清除 */
+  reasoning: Record<string, string>;
+  /** 房间消息投影水位：最近已应用的 message seq（roomId → seq）。用于丢弃重复/乱序/陈旧补发的 message 事件。 */
+  messageSeqWatermarks: Record<string, number>;
   loading: boolean;
   /** 切房间拉取消息期间的加载态（驱动消息区骨架/loading 反馈） */
   messagesLoading: boolean;
@@ -49,20 +53,27 @@ interface GroupChatStoreState {
   /** 房间消息总数（用于虚拟列表 firstItemIndex 计算） */
   totalMessages: number;
   error: string | null;
+  /** 当前房间 Actor（进程内运行实例）是否存活。用于区分"真 running/在跑"与
+   * "假 running"（DB 仍标 running 但进程内无 Actor，如异常退出后未恢复）——后者界面应提供"继续/恢复"入口。 */
+  actorAlive: boolean;
+  /** 房间列表各房间 Actor 存活映射（roomId → bool），供左侧列表状态点按真实运行态点亮。 */
+  roomsActorAlive: Record<string, boolean>;
 
   loadRooms: () => Promise<void>;
   selectRoom: (roomId: string) => Promise<void>;
+  refreshActorAlive: (roomId: string) => Promise<void>;
   loadEarlierMessages: () => Promise<void>;
   createRoom: (input: CreateGroupChatRoomInput) => Promise<GroupChatRoom>;
   deleteRoom: (roomId: string) => Promise<void>;
   addParticipant: (input: GroupChatParticipantInput) => Promise<void>;
   removeParticipant: (participantId: string) => Promise<void>;
-  sendMessage: (content: string, attachments?: Attachment[], mention?: string | null, recipients?: string[]) => Promise<void>;
+  sendMessage: (content: string, attachments?: Attachment[], mention?: string | null, recipients?: string[], securityMode?: string) => Promise<void>;
   respondConfirmation: (requestId: string, responses: GroupChatConfirmationResponseInput[]) => Promise<void>;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   abort: () => Promise<void>;
   setDirector: (newDirectorId: string) => Promise<void>;
+  setRoomOutputDir: (outputDir: string) => Promise<void>;
   exportWorkflow: () => Promise<Record<string, unknown>>;
   applyEvent: (event: GroupChatEvent) => void;
 }
@@ -81,24 +92,72 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
   currentSpeaker: null,
   currentRound: 0,
   toolCalls: {},
+  reasoning: {},
+  messageSeqWatermarks: {},
   loading: false,
   messagesLoading: false,
   hasMoreMessages: false,
   loadingEarlier: false,
   totalMessages: 0,
   error: null,
+  actorAlive: false,
+  roomsActorAlive: {},
 
   loadRooms: async () => {
     set({ loading: true, error: null });
     try {
       const rooms = await invoke<GroupChatRoom[]>('groupchat_list_rooms');
       set({ rooms, loading: false });
+      if (get().currentRoomId) {
+        void get().refreshActorAlive(get().currentRoomId!);
+      }
+      // 对 running 房间逐一探测 Actor 存活，供列表状态点区分真/假运行（不点亮假 running 的脉冲）。
+      const runningIds = rooms.filter((r) => r.status === 'running').map((r) => r.id);
+      if (runningIds.length > 0) {
+        void Promise.all(
+          runningIds.map(async (id) => {
+            try {
+              return [id, await invoke<boolean>('groupchat_room_actor_alive', { roomId: id })] as const;
+            } catch {
+              return [id, false] as const;
+            }
+          })
+        ).then((entries) => {
+          set((s) => ({
+            roomsActorAlive: {
+              ...s.roomsActorAlive,
+              ...Object.fromEntries(entries),
+            },
+          }));
+        });
+      }
     } catch (err) {
       set({ error: String(err), loading: false });
     }
   },
 
   selectRoom: async (roomId) => {
+    // 空 roomId = 关闭当前会话实例（回到默认页）：仅清空本地选中与数据，不发后端请求。
+    if (!roomId) {
+      set({
+        currentRoomId: '',
+        participants: [],
+        messages: [],
+        stances: [],
+        tasks: [],
+        streaming: {},
+        currentSpeaker: null,
+        currentRound: 0,
+        toolCalls: {},
+        reasoning: {},
+        actorAlive: false,
+        messagesLoading: false,
+        hasMoreMessages: false,
+        loadingEarlier: false,
+        totalMessages: 0,
+      });
+      return;
+    }
     set({
       currentRoomId: roomId,
       participants: [],
@@ -109,20 +168,26 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
       currentSpeaker: null,
       currentRound: 0,
       toolCalls: {},
+      reasoning: {},
+      actorAlive: false,
       messagesLoading: true,
       hasMoreMessages: false,
       loadingEarlier: false,
       totalMessages: 0,
     });
     try {
-      const [participants, page, stances, tasks] = await Promise.all([
+      const [participants, page, stances, tasks, messageWatermark] = await Promise.all([
         invoke<GroupChatParticipant[]>('groupchat_get_participants', { roomId }),
         invoke<MessagePage>('groupchat_get_messages', { roomId, beforeSeq: null, limit: GC_PAGE_SIZE }),
         invoke<GroupChatStance[]>('groupchat_get_stances', { roomId }),
         invoke<GroupChatTask[]>('groupchat_get_tasks', { roomId }),
+        invoke<number>('groupchat_message_watermark', { roomId }),
       ]);
       // 重新进入房间时，从已落库消息恢复当前轮次（用户指令为第 0 轮，参与者发言逐轮递增）。
       const maxRound = page.messages.reduce((m, msg) => Math.max(m, msg.round), 0);
+      // 投影水位阶段③：整页加载后把房间水位同步到"已落库 message 事件最大 seq"，
+      // 使加载前可能重复派发/乱序到达的 message 事件在 applyEvent 中按水位直接丢弃。
+      const prevWm = get().messageSeqWatermarks[roomId] ?? 0;
       set({
         participants,
         messages: page.messages,
@@ -132,9 +197,25 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         messagesLoading: false,
         hasMoreMessages: page.messages.length < page.total,
         totalMessages: page.total,
+        messageSeqWatermarks: {
+          ...get().messageSeqWatermarks,
+          [roomId]: Math.max(prevWm, messageWatermark),
+        },
       });
     } catch (err) {
-      set({ error: String(err), messagesLoading: false });
+      set({ error: String(err), messagesLoading: false, actorAlive: false });
+      return;
+    }
+    // 探测当前房间 Actor 是否在进程内存活（区分真/假 running）。
+    await get().refreshActorAlive(roomId);
+  },
+
+  refreshActorAlive: async (roomId) => {
+    try {
+      const alive = await invoke<boolean>('groupchat_room_actor_alive', { roomId });
+      set({ actorAlive: alive });
+    } catch {
+      set({ actorAlive: false });
     }
   },
 
@@ -184,6 +265,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         currentSpeaker: null,
         currentRound: 0,
         toolCalls: {},
+        reasoning: {},
         messagesLoading: false,
         hasMoreMessages: false,
         loadingEarlier: false,
@@ -209,7 +291,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
     await get().selectRoom(roomId);
   },
 
-  sendMessage: async (content, attachments, mention, recipients) => {
+  sendMessage: async (content, attachments, mention, recipients, securityMode) => {
     const roomId = get().currentRoomId;
     if (!roomId) return;
     set({ error: null });
@@ -222,6 +304,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
           replyTo: null,
           mention: mention ?? null,
           attachments: attachments ?? [],
+          securityMode: securityMode || 'standard',
         },
       });
     } catch (err) {
@@ -277,6 +360,15 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
     await invoke('groupchat_set_director', { roomId, newDirectorId });
   },
 
+  setRoomOutputDir: async (outputDir: string) => {
+    const roomId = get().currentRoomId;
+    if (!roomId) return;
+    const room = await invoke<GroupChatRoom>('groupchat_set_output_dir', { roomId, outputDir });
+    set((s) => ({
+      rooms: s.rooms.map((r) => (r.id === roomId ? { ...r, outputDir: room.outputDir } : r)),
+    }));
+  },
+
   exportWorkflow: async () => {
     const roomId = get().currentRoomId;
     if (!roomId) throw new Error('未选择房间');
@@ -290,8 +382,17 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
     // 房间级事件：无论是否当前房间，都同步房间列表状态。
     switch (event.type) {
       case 'room_status': {
+        // 暂停/停止时同步清理流式状态：后端已停止推送 token_stream（抑制流式），
+        // 前端同时清空当前发言者与增量缓存，避免"点了停止却还在输出"的错觉。
+        const stopped = event.status === 'paused' || event.status === 'aborted';
         set((s) => ({
           rooms: s.rooms.map((r) => (r.id === event.roomId ? { ...r, status: event.status } : r)),
+          ...(stopped && s.currentRoomId === event.roomId
+            ? { currentSpeaker: null, streaming: {}, toolCalls: {} }
+            : {}),
+          // Actor 正在推送事件 → 该房间 Actor 存活（真 running；含 paused/aborted 均活）。
+          actorAlive: s.currentRoomId === event.roomId ? true : s.actorAlive,
+          roomsActorAlive: { ...s.roomsActorAlive, [event.roomId]: true },
         }));
         break;
       }
@@ -299,6 +400,15 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         set((s) => ({
           rooms: s.rooms.map((r) =>
             r.id === event.roomId ? { ...r, status: 'finished' as const } : r,
+          ),
+        }));
+        break;
+      }
+      case 'output_dir_updated': {
+        // 产物目录已在目标理解阶段确定/变更：同步房间列表，右侧面板动态显示当前值。
+        set((s) => ({
+          rooms: s.rooms.map((r) =>
+            r.id === event.roomId ? { ...r, outputDir: event.outputDir } : r,
           ),
         }));
         break;
@@ -325,19 +435,32 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         break;
       }
       case 'message': {
+        const roomSeq = event.message?.seq ?? 0;
+        const prevWm = get().messageSeqWatermarks[event.roomId] ?? 0;
+        // 事件投影水位（阶段②）：seq 单调递增。收到"严格早于已应用水位"的 message
+        // 事件是重复/乱序/陈旧补发 → 丢弃。相等（seq == 水位）可能是快照与实时竞态下
+        // 同一条刚落库的消息，交由下方 id 去重兜底，避免水位把新消息误吞。
+        if (roomSeq > 0 && prevWm > 0 && roomSeq < prevWm) break;
         set((s) => {
           const exists = s.messages.some((m) => m.id === event.message.id);
           const nextStreaming = { ...s.streaming };
           delete nextStreaming[event.message.sender];
-          // 参与者本段发言/执行结果已落库，其临时工具调用链一并清空（避免残留）。
+          // 参与者本段发言/执行结果已落库，其临时工具调用链与推理文本一并清空（避免残留）。
           const nextToolCalls = { ...s.toolCalls };
           delete nextToolCalls[event.message.sender];
+          const nextReasoning = { ...s.reasoning };
+          delete nextReasoning[event.message.sender];
           return {
             messages: exists ? s.messages : [...s.messages, event.message],
             totalMessages: exists ? s.totalMessages : s.totalMessages + 1,
             streaming: nextStreaming,
             toolCalls: nextToolCalls,
+            reasoning: nextReasoning,
             currentSpeaker: null,
+            messageSeqWatermarks: {
+              ...s.messageSeqWatermarks,
+              [event.roomId]: Math.max(prevWm, roomSeq),
+            },
           };
         });
         break;
@@ -352,6 +475,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
                 roomId: event.roomId,
                 participantId: event.participantId,
                 stance: event.stance,
+                attitude: event.attitude,
                 updatedAt: Date.now(),
               },
             ],
@@ -365,6 +489,21 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
             p.id === event.participantId ? { ...p, systemRole: event.role } : p,
           ),
         }));
+        break;
+      }
+      case 'participant_updated': {
+        // 主持人按需自动补充参与者后刷新名册（异步拉取，用户无需任何操作）。
+        // 消息流中的 [@id] 提及随后渲染为 @显示名（participants 更新触发重渲染）。
+        void (async () => {
+          try {
+            const participants = await invoke<GroupChatParticipant[]>('groupchat_get_participants', {
+              roomId: event.roomId,
+            });
+            set({ participants });
+          } catch {
+            // 忽略：重新进入房间（selectRoom）时仍会全量刷新。
+          }
+        })();
         break;
       }
       case 'task_updated': {
@@ -383,6 +522,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
           currentSpeaker: null,
           streaming: {},
           toolCalls: {},
+          reasoning: {},
         }));
         break;
       }
@@ -446,7 +586,21 @@ function applyGroupChatToolResult(
   });
 }
 
-/** 注册全局事件监听（App 挂载时调用一次），按 roomId 过滤分发到 store。 */
+/** 复用会话模式的 agent-reasoning 事件，按 groupchat sessionId 过滤，累积参与者实时推理文本。 */
+function applyGroupChatReasoning(sessionId: string, content: string) {
+  const parsed = parseGroupChatSessionId(sessionId);
+  if (!parsed) return;
+  const { currentRoomId } = useGroupChatStore.getState();
+  if (parsed.roomId !== currentRoomId) return;
+  useGroupChatStore.setState((s) => ({
+    reasoning: {
+      ...s.reasoning,
+      [parsed.participantId]: (s.reasoning[parsed.participantId] ?? '') + content,
+    },
+  }));
+}
+
+/** 注册全局事件监听（App 挂载时调用一次；模块热更新后随新 store 重建），按 roomId 过滤分发到 store。 */
 export async function subscribeGroupChat(): Promise<UnlistenFn> {
   if (unlisten) return unlisten;
   if (unlistenPromise) return unlistenPromise;
@@ -470,14 +624,41 @@ export async function subscribeGroupChat(): Promise<UnlistenFn> {
         applyGroupChatToolResult(p.sessionId, p.toolId, p.toolName, p.result, p.success);
       },
     );
+    // 复用会话模式的 agent-reasoning 事件，展示参与者推理步骤（不落库，仅实时）。
+    const offReasoning = await listen<{ sessionId: string; content: string }>('agent-reasoning', (raw) => {
+      const p = raw.payload;
+      applyGroupChatReasoning(p.sessionId, p.content);
+    });
     return () => {
       offGroupChat();
       offToolStart();
       offToolResult();
+      offReasoning();
     };
   })().then((fn) => {
     unlisten = fn;
     return fn;
   });
+  // 任一 listen 失败时清空单例标记，允许后续再次调用时重新注册；
+  // 否则被拒绝的 promise 会永久阻塞监听重建，导致实时事件彻底失效。
+  unlistenPromise.catch(() => {
+    unlisten = null;
+    unlistenPromise = null;
+  });
   return unlistenPromise;
+}
+
+// 模块求值即注册：Vite 热更新（HMR）会重新求值本模块并 create 出新的 store 实例，
+// 若仅在 App 挂载时注册一次监听，旧监听会持续把事件写入被废弃的旧 store 实例，
+// 表现为「后台在执行、前端不实时更新/严重延后」。此处确保每次重新求值后，
+// 事件监听都绑定到最新 store 实例，热更新后即可恢复实时显示。
+void subscribeGroupChat();
+
+// 热更新替换旧模块前注销旧监听，避免新旧实例监听叠加导致重复处理。
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    unlisten?.();
+    unlisten = null;
+    unlistenPromise = null;
+  });
 }

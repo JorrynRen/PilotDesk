@@ -1,9 +1,7 @@
 //! 命令执行工具（会话模式与群聊参与者共用）。
 //!
-//! 合并自两处历史实现（工具架构统一 v1.0，轮 4）：
-//! - 会话版（原 `lib.rs`）：30s 超时轮询 + 输出解码 + 32KB head/tail 截断 + Python 引导描述
-//! - 群聊版（原 `groupchat/adapter/tools.rs`）：精简执行（.output() 同步阻塞，无超时）
-//! 统一采用会话版能力（`tools/exec.rs::run_command`），描述保留"Python 优先 execute_python"引导。
+//! 合并自两处历史实现（工具架构统一 v1.0，轮 4），v3.5c 起统一走
+//! `tools/exec.rs::run_command`（异步管道实时读 + 活性检测判真实卡死 + 进程树终止，无秒级盲杀）。
 
 use crate::tools::exec::run_command;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
@@ -59,6 +57,6 @@ impl ToolHandler for ExecuteCommandTool {
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
         let command = arguments["command"].as_str().ok_or("缺少 command 参数")?;
         let cwd = arguments["cwd"].as_str().unwrap_or(&self.cwd);
-        run_command(cwd, command)
+        run_command(cwd, command).await
     }
 }

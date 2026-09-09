@@ -26,6 +26,8 @@ interface SessionState {
     maxTokens?: number,
   ) => Promise<Session>;
   renameSession: (id: string, newTitle: string) => Promise<void>;
+  /** 切换会话工作目录（项目根），对后续消息生效 */
+  updateSessionCwd: (id: string, cwd: string) => Promise<void>;
   archiveSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   toggleArchived: () => void;
@@ -132,6 +134,15 @@ export const useSessionStore = create<SessionState>((set) => ({
     set((state) => ({
       sessions: state.sessions.map((s) =>
         s.id === id ? { ...s, title: newTitle } : s
+      ),
+    }));
+  },
+
+  updateSessionCwd: async (id, cwd) => {
+    await invoke('update_session_cwd', { sessionId: id, cwd });
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, cwd } : s
       ),
     }));
   },

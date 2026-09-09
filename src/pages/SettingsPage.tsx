@@ -1,10 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Settings, Globe, Key, Info, Bot,
+  ArrowLeft, Settings, Globe, Key, Info, Bot, Brain,
   Sun, Moon, Monitor, FolderOpen, ChevronDown,
   Plus, Trash2, Edit3, Check, X, Pencil,
-  Loader2, Zap, GripVertical, ShieldCheck, Plug, Search, Bookmark,
+  Loader2, Zap, GripVertical, ShieldCheck, Plug, Search, Bookmark, Wrench, History,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -31,9 +31,10 @@ import { EnvManager } from '../components/env/EnvManager';
 import { AgentManager } from '../components/env/AgentManager';
 import { UpdateChecker } from '../components/panels/UpdateChecker';
 import { ModePromptSettings } from '../components/panels/ModePromptSettings';
-import { AgentPermissionSettings } from '../components/settings/AgentPermissionSettings';
+import { PermissionSettings } from '../components/settings/AgentPermissionSettings';
 import { McpSettings } from '../components/settings/McpSettings';
 import { SearchSettings } from '../components/settings/SearchSettings';
+import { FileHistorySettings } from '../components/settings/FileHistorySettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
 import { sendApiRequest } from '../utils/apiClient';
 import type { ApiProvider as StoreApiProvider } from '../stores/apiProviderStore';
@@ -43,25 +44,65 @@ interface SettingsPageProps {
   onBack: () => void;
 }
 
-type SettingsTab = 'general' | 'environment' | 'agents' | 'api' | 'mode' | 'permission' | 'mcp' | 'search' | 'customtabs' | 'about';
+type SettingsTab = 'general' | 'environment' | 'agents' | 'api' | 'mode' | 'permission' | 'mcp' | 'search' | 'tools' | 'customtabs' | 'filehistory' | 'memory' | 'about';
 
-const SETTINGS_TABS: { id: SettingsTab; icon: typeof Settings; label: string }[] = [
-  { id: 'general', icon: Settings, label: '通用设置' },
-  { id: 'environment', icon: Globe, label: '环境检测' },
-  { id: 'agents', icon: Bot, label: 'Agent集成配置' },
-  { id: 'api', icon: Key, label: 'API集成配置' },
-  { id: 'mode', icon: Zap, label: '对话模式' },
-  { id: 'permission', icon: ShieldCheck, label: '权限与历史' },
-  { id: 'mcp', icon: Plug, label: 'MCP 服务器' },
-  { id: 'search', icon: Search, label: '联网搜索' },
-  { id: 'customtabs', icon: Bookmark, label: '自定义标签' },
-  { id: 'about', icon: Info, label: '关于' },
+interface SettingsTabItem {
+  id: SettingsTab;
+  icon: typeof Settings;
+  label: string;
+}
+
+// 设置项按类别分组，左侧侧边栏渲染（避免 11 个 tab 平铺顶部拥挤）
+const SETTINGS_GROUPS: { title: string; items: SettingsTabItem[] }[] = [
+  {
+    title: '应用',
+    items: [
+      { id: 'general', icon: Settings, label: '通用设置' },
+      { id: 'environment', icon: Globe, label: '环境检测' },
+      { id: 'about', icon: Info, label: '关于' },
+    ],
+  },
+  {
+    title: 'Agent 与 API',
+    items: [
+      { id: 'agents', icon: Bot, label: 'Agent集成配置' },
+      { id: 'api', icon: Key, label: 'API集成配置' },
+      { id: 'mode', icon: Zap, label: '对话模式' },
+      { id: 'permission', icon: ShieldCheck, label: '权限规则' },
+    ],
+  },
+  {
+    title: '连接',
+    items: [
+      { id: 'mcp', icon: Plug, label: 'MCP 服务器' },
+      { id: 'search', icon: Search, label: '联网搜索' },
+    ],
+  },
+  {
+    title: '工具与扩展',
+    items: [
+      { id: 'tools', icon: Wrench, label: '工具管理' },
+      { id: 'customtabs', icon: Bookmark, label: '自定义标签' },
+    ],
+  },
+  {
+    title: '数据管理',
+    items: [
+      { id: 'memory', icon: Brain, label: '记忆管理' },
+      { id: 'filehistory', icon: History, label: '文件历史' },
+    ],
+  },
 ];
 
 
 
 import { SettingsSection, SettingsButton } from '../components/settings';
+import { UsageStats } from '../components/settings/UsageStats';
 import { CustomTabsSettings } from '../components/settings/CustomTabsSettings';
+import { ProjectMemorySettings } from '../components/settings/ProjectMemorySettings';
+import { UserMemorySettings } from '../components/settings/UserMemorySettings';
+import { KvMemorySettings } from '../components/settings/KvMemorySettings';
+import { ToolSettings } from '../components/settings/ToolSettings';
 import { TitleBar, StatusBar } from '../components/layout';
 
 // ============================================================
@@ -74,6 +115,7 @@ function GeneralSettings() {
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [maxConcurrency, setMaxConcurrency] = useState(10);
   const [maxSubflowDepth, setMaxSubflowDepth] = useState(3);
+  const [streamIdleSecs, setStreamIdleSecs] = useState(90);
 
   // Load workspace from SQLite on mount
   useEffect(() => {
@@ -89,6 +131,10 @@ function GeneralSettings() {
       try {
         const msd = await invoke<string | null>('get_app_setting', { key: 'workflow_max_subflow_depth' });
         if (msd) setMaxSubflowDepth(parseInt(msd));
+      } catch { /* ignore */ }
+      try {
+        const idle = await invoke<string | null>('get_app_setting', { key: 'api_stream_idle_secs' });
+        if (idle && !Number.isNaN(parseInt(idle))) setStreamIdleSecs(parseInt(idle));
       } catch { /* ignore */ }
       setWorkspaceLoaded(true);
     })();
@@ -113,6 +159,16 @@ function GeneralSettings() {
     setMaxSubflowDepth(clamped);
     try {
       await invoke('set_app_setting', { key: 'workflow_max_subflow_depth', value: clamped.toString() });
+    } catch { /* ignore */ }
+  };
+
+  const handleStreamIdleSecsChange = async (value: number) => {
+    if (Number.isNaN(value)) return;
+    // 0 = 禁用空闲检测（调试用）；其余钳制在 10-600 秒。
+    const clamped = value === 0 ? 0 : Math.max(10, Math.min(600, value));
+    setStreamIdleSecs(clamped);
+    try {
+      await invoke('set_app_setting', { key: 'api_stream_idle_secs', value: clamped.toString() });
     } catch { /* ignore */ }
   };
 
@@ -242,6 +298,26 @@ function GeneralSettings() {
           子工作流（Subflow 节点）允许的最大递归嵌套层数（1-10）。超过此限制将阻止执行以防止无限递归。
         </p>
       </SettingsSection>
+
+      {/* 模型流式空闲超时 */}
+      <SettingsSection title="模型流式空闲超时">
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={0}
+            max={600}
+            step={10}
+            value={streamIdleSecs}
+            onChange={(e) => handleStreamIdleSecsChange(parseInt(e.target.value))}
+            className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          />
+          <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>秒</span>
+        </div>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          流式响应超过该秒数仍未收到任何数据时，判定为上游连接假死并终止本次调用（会话与群聊共用）。0 表示关闭空闲检测（调试用）；合法范围 10-600，默认 90。
+        </p>
+      </SettingsSection>
     </div>
   );
 }
@@ -316,7 +392,7 @@ function SortableProviderCard({
   isEditing,
   testResult,
   editingProvider,
-  newModelInput,
+  editingNotes,
   onTestConnection,
   onStartEdit,
   onDeleteProvider,
@@ -325,23 +401,25 @@ function SortableProviderCard({
   onCancelEdit,
   onAddModelInline,
   onRemoveModel,
-  onNewModelInputChange,
+  onEditingNotesChange,
 }: {
   provider: ApiProvider;
   isEditing: boolean;
   testResult: TestResult | undefined;
   editingProvider: EditingProvider | null;
-  newModelInput: string;
+  editingNotes: string;
   onTestConnection: (id: string) => void;
   onStartEdit: (p: ApiProvider) => void;
   onDeleteProvider: (id: string) => void;
   onSetEditingProvider: (ep: EditingProvider) => void;
   onSaveEdit: () => void;
   onCancelEdit: () => void;
-  onAddModelInline: (id: string) => void;
+  onAddModelInline: (id: string, raw: string) => void;
   onRemoveModel: (id: string, model: string) => void;
-  onNewModelInputChange: (val: string) => void;
+  onEditingNotesChange: (val: string) => void;
 }) {
+  // 快捷添加模型输入：卡片内本地状态（勿提为父级共享，否则一张卡片输入会联动到所有卡片）。
+  const [newModelInput, setNewModelInput] = useState('');
   const {
     attributes,
     listeners,
@@ -513,7 +591,7 @@ function SortableProviderCard({
             {/* API Endpoint */}
             <div>
               <label className="text-[10px] " style={{ color: 'var(--text-tertiary)' }}>
-                API URL
+                API Base URL
               </label>
               {isEditing ? (
                 <input
@@ -523,7 +601,7 @@ function SortableProviderCard({
                     onSetEditingProvider({ ...editingProvider!, apiEndpoint: e.target.value })
                   }
                   className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
-                  placeholder="完整URL，如 https://api.siliconflow.cn/v1/chat/completions"
+                  placeholder="Base URL，如 https://api.siliconflow.cn/v1（部分服务含 /v1；不要拼 /chat/completions 等接口路径）"
                   style={{
                     backgroundColor: 'var(--bg-tertiary)',
                     color: 'var(--text-primary)',
@@ -566,15 +644,13 @@ function SortableProviderCard({
                 可用模型
               </label>
               {isEditing ? (
-                <div className="mt-0.5 space-y-1">
-                  <input
-                    type="text"
-                    value={editingProvider!.models}
-                    onChange={(e) =>
-                      onSetEditingProvider({ ...editingProvider!, models: e.target.value })
-                    }
-                    placeholder="用逗号分隔模型名称，如: gpt-4o, gpt-4o-mini"
-                    className="w-full px-2 py-1 rounded text-xs outline-none"
+                <div className="mt-0.5">
+                  <textarea
+                    value={editingNotes}
+                    onChange={(e) => onEditingNotesChange(e.target.value)}
+                    rows={5}
+                    placeholder="每行一个模型：模型名 = 备注（备注可选，供 LLM 选择模型时参考；如：dall-e-3 = 文生图/图生图）"
+                    className="w-full px-2 py-1 rounded text-xs outline-none resize-y"
                     style={{
                       backgroundColor: 'var(--bg-tertiary)',
                       color: 'var(--text-primary)',
@@ -619,11 +695,14 @@ function SortableProviderCard({
                     <input
                       type="text"
                       value={newModelInput}
-                      onChange={(e) => onNewModelInputChange(e.target.value)}
+                      onChange={(e) => setNewModelInput(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') onAddModelInline(p.id);
+                        if (e.key === 'Enter') {
+                          onAddModelInline(p.id, newModelInput);
+                          setNewModelInput('');
+                        }
                       }}
-                      placeholder="添加模型名称..."
+                      placeholder="模型名 = 备注（逗号分隔可加多个）"
                       className="flex-1 px-2 py-0.5 rounded text-[10px] outline-none"
                       style={{
                         backgroundColor: 'var(--bg-tertiary)',
@@ -632,7 +711,10 @@ function SortableProviderCard({
                       }}
                     />
                     <button
-                      onClick={() => onAddModelInline(p.id)}
+                      onClick={() => {
+                        onAddModelInline(p.id, newModelInput);
+                        setNewModelInput('');
+                      }}
                       disabled={!newModelInput.trim()}
                       className="px-1.5 py-0.5 rounded text-[10px] transition-colors disabled:opacity-30"
                       style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
@@ -679,13 +761,19 @@ function SortableProviderCard({
 function ApiConfig() {
   const { providers, loading, fetchProviders, saveProvider, deleteProvider, reorderProviders } = useApiProviderStore();
   const [editingProvider, setEditingProvider] = useState<EditingProvider | null>(null);
-  const [newModelInput, setNewModelInput] = useState('');
+  // 模型备注：providerId → modelName → 用途描述（存 app_settings，供 list_models 工具带给 LLM）
+  const [modelNotes, setModelNotes] = useState<Record<string, Record<string, string>>>({});
+  const [editingNotes, setEditingNotes] = useState('');
   const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map());
   const abortRef = useRef<Map<string, AbortController>>(new Map());
+  const [apiTab, setApiTab] = useState<'providers' | 'usage'>('providers');
 
   // Load providers from SQLite on mount
   useEffect(() => {
     fetchProviders();
+    invoke<Record<string, Record<string, string>>>('get_model_notes_cmd')
+      .then(setModelNotes)
+      .catch(() => {});
   }, []);
 
   // DnD sensors — use pointer sensor for drag, keyboard for accessibility
@@ -742,13 +830,15 @@ function ApiConfig() {
       apiKey: '',
       models: p.models.join(', '),
     });
-    setNewModelInput('');
+    const notes = modelNotes[p.id] ?? {};
+    // 无备注的模型补全「=」，保证每行统一为「模型名 = 备注」格式
+    setEditingNotes(p.models.map((m) => (notes[m] ? `${m} = ${notes[m]}` : `${m} =`)).join('\n'));
   };
 
   // Cancel editing
   const handleCancelEdit = () => {
     setEditingProvider(null);
-    setNewModelInput('');
+    setEditingNotes('');
   };
 
   // Save editing
@@ -756,10 +846,22 @@ function ApiConfig() {
     if (!editingProvider) return;
     const name = editingProvider.name.trim() || '未命名提供商';
     const endpoint = editingProvider.apiEndpoint.trim() || 'https://';
-    const models = editingProvider.models
-      .split(/[,，]/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+
+    // 可用模型统一从备注行输入解析（每行：模型名 = 备注）；备注为空字符串时正常保存
+    const models: string[] = [];
+    const notesForProvider: Record<string, string> = {};
+    for (const line of editingNotes.split('\n')) {
+      const idx = line.indexOf('=');
+      const mname = (idx >= 0 ? line.slice(0, idx) : line).trim();
+      const note = (idx >= 0 ? line.slice(idx + 1) : '').trim();
+      if (mname) {
+        if (!models.includes(mname)) models.push(mname);
+        notesForProvider[mname] = note;
+      }
+    }
+
+    // 保留原 sortOrder：upsert 缺省会把 sort_order 重置为当前时间戳，导致编辑后卡片跳到列表末尾。
+    const original = providers.find((x) => x.id === editingProvider.id);
 
     await saveProvider({
       id: editingProvider.id,
@@ -768,24 +870,60 @@ function ApiConfig() {
       apiKey: editingProvider.apiKey.trim() || undefined,
       models,
       apiFormat: editingProvider.apiFormat,
+      sortOrder: original?.sortOrder,
     });
 
+    // 备注持久化到 app_settings
+    const next = { ...modelNotes, [editingProvider.id]: notesForProvider };
+    setModelNotes(next);
+    try {
+      await invoke('set_model_notes_cmd', { notes: next });
+    } catch { /* ignore */ }
+
     setEditingProvider(null);
-    setNewModelInput('');
+    setEditingNotes('');
   };
 
   // Add model to existing provider (non-editing mode)
-  const handleAddModelInline = async (providerId: string) => {
-    if (!newModelInput.trim()) return;
+  // 支持「模型名 = 备注」格式，逗号（中英文）分隔多组：模型名 = 备注, 模型名 = 备注……
+  const handleAddModelInline = async (providerId: string, raw: string) => {
+    const trimmed = (raw ?? '').trim();
+    if (!trimmed) return;
     const p = providers.find(x => x.id === providerId);
     if (!p) return;
+
+    const added: string[] = [];
+    const newNotes: Record<string, string> = {};
+    for (const part of trimmed.split(/[,，]/).map((s) => s.trim()).filter(Boolean)) {
+      const idx = part.indexOf('=');
+      const mname = (idx >= 0 ? part.slice(0, idx) : part).trim();
+      const note = (idx >= 0 ? part.slice(idx + 1) : '').trim();
+      if (mname) {
+        if (!p.models.includes(mname) && !added.includes(mname)) added.push(mname);
+        newNotes[mname] = note;
+      }
+    }
+    if (added.length === 0 && Object.keys(newNotes).length === 0) return;
+
     await saveProvider({
       id: providerId,
       name: p.name,
       apiEndpoint: p.apiEndpoint,
-      models: [...p.models, newModelInput.trim()],
+      models: [...p.models, ...added],
+      // 保留原 sortOrder，避免快捷添加后卡片跳到列表末尾。
+      sortOrder: p.sortOrder,
     });
-    setNewModelInput('');
+
+    // 备注同步（含纯备注更新场景）
+    if (Object.keys(newNotes).length > 0) {
+      const base = { ...(modelNotes[p.id] ?? {}) };
+      for (const [k, v] of Object.entries(newNotes)) base[k] = v;
+      const next = { ...modelNotes, [p.id]: base };
+      setModelNotes(next);
+      try {
+        await invoke('set_model_notes_cmd', { notes: next });
+      } catch { /* ignore */ }
+    }
   };
 
   // Remove model from provider
@@ -797,6 +935,8 @@ function ApiConfig() {
       name: p.name,
       apiEndpoint: p.apiEndpoint,
       models: p.models.filter((m) => m !== model),
+      // 保留原 sortOrder，避免移除模型后卡片跳到列表末尾。
+      sortOrder: p.sortOrder,
     });
   };
 
@@ -850,11 +990,29 @@ function ApiConfig() {
 
   return (
     <div className="space-y-4">
+      {/* 子 Tab：提供商列表 / 用量统计（与「工具管理」一致） */}
+      <div className="flex items-center gap-1">
+        {([
+          { key: 'providers', label: 'API 提供商列表' },
+          { key: 'usage', label: '用量统计' },
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setApiTab(t.key)}
+            className={'pd-tab' + (apiTab === t.key ? ' pd-tab-active' : '')}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {apiTab === 'providers' && (
+        <>
       {/* Header with add button */}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-            API 提供商列表
+            提供商配置
           </h3>
           <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
             拖拽左侧手柄调整排序 · 配置完成后可在新建会话时选择 API 直连模式
@@ -899,7 +1057,7 @@ function ApiConfig() {
                 isEditing={editingProvider?.id === p.id}
                 testResult={testResults.get(p.id)}
                 editingProvider={editingProvider}
-                newModelInput={newModelInput}
+                editingNotes={editingNotes}
                 onTestConnection={handleTestConnection}
                 onStartEdit={handleStartEdit}
                 onDeleteProvider={handleDeleteProvider}
@@ -908,7 +1066,7 @@ function ApiConfig() {
                 onCancelEdit={handleCancelEdit}
                 onAddModelInline={handleAddModelInline}
                 onRemoveModel={handleRemoveModel}
-                onNewModelInputChange={setNewModelInput}
+                onEditingNotesChange={setEditingNotes}
               />
             ))}
           </div>
@@ -918,6 +1076,10 @@ function ApiConfig() {
       <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
         API Key 保存在本地 SQLite 数据库，不会上传。排序结果自动保存。
       </p>
+        </>
+      )}
+
+      {apiTab === 'usage' && <UsageStats />}
     </div>
   );
 }
@@ -998,14 +1160,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     if (urlTab === 'environment') return 'environment';
     if (urlTab === 'agents') return 'agents';
     if (urlTab === 'customtabs') return 'customtabs';
+    if (urlTab === 'memory') return 'memory';
     return 'general';
   });
   // URL 中 tab 参数变化时同步激活对应 tab（支持 /settings?tab=xxx 直接定位）
   useEffect(() => {
-    if (urlTab === 'environment' || urlTab === 'agents' || urlTab === 'customtabs') {
+    if (urlTab === 'environment' || urlTab === 'agents' || urlTab === 'customtabs' || urlTab === 'memory') {
       setActiveTab(urlTab);
     }
   }, [urlTab]);
+
+  // 记忆管理页内部子 tab（项目记忆 / 全局 KV 记忆）
+  const [memTab, setMemTab] = useState<'project' | 'user' | 'kv'>('project');
 
   const { viewMode, setMode } = useTerminal();
   const navigate = useNavigate();
@@ -1017,45 +1183,85 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* TitleBar：复用组合开关显示（返回按钮 + “设置”已移除） */}
+      {/* TitleBar：组合开关注入「设置」段（thumb 定位到设置），点击其它模式段跳回主布局 */}
       <TitleBar
         mode={viewMode}
         onModeChange={handleModeChange}
         onToggleRightPanel={undefined}
         rightPanelOpen={false}
         showBackButton={false}
+        settingsOpen
+        onOpenSettings={() => { /* 已在设置页，无需动作 */ }}
       />
 
-      {/* Tab navigation */}
-      <div
-        className="shrink-0 px-4 pt-1 flex gap-0.5 overflow-x-clip"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
-        {SETTINGS_TABS.map(({ id, icon: Icon, label }) => (
-          <button
-            key={id}
-            onClick={() => setActiveTab(id)}
-            className={"pd-tab" + (activeTab === id ? " pd-tab-active" : "")}
-          >
-            <Icon size={12} />
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* 主体：左侧分组侧边栏 + 右侧内容区 */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* 侧边栏导航 */}
+        <aside
+          className="shrink-0 w-44 overflow-y-auto px-2 py-3 space-y-4"
+          style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+        >
+          {SETTINGS_GROUPS.map((group) => (
+            <div key={group.title}>
+              <div className="px-2 pb-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                {group.title}
+              </div>
+              <div className="space-y-0.5">
+                {group.items.map(({ id, icon: Icon, label }) => (
+                  <button
+                    key={id}
+                    onClick={() => setActiveTab(id)}
+                    className={"pd-side-item" + (activeTab === id ? " pd-side-item-active" : "")}
+                    title={label}
+                  >
+                    <Icon size={13} className="shrink-0" />
+                    <span className="truncate">{label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </aside>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-4 max-w-2xl mx-auto w-full">
-          {activeTab === 'general' && <GeneralSettings />}
-          {activeTab === 'environment' && <EnvManager />}
-          {activeTab === 'agents' && <AgentManager />}
-          {activeTab === 'api' && <ApiConfig />}
-          {activeTab === 'mode' && <ModePromptSettings />}
-          {activeTab === 'permission' && <AgentPermissionSettings />}
-          {activeTab === 'mcp' && <McpSettings />}
-          {activeTab === 'search' && <SearchSettings />}
-          {activeTab === 'customtabs' && <CustomTabsSettings />}
-          {activeTab === 'about' && <AboutSection />}
+        {/* 内容区 */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="p-4 max-w-2xl mx-auto w-full">
+            {activeTab === 'general' && <GeneralSettings />}
+            {activeTab === 'environment' && <EnvManager />}
+            {activeTab === 'agents' && <AgentManager />}
+            {activeTab === 'api' && <ApiConfig />}
+            {activeTab === 'mode' && <ModePromptSettings />}
+            {activeTab === 'permission' && <PermissionSettings />}
+            {activeTab === 'mcp' && <McpSettings />}
+            {activeTab === 'search' && <SearchSettings />}
+            {activeTab === 'tools' && <ToolSettings />}
+            {activeTab === 'customtabs' && <CustomTabsSettings />}
+            {activeTab === 'memory' && (
+              <div className="space-y-4">
+                {/* 记忆管理页内子 tab（样式与工具管理页场景切换一致） */}
+                <div className="flex items-center gap-1">
+                  {(['project', 'user', 'kv'] as const).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setMemTab(t)}
+                      className={'pd-tab' + (memTab === t ? ' pd-tab-active' : '')}
+                    >
+                      {t === 'project' ? '项目记忆' : t === 'user' ? '用户偏好' : '全局 KV 记忆'}
+                    </button>
+                  ))}
+                </div>
+                {memTab === 'project' ? (
+                  <ProjectMemorySettings />
+                ) : memTab === 'user' ? (
+                  <UserMemorySettings />
+                ) : (
+                  <KvMemorySettings />
+                )}
+              </div>
+            )}
+            {activeTab === 'filehistory' && <FileHistorySettings />}
+            {activeTab === 'about' && <AboutSection />}
+          </div>
         </div>
       </div>
 

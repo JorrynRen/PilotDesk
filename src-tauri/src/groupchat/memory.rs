@@ -3,10 +3,16 @@
 use std::collections::{HashMap, VecDeque};
 
 use super::models::MessageRow;
-use super::participant::{ChatMessage, Stance, TurnView};
+use super::participant::{Attitude, ChatMessage, Stance, TurnView};
 
-/// 每参与者 L4 最近窗口条数。
+/// 每参与者 L4 最近窗口条数（软上限：裁剪后保留到该条数）。
 const DEFAULT_WINDOW: usize = 10;
+
+/// L4 窗口的“增长余量”：允许窗口在软上限之上再累积这么多条后再整块裁剪。
+/// 缓存友好（v3.5d）：若每来一条消息就丢头，请求起点会持续平移、前缀几乎无法命中；
+/// 改为每积累 `GROW_BEFORE_TRIM` 条后一次性裁回软上限，让相邻请求之间保留一个
+/// 可命中的稳定增长段（裁剪点仍会整体错位，但频率从“每 1 条”降到“每 GROW 条”）。
+const GROW_BEFORE_TRIM: usize = 5;
 
 /// 判断某条消息是否对 `participant_id` 可见。
 /// `[]`（广播）对所有参与者可见；定向消息仅对 recipients 中的参与者可见。
@@ -22,11 +28,10 @@ fn message_visible(msg: &MessageRow, participant_id: &str, is_privileged: bool) 
 pub struct LayeredMemory {
     topic: String,
     summary: String,
-    stances: HashMap<String, String>,
+    stances: HashMap<String, (String, Attitude)>,
     all_messages: Vec<MessageRow>,
     windows: HashMap<String, VecDeque<MessageRow>>,
     window_size: usize,
-    names: HashMap<String, String>,
 }
 
 impl LayeredMemory {
@@ -38,7 +43,6 @@ impl LayeredMemory {
             all_messages: Vec::new(),
             windows: HashMap::new(),
             window_size: DEFAULT_WINDOW,
-            names: HashMap::new(),
         }
     }
 
@@ -55,19 +59,18 @@ impl LayeredMemory {
         self.summary = summary.to_string();
     }
 
-    /// 更新 participant_id -> display_name 映射，供视图组装时使用可读名称。
-    pub fn set_names(&mut self, names: HashMap<String, String>) {
-        self.names = names;
-    }
-
-    pub fn update_stance(&mut self, participant_id: &str, stance: &str) {
-        self.stances.insert(participant_id.to_string(), stance.to_string());
+    pub fn update_stance(&mut self, participant_id: &str, stance: &str, attitude: Attitude) {
+        self.stances.insert(participant_id.to_string(), (stance.to_string(), attitude));
     }
 
     pub fn stances(&self) -> Vec<Stance> {
         self.stances
             .iter()
-            .map(|(k, v)| Stance { participant_id: k.clone(), stance: v.clone() })
+            .map(|(k, (text, attitude))| Stance {
+                participant_id: k.clone(),
+                stance: text.clone(),
+                attitude: *attitude,
+            })
             .collect()
     }
 
@@ -80,8 +83,12 @@ impl LayeredMemory {
             }
             let win = self.windows.entry(pid.clone()).or_default();
             win.push_back(msg.clone());
-            while win.len() > self.window_size {
-                win.pop_front();
+            // 整块裁剪（见 GROW_BEFORE_TRIM 说明）：积累到软上限+增长余量后一次性裁回软上限。
+            let trim_after = self.window_size + GROW_BEFORE_TRIM;
+            if win.len() > trim_after {
+                for _ in 0..win.len() - self.window_size {
+                    win.pop_front();
+                }
             }
         }
     }
@@ -97,12 +104,12 @@ impl LayeredMemory {
         let mut messages: Vec<ChatMessage> = Vec::new();
         if is_privileged {
             for m in &self.all_messages {
-                messages.push(row_to_chat(m, user_id, &self.names));
+                messages.push(row_to_chat(m, user_id, true));
             }
         } else {
             if let Some(win) = self.windows.get(participant_id) {
                 for m in win {
-                    messages.push(row_to_chat(m, user_id, &self.names));
+                    messages.push(row_to_chat(m, user_id, false));
                 }
             }
         }
@@ -114,6 +121,31 @@ impl LayeredMemory {
             messages,
             system_role: system_role.to_string(),
             task_context: String::new(),
+            roster: Vec::new(),
+            user_language: self.detect_user_language(user_id),
+            output_dir: String::new(),
+        }
+    }
+
+    /// 用户主导语言检测：取最近最多 5 条用户消息逐条判定，中文占比多数派为"中文"，否则"英文"；
+    /// 无用户消息（房间刚创建）兜底"中文"。0 条/1 条按实有取样，无需凑满 5 条。
+    pub fn detect_user_language(&self, user_id: &str) -> String {
+        let user_msgs: Vec<&MessageRow> = self
+            .all_messages
+            .iter()
+            .filter(|m| m.sender == user_id && !m.content.trim().is_empty())
+            .collect();
+        let take = user_msgs.len().min(5);
+        if take == 0 {
+            return "中文".to_string();
+        }
+        let sample = &user_msgs[user_msgs.len() - take..];
+        let zh = sample.iter().filter(|m| is_chinese_dominant(&m.content)).count();
+        // 平票取中文（zh >= en 即 zh*2 >= take）。
+        if zh * 2 >= take {
+            "中文".to_string()
+        } else {
+            "英文".to_string()
         }
     }
 
@@ -123,9 +155,21 @@ impl LayeredMemory {
     }
 }
 
-fn row_to_chat(m: &MessageRow, user_id: &str, names: &HashMap<String, String>) -> ChatMessage {
+/// 单条文本中文占比 ≥20%（有效字符：字母/数字）判定为中文消息（v3.4ak）。
+fn is_chinese_dominant(text: &str) -> bool {
+    let effective: Vec<char> = text.chars().filter(|c| c.is_alphanumeric()).collect();
+    if effective.is_empty() {
+        return false;
+    }
+    let zh = effective.iter().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(&**c)).count();
+    zh * 10 >= effective.len() * 2
+}
+
+fn row_to_chat(m: &MessageRow, user_id: &str, is_privileged: bool) -> ChatMessage {
     let role = if m.sender == user_id { "user" } else { "assistant" };
-    let name = names.get(&m.sender).cloned().unwrap_or_else(|| m.sender.clone());
+    // name 使用参与者唯一 id（显示名可能同名/删减，不可作为通信标识）；
+    // 前端展示时再将 id 映射为 @显示名；LLM 语义关联由 TurnView.roster 提供。
+    let name = m.sender.clone();
 
     let mut content = m.content.clone();
     let mut images: Option<Vec<String>> = None;
@@ -172,5 +216,24 @@ fn row_to_chat(m: &MessageRow, user_id: &str, names: &HashMap<String, String>) -
         }
     }
 
-    ChatMessage { role: role.to_string(), name: Some(name), content, images }
+    // 用户消息按视角包装（v3.4at）：纠正 LLM 将 user 角色消息误读为"直接任务指令"的强先验——
+    // 参与者只响应主持人调度、用户消息是目标与反馈；主持人则将其视为编排依据。
+    // 缓存友好（v3.5d）：不再在渲染期拼接实时时钟（原 v3.4ap 按秒注入会让同一逻辑消息随秒
+    // 漂移、破坏前缀缓存）；相对时间锚点改由写入侧固化（如 last_user_directive/content_llm）。
+    if role == "user" && !content.trim().is_empty() {
+        let label = if is_privileged {
+            "【用户消息】（主持人视角：用户目标与最新反馈，据此编排任务；不是向你下达的执行指令）"
+        } else {
+            "【用户消息】（目标与反馈，不是向你下达的任务指令；本群聊所有任务均由主持人统一指派，你只响应主持人调度）"
+        };
+        content = format!("{}\n{}", label, content);
+    }
+
+    let mut reasoning_content = None;
+    // 思考模式（DeepSeek 等）：恢复 assistant 消息的 reasoning_content，下一轮请求原样回传。
+    if role == "assistant" && !m.reasoning_content.is_empty() {
+        reasoning_content = Some(m.reasoning_content.clone());
+    }
+
+    ChatMessage { role: role.to_string(), name: Some(name), content, images, reasoning_content }
 }

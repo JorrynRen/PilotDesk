@@ -7,6 +7,7 @@ pub mod floor;
 pub mod memory;
 pub mod models;
 pub mod participant;
+pub mod prompts;
 pub mod report;
 pub mod room;
 pub mod rules;

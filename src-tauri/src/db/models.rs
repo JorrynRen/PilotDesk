@@ -21,7 +21,7 @@ pub struct Session {
     pub agent_session_id: Option<String>,
     /// 模型温度 (0.0-2.0)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
+    pub temperature: Option<f64>,
     /// 最大生成 token 数
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,

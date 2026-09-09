@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
-import { Copy, Edit3, Pencil, Bookmark, Check, User, X, FileText } from 'lucide-react';
+import { Copy, Edit3, Pencil, Bookmark, Check, User, FileText } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { MarkdownRenderer, linkifyUrls } from './MarkdownRenderer';
 import { ThinkingChain } from './ThinkingChain';
@@ -11,6 +10,7 @@ import { useInspirationStore } from '../../stores/inspirationStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
 import { showToast } from '../../utils/toast';
 import { useSessionStore } from '../../stores/sessionStore';
+import { useImagePreviewStore } from '../../stores/imagePreviewStore';
 import { type Message } from '../../types';
 import { AgentIcon } from '../common/AgentIcon';
 import { isApiSession } from '../../utils/sessionType';
@@ -24,6 +24,8 @@ interface MessageBubbleProps {
   thinkingChain?: ThinkingChainStep[];
   isStreaming?: boolean;
   isHighlighted?: boolean;
+  /** 工具执行进度（generate_video 等），流式期间显示在助手消息气泡内，生成结束后不持久化。 */
+  streamingProgress?: string;
   /** ask_user 确认块（仅最后一条 assistant 消息内嵌渲染）。 */
   confirmation?: ConfirmationBlockData | null;
   onEdit?: (content: string) => void;
@@ -40,17 +42,11 @@ function formatTimestamp(ts: number): string {
   return `${y}/${m}/${d} ${time}`;
 }
 
-export function MessageBubble({ message, agentType, apiProviderId, apiModel, thinkingChain, isStreaming, isHighlighted, confirmation, onEdit, onSaveInspiration, onResend }: MessageBubbleProps) {
+export function MessageBubble({ message, agentType, apiProviderId, apiModel, thinkingChain, isStreaming, isHighlighted, streamingProgress, confirmation, onEdit, onSaveInspiration, onResend }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
-  const [previewScale, setPreviewScale] = useState(1);
-  const [previewOffset, setPreviewOffset] = useState({ x: 0, y: 0 });
-  const [dragging, setDragging] = useState(false);
   const editRef = useRef<HTMLTextAreaElement>(null);
-  const dragRef = useRef<{ startX: number; startY: number; offsetX: number; offsetY: number; moved: boolean } | null>(null);
-  const justDraggedRef = useRef(false);
   const { updateMessage } = useSessionStore();
   const { getTheme, getDisplayName } = useAgentRegistry();
   const isUser = message.role === 'user';
@@ -136,78 +132,6 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
     }
   }, [handleSaveEdit, handleCancelEdit]);
 
-  // 图片放大预览：Escape 关闭
-  useEffect(() => {
-    if (!previewImage) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPreviewImage(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [previewImage]);
-
-  // 打开图片预览（每次打开重置缩放比例与位置）
-  const openPreview = useCallback((src: string) => {
-    setPreviewScale(1);
-    setPreviewOffset({ x: 0, y: 0 });
-    setDragging(false);
-    dragRef.current = null;
-    justDraggedRef.current = false;
-    setPreviewImage(src);
-  }, []);
-
-  // 鼠标滑轮缩放：向上滚放大、向下滚缩小，比例限制在 0.25x ~ 6x
-  const handlePreviewWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const factor = Math.exp(-e.deltaY * 0.002);
-    setPreviewScale((s) => Math.min(6, Math.max(0.25, s * factor)));
-  }, []);
-
-  // 拖动图片移动位置（仅左键，记录起始坐标与偏移）
-  const handlePreviewMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    dragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      offsetX: previewOffset.x,
-      offsetY: previewOffset.y,
-      moved: false,
-    };
-    justDraggedRef.current = false;
-    setDragging(true);
-  }, [previewOffset]);
-
-  const handlePreviewMouseMove = useCallback((e: React.MouseEvent) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const dx = e.clientX - drag.startX;
-    const dy = e.clientY - drag.startY;
-    if (!drag.moved && Math.hypot(dx, dy) > 3) {
-      drag.moved = true;
-      justDraggedRef.current = true;
-    }
-    if (drag.moved) {
-      setPreviewOffset({ x: drag.offsetX + dx, y: drag.offsetY + dy });
-    }
-  }, []);
-
-  const handlePreviewMouseUp = useCallback(() => {
-    dragRef.current = null;
-    setDragging(false);
-  }, []);
-
-  // 背景点击关闭：拖动后释放不触发关闭
-  const handleOverlayClick = useCallback(() => {
-    if (justDraggedRef.current) {
-      justDraggedRef.current = false;
-      return;
-    }
-    setPreviewImage(null);
-  }, []);
-
   const messageMode = message.mode as keyof typeof MODE_LABELS;
   const modeColor = MODE_COLORS[messageMode];
   const modeLabel = MODE_LABELS[messageMode];
@@ -261,6 +185,15 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
     }
     return steps;
   }, [thinkingChain, message.toolCalls, message.timestamp]);
+
+  // 流式期间最后一条推理步骤为"活动条目"：自动展开，流式结束（isStreaming=false）后自动收起。
+  const liveReasoningKey = useMemo(() => {
+    if (!isStreaming) return undefined;
+    for (let i = mergedThinkingChain.length - 1; i >= 0; i -= 1) {
+      if (mergedThinkingChain[i].type === 'reasoning') return mergedThinkingChain[i].id;
+    }
+    return undefined;
+  }, [isStreaming, mergedThinkingChain]);
 
   const agentTheme = getTheme(agentType);
   const agentColor = agentTheme.color;
@@ -338,7 +271,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
         {/* Message card — w-full 确保所有类型宽度一致 */}
         <div className="w-full">
           {isUser ? (
-            <div className="rounded-xl px-3.5 py-2.5 w-full" style={{ backgroundColor: 'var(--accent)', color: '#fff', ...highlightStyle }}>
+            <div className="message-bubble-user rounded-xl px-3.5 py-2.5 w-full min-w-0 break-all" style={{ backgroundColor: 'var(--accent)', color: '#fff', ...highlightStyle }}>
               {isEditing ? (
                 <textarea
                   ref={editRef}
@@ -356,7 +289,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
                         att.kind === 'image' ? (
                           <button
                             key={`${idx}-${att.path}`}
-                            onClick={() => openPreview(convertFileSrc(att.path))}
+                            onClick={() => useImagePreviewStore.getState().open(convertFileSrc(att.path))}
                             className="block w-20 h-20 rounded-lg overflow-hidden shrink-0 cursor-zoom-in p-0"
                             style={{ border: '1px solid rgba(255,255,255,0.35)' }}
                             aria-label={`预览图片 ${idx + 1}`}
@@ -378,7 +311,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
                     </div>
                   )}
                   {message.content && (
-                    <p className="text-[13px] leading-relaxed whitespace-pre-wrap m-0">{linkifyUrls(message.content)}</p>
+                    <p className="text-[13px] leading-relaxed whitespace-pre-wrap break-all m-0">{linkifyUrls(message.content)}</p>
                   )}
                 </>
               )}
@@ -410,10 +343,21 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
               );
             })()
           ) : (
-            <div className="rounded-xl w-full px-3.5 py-2.5" style={{ backgroundColor: 'var(--bg-secondary)', ...highlightStyle }}>
+            <div className="rounded-xl w-full px-3.5 py-2.5 min-w-0 break-all" style={{ backgroundColor: 'var(--bg-secondary)', ...highlightStyle }}>
               {/* 思维链 */}
-              <ThinkingChain steps={mergedThinkingChain} defaultCollapsed={!isStreaming} />
+              <ThinkingChain
+                steps={mergedThinkingChain}
+                defaultCollapsed={!isStreaming}
+                liveStepKeys={liveReasoningKey ? new Set([liveReasoningKey]) : undefined}
+              />
               <MarkdownRenderer content={message.content} />
+              {/* 工具执行进度（如视频生成中）：流式期间展示，生成结束后不落库 */}
+              {streamingProgress && (
+                <div className="flex items-start gap-1.5 mt-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                  <span className="shrink-0 mt-0.5" style={{ color: 'var(--warning, #F59E0B)' }}>⏳</span>
+                  <span className="min-w-0 break-all leading-relaxed">{streamingProgress}</span>
+                </div>
+              )}
               {/* ask_user 确认块：内嵌在工具调用链之后 */}
               {confirmation && (
                 <ConfirmationCard
@@ -459,35 +403,6 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
         </div>
       </div>
       </div>
-
-      {previewImage && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-6 cursor-zoom-out select-none"
-          style={{ backgroundColor: 'rgba(0,0,0,0.85)' }}
-          onClick={handleOverlayClick}
-          onWheel={handlePreviewWheel}
-          onMouseMove={handlePreviewMouseMove}
-          onMouseUp={handlePreviewMouseUp}
-        >
-          <button
-            onClick={() => setPreviewImage(null)}
-            className="absolute top-4 right-4 w-9 h-9 rounded-full flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-            aria-label="关闭预览"
-          >
-            <X size={20} />
-          </button>
-          <img
-            src={previewImage}
-            alt="图片预览"
-            draggable={false}
-            className={`max-w-full max-h-full object-contain rounded-lg shadow-2xl ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
-            style={{ transform: `translate(${previewOffset.x}px, ${previewOffset.y}px) scale(${previewScale})` }}
-            onMouseDown={handlePreviewMouseDown}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>,
-        document.body
-      )}
     </>
   );
 }

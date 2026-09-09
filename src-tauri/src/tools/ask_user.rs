@@ -132,6 +132,9 @@ impl ToolHandler for AskUserTool {
             Ok(Err(_)) => Err("确认通道已关闭".to_string()),
             Err(_) => {
                 log::warn!("[AskUser] 确认等待超时（{}s）: call_id={}", CONFIRM_TIMEOUT_SECS, call_id);
+                // 超时不再等待用户回复：清理 confirmation map 中残留的 sender，避免泄漏；
+                // 此后前端若再回复该 call_id，respond_confirmation 按"未找到"处理（与超时语义一致）。
+                self.pending.discard_confirmation(&call_id);
                 Ok(format!("用户未在 {} 秒内回复，确认请求已超时，请根据已有信息自行决定如何继续或收尾。", CONFIRM_TIMEOUT_SECS))
             }
         }

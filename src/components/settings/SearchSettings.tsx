@@ -70,7 +70,7 @@ export function SearchSettings() {
             联网搜索
           </h3>
           <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-            配置 API Agent 的 web_search / web_fetch 工具所使用搜索后端
+            配置 API Agent 的 search_web / fetch_web 工具所使用搜索后端
           </p>
         </div>
       </div>

@@ -1,6 +1,7 @@
 //! 联网搜索工具：将关键词查询分发给 web.rs 中的搜索后端，返回结构化文本。
 //!
-//! 自 `api_agent/web_search.rs` 迁入（工具架构统一 v1.0，轮 6），逻辑不变。
+//! 自 `api_agent/web_search.rs` 迁入（工具架构统一 v1.0，轮 6）；命名规范对齐
+//! （verb+noun）：`web_search` → `search_web`。
 
 use async_trait::async_trait;
 
@@ -8,20 +9,20 @@ use crate::api_agent::web::{search_web, SearchConfig};
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 
 /// 联网搜索工具
-pub struct WebSearchTool {
+pub struct SearchWebTool {
     config: SearchConfig,
 }
 
-impl WebSearchTool {
+impl SearchWebTool {
     pub fn new(config: SearchConfig) -> Self {
         Self { config }
     }
 }
 
 #[async_trait]
-impl ToolHandler for WebSearchTool {
+impl ToolHandler for SearchWebTool {
     fn name(&self) -> &str {
-        "web_search"
+        "search_web"
     }
 
     fn description(&self) -> &str {

@@ -50,8 +50,17 @@ impl ToolHandler for LoadSkillTool {
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
         let name = arguments["name"].as_str().ok_or("缺少 name 参数")?;
-        self.loader
+        let content = self
+            .loader
             .load_skill(name)
-            .ok_or_else(|| format!("技能不存在: {}", name))
+            .ok_or_else(|| format!("技能不存在: {}", name))?;
+        // 注入技能根目录：模型读取技能内容时即可获知脚本所在绝对路径，
+        // 技能文档内无需硬编码安装路径（通用机制，所有技能受益）。
+        let prefix = self
+            .loader
+            .skill_dir(name)
+            .map(|dir| format!("> 技能根目录：{}\n\n", dir.display()))
+            .unwrap_or_default();
+        Ok(format!("{}{}", prefix, content))
     }
 }

@@ -11,9 +11,11 @@
 pub mod agent_loop;
 pub mod agent_turn;
 pub mod client;
+pub mod compaction;
 pub mod context;
 pub mod db;
 pub mod memory;
+pub mod memory_intent;
 pub mod skills;
 pub mod summarize;
 pub mod system_prompt;

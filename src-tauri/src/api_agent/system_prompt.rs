@@ -78,10 +78,8 @@ pub struct SystemPromptBuilder {
     base_prompt: String,
     memory_md: Option<String>,
     user_md: Option<String>,
-    kv_memories: Option<String>,
     skills: Vec<SkillEntry>,
     git_context: Option<String>,
-    project_context: Option<String>,
 }
 
 /// 技能条目（仅 name + description，Progressive Disclosure）
@@ -96,10 +94,8 @@ impl SystemPromptBuilder {
             base_prompt,
             memory_md: None,
             user_md: None,
-            kv_memories: None,
             skills: Vec::new(),
             git_context: None,
-            project_context: None,
         }
     }
 
@@ -111,17 +107,13 @@ impl SystemPromptBuilder {
         self
     }
 
-    /// 从 PilotDesk 配置目录加载 USER.md
+    /// 从 PilotDesk 统一配置根目录加载 USER.md（用户级偏好）。
+    /// 读取根与 MEMORY.db / 技能等共用同一配置目录（见 get_pilotdesk_config_dir），
+    /// 文件不存在即视为无用户偏好，不做额外目录兜底。
     pub fn with_user_md(mut self) -> Self {
         if let Some(config_dir) = get_pilotdesk_config_dir() {
             self.user_md = read_file_if_exists(&config_dir, "USER.md");
         }
-        self
-    }
-
-    /// 设置 KV 记忆块（从 MemoryStore.format_for_prompt 获取）
-    pub fn with_kv_memories(mut self, kv_block: Option<String>) -> Self {
-        self.kv_memories = kv_block;
         self
     }
 
@@ -134,12 +126,6 @@ impl SystemPromptBuilder {
     /// 注入 Git 仓库上下文
     pub fn with_git_context(mut self, git: &GitContext) -> Self {
         self.git_context = Some(git.format_prompt());
-        self
-    }
-
-    /// 注入项目级上下文文件（CLAUDE.md、README.md 等）
-    pub fn with_project_context(mut self, cwd: &str) -> Self {
-        self.project_context = ProjectContext::from_cwd(cwd).format_prompt();
         self
     }
 
@@ -165,22 +151,12 @@ impl SystemPromptBuilder {
             parts.push(git.clone());
         }
 
-        // 2.6. 项目上下文文件
-        if let Some(ref ctx) = self.project_context {
-            parts.push(ctx.clone());
-        }
-
         // 3. USER.md — 用户偏好
         if let Some(ref user) = self.user_md {
             parts.push(format!(
                 "<user_preferences>\n{}\n</user_preferences>",
                 user
             ));
-        }
-
-        // 3.5. KV 记忆 — 跨会话持久化知识
-        if let Some(ref kv) = self.kv_memories {
-            parts.push(kv.clone());
         }
 
         // 4. Skill 列表 — Progressive Disclosure
@@ -199,58 +175,6 @@ impl SystemPromptBuilder {
         }
 
         parts.join("\n\n")
-    }
-}
-
-/// 项目上下文文件扫描
-pub struct ProjectContext {
-    pub claude_md: Option<String>,
-    pub readme: Option<String>,
-}
-
-impl ProjectContext {
-    /// 扫描工作区递归查找配置文档（最多向上查找 2 层）
-    pub fn from_cwd(cwd: &str) -> Self {
-        let mut ctx = Self {
-            claude_md: None,
-            readme: None,
-        };
-
-        // 读取根目录 README.md
-        ctx.readme = read_file_if_exists(cwd, "README.md");
-
-        // 递归查找 CLAUDE.md（向上最多 2 层）
-        let mut dir = std::path::PathBuf::from(cwd);
-        for _ in 0..=2 {
-            if let Some(parent) = dir.parent() {
-                dir = parent.to_path_buf();
-            } else {
-                break;
-            }
-            if ctx.claude_md.is_none() {
-                ctx.claude_md = read_file_if_exists(dir.to_string_lossy().as_ref(), "CLAUDE.md");
-            }
-        }
-
-        ctx
-    }
-
-    /// 格式化为 system prompt 块
-    pub fn format_prompt(&self) -> Option<String> {
-        let mut lines = Vec::new();
-        if let Some(ref claude) = self.claude_md {
-            lines.push("## 项目配置文档 (CLAUDE.md)".to_string());
-            lines.push(claude.clone());
-        }
-        if let Some(ref readme) = self.readme {
-            lines.push("## 项目说明文档 (README.md)".to_string());
-            lines.push(readme.clone());
-        }
-        if lines.is_empty() {
-            None
-        } else {
-            Some(lines.join("\n\n"))
-        }
     }
 }
 

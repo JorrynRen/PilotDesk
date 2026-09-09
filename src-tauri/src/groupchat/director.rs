@@ -1,10 +1,29 @@
 //! Director：全知协调者（非自主发言者）。依赖 LlmClient 输出结构化决策。
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::models::{ConfirmationItem, ConfirmationRequest, TaskRow, summarize_confirmation_title};
-use super::participant::{ChatMessage, LlmClient};
+use super::participant::{Attitude, ChatMessage, LlmClient, Stance};
+
+/// 组装「各参与者当前立场」区块文本（含态度标签）。
+fn format_stances(stances: &[Stance]) -> String {
+    if stances.is_empty() {
+        return "（暂无）".to_string();
+    }
+    stances
+        .iter()
+        .map(|st| {
+            let tag = match st.attitude {
+                Attitude::Agree => "支持",
+                Attitude::Disagree => "反对",
+                Attitude::Neutral => "中立",
+            };
+            format!("- [@{}]: [{}] {}", st.participant_id, tag, st.stance)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// 开场编排产出的任务草稿。
 #[derive(Debug, Clone)]
@@ -14,6 +33,66 @@ pub struct TaskDraft {
     pub depends_on: Vec<usize>,
     /// 负责执行该任务的参与者 id（由 Director 指派，可为空）。
     pub assignee: Option<String>,
+}
+
+/// Director 按需补充的新参与者草稿（全自动组建名册：主持人发现参与者不足/缺角色时提出）。
+#[derive(Debug, Clone)]
+pub struct NewParticipantDraft {
+    /// 唯一 id（仅含字母/数字/下划线/连字符，如 api_3、designer_1）。
+    pub id: String,
+    pub display_name: String,
+    /// 角色定位：简洁、只写专业方向，禁止携带具体任务属性（任务协调统一由主持人负责）。
+    pub system_role: String,
+    /// "api"=通用 LLM 参与者（provider/model 必填）；"cli"=本地 CLI Agent（agent_type 必填）。
+    pub participant_type: String,
+    /// 提供商 id（api 类型必填，必须存在于可用模型清单）。
+    pub provider: String,
+    /// 文本生成模型名（api 类型必填，必须从模型清单逐字复制，禁止编造）。
+    pub model: String,
+    /// 已注册 CLI Agent 类型（cli 类型必填，必须从可用 CLI Agent 清单逐字复制，禁止编造；
+    /// 同一房间同一 agent_type 只允许 1 个）。
+    pub agent_type: String,
+    /// 补充原因（为什么需要该参与者，如"名册缺少视觉设计能力"；供调度消息可追溯展示，可为空）。
+    pub reason: String,
+}
+
+/// 开场编排结果：任务草稿 + 角色分配 + 按需补充的参与者。
+#[derive(Debug, Clone)]
+pub struct KickoffPlan {
+    pub tasks: Vec<TaskDraft>,
+    pub roles: HashMap<String, String>,
+    pub new_participants: Vec<NewParticipantDraft>,
+    /// 未被 Director 覆盖角色、由代码兜底补"未分配"的参与者 id（调用方据此落提示）。
+    pub missing_roles: Vec<String>,
+}
+
+/// 阶段A 目标确定结果：主持人理解整理后的总目标 + 是否需要向用户确认。
+#[derive(Debug, Clone)]
+pub struct GoalClarification {
+    /// 整理后的总目标（主持人视角：目标 + 关键约束 + 可验证验收标准；不得复制用户原文）。
+    pub goal: String,
+    /// 目标存在歧义 / 缺关键基础信息，需先向用户确认再编排。
+    pub need_confirmation: bool,
+    /// 需要向用户确认的具体问题（need_confirmation=true 时非空）。
+    pub questions: Vec<String>,
+    /// 主持人取的简短产物目录名（≤20 字符，贴切概括；空则回退按主题截断）。
+    pub output_dir_name: String,
+}
+
+/// 阶段A 确认回复消化结果（v3.5c）：主持人理解并消化用户回复（可能含材料核验简报），
+/// 动态更新问题答案/问题项/目标方向，并判定是否仍需继续向用户确认。
+#[derive(Debug, Clone)]
+pub struct GoalClarifyReply {
+    /// 消化后的目标（基于回复/材料更新约束、方向与验收；不得复制用户口语原文）。
+    pub adjusted_goal: String,
+    /// 本轮回合已确定/已落实的信息要点（含从用户指向材料核验得到的项，供追溯）。
+    pub resolved: Vec<String>,
+    /// 仍缺失、影响任务拆分、且回复/材料/简报均无法确定的项（need_more=true 时非空）。
+    pub remaining_questions: Vec<String>,
+    /// 是否仍需继续向用户确认（仅当 remaining_questions 非空时为 true）。
+    pub need_more: bool,
+    /// 更新后的简短产物目录名（未变化时为空串表示沿用）。
+    pub output_dir_name: String,
 }
 
 /// 追加轮次对账重排时的单个操作。
@@ -39,6 +118,10 @@ pub struct ReplanOperation {
 #[derive(Debug, Clone)]
 pub struct ReplanPlan {
     pub operations: Vec<ReplanOperation>,
+    /// 需调整角色的参与者（仅包含角色变化的；无调整需求时为空）。
+    pub roles: HashMap<String, String>,
+    /// 讨论中发现的缺失角色（按需补充参与者；无补充需求时为空）。
+    pub new_participants: Vec<NewParticipantDraft>,
 }
 
 /// 名册变更（加入/移除参与者）后的重排结果：角色分配 + 任务重派/新增。
@@ -51,7 +134,7 @@ pub struct RosterReplan {
 /// 任务执行失败后的处置决策。
 #[derive(Debug, Clone)]
 pub struct FailureDecision {
-    /// retry / reassign / skip / abort / ask_user
+    /// retry / reassign / skip / abort / ask_user / self_execute / add_participant
     pub action: String,
     /// reassign 时的目标参与者 id
     pub assignee: Option<String>,
@@ -59,6 +142,10 @@ pub struct FailureDecision {
     pub reason: String,
     /// ask_user 时向用户发起的确认请求
     pub confirmation: Option<ConfirmationRequest>,
+    /// add_participant 时建议补充的新参与者（接盘失败任务，可同时满足"重派"效果）
+    pub new_participant: Option<NewParticipantDraft>,
+    /// 同时移除的僵尸参与者 id（反复失败/能力不可用占位，可与其他 action 组合，如替换）
+    pub remove_participant: Option<String>,
 }
 
 /// Director 选中的下一位发言者及其选择理由。
@@ -66,6 +153,13 @@ pub struct FailureDecision {
 pub struct SpeakerDecision {
     pub speaker: String,
     pub reason: String,
+    /// 本轮发言者的具体工作内容（v3.4ao）：主持人"派活"——讨论中则告知
+    /// "就 X 的方案/分工/验收标准发表意见"，方案已定则告知"执行 X：具体步骤与产出要求"。
+    /// 空串时调用方回退原"围绕任务发言"语义。
+    pub work_content: String,
+    /// 名册缺身份/能力时的补人提案（v3.4bb）：由系统创建专用参与者承接该身份，
+    /// **不会**让现有参与者临时扮演他人（身份纪律由提示词层约束）。空数组表示不需补人。
+    pub new_participants: Vec<NewParticipantDraft>,
 }
 
 /// Director 讨论收敛审查结果。
@@ -79,6 +173,18 @@ pub struct ReviewOutcome {
     pub reason: String,
     /// next_action=confirm 时的确认请求。
     pub confirmation: Option<ConfirmationRequest>,
+    /// 主持人收口裁决（v3.4ao）：next_action=done 时，判定为"讨论中已被实质完成、执行阶段应跳过"的
+    /// discussing 任务 id 列表（主持人最终权威；产物/发言仅为裁决依据）。
+    pub completed_tasks: Vec<String>,
+}
+
+/// 立场预处理结果（LLM 从单次发言提取的归一化立场）。
+#[derive(Debug, Clone)]
+pub struct StanceExtraction {
+    /// 态度（支持/反对/中立）。
+    pub attitude: Attitude,
+    /// 归一化立场陈述（≤100 字，第一人称）。
+    pub stance: String,
 }
 
 /// 工具授权裁决结果。
@@ -92,36 +198,219 @@ pub struct ToolDecision {
 #[derive(Debug, Clone)]
 pub struct GoalIntent {
     /// refine（补充/确认，保持目标）/ change_goal（明确变更目标）/ new_goal（全新无关目标）
+    /// / amend_goal（目标范围扩展，修正初始目标）/ temp_task（临时性一次性额外任务，不改目标）
+    /// / switch_director（更换主持人，结构身份变更）
     pub intent: String,
-    /// change_goal / new_goal 时的新目标文本（refine 时为空）
+    /// change_goal / new_goal 时的新目标文本（其余为空）
     pub new_goal: String,
-    /// refine 时提炼出的补充/细化约束（可空；change_goal/new_goal 时忽略）
+    /// amend_goal 时追加到目标锚点的补充文本（其余为空）
+    pub amend: String,
+    /// refine 时提炼出的补充/细化约束（可空；change_goal/new_goal/amend_goal/temp_task 时忽略）
     pub note: String,
+    /// temp_task 时的临时额外任务（其余为 None）
+    pub temp_task: Option<TempTaskDraft>,
+    /// switch_director 时的新主持人参与者 id（其余为 None）
+    pub director: Option<String>,
+}
+
+/// 用户插队的临时性、一次性额外任务（不更新初始目标，执行完即弃）。
+#[derive(Debug, Clone)]
+pub struct TempTaskDraft {
+    pub description: String,
+    pub assignee: Option<String>,
 }
 
 /// Director 结构化决策输出。
 pub struct Director {
     llm: Arc<dyn LlmClient>,
+    /// 主持人自身的参与者 id（通信标识 [@id]），供自我身份感知与引用规范。
+    director_id: String,
+    /// 最近一次 LLM 调用的思考链（reasoning_content），供决策消息落库、前端无差异展示。
+    last_reasoning: Mutex<String>,
 }
 
 impl Director {
-    pub fn new(llm: Arc<dyn LlmClient>) -> Self {
-        Self { llm }
+    pub fn new(llm: Arc<dyn LlmClient>, director_id: String) -> Self {
+        Self { llm, director_id, last_reasoning: Mutex::new(String::new()) }
     }
 
-    /// 开场编排：产出子任务/议程 + 为参与者分配角色。
+    /// 调用 LLM 完成一次决策：捕获思考链（reasoning_content）供落库展示，返回决策正文。
+    /// 与参与者一致使用 complete_with_tool_calls，使主持人推理也能被前端无差异渲染。
+    async fn complete_decision(&self, prompt: &str) -> Result<String, String> {
+        let (content, _tool_calls, reasoning) = self
+            .llm
+            .complete_with_tool_calls(&self.system_prompt(), &[ChatMessage::user(prompt)], None, None)
+            .await?;
+        if let Ok(mut g) = self.last_reasoning.lock() {
+            *g = reasoning;
+        }
+        Ok(content)
+    }
+
+    /// 取走最近一次决策的思考链（取后清空，避免重复落库）。
+    pub fn take_last_reasoning(&self) -> String {
+        self.last_reasoning.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default()
+    }
+
+    fn system_prompt(&self) -> String {
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_system_prompt.prompt.md。
+        super::prompts::render(
+            super::prompts::blocks::DIRECTOR_SYSTEM_PROMPT.body,
+            &super::prompts::PromptCtx::new().var("director_id", &self.director_id),
+        )
+    }
+
+    /// 阶段A 目标确定：主持人理解并整理用户目标（生成总目标），判定是否需要先向用户确认。
+    /// `topic` 为当前目标锚点（首次整理时可为空或占位），`latest` 为用户最新指令原文，
+    /// `roster` 为参与者名册（id/显示名/角色，供理解用户提及的人称）。失败返回 `None`（调用方降级）。
+    pub async fn clarify_goal(
+        &self,
+        topic: &str,
+        latest: &str,
+        notes: &str,
+        roster: &str,
+    ) -> Option<GoalClarification> {
+        let topic_section = if topic.trim().is_empty() {
+            "（房间尚无既定目标，本次为初始目标整理）".to_string()
+        } else {
+            topic.to_string()
+        };
+        let notes_section = if notes.trim().is_empty() {
+            "（暂无补充约束）".to_string()
+        } else {
+            notes.to_string()
+        };
+        let roster_section = if roster.trim().is_empty() {
+            "（暂无参与者名册）".to_string()
+        } else {
+            roster.to_string()
+        };
+
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_clarify_goal.prompt.md，
+        // 此处仅组装输入数据段（latest/topic/notes/roster），文本全部来自块资产。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_CLARIFY_GOAL.body,
+            &super::prompts::PromptCtx::new()
+                .section("latest", latest)
+                .section("topic", topic_section)
+                .section("notes", notes_section)
+                .section("roster", roster_section),
+        );
+
+        let raw = self
+            .complete_decision(&prompt).await
+            .ok()?;
+        let json = strip_fences(&raw);
+        let v: serde_json::Value = serde_json::from_str(&json).ok()?;
+        let goal = v["goal"].as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+        if goal.is_empty() {
+            return None;
+        }
+        let need_confirmation = v["need_confirmation"].as_bool().unwrap_or(false);
+        let questions = v["questions"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|q| q.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let output_dir_name = v["output_dir_name"].as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+        Some(GoalClarification { goal, need_confirmation, questions, output_dir_name })
+    }
+
+    /// 阶段A 确认回复消化（v3.5c）：主持人理解并消化用户对确认问题的回复，
+    /// 结合已解析输入物/约束（notes）与材料核验简报（evidence），输出：消化后的目标、
+    /// 已确定信息要点、仍需向用户追问的剩余问题，以及是否需继续确认。
+    /// `goal` 为当前整理中的目标，`reply` 为用户本轮回复原文。失败返回 `None`（调用方降级为摘要兜底）。
+    pub async fn clarify_reply(
+        &self,
+        goal: &str,
+        reply: &str,
+        notes: &str,
+        roster: &str,
+        evidence: &str,
+    ) -> Option<GoalClarifyReply> {
+        let notes_section = if notes.trim().is_empty() {
+            "（暂无补充约束）".to_string()
+        } else {
+            notes.to_string()
+        };
+        let evidence_section = if evidence.trim().is_empty() {
+            "（本轮未执行材料核验）".to_string()
+        } else {
+            evidence.to_string()
+        };
+        let roster_section = if roster.trim().is_empty() {
+            "（暂无参与者名册）".to_string()
+        } else {
+            roster.to_string()
+        };
+
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_CLARIFY_REPLY.body,
+            &super::prompts::PromptCtx::new()
+                .section("goal", goal)
+                .section("reply", reply)
+                .section("notes", notes_section)
+                .section("evidence", evidence_section)
+                .section("roster", roster_section),
+        );
+
+        let raw = self
+            .complete_decision(&prompt).await
+            .ok()?;
+        let json = strip_fences(&raw);
+        let v: serde_json::Value = serde_json::from_str(&json).ok()?;
+        let adjusted_goal = v["adjusted_goal"].as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+        if adjusted_goal.is_empty() {
+            return None;
+        }
+        let strings = |key: &str| {
+            v[key]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|q| q.as_str().map(|s| s.trim().to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let need_more = v["need_more"].as_bool().unwrap_or(false);
+        let output_dir_name = v["output_dir_name"].as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+        Some(GoalClarifyReply {
+            adjusted_goal,
+            resolved: strings("resolved"),
+            remaining_questions: strings("remaining_questions"),
+            need_more,
+            output_dir_name,
+        })
+    }
+
+    /// 开场编排：产出子任务/议程 + 为参与者分配角色 + 按需补充缺失角色参与者。
     /// `topic` 为初始目标（不可变锚点），`latest` 为本轮新增指令（首轮两者相同，
-    /// 追加/确认轮为用户最新输入）。返回 `(任务草稿, participant_id -> 角色)`；失败返回 `None`。
+    /// 追加/确认轮为用户最新输入），`catalog` 为可用模型 + CLI Agent 清单（供按需组建参与者选模型/agent），
+    /// `max_new_participants` 为本场可补充空位（剩余空位与批量上限取小，0 表示禁止新增）。
+    /// 返回任务草稿、角色分配与建议新增的参与者；失败返回 `None`。
     pub async fn kickoff(
         &self,
         topic: &str,
         latest: &str,
         notes: &str,
-        participants: &[(String, String)],
-    ) -> Option<(Vec<TaskDraft>, HashMap<String, String>)> {
+        participants: &[(String, String, String)],
+        catalog: &str,
+        max_new_participants: usize,
+        failures: &str,
+    ) -> Option<KickoffPlan> {
+        // 名册三字段：唯一 id / 显示名（仅作角色分配时参考用户定位倾向）/ 当前角色。
         let roster = participants
             .iter()
-            .map(|(id, name)| format!("- {} ({})", id, name))
+            .map(|(id, name, role)| {
+                let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                format!("- [@{}]（显示名：{}）（当前角色：{}）", id, name, role)
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -136,29 +425,33 @@ impl Director {
         } else {
             format!("【已累积的补充/细化约束（必须一并满足）】\n{}", notes)
         };
+        let catalog_section = if catalog.trim().is_empty() {
+            "（无可用模型/CLI Agent）".to_string()
+        } else {
+            catalog.to_string()
+        };
+        let failures_section = if failures.trim().is_empty() {
+            "（暂无失败记录）".to_string()
+        } else {
+            failures.to_string()
+        };
 
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。请针对以下目标进行开场编排。\n\
-             【初始目标（始终不变，必须优先服务）】\n{topic}\n\n\
-             {notes_section}\n\n\
-             {latest_section}\n\n\
-             参与者列表：\n{roster}\n\n\
-             请输出严格 JSON（不要 markdown 代码块），格式：\n\
-             {{\"tasks\":[{{\"description\":\"子任务描述\",\"depends_on\":[前置任务下标数组],\"assignee\":\"负责执行的参与者id\"}}],\
-             \"roles\":{{\"参与者id\":\"角色名\"}}}}\n\
-             要求：\n\
-             1. 任务个数由你根据目标复杂度自行决定，roles 覆盖每个参与者；\n\
-             2. 每个任务都必须用 assignee 明确指派给一个参与者（使用参与者列表中的 id）；\n\
-             3. 所有任务都必须服务于【初始目标】，并满足【已累积的补充/细化约束】，同时响应【本轮新增指令】；若新增指令与初始目标冲突，以初始目标为准；\n\
-             4. 任务必须是可被参与者执行的实质性子任务，禁止包含“总结观点/归纳共识分歧/形成最终结论/收口”类任务——最终结论由 Director 在讨论结束后统一负责；\n\
-             5. depends_on 表示该任务必须等待哪些前置任务完成后才能执行：若任务 B 依赖任务 A（A 在 tasks 数组中的下标为 i），则 B.depends_on 必须包含整数 i（下标从 0 开始）；无依赖则用空数组 []；\n\
-             6. 每个任务的 description 必须写明可验证的产出物/目标，并在涉及文件时指明具体文件、目录或搜索模式；禁止“了解/熟悉/分析项目”“查看工作区”等空洞、泛化的任务描述，禁止让参与者无差别扫描整个工作区。"
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_kickoff.prompt.md，
+        // 此处仅组装输入数据段（topic/notes/latest/roster/catalog/failures）与单值变量。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_KICKOFF.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("notes", notes_section)
+                .section("latest", latest_section)
+                .section("roster", roster)
+                .section("catalog", catalog_section)
+                .section("failures", failures_section)
+                .var("max_new_participants", max_new_participants.to_string()),
         );
 
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         let json = strip_fences(&raw);
         let v: serde_json::Value = serde_json::from_str(&json).ok()?;
@@ -186,15 +479,32 @@ impl Director {
         let mut roles = HashMap::new();
         if let Some(obj) = v["roles"].as_object() {
             for (k, val) in obj {
-                roles.insert(k.clone(), val.as_str().unwrap_or("参与者").to_string());
+                // 归一化 key：LLM 可能回显 [@id]/@id，直接作为 id 写库会匹配不到裸 id 行（角色分配不落库）。
+                roles.insert(normalize_ref(k), val.as_str().unwrap_or("参与者").to_string());
             }
         }
 
-        Some((tasks, roles))
+        // v3.4as：roles 完整性兜底——Director 未覆盖的参与者补"未分配"，不阻断编排，交由调用方落提示。
+        let mut missing_roles = Vec::new();
+        for (id, _, _) in participants {
+            if !roles.contains_key(id) {
+                roles.insert(id.clone(), "未分配".to_string());
+                missing_roles.push(id.clone());
+            }
+        }
+
+        Some(KickoffPlan {
+            tasks,
+            roles,
+            new_participants: parse_new_participants(&v),
+            missing_roles,
+        })
     }
 
     /// 追加轮次对账重排：把当前任务清单（含状态）交给 Director，输出 keep/remove/add 操作。
     /// 运行时据此删减未执行任务、重分配负责人、新增必要子任务，从而替代盲目累加。
+    /// `catalog` 为可用模型 + CLI Agent 清单（供按需组建参与者选模型/agent），`max_new_participants` 为本场
+    /// 可补充空位（与剩余空位取小，0 表示禁止新增）。
     /// 失败返回 `None`（由调用方按保守策略处理：不新增、不删减）。
     pub async fn replan(
         &self,
@@ -202,11 +512,18 @@ impl Director {
         latest: &str,
         notes: &str,
         existing: &[TaskRow],
-        participants: &[(String, String)],
+        participants: &[(String, String, String)],
+        catalog: &str,
+        max_new_participants: usize,
+        failures: &str,
     ) -> Option<ReplanPlan> {
+        // 名册三字段：唯一 id / 显示名（仅作理解用户指令中的人称引用）/ 当前角色。
         let roster = participants
             .iter()
-            .map(|(id, name)| format!("- {} ({})", id, name))
+            .map(|(id, name, role)| {
+                let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                format!("- [@{}]（显示名：{}）（当前角色：{}）", id, name, role)
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -231,34 +548,33 @@ impl Director {
         } else {
             format!("【已累积的补充/细化约束（必须一并满足）】\n{}", notes)
         };
+        let catalog_section = if catalog.trim().is_empty() {
+            "（无可用模型/CLI Agent）".to_string()
+        } else {
+            catalog.to_string()
+        };
+        let failures_section = if failures.trim().is_empty() {
+            "（暂无失败记录）".to_string()
+        } else {
+            failures.to_string()
+        };
 
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。用户对初始目标补充了新的指令，请对「当前任务清单」进行对账式重排。\n\
-             【初始目标（始终不变，必须优先服务）】\n{topic}\n\n\
-             {notes_section}\n\n\
-             【本轮新增指令（用户最新输入）】\n{latest}\n\n\
-             参与者列表：\n{roster}\n\n\
-             当前任务清单（id 必须原样保留；仅未执行任务可删减或重分配）：\n{existing_text}\n\n\
-             请输出严格 JSON（不要 markdown 代码块），格式：\n\
-             {{\"operations\":[\
-             {{\"action\":\"keep\",\"task_id\":\"已存在任务id\",\"reassign\":\"新负责人id或省略\"}},\
-             {{\"action\":\"remove\",\"task_id\":\"已存在任务id\",\"reason\":\"移除理由\"}},\
-             {{\"action\":\"add\",\"description\":\"新任务描述\",\"depends_on\":[\"前置任务id\"],\"assignee\":\"负责人id\"}}\
-             ]}}\n\
-             要求：\n\
-             1. 状态为 success/failed/skipped 的任务一律 keep 且 reassign 留空，不得改动；\n\
-             2. 状态为 discussing（尚未执行）的任务：若本轮指令使其不再必要，用 remove 并说明理由；若需更换负责人，用 keep 且填 reassign；\n\
-             3. 状态为 pending（等待用户确认）的任务不要 remove，用 keep 保持；\n\
-             4. 本轮指令若需要新的子任务，用 add 新增；depends_on 只能引用「已有任务 id」，本批新增任务之间不建立依赖；\n\
-             5. 若本轮指令并未要求新增任务、且已有任务已覆盖目标，则不要输出 add 操作，operations 只保留必要的 keep；\n\
-             6. 所有任务都必须服务于【初始目标】；\n\
-             7. add 的任务 description 必须写明可验证的产出物/目标，并在涉及文件时指明具体文件、目录或搜索模式；禁止“了解/熟悉/分析项目”“查看工作区”等空洞任务描述，禁止让参与者无差别扫描整个工作区。"
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_replan.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_REPLAN.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("notes", notes_section)
+                .section("latest", latest)
+                .section("roster", roster)
+                .section("catalog", catalog_section)
+                .section("failures", failures_section)
+                .section("existing_tasks", existing_text)
+                .var("max_new_participants", max_new_participants.to_string()),
         );
 
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
 
@@ -301,7 +617,15 @@ impl Director {
             })
             .collect();
 
-        Some(ReplanPlan { operations })
+        let mut roles = HashMap::new();
+        if let Some(obj) = v["roles"].as_object() {
+            for (k, val) in obj {
+                // 归一化 key：LLM 可能回显 [@id]/@id，直接作为 id 写库会匹配不到裸 id 行（角色分配不落库）。
+                roles.insert(normalize_ref(k), val.as_str().unwrap_or("参与者").to_string());
+            }
+        }
+
+        Some(ReplanPlan { operations, roles, new_participants: parse_new_participants(&v) })
     }
 
     /// 名册变更后的重排：结合当前角色与任务完成情况，输出角色分配与任务重派。
@@ -318,7 +642,7 @@ impl Director {
             .iter()
             .map(|(id, name, role)| {
                 let role = if role.trim().is_empty() { "未分配".to_string() } else { role.clone() };
-                format!("- {}（{}）角色：{}", id, name, role)
+                format!("- [@{}]（显示名：{}）（角色：{}）", id, name, role)
             })
             .collect();
         let roster = if roster_lines.is_empty() {
@@ -358,37 +682,26 @@ impl Director {
             format!("【已累积的补充/细化约束（必须一并满足）】\n{}", notes)
         };
 
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。有参与者加入/离开了房间，请对「角色分配」和「任务清单」进行对账式重排。\n\
-             【初始目标（始终不变，必须优先服务）】\n{topic}\n\n\
-             {notes_section}\n\n\
-             【当前参与者名册（id、显示名、当前角色）】\n{roster}\n\n\
-             【当前任务清单（id、状态、描述、负责人、结果/错误）】\n{existing_text}\n\n\
-             请输出严格 JSON（不要 markdown 代码块），格式：\n\
-             {{\"roles\":{{\"参与者id\":\"角色名\"}},\"operations\":[\
-             {{\"action\":\"keep\",\"task_id\":\"已存在任务id\",\"reassign\":\"新负责人id或省略\"}},\
-             {{\"action\":\"add\",\"description\":\"新任务描述\",\"depends_on\":[\"前置任务id\"],\"assignee\":\"负责人id\"}}\
-             ]}}\n\
-             要求：\n\
-             1. 角色连续性：已有参与者保持其根本角色定位，仅可调整职责边界/任务分工，禁止根本性变更角色（如 架构师→视觉工程师）；新加入的参与者分配一个合适的角色；已离开的参与者不再出现在 roles 中；\n\
-             2. 已完成任务不可动：状态为 success/failed/skipped 的任务一律 keep 且 reassign 留空，不得重派或重新分配；\n\
-             3. 仅 discussing/pending/running（未完成/未执行）的任务可重派、拆分或新增；优先把其中适合的部分指派给新参与者，不重复已完成工作；\n\
-             4. 已离开参与者名下未完成的任务需重派给仍在名册中的参与者；\n\
-             5. 所有重排必须服务【初始目标】并满足补充约束；\n\
-             6. roles 覆盖名册中每个仍在册的参与者。"
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_replan_for_roster_change.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_REPLAN_FOR_ROSTER_CHANGE.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("notes", notes_section)
+                .section("roster", roster)
+                .section("existing_tasks", existing_text),
         );
 
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
 
         let mut roles = HashMap::new();
         if let Some(obj) = v["roles"].as_object() {
             for (k, val) in obj {
-                roles.insert(k.clone(), val.as_str().unwrap_or("参与者").to_string());
+                // 归一化 key：LLM 可能回显 [@id]/@id，直接作为 id 写库会匹配不到裸 id 行（角色分配不落库）。
+                roles.insert(normalize_ref(k), val.as_str().unwrap_or("参与者").to_string());
             }
         }
 
@@ -434,60 +747,88 @@ impl Director {
         Some(RosterReplan { roles, operations })
     }
 
-    /// 判断用户最新输入对初始目标的意图类型。
-    /// 默认保守：仅在语义明确时才判 `change_goal` / `new_goal`，其余一律 `refine`。
-    /// 失败返回 `None`（由调用方按 `refine` 处理）。
-    pub async fn classify_goal_intent(&self, topic: &str, latest: &str, notes: &str) -> Option<GoalIntent> {
+    /// 判断用户最新输入对初始目标的意图类型（五分类）。
+    /// 默认保守：仅在语义明确时才判 `change_goal` / `new_goal` / `amend_goal` / `temp_task`，
+    /// 其余按 `refine`；但「用户明确改变目标/方向」不得被降级吞并。失败返回 `None`（由调用方按 `refine` 处理）。
+    pub async fn classify_goal_intent(
+        &self,
+        topic: &str,
+        latest: &str,
+        notes: &str,
+        roster: &[(String, String, String)],
+    ) -> Option<GoalIntent> {
         let notes_display = if notes.trim().is_empty() {
             "（暂无）".to_string()
         } else {
             notes.to_string()
         };
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。请判断用户最新输入对「初始目标」的意图类型。\n\
-             【初始目标】\n{topic}\n\n\
-             【已累积的补充/细化约束】\n{notes_display}\n\n\
-             【用户最新输入】\n{latest}\n\n\
-             请输出严格 JSON（不要 markdown 代码块），格式：\
-             {{\"intent\":\"refine|change_goal|new_goal\",\"new_goal\":\"新目标文本(仅 change_goal/new_goal 时填写)\",\"note\":\"补充/细化约束(仅 refine 且确有新增约束时填写)\"}}\n\
-             判定规则：\n\
-             1. 若用户是对当前目标的补充、细化、确认、追问或对讨论内容的反馈 → intent=refine；若其中蕴含新的约束或需求，请提炼为一句简洁的 note（否则 note 留空）；new_goal 留空；\n\
-             2. 若用户明确表示要修改/更换当前目标（如“改成…”“换成…”“重新设定目标为…”“目标改为…”）→ intent=change_goal，new_goal 填新目标，note 留空；\n\
-             3. 若用户提出了与当前目标完全无关的全新目标/话题（如“算了，我们来做…”“换一个完全不同的任务…”“新任务：…”）→ intent=new_goal，new_goal 填新目标，note 留空。\n\
-             默认优先判 refine，只有在语义明确时才判 change_goal/new_goal；note 只在 refine 且确有新约束时填写，避免重复已有约束。"
+        let roster_section = if roster.is_empty() {
+            "（暂无参与者）".to_string()
+        } else {
+            roster
+                .iter()
+                .map(|(id, name, role)| {
+                    let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                    format!("- [@{}]（显示名：{}）（角色：{}）", id, name, role)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_classify_goal_intent.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_CLASSIFY_GOAL_INTENT.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("notes", notes_display)
+                .section("roster", roster_section)
+                .section("latest", latest),
         );
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
         let intent = match v["intent"].as_str().unwrap_or("refine") {
             "change_goal" => "change_goal".to_string(),
             "new_goal" => "new_goal".to_string(),
+            "amend_goal" => "amend_goal".to_string(),
+            "temp_task" => "temp_task".to_string(),
+            "switch_director" => "switch_director".to_string(),
             _ => "refine".to_string(),
         };
         let new_goal = v["new_goal"].as_str().unwrap_or("").trim().to_string();
+        let amend = v["amend"].as_str().unwrap_or("").trim().to_string();
         let note = v["note"].as_str().unwrap_or("").trim().to_string();
-        Some(GoalIntent { intent, new_goal, note })
+        let temp_task = if v["temp_task"].is_object() {
+            let d = v["temp_task"].clone();
+            Some(TempTaskDraft {
+                description: d["description"].as_str().unwrap_or("").trim().to_string(),
+                assignee: d["assignee"]
+                    .as_str()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            })
+        } else {
+            None
+        };
+        let director = v["director"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Some(GoalIntent { intent, new_goal, amend, note, temp_task, director })
     }
 
     /// 判断用户对确认请求的回复语义：`confirm`（回复/补充确认项）或 `directive`（新指令/改方向）。
     /// 完全由 LLM 依据内容语义判断，不约定硬编码规则；失败默认按 `confirm` 处理。
     pub async fn classify_reply_intent(&self, confirmation_prompt: &str, reply: &str) -> Option<String> {
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。系统正在等待用户对以下确认请求的回复。\n\
-             【确认请求】\n{confirmation_prompt}\n\n\
-             【用户回复】\n{reply}\n\n\
-             请判断这条用户回复的意图：\n\
-             1. 若用户是在回答、确认、补充上述确认请求的内容，或提供确认请求所需的决策信息 → intent=confirm；\n\
-             2. 若用户提出了新的要求、新的指令、更换了方向，或与当前确认请求无直接关联 → intent=directive。\n\
-             请输出严格 JSON（不要 markdown 代码块），格式：{{\"intent\":\"confirm|directive\"}}。默认优先判 confirm。"
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_classify_reply_intent.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_CLASSIFY_REPLY_INTENT.body,
+            &super::prompts::PromptCtx::new()
+                .section("confirmation_prompt", confirmation_prompt)
+                .section("reply", reply),
         );
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
         Some(match v["intent"].as_str().unwrap_or("confirm") {
@@ -496,47 +837,124 @@ impl Director {
         })
     }
 
-    /// 选择下一发言者（依据角色匹配/立场分歧/话题相关性/@提及）。
+    /// 选择下一发言者（依据角色匹配/立场分歧/话题相关性/@提及/用户最新指令）。
     /// 失败返回 `None`（由 RuleEngine 轮询兜底）。
+    /// `recent_speeches` 为最近发言（发言者 + 内容），供 Director 判断任务是否已被实质推进。
     pub async fn next_speaker(
         &self,
         topic: &str,
         summary: &str,
-        participants: &[String],
+        participants: &[(String, String, String)],
         task_manifest: &str,
+        stances: &[Stance],
         mention: Option<&str>,
+        latest_directive: &str,
+        notes: &str,
+        failures: &str,
+        recent_speeches: &str,
+        catalog: &str,
+        max_new_participants: usize,
     ) -> Option<SpeakerDecision> {
-        let roster = participants.join(", ");
-        let mention_hint = mention.map(|m| format!("用户 @ 了：{m}")).unwrap_or_default();
+        // 名册三字段（与 kickoff/replan 一致）：唯一 id / 显示名 / 当前角色。
+        // 身份信息缺失会迫使主持人靠发言反推身份、导致臆造角色（如把正方当成评委组长）。
+        let roster = participants
+            .iter()
+            .map(|(id, name, role)| {
+                let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                format!("- [@{}]（显示名：{}）（当前角色：{}）", id, name, role)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mention_hint = mention
+            .map(|m| format!("用户 @ 了：[@{}]", m))
+            .unwrap_or_default();
         let task_section = if task_manifest.trim().is_empty() {
             "（暂无任务清单）".to_string()
         } else {
             task_manifest.to_string()
         };
+        let stance_section = format_stances(stances);
+        let directive_section = if latest_directive.trim().is_empty() {
+            "（暂无）".to_string()
+        } else {
+            latest_directive.to_string()
+        };
+        let notes_section = if notes.trim().is_empty() {
+            "（暂无）".to_string()
+        } else {
+            notes.to_string()
+        };
+        let failures_section = if failures.trim().is_empty() {
+            "（暂无失败记录）".to_string()
+        } else {
+            failures.to_string()
+        };
+        let recent_speeches_section = if recent_speeches.trim().is_empty() {
+            "（暂无最近发言）".to_string()
+        } else {
+            recent_speeches.to_string()
+        };
+        let catalog_section = if catalog.trim().is_empty() {
+            "（无可用模型/CLI Agent）".to_string()
+        } else {
+            catalog.to_string()
+        };
 
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。请选择下一位发言者。\n\
-             当前议题（初始目标，不可偏离）：{topic}\n全局摘要：{summary}\n\
-             任务清单（编号、状态、描述、负责人）：\n{task_section}\n\
-             可发言参与者：{roster}\n{mention_hint}\n\n\
-             请输出严格 JSON（不要 markdown 代码块），格式：{{\"next_speaker\":\"参与者id\",\"reason\":\"选择理由\"}}。\
-             选择依据必须服务于上述初始目标：优先选择仍有未完成任务（状态为 discussing/pending/running）的负责人发言推进，\
-             避免重复指派已完成或无需推进的参与者；若参与者为空，next_speaker 设为空字符串。"
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_next_speaker.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_NEXT_SPEAKER.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("summary", summary)
+                .section("task_manifest", task_section)
+                .section("roster", roster)
+                .section("mention", mention_hint)
+                .section("stances", stance_section)
+                .section("latest", directive_section)
+                .section("notes", notes_section)
+                .section("failures", failures_section)
+                .section("recent_speeches", recent_speeches_section)
+                .section("catalog", catalog_section)
+                .var("max_new_participants", max_new_participants.to_string()),
         );
 
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
-        let speaker = v["next_speaker"].as_str()?.trim().to_string();
-        if speaker.is_empty() {
+        let speaker = v["next_speaker"].as_str().map(str::trim).unwrap_or_default().to_string();
+        let new_participants = parse_new_participants(&v);
+        if speaker.is_empty() && new_participants.is_empty() {
             None
         } else {
             let reason = v["reason"].as_str().unwrap_or("").trim().to_string();
-            Some(SpeakerDecision { speaker, reason })
+            let work_content = v["work_content"].as_str().unwrap_or("").trim().to_string();
+            Some(SpeakerDecision { speaker, reason, work_content, new_participants })
         }
+    }
+
+    /// 立场预处理：从单次发言提取归一化立场（态度 + ≤100 字陈述）。
+    /// LLM 失败或输出不合法时返回 None，由调用方回退到机械截断 + 关键词分类。
+    pub async fn extract_stance(&self, speaker: &str, speech: &str) -> Option<StanceExtraction> {
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_extract_stance.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_EXTRACT_STANCE.body,
+            &super::prompts::PromptCtx::new()
+                .section("speech", speech)
+                .var("speaker", speaker),
+        );
+        let raw = self
+            .complete_decision(&prompt).await
+            .ok()?;
+        let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
+        let attitude = match v["attitude"].as_str().unwrap_or("").trim() {
+            "支持" => Attitude::Agree,
+            "反对" => Attitude::Disagree,
+            "中立" => Attitude::Neutral,
+            _ => return None,
+        };
+        let stance = v["stance"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+        Some(StanceExtraction { attitude, stance })
     }
 
     /// 讨论收敛审查：审阅进度，更新 L1 摘要并判定下一步（discuss/confirm/done）。
@@ -549,6 +967,8 @@ impl Director {
         transcript: &str,
         notes: &str,
         task_manifest: &str,
+        stances: &[Stance],
+        latest_directive: &str,
     ) -> Option<ReviewOutcome> {
         let notes_display = if notes.trim().is_empty() {
             "（暂无）".to_string()
@@ -560,33 +980,32 @@ impl Director {
         } else {
             task_manifest.to_string()
         };
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。请审阅当前讨论进度，更新摘要并判定下一步。\n\
-             【初始目标（不可变锚点，必须始终保留其语义）】\n{topic}\n\n\
-             【已累积的补充/细化约束】\n{notes_display}\n\n\
-             【任务清单（编号、状态、描述、负责人）】\n{task_display}\n\n\
-             【已有进度摘要】\n{old_summary}\n\n\
-             【最近讨论记录】\n{transcript}\n\n\
-             请输出严格 JSON（不要 markdown 代码块），格式：\
-             {{\"summary\":\"更新后的中文摘要(≤300字，锚定初始目标)\",\"next_action\":\"discuss|confirm|done\",\"reason\":\"判定理由\",\"confirmation\":{{...}}}}\n\n\
-             next_action 判定规则（按顺序判断）：\n\
-             1. 若继续推进任务仍需关键信息，且该信息只能由用户（人类）提供或拍板（例如需求歧义、不可逆决策、方案取舍、用户偏好），则 next_action=confirm，并用 confirmation 字段发起确认请求；\n\
-             2. 若仍缺的信息可由参与者通过查文件/工具/自行分析获取，或仍有未完成任务需要继续讨论细化，则 next_action=discuss；\n\
-             3. 仅当所有子任务方案均已明确、无需再向用户确认、也无需继续讨论时，才 next_action=done。\n\
-             注意：不要因参与者表述方式变化或换措辞就重复讨论；信息已充分、任务已明确就直接 done，不要机械重复指派。\n\n\
-             confirmation 字段格式（仅 next_action=confirm 时填写，其余省略）：\n\
-             - 开放式：{{\"title\":\"不超过22字的确认事项摘要\",\"reply_mode\":\"open\",\"prompt\":\"请说明…\",\"items\":[]}}\n\
-             - 结构化：{{\"title\":\"不超过22字的确认事项摘要\",\"reply_mode\":\"structured\",\"prompt\":\"请确认…\",\"items\":[{{\"id\":\"q1\",\"label\":\"问题\",\"input_type\":\"confirm|select|text\",\"options\":[],\"required\":true,\"placeholder\":\"\"}}]}}"
+        let stance_section = format_stances(stances);
+        let directive_section = if latest_directive.trim().is_empty() {
+            "（暂无）".to_string()
+        } else {
+            latest_directive.to_string()
+        };
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_review.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_REVIEW.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("notes", notes_display)
+                .section("latest", directive_section)
+                .section("task_manifest", task_display)
+                .section("summary", old_summary)
+                .section("transcript", transcript)
+                .section("stances", stance_section),
         );
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
         let summary = v["summary"].as_str().unwrap_or("").trim().to_string();
         let next_action = match v["next_action"].as_str().unwrap_or("discuss").trim() {
             "confirm" => "confirm".to_string(),
+            "replan" => "replan".to_string(),
             "done" => "done".to_string(),
             _ => "discuss".to_string(),
         };
@@ -600,75 +1019,118 @@ impl Director {
         } else {
             None
         };
-        Some(ReviewOutcome { summary, next_action, reason, confirmation })
+        let completed_tasks = v["completed_tasks"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(ReviewOutcome { summary, next_action, reason, confirmation, completed_tasks })
+    }
+
+    /// 语义解析用户输入物引用（v3.4an LLM 层）：只输出锚点枚举 + 路径段结构，
+    /// 不允许输出路径字符串（防幻觉）；路径拼接与存在性校验由调用方代码完成。
+    /// 失败/超时返回 None（调用方仅用确定性解析结果，不阻塞编排）。
+    pub async fn parse_input_refs(&self, texts: &str) -> Option<Vec<(String, Vec<String>)>> {
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_parse_input_refs.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_PARSE_INPUT_REFS.body,
+            &super::prompts::PromptCtx::new().section("texts", texts),
+        );
+        let raw = self.complete_decision(&prompt).await.ok()?;
+        let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
+        let arr = v.as_array()?;
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        for item in arr {
+            let anchor = item["anchor"].as_str().unwrap_or("").to_string();
+            let subpath: Vec<String> = item["subpath"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            if !subpath.is_empty() {
+                out.push((anchor, subpath));
+            }
+        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     /// 收敛结论。
     pub async fn conclude(&self, topic: &str, summary: &str, transcript: &str, task_manifest: &str) -> Option<String> {
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。讨论已收敛，请给出最终结论。\n\
-             【初始目标（结论必须对照此目标，不可偏离）】\n{topic}\n\
-             全局摘要：{summary}\n\n任务执行清单：\n{task_manifest}\n\n完整讨论记录：\n{transcript}\n\n\
-             请严格按以下四部分输出结论正文，每部分以 `## 标题` 开头（标题必须一字不差），\
-             正文写在标题下方。不要使用 `---` 分隔线、不要代码块、不要任何前缀或额外说明。\n\n\
-             四部分要求各不相同，各写各的，互不套用：\n\n\
-             ## 已完成\n【要求】简洁罗列已成功完成的任务与成果要点，每条一行直接陈述即可；不要综合叙述、不要展开论证。\n\n\
-             ## 未完成\n【要求】简洁罗列尚未完成的任务及原因，每条一行直接陈述即可。\n\n\
-             ## 失败\n【要求】简洁罗列失败的任务及失败原因，每条一行直接陈述即可。\n\n\
-             ## 最终结论\n【要求】这一部分才需要完整综合，前面的已完成/未完成/失败部分保持简洁即可。\
-             请综合以上讨论记录、执行成果与任务清单，整理成意见收敛的完整总结：\
-             覆盖关键决策、方案要点与执行成果，不遗漏关键信息，避免摘要式总结，但不可冗余；\
-             应呈现讨论收敛后的共识与最终确定的方案，而不是复述各方发言过程或简单罗列要点。\
-             此完整总结要求仅适用于「最终结论」部分，不要影响前面三个部分的简洁风格。"
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_conclude.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_CONCLUDE.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("summary", summary)
+                .section("task_manifest", task_manifest)
+                .section("transcript", transcript),
         );
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         Some(raw.trim().to_string())
     }
 
-    /// 任务执行失败后的兜底裁决：返回结构化处置决策（重试/换人/跳过/终止/向用户确认）。
+    /// 任务执行失败后的兜底裁决：返回结构化处置决策（重试/换人/跳过/终止/向用户确认/主持人亲自执行/补充参与者接盘）。
     /// `topic` 为初始目标锚点，确保失败处置与确认请求不偏离原始目标。
-    /// 失败返回 `None`（由调用方走默认跳过策略）。
+    /// `attempt` 为累计尝试次数（含重试与换人）；`previous_executors` 为已失败执行者（不得再指派）。
+    /// `catalog` 为可用模型 + CLI Agent 清单（供 add_participant 选模型/agent），`max_new_participants` 为本场可补充空位。
+    /// 失败返回 `None`（由调用方走确定性兜底：轮询换人/跳过）。
     pub async fn handle_task_failure(
         &self,
         topic: &str,
         task_id: &str,
         task_desc: &str,
         error: &str,
-        participants: &[String],
+        roster: &[(String, String)],
+        attempt: usize,
+        previous_executors: &[String],
+        catalog: &str,
+        max_new_participants: usize,
     ) -> Option<FailureDecision> {
-        let roster = participants.join(", ");
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。执行者执行以下子任务失败，请给出处置决策。\n\
-             【初始目标（所有处置必须服务于此目标，不可偏离）】\n{topic}\n\
-             子任务：{task_desc}\n失败原因：{error}\n可重新指派的参与者：{roster}\n\n\
-             请输出严格 JSON（不要 markdown 代码块），格式：\
-             {{\"action\":\"retry|reassign|skip|abort|ask_user\",\"assignee\":\"参与者id(仅 reassign 时必填)\",\"reason\":\"决策理由\",\"confirmation\":{{...}}}}\n\
-             要求：\n\
-             1. 若失败可能因瞬时故障且该参与者仍合适，action=retry；\n\
-             2. 若应换人继续，action=reassign 并指定 assignee；\n\
-             3. 若该任务已无必要或无法完成，action=skip；\n\
-             4. 若失败严重到应终止整个执行，action=abort；\n\
-             5. 若该任务的关键决策需要用户（人类）拍板才能继续（例如涉及不可逆操作、关键信息缺失需用户补充、方案取舍），action=ask_user，并通过 confirmation 字段发起确认请求。\n\n\
-             confirmation 字段格式：\n\
-             - 开放式回复（reply_mode=open，items 为空数组）：\
-             {{\"title\":\"不超过22字的确认事项摘要\",\"reply_mode\":\"open\",\"prompt\":\"请说明你的决定或补充信息\",\"items\":[]}}\n\
-             - 结构化确认列表（reply_mode=structured）：\
-             {{\"title\":\"不超过22字的确认事项摘要\",\"reply_mode\":\"structured\",\"prompt\":\"请确认以下事项\",\"items\":[\
-             {{\"id\":\"q1\",\"label\":\"问题标题\",\"input_type\":\"confirm\",\"options\":[],\"required\":true}},\
-             {{\"id\":\"q2\",\"label\":\"问题标题\",\"input_type\":\"select\",\"options\":[\"选项A\",\"选项B\"],\"required\":true}},\
-             {{\"id\":\"q3\",\"label\":\"问题标题\",\"input_type\":\"text\",\"required\":false,\"placeholder\":\"请输入\"}}\
-             ]}}\n\
-             input_type 可选：confirm（确认，固定为 是/否）、select（单选，需 options）、text（文本填写）。\n\
-             6. 无论选择何种 action，处置与确认问题都必须始终围绕上述【初始目标】。"
+        let roster_text = if roster.is_empty() {
+            "（无其他可指派执行者）".to_string()
+        } else {
+            roster
+                .iter()
+                .map(|(id, role)| {
+                    let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                    format!("- [@{}]({})", id, role)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let previous_text = if previous_executors.is_empty() {
+            "（无）".to_string()
+        } else {
+            previous_executors
+                .iter()
+                .map(|e| format!("[@{}]", e))
+                .collect::<Vec<_>>()
+                .join("、")
+        };
+        let catalog_section = if catalog.trim().is_empty() {
+            "（无可用模型/CLI Agent）".to_string()
+        } else {
+            catalog.to_string()
+        };
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_handle_task_failure.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_HANDLE_TASK_FAILURE.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("task_desc", task_desc)
+                .section("error", error)
+                .section("previous_executors", previous_text)
+                .section("roster", roster_text)
+                .section("catalog", catalog_section)
+                .var("attempt", attempt.to_string())
+                .var("max_new_participants", max_new_participants.to_string()),
         );
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
 
@@ -677,6 +1139,8 @@ impl Director {
             "reassign" => "reassign".to_string(),
             "abort" => "abort".to_string(),
             "ask_user" => "ask_user".to_string(),
+            "self_execute" => "self_execute".to_string(),
+            "add_participant" => "add_participant".to_string(),
             _ => "skip".to_string(),
         };
         let assignee = v["assignee"]
@@ -684,33 +1148,41 @@ impl Director {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let reason = v["reason"].as_str().unwrap_or("").trim().to_string();
+        let remove_participant = v["remove_participant"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         let confirmation = if action == "ask_user" {
             Some(build_confirmation(topic, task_id, error, &v))
         } else {
             None
         };
+        let new_participant = if action == "add_participant" {
+            parse_new_participants(&v).into_iter().next()
+        } else {
+            None
+        };
 
-        Some(FailureDecision { action, assignee, reason, confirmation })
+        Some(FailureDecision { action, assignee, reason, confirmation, new_participant, remove_participant })
     }
 
     /// 工具授权裁决：对中/高风险工具调用做轻量结构化裁决，返回是否放行及理由。
     /// 注入当前讨论目标作为「任务必要性」依据；请求失败/解析失败时按风险分级回退
     /// （High 拒绝，Medium/Low 放行），避免频繁工具调用因裁决不稳定而批量卡死。
     pub async fn authorize_tool(&self, topic: &str, tool_name: &str, args: &str, risk: &str) -> ToolDecision {
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。执行者发起了一次工具调用，需要你裁决是否放行。\n\
-             【当前讨论目标】\n{topic}\n\n\
-             工具名：{tool_name}\n风险等级：{risk}\n参数：{args}\n\n\
-             请基于安全性与任务必要性进行裁决：若该工具调用服务于【当前讨论目标】且参数合理则放行；\
-             若明显危险、越权或与目标无关则拒绝。输出严格 JSON（不要 markdown 代码块），格式：\
-             {{\"allow\":true或false,\"reason\":\"简要理由\"}}"
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_authorize_tool.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_AUTHORIZE_TOOL.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("tool_name", tool_name)
+                .section("risk", risk)
+                .section("args", args),
         );
 
         let raw = match self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
         {
             Ok(r) => r,
             Err(e) => {
@@ -756,18 +1228,16 @@ impl Director {
     /// 执行者连续无进展时，裁决是否再给一次推进机会（true=继续，false=收尾）。
     /// 成功返回 `Some(bool)`；LLM 不可用/解析失败返回 `None`（调用方按"不继续"处理）。
     pub async fn decide_stall_continue(&self, topic: &str, summary: &str) -> Option<bool> {
-        let prompt = format!(
-            "你是多 Agent 群聊的协调者（Director）。执行者已连续多轮无实质进展（未成功执行工具且未输出内容）。\n\
-             初始目标：{topic}\n当前摘要：{summary}\n\n\
-             请裁决是否给执行者最后一次推进机会。若任务方向仍清晰、继续有价值则 continue 为 true；\
-             若已陷入空转则 continue 为 false（进入收尾总结）。输出严格 JSON（不要 markdown 代码块），格式：\
-             {{\"continue\":true或false,\"reason\":\"简要理由\"}}"
+        // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_decide_stall_continue.prompt.md。
+        let prompt = super::prompts::render(
+            super::prompts::blocks::DIRECTOR_DECIDE_STALL_CONTINUE.body,
+            &super::prompts::PromptCtx::new()
+                .section("topic", topic)
+                .section("summary", summary),
         );
 
         let raw = self
-            .llm
-            .complete(&system_prompt(), &[ChatMessage::user(&prompt)], None)
-            .await
+            .complete_decision(&prompt).await
             .ok()?;
 
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
@@ -785,11 +1255,6 @@ impl Director {
 /// 裁决失败时的风险分级回退：High 拒绝，Medium/Low 放行（避免工具链因裁决不稳定而批量卡死）。
 fn fallback_decision(risk: &str) -> bool {
     !risk.eq_ignore_ascii_case("high")
-}
-
-fn system_prompt() -> String {
-    "你是多 Agent 群聊的协调者（Director）。你的职责是编排讨论、分配角色、选择发言者、总结与裁决。\
-     你只输出结构化决策，不作为普通参与者发言。".to_string()
 }
 
 /// 从 Director 的 ask_user 决策 JSON 中构建确认请求；解析失败则退化为开放式确认。
@@ -843,4 +1308,97 @@ fn strip_fences(raw: &str) -> &str {
     let trimmed = trimmed.strip_prefix("```").unwrap_or(trimmed);
     let trimmed = trimmed.strip_suffix("```").unwrap_or(trimmed);
     trimmed.trim()
+}
+
+/// 宽容归一化参与者引用：剥离 `[@...]` / `@` 前缀/后缀得到裸 id。
+/// 角色分配（roles）的 key 由 LLM 输出，可能回显带括号/前缀的引用；
+/// 若未经归一化就作为 id 写库（UPDATE WHERE id=原始key），将因匹配不到裸 id 行而静默失败——
+/// 这正是「角色分配消息显示变更、落库却未生效」的根因。与 room.rs 的 normalize_participant_ref 同语义。
+fn normalize_ref(raw: &str) -> String {
+    let mut s = raw.trim();
+    if let Some(rest) = s.strip_prefix("[@") {
+        s = rest.strip_suffix(']').unwrap_or(rest).trim();
+    } else if let Some(rest) = s.strip_prefix('@') {
+        s = rest.trim();
+    }
+    s.to_string()
+}
+
+/// 解析 Director 输出中的 new_participants 数组（按需组建参与者）。
+/// 兼容两种输出形态：数组 `new_participants`（kickoff/replan 批量）与
+/// 单对象 `new_participant`（失败裁决 add_participant 单点补人）。
+/// 逐字段宽容解析：id/provider/model 缺失时丢弃该条；显示名/角色缺失时回退。
+fn parse_new_participants(v: &serde_json::Value) -> Vec<NewParticipantDraft> {
+    let arr = match v["new_participants"].as_array() {
+        Some(arr) => arr.clone(),
+        None => match v["new_participant"].as_object() {
+            Some(_) => vec![v["new_participant"].clone()],
+            None => return Vec::new(),
+        },
+    };
+    arr.iter()
+        .filter_map(|p| {
+            let id = p["id"]
+                .as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())?;
+            let display_name = p["display_name"]
+                .as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                // V3.5bp：display_name 缺失时不再用裸 id 兜底（否则名册显示 [@api_1] 无显示名、
+                // 前端名册与调度消息读不出身份），改用可读兜底「参与者{id}」，避免与 id 混淆。
+                .unwrap_or_else(|| format!("参与者{}", id));
+            let system_role = p["system_role"]
+                .as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| display_name.clone());
+            // cli 参与者：agent_type 必填（provider/model 忽略）；api 参与者（缺省）：provider/model 必填。
+            let participant_type = match p["participant_type"].as_str().map(|s| s.trim()) {
+                Some("cli") => "cli",
+                _ => "api",
+            };
+            let reason = p["reason"]
+                .as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_default();
+            if participant_type == "cli" {
+                let agent_type = p["agent_type"]
+                    .as_str()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())?;
+                Some(NewParticipantDraft {
+                    id,
+                    display_name,
+                    system_role,
+                    participant_type: "cli".into(),
+                    provider: String::new(),
+                    model: String::new(),
+                    agent_type,
+                    reason,
+                })
+            } else {
+                let provider = p["provider"]
+                    .as_str()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())?;
+                let model = p["model"]
+                    .as_str()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())?;
+                Some(NewParticipantDraft {
+                    id,
+                    display_name,
+                    system_role,
+                    participant_type: "api".into(),
+                    provider,
+                    model,
+                    agent_type: String::new(),
+                    reason,
+                })
+            }
+        })
+        .collect()
 }

@@ -1,7 +1,7 @@
 //! Python 执行工具（会话模式与群聊参与者共用）。
 //!
 //! 合并自两处历史实现（工具架构统一 v1.0，轮 4）：两版逻辑相同，
-//! 统一调用 `tools/exec.rs::run_python`（file/code 二选一、Python 检测缓存、30s 超时）。
+//! 统一调用 `tools/exec.rs::run_python`（file/code 二选一、Python 检测缓存、异步活性检测）。
 
 use crate::tools::exec::run_python;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
@@ -62,6 +62,6 @@ impl ToolHandler for ExecutePythonTool {
         let cwd = arguments["cwd"].as_str().unwrap_or(&self.cwd);
         let code = arguments["code"].as_str();
         let file = arguments["file"].as_str();
-        run_python(cwd, code, file)
+        run_python(cwd, code, file).await
     }
 }

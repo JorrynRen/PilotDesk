@@ -6,7 +6,24 @@ import { usePluginStore } from '../../stores/pluginStore';
 import { PluginReadmeDialog } from './PluginReadmeDialog';
 import { OnlinePluginStore } from './OnlinePluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
+import { PluginIcon as SharedPluginIcon } from './PluginIcon';
 import type { PermissionCheck, PluginInstance } from '../../types/plugin';
+
+/** 单个插件面板入口（来自 RightPanel 按插件分组的 registeredPanels） */
+export interface PluginPanelEntry {
+  uniqueKey: string;
+  panelId: string;
+  title: string;
+  icon?: string;
+  pluginId: string;
+}
+
+interface PluginManagerProps {
+  /** 各插件已注册的面板入口：用于在插件卡片中直接跳转打开面板 */
+  panelsByPluginId?: Map<string, PluginPanelEntry[]>;
+  /** 点击面板入口的回调：参数为 uniqueKey = `${pluginId}:${panelId}` */
+  onOpenPanel?: (uniqueKey: string) => void;
+}
 
 function PermissionBadge({ check }: { check: PermissionCheck }) {
   return (
@@ -211,7 +228,7 @@ function PluginIcon({ plugin }: { plugin: PluginInstance }) {
   );
 }
 
-export function PluginManager() {
+export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerProps) {
   const { plugins, loading, error, discover, enable, disable, installZip, uninstall, sandboxInfo } = usePluginStore();
   const [showSandbox, setShowSandbox] = useState(false);
   const [showStore, setShowStore] = useState(false);
@@ -499,6 +516,7 @@ export function PluginManager() {
           <div className="space-y-2">
             {plugins.map((plugin) => {
               const loadState = pluginRegistry.getPluginLoadState(plugin.path);
+              const myPanels = panelsByPluginId?.get(plugin.manifest.id) ?? [];
               return (
                 <div
                   key={plugin.manifest.id}
@@ -592,6 +610,30 @@ export function PluginManager() {
                           </span>)}
                       </div>)}
                   </div>
+                  {/* 插件面板入口：从插件列表直达面板预览（替代右侧头部「面板」下拉） */}
+                  {plugin.enabled && onOpenPanel && myPanels.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                      <span className="text-[9px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                        面板
+                      </span>
+                      {myPanels.map((p) => (
+                        <button
+                          key={p.uniqueKey}
+                          onClick={() => onOpenPanel(p.uniqueKey)}
+                          className="pd-btn px-1.5 py-0.5 rounded text-[10px] flex items-center gap-1 transition-colors"
+                          style={{
+                            backgroundColor: 'var(--bg-tertiary)',
+                            color: 'var(--accent)',
+                            border: '1px solid var(--border)',
+                          }}
+                          title={`打开面板：${p.title}`}
+                        >
+                          <SharedPluginIcon icon={p.icon} pluginId={p.pluginId} size={10} />
+                          <span className="truncate" style={{ maxWidth: 140 }}>{p.title}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {plugin.error && (<p className="text-[10px] mt-1.5" style={{ color: '#EF4444' }}>{plugin.error}</p>)}
                   {plugin.has_unauthorized_permissions && (<p className="text-[10px] mt-1" style={{ color: '#F59E0B' }}>包含未授权权限声明，请联系插件开发者或检查 manifest.json</p>)}
                   {loadState?.error && (<p className="text-[10px] mt-1" style={{ color: '#EF4444' }}>加载错误: {loadState.error}</p>)}

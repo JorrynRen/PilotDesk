@@ -120,51 +120,20 @@ fn insert_node_execution(
 
     let now = crate::utils::now();
 
-
-
-    conn.execute(
-
-
-
-        "INSERT OR REPLACE INTO node_executions (id, execution_id, node_id, status, input_data, started_at, created_at, updated_at)
-
-
-
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-
-
-
-        rusqlite::params![
-
-
-
-            format!("{}_{}", execution_id, node_id),
-
-
-
-            execution_id, node_id, status, input_data, now, now,
-
-
-
-        ],
-
-
-
-    )?;
-
-
+    // 事件化：节点执行开始（node/start；旧 node_executions 行已由事件日志取代）。
+    let input_preview: Option<String> = input_data.map(|s| s.chars().take(500).collect::<String>());
+    let event = serde_json::json!({
+        "executionId": execution_id,
+        "nodeId": node_id,
+        "status": status,
+        "inputPreview": input_preview,
+        "timestamp": now,
+    });
+    crate::eventlog::append_workflow_event(conn, execution_id, "node/start", &event, true)?;
 
     Ok(())
 
-
-
 }
-
-
-
-
-
-
 
 /// 更新节点执行状态
 
@@ -202,7 +171,8 @@ fn update_node_execution(
 
 
 
-    input_data: Option<&str>,
+
+    _input_data: Option<&str>,
 
 
 
@@ -222,101 +192,41 @@ fn update_node_execution(
 
 
 
+
     // input_data 由调用方传入（completed 时覆盖 running 时写入的输入映射内容）
+
 
 
 
     // artifacts_path 由调用方传入（节点执行工件路径）
 
-
-
-    // 计算 duration_ms = finished_at - started_at
-
-
-
-    let duration_ms: Option<i64> = conn.query_row(
-
-
-
-        "SELECT started_at FROM node_executions WHERE execution_id = ?1 AND node_id = ?2",
-
-
-
-        rusqlite::params![execution_id, node_id],
-
-
-
-        |row| row.get::<_, Option<i64>>(0),
-
-
-
-    ).ok().flatten().map(|started| now - started);
-
-
-
-
-
-
-
-    conn.execute(
-
-
-
-        "UPDATE node_executions SET status = ?1, output_data = COALESCE(?2, output_data),
-
-
-
-         error_message = ?3, finished_at = ?4, updated_at = ?4,
-
-
-
-         duration_ms = COALESCE(?5, duration_ms),
-
-
-
-         agent_session_id = COALESCE(?6, agent_session_id),
-
-
-
-         input_data = COALESCE(?7, input_data),
-
-
-
-         artifacts_path = COALESCE(?8, artifacts_path)
-
-
-
-         WHERE execution_id = ?9 AND node_id = ?10",
-
-
-
-        rusqlite::params![
-
-
-
-            status, output_data, error_message, now,
-
-
-
-            duration_ms, agent_session_id,
-
-
-
-            input_data, artifacts_path,
-
-
-
-            execution_id, node_id,
-
-
-
-        ],
-
-
-
-    )?;
-
-
+    // 事件化：节点状态迁移（error 截断便于审计；状态事件不含 output）。
+    let err_preview: Option<String> = error_message.map(|s| s.chars().take(2000).collect::<String>());
+    let event = serde_json::json!({
+        "executionId": execution_id,
+        "nodeId": node_id,
+        "status": status,
+        "errorMessage": err_preview,
+        "agentSessionId": agent_session_id,
+        "finishedAt": now,
+        "timestamp": now,
+    });
+    crate::eventlog::append_workflow_event(conn, execution_id, "node/status", &event, true)?;
+
+    // 事件化：成功节点另落 node/result（携带 output 与 artifacts_path）。
+    // 完整事件源需要输出供下游引用 / rebuild_context_from_history 重建。
+    if matches!(status, "completed" | "success") {
+        if let Some(output) = output_data {
+            let result_event = serde_json::json!({
+                "executionId": execution_id,
+                "nodeId": node_id,
+                "output": output,
+                "artifactsPath": artifacts_path,
+                "timestamp": now,
+            });
+            crate::eventlog::append_workflow_event(conn, execution_id, "node/result", &result_event, true)?;
+        }
+    }
 
     Ok(())
 
@@ -670,7 +580,7 @@ fn record_node_execution(
 
 
 
-/// 写入节点执行日志到 node_execution_logs 表
+/// 追加节点执行日志（node/log 事件；读侧按节点日志投影返回）。
 
 
 
@@ -706,46 +616,18 @@ fn insert_node_execution_log(
 
 
 
-    let now = crate::utils::now();
-
-
-
     let node_execution_id = format!("{}_{}", execution_id, node_id);
-
-
-
-    let result = conn.execute(
-
-
-
-        "INSERT INTO node_execution_logs (execution_id, node_execution_id, timestamp, level, message, metadata)
-
-
-
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-
-
-
-        rusqlite::params![execution_id, node_execution_id, now, level, message, metadata],
-
-
-
-    );
-
-
-
-    if let Err(e) = result {
-
-
-
+    let event = serde_json::json!({
+        "executionId": execution_id,
+        "nodeExecutionId": node_execution_id,
+        "nodeId": node_id,
+        "level": level,
+        "message": message,
+        "metadata": metadata,
+    });
+    if let Err(e) = crate::eventlog::append_workflow_event(conn, execution_id, "node/log", &event, false) {
         log::warn!("[WorkflowEngine] 写入节点执行日志失败: {}", e);
-
-
-
     }
-
-
-
 }
 
 
@@ -788,61 +670,18 @@ fn update_instance_progress(
 
 
     let rate = if total > 0 { success as f64 / total as f64 } else { 0.0 };
-
-
-
     let now = crate::utils::now();
-
-
-
+    let mut event = serde_json::json!({
+        "executionId": execution_id,
+        "completionRate": rate,
+        "timestamp": now,
+    });
     if let Some(ctx) = context {
-
-
-
-        let ctx_str = serde_json::to_string(ctx).unwrap_or_else(|_| "{}".to_string());
-
-
-
-        let _ = conn.execute(
-
-
-
-            "UPDATE workflow_instances SET completion_rate = ?1, context = ?2, updated_at = ?3 WHERE id = ?4",
-
-
-
-            rusqlite::params![rate, ctx_str, now, execution_id],
-
-
-
-        );
-
-
-
-    } else {
-
-
-
-        let _ = conn.execute(
-
-
-
-            "UPDATE workflow_instances SET completion_rate = ?1, updated_at = ?2 WHERE id = ?3",
-
-
-
-            rusqlite::params![rate, now, execution_id],
-
-
-
-        );
-
-
-
+        event["context"] = ctx.clone();
     }
-
-
-
+    if let Err(e) = crate::eventlog::append_workflow_event(conn, execution_id, "execution/progress", &event, false) {
+        log::warn!("[WorkflowEngine] 追加执行进度事件失败: {}", e);
+    }
 }
 
 
@@ -6276,25 +6115,17 @@ impl WorkflowEngine {
 
         let now = crate::utils::now();
 
-
-
-        let _ = conn.execute(
-
-
-
-            "INSERT OR REPLACE INTO workflow_instances (id, definition_id, definition_name, status, context, trigger, started_at, created_at, updated_at)
-
-
-
-             VALUES (?1, ?2, ?3, 'running', '{}', 'subflow', ?4, ?4, ?4)",
-
-
-
-            rusqlite::params![sub_execution_id, subflow_def_id, subflow_def.name, now],
-
-
-
-        );
+        // 事件化：子工作流实例创建（execution/created，随父流程级联记录）。
+        let event = serde_json::json!({
+            "executionId": &sub_execution_id,
+            "definitionId": &subflow_def_id,
+            "definitionName": &subflow_def.name,
+            "status": "running",
+            "trigger": "subflow",
+            "startedAt": now,
+            "createdAt": now,
+        });
+        let _ = crate::eventlog::append_workflow_event(&conn, &sub_execution_id, "execution/created", &event, true);
 
 
 
@@ -7544,23 +7375,16 @@ result
 
             let now = crate::utils::now();
 
-
-
-            let _ = conn.execute(
-
-
-
-                "UPDATE workflow_instances SET status = ?1, completed_at = ?2, completion_rate = ?3, context = ?4, updated_at = ?2 WHERE id = ?5",
-
-
-
-                rusqlite::params![final_status, now, rate, serde_json::to_string(&final_ctx_json).unwrap_or_else(|_| "{}".to_string()), execution_id],
-
-
-
-            );
-
-
+            // 事件化：实例进入终态（success/failed，取决于调用方 final_status）。
+            let event = serde_json::json!({
+                "executionId": execution_id,
+                "status": final_status,
+                "completionRate": rate,
+                "context": &final_ctx_json,
+                "completedAt": now,
+                "timestamp": now,
+            });
+            crate::eventlog::append_workflow_event(&conn, execution_id, "execution/status", &event, true)?;
 
         }
 
@@ -7656,24 +7480,17 @@ result
     // 断点执行基础设施（单点执行 / 链式执行 / 补全执行）
     // ════════════════════════════════════════════════════════════
 
-    /// 从 node_executions 表重建前序已完成节点的 context
+    /// 从 `workflow_events`（node/result）重建前序已完成节点的 context
     ///
-    /// 读取所有 status='completed' 的节点的 output_data，以 node_id 为 key 注入 HashMap。
+    /// 读取每个已完成节点的最新 output（node/result），以 node_id 为 key 注入 HashMap。
     /// 用于断点执行时恢复前序执行上下文。
     fn rebuild_context_from_history(execution_id: &str, conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>) -> Result<std::collections::HashMap<String, serde_json::Value>, AppError> {
-        let mut stmt = conn.prepare(
-            "SELECT node_id, output_data FROM node_executions WHERE execution_id = ?1 AND status = 'completed'"
-        ).map_err(|e| AppError::Db(e.to_string()))?;
-
-        let rows: Vec<(String, Option<String>)> = stmt.query_map(
-            rusqlite::params![execution_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
-        ).map_err(|e| AppError::Db(e.to_string()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| AppError::Db(e.to_string()))?;
+        // 前序已完成节点输出改经事件派生（读切点迁移③）：node/result 每节点保留最新 output。
+        let outputs = crate::workflow::events::derive_node_outputs(conn, execution_id)
+            .map_err(|e| AppError::Db(e.to_string()))?;
 
         let mut context = std::collections::HashMap::new();
-        for (node_id, output_data_opt) in rows {
+        for (node_id, (output_data_opt, _artifacts)) in outputs {
             if let Some(output_data_str) = output_data_opt {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&output_data_str) {
                     context.insert(node_id, val);
@@ -7775,19 +7592,14 @@ result
             }
 
             ExecutionMode::Completion => {
-                // 查询已完成的节点
-                let mut stmt = conn.prepare(
-                    "SELECT node_id FROM node_executions WHERE execution_id = ?1 AND status = 'completed'"
-                ).map_err(|e| AppError::Db(e.to_string()))?;
-
-                let completed: std::collections::HashSet<String> = stmt.query_map(
-                    rusqlite::params![execution_id],
-                    |row| row.get::<_, String>(0),
-                ).map_err(|e| AppError::Db(e.to_string()))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| AppError::Db(e.to_string()))?
-                .into_iter()
-                .collect();
+                // 已完成节点改经事件派生（读切点迁移②）。
+                let completed: std::collections::HashSet<String> =
+                    crate::workflow::events::derive_node_statuses(conn, execution_id)
+                        .map_err(|e| AppError::Db(e.to_string()))?
+                        .into_iter()
+                        .filter(|(_, status)| status == "completed")
+                        .map(|(nid, _)| nid)
+                        .collect();
 
                 // 非完成的可达节点
                 let pending: std::collections::HashSet<String> = all_reachable.difference(&completed).cloned().collect();
@@ -7801,34 +7613,24 @@ result
 
     /// 重置目标范围内节点的执行状态
     ///
-    /// 将 scope 内节点的 node_executions 状态重置为 pending（清空 output_data、error_message）。
+    /// 记录本次重置范围（node/reset 事件）；重跑后节点状态由事件投影回到 pending。
     /// scope 外的已完成节点保持不变。
     fn reset_nodes_for_reexecution(
         execution_id: &str,
         scope: &std::collections::HashSet<String>,
         conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
     ) -> Result<(), AppError> {
-        // 构建 IN 子句参数
-        let placeholders: String = scope.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = scope.iter().map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>).collect();
+        log::info!("[WorkflowEngine] reset_nodes: execution_id={}, scope={}, affected_rows={}", execution_id, scope.len(), scope.len());
 
-        let sql = format!(
-            "UPDATE node_executions SET status = 'pending', output_data = NULL, error_message = NULL, \
-             finished_at = NULL, duration_ms = NULL, updated_at = ?1 \
-             WHERE execution_id = ?2 AND node_id IN ({})",
-            placeholders
-        );
-
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-            Box::new(crate::utils::now()),
-            Box::new(execution_id.to_string()),
-        ];
-        param_values.extend(params);
-
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
-
-        let affected = conn.execute(&sql, param_refs.as_slice()).map_err(|e| AppError::Db(e.to_string()))?;
-        log::info!("[WorkflowEngine] reset_nodes: execution_id={}, scope={}, affected_rows={}", execution_id, scope.len(), affected);
+        // 事件化：重跑不抹历史——记录本次重置范围，供审计与回放。
+        let mut nodes: Vec<String> = scope.iter().cloned().collect();
+        nodes.sort();
+        let event = serde_json::json!({
+            "executionId": execution_id,
+            "nodes": nodes,
+            "affectedRows": scope.len(),
+        });
+        crate::eventlog::append_workflow_event(conn, execution_id, "node/reset", &event, true)?;
 
         Ok(())
     }
@@ -7838,11 +7640,14 @@ result
         execution_id: &str,
         conn: &r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
     ) -> Result<(), AppError> {
-        let now = crate::utils::now();
-        conn.execute(
-            "UPDATE workflow_instances SET status = 'running', error = NULL, completed_at = NULL, updated_at = ?1 WHERE id = ?2",
-            rusqlite::params![now, execution_id],
-        ).map_err(|e| AppError::Db(e.to_string()))?;
+
+        // 事件化：记录实例重跑，保留上一轮完成的审计痕迹。
+        let event = serde_json::json!({
+            "executionId": execution_id,
+            "status": "running",
+            "timestamp": crate::utils::now(),
+        });
+        crate::eventlog::append_workflow_event(conn, execution_id, "execution/reset", &event, true)?;
 
         log::info!("[WorkflowEngine] reset_instance: execution_id={}", execution_id);
         Ok(())
@@ -7851,7 +7656,7 @@ result
     /// 统一断点执行入口
     ///
     /// 支持 Full / SingleNode / Chain / Completion 四种模式。
-    /// 对于断点模式（非 Full），从 node_executions 重建 context，计算执行范围，
+    /// 对于断点模式（非 Full），从事件日志重建 context，计算执行范围，
     /// 重置目标节点状态，然后调用 execute_with_concurrency_impl 执行。
     pub async fn execute_with_mode(
         executor: &Arc<NodeExecutor>,
@@ -7877,12 +7682,14 @@ result
 
                 if scope.is_empty() {
                     log::info!("[WorkflowEngine] execute_with_mode: scope 为空，无需执行");
-                    // 更新实例状态为 success（所有节点都已完成）
                     let now = crate::utils::now();
-                    let _ = conn.execute(
-                        "UPDATE workflow_instances SET status = 'success', completed_at = ?1, updated_at = ?1 WHERE id = ?2",
-                        rusqlite::params![now, execution_id],
-                    );
+                    // 事件化：空 scope 断点续跑，实例直接收尾为 success。
+                    let event = serde_json::json!({
+                        "executionId": execution_id,
+                        "status": "success",
+                        "timestamp": now,
+                    });
+                    crate::eventlog::append_workflow_event(&conn, execution_id, "execution/status", &event, true)?;
                     return Ok(Value::Null);
                 }
 
@@ -7980,19 +7787,13 @@ result
                     let mut failed_count: usize = 0;
                     let mut cancelled_count: usize = 0;
                     {
-                        let mut stmt = conn.prepare(
-                            "SELECT node_id, status FROM node_executions WHERE execution_id = ?1"
-                        ).map_err(|e| AppError::Db(e.to_string()))?;
-                        let rows: Vec<(String, String)> = stmt.query_map(
-                            rusqlite::params![execution_id],
-                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                        ).map_err(|e| AppError::Db(e.to_string()))?
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(|e| AppError::Db(e.to_string()))?;
-                        for (nid, status) in rows {
+                        // 状态投影改经事件派生（workflow_events 为唯一事实源，读切点迁移①）。
+                        let statuses = crate::workflow::events::derive_node_statuses(&conn, execution_id)
+                            .map_err(|e| AppError::Db(e.to_string()))?;
+                        for (nid, status) in &statuses {
                             if !reachable_set.contains(nid.as_str()) { continue; }
                             match status.as_str() {
-                                "completed" => { completed_nodes.insert(nid); },
+                                "completed" => { completed_nodes.insert(nid.clone()); },
                                 "failed" => { failed_count += 1; },
                                 "cancelled" => { cancelled_count += 1; },
                                 _ => {}
@@ -8016,10 +7817,14 @@ result
                         "running"
                     };
                     let now = crate::utils::now();
-                    let _ = conn.execute(
-                        "UPDATE workflow_instances SET status = ?1, completion_rate = ?2, updated_at = ?3 WHERE id = ?4",
-                        rusqlite::params![recalc_status, rate, now, execution_id],
-                    );
+                    // 事件化：断点执行后实例状态重算。
+                    let event = serde_json::json!({
+                        "executionId": execution_id,
+                        "status": recalc_status,
+                        "completionRate": rate,
+                        "timestamp": now,
+                    });
+                    crate::eventlog::append_workflow_event(&conn, execution_id, "execution/status", &event, true)?;
                     log::info!(
                         "[WorkflowEngine] 断点执行后重算: total={}, completed={}, failed={}, cancelled={}, rate={:.2}, status={}",
                         all_total, all_success, failed_count, cancelled_count, rate, recalc_status

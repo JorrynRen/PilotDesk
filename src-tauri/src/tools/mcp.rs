@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -50,6 +51,8 @@ impl McpClient {
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::null());
+        // 主进程随 Child 释放即终止（与 Drop 的进程树终止互补，覆盖 Drop 前被提前丢弃的场景）
+        cmd.kill_on_drop(true);
 
         let mut child = cmd
             .spawn()
@@ -107,7 +110,16 @@ impl McpClient {
         self.write_line(&req.to_string()).await?;
 
         loop {
-            match self.read_line().await? {
+            // 内层读取超时：MCP 服务器长期无响应（卡死/断连未被察觉）时不让调用方无限阻塞。
+            // 超时返回 Err（含"MCP 请求超时"），McpToolHandler::execute 的池逻辑照常 evict 并
+            // 重连一次，外部可见行为不变。
+            let read_result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                self.read_line(),
+            )
+            .await
+            .map_err(|_| "MCP 请求超时（30 秒无响应）".to_string())?;
+            match read_result? {
                 None => return Err("MCP 服务器连接已关闭".to_string()),
                 Some(line) => {
                     let line = line.trim();
@@ -214,13 +226,33 @@ impl McpClient {
 
 impl Drop for McpClient {
     fn drop(&mut self) {
+        // Windows 进程树终止：多数 MCP server 由 npx/uvx/node 拉起父子进程链，只杀主进程会
+        // 残留孙进程（继续占用端口/资源）。taskkill /T /F 按父子关系递归强杀整棵树，与
+        // tools/exec.rs 的 kill_tree 同思路；此处为同步调用，Drop 中可直接执行，且同步等待
+        // 进程树终止完毕后才返回，即"收尸到 quiescence"。
+        #[cfg(windows)]
+        if let Some(pid) = self.child.id() {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        // 主进程补一发 kill（taskkill 失败或非 Windows 时的兜底；进程已被杀时无害）。
         let _ = self.child.start_kill();
+        // 取舍说明：不在 Drop 内 block_on(child.wait()) 收尸——McpClient 通常在 tokio async
+        // 上下文内被 drop（工具调用/evict 路径），此时 block_on 会 panic；spawn 时已设
+        // kill_on_drop(true)，Child 句柄随其释放而关闭。Windows 无僵尸进程语义，taskkill 已
+        // 同步等进程树退出，不残留；非 Windows 上 kill_on_drop 终止主进程，孙进程残留属已知
+        // 平台限制（进程树 kill 需 await 收尸，Drop 无法承担）。
     }
 }
 
-/// 将某个 MCP 工具暴露为 Agent 工具（共享一个 McpClient，串行化调用）
+/// 将某个 MCP 工具暴露为 Agent 工具（经连接池共享客户端，串行化调用 + 失败重连）。
 pub struct McpToolHandler {
-    client: Arc<Mutex<McpClient>>,
+    pool: McpConnectionPool,
+    server: McpServerConfig,
     full_name: String,
     raw_name: String,
     description: String,
@@ -228,16 +260,14 @@ pub struct McpToolHandler {
 }
 
 impl McpToolHandler {
-    pub fn new(
-        client: Arc<Mutex<McpClient>>,
-        server_name: &str,
-        info: McpToolInfo,
-    ) -> Self {
+    pub fn new(pool: McpConnectionPool, server: McpServerConfig, info: McpToolInfo) -> Self {
+        let full_name = format!("mcp_{}_{}", server.name, info.name);
         Self {
-            client,
-            full_name: format!("mcp_{}_{}", server_name, info.name),
+            pool,
+            server,
+            full_name: full_name.clone(),
             raw_name: info.name,
-            description: format!("[MCP:{}] {}", server_name, info.description),
+            description: format!("[MCP:{}] {}", full_name, info.description),
             schema: info.schema,
         }
     }
@@ -266,7 +296,67 @@ impl ToolHandler for McpToolHandler {
     }
 
     async fn execute(&self, arguments: Value) -> Result<String, String> {
-        let mut client = self.client.lock().await;
-        client.call_tool(&self.raw_name, arguments).await
+        // 懒连接（连接池缓存共享客户端）；连接中断时 evict 后重连一次，避免一次失败即永久失效。
+        let mut attempt = 0u8;
+        loop {
+            let client = self.pool.get_or_connect(&self.server).await?;
+            let result = {
+                let mut c = client.lock().await;
+                c.call_tool(&self.raw_name, arguments.clone()).await
+            };
+            match result {
+                Ok(v) => return Ok(v),
+                Err(_) if attempt == 0 => {
+                    self.pool.evict(&self.server.name);
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+/// MCP 连接池：按服务器名称懒连接并缓存共享客户端。
+/// `std::sync::Mutex` 仅保护 map，跨 await 只传递 owned `Arc`（不持有锁跨 await）。
+#[derive(Clone, Default)]
+pub struct McpConnectionPool {
+    connections: Arc<std::sync::Mutex<HashMap<String, Arc<Mutex<McpClient>>>>>,
+}
+
+impl McpConnectionPool {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 获取（必要时懒连接）某服务器的共享客户端；连接失败返回 Err（不缓存失败）。
+    pub async fn get_or_connect(&self, server: &McpServerConfig) -> Result<Arc<Mutex<McpClient>>, String> {
+        if let Some(c) = self
+            .connections
+            .lock()
+            .map_err(|_| "MCP 连接池锁失败".to_string())?
+            .get(&server.name)
+        {
+            return Ok(c.clone());
+        }
+        let client = McpClient::connect(server).await?;
+        let shared = Arc::new(Mutex::new(client));
+        self.connections
+            .lock()
+            .map_err(|_| "MCP 连接池锁失败".to_string())?
+            .insert(server.name.clone(), shared.clone());
+        Ok(shared)
+    }
+
+    /// 断开并移除某服务器连接（卸载 / 失败重连用）。
+    pub fn evict(&self, server_name: &str) {
+        if let Ok(mut m) = self.connections.lock() {
+            m.remove(server_name);
+        }
+    }
+
+    /// 当前已连接服务器数（诊断用）。
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.connections.lock().map(|m| m.len()).unwrap_or(0)
     }
 }

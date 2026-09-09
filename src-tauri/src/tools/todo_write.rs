@@ -1,28 +1,25 @@
 //! 任务列表追踪工具（会话模式专属）。
 //!
-//! 迁移自 `lib.rs`（工具架构统一 v1.0，轮 5）：闭包持有的 `Mutex<Vec>` 状态
-//! 收敛为 struct 字段。仅会话模式注册（群聊参与者不追踪会话级任务）。
+//! todo_write 事件化（会话持久化事实源）：不再用工具实例内存 `Arc<Mutex<Vec>>` 存整表
+//! （每次发消息都重建 registry/工具会导致列表每轮清零），改把每次执行的整表快照写为一条
+//! `todo/state` 会话事件（model_visible=false，追加事件类型不属结构变更）。跨轮历史重建
+//! 不含工具调用 args，模型可见的任务列表由 lib.rs 消息组装处读取 `latest_session_todos`
+//! 投影并注入（见 run_api_agent）。仅会话模式注册（群聊 GROUPCHAT_DISABLE 含 "todo_write"）。
 
+use crate::db::init::DbPool;
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
 
-/// 任务列表追踪工具
+/// 任务列表追踪工具（持会话归属 + 连接池，执行期每次向事件日志写整表快照）。
 pub struct TodoWriteTool {
-    state: Arc<Mutex<Vec<serde_json::Value>>>,
-}
-
-impl Default for TodoWriteTool {
-    fn default() -> Self {
-        Self::new()
-    }
+    session_id: String,
+    pool: DbPool,
 }
 
 impl TodoWriteTool {
-    pub fn new() -> Self {
-        Self {
-            state: Arc::new(Mutex::new(Vec::<serde_json::Value>::new())),
-        }
+    /// `session_id`：事件归属会话；`pool`：写 `todo/state` 事件时取连接用。
+    pub fn new(session_id: String, pool: DbPool) -> Self {
+        Self { session_id, pool }
     }
 }
 
@@ -69,11 +66,10 @@ impl ToolHandler for TodoWriteTool {
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
         let todos = arguments["todos"].as_array().cloned().unwrap_or_default();
-        let mut guard = self.state.lock().unwrap();
-        *guard = todos;
 
+        // 先排版返回文案（与注入格式一致：completed=[x] / in_progress=[>] / 其它=[ ]）
         let mut lines: Vec<String> = Vec::new();
-        for t in guard.iter() {
+        for t in &todos {
             let content = t["content"].as_str().unwrap_or("");
             let status = t["status"].as_str().unwrap_or("pending");
             let priority = t["priority"].as_str().unwrap_or("medium");
@@ -89,6 +85,22 @@ impl ToolHandler for TodoWriteTool {
         } else {
             lines.join("\n")
         };
-        Ok(format!("任务列表已更新（共 {} 项）：\n{}", guard.len(), body))
+        let count = todos.len();
+
+        // 整表快照（last-write-wins）落为一条 todo/state 事件，非模型可见：
+        // toolCallId 溯源本次 assistant 工具调用（uuid），ts 为写入时的 unix 秒。
+        let payload = serde_json::json!({
+            "todos": todos,
+            "toolCallId": uuid::Uuid::new_v4().to_string(),
+            "ts": crate::utils::now(),
+        });
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| format!("获取数据库连接失败: {}", e))?;
+        crate::eventlog::append_session_event(&conn, &self.session_id, "todo/state", &payload, false)
+            .map_err(|e| format!("保存任务列表失败: {}", e))?;
+
+        Ok(format!("任务列表已更新（共 {} 项）：\n{}", count, body))
     }
 }

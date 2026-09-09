@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu, ChevronUp, ClipboardList, ImagePlus, FileText, X } from 'lucide-react';
+import { Send, Square, Zap, Brain, GraduationCap, Lightbulb, Cpu, ChevronUp, ClipboardList, ImagePlus, FileText, FolderOpen, X } from 'lucide-react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -7,7 +7,10 @@ import type { ChatMode, Session, Attachment } from '../../types';
 import { MODE_LABELS, MODE_COLORS, getModePrompt } from '../../types';
 import { InspirationPicker } from '../input/InspirationPicker';
 import { SkillPicker } from '../input/SkillPicker';
+import { SecurityModeSelector, type SecurityModeValue } from '../security/SecurityModeSelector';
+import { SessionUsageBar } from './SessionUsageBar';
 import { showToast } from '../../utils/toast';
+import { useSessionStore } from '../../stores/sessionStore';
 
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
@@ -28,6 +31,9 @@ interface InputBarProps {
   streamingStatus?: string;
   pendingInput?: string | null;
   onPendingConsumed?: () => void;
+  /** 会话安全模式（显示在「文件」按钮右侧；None 时不渲染） */
+  securityMode?: SecurityModeValue;
+  onSecurityModeChange?: (v: SecurityModeValue) => void;
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
@@ -55,7 +61,7 @@ interface PendingAttachment {
   data?: string;
 }
 
-export function InputBar({ session, onSend, onStop, isGenerating, streamingStatus, pendingInput, onPendingConsumed }: InputBarProps) {
+export function InputBar({ session, onSend, onStop, isGenerating, streamingStatus, pendingInput, onPendingConsumed, securityMode, onSecurityModeChange }: InputBarProps) {
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<ChatMode>('native');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -215,6 +221,19 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
     if (!selected) return;
     await addFromPaths(Array.isArray(selected) ? selected : [selected], 'file');
   }, [addFromPaths]);
+
+  const updateSessionCwd = useSessionStore((s) => s.updateSessionCwd);
+  const handlePickProjectDir = useCallback(async () => {
+    if (!session) return;
+    try {
+      const selected = await openDialog({ directory: true, multiple: false, title: '选择项目目录' });
+      if (!selected || typeof selected !== 'string') return;
+      await updateSessionCwd(session.id, selected);
+      showToast('项目目录已切换，下一条消息起生效', 'info');
+    } catch (e) {
+      showToast(`切换项目目录失败: ${e}`, 'error');
+    }
+  }, [session, updateSessionCwd]);
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     const files: File[] = [];
@@ -377,6 +396,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
               backgroundColor: 'var(--bg-tertiary)',
               color: MODE_COLORS[mode],
               border: '1px solid var(--border)',
+              height: '24px',
             }}
             title={modeDescriptions[mode] || '加载中...'}
           >
@@ -393,7 +413,7 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
               style={{
                 backgroundColor: 'var(--bg-panel)',
                 border: '1px solid var(--border)',
-                minWidth: '200px',
+                minWidth: '110px',
               }}
             >
               {(Object.keys(MODE_LABELS) as ChatMode[]).map((m) => {
@@ -469,6 +489,22 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
           {fileCount > 0 ? `${fileCount} 文件` : '文件'}
         </button>
 
+        {/* 会话安全模式选择器（显示在「文件」按钮右侧） */}
+        {securityMode && onSecurityModeChange && (
+          <SecurityModeSelector value={securityMode} onChange={onSecurityModeChange} />
+        )}
+
+        {/* 项目目录选择（安全模式右侧；切换后对后续消息生效） */}
+        <button
+          onClick={handlePickProjectDir}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors shrink-0 max-w-[180px]"
+          style={{ color: session?.cwd ? 'var(--text-primary)' : 'var(--text-tertiary)', backgroundColor: 'transparent' }}
+          title={session?.cwd ? `项目目录：${session.cwd}\n点击可切换（下一条消息生效）` : '未设置项目目录（默认全局工作空间），点击选择'}
+        >
+          <FolderOpen size={12} style={{ flexShrink: 0 }} />
+          <span className="truncate">{session?.cwd ? session.cwd.split(/[\\/]/).pop() || session.cwd : '默认项目'}</span>
+        </button>
+
         {/* Spacer */}
         <div className="flex-1" />
 
@@ -486,20 +522,26 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
           <button
             onClick={handleSendInternal}
             disabled={(!input.trim() && attachments.length === 0) || !session}
-            className="pd-btn p-1.5 rounded-lg transition-colors disabled:opacity-30"
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors disabled:opacity-30"
             style={{
               backgroundColor: (input.trim() || attachments.length > 0) && session ? 'var(--accent)' : 'var(--bg-tertiary)',
               color: (input.trim() || attachments.length > 0) && session ? '#fff' : 'var(--text-secondary)',
             }}
             title="发送"
           >
-            <Send size={14} />
+            <Send size={11} />
+            发送
           </button>
         )}
       </div>
 
+      {/* 工具栏底部分隔线（上下留白均衡垂直居中；宽度与工具栏内容一致） */}
+      <div className="px-4 py-1">
+        <div style={{ borderBottom: '1px dashed var(--border)' }} />
+      </div>
+
       {/* Input area */}
-      <div className="flex items-end px-4 py-3" ref={pickerAnchorRef}>
+      <div className="flex items-end px-4 pt-1 pb-3" ref={pickerAnchorRef}>
         <div className="flex-1 relative">
           <textarea
             ref={textareaRef}
@@ -509,11 +551,13 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
             onPaste={handlePaste}
             placeholder={placeholder}
             rows={1}
-            className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
+            className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none focus:outline-none focus-visible:outline-none"
             style={{
-              backgroundColor: 'var(--bg-secondary)',
+              backgroundColor: 'transparent',
               color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
+              border: 'none',
+              boxShadow: 'none',
+              outline: 'none',
               minHeight: '36px',
               maxHeight: '200px',
             }}
@@ -630,6 +674,8 @@ export function InputBar({ session, onSend, onStop, isGenerating, streamingStatu
           )}
         </div>
       </div>
+
+      {session && <SessionUsageBar sessionId={session.id} agentType={session.agentType ?? null} />}
     </div>
   );
 }

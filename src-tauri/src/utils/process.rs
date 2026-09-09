@@ -271,7 +271,12 @@ mod tests {
     #[test]
     fn test_summarize_stderr_truncation() {
         let lines: Vec<String> = (0..10).map(|i| format!("line {}", i)).collect();
+        // 实现语义：取最后 3 行 join（"line 7 | line 8 | line 9"），长度 24 > max_chars 20
+        // → 只保留末尾 20 字符并在开头补 "..."，因此不再以整行开头。
         let summary = summarize_stderr(&lines, 20, 3);
-        assert!(summary.starts_with("line 7 | line 8 | line 9"));
+        assert!(summary.starts_with("..."), "截断应带省略号前缀: {}", summary);
+        assert!(summary.ends_with("line 9"), "应保留最后一行结尾: {}", summary);
+        assert_eq!(summary.len(), 23, "3 个省略号 + 末尾 20 字符: {}", summary);
+        assert!(summary.contains("line 8"), "应包含倒数第二行内容: {}", summary);
     }
 }

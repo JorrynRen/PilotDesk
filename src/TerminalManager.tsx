@@ -76,4 +76,25 @@ export const TerminalProvider: React.FC<TerminalProviderProps> = ({ children }) 
       {children}
     </TerminalContext.Provider>
   );
-};
+}
+
+// ── 活跃终端注入桥 ──
+// TerminalPanel 将“向当前活跃终端输入点注入文本”的能力注册于此；
+// 灵感面板等外部组件在终端模式下借此把内容直接送达终端（term.paste 语义）。
+// 不用 context 而是模块级单例：避免每 tick 改动触发 context 重渲染，且调用方无需 Provider。
+type TerminalInjector = (text: string) => boolean;
+let activeInjector: TerminalInjector | null = null;
+
+export function registerTerminalInjector(injector: TerminalInjector | null): void {
+  activeInjector = injector;
+}
+
+/** 向当前活跃终端输入点注入文本；无活跃终端或注入失败时返回 false。 */
+export function injectToActiveTerminal(text: string): boolean {
+  if (!activeInjector) return false;
+  try {
+    return activeInjector(text);
+  } catch {
+    return false;
+  }
+}
