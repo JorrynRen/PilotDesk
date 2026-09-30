@@ -12,27 +12,13 @@ use std::mem;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle;
 
-use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT,
-    EXTENDED_STARTUPINFO_PRESENT,
-    PROCESS_INFORMATION,
-    STARTUPINFOEXW,
-    InitializeProcThreadAttributeList,
-    UpdateProcThreadAttribute,
-    DeleteProcThreadAttributeList,
-};
-use windows_sys::Win32::System::Console::{
-    CreatePseudoConsole,
-    HPCON,
-};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+use windows_sys::Win32::System::Console::{CreatePseudoConsole, HPCON};
 use windows_sys::Win32::System::Pipes::CreatePipe;
-use windows_sys::Win32::Foundation::{
-    CloseHandle,
-    HANDLE,
-    INVALID_HANDLE_VALUE,
-};
-use windows_sys::Win32::Security::{
-    SECURITY_ATTRIBUTES,
+use windows_sys::Win32::System::Threading::{
+    DeleteProcThreadAttributeList, InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
+    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION, STARTUPINFOEXW,
 };
 
 // PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x20016 (22)
@@ -68,22 +54,12 @@ pub fn spawn_with_conpty(
 
         // 输出管道：ConPTY → 宿主
         // CreatePipe(hRead, hWrite): h_pipe_client_out=read(宿主读), h_pipe_server_out=write(ConPTY写)
-        if CreatePipe(
-            &mut h_pipe_client_out,
-            &mut h_pipe_server_out,
-            &sa,
-            0,
-        ) == 0 {
+        if CreatePipe(&mut h_pipe_client_out, &mut h_pipe_server_out, &sa, 0) == 0 {
             return Err("CreatePipe(output) 失败".into());
         }
 
         // 输入管道：宿主 → ConPTY（提供 stdin 数据）
-        if CreatePipe(
-            &mut h_pipe_server_in,
-            &mut h_pipe_client_in,
-            &sa,
-            0,
-        ) == 0 {
+        if CreatePipe(&mut h_pipe_server_in, &mut h_pipe_client_in, &sa, 0) == 0 {
             CloseHandle(h_pipe_server_out);
             CloseHandle(h_pipe_client_out);
             return Err("CreatePipe(input) 失败".into());
@@ -92,12 +68,15 @@ pub fn spawn_with_conpty(
         // 2. 创建伪控制台
         let mut h_pc: HPCON = 0;
         use windows_sys::Win32::System::Console::COORD;
-        let coord = COORD { X: cols as i16, Y: rows as i16 };
+        let coord = COORD {
+            X: cols as i16,
+            Y: rows as i16,
+        };
         let result = CreatePseudoConsole(
             coord,
-            h_pipe_server_in,   // ConPTY 读 stdin 从这个管道
-            h_pipe_server_out,  // ConPTY 写 stdout/stderr 到这个管道
-            0,    // flags
+            h_pipe_server_in,  // ConPTY 读 stdin 从这个管道
+            h_pipe_server_out, // ConPTY 写 stdout/stderr 到这个管道
+            0,                 // flags
             &mut h_pc,
         );
 
@@ -106,18 +85,16 @@ pub fn spawn_with_conpty(
             CloseHandle(h_pipe_client_in);
             CloseHandle(h_pipe_server_out);
             CloseHandle(h_pipe_client_out);
-            return Err(format!("CreatePseudoConsole 失败: HRESULT 0x{:X}", result as u32));
+            return Err(format!(
+                "CreatePseudoConsole 失败: HRESULT 0x{:X}",
+                result as u32
+            ));
         }
 
         // 3. 准备 STARTUPINFOEXW（含 ConPTY 属性）
         // 计算属性列表所需大小
         let mut attr_list_size: usize = 0;
-        InitializeProcThreadAttributeList(
-            std::ptr::null_mut(),
-            1,
-            0,
-            &mut attr_list_size,
-        );
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_list_size);
 
         // 分配属性列表
         let mut startup_info_ex: STARTUPINFOEXW = std::mem::zeroed();
@@ -139,7 +116,8 @@ pub fn spawn_with_conpty(
             1,
             0,
             &mut attr_list_size,
-        ) == 0 {
+        ) == 0
+        {
             free_attr_list(startup_info_ex.lpAttributeList);
             CloseHandle(h_pipe_server_in);
             CloseHandle(h_pipe_client_in);
@@ -157,7 +135,8 @@ pub fn spawn_with_conpty(
             mem::size_of::<HPCON>(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-        ) == 0 {
+        ) == 0
+        {
             DeleteProcThreadAttributeList(startup_info_ex.lpAttributeList);
             free_attr_list(startup_info_ex.lpAttributeList);
             CloseHandle(h_pipe_server_in);
@@ -188,7 +167,7 @@ pub fn spawn_with_conpty(
         let creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
 
         let result = windows_sys::Win32::System::Threading::CreateProcessW(
-            std::ptr::null(),  // lpApplicationName: null, let CreateProcessW parse exe path from lpCommandLine
+            std::ptr::null(), // lpApplicationName: null, let CreateProcessW parse exe path from lpCommandLine
             cmd_buf.as_mut_ptr(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -208,8 +187,6 @@ pub fn spawn_with_conpty(
         // 否则 ConPTY 的伪控制台会立即产生 EOF
         // 它们在 ConptyProcess::Drop 中被关闭
 
-
-        
         if result == 0 {
             let err_code = windows_sys::Win32::Foundation::GetLastError();
             CloseHandle(h_pipe_client_in);
@@ -221,9 +198,7 @@ pub fn spawn_with_conpty(
         CloseHandle(proc_info.hThread);
 
         // 6. 将 stdout 管道 HANDLE 转换为 tokio::fs::File（实现 AsyncRead）
-        let stdout = tokio::fs::File::from_std(
-            std::fs::File::from_raw_handle(h_pipe_client_out)
-        );
+        let stdout = tokio::fs::File::from_std(std::fs::File::from_raw_handle(h_pipe_client_out));
 
         // stderr: ConPTY 合并了 stdout 和 stderr 到同一个管道，
         // 此处返回一个空管道（已关闭写端的读端），读取立即返回 EOF
@@ -236,9 +211,7 @@ pub fn spawn_with_conpty(
         };
         CreatePipe(&mut h_null_read, &mut h_null_write, &null_sa, 0);
         CloseHandle(h_null_write);
-        let stderr = tokio::fs::File::from_std(
-            std::fs::File::from_raw_handle(h_null_read)
-        );
+        let stderr = tokio::fs::File::from_std(std::fs::File::from_raw_handle(h_null_read));
 
         // 用 ConptyProcess 封装进程句柄
         // stdin_pipe 必须在进程生命周期内保持打开，否则 ConPTY 会发送 Ctrl+C 终止子进程
@@ -251,7 +224,6 @@ pub fn spawn_with_conpty(
             conpty: SendHPCON(h_pc),
         };
 
-        
         Ok((child, stdout, stderr, true)) // true = conpty_mode
     }
 }
@@ -284,7 +256,9 @@ unsafe impl Sync for SendHPCON {}
 impl SendHandle {
     fn wait_for_exit(self) -> i32 {
         unsafe {
-            use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE, GetExitCodeProcess};
+            use windows_sys::Win32::System::Threading::{
+                GetExitCodeProcess, WaitForSingleObject, INFINITE,
+            };
             WaitForSingleObject(self.0, INFINITE);
             let mut exit_code: u32 = 0;
             if GetExitCodeProcess(self.0, &mut exit_code) == 0 {
@@ -321,7 +295,9 @@ impl ConptyProcess {
 
     /// 关闭 stdout 读端，触发 tokio 读取 EOF
     pub fn close_stdout_pipe(&self) {
-        unsafe { CloseHandle(self.stdout_pipe.0); }
+        unsafe {
+            CloseHandle(self.stdout_pipe.0);
+        }
     }
 
     /// 获取 stdin 管道句柄（用于写入用户输入）
@@ -332,8 +308,8 @@ impl ConptyProcess {
     /// 写入用户输入到 stdin 管道
     pub fn write(&self, data: &str) -> Result<(), String> {
         unsafe {
-            use windows_sys::Win32::Storage::FileSystem::WriteFile;
             use windows_sys::Win32::Foundation::GetLastError;
+            use windows_sys::Win32::Storage::FileSystem::WriteFile;
 
             let handle = self.stdin_pipe.0;
             let data_bytes = data.as_bytes();
@@ -354,11 +330,13 @@ impl ConptyProcess {
         Ok(())
     }
 
-
     /// Resize the ConPTY pseudo console to match terminal dimensions
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
-        use windows_sys::Win32::System::Console::{COORD, ResizePseudoConsole};
-        let coord = COORD { X: cols as i16, Y: rows as i16 };
+        use windows_sys::Win32::System::Console::{ResizePseudoConsole, COORD};
+        let coord = COORD {
+            X: cols as i16,
+            Y: rows as i16,
+        };
         let hpc: windows_sys::Win32::System::Console::HPCON = self.conpty.0;
         let result = unsafe { ResizePseudoConsole(hpc, coord) };
         if result != 0 {
@@ -376,14 +354,15 @@ impl ConptyProcess {
             let exit_code = handle.wait_for_exit();
             exit_code
         })
-        .await.map_err(|e| format!("等待进程失败: {}", e))
+        .await
+        .map_err(|e| format!("等待进程失败: {}", e))
     }
 
     /// 向 ConPTY stdin 写入 Ctrl+C (0x03)，终止交互式 CLI 工具
     pub fn send_eof(&self) {
         unsafe {
-            use windows_sys::Win32::Storage::FileSystem::WriteFile;
             use windows_sys::Win32::Foundation::GetLastError;
+            use windows_sys::Win32::Storage::FileSystem::WriteFile;
             let mut bytes_written: u32 = 0;
             let ctrl_c: u8 = 0x03; // Ctrl+C
             let result = WriteFile(

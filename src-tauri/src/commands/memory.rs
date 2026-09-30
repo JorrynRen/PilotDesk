@@ -11,6 +11,7 @@ use tauri::State;
 use crate::api_agent::db::{
     MemoryEntry, MemoryStore, MEMORY_IDLE_SECS, MEMORY_MAX_ENTRIES, MEMORY_MIN_ACCESS,
 };
+use crate::utils::errors::AppError;
 use crate::DbState;
 
 /// MEMORY.md 文件名（固定于记忆根目录）。
@@ -30,9 +31,7 @@ pub struct ProjectMemory {
 
 /// 路径归一化键（用于授权比较）：反斜杠统一、去尾部分隔符、小写。
 fn norm_key(path: &str) -> String {
-    path.replace('\\', "/")
-        .trim_end_matches('/')
-        .to_lowercase()
+    path.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
 /// 记忆根解析：`cwd` 非空用其解析路径，空串回退兜底工作区（与运行时一致）。
@@ -45,12 +44,13 @@ pub(crate) fn resolve_memory_root(conn: &Connection, cwd: Option<&str>) -> Strin
 fn authorized_roots(conn: &Connection) -> Vec<String> {
     let mut roots: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let push = |roots: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, root: String| {
-        let key = norm_key(&root);
-        if !key.is_empty() && seen.insert(key) {
-            roots.push(root);
-        }
-    };
+    let push =
+        |roots: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, root: String| {
+            let key = norm_key(&root);
+            if !key.is_empty() && seen.insert(key) {
+                roots.push(root);
+            }
+        };
 
     let mut stmt = match conn.prepare(
         "SELECT DISTINCT cwd FROM sessions WHERE cwd IS NOT NULL AND cwd <> '' ORDER BY cwd",
@@ -83,7 +83,12 @@ fn read_named_file(root: &str, filename: &str) -> ProjectMemory {
             char_count: content.chars().count(),
             content,
         },
-        Err(_) => ProjectMemory { root: root.to_string(), exists: false, content: String::new(), char_count: 0 },
+        Err(_) => ProjectMemory {
+            root: root.to_string(),
+            exists: false,
+            content: String::new(),
+            char_count: 0,
+        },
     }
 }
 
@@ -92,35 +97,43 @@ fn read_memory_file(root: &str) -> ProjectMemory {
 }
 
 /// 原子写（同目录临时文件 + 覆盖目标；Windows 先删后更名）。
-fn write_named_file(root: &str, filename: &str, content: &str) -> Result<(), String> {
+fn write_named_file(root: &str, filename: &str, content: &str) -> Result<(), AppError> {
     let dir = root.trim_end_matches(['/', '\\']);
-    std::fs::create_dir_all(dir).map_err(|e| format!("无法创建目录 {}: {}", dir, e))?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| AppError::Io(format!("无法创建目录 {}: {}", dir, e)))?;
     let target = format!("{}/{}", dir, filename);
     let tmp = format!("{}.{}.tmp", target, std::process::id());
-    std::fs::write(&tmp, content).map_err(|e| format!("写入 {} 失败: {}", filename, e))?;
+    std::fs::write(&tmp, content)
+        .map_err(|e| AppError::Io(format!("写入 {} 失败: {}", filename, e)))?;
     let _ = std::fs::remove_file(&target);
-    std::fs::rename(&tmp, &target).map_err(|e| format!("替换 {} 失败: {}", filename, e))?;
+    std::fs::rename(&tmp, &target)
+        .map_err(|e| AppError::Io(format!("替换 {} 失败: {}", filename, e)))?;
     Ok(())
 }
 
-fn write_memory_file(root: &str, content: &str) -> Result<(), String> {
+fn write_memory_file(root: &str, content: &str) -> Result<(), AppError> {
     write_named_file(root, MEMORY_FILE, content)
 }
 
 /// 已使用项目根列表（会话 cwd 去重 + 兜底工作区），供项目选择器。
 #[tauri::command]
 pub fn list_project_roots(state: State<'_, DbState>) -> Result<Vec<String>, String> {
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let conn = state.pool.get().map_err(AppError::from)?;
     Ok(authorized_roots(&conn))
 }
 
 /// 读取指定记忆根的 MEMORY.md（cwd 为空视为兜底记忆根）。
 #[tauri::command]
-pub fn get_project_memory(state: State<'_, DbState>, cwd: Option<String>) -> Result<ProjectMemory, String> {
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
+pub fn get_project_memory(
+    state: State<'_, DbState>,
+    cwd: Option<String>,
+) -> Result<ProjectMemory, String> {
+    let conn = state.pool.get().map_err(AppError::from)?;
     let root = resolve_memory_root(&conn, cwd.as_deref());
     if !is_authorized_root(&conn, &root) {
-        return Err(format!("目录不在项目记忆范围内，拒绝读取: {}", root));
+        return Err(
+            AppError::InvalidInput(format!("目录不在项目记忆范围内，拒绝读取: {}", root)).into(),
+        );
     }
     Ok(read_memory_file(&root))
 }
@@ -134,22 +147,33 @@ pub fn update_project_memory(
 ) -> Result<ProjectMemory, String> {
     let char_count = content.chars().count();
     if char_count > MAX_CHARS {
-        return Err(format!("MEMORY.md 内容超长（{} 字，上限 {} 字），请精简后保存。", char_count, MAX_CHARS));
+        return Err(AppError::InvalidInput(format!(
+            "MEMORY.md 内容超长（{} 字，上限 {} 字），请精简后保存。",
+            char_count, MAX_CHARS
+        ))
+        .into());
     }
-    let conn = state.pool.get().map_err(|e| e.to_string())?;
+    let conn = state.pool.get().map_err(AppError::from)?;
     let root = resolve_memory_root(&conn, cwd.as_deref());
     if !is_authorized_root(&conn, &root) {
-        return Err(format!("目录不在项目记忆范围内，拒绝写入: {}", root));
+        return Err(
+            AppError::InvalidInput(format!("目录不在项目记忆范围内，拒绝写入: {}", root)).into(),
+        );
     }
     write_memory_file(&root, &content)?;
-    Ok(ProjectMemory { root, exists: true, char_count, content })
+    Ok(ProjectMemory {
+        root,
+        exists: true,
+        char_count,
+        content,
+    })
 }
 
 /// MEMORY.md 新建模板。
 #[tauri::command]
 pub fn project_memory_template() -> Result<String, String> {
     Ok(format!(
-        "# 项目记忆\n\n\
+        "# 项目记忆（MEMORY.md）\n\n\
          本文件为当前项目的长期记忆，会随每次对话注入模型上下文。请用简洁、可复用的事实与规则填写，不要记录过程性对话。建议分节维护：\n\n\
          ## 项目概述\n\n\
          ## 技术栈与代码约定\n\n\
@@ -165,9 +189,9 @@ pub fn project_memory_template() -> Result<String, String> {
 const USER_FILE: &str = "USER.md";
 
 /// 统一配置根（Windows: %APPDATA%/PilotDesk 等），与 MEMORY.db/技能共用。
-fn config_root() -> Result<String, String> {
+fn config_root() -> Result<String, AppError> {
     crate::api_agent::system_prompt::get_pilotdesk_config_dir()
-        .ok_or_else(|| "无法获取配置目录".to_string())
+        .ok_or_else(|| AppError::Config("无法获取配置目录".to_string()))
 }
 
 /// 读取用户偏好 USER.md（文件不存在返回 exists=false）。
@@ -182,14 +206,20 @@ pub fn get_user_preferences() -> Result<ProjectMemory, String> {
 pub fn update_user_preferences(content: String) -> Result<ProjectMemory, String> {
     let char_count = content.chars().count();
     if char_count > MAX_CHARS {
-        return Err(format!(
+        return Err(AppError::InvalidInput(format!(
             "USER.md 内容超长（{} 字，上限 {} 字），请精简后保存。",
             char_count, MAX_CHARS
-        ));
+        ))
+        .into());
     }
     let root = config_root()?;
     write_named_file(&root, USER_FILE, &content)?;
-    Ok(ProjectMemory { root, exists: true, char_count, content })
+    Ok(ProjectMemory {
+        root,
+        exists: true,
+        char_count,
+        content,
+    })
 }
 
 /// USER.md 新建模板。
@@ -208,10 +238,10 @@ pub fn user_preferences_template() -> Result<String, String> {
 // ── 全局 KV 记忆（MEMORY.db key_memories，与 save/search_memory 工具同库）──
 
 /// 打开全局 KV 记忆库（基于配置目录下的 MEMORY.db）。
-fn open_memory_store() -> Result<MemoryStore, String> {
+fn open_memory_store() -> Result<MemoryStore, AppError> {
     let dir = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
-        .ok_or_else(|| "无法获取配置目录".to_string())?;
-    MemoryStore::new(&dir)
+        .ok_or_else(|| AppError::Config("无法获取配置目录".to_string()))?;
+    MemoryStore::new(&dir).map_err(AppError::Db)
 }
 
 /// KV 条目视图（前端展示）。
@@ -280,13 +310,20 @@ pub struct MemoryStats {
 
 /// 全量列表（可选分类/关键词过滤）。
 #[tauri::command]
-pub fn list_memory_entries(category: Option<String>, query: Option<String>) -> Result<Vec<MemoryEntryView>, String> {
+pub fn list_memory_entries(
+    category: Option<String>,
+    query: Option<String>,
+) -> Result<Vec<MemoryEntryView>, String> {
     let store = open_memory_store()?;
-    Ok(store.list_all(category.as_deref(), query.as_deref()).iter().map(MemoryEntryView::from).collect())
+    Ok(store
+        .list_all(category.as_deref(), query.as_deref())
+        .iter()
+        .map(MemoryEntryView::from)
+        .collect())
 }
 
-/// 新增/更新一条全局 KV 记忆（key 已存在则更新；important=true 置 pin 保护，免自动清理；
-/// tags 为逗号分隔检索标签，可选）。
+/// 新增/更新一条全局 KV 记忆（按 key 覆盖/新增；不做内容级去重，设置页手动编辑语义；
+/// important=true 置 pin 保护，免自动清理；tags 为逗号分隔检索标签，可选）。
 #[tauri::command]
 pub fn save_memory_entry(
     key: String,
@@ -302,19 +339,23 @@ pub fn save_memory_entry(
         .map(|t| t.trim().trim_matches(',').to_string())
         .unwrap_or_default();
     if key.is_empty() || key.chars().count() > 200 {
-        return Err("记忆 key 不能为空且不超过 200 字符".to_string());
+        return Err(
+            AppError::InvalidInput("记忆 key 不能为空且不超过 200 字符".to_string()).into(),
+        );
     }
     if value.is_empty() || value.chars().count() > 4000 {
-        return Err("记忆 value 不能为空且不超过 4000 字符".to_string());
+        return Err(
+            AppError::InvalidInput("记忆 value 不能为空且不超过 4000 字符".to_string()).into(),
+        );
     }
     if category.is_empty() || category.chars().count() > 32 {
-        return Err("记忆分类不能为空且不超过 32 字符".to_string());
+        return Err(AppError::InvalidInput("记忆分类不能为空且不超过 32 字符".to_string()).into());
     }
     if tags.chars().count() > 200 {
-        return Err("记忆 tags 不能超过 200 字符".to_string());
+        return Err(AppError::InvalidInput("记忆 tags 不能超过 200 字符".to_string()).into());
     }
     let store = open_memory_store()?;
-    Ok(MemoryEntryView::from(&store.save_memory(
+    Ok(MemoryEntryView::from(&store.upsert_memory(
         &key,
         &value,
         &category,
@@ -324,10 +365,11 @@ pub fn save_memory_entry(
 }
 
 /// 删除一条全局 KV 记忆；返回是否命中。
+/// 知识库条目会被拒绝（它们归「知识库」页管理），见 `MemoryStore::take_session_memory`。
 #[tauri::command]
 pub fn delete_memory_entry(key: String) -> Result<bool, String> {
     let store = open_memory_store()?;
-    Ok(store.delete_memory(key.trim()))
+    Ok(store.take_session_memory(key.trim())?.is_some())
 }
 
 /// 置/取消某条 KV 记忆的 pin（重要）标记。
@@ -337,7 +379,7 @@ pub fn set_memory_pin(key: String, pin: bool) -> Result<(), String> {
     if store.set_pin(key.trim(), pin) {
         Ok(())
     } else {
-        Err(format!("未找到该记忆: {}", key.trim()))
+        Err(AppError::NotFound(format!("未找到该记忆: {}", key.trim())).into())
     }
 }
 
@@ -379,11 +421,16 @@ pub fn get_memory_stats() -> Result<MemoryStats, String> {
     let store = open_memory_store()?;
     let candidates = store.maintenance_candidates().len();
     Ok(MemoryStats {
-        total: store.count(),
+        // 与列表同一口径：只算会话记忆，知识库条目（不占 600 配额）不计入
+        total: store.quota_count(),
         pinned: store.pinned_count(),
         candidates,
         // 与真实 system prompt 注入同一来源（统一评分排序），保证预览即所见
-        injected: store.ranked_top(5).iter().map(MemoryEntryView::from).collect(),
+        injected: store
+            .ranked_top(5)
+            .iter()
+            .map(MemoryEntryView::from)
+            .collect(),
         policy: MemoryPolicy::current(),
     })
 }
@@ -398,7 +445,11 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or_default();
         std::env::temp_dir()
-            .join(format!("pilotdesk_memory_md_test_{}_{}", std::process::id(), n))
+            .join(format!(
+                "pilotdesk_memory_md_test_{}_{}",
+                std::process::id(),
+                n
+            ))
             .to_string_lossy()
             .to_string()
     }

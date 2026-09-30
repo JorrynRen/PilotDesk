@@ -95,6 +95,7 @@ pub async fn generate_rolling_summary(
         stream: false,
         temperature: Some(0.3),
         max_tokens: Some(1024),
+        response_format: None,
     };
 
     let response = match format {
@@ -125,7 +126,10 @@ pub async fn generate_rolling_summary(
         ));
     }
     // 摘要必须比被压缩的早期对话更小，否则说明压缩失败、写入只会挤占上下文。
-    let older_tokens: usize = older_messages.iter().map(|m| TokenEstimator::estimate_message(m)).sum();
+    let older_tokens: usize = older_messages
+        .iter()
+        .map(|m| TokenEstimator::estimate_message(m))
+        .sum();
     let summary_tokens = TokenEstimator::estimate(&summary);
     if older_tokens > 0 && summary_tokens >= older_tokens {
         return Err(format!(

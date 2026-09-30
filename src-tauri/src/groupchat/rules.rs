@@ -9,7 +9,9 @@ pub struct RuleEngine {
 
 impl RuleEngine {
     pub fn new() -> Self {
-        Self { converged_rounds: 0 }
+        Self {
+            converged_rounds: 0,
+        }
     }
 
     /// 记录一轮 Director 收敛裁决，返回是否应收敛（连续 2 轮 done）。

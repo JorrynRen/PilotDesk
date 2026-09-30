@@ -1,8 +1,9 @@
 import { useState, memo } from 'react';
-import { Archive, Trash2, Pencil, Check, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Trash2, Pencil, Check, X } from 'lucide-react';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { AgentBadge } from '../common/AgentBadge';
 import { useGeneratingStore } from '../../stores/generatingStore';
+import { useApprovalStore, selectPendingCount } from '../../stores/approvalStore';
 import type { Session } from '../../types';
 
 interface SessionListItemProps {
@@ -12,6 +13,8 @@ interface SessionListItemProps {
   batchMode?: boolean;
   selected?: boolean;
   onToggleSelect?: (id: string) => void;
+  /** 当前列表是否为归档视图：决定归档按钮是「归档」还是「取消归档」 */
+  archived?: boolean;
 }
 
 function formatTime(timestamp: number): string {
@@ -37,9 +40,12 @@ export const SessionListItem = memo(function SessionListItem({
   batchMode,
   selected,
   onToggleSelect,
+  archived,
 }: SessionListItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const isGenerating = useGeneratingStore((s) => !!s.generatingMap[session.id]);
+  // 待审批徽标：该会话当前待用户决策的工具审批数量（内联审批卡共享同一集合）
+  const pendingApprovalCount = useApprovalStore(selectPendingCount(session.id));
   const [editTitle, setEditTitle] = useState(session.title);
 
   // Fallback display title when title is empty
@@ -151,7 +157,18 @@ export const SessionListItem = memo(function SessionListItem({
               </div>
             ) : (
               <>
-                <span className="text-xs  truncate">{displayTitle}</span>
+                <div className="flex items-center gap-1 min-w-0">
+                  <span className="text-xs truncate">{displayTitle}</span>
+                  {pendingApprovalCount > 0 && (
+                    <span
+                      className="text-[9px] leading-none px-1 py-0.5 rounded-full shrink-0"
+                      style={{ backgroundColor: 'var(--warning-bg, rgba(234,179,8,0.15))', color: 'var(--warning, #eab308)' }}
+                      title={`${pendingApprovalCount} 项等待审批`}
+                    >
+                      待审批 {pendingApprovalCount}
+                    </span>
+                  )}
+                </div>
                 <span className="text-[10px] shrink-0 ml-1" style={{ color: 'var(--text-secondary)' }}>
                   {formatTime(session.updatedAt)}
                 </span>
@@ -182,12 +199,12 @@ export const SessionListItem = memo(function SessionListItem({
               </button>
             )}
             <button
-              data-action="archive"
+              data-action={archived ? 'unarchive' : 'archive'}
               className="p-0.5 rounded transition-all hover:bg-black/10 dark:hover:bg-white/10 active:scale-90"
               style={{ color: 'var(--text-secondary)' }}
-              title="归档"
+              title={archived ? '取消归档' : '归档'}
             >
-              <Archive size={11} />
+              {archived ? <ArchiveRestore size={11} /> : <Archive size={11} />}
             </button>
             <button
               data-action="delete"

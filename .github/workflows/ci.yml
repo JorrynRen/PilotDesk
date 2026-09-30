@@ -1,0 +1,86 @@
+# 持续集成：main 分支推送与所有 PR 上运行
+# 本文件同时通过 workflow_call 被 release.yml 复用，作为发布前置门禁。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # 允许 .github/workflows/release.yml 直接调用本流水线（jobs.<id>.uses）
+  workflow_call:
+
+jobs:
+  frontend:
+    name: 前端 (tsc / eslint / build)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖 (npm ci)
+        run: npm ci
+
+      - name: TypeScript 类型检查
+        run: npx tsc -b --force
+
+      - name: ESLint
+        # ⚠️ 当前基线为 3 条 warning、0 error，退出码为 0。
+        # 切勿改成 `npx eslint . --max-warnings 0`，否则会因这几条刻意保留的 warning 使 CI 失败。
+        run: npx eslint .
+
+      - name: 前端构建
+        run: npm run build
+
+  backend:
+    name: 后端 (fmt / check / test)
+    # 测试均为纯逻辑单测（semver 比较、模板解析、任务 DAG、事件白名单等），不依赖 Windows API，
+    # 因此放在 ubuntu 上跑，与 release.yml 的 Linux 构建环境保持一致。
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 安装 Linux 系统依赖 (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: 缓存 Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 生成占位前端产物
+        # tauri::generate_context! 在编译期会读取 tauri.conf.json 的 frontendDist（../dist），
+        # 目录不存在会导致编译失败。后端校验不关心前端内容，这里放一个占位文件即可，
+        # 免去在 backend job 里重复安装 Node 依赖并构建前端。
+        run: mkdir -p dist && echo '<!doctype html><title>ci</title>' > dist/index.html
+
+      - name: rustfmt 检查
+        # 全量 `cargo fmt` 已完成并提交，此步是硬性门禁：格式不一致即失败。
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: cargo check --tests
+        working-directory: src-tauri
+        run: cargo check --tests
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test

@@ -7,7 +7,8 @@
  * 设计文档: docs/PilotDesk-插件系统架构设计-v2.0.md
  */
 
-import type { CommandHandler, CommandResult } from '../types/plugin';
+import type { CommandHandler, CommandResult, JsonValue } from '../types/plugin';
+import { errorMessage } from '../utils/errorMessage';
 
 // ── 类型定义 ──
 
@@ -92,10 +93,10 @@ class CommandDispatcher {
   /**
    * 执行命令
    */
-  async execute<T = any>(
+  async execute(
     pluginId: string,
     commandId: string,
-    params?: any,
+    params?: Record<string, unknown>,
     options?: CommandExecuteOptions,
   ): Promise<CommandResult> {
     const key = `${pluginId}:${commandId}`;
@@ -112,16 +113,16 @@ class CommandDispatcher {
     const startTime = Date.now();
 
     try {
-      const result = await this.executeWithTimeout(registered.handler, params, timeout);
+      const result = await this.executeWithTimeout(registered.handler, params ?? {}, timeout);
       return {
         success: true,
         data: result,
         duration: Date.now() - startTime,
       };
-    } catch (err: any) {
+    } catch (err) {
       return {
         success: false,
-        error: err.message || String(err),
+        error: errorMessage(err),
         duration: Date.now() - startTime,
       };
     }
@@ -130,9 +131,9 @@ class CommandDispatcher {
   /**
    * 通过完整命令 ID 执行（格式: pluginId:commandId）
    */
-  async executeCommand<T = any>(
+  async executeCommand(
     commandId: string,
-    params?: any,
+    params?: Record<string, unknown>,
     options?: CommandExecuteOptions,
   ): Promise<CommandResult> {
     const colonIndex = commandId.indexOf(':');
@@ -152,14 +153,14 @@ class CommandDispatcher {
 
   private async executeWithTimeout(
     handler: CommandHandler,
-    params: any,
+    params: Record<string, unknown>,
     timeoutMs: number,
-  ): Promise<any> {
+  ): Promise<JsonValue> {
     if (timeoutMs <= 0) {
       return handler(params);
     }
 
-    return new Promise<any>((resolve, reject) => {
+    return new Promise<JsonValue>((resolve, reject) => {
       const timer = setTimeout(() => {
         reject(new Error(`命令执行超时 (${timeoutMs}ms)`));
       }, timeoutMs);

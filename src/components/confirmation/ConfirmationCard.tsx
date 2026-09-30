@@ -8,28 +8,14 @@ import type {
   GroupChatConfirmationResponseInput,
 } from '../../types/groupchat';
 import { showToast } from '../../utils/toast';
+import { headChars } from '../../utils/text';
+import { Select } from '../common/Select';
 
 /** 确认块标题栏兜底：后端未生成 title 时，取确认问题首行截断到 22 字（无省略号）。 */
 function confirmationTitle(prompt: string): string {
   const line = (prompt || '').split('\n')[0].trim();
   if (!line) return '确认请求';
-  return [...line].slice(0, 22).join('');
-}
-
-/** 解析确认请求消息/事件的 JSON（items/options 补齐安全数组）。 */
-export function parseConfirmation(raw: string | undefined | null): GroupChatConfirmationRequest | null {
-  if (!raw) return null;
-  try {
-    const v = JSON.parse(raw);
-    if (!v || typeof v !== 'object' || typeof v.replyMode !== 'string') return null;
-    if (!Array.isArray(v.items)) v.items = [];
-    for (const it of v.items) {
-      if (it && !Array.isArray(it.options)) it.options = [];
-    }
-    return v as GroupChatConfirmationRequest;
-  } catch {
-    return null;
-  }
+  return headChars(line, 22);
 }
 
 /** 判断选项是否属于"其他类"（选中后需补充自由文本，避免再来一轮确认）。 */
@@ -249,18 +235,16 @@ export function ConfirmationCard({
               />
             ) : (
               <>
-              <select
+              <Select
                 value={values[it.id] ?? ''}
-                onChange={(e) => setValue(it.id, e.target.value)}
+                onChange={(v) => setValue(it.id, v)}
                 disabled={locked}
-                className="px-3 py-2 rounded-lg text-xs outline-none"
-                style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-              >
-                <option value="">请选择</option>
-                {options.map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))}
-              </select>
+                placeholder="请选择"
+                options={[
+                  { value: '', label: '请选择' },
+                  ...options.map((opt) => ({ value: opt, label: opt })),
+                ]}
+              />
               {/* 选中"其他类"选项时展开自由文本输入，避免需再经一轮确认补充细节 */}
               {isOtherOption(values[it.id] ?? '') && (
                 <input
@@ -294,17 +278,4 @@ export function ConfirmationCard({
       </div>
     </div>
   );
-}
-
-/** 把确认回复格式化为可读文本（label：value，仅含被勾选项），供会话模式回传模型。 */
-export function formatResponsesToText(
-  items: GroupChatConfirmationRequest['items'],
-  responses: GroupChatConfirmationResponseInput[],
-): string {
-  return responses
-    .map((r) => {
-      const label = items.find((it) => it.id === r.itemId)?.label?.trim();
-      return `${label || r.itemId}：${r.value}`;
-    })
-    .join('\n');
 }

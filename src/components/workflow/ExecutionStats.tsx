@@ -20,11 +20,14 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import {
-  BarChart3, TrendingUp, Clock, Zap, Activity, PieChart, Target,
+  BarChart3, Clock, Zap, PieChart, Target,
   RefreshCw, AlertTriangle, Trophy, Flame, MinusCircle, CheckCircle, XCircle,
-  PlayCircle, PauseCircle, Hourglass, Gauge, Calendar, Hash, Layers,
+  PlayCircle, PauseCircle, Hourglass, Calendar, Hash, Layers,
 } from 'lucide-react';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
+import { elide } from '../../utils/text';
+import { Select } from '../common/Select';
+import { errorMessage } from '../../utils/errorMessage';
 
 // ── 类型定义 ──
 
@@ -38,9 +41,10 @@ interface WorkflowStats {
   pausedCount: number;
   timeoutCount: number;
   successRate: number;
-  avgDurationMs: number;
-  maxDurationMs: number;
-  minDurationMs: number;
+  /** 耗时字段：null = 无可用样本；0 = 该执行不足 1 秒（事件时间戳为秒级） */
+  avgDurationMs: number | null;
+  maxDurationMs: number | null;
+  minDurationMs: number | null;
   totalNodeExecutions: number;
   nodeFailedCount: number;
   last7DaysCount: number;
@@ -58,9 +62,9 @@ interface WorkflowStats {
   rangePaused: number;
   rangeTimeout: number;
   rangeSuccessRate: number;
-  rangeAvgDurationMs: number;
-  rangeMaxDurationMs: number;
-  rangeMinDurationMs: number;
+  rangeAvgDurationMs: number | null;
+  rangeMaxDurationMs: number | null;
+  rangeMinDurationMs: number | null;
 }
 
 interface TimelinePoint {
@@ -69,7 +73,8 @@ interface TimelinePoint {
   success: number;
   failed: number;
   cancelled: number;
-  avgDurationMs: number;
+  /** 该分桶平均耗时（ms）；null = 该分桶无已完成执行 */
+  avgDurationMs: number | null;
   granularity?: 'day' | 'week' | 'month';
 }
 
@@ -117,8 +122,15 @@ const STATUS_META: StatusMeta[] = [
 
 // ── 格式化工具 ──
 
-function formatDuration(ms: number): string {
-  if (!ms || ms <= 0) return '--';
+/**
+ * 耗时展示。
+ * - null / 非有限值 = 无样本 → "--"
+ * - 0 = 有样本但不足 1 秒（事件时间戳为秒级，短执行会取整为 0）→ "<1s"
+ *   —— 不能把 0 当成"无数据"，否则任何一次秒内完成的执行都会让最短耗时永远显示为空
+ */
+function formatDuration(ms?: number | null): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return '--';
+  if (ms === 0) return '<1s';
   if (ms < 1000) return `${ms.toFixed(0)}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   const minutes = Math.floor(ms / 60000);
@@ -138,10 +150,6 @@ function formatRelativeTime(unixSec: number): string {
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
   if (diff < 86400 * 30) return `${Math.floor(diff / 86400)} 天前`;
   return new Date(unixSec * 1000).toISOString().slice(0, 10);
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
 // ── 迷你柱状图组件（按选择天数固定柱宽，支持稀疏日期标签） ──
@@ -268,7 +276,7 @@ const MiniBarChart: React.FC<{
     const allBuckets = generateBuckets(maxBars, 'day');
     points = allBuckets.map(bucket => {
       const found = dataMap.get(bucket);
-      return found || { date: bucket, total: 0, success: 0, failed: 0, cancelled: 0, avgDurationMs: 0, granularity: 'day' };
+      return found || { date: bucket, total: 0, success: 0, failed: 0, cancelled: 0, avgDurationMs: null, granularity: 'day' };
     });
   } else {
     // 周/月粒度：按后端返回的数据顺序渲染（后端已排序），不再额外补空，因为周/月 bucket 字符串生成逻辑复杂
@@ -441,6 +449,11 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
 
   // Opt #6: 防止并发刷新 + 静默刷新支持
   const loadingRef = useRef<boolean>(false);
+  /**
+   * 渲染期不能读 ref（react-hooks/refs），所以给 loadingRef 配一个镜像 state：
+   * 并发去重仍用 ref（同步语义），按钮禁用/动画状态读这个 state。
+   */
+  const [inFlight, setInFlight] = useState(false);
   const isFirstLoadRef = useRef<boolean>(true);
 
   const loadStats = useCallback(async () => {
@@ -462,7 +475,7 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
       setTopByFailedRate(topFailed);
       setTopErrors(topErr);
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     }
   }, [workflowId, days]);
 
@@ -472,6 +485,7 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
     const { silent = false, showLoading = false } = opts;
     if (loadingRef.current) return;
     loadingRef.current = true;
+    setInFlight(true);
     if (showLoading) setLoading(true);
     if (!silent) setRefreshing(true);
     try {
@@ -480,6 +494,7 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
       if (showLoading) setLoading(false);
       if (!silent) setRefreshing(false);
       loadingRef.current = false;
+      setInFlight(false);
     }
   }, [loadStats]);
 
@@ -529,6 +544,8 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
     timeout: stats.rangeTimeout,
   };
   const totalForBar = Math.max(stats.rangeTotal, 1);
+  // 「失败次数」口径 = 失败 + 超时 + 取消（三种非成功终态；运行中/待触发/已暂停不计入）
+  const failedTotal = stats.rangeFailed + stats.rangeTimeout + stats.rangeCancelled;
 
   // Opt #12: maxCount 计算一次
   const nodeMaxCount = Math.max(...nodeTypeStats.map(s => s.count), 1);
@@ -552,33 +569,33 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <select
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-            className="text-[11px] rounded px-2 py-1"
-            style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
-            disabled={refreshing || loadingRef.current}
-          >
-            <option value={0}>全部</option>
-            <option value={7}>最近 7 天</option>
-            <option value={14}>最近 14 天</option>
-            <option value={30}>最近 30 天</option>
-            <option value={90}>最近 90 天</option>
-          </select>
+          <Select
+            value={String(days)}
+            onChange={(v) => setDays(Number(v))}
+            options={[
+              { value: '0', label: '全部' },
+              { value: '7', label: '最近 7 天' },
+              { value: '14', label: '最近 14 天' },
+              { value: '30', label: '最近 30 天' },
+              { value: '90', label: '最近 90 天' },
+            ]}
+            size="sm"
+            disabled={refreshing || inFlight}
+          />
           <button
             onClick={() => void safeRefresh({ silent: false, showLoading: false })}
-            disabled={refreshing || loadingRef.current}
+            disabled={refreshing || inFlight}
             className="pd-btn px-2 py-1 text-[11px] rounded transition-colors inline-flex items-center gap-1"
             style={{
               border: '1px solid var(--border)',
               background: 'var(--bg-secondary)',
               color: 'var(--accent)',
-              opacity: (refreshing || loadingRef.current) ? 0.6 : 1,
-              cursor: (refreshing || loadingRef.current) ? 'not-allowed' : 'pointer',
+              opacity: (refreshing || inFlight) ? 0.6 : 1,
+              cursor: (refreshing || inFlight) ? 'not-allowed' : 'pointer',
             }}
             title="立即刷新统计数据"
           >
-            <RefreshCw size={11} style={{ animation: (refreshing || loadingRef.current) ? 'spin 0.8s linear infinite' : undefined }} />
+            <RefreshCw size={11} style={{ animation: (refreshing || inFlight) ? 'spin 0.8s linear infinite' : undefined }} />
             刷新
           </button>
         </div>
@@ -589,7 +606,7 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
         <StatCard
           label="工作流数量"
           value={(stats.workflowCount ?? 0).toString()}
-          subValue={`${days > 0 ? `近 ${days} 天` : '全量'}执行 ${stats.lastNDaysCount} 次`}
+          subValue={`近7天 ${stats.last7DaysCount} · 近30天 ${stats.last30DaysCount} 次执行`}
           icon={<Layers size={14} />}
         />
         <StatCard
@@ -606,10 +623,11 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
           icon={<PieChart size={14} />}
         />
         <StatCard
-          label={days > 0 ? '区间执行次数' : '全量执行次数'}
-          value={stats.rangeTotal.toString()}
-          subValue={days > 0 ? `近7天 ${stats.last7DaysCount} · 近30天 ${stats.last30DaysCount}` : `历史累计 ${stats.totalExecutions} 次`}
-          icon={<Gauge size={14} />}
+          label={days > 0 ? '区间失败次数' : '全量失败次数'}
+          value={failedTotal.toString()}
+          subValue={`失败 ${stats.rangeFailed} · 超时 ${stats.rangeTimeout} · 取消 ${stats.rangeCancelled}`}
+          color={failedTotal > 0 ? '#EF4444' : '#10B981'}
+          icon={<XCircle size={14} />}
         />
       </div>
 
@@ -833,7 +851,7 @@ export const ExecutionStats: React.FC<Props> = ({ workflowId }) => {
               <div key={`${err.error}-${idx}`} className="flex items-start gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                 <span className="w-4 shrink-0 text-center" style={{ color: idx < 3 ? '#EF4444' : 'var(--text-tertiary)' }}>{idx + 1}</span>
                 <span className="flex-1 break-all" style={{ color: 'var(--text-primary)' }} title={err.error}>
-                  {truncate(err.error, 120)}
+                  {elide(err.error, 120)}
                 </span>
                 <span className="shrink-0" style={{ color: 'var(--text-tertiary)' }}>×{err.count}</span>
                 <span className="shrink-0 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{formatRelativeTime(err.lastOccurredAt)}</span>

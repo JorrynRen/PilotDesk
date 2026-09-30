@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "updatedAt": "2026-09-30T05:28:03.062Z",
+  "templates": [
+    {
+      "id": "写小说工作流（测试）",
+      "name": "写小说工作流（测试）",
+      "version": "1.0.0",
+      "description": "",
+      "path": "workflow/%E5%86%99%E5%B0%8F%E8%AF%B4%E5%B7%A5%E4%BD%9C%E6%B5%81%EF%BC%88%E6%B5%8B%E8%AF%95%EF%BC%89/%5B%E4%B8%BB%5D%E5%86%99%E5%B0%8F%E8%AF%B4%E5%B7%A5%E4%BD%9C%E6%B5%81%EF%BC%88%E6%B5%8B%E8%AF%95%EF%BC%89.json",
+      "dir": "写小说工作流（测试）",
+      "mainFile": "[主]写小说工作流（测试）.json",
+      "subFiles": [],
+      "stageCount": 6,
+      "nodeCount": 7,
+      "size": "7K",
+      "updatedAt": "2026-08-10T02:21:26.478Z"
+    },
+    {
+      "id": "自动短篇小说写作工作流",
+      "name": "自动短篇小说写作工作流",
+      "version": "1.0.0",
+      "description": "自动短篇小说写作工作流：用户输入设定 → AI策划故事 → 分章创作 → 合稿输出完整小说",
+      "path": "workflow/%E8%87%AA%E5%8A%A8%E7%9F%AD%E7%AF%87%E5%B0%8F%E8%AF%B4%E5%86%99%E4%BD%9C%E5%B7%A5%E4%BD%9C%E6%B5%81/%5B%E4%B8%BB%5D%E8%87%AA%E5%8A%A8%E7%9F%AD%E7%AF%87%E5%B0%8F%E8%AF%B4%E5%86%99%E4%BD%9C%E5%B7%A5%E4%BD%9C%E6%B5%81.json",
+      "dir": "自动短篇小说写作工作流",
+      "mainFile": "[主]自动短篇小说写作工作流.json",
+      "subFiles": [
+        "[子]子工作流（1）(ref_1).json",
+        "[子]子工作流（2）(ref_2).json",
+        "[子]子工作流（3）(ref_3).json"
+      ],
+      "stageCount": 5,
+      "nodeCount": 13,
+      "size": "18K",
+      "updatedAt": "2026-08-10T02:21:26.450Z"
+    }
+  ]
+}

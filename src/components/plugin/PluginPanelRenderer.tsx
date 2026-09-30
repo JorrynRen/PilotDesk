@@ -5,7 +5,7 @@
  * 面板数据来自 pluginStore.registeredPanels，组件来自 PluginRegistry。
  */
 
-import { useCallback } from 'react';
+import React from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { usePluginStore } from '../../stores/pluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
@@ -14,32 +14,23 @@ import { PluginIcon } from './PluginIcon';
 interface PluginPanelRendererProps {
   /** 当前选中的插件面板 ID */
   activePanelId?: string;
-  /** 面板切换回调 */
-  onPanelChange?: (panelId: string) => void;
   /** 返回插件列表（面板二级视图的返回入口） */
   onBack?: () => void;
 }
 
-export function PluginPanelRenderer({ activePanelId, onPanelChange, onBack }: PluginPanelRendererProps) {
+export function PluginPanelRenderer({ activePanelId, onBack }: PluginPanelRendererProps) {
   const registeredPanels = usePluginStore((s) => s.registeredPanels);
   const panels = Array.from(registeredPanels.values());
-
-  /** 获取面板组件 */
-  const getComponent = useCallback((panelId: string) => {
-    for (const panel of registeredPanels.values()) {
-      if (panel.contribution.id === panelId) {
-        return pluginRegistry.getPanelComponent(panel.pluginPath, panelId);
-      }
-    }
-    return undefined;
-  }, [registeredPanels]);
 
   if (panels.length === 0) {
     return null;
   }
 
   const activePanel = panels.find((p) => p.contribution.id === activePanelId);
-  const Component = activePanelId ? getComponent(activePanelId) : undefined;
+  // 面板组件由注册表按 pluginPath 解析（引用稳定，不随渲染重建）
+  const Component = activePanel
+    ? pluginRegistry.getPanelComponent(activePanel.pluginPath, activePanel.contribution.id)
+    : undefined;
 
   return (
     <div className="plugin-panels" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -73,7 +64,7 @@ export function PluginPanelRenderer({ activePanelId, onPanelChange, onBack }: Pl
       {activePanel && (
         <div className="p-3" style={{ flex: 1, overflowY: "auto" }}>
           {Component ? (
-            <Component pluginId={activePanel.pluginId} />
+            React.createElement(Component, { pluginId: activePanel.pluginId })
           ) : (
             <div
               className="text-xs py-8 text-center rounded"

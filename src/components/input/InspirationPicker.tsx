@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Search, X } from 'lucide-react';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
+import { headChars } from '../../utils/text';
 
 interface InspirationPickerProps {
   onSelect: (content: string) => void;
@@ -12,11 +13,9 @@ export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps)
   const inspirations = useInspirationStore((s) => s.inspirations);
   const loading = useInspirationStore((s) => s.loading);
   const [query, setQuery] = useState('');
-  const [filtered, setFiltered] = useState<InspirationItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Focus input on mount
   useEffect(() => {
@@ -25,22 +24,24 @@ export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps)
 
   // Local filtering only — never calls searchInspirations/fetchInspirations
   // so the right panel's global state is never polluted
-  useEffect(() => {
-    setSelectedIndex(0);
-    if (!query.trim()) {
-      setFiltered(inspirations);
-    } else {
-      const q = query.toLowerCase();
-      setFiltered(
-        inspirations.filter(
-          (insp) =>
-            insp.title.toLowerCase().includes(q) ||
-            insp.content.toLowerCase().includes(q) ||
-            insp.icon.includes(q)
-        )
-      );
-    }
+  const filtered = useMemo<InspirationItem[]>(() => {
+    if (!query.trim()) return inspirations;
+    const q = query.toLowerCase();
+    return inspirations.filter(
+      (insp) =>
+        insp.title.toLowerCase().includes(q) ||
+        insp.content.toLowerCase().includes(q) ||
+        insp.icon.includes(q)
+    );
   }, [query, inspirations]);
+
+  // 查询词或灵感列表变化时把键盘高亮重置到首项。用「渲染期修正」而不是 effect：在 effect 里同步
+  // setState 会多一轮级联渲染（`react-hooks/set-state-in-effect`），两者行为一致。
+  const [prevFilterDeps, setPrevFilterDeps] = useState<[string, InspirationItem[]]>([query, inspirations]);
+  if (prevFilterDeps[0] !== query || prevFilterDeps[1] !== inspirations) {
+    setPrevFilterDeps([query, inspirations]);
+    setSelectedIndex(0);
+  }
 
   const handleSearch = useCallback(
     (q: string) => {
@@ -141,7 +142,7 @@ export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps)
                   {insp.title}
                 </div>
                 <div className="text-[10px] truncate mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-                  {insp.content.slice(0, 80)}
+                  {headChars(insp.content, 80)}
                 </div>
               </div>
             </button>

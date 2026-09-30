@@ -37,31 +37,31 @@
   border: 1px solid #FDE68A;
 }
 
-[data-theme="dark"] .pilotdesk-toast-info {
+[data-theme-kind="dark"] .pilotdesk-toast-info {
   background-color: #172554;
   color: #93C5FD;
   border-color: #1E3A5F;
 }
 
-[data-theme="dark"] .pilotdesk-toast-warning {
+[data-theme-kind="dark"] .pilotdesk-toast-warning {
   background-color: #451A03;
   color: #FCD34D;
   border-color: #78350F;
 }
 
-[data-theme="dark"] .pilotdesk-toast-error {
+[data-theme-kind="dark"] .pilotdesk-toast-error {
   background-color: #450A0A;
   color: #FCA5A5;
   border-color: #7F1D1D;
 }
 
-[data-theme="dark"] .pilotdesk-toast-success {
+[data-theme-kind="dark"] .pilotdesk-toast-success {
   background-color: #022C22;
   color: #6EE7B7;
   border-color: #064E3B;
 }
 
-[data-theme="dark"] .pilotdesk-toast-info {
+[data-theme-kind="dark"] .pilotdesk-toast-info {
   background-color: #172554;
   color: #93C5FD;
   border-color: #1E3A5F;

@@ -202,7 +202,11 @@ impl ConfirmationItem {
 
 /// 生成 ≤22 字的确认事项摘要标题：取首行非空文本，按字符截断（无省略号）。
 pub(crate) fn summarize_confirmation_title(text: &str) -> String {
-    let line = text.lines().map(str::trim).find(|s| !s.is_empty()).unwrap_or("");
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or("");
     line.chars().take(22).collect()
 }
 

@@ -3,6 +3,7 @@ import {
   Users, Plus, Bot, User, Sparkles, Send, Pause, Play, Square,
   Radio, Paperclip, Scale, ListTodo, CheckCircle, XCircle, AlertCircle, Download, Copy, Trash2, Folder,
   ImagePlus, FileText, X, Clock, Flag, Save, Undo2, Loader2, History, ChevronDown,
+  SkipForward, GitBranch, CheckSquare,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -10,24 +11,35 @@ import { listen } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { useNavigate } from 'react-router-dom';
 import { useGroupChatStore } from '../stores/groupChatStore';
+import { confirmDialog } from '../stores/confirmStore';
 import { useApiProviderStore } from '../stores/apiProviderStore';
 import { useAgentRegistry } from '../hooks/useAgentRegistry';
 import { showToast } from '../utils/toast';
+import { errorMessage } from '../utils/errorMessage';
 import { useImagePreviewStore } from '../stores/imagePreviewStore';
-import { MarkdownRenderer, collapseBlankLines, tightenListGaps, linkifyUrls } from '../components/message/MarkdownRenderer';
+import { MarkdownRenderer } from '../components/message/MarkdownRenderer';
+import { collapseBlankLines, tightenListGaps } from '../components/message/markdownText';
 import { RoomUsageBar } from '../components/groupchat/RoomUsageBar';
-import { ConfirmationCard, parseConfirmation } from '../components/confirmation/ConfirmationCard';
+import { ConfirmationCard } from '../components/confirmation/ConfirmationCard';
+import { parseConfirmation } from '../components/confirmation/confirmationUtils';
 import { ThinkingChain } from '../components/message/ThinkingChain';
+import { MessageSelectionBar } from '../components/message/MessageSelectionBar';
+import { copyToClipboard, useMessageSelection } from '../components/message/messageSelection';
+import { SaveToKnowledgeDialog, type KbDigestInput } from '../components/knowledge/SaveToKnowledgeDialog';
 import { SecurityModeSelector, type SecurityModeValue } from '../components/security/SecurityModeSelector';
+import { VoiceInputButton } from '../components/input/VoiceInputButton';
+import { Select } from '../components/common/Select';
 import type { ThinkingChainStep } from '../components/layout/MainPanel';
 import type {
   GroupChatParticipant,
   GroupChatParticipantInput,
   GroupChatMessage,
+  GroupChatTask,
+  GroupChatDepChangePreview,
   CreateGroupChatRoomInput,
   GroupChatToolCall,
-  GroupChatConfirmationRequest,
   GroupChatConfirmationResponseInput,
   RoomStatus,
 } from '../types/groupchat';
@@ -56,9 +68,58 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   success: '完成',
   failed: '失败',
   skipped: '跳过',
+  // 后端产物：目标变更时归档旧任务、Director 重排时级联删减（原因见任务展开后的说明）
+  aborted: '已作废',
 };
 
 const FALLBACK_COLORS = ['#3b82f6', '#f59e0b', '#ef4444', '#10b981', '#8b5cf6', '#ec4899'];
+
+// ── 任务依赖工具（人工干预共用）──
+//
+// `dependsOn` 存的是**任务数组下标**（按 taskNo 升序，与后端 `list_tasks` 同序），不是任务 id：
+// 展示、编辑与提交都要经这里换算，避免把下标当 id 传给后端（后端按 id 解析，会直接报错）。
+
+/** 解析 dependsOn 下标数组（脏数据一律按空依赖处理，不抛错中断渲染）。 */
+function parseDepIndices(task: GroupChatTask): number[] {
+  try {
+    const parsed: unknown = JSON.parse(task.dependsOn || '[]');
+    return Array.isArray(parsed) ? parsed.filter((n): n is number => typeof n === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 前置任务（展示/编辑用）。 */
+function depTasksOf(task: GroupChatTask, tasks: GroupChatTask[]): GroupChatTask[] {
+  return parseDepIndices(task)
+    .map((i) => tasks[i])
+    .filter((t): t is GroupChatTask => !!t);
+}
+
+/** 直接/间接受该任务影响的后续任务：跳过前置会让它们因"前置未成功"被调度跳过，需在确认前说清。 */
+function dependentTasksOf(task: GroupChatTask, tasks: GroupChatTask[]): GroupChatTask[] {
+  const targetIdx = tasks.findIndex((t) => t.id === task.id);
+  if (targetIdx < 0) return [];
+  const hit = new Set<number>([targetIdx]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    tasks.forEach((t, i) => {
+      if (hit.has(i)) return;
+      if (parseDepIndices(t).some((d) => hit.has(d))) {
+        hit.add(i);
+        changed = true;
+      }
+    });
+  }
+  hit.delete(targetIdx);
+  return [...hit].sort((a, b) => a - b).map((i) => tasks[i]);
+}
+
+/** 任务编号文案：`T1、T3`。 */
+function taskNosText(nos: number[]): string {
+  return nos.map((n) => `T${n}`).join('、');
+}
 
 function genId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -342,7 +403,7 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
       await selectRoom(room.id);
       onClose();
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -366,7 +427,7 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-4">
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-4 pd-scroll-stable">
         <label className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
           房间标题
           <input
@@ -393,29 +454,27 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
         <div className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
           Director 模型（协调/裁决）
           <div className="flex gap-2">
-            <select
-              className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            <Select
+              className="flex-1"
               value={directorProvider}
-              onChange={(e) => { setDirectorProvider(e.target.value); setDirectorModel(''); }}
-            >
-              <option value="">选择提供商</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <select
-              className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+              onChange={(v) => { setDirectorProvider(v); setDirectorModel(''); }}
+              placeholder="选择提供商"
+              options={[
+                { value: '', label: '选择提供商' },
+                ...providers.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
+            <Select
+              className="flex-1"
               value={directorModel}
-              onChange={(e) => setDirectorModel(e.target.value)}
+              onChange={setDirectorModel}
+              placeholder="选择模型"
               disabled={!directorProvider}
-            >
-              <option value="">选择模型</option>
-              {modelsOf(directorProvider).map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
+              options={[
+                { value: '', label: '选择模型' },
+                ...modelsOf(directorProvider).map((m) => ({ value: m, label: m })),
+              ]}
+            />
           </div>
         </div>
 
@@ -490,42 +549,38 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
               />
               {d.type === 'api' ? (
                 <div className="flex gap-2">
-                  <select
-                    className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                  <Select
+                    className="flex-1"
                     value={d.provider}
-                    onChange={(e) => updateDraft(i, { provider: e.target.value, model: '' })}
-                  >
-                    <option value="">选择提供商</option>
-                    {providers.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                  <select
-                    className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
-                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                    onChange={(v) => updateDraft(i, { provider: v, model: '' })}
+                    placeholder="选择提供商"
+                    options={[
+                      { value: '', label: '选择提供商' },
+                      ...providers.map((p) => ({ value: p.id, label: p.name })),
+                    ]}
+                  />
+                  <Select
+                    className="flex-1"
                     value={d.model}
-                    onChange={(e) => updateDraft(i, { model: e.target.value })}
+                    onChange={(v) => updateDraft(i, { model: v })}
+                    placeholder="选择模型"
                     disabled={!d.provider}
-                  >
-                    <option value="">选择模型</option>
-                    {modelsOf(d.provider).map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: '', label: '选择模型' },
+                      ...modelsOf(d.provider).map((m) => ({ value: m, label: m })),
+                    ]}
+                  />
                 </div>
               ) : (
-                <select
-                  className="px-3 py-2 rounded-lg text-xs outline-none"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                <Select
                   value={d.agentType}
-                  onChange={(e) => updateDraft(i, { agentType: e.target.value })}
-                >
-                  <option value="">选择 CLI Agent 类型</option>
-                  {cliAgents.map((a) => (
-                    <option key={a.agentType} value={a.agentType}>{a.displayName || a.agentType}</option>
-                  ))}
-                </select>
+                  onChange={(v) => updateDraft(i, { agentType: v })}
+                  placeholder="选择 CLI Agent 类型"
+                  options={[
+                    { value: '', label: '选择 CLI Agent 类型' },
+                    ...cliAgents.map((a) => ({ value: a.agentType, label: a.displayName || a.agentType })),
+                  ]}
+                />
               )}
             </div>
           ))}
@@ -601,7 +656,8 @@ function AddParticipantModal({ onClose }: { onClose: () => void }) {
       setError('请填写显示名');
       return;
     }
-    let agentConfig = '{}';
+    // 两个分支都会赋值（缺项时提前 return），所以不需要初值 —— 给了初值反而会被判成"无用赋值"
+    let agentConfig: string;
     if (type === 'api') {
       if (!provider || !model) {
         setError('请选择提供商与模型');
@@ -626,7 +682,7 @@ function AddParticipantModal({ onClose }: { onClose: () => void }) {
       });
       onClose();
     } catch (err) {
-      setError(String(err));
+      setError(errorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -699,42 +755,38 @@ function AddParticipantModal({ onClose }: { onClose: () => void }) {
 
         {type === 'api' ? (
           <div className="flex gap-2">
-            <select
-              className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            <Select
+              className="flex-1"
               value={provider}
-              onChange={(e) => { setProvider(e.target.value); setModel(''); }}
-            >
-              <option value="">选择提供商</option>
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <select
-              className="flex-1 px-3 py-2 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+              onChange={(v) => { setProvider(v); setModel(''); }}
+              placeholder="选择提供商"
+              options={[
+                { value: '', label: '选择提供商' },
+                ...providers.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
+            <Select
+              className="flex-1"
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={setModel}
+              placeholder="选择模型"
               disabled={!provider}
-            >
-              <option value="">选择模型</option>
-              {modelsOf(provider).map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
+              options={[
+                { value: '', label: '选择模型' },
+                ...modelsOf(provider).map((m) => ({ value: m, label: m })),
+              ]}
+            />
           </div>
         ) : (
-          <select
-            className="px-3 py-2 rounded-lg text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          <Select
             value={agentType}
-            onChange={(e) => setAgentType(e.target.value)}
-          >
-            <option value="">选择 CLI Agent 类型</option>
-            {cliAgents.map((a) => (
-              <option key={a.agentType} value={a.agentType}>{a.displayName || a.agentType}</option>
-            ))}
-          </select>
+            onChange={setAgentType}
+            placeholder="选择 CLI Agent 类型"
+            options={[
+              { value: '', label: '选择 CLI Agent 类型' },
+              ...cliAgents.map((a) => ({ value: a.agentType, label: a.displayName || a.agentType })),
+            ]}
+          />
         )}
 
         {error && (
@@ -768,7 +820,9 @@ const CONCLUSION_SECTIONS: { title: string; icon: LucideIcon; color: string }[] 
  * - 匹配不到（参与者已移出）或显示名与 id 相同时保留原样。
  * 后端消息一律以唯一 id 落库，显示名只在本层做展示映射，避免同名/删减导致的指代歧义。
  */
-export function renderMentions(text: string, mentionMap: ReadonlyMap<string, string>): string {
+// 只在文件内用（不导出）：本文件已导出组件，再导出函数会让 Fast Refresh 失效
+// （react-refresh/only-export-components）。要复用时再抽成独立模块。
+function renderMentions(text: string, mentionMap: ReadonlyMap<string, string>): string {
   if (!text || mentionMap.size === 0) return text;
   const re = /\[@([^\]]+)\]|@([\w-]+)/g;
   return text.replace(re, (m, bracketed, bare) => {
@@ -835,6 +889,14 @@ function ConclusionContent({ content }: { content: string }) {
   );
 }
 
+/**
+ * 一条群聊消息能否参与知识沉淀。
+ * 确认请求 / 回复（`confirmation_*`）是流程动作（提问与点选），空正文没有可沉淀的东西 —— 两者都不选。
+ */
+function isSedimentable(m: GroupChatMessage): boolean {
+  return !m.kind.startsWith('confirmation_') && m.content.trim() !== '';
+}
+
 interface GroupChatMessageItemProps {
   message: GroupChatMessage;
   participant?: GroupChatParticipant;
@@ -848,6 +910,10 @@ interface GroupChatMessageItemProps {
   /** 已提交时的结构化回复（confirmation_response 的 extra.responses）：控件级还原勾选/输入/选择。 */
   submittedResponses?: GroupChatConfirmationResponseInput[];
   onRespond: (requestId: string, responses: GroupChatConfirmationResponseInput[]) => Promise<void>;
+  /** 多选态：在消息左侧显示勾选框（仅群聊页进入多选时传） */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }
 
 /** 群聊默认页介绍：未选中会话实例时展示功能能力与使用方法。 */
@@ -920,6 +986,9 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
   responded,
   submittedResponses,
   onRespond,
+  selectable,
+  selected,
+  onToggleSelect,
 }: GroupChatMessageItemProps) {
   const atts = parseAttachments(message.attachments);
   const confirmation = message.kind === 'confirmation_request' ? parseConfirmation(message.extra) : null;
@@ -932,6 +1001,15 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
   return (
     <div className="flex justify-start px-4 py-1.5">
       <div className="flex w-full items-start gap-2">
+        {/* 多选勾选框：只在群聊页进入多选时出现（确认请求/回复是流程动作，不参与沉淀） */}
+        {selectable && <input
+          type="checkbox"
+          checked={Boolean(selected)}
+          onChange={() => onToggleSelect?.(message.id)}
+          className="shrink-0 mt-1.5 cursor-pointer"
+          style={{ accentColor: 'var(--accent)' }}
+          title="选中后可与其它消息一起沉淀为知识"
+        />}
         <ParticipantAvatar icon={participantIcon(participant?.participantType ?? 'agent')} color={color} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-0.5">
@@ -1024,6 +1102,319 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
   );
 });
 
+// ── 任务人工干预弹窗（新增 / 改依赖）──
+//
+// 任务面板本身是只读投影（数据源是 room_events 的任务事件），干预一律走后端命令，
+// 成功后由 `task_updated` 事件回流刷新，故这里不做本地乐观更新。
+
+/** 前置任务多选（新增/改依赖共用）。 */
+function DepPicker({
+  tasks,
+  excludeId,
+  selected,
+  onToggle,
+}: {
+  tasks: GroupChatTask[];
+  excludeId?: string;
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+}) {
+  const options = tasks.filter((t) => t.id !== excludeId);
+  if (options.length === 0) {
+    return (
+      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+        暂无可选前置任务
+      </span>
+    );
+  }
+  return (
+    <div
+      className="max-h-40 overflow-y-auto rounded-lg p-1 flex flex-col gap-0.5"
+      style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+    >
+      {options.map((t) => (
+        <label
+          key={t.id}
+          className="flex items-start gap-1.5 px-1 py-0.5 rounded cursor-pointer text-[10px]"
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          <input type="checkbox" className="mt-0.5" checked={selected.has(t.id)} onChange={() => onToggle(t.id)} />
+          <span className="shrink-0" style={{ color: 'var(--text-tertiary)' }}>T{t.taskNo}</span>
+          <span className="flex-1 truncate">{t.description}</span>
+          <span className="shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+            {TASK_STATUS_LABEL[t.status] ?? t.status}
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+/** 「新增子任务」：只做追加（不改既有任务与目标锚点），以「讨论中」进入编排。 */
+function AddTaskModal({
+  participants,
+  tasks,
+  onClose,
+  onSubmit,
+}: {
+  participants: GroupChatParticipant[];
+  tasks: GroupChatTask[];
+  onClose: () => void;
+  onSubmit: (description: string, dependsOn: string[], assignee: string | null) => Promise<void>;
+}) {
+  const [description, setDescription] = useState('');
+  const [assignee, setAssignee] = useState('');
+  const [depIds, setDepIds] = useState<Set<string>>(() => new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState('');
+
+  const toggleDep = (id: string) =>
+    setDepIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  async function submit() {
+    if (!description.trim()) {
+      setErr('请填写任务描述');
+      return;
+    }
+    setSubmitting(true);
+    setErr('');
+    try {
+      await onSubmit(description.trim(), [...depIds], assignee || null);
+      onClose();
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-[460px] max-h-[80vh] overflow-y-auto rounded-xl p-5 flex flex-col gap-3"
+        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>新增子任务</div>
+        <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+          只做追加，不改动既有任务与目标。新任务以「讨论中」开始，由主持人/参与者讨论定性后进入执行；
+          房间已结束时追加会自动唤醒编排。
+        </span>
+        <textarea
+          className="pd-input w-full px-2 py-1.5 rounded-lg text-xs resize-none outline-none"
+          style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          rows={3}
+          placeholder="任务描述（要做什么、产出什么）"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] shrink-0" style={{ color: 'var(--text-secondary)' }}>负责人</span>
+          <Select
+            className="flex-1"
+            size="sm"
+            value={assignee}
+            onChange={setAssignee}
+            placeholder="留空（由主持人指派）"
+            options={[
+              { value: '', label: '留空（由主持人指派）' },
+              // 只有 api/cli 参与者能执行任务：user/director 是人与主持人角色，指派过去等于"无可用执行者"
+              ...participants
+                .filter((p) => p.participantType === 'api' || p.participantType === 'cli')
+                .map((p) => ({ value: p.id, label: p.displayName })),
+            ]}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>前置任务（全部完成后本任务才会执行）</span>
+          <DepPicker tasks={tasks} selected={depIds} onToggle={toggleDep} />
+        </div>
+        {err && <span className="text-[10px] break-words" style={{ color: 'var(--status-danger)' }}>{err}</span>}
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          >
+            取消
+          </button>
+          <button
+            onClick={submit}
+            disabled={submitting}
+            className="pd-btn px-3 py-1.5 text-xs rounded transition-colors disabled:opacity-50"
+            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+          >
+            {submitting ? '提交中…' : '新增'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 「修改依赖」：先预览变更后果（确认卡），确认后再提交 —— 依赖改错会让任务永久等待。 */
+function TaskDepsModal({
+  task,
+  tasks,
+  onClose,
+  onPreview,
+  onSubmit,
+}: {
+  task: GroupChatTask;
+  tasks: GroupChatTask[];
+  onClose: () => void;
+  onPreview: (dependsOn: string[]) => Promise<GroupChatDepChangePreview>;
+  onSubmit: (dependsOn: string[]) => Promise<void>;
+}) {
+  const [depIds, setDepIds] = useState<Set<string>>(() => new Set(depTasksOf(task, tasks).map((t) => t.id)));
+  const [preview, setPreview] = useState<GroupChatDepChangePreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  // 依赖一改，旧预览立即失效（否则会拿着过时结论点确认）
+  const toggleDep = (id: string) => {
+    setPreview(null);
+    setErr('');
+    setDepIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  async function runPreview() {
+    setBusy(true);
+    setErr('');
+    try {
+      setPreview(await onPreview([...depIds]));
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    setBusy(true);
+    setErr('');
+    try {
+      await onSubmit([...depIds]);
+      onClose();
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasCycle = !!preview && preview.cycleTaskNos.length > 0;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-[460px] max-h-[80vh] overflow-y-auto rounded-xl p-5 flex flex-col gap-3"
+        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+          修改依赖 · T{task.taskNo}
+        </div>
+        <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+          仅「讨论中 / 待执行」的任务可改依赖；改完先预览影响，再确认提交。
+        </span>
+        <DepPicker tasks={tasks} excludeId={task.id} selected={depIds} onToggle={toggleDep} />
+
+        {preview && (
+          <div
+            className="rounded-lg p-2 flex flex-col gap-1 text-[10px]"
+            style={{
+              backgroundColor: hasCycle ? 'var(--status-danger-bg)' : 'var(--bg-tertiary)',
+              border: `1px solid ${hasCycle ? 'var(--status-danger)' : 'var(--border)'}`,
+            }}
+          >
+            <span className="font-medium" style={{ color: hasCycle ? 'var(--status-danger)' : 'var(--text-secondary)' }}>
+              {hasCycle ? '预览：该依赖不可用' : '预览：变更后果'}
+            </span>
+            {hasCycle && (
+              <span style={{ color: 'var(--status-danger)' }}>
+                会形成依赖环（{taskNosText(preview.cycleTaskNos)}），
+                环内任务会互相等待直至判死锁失败，提交将被拒绝。
+              </span>
+            )}
+            {preview.blockedTaskNos.length > 0 && (
+              <span style={{ color: 'var(--text-secondary)' }}>
+                新增阻塞：{taskNosText(preview.blockedTaskNos)}（等待前置完成）
+              </span>
+            )}
+            {preview.unblockedTaskNos.length > 0 && (
+              <span style={{ color: 'var(--status-success)' }}>
+                解除阻塞：{taskNosText(preview.unblockedTaskNos)}（变为就绪）
+              </span>
+            )}
+            {!hasCycle && preview.blockedTaskNos.length === 0 && preview.unblockedTaskNos.length === 0 && (
+              <span style={{ color: 'var(--text-tertiary)' }}>就绪顺序不变</span>
+            )}
+          </div>
+        )}
+
+        {err && <span className="text-[10px] break-words" style={{ color: 'var(--status-danger)' }}>{err}</span>}
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          >
+            取消
+          </button>
+          {preview === null ? (
+            <button
+              onClick={runPreview}
+              disabled={busy}
+              className="pd-btn px-3 py-1.5 text-xs rounded transition-colors disabled:opacity-50"
+              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+            >
+              {busy ? '计算中…' : '预览变更'}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={() => setPreview(null)}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              >
+                返回修改
+              </button>
+              <button
+                onClick={submit}
+                disabled={busy || hasCycle}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors disabled:opacity-50"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                {busy ? '提交中…' : '确认提交'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** 群聊页面：rightPanelOpen 由外层 MainLayout 的标题栏折叠按钮控制页内右侧面板显隐 */
 export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: boolean }) {
   const {
@@ -1033,8 +1424,10 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     loadRooms, selectRoom, sendMessage, deleteRoom, removeParticipant,
     respondConfirmation, pause, resume, abort, exportWorkflow,
     setRoomOutputDir, actorAlive, roomsActorAlive,
+    skipTask, addTask, updateTaskDeps, previewTaskDeps, promoteWorkflow,
   } = useGroupChatStore();
 
+  const navigate = useNavigate();
   const { getTheme } = useAgentRegistry();
   const [input, setInput] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -1042,6 +1435,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const [outputDirDraft, setOutputDirDraft] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [exporting, setExporting] = useState(false);
+  /** 「转为可运行工作流」进行中（落库 + 跳转编辑器前禁止重复点击）。 */
+  const [promoting, setPromoting] = useState(false);
   const [exportJson, setExportJson] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
@@ -1069,6 +1464,9 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   const [expandedStances, setExpandedStances] = useState<Set<string>>(() => new Set());
   /** 任务条目展开集合（taskId → 展开）。默认折叠只显示一行。 */
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(() => new Set());
+  /** 任务人工干预弹窗（null=关闭）：新增子任务 / 修改依赖。 */
+  const [showAddTask, setShowAddTask] = useState(false);
+  const [depsTask, setDepsTask] = useState<GroupChatTask | null>(null);
   /** 群聊文件历史开关（持久化于 tool_overrides.groupchat）。 */
   const [fileHistoryEnabled, setFileHistoryEnabled] = useState(true);
 
@@ -1089,6 +1487,39 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       return next;
     });
   }, []);
+
+  /** 手动跳过子任务：跳过即终态，且依赖它的后续任务会因"前置未成功"被调度跳过，故确认前先说清。 */
+  const handleSkipTask = useCallback(
+    async (task: GroupChatTask) => {
+      const dependents = dependentTasksOf(task, tasks);
+      const confirmed = await confirmDialog({
+        title: `跳过 T${task.taskNo}`,
+        message:
+          `确定跳过「${task.description}」？跳过是终态，该任务不会再执行。` +
+          (dependents.length > 0
+            ? `\n依赖它的 ${taskNosText(dependents.map((t) => t.taskNo))} 会因前置未成功而被自动跳过。`
+            : ''),
+        confirmText: '跳过',
+      });
+      if (!confirmed) return;
+      try {
+        await skipTask(task.id);
+        showToast(`已跳过 T${task.taskNo}`, 'success');
+      } catch (e) {
+        showToast(`跳过失败: ${errorMessage(e)}`, 'error');
+      }
+    },
+    [tasks, skipTask],
+  );
+
+  /** 新增子任务：失败信息交给弹窗内展示（用户要就地改，而不是看一条 8 秒后消失的 Toast）。 */
+  const handleAddTask = useCallback(
+    async (description: string, dependsOn: string[], assignee: string | null) => {
+      await addTask(description, dependsOn, assignee);
+      showToast('已新增子任务', 'success');
+    },
+    [addTask],
+  );
 
   // 读取群聊文件历史开关状态（切房间/首次加载均刷新）
   useEffect(() => {
@@ -1118,34 +1549,59 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     }
   }, []);
 
+  /**
+   * 请求一次文件历史。
+   *
+   * 不在 effect 里**同步**调用 `loadRoomHistory`：它开头就 `setHistoryLoading(true)`，
+   * 属于"在 effect 体内同步 setState"（`react-hooks/set-state-in-effect` 会判为级联渲染）。
+   * 推到微任务里调用 —— 仍是同一个任务、早于这一帧的绘制，用户看不到差别。
+   */
+  const requestRoomHistory = useCallback(
+    (roomId: string) => {
+      void Promise.resolve().then(() => loadRoomHistory(roomId));
+    },
+    [loadRoomHistory],
+  );
+
   // 切房间时加载该房间的文件历史
   useEffect(() => {
-    loadRoomHistory(currentRoomId ?? '');
-  }, [currentRoomId, loadRoomHistory]);
+    requestRoomHistory(currentRoomId ?? '');
+  }, [currentRoomId, requestRoomHistory]);
 
   // 切入「文件历史」tab 时刷新记录（讨论过程中可能持续产生新写入）
   useEffect(() => {
     if (rightTab === 'files') {
-      loadRoomHistory(currentRoomId ?? '');
+      requestRoomHistory(currentRoomId ?? '');
     }
-  }, [rightTab, currentRoomId, loadRoomHistory]);
+  }, [rightTab, currentRoomId, requestRoomHistory]);
 
   // 文件历史更新事件：运行中产生新快照时实时刷新徽标数量（防抖 300ms 合并连续写）。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // 与 listen() 的 Promise 是竞态：切房间/卸载时 cleanup 先跑，unlisten 还是 undefined，
+    // 监听器就留着了——而且它的闭包锁的是**旧** roomId，之后每次文件历史更新都会去刷新旧房间。
+    // 所以既要在 resolve 后发现已卸载就立刻反注册，也要让回调本身认 disposed。
+    let disposed = false;
     (async () => {
       try {
-        unlisten = await listen<{ roomId: string }>('file-history-updated', (event) => {
+        const off = await listen<{ roomId: string }>('file-history-updated', (event) => {
+          if (disposed) return;
           if (event.payload.roomId !== currentRoomId) return;
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => loadRoomHistory(currentRoomId ?? ''), 300);
         });
+        if (disposed) {
+          off();
+          return;
+        }
+        unlisten = off;
       } catch (e) {
         console.warn('[GroupChat] 注册文件历史事件监听失败:', e);
       }
     })();
     return () => {
+      disposed = true;
       if (timer) clearTimeout(timer);
       unlisten?.();
     };
@@ -1177,10 +1633,23 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
 
   const currentRoom = rooms.find((r) => r.id === currentRoomId) ?? null;
 
+  /** 多选态：勾选若干条群聊消息 → 作为**一段对话**交给 AI 整理成知识（状态机与选择条见 MessageSelection） */
+  const { selectMode, selectedIds, enter: enterSelectMode, exit: exitSelectMode, clear: clearSelection, toggle: toggleSelect } = useMessageSelection();
+  /** 待沉淀的消息（非空时弹出入库弹窗） */
+  const [kbMessages, setKbMessages] = useState<KbDigestInput[] | null>(null);
+
   // 同步产物目录编辑草稿到当前房间配置。
-  useEffect(() => {
+  //
+  // 用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮级联渲染
+  // （`react-hooks/set-state-in-effect`），而这里本来就是"外部值变了就把草稿重置成它"，
+  // 属于 React 推荐的 adjust-during-render 场景。用「房间 + 目标值」做判据，
+  // 用户自己编辑草稿不会被覆盖。
+  const [dirDraftSyncKey, setDirDraftSyncKey] = useState<string | null>(null);
+  const dirDraftKey = `${currentRoomId ?? ''}|${currentRoom?.outputDir ?? ''}`;
+  if (dirDraftSyncKey !== dirDraftKey) {
+    setDirDraftSyncKey(dirDraftKey);
     setOutputDirDraft(currentRoom?.outputDir ?? '');
-  }, [currentRoomId, currentRoom?.outputDir]);
+  }
 
   const participantById = useMemo(() => {
     const map = new Map<string, GroupChatParticipant>();
@@ -1286,6 +1755,20 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     [participantById],
   );
 
+  /**
+   * 选中的群聊消息，**按对话顺序**（`sortedMessages` 的 seq 顺序，不是勾选顺序）——
+   * AI 要按"谁先说、谁后说"理解上下文。
+   */
+  const selectedMessages = useMemo(
+    () => sortedMessages.filter((m) => selectedIds.includes(m.id) && isSedimentable(m)),
+    [sortedMessages, selectedIds],
+  );
+
+  // 切房间就退出多选：上一个房间的勾选在新房间里毫无意义（与切会话同一口径）
+  useEffect(() => {
+    exitSelectMode();
+  }, [currentRoomId, exitSelectMode]);
+
   // 参与者 id → 显示名映射，用于消息正文/工具调用/立场/子任务等提及的视觉替换。
   const mentionMap = useMemo(
     () => new Map(participants.map((p) => [p.id, p.displayName])),
@@ -1342,10 +1825,13 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           responded={responded}
           submittedResponses={submittedResponses}
           onRespond={respondConfirmation}
+          selectable={selectMode && isSedimentable(m)}
+          selected={selectedIds.includes(m.id)}
+          onToggleSelect={toggleSelect}
         />
       );
     },
-    [sortedMessages, participantById, colorOf, displayNameOf, mentionMap, respondedRequestIds, replyResponsesByRequest, respondConfirmation],
+    [sortedMessages, participantById, colorOf, displayNameOf, mentionMap, respondedRequestIds, replyResponsesByRequest, respondConfirmation, selectMode, selectedIds, toggleSelect],
   );
 
   // 切房间 / 首屏加载完成后滚动到底部。
@@ -1370,9 +1856,15 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
 
   // 思考等待计时：当前发言者就位后每秒 +1（thinkingTick 即等待秒数），驱动「正在思考… Ns」与超时警示刷新。
   const [thinkingTick, setThinkingTick] = useState(0);
+  // 换发言人就归零：用「渲染期修正」而不是在 effect 里 setState（后者会多一轮级联渲染，
+  // 且 `react-hooks/set-state-in-effect` 会报）。在渲染期改，本帧直接以 0 渲染，不会有旧值闪现。
+  const [tickSpeaker, setTickSpeaker] = useState(currentSpeaker);
+  if (tickSpeaker !== currentSpeaker) {
+    setTickSpeaker(currentSpeaker);
+    setThinkingTick(0);
+  }
   useEffect(() => {
     if (!currentSpeaker) return;
-    setThinkingTick(0);
     const t = setInterval(() => setThinkingTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [currentSpeaker]);
@@ -1542,7 +2034,12 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       (!currentSpeaker && !hasLiveActivity));
 
   async function handleDeleteRoom(roomId: string) {
-    if (!window.confirm('确定删除该群聊房间及其全部消息、任务与参与者数据？')) return;
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: '确定删除该群聊房间及其全部消息、任务、参与者数据与该房间的用量记录？',
+      confirmText: '删除',
+    });
+    if (!ok) return;
     try {
       await deleteRoom(roomId);
     } catch (err) {
@@ -1551,7 +2048,12 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   }
 
   async function handleRemoveParticipant(participantId: string) {
-    if (!window.confirm('确定移除该参与者？')) return;
+    const ok = await confirmDialog({
+      title: '确认移除',
+      message: '确定移除该参与者？',
+      confirmText: '移除',
+    });
+    if (!ok) return;
     try {
       await removeParticipant(participantId);
     } catch (err) {
@@ -1570,7 +2072,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       await setRoomOutputDir(sel);
       showToast('项目目录已切换（后续消息以该目录为工作空间根）', 'info');
     } catch (e) {
-      showToast(`切换项目目录失败: ${String(e)}`, 'error');
+      showToast(`切换项目目录失败: ${errorMessage(e)}`, 'error');
     }
   }, [currentRoomId, setRoomOutputDir]);
 
@@ -1583,7 +2085,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     try {
       return await invoke<Attachment[]>('groupchat_save_attachments', { roomId: currentRoomId, items });
     } catch (e) {
-      showToast(`附件保存失败: ${String(e)}`, 'error');
+      showToast(`附件保存失败: ${errorMessage(e)}`, 'error');
       return [];
     }
   }, [currentRoomId]);
@@ -1808,7 +2310,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       const result = await exportWorkflow();
       setExportJson(JSON.stringify(result, null, 2));
     } catch (err) {
-      setExportJson(JSON.stringify({ error: String(err) }, null, 2));
+      setExportJson(JSON.stringify({ error: errorMessage(err) }, null, 2));
     } finally {
       setExporting(false);
     }
@@ -1827,7 +2329,26 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       showToast('已保存到文件', 'success');
     } catch (err) {
       console.warn('[GroupChat] 保存失败:', err);
-      showToast(`保存失败: ${err}`, 'error');
+      showToast(`保存失败: ${errorMessage(err)}`, 'error');
+    }
+  }
+
+  /**
+   * 精准转换：把任务议程落库为可直接运行的工作流定义，随后打开编辑器（用户可立即点运行）。
+   * 失败信息用 Toast 呈现（错误文案来自后端，如"任务依赖存在环""没有可转换的子任务"）。
+   */
+  async function handlePromote() {
+    if (!currentRoomId) return;
+    setPromoting(true);
+    try {
+      const def = await promoteWorkflow();
+      setExportJson(null);
+      showToast(`已创建可运行工作流「${def.name}」`, 'success');
+      navigate(`/workflow/editor?id=${def.id}`);
+    } catch (err) {
+      showToast(`转为工作流失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setPromoting(false);
     }
   }
 
@@ -1851,7 +2372,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             新建
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
           {rooms.length === 0 && (
             <div className="px-3 py-4 text-[11px] text-center" style={{ color: 'var(--text-tertiary)' }}>
               暂无房间，点击「新建」创建。
@@ -1869,8 +2390,10 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 onClick={() => selectRoom(r.id)}
                 className="w-full text-left px-3 py-2 rounded-lg transition-colors flex flex-col"
                 style={{
-                  backgroundColor: currentRoomId === r.id ? 'var(--accent-light)' : 'var(--bg-tertiary)',
-                  border: `1px solid ${currentRoomId === r.id ? 'var(--accent)' : 'var(--border)'}`,
+                  // 选中态**统一按会话列表（`SessionListItem`）的口径**：选中 = `var(--border)` 底、
+                  // 未选中 = 透明（卡片描边另给）。主题色只留给批量多选，不用它表达"我在哪儿"。
+                  backgroundColor: currentRoomId === r.id ? 'var(--border)' : 'transparent',
+                  border: '1px solid var(--border)',
                   alignItems: 'stretch',
                 }}
               >
@@ -1922,14 +2445,18 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             </span>
           )}
           <div className="flex-1" />
-          {currentRoom && (
+          {currentRoom && sortedMessages.length > 0 && (
             <button
-              onClick={() => selectRoom('')}
-              className="p-1.5 rounded-md hover:opacity-70 transition-opacity shrink-0"
-              style={{ color: 'var(--text-tertiary)' }}
-              title="关闭当前会话实例"
+              onClick={() => (selectMode ? exitSelectMode() : enterSelectMode())}
+              className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
+              style={{
+                color: selectMode ? 'var(--accent)' : 'var(--text-secondary)',
+                backgroundColor: selectMode ? 'var(--accent-light)' : 'transparent',
+              }}
+              title="多选消息：勾选若干条，交给 AI 整理成多条知识"
             >
-              <X size={13} />
+              {selectMode ? <X size={11} /> : <CheckSquare size={11} />}
+              {selectMode ? '退出多选' : '多选'}
             </button>
           )}
           {/* 运行/暂停/已中止 房间显示控制按钮；running 分真/假（Actor 存活）：
@@ -1968,12 +2495,51 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               className="pd-btn pd-btn-sm"
               style={{ color: 'var(--text-secondary)' }}
               disabled={exporting}
+              title="按任务议程生成可直接运行的工作流定义（含依赖与前置产出引用）"
             >
               <Download size={11} />
-              {exporting ? '导出中…' : '导出为工作流'}
+              {exporting ? '生成中…' : '转为工作流'}
+            </button>
+          )}
+          {/* 关闭当前会话实例：固定在**行尾最右**（不再夹在多选与控制按钮之间） */}
+          {currentRoom && (
+            <button
+              onClick={() => selectRoom('')}
+              className="p-1.5 rounded-md hover:opacity-70 transition-opacity shrink-0"
+              style={{ color: 'var(--text-tertiary)' }}
+              title="关闭当前会话实例"
+            >
+              <X size={13} />
             </button>
           )}
         </div>
+
+        {/* 选择条：多选态下出现。把勾选的群聊消息**按对话顺序**交给 AI 整理成 0..N 条知识 */}
+        {selectMode && (
+          <MessageSelectionBar
+            count={selectedMessages.length}
+            hint="按对话顺序整理成多条知识（确认请求与系统消息不参与）"
+            onCopy={() =>
+              void copyToClipboard(
+                selectedMessages
+                  .map((m) => `${displayNameOf(m.sender)}：${m.content}`)
+                  .join('\n\n'),
+                `已复制 ${selectedMessages.length} 条消息`,
+              )
+            }
+            onDigest={() =>
+              setKbMessages(
+                selectedMessages.map((m) => ({
+                  // 用户 → 'user'（后端渲染成「用户」）；其余用**显示名**当角色（主持人 / 研究员 A…），
+                  // 群聊里"谁说的"比一个内部 id 有意义得多
+                  role: m.sender === 'user' ? 'user' : displayNameOf(m.sender),
+                  content: m.content,
+                })),
+              )
+            }
+            onClear={clearSelection}
+          />
+        )}
 
         <div className="flex-1 overflow-hidden">
           {!currentRoomId ? (
@@ -2020,57 +2586,18 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           </div>
         )}
 
-        <div className="shrink-0" style={{ borderTop: '1px solid var(--border)' }} ref={inputBarRef}>
-          {/* 工具行：会话安全模式 + 附件 + 项目根 + 发送（仿会话页工具栏） */}
-          <div className="flex items-center gap-1 px-4 pt-3">
-            <SecurityModeSelector value={securityMode} onChange={setSecurityMode} />
-            <button
-              onClick={handlePickAttachments}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
-              style={{
-                color: attachments.length > 0 ? 'var(--accent)' : 'var(--text-secondary)',
-                backgroundColor: attachments.length > 0 ? 'var(--border)' : 'transparent',
-              }}
-              title="添加附件（图片/文件，支持拖拽/粘贴，最多 8 个）"
+        <div className="shrink-0" ref={inputBarRef}>
+          {/* 输入区：容器化输入区（边界、聚焦态、拖拽态挂在容器上，见 .pd-composer）。
+              工具栏（安全模式 / 附件 / 项目根）已并入容器内、与发送键同一行，与会话页 InputBar 同一套方案。
+              顶部 pt-3 是与消息列表/实时活动面板之间的安全距离（原先靠一条 border-top 分隔，已去掉）；
+              底部只留 4px：与其下方的用量行（自身 py-1）合成 8px 视觉间隙 */}
+          <div className="px-4 pt-3 pb-1">
+            <div
+              className="pd-composer"
+              data-dragging={dragActive}
+              data-disabled={!currentRoomId}
             >
-              <Paperclip size={11} />
-              附件
-            </button>
-            <button
-              onClick={handlePickRoomDir}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors shrink-0 max-w-[180px]"
-              style={{ color: currentRoom?.outputDir ? 'var(--text-primary)' : 'var(--text-tertiary)', backgroundColor: 'transparent' }}
-              title={currentRoom?.outputDir
-                ? `项目/工作空间根：${currentRoom.outputDir}\n点击可切换（后续消息生效）`
-                : '未设置项目目录（运行时默认 <工作目录>/outputs/ 下），点击选择'}
-            >
-              <Folder size={11} style={{ flexShrink: 0 }} />
-              <span className="truncate">{currentRoom?.outputDir ? currentRoom.outputDir.split(/[\\/]/).pop() || currentRoom.outputDir : '默认项目'}</span>
-            </button>
-            <div className="flex-1" />
-            <button
-              onClick={handleSend}
-              disabled={!currentRoomId || (!input.trim() && attachments.length === 0)}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors disabled:opacity-30"
-              style={{
-                backgroundColor: (input.trim() || attachments.length > 0) && currentRoomId ? 'var(--accent)' : 'var(--bg-tertiary)',
-                color: (input.trim() || attachments.length > 0) && currentRoomId ? '#fff' : 'var(--text-secondary)',
-              }}
-              title="发送"
-            >
-              <Send size={11} />
-              发送
-            </button>
-          </div>
-
-          {/* 工具栏底部分隔线（仿会话页） */}
-          <div className="px-4 py-1">
-            <div style={{ borderBottom: '1px dashed var(--border)' }} />
-          </div>
-
-          {/* 输入区（仿会话页：左右边距 px-4，顶部 pt-1 底部 pb-3） */}
-          <div className="flex items-end px-4 pt-1 pb-3">
-            <div className="flex-1 relative">
+              <div className="pd-composer-body">
               {mentionOpen && mentionCandidates.length > 0 && (
                 <div
                   className="absolute bottom-full left-0 right-0 mb-1 p-1 rounded-lg shadow-lg z-20 max-h-48 overflow-y-auto"
@@ -2095,100 +2622,138 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 </div>
               )}
 
-              <textarea
-                ref={inputAreaRef}
-                rows={1}
-                value={input}
-                onChange={handleInputChange}
-                onPaste={handlePaste}
-                placeholder={currentRoomId ? '输入发言，启动或继续讨论…（Shift+Enter 换行）' : '请先选择或创建一个房间'}
-                onInput={(e) => {
-                  const el = e.currentTarget;
-                  el.style.height = 'auto';
-                  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
-                }}
-                className="w-full px-3 py-2 text-xs outline-none resize-none focus:outline-none focus-visible:outline-none"
-                style={{
-                  backgroundColor: 'transparent',
-                  color: 'var(--text-primary)',
-                  border: 'none',
-                  boxShadow: 'none',
-                  outline: 'none',
-                  minHeight: '36px',
-                  maxHeight: '200px',
-                  overflowY: 'auto',
-                  lineHeight: '16px',
-                }}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              />
-
-              {/* 附件预览：最后一行（仿会话页，位于输入框下方） */}
+              {/* 附件预览：图片缩略图 + 文件 chip（拖拽悬停时由容器整体提示"可放置"） */}
               {(attachments.length > 0 || dragActive) && (
-                <div
-                  className="flex flex-wrap gap-2 mt-2 p-2 rounded-lg transition-colors"
-                  style={{
-                    backgroundColor: dragActive ? 'var(--accent)0d' : 'transparent',
-                    border: `1px dashed ${dragActive ? 'var(--accent)' : 'var(--border)'}`,
-                  }}
-                >
+                <div className="pd-composer-att">
                   {attachments.map((att, idx) => (
-                    <div
-                      key={`${idx}-${att.path}`}
-                      className="relative rounded-lg overflow-hidden shrink-0 flex items-center justify-center"
-                      style={{
-                        width: att.kind === 'image' ? 64 : 120,
-                        height: att.kind === 'image' ? 64 : 40,
-                        border: '1px solid var(--border)',
-                        backgroundColor: 'var(--bg-tertiary)',
-                      }}
-                    >
-                      {att.kind === 'image' ? (
+                    att.kind === 'image' ? (
+                      <div key={`${idx}-${att.path}`} className="pd-att-thumb" title={att.name}>
                         <img src={convertFileSrc(att.path)} alt={att.name} className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="flex items-center gap-1 px-2 max-w-full">
-                          <FileText size={12} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
-                          <span className="text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>{att.name}</span>
-                        </div>
-                      )}
-                      <button
-                        onClick={() => removeAttachment(idx)}
-                        className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
-                        style={{ backgroundColor: 'rgba(0,0,0,0.6)', color: '#fff' }}
-                        title="移除附件"
-                      >
-                        <X size={10} />
-                      </button>
-                    </div>
+                        <button onClick={() => removeAttachment(idx)} className="pd-att-x" title="移除附件"><X size={9} /></button>
+                      </div>
+                    ) : (
+                      <div key={`${idx}-${att.path}`} className="pd-att-file" title={att.name}>
+                        <FileText size={12} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                        <span className="text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>{att.name}</span>
+                        <button onClick={() => removeAttachment(idx)} className="pd-att-x" title="移除附件"><X size={9} /></button>
+                      </div>
+                    )
                   ))}
                   {dragActive && draggingFiles.map((f, i) => (
                     <div
                       key={`drag-${i}-${f.name}`}
-                      className="relative rounded-lg overflow-hidden shrink-0 flex items-center justify-center opacity-70"
-                      style={{
-                        width: f.kind === 'image' ? 64 : 120,
-                        height: f.kind === 'image' ? 64 : 40,
-                        border: '1px dashed var(--accent)',
-                        backgroundColor: 'var(--bg-tertiary)',
-                      }}
+                      className={f.kind === 'image' ? 'pd-att-thumb' : 'pd-att-file'}
+                      style={{ borderStyle: 'dashed', borderColor: 'var(--accent)', opacity: 0.7 }}
                     >
                       {f.kind === 'image' ? (
                         <ImagePlus size={16} style={{ color: 'var(--accent)' }} />
                       ) : (
-                        <div className="flex items-center gap-1 px-2 max-w-full">
+                        <>
                           <FileText size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                           <span className="text-[11px] truncate" style={{ color: 'var(--text-secondary)' }}>{f.name}</span>
-                        </div>
+                        </>
                       )}
                     </div>
                   ))}
                 </div>
               )}
+
+              <textarea
+                ref={inputAreaRef}
+                rows={2}
+                value={input}
+                onChange={handleInputChange}
+                onPaste={handlePaste}
+                placeholder={currentRoomId ? '输入发言，启动或继续讨论…（Shift+Enter 换行）' : '请先选择或创建一个房间'}
+                title="输入 @ 可提及参与者；Enter 发送，Shift+Enter 换行"
+                onInput={(e) => {
+                  const el = e.currentTarget;
+                  // 空输入交回 CSS（.pd-composer-input 的 min-height 即默认两行），
+                  // 否则内联高度会把文本域压回一行
+                  if (!el.value) {
+                    el.style.height = '';
+                    return;
+                  }
+                  el.style.height = 'auto';
+                  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+                }}
+                className="pd-composer-input"
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+              />
+              </div>
+
+              {/* 主操作行：工具组在左、发送键在右，同一行（见 .pd-composer-actions / .pd-composer-tools）。
+                  与会话页一致：工具组的 flex-basis 为 0，宽度不足时工具组内部换行，发送键始终贴本行右端 */}
+              <div className="pd-composer-actions">
+                <div className="pd-composer-tools">
+                  <SecurityModeSelector value={securityMode} onChange={setSecurityMode} />
+                  <button
+                    onClick={handlePickAttachments}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors shrink-0"
+                    style={{
+                      color: attachments.length > 0 ? 'var(--accent)' : 'var(--text-secondary)',
+                      backgroundColor: attachments.length > 0 ? 'var(--border)' : 'transparent',
+                    }}
+                    title="添加附件（图片/文件，支持拖拽/粘贴，最多 8 个）"
+                  >
+                    <Paperclip size={12} />
+                    附件
+                  </button>
+                  <button
+                    onClick={handlePickRoomDir}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
+                    style={{
+                      color: currentRoom?.outputDir ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                      backgroundColor: 'transparent',
+                      // 与会话页「工作目录」同一套宽度规则：flex 1 1 0（预估宽度只有 minWidth，不挤换行）
+                      // + maxWidth max-content（最多长到内容宽，不拉伸）+ minWidth（收缩下限，truncate 兜底）
+                      flex: '1 1 0',
+                      minWidth: 96,
+                      maxWidth: 'max-content',
+                    }}
+                    title={currentRoom?.outputDir
+                      ? `项目/工作空间根：${currentRoom.outputDir}\n点击可切换（后续消息生效）`
+                      : '未设置项目目录（运行时默认 <工作目录>/outputs/ 下），点击选择'}
+                  >
+                    <Folder size={12} style={{ flexShrink: 0 }} />
+                    <span className="truncate">{currentRoom?.outputDir ? currentRoom.outputDir.split(/[\\/]/).pop() || currentRoom.outputDir : '默认项目'}</span>
+                  </button>
+                  {/* 语音输入：工具栏最后一项（发送键之前）。群聊没有"当前会话模型"这回事，
+                      转写只认 设置 › 语音识别 指定的专用转写模型 */}
+                  <VoiceInputButton
+                    disabled={!currentRoomId}
+                    disabledHint="请先选择或创建一个房间"
+                    onTranscribed={(text) => {
+                      setInput((prev) => (prev.trim() ? `${prev.replace(/\s+$/, '')} ${text}` : text));
+                      inputAreaRef.current?.focus();
+                    }}
+                  />
+                </div>
+                <button
+                  onClick={handleSend}
+                  disabled={!currentRoomId || (!input.trim() && attachments.length === 0)}
+                  className="pd-composer-send"
+                  data-active={Boolean(currentRoomId && (input.trim() || attachments.length > 0))}
+                  title="发送"
+                >
+                  <Send size={13} />
+                </button>
+              </div>
             </div>
           </div>
 
           {/* 用量行：紧贴输入区底部（仿会话页 SessionUsageBar） */}
           <RoomUsageBar roomId={currentRoomId} />
         </div>
+
+        {/* 沉淀弹窗：把选中的一段群聊对话交给 AI 整理成 0..N 条知识（成功后退出多选） */}
+        {kbMessages && (
+          <SaveToKnowledgeDialog
+            messages={kbMessages}
+            onClose={() => setKbMessages(null)}
+            onSaved={exitSelectMode}
+          />
+        )}
       </main>
 
       {/* ── 右：讨论（参与者 + 立场 + 任务） / 文件历史（tab 切换）；显隐由外层折叠按钮控制 ── */}
@@ -2270,7 +2835,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 </span>
               )}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5" style={{ backgroundColor: 'var(--bg-primary)' }}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable" style={{ backgroundColor: 'var(--bg-primary)' }}>
               {stances.length === 0 && (
                 <div className="px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                   暂无立场
@@ -2424,8 +2989,18 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
               <ListTodo size={10} style={{ color: 'var(--accent)' }} />
               子任务
+              <span className="flex-1" />
+              <button
+                onClick={() => setShowAddTask(true)}
+                className="px-1.5 rounded transition-colors hover:opacity-80 flex items-center gap-0.5"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                title="手动追加一个子任务（只增不改）"
+              >
+                <Plus size={9} />
+                新增
+              </button>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5" style={{ backgroundColor: 'var(--bg-primary)' }}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable" style={{ backgroundColor: 'var(--bg-primary)' }}>
               {tasks.length === 0 && (
                 <div className="px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                   暂无任务
@@ -2474,6 +3049,48 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       {TASK_STATUS_LABEL[t.status] ?? t.status}
                     </span>
                   </div>
+                  {expanded && (t.resultSummary || t.error) && (
+                    <div className="mt-1 leading-relaxed break-words" style={{ color: 'var(--text-tertiary)' }}>
+                      {t.resultSummary ?? t.error}
+                    </div>
+                  )}
+                  {(depTasksOf(t, tasks).length > 0 || t.status === 'discussing' || t.status === 'pending') && (
+                    <div className="flex items-center justify-between gap-1 mt-1">
+                      <span className="truncate" style={{ color: 'var(--text-tertiary)' }}>
+                        {depTasksOf(t, tasks).length > 0
+                          ? `依赖 ${taskNosText(depTasksOf(t, tasks).map((d) => d.taskNo))}`
+                          : ''}
+                      </span>
+                      {(t.status === 'discussing' || t.status === 'pending') && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDepsTask(t);
+                            }}
+                            className="px-1 rounded transition-colors hover:opacity-80 flex items-center gap-0.5"
+                            style={{ color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                            title="修改前置依赖（先预览影响，再确认提交）"
+                          >
+                            <GitBranch size={9} />
+                            依赖
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleSkipTask(t);
+                            }}
+                            className="px-1 rounded transition-colors hover:opacity-80 flex items-center gap-0.5"
+                            style={{ color: 'var(--status-warning)', border: '1px solid var(--border)' }}
+                            title="跳过该任务（终态，不再执行）"
+                          >
+                            <SkipForward size={9} />
+                            跳过
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 );
               })}
@@ -2525,7 +3142,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-1.5" style={{ backgroundColor: 'var(--bg-primary)' }}>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable" style={{ backgroundColor: 'var(--bg-primary)' }}>
               {historyLoading ? (
                 <div className="flex items-center justify-center py-3">
                   <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
@@ -2581,6 +3198,28 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
 
       {showAdd && <AddParticipantModal onClose={() => setShowAdd(false)} />}
 
+      {showAddTask && (
+        <AddTaskModal
+          participants={participants}
+          tasks={tasks}
+          onClose={() => setShowAddTask(false)}
+          onSubmit={handleAddTask}
+        />
+      )}
+
+      {depsTask && (
+        <TaskDepsModal
+          task={depsTask}
+          tasks={tasks}
+          onClose={() => setDepsTask(null)}
+          onPreview={(dependsOn) => previewTaskDeps(depsTask.id, dependsOn)}
+          onSubmit={async (dependsOn) => {
+            await updateTaskDeps(depsTask.id, dependsOn);
+            showToast(`已更新 T${depsTask.taskNo} 的依赖`, 'success');
+          }}
+        />
+      )}
+
       {error && (
         <div
           className="fixed bottom-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg text-xs shadow-lg"
@@ -2602,11 +3241,15 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>工作流定义草稿</span>
+              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>工作流定义（转换预览）</span>
               <button className="pd-btn pd-btn-sm" style={{ color: 'var(--text-secondary)' }} onClick={() => setExportJson(null)}>
                 <XCircle size={14} />
               </button>
             </div>
+            <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+              以下即「转为可运行工作流」将创建的定义原文：任务依赖按群聊议程还原为 DAG，
+              节点提示词已带总目标与前置产出的取值引用（作废任务不进工作流）。
+            </span>
             <pre
               className="flex-1 overflow-auto rounded-lg p-3 text-[11px] leading-relaxed"
               style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
@@ -2623,11 +3266,20 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 保存
               </button>
               <button
-                className="pd-btn pd-btn-sm pd-btn-primary"
+                className="pd-btn pd-btn-sm"
+                style={{ color: 'var(--text-secondary)' }}
                 onClick={() => navigator.clipboard?.writeText(exportJson)}
               >
                 <Copy size={11} />
                 复制
+              </button>
+              <button
+                className="pd-btn pd-btn-sm pd-btn-primary"
+                disabled={promoting}
+                onClick={handlePromote}
+              >
+                <Sparkles size={11} />
+                {promoting ? '转换中…' : '转为可运行工作流'}
               </button>
             </div>
           </div>

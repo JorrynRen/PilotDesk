@@ -82,7 +82,10 @@ impl ToolHandler for ListFilesTool {
             const MAX_ENTRIES: usize = 200;
             for entry in entries.flatten() {
                 if count >= MAX_ENTRIES {
-                    result.push_str(&format!("\n... 还有更多条目（仅显示前{}条）\n", MAX_ENTRIES));
+                    result.push_str(&format!(
+                        "\n... 还有更多条目（仅显示前{}条）\n",
+                        MAX_ENTRIES
+                    ));
                     break;
                 }
                 let name = entry.file_name().to_string_lossy().to_string();

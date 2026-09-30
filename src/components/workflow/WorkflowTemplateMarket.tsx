@@ -14,22 +14,16 @@
 
 import React, { useState, useMemo } from 'react';
 import {
-  Search, RefreshCw, Download, Star, Grid3X3, List, SlidersHorizontal,
+  Search, RefreshCw, Download, Grid3X3, List, SlidersHorizontal,
   ChevronRight, Filter, X, Heart, FolderOpen, Sparkles, Clock, User,
-  Zap, TrendingUp, CheckCircle, Eye, LayoutGrid, Code2, PackageOpen,
-  ArrowLeftToLine,
+  Zap, TrendingUp, CheckCircle, Eye, LayoutGrid, PackageOpen,
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
+import { headChars } from '../../utils/text';
+import { Select } from '../common/Select';
 
 // ── 数据类型 ──
 type InstallStatus = 'not-installed' | 'installed' | 'update-available' | 'installing';
-
-interface WorkflowTemplateTag {
-  id: string;
-  name: string;
-  /** 分类大类：用于左栏分类树的一级节点 */
-  category: string;
-}
 
 interface WorkflowTemplateNodePreview {
   id: string;
@@ -443,7 +437,7 @@ function WorkflowMiniPreview({ nodes, accent }: { nodes: WorkflowTemplateNodePre
             textAnchor="middle"
             fontSize="7"
             fill="var(--text-secondary)"
-          >{n.label.slice(0, 5)}</text>
+          >{headChars(n.label, 5)}</text>
         </g>
       ))}
     </svg>
@@ -831,7 +825,7 @@ function TemplateDetailDrawer({
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 pd-scroll-stable">
           {/* 概览 Stats */}
           <div className="grid grid-cols-4 gap-2">
             {[
@@ -918,9 +912,8 @@ function TemplateDetailDrawer({
 
 // ── 主组件 ──
 export const WorkflowTemplateMarket: React.FC<{
-  onBack?: () => void;
   onUseTemplate?: (tplId: string) => void;
-}> = ({ onBack, onUseTemplate }) => {
+}> = ({ onUseTemplate }) => {
   const [topTab, setTopTab] = useState<'featured' | 'browse' | 'favorites'>('featured');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
@@ -1022,11 +1015,11 @@ export const WorkflowTemplateMarket: React.FC<{
             { key: 'featured', label: '精选', icon: <Sparkles size={11} /> },
             { key: 'browse',   label: '浏览全部', icon: <FolderOpen size={11} /> },
             { key: 'favorites', label: '我的收藏', icon: <Heart size={11} /> },
-          ].map((tab, i) => (
+          ].map((tab) => (
             <button
               key={tab.key}
               onClick={() => setTopTab(tab.key as typeof topTab)}
-              className="pd-btn px-2 py-1 rounded-md text-[11px]"
+              className="pd-btn px-2 py-1 h-7 rounded-md text-[11px]"
               style={{
                 backgroundColor: topTab === tab.key ? 'var(--accent-light)' : 'transparent',
                 color: topTab === tab.key ? 'var(--accent)' : 'var(--text-tertiary)',
@@ -1055,12 +1048,12 @@ export const WorkflowTemplateMarket: React.FC<{
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索模板名称 / 标签 / 作者 / 描述..."
-            className="w-full pl-8 pr-3 py-1 rounded-md text-[11px] outline-none"
+            className="block w-full pl-8 pr-3 rounded-md text-[11px] outline-none"
             style={{
+              height: 28, /* 对齐同行 Select(size=sm) 与 Tab 组（原靠 py-1 撑到 24px，矮 4px） */
               backgroundColor: 'var(--bg-tertiary)',
               color: 'var(--text-primary)',
               border: '1px solid var(--border)',
-              height: 24,
             }}
           />
         </div>
@@ -1070,19 +1063,12 @@ export const WorkflowTemplateMarket: React.FC<{
           {/* 排序（放在显示方式前面） */}
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>排序</span>
-            <select
+            <Select
               value={sort}
-              onChange={(e) => setSort(e.target.value as typeof sort)}
-              className="text-[11px] rounded px-2 py-0.5"
-              style={{
-                backgroundColor: 'var(--bg-tertiary)',
-                border: '1px solid var(--border)',
-                color: 'var(--text-secondary)',
-                height: 24,
-              }}
-            >
-              {SORT_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-            </select>
+              onChange={(v) => setSort(v as typeof sort)}
+              size="sm"
+              options={SORT_OPTIONS.map(o => ({ value: o.key, label: o.label }))}
+            />
           </div>
 
           {/* 视图模式切换 */}
@@ -1093,7 +1079,7 @@ export const WorkflowTemplateMarket: React.FC<{
               style={{
                 backgroundColor: viewMode === 'grid' ? 'var(--bg-primary)' : 'transparent',
                 color: viewMode === 'grid' ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                width: 22, height: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               }}
               title="网格视图">
               <Grid3X3 size={13} />
@@ -1104,7 +1090,7 @@ export const WorkflowTemplateMarket: React.FC<{
               style={{
                 backgroundColor: viewMode === 'list' ? 'var(--bg-primary)' : 'transparent',
                 color: viewMode === 'list' ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                width: 22, height: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               }}
               title="列表视图">
               <List size={13} />
@@ -1117,7 +1103,7 @@ export const WorkflowTemplateMarket: React.FC<{
               backgroundColor: showFilters || categoryBadgeCount > 0 ? 'var(--accent-light)' : 'var(--bg-tertiary)',
               color: showFilters || categoryBadgeCount > 0 ? 'var(--accent)' : 'var(--text-secondary)',
               display: 'inline-flex', alignItems: 'center', gap: 4,
-              height: 24,
+              height: 28,
             }}>
             <Filter size={12} />
             筛选
@@ -1130,7 +1116,7 @@ export const WorkflowTemplateMarket: React.FC<{
           </button>
           <button onClick={handleRefresh}
             className="pd-btn p-1 rounded"
-            style={{ color: 'var(--text-secondary)', width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            style={{ color: 'var(--text-secondary)', width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
             title="刷新列表">
             <RefreshCw size={13} className={refreshing ? 'pd-animate-spin' : ''} />
           </button>
@@ -1198,7 +1184,7 @@ export const WorkflowTemplateMarket: React.FC<{
       {/* ── 主体：左侧分类 + 右侧网格/列表 ── */}
       <div className="flex-1 flex min-h-0">
         {/* 左：分类树 */}
-        <div className="w-56 shrink-0 h-full overflow-y-auto"
+        <div className="w-56 shrink-0 h-full overflow-y-auto pd-scroll-stable"
           style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
           <div className="px-3 py-3 space-y-0.5">
             <div className="text-[10px] mb-1.5 mt-2" style={{ color: 'var(--text-tertiary)' }}>

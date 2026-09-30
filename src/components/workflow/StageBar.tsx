@@ -6,7 +6,7 @@
  */
 
 import React, { useState } from 'react';
-import type { Stage, GateConfig } from '../../types/workflow';
+import type { Stage } from '../../types/workflow';
 
 interface Props {
   stages: Stage[];
@@ -16,7 +16,6 @@ interface Props {
   onAddStage: () => void;
   onDeleteStage: (stageId: string) => void;
   onRenameStage: (stageId: string, name: string) => void;
-  onUpdateGate: (stageId: string, gate: Partial<GateConfig>) => void;
   unreachableNodeIds?: Set<string>;
 }
 
@@ -41,7 +40,6 @@ export const StageBar: React.FC<Props> = ({
   onAddStage,
   onDeleteStage,
   onRenameStage,
-  onUpdateGate,
   unreachableNodeIds,
 }) => {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());

@@ -110,16 +110,32 @@ enum PathCategory {
 fn command_action(level: u8, cat: CommandCategory) -> Action {
     match cat {
         CommandCategory::HighRisk => {
-            if level <= 2 { Action::Deny } else { Action::Allow }
+            if level <= 2 {
+                Action::Deny
+            } else {
+                Action::Allow
+            }
         }
         CommandCategory::Risky => {
-            if level <= 1 { Action::Approve } else { Action::Allow }
+            if level <= 1 {
+                Action::Approve
+            } else {
+                Action::Allow
+            }
         }
         CommandCategory::Safe => {
-            if level == 0 { Action::Approve } else { Action::Allow }
+            if level == 0 {
+                Action::Approve
+            } else {
+                Action::Allow
+            }
         }
         CommandCategory::Unknown => {
-            if level <= 1 { Action::Approve } else { Action::Allow }
+            if level <= 1 {
+                Action::Approve
+            } else {
+                Action::Allow
+            }
         }
     }
 }
@@ -131,13 +147,25 @@ fn command_action(level: u8, cat: CommandCategory) -> Action {
 fn path_action(level: u8, cat: PathCategory) -> Action {
     match cat {
         PathCategory::HighRisk => {
-            if level <= 2 { Action::Deny } else { Action::Allow }
+            if level <= 2 {
+                Action::Deny
+            } else {
+                Action::Allow
+            }
         }
         PathCategory::Safe => {
-            if level == 0 { Action::Approve } else { Action::Allow }
+            if level == 0 {
+                Action::Approve
+            } else {
+                Action::Allow
+            }
         }
         PathCategory::Unknown => {
-            if level <= 1 { Action::Approve } else { Action::Allow }
+            if level <= 1 {
+                Action::Approve
+            } else {
+                Action::Allow
+            }
         }
     }
 }
@@ -345,67 +373,184 @@ pub const DEFAULT_ALLOW_PATHS: &[&str] = &[
 /// 默认 deny_commands：确定性破坏（命令名/短语边界匹配）
 pub const DEFAULT_DENY_COMMANDS: &[&str] = &[
     // 系统级破坏
-    "shutdown", "diskpart", "bootsect", "bootrec", "format c:", "format d:",
-    "format e:", "format /", "regsvr32", "mshta", "rundll32", "bitsadmin",
+    "shutdown",
+    "diskpart",
+    "bootsect",
+    "bootrec",
+    "format c:",
+    "format d:",
+    "format e:",
+    "format /",
+    "regsvr32",
+    "mshta",
+    "rundll32",
+    "bitsadmin",
     "bcdedit /delete",
     // PowerShell 任意执行面
-    "powershell -enc", "powershell -e ", "powershell -executionpolicy bypass",
-    "pwsh -enc", "pwsh -e ",
-    "invoke-expression", "iex(", "iex ",
-    "invoke-webrequest -outfile", "invoke-webrequest -o ",
-    "downloadstring", "downloadfile",
+    "powershell -enc",
+    "powershell -e ",
+    "powershell -executionpolicy bypass",
+    "pwsh -enc",
+    "pwsh -e ",
+    "invoke-expression",
+    "iex(",
+    "iex ",
+    "invoke-webrequest -outfile",
+    "invoke-webrequest -o ",
+    "downloadstring",
+    "downloadfile",
     // Python 任意执行面
-    "exec(open(", "os.system(", "subprocess",
+    "exec(open(",
+    "os.system(",
+    "subprocess",
     // 下载执行链
-    "certutil -urlcache", "curl | bash", "wget | sh", "| powershell",
+    "certutil -urlcache",
+    "curl | bash",
+    "wget | sh",
+    "| powershell",
 ];
 
 /// 默认 risky_commands：可能性安全（命令名/短语边界匹配，命中需审批）
 pub const DEFAULT_RISKY_COMMANDS: &[&str] = &[
     // 文件写/删/移动
-    "del", "erase", "rd", "rmdir", "copy", "xcopy", "move", "robocopy",
-    "ren", "rename", "attrib", "mklink", "mkdir", "takeown", "icacls", "cacls",
+    "del",
+    "erase",
+    "rd",
+    "rmdir",
+    "copy",
+    "xcopy",
+    "move",
+    "robocopy",
+    "ren",
+    "rename",
+    "attrib",
+    "mklink",
+    "mkdir",
+    "takeown",
+    "icacls",
+    "cacls",
     // 重定向/追加
-    ">", ">>", "tee",
+    ">",
+    ">>",
+    "tee",
     // 注册表/计划任务/服务/账户
-    "reg add", "reg delete", "reg import", "schtasks", "sc config", "net user",
-    "net localgroup", "netsh", "setx",
+    "reg add",
+    "reg delete",
+    "reg import",
+    "schtasks",
+    "sc config",
+    "net user",
+    "net localgroup",
+    "netsh",
+    "setx",
     // 进程终止（普通；关键系统进程由 deny 覆盖）
-    "taskkill", "tskill",
+    "taskkill",
+    "tskill",
     // 包安装/卸载
-    "npm install", "npm i ", "npm uninstall", "pip install", "pip uninstall",
+    "npm install",
+    "npm i ",
+    "npm uninstall",
+    "pip install",
+    "pip uninstall",
     // git 写操作组
-    "git add", "git commit", "git push", "git pull", "git clean", "git reset",
-    "git checkout", "git merge", "git revert", "git stash", "git rm", "git fetch",
+    "git add",
+    "git commit",
+    "git push",
+    "git pull",
+    "git clean",
+    "git reset",
+    "git checkout",
+    "git merge",
+    "git revert",
+    "git stash",
+    "git rm",
+    "git fetch",
     // 下载写文件
-    "curl -o", "curl --output", "wget -o", "wget -o ", "wget --output-document",
-    "curl -d", "curl --data",
+    "curl -o",
+    "curl --output",
+    "wget -o",
+    "wget -o ",
+    "wget --output-document",
+    "curl -d",
+    "curl --data",
 ];
 
 /// 默认 allow_commands：整体安全（「命令 + 首子命令」token 前缀匹配）
 pub const DEFAULT_ALLOW_COMMANDS: &[&str] = &[
     // 目录/文件只读
-    "dir", "ls", "tree", "type", "more", "find", "findstr", "fc", "where",
-    "which", "cd", "pwd",
+    "dir",
+    "ls",
+    "tree",
+    "type",
+    "more",
+    "find",
+    "findstr",
+    "fc",
+    "where",
+    "which",
+    "cd",
+    "pwd",
     // 系统信息只读
-    "systeminfo", "ver", "hostname", "whoami", "tasklist", "ipconfig", "ping",
-    "nslookup", "tracert", "pathping", "netstat", "getmac", "vol", "date", "time",
-    "cls", "color", "title",
+    "systeminfo",
+    "ver",
+    "hostname",
+    "whoami",
+    "tasklist",
+    "ipconfig",
+    "ping",
+    "nslookup",
+    "tracert",
+    "pathping",
+    "netstat",
+    "getmac",
+    "vol",
+    "date",
+    "time",
+    "cls",
+    "color",
+    "title",
     // echo（无重定向；重定向由 risky 的 `>` 覆盖）
     "echo",
     // git 只读组
-    "git status", "git log", "git diff", "git show", "git branch", "git remote",
-    "git tag", "git help", "git ls-files", "git rev-parse", "git describe",
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "git branch",
+    "git remote",
+    "git tag",
+    "git help",
+    "git ls-files",
+    "git rev-parse",
+    "git describe",
     "git config --get",
     // npm/pip 只读组
-    "npm view", "npm list", "npm ls", "npm search", "npm info", "npm ping",
-    "pip view", "pip list", "pip show", "pip search", "pip index",
+    "npm view",
+    "npm list",
+    "npm ls",
+    "npm search",
+    "npm info",
+    "npm ping",
+    "pip view",
+    "pip list",
+    "pip show",
+    "pip search",
+    "pip index",
     // powershell 只读 cmdlet
-    "powershell get-process", "powershell get-service", "powershell get-childitem",
-    "powershell get-content", "powershell get-item", "powershell get-command",
-    "powershell get-location", "powershell get-date", "powershell get-help",
-    "powershell get-alias", "powershell get-history", "powershell get-psdrive",
-    "powershell get-wmiobject", "powershell get-ciminstance",
+    "powershell get-process",
+    "powershell get-service",
+    "powershell get-childitem",
+    "powershell get-content",
+    "powershell get-item",
+    "powershell get-command",
+    "powershell get-location",
+    "powershell get-date",
+    "powershell get-help",
+    "powershell get-alias",
+    "powershell get-history",
+    "powershell get-psdrive",
+    "powershell get-wmiobject",
+    "powershell get-ciminstance",
 ];
 
 /// 默认权限规则（启动种子写入 agent_permission_rules；用户已有规则不被覆盖）。
@@ -413,9 +558,18 @@ pub fn default_permission_rules() -> PermissionRules {
     PermissionRules {
         allow_paths: DEFAULT_ALLOW_PATHS.iter().map(|s| s.to_string()).collect(),
         deny_paths: DEFAULT_DENY_PATHS.iter().map(|s| s.to_string()).collect(),
-        allow_commands: DEFAULT_ALLOW_COMMANDS.iter().map(|s| s.to_string()).collect(),
-        deny_commands: DEFAULT_DENY_COMMANDS.iter().map(|s| s.to_string()).collect(),
-        risky_commands: DEFAULT_RISKY_COMMANDS.iter().map(|s| s.to_string()).collect(),
+        allow_commands: DEFAULT_ALLOW_COMMANDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        deny_commands: DEFAULT_DENY_COMMANDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        risky_commands: DEFAULT_RISKY_COMMANDS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         security_mode: SecurityMode::Standard,
     }
 }
@@ -426,7 +580,13 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     let t: Vec<char> = text.chars().collect();
     // (pattern_idx, text_idx)
     let mut memo = std::collections::HashSet::new();
-    fn matches(p: &[char], t: &[char], pi: usize, ti: usize, memo: &mut std::collections::HashSet<(usize, usize)>) -> bool {
+    fn matches(
+        p: &[char],
+        t: &[char],
+        pi: usize,
+        ti: usize,
+        memo: &mut std::collections::HashSet<(usize, usize)>,
+    ) -> bool {
         if !memo.insert((pi, ti)) {
             return false;
         }
@@ -467,18 +627,18 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     matches(&p, &t, 0, 0, &mut memo)
 }
 
-/// 当前会话的授权级别
-/// 控制哪些风险等级的工具需要用户确认
-#[derive(Debug, Clone)]
-pub enum AuthLevel {
-    /// 静默模式：所有操作自动执行
-    #[allow(dead_code)]
-    Silent,
-    /// 确认模式：中风险及以上需要确认（默认）
-    Confirm,
-    /// 阻止模式：高风险操作被阻止
-    #[allow(dead_code)]
-    Block,
+/// 授权模式 → 需要用户确认的最低风险等级（`None` = 一律不审）。
+///
+/// 审批尺度**只由「工具授权」（`SecurityMode`）决定**，不再有第二套开关：
+/// 模式越严，越低的风险等级也要问；无限制则全放。方向与命令/路径子策略矩阵一致
+/// （L0 最严 → L3 全放），所以「严格」下任何工具调用都会先问一次。
+fn approval_floor(mode: SecurityMode) -> Option<RiskLevel> {
+    match mode {
+        SecurityMode::Strict => Some(RiskLevel::Low),
+        SecurityMode::Standard => Some(RiskLevel::Medium),
+        SecurityMode::Relaxed => Some(RiskLevel::High),
+        SecurityMode::Unrestricted => None,
+    }
 }
 
 /// ask_user 工具的行为（区分会话与群聊场景）：
@@ -587,18 +747,23 @@ pub struct AgentLoop {
     tool_registry: Arc<ToolRegistry>,
     model: String,
     temperature: f64,
-    auth_level: AuthLevel,
     approval_handler: Option<ApprovalHandler>,
     /// 审批方身份标签（拒绝文案用，默认 "用户"；群聊场景由 Director 裁决时为 "主持人"）
     approval_label: String,
+    /// 是否把审批请求作为"用户需亲自决策"事件发往前端（`agent-approval-required` 弹窗）。
+    /// 仅用户亲自审批的路径置 true；程序化裁决（群聊主持人等）保持 false，
+    /// 否则会在用户界面弹出与当前运行无关的审批弹窗（跨页面/跨会话审批混乱）。
+    notify_user_approval: bool,
     /// 迭代上限回调（达到限制时请求用户确认是否继续）
     continue_handler: Option<ContinueHandler>,
     /// Tauri AppHandle，用于直接发送事件到前端（绕过广播 channel，确保实时性）
     app_handle: tauri::AppHandle,
     /// 当前会话 ID
     session_id: String,
-    /// 用量归因的 provider 名（群聊工具分支经 `run_agent_turn` 注入；空则回退查 `sessions.api_provider`）
+    /// 用量归因的 provider id（群聊工具分支经 `run_agent_turn` 注入；空则回退查 `sessions.api_provider`）
     provider_label: String,
+    /// 用量落库的 scope_key；None 时回退 `session_id`。
+    usage_scope: Option<String>,
     /// 当前会话已授权的文件路径（避免同一文件反复弹窗）
     approved_files: std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>,
     /// 当前会话已授权的目录（该目录下所有 write_file 自动放行）
@@ -636,13 +801,14 @@ impl AgentLoop {
             tool_registry,
             model,
             temperature: 0.7,
-            auth_level: AuthLevel::Confirm,
             approval_handler: None,
             approval_label: "用户".to_string(),
+            notify_user_approval: false,
             continue_handler: None,
             app_handle,
             session_id,
             provider_label: String::new(),
+            usage_scope: None,
             approved_files: std::sync::Mutex::new(std::collections::HashSet::new()),
             approved_dirs: std::sync::Mutex::new(std::collections::HashSet::new()),
             approved_commands: std::sync::Mutex::new(std::collections::HashSet::new()),
@@ -664,7 +830,9 @@ impl AgentLoop {
 
     /// 判断路径是否位于工作区目录内（授权边界判定；相对路径基于工作区解析）。
     fn is_in_workspace(&self, raw_path: &str) -> bool {
-        let Some(ws) = &self.workspace else { return false };
+        let Some(ws) = &self.workspace else {
+            return false;
+        };
         if ws.trim().is_empty() {
             return false;
         }
@@ -697,7 +865,10 @@ impl AgentLoop {
         let mut dirs = self.approved_dirs.lock().unwrap();
         for p in &found {
             let norm = normalize_path(p, cwd);
-            log::info!("[AgentLoop] 用户显式路径预缓存（会话内免审批）: {}", norm.display());
+            log::info!(
+                "[AgentLoop] 用户显式路径预缓存（会话内免审批）: {}",
+                norm.display()
+            );
             files.insert(norm.clone());
             if let Some(parent) = norm.parent() {
                 dirs.insert(parent.to_path_buf());
@@ -705,10 +876,19 @@ impl AgentLoop {
         }
     }
 
-    /// 设置协作式取消令牌（迭代边界检查，会话模式不调用即为 None，零影响）。
+    /// 设置协作式取消令牌：迭代边界检查，并注入客户端使流式读取也能被即时中断
+    /// （否则"停止生成"要等整段生成结束才生效）。
     pub fn with_cancel_token(mut self, token: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.client = self.client.clone().with_abort(Arc::clone(&token));
         self.cancel_token = Some(token);
         self
+    }
+
+    /// 是否已收到协作式取消信号。
+    fn cancelled(&self) -> bool {
+        self.cancel_token
+            .as_ref()
+            .is_some_and(|ct| ct.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     /// 设置 ask_user 工具行为（会话默认=工具内阻塞；群聊=拦截转轮末确认）。
@@ -733,21 +913,22 @@ impl AgentLoop {
         self
     }
 
-    /// 设置用量归因的 provider 名（群聊工具分支经 `run_agent_turn` 注入；单 Agent 保持默认空 → 查 `sessions`）。
+    /// 设置用量归因的 provider id（群聊工具分支经 `run_agent_turn` 注入；单 Agent 保持默认空 → 查 `sessions`）。
     pub fn with_provider_label(mut self, label: &str) -> Self {
         self.provider_label = label.to_string();
+        self
+    }
+
+    /// 设置用量落库的 scope_key（群聊房间级 `groupchat:{roomId}`；None 回退 `session_id`，
+    /// 不影响 `agent-*` 事件使用的 `session_id`）。
+    pub fn with_usage_scope(mut self, scope: &str) -> Self {
+        self.usage_scope = Some(scope.to_string());
         self
     }
 
     #[allow(dead_code)]
     pub fn with_temperature(mut self, temp: f64) -> Self {
         self.temperature = temp;
-        self
-    }
-
-    /// 设置授权级别
-    pub fn with_auth_level(mut self, level: AuthLevel) -> Self {
-        self.auth_level = level;
         self
     }
 
@@ -775,18 +956,25 @@ impl AgentLoop {
         self
     }
 
+    /// 标记本循环的审批由用户亲自决策：向前端发 `agent-approval-required` 弹窗等待回复。
+    /// 程序化裁决路径（如群聊主持人 `authorize_tool`）不要调用，否则会向用户弹出与本次
+    /// 运行无关的审批（跨页面/跨会话混淆）。
+    pub fn with_user_approval_notification(mut self) -> Self {
+        self.notify_user_approval = true;
+        self
+    }
+
     /// 设置迭代上限回调（达到限制时阻塞等待用户确认）
     pub fn with_continue_handler(mut self, handler: ContinueHandler) -> Self {
         self.continue_handler = Some(handler);
         self
     }
 
-    /// 检查是否需要用户审批
+    /// 检查是否需要用户审批（唯一依据：「工具授权」`security_mode`）
     fn needs_approval(&self, risk: &RiskLevel) -> bool {
-        match self.auth_level {
-            AuthLevel::Silent => false,
-            AuthLevel::Confirm => *risk >= RiskLevel::Medium,
-            AuthLevel::Block => *risk >= RiskLevel::High,
+        match approval_floor(self.permission_rules.security_mode) {
+            Some(floor) => *risk >= floor,
+            None => false,
         }
     }
 
@@ -796,70 +984,125 @@ impl AgentLoop {
         let sid = &self.session_id;
         match event {
             AgentLoopEvent::Reasoning { content } => {
-                let _ = self.app_handle.emit("agent-reasoning", serde_json::json!({
-                    "sessionId": sid,
-                    "content": content,
-                }));
+                let _ = self.app_handle.emit(
+                    "agent-reasoning",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "content": content,
+                    }),
+                );
             }
             AgentLoopEvent::Chunk { content } => {
-                let _ = self.app_handle.emit("agent-chunk", serde_json::json!({
-                    "sessionId": sid,
-                    "content": content,
-                }));
+                let _ = self.app_handle.emit(
+                    "agent-chunk",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "content": content,
+                    }),
+                );
             }
-            AgentLoopEvent::ToolStart { id, name, arguments } => {
-                let _ = self.app_handle.emit("agent-tool-start", serde_json::json!({
-                    "sessionId": sid,
-                    "toolId": id,
-                    "toolName": name,
-                    "arguments": arguments,
-                }));
+            AgentLoopEvent::ToolStart {
+                id,
+                name,
+                arguments,
+            } => {
+                let _ = self.app_handle.emit(
+                    "agent-tool-start",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "toolId": id,
+                        "toolName": name,
+                        "arguments": arguments,
+                    }),
+                );
             }
-            AgentLoopEvent::ToolResult { id, name, result, success } => {
-                let _ = self.app_handle.emit("agent-tool-result", serde_json::json!({
-                    "sessionId": sid,
-                    "toolId": id,
-                    "toolName": name,
-                    "result": result,
-                    "success": success,
-                }));
+            AgentLoopEvent::ToolResult {
+                id,
+                name,
+                result,
+                success,
+            } => {
+                let _ = self.app_handle.emit(
+                    "agent-tool-result",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "toolId": id,
+                        "toolName": name,
+                        "result": result,
+                        "success": success,
+                    }),
+                );
             }
-            AgentLoopEvent::ApprovalRequired { call_id, tool_name, arguments, risk_description } => {
-                let _ = self.app_handle.emit("agent-approval-required", serde_json::json!({
-                    "sessionId": sid,
-                    "toolId": call_id,
-                    "toolName": tool_name,
-                    "arguments": arguments,
-                    "riskDescription": risk_description,
-                }));
+            AgentLoopEvent::ApprovalRequired {
+                call_id,
+                tool_name,
+                arguments,
+                risk_description,
+            } => {
+                let _ = self.app_handle.emit(
+                    "agent-approval-required",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "toolId": call_id,
+                        "toolName": tool_name,
+                        "arguments": arguments,
+                        "riskDescription": risk_description,
+                    }),
+                );
             }
             AgentLoopEvent::Done { content } => {
-                let _ = self.app_handle.emit("agent-done", serde_json::json!({
-                    "sessionId": sid,
-                    "content": content,
-                }));
+                // 事件触发钩子：会话一轮生成结束（工作流内部会话会在派发器里被过滤掉）
+                crate::workflow::triggers::dispatch_event(
+                    &self.app_handle,
+                    "session.completed",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "content": content.clone(),
+                    }),
+                );
+                let _ = self.app_handle.emit(
+                    "agent-done",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "content": content,
+                    }),
+                );
             }
-            AgentLoopEvent::Error { message } => {
-                let _ = self.app_handle.emit("agent-error", serde_json::json!({
-                    "sessionId": sid,
-                    "error": message,
-                }));
+            AgentLoopEvent::Cancelled { content } => {
+                let _ = self.app_handle.emit(
+                    "agent-cancelled",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "content": content,
+                    }),
+                );
             }
             AgentLoopEvent::IterationLimit { current, max } => {
-                let _ = self.app_handle.emit("agent-iteration-limit", serde_json::json!({
-                    "sessionId": sid,
-                    "current": current,
-                    "max": max,
-                }));
+                let _ = self.app_handle.emit(
+                    "agent-iteration-limit",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "current": current,
+                        "max": max,
+                    }),
+                );
             }
-            AgentLoopEvent::Usage { prompt_tokens, completion_tokens, total_tokens, cached_tokens } => {
-                let _ = self.app_handle.emit("agent-usage", serde_json::json!({
-                    "sessionId": sid,
-                    "promptTokens": prompt_tokens,
-                    "completionTokens": completion_tokens,
-                    "totalTokens": total_tokens,
-                    "cachedTokens": cached_tokens,
-                }));
+            AgentLoopEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                cached_tokens,
+            } => {
+                let _ = self.app_handle.emit(
+                    "agent-usage",
+                    serde_json::json!({
+                        "sessionId": sid,
+                        "promptTokens": prompt_tokens,
+                        "completionTokens": completion_tokens,
+                        "totalTokens": total_tokens,
+                        "cachedTokens": cached_tokens,
+                    }),
+                );
             }
         }
     }
@@ -868,10 +1111,19 @@ impl AgentLoop {
     /// 仅记录；失败（库未就绪等）静默跳过，不影响主流程。
     /// provider 优先取 `provider_label`（群聊工具分支注入），为空再查本会话 `sessions.api_provider`。
     /// 写库成功后才发射 `usage-recorded`（用量面板脏标记；`agent-usage` 仍保留用于逐 token 展示）。
-    fn record_usage(&self, prompt: u32, completion: u32, total: u32, cache_read: u32, cache_write: u32) {
-        use tauri::Manager;
+    fn record_usage(
+        &self,
+        prompt: u32,
+        completion: u32,
+        total: u32,
+        cache_read: u32,
+        cache_write: u32,
+    ) {
         use rusqlite::OptionalExtension;
-        let Some(state) = self.app_handle.try_state::<crate::DbState>() else { return };
+        use tauri::Manager;
+        let Some(state) = self.app_handle.try_state::<crate::DbState>() else {
+            return;
+        };
         let Ok(conn) = state.pool.get() else { return };
         let provider = if !self.provider_label.is_empty() {
             self.provider_label.clone()
@@ -886,9 +1138,13 @@ impl AgentLoop {
             .flatten()
             .unwrap_or_default()
         };
+        let scope_key = self
+            .usage_scope
+            .clone()
+            .unwrap_or_else(|| self.session_id.clone());
         if record_usage_row(
             &conn,
-            &self.session_id,
+            &scope_key,
             &provider,
             &self.model,
             &self.api_format,
@@ -901,18 +1157,19 @@ impl AgentLoop {
         .is_ok()
         {
             use tauri::Emitter;
-            let _ = self.app_handle.emit("usage-recorded", serde_json::json!({
-                "provider": provider,
-                "model": self.model,
-            }));
+            let _ = self.app_handle.emit(
+                "usage-recorded",
+                serde_json::json!({
+                    "sessionId": self.session_id,
+                    "provider": provider,
+                    "model": self.model,
+                }),
+            );
         }
     }
 
     /// 执行 Agent Loop
-    pub async fn run(
-        &self,
-        config: AgentLoopConfig,
-    ) -> Result<AgentLoopOutput, String> {
+    pub async fn run(&self, config: AgentLoopConfig) -> Result<AgentLoopOutput, String> {
         let mut messages: Vec<ChatMessage> = Vec::new();
         let mut max_iters = config.max_iterations;
 
@@ -938,8 +1195,8 @@ impl AgentLoop {
         let mut iteration: usize = 0;
         let mut empty_response_count: usize = 0; // 连续空响应计数
         let mut reasoning_only_count: usize = 0; // 连续只推理不调用工具的次数
-        // 进展感知动态收敛：连续无进展轮数。有进展（工具成功且结果非空 / 输出非空文本）即清零。
-        // 达到阈值先注入收敛提示，再超阈值则请求 continue_handler（群聊为 Director 裁决）决定收尾。
+                                                 // 进展感知动态收敛：连续无进展轮数。有进展（工具成功且结果非空 / 输出非空文本）即清零。
+                                                 // 达到阈值先注入收敛提示，再超阈值则请求 continue_handler（群聊为 Director 裁决）决定收尾。
         const STALL_THRESHOLD: usize = 3;
         let mut stall_count: usize = 0;
         let mut stall_prompted: bool = false;
@@ -948,15 +1205,19 @@ impl AgentLoop {
         loop {
             // ── 协作式取消检查（迭代边界）：房间停止/暂停时提前结束工具循环，
             //    当前正在执行的工具调用已完成（原子），不再进入下一轮 LLM 迭代。 ──
-            if let Some(ct) = &self.cancel_token {
-                if ct.load(std::sync::atomic::Ordering::SeqCst) {
-                    log::info!("[AgentLoop] 收到协作式取消信号，提前结束工具循环（已执行 {} 轮）", iteration);
-                    return Ok(AgentLoopOutput {
-                        content: String::new(),
-                        messages: strip_system(&messages),
-                        tool_calls: extract_tool_calls(&messages),
-                    });
-                }
+            if self.cancelled() {
+                log::info!(
+                    "[AgentLoop] 收到协作式取消信号，提前结束工具循环（已执行 {} 轮）",
+                    iteration
+                );
+                self.emit_to_frontend(AgentLoopEvent::Cancelled {
+                    content: String::new(),
+                });
+                return Ok(AgentLoopOutput {
+                    content: String::new(),
+                    messages: strip_system(&messages),
+                    tool_calls: extract_tool_calls(&messages),
+                });
             }
 
             // ── 迭代上限检查：达到限制时请求用户确认 ──
@@ -995,7 +1256,11 @@ impl AgentLoop {
                     let used = estimate_non_system(&messages);
                     let over = overflow_recovered || used as f64 > ctx as f64 * 0.8;
                     if over {
-                        let budget = if overflow_recovered { (ctx / 2).max(1) } else { ctx };
+                        let budget = if overflow_recovered {
+                            (ctx / 2).max(1)
+                        } else {
+                            ctx
+                        };
                         log::warn!(
                             "[AgentLoop] 请求前上下文压力 {}/{}（>80% 或溢出恢复中），对本次发送副本裁剪",
                             used,
@@ -1017,6 +1282,7 @@ impl AgentLoop {
                 stream: true,
                 temperature: config.temperature,
                 max_tokens: config.max_tokens,
+                response_format: None,
             };
 
             // 调用 LLM（流式）
@@ -1030,73 +1296,79 @@ impl AgentLoop {
             let slf = self;
             let stream_result = match self.api_format {
                 ApiFormat::Anthropic => {
-                    self.client.chat_stream_anthropic(
-                        &request,
-                        |chunk| {
-                            content_buffer.push_str(chunk);
-                            slf.emit_to_frontend(AgentLoopEvent::Chunk {
-                                content: chunk.to_string(),
-                            });
-                            if let Some(cb) = &slf.on_delta {
-                                cb(chunk);
-                            }
-                        },
-                        |_| {}, // Anthropic 不支持 reasoning_content
-                        |call_id, name, arguments| {
-                            slf.emit_to_frontend(AgentLoopEvent::ToolStart {
-                                id: call_id.to_string(),
-                                name: name.to_string(),
-                                arguments: arguments.to_string(),
-                            });
-                        },
-                        |prompt, completion, total, cache_read, cache_write| {
-                            last_usage = Some((prompt, completion, total, cache_read, cache_write));
-                            slf.emit_to_frontend(AgentLoopEvent::Usage {
-                                prompt_tokens: prompt,
-                                completion_tokens: completion,
-                                total_tokens: total,
-                                // 前端仍为单值缓存口径：总缓存 = 缓存读取 + 缓存写入。
-                                cached_tokens: cache_read + cache_write,
-                            });
-                        },
-                    ).await
+                    self.client
+                        .chat_stream_anthropic(
+                            &request,
+                            |chunk| {
+                                content_buffer.push_str(chunk);
+                                slf.emit_to_frontend(AgentLoopEvent::Chunk {
+                                    content: chunk.to_string(),
+                                });
+                                if let Some(cb) = &slf.on_delta {
+                                    cb(chunk);
+                                }
+                            },
+                            |_| {}, // Anthropic 不支持 reasoning_content
+                            |call_id, name, arguments| {
+                                slf.emit_to_frontend(AgentLoopEvent::ToolStart {
+                                    id: call_id.to_string(),
+                                    name: name.to_string(),
+                                    arguments: arguments.to_string(),
+                                });
+                            },
+                            |prompt, completion, total, cache_read, cache_write| {
+                                last_usage =
+                                    Some((prompt, completion, total, cache_read, cache_write));
+                                slf.emit_to_frontend(AgentLoopEvent::Usage {
+                                    prompt_tokens: prompt,
+                                    completion_tokens: completion,
+                                    total_tokens: total,
+                                    // 前端仍为单值缓存口径：总缓存 = 缓存读取 + 缓存写入。
+                                    cached_tokens: cache_read + cache_write,
+                                });
+                            },
+                        )
+                        .await
                 }
                 _ => {
-                    self.client.chat_stream(
-                        &request,
-                        |chunk| {
-                            content_buffer.push_str(chunk);
-                            slf.emit_to_frontend(AgentLoopEvent::Chunk {
-                                content: chunk.to_string(),
-                            });
-                            if let Some(cb) = &slf.on_delta {
-                                cb(chunk);
-                            }
-                        },
-                        |reasoning| {
-                            reasoning_buffer.push_str(reasoning);
-                            slf.emit_to_frontend(AgentLoopEvent::Reasoning {
-                                content: reasoning.to_string(),
-                            });
-                        },
-                        |call_id, name, arguments| {
-                            slf.emit_to_frontend(AgentLoopEvent::ToolStart {
-                                id: call_id.to_string(),
-                                name: name.to_string(),
-                                arguments: arguments.to_string(),
-                            });
-                        },
-                        |prompt, completion, total, cache_read, cache_write| {
-                            last_usage = Some((prompt, completion, total, cache_read, cache_write));
-                            slf.emit_to_frontend(AgentLoopEvent::Usage {
-                                prompt_tokens: prompt,
-                                completion_tokens: completion,
-                                total_tokens: total,
-                                // 前端仍为单值缓存口径：总缓存 = 缓存读取 + 缓存写入。
-                                cached_tokens: cache_read + cache_write,
-                            });
-                        },
-                    ).await
+                    self.client
+                        .chat_stream(
+                            &request,
+                            |chunk| {
+                                content_buffer.push_str(chunk);
+                                slf.emit_to_frontend(AgentLoopEvent::Chunk {
+                                    content: chunk.to_string(),
+                                });
+                                if let Some(cb) = &slf.on_delta {
+                                    cb(chunk);
+                                }
+                            },
+                            |reasoning| {
+                                reasoning_buffer.push_str(reasoning);
+                                slf.emit_to_frontend(AgentLoopEvent::Reasoning {
+                                    content: reasoning.to_string(),
+                                });
+                            },
+                            |call_id, name, arguments| {
+                                slf.emit_to_frontend(AgentLoopEvent::ToolStart {
+                                    id: call_id.to_string(),
+                                    name: name.to_string(),
+                                    arguments: arguments.to_string(),
+                                });
+                            },
+                            |prompt, completion, total, cache_read, cache_write| {
+                                last_usage =
+                                    Some((prompt, completion, total, cache_read, cache_write));
+                                slf.emit_to_frontend(AgentLoopEvent::Usage {
+                                    prompt_tokens: prompt,
+                                    completion_tokens: completion,
+                                    total_tokens: total,
+                                    // 前端仍为单值缓存口径：总缓存 = 缓存读取 + 缓存写入。
+                                    cached_tokens: cache_read + cache_write,
+                                });
+                            },
+                        )
+                        .await
                 }
             };
 
@@ -1105,14 +1377,15 @@ impl AgentLoop {
             let response = match stream_result {
                 Ok(r) => r,
                 Err(e) => {
-                    let recoverable = config
-                        .context_tokens
-                        .filter(|&c| c > 0)
-                        .is_some_and(|_| !overflow_recovered && crate::api_agent::client::is_context_overflow(&e));
+                    let recoverable = config.context_tokens.filter(|&c| c > 0).is_some_and(|_| {
+                        !overflow_recovered && crate::api_agent::client::is_context_overflow(&e)
+                    });
                     if recoverable {
                         let ctx = config.context_tokens.unwrap_or_default();
                         let before = estimate_non_system(&messages);
-                        let strong = crate::api_agent::context::SlidingWindow::new((ctx / 2).max(1)).trim(&messages);
+                        let strong =
+                            crate::api_agent::context::SlidingWindow::new((ctx / 2).max(1))
+                                .trim(&messages);
                         let after = estimate_non_system(&strong);
                         if after < before {
                             overflow_recovered = true;
@@ -1137,7 +1410,8 @@ impl AgentLoop {
                         "chat_stream 失败"
                     };
                     log::error!("[AgentLoop] {}: {}", prefix, e);
-                    slf.emit_to_frontend(AgentLoopEvent::Error { message: e.clone() });
+                    // 不在此发 agent-error：所有失败统一由 run_api_agent_inner 收到本函数的 Err 后
+                    // 发一次（见 lib.rs）。这里再发一次，前端同一失败会收到两条完全相同的通知。
                     return Err(e);
                 }
             };
@@ -1146,6 +1420,23 @@ impl AgentLoop {
             // 供会话 token 统计与缓存命中率基线。群聊 Director/参与者经本 Loop 的请求同记录。
             if let Some((prompt, completion, total, cache_read, cache_write)) = last_usage {
                 self.record_usage(prompt, completion, total, cache_read, cache_write);
+            }
+
+            // 用户请求停止：流式读取被取消令牌中断。保留已累积正文交由前端收尾落库，
+            // 不当作错误（走 Err 会让前端弹出失败提示，并把已产出的内容丢掉）。
+            if self.cancelled() {
+                log::info!(
+                    "[AgentLoop] 已取消，停止工具循环（已产出 {} 字）",
+                    content_buffer.len()
+                );
+                self.emit_to_frontend(AgentLoopEvent::Cancelled {
+                    content: content_buffer.clone(),
+                });
+                return Ok(AgentLoopOutput {
+                    content: content_buffer,
+                    messages: strip_system(&messages),
+                    tool_calls: extract_tool_calls(&messages),
+                });
             }
 
             log::info!(
@@ -1172,7 +1463,10 @@ impl AgentLoop {
                         );
                         // 连续推理 2 轮后注入更强提示
                         if reasoning_only_count >= 2 {
-                            log::warn!("[AgentLoop] 连续 {} 轮只推理不调用工具，注入强制提示", reasoning_only_count);
+                            log::warn!(
+                                "[AgentLoop] 连续 {} 轮只推理不调用工具，注入强制提示",
+                                reasoning_only_count
+                            );
                             messages.push(ChatMessage::system(
                                 "你已连续多轮只输出思考内容而未推进任务。请基于当前任务直接给出结论；若确实需要查看文件、搜索或执行操作，再调用相应工具，不要继续描述计划。"
                             ));
@@ -1192,9 +1486,14 @@ impl AgentLoop {
                         let retry_prompt = match empty_response_count {
                             1 => "请基于当前任务继续推进：若需要查看文件或目录、搜索或执行操作，请调用相应工具；否则请直接给出回答。".to_string(),
                             2 => "你尚未给出有效回复。请直接完成当前任务：需要时调用工具，不需要时直接输出结论。".to_string(),
-                            _ => unreachable!(),
+                            // 上面的 `<= 2` 已排除其它取值；留兜底文案而不是 unreachable!，
+                            // 免得将来放宽重试次数时这里变成一次崩溃
+                            _ => "请直接输出本轮任务的结论。".to_string(),
                         };
-                        log::info!("[AgentLoop] 空响应第 {} 次，注入提示重试", empty_response_count);
+                        log::info!(
+                            "[AgentLoop] 空响应第 {} 次，注入提示重试",
+                            empty_response_count
+                        );
                         messages.push(ChatMessage::user(&retry_prompt));
                         iteration += 1;
                         continue;
@@ -1215,14 +1514,20 @@ impl AgentLoop {
                 }
 
                 // 有文本内容，正常结束
-                log::info!("[AgentLoop] 发送 Done 事件, content_len={}", content_buffer.len());
+                log::info!(
+                    "[AgentLoop] 发送 Done 事件, content_len={}",
+                    content_buffer.len()
+                );
                 self.emit_to_frontend(AgentLoopEvent::Done {
                     content: content_buffer.clone(),
                 });
                 log::info!("[AgentLoop] Done 事件已发送");
                 // 将最终回复追加到消息历史，保证 AgentLoopOutput.messages 完整：
                 // 会话连续性由事件派生重建，但滚动摘要的切分/增量合并仍基于 messages。
-                messages.push(ChatMessage::assistant_with_reasoning(&content_buffer, &reasoning_buffer));
+                messages.push(ChatMessage::assistant_with_reasoning(
+                    &content_buffer,
+                    &reasoning_buffer,
+                ));
                 return Ok(AgentLoopOutput {
                     content: content_buffer,
                     messages: strip_system(&messages),
@@ -1231,7 +1536,10 @@ impl AgentLoop {
             }
 
             // 保存 assistant 消息（含 tool_calls，保留前缀文本）
-            let mut assistant_msg = ChatMessage::assistant_with_tools_and_reasoning(response.tool_calls.clone(), &reasoning_buffer);
+            let mut assistant_msg = ChatMessage::assistant_with_tools_and_reasoning(
+                response.tool_calls.clone(),
+                &reasoning_buffer,
+            );
             if !content_buffer.is_empty() {
                 assistant_msg.content = Some(std::mem::take(&mut content_buffer));
             }
@@ -1246,10 +1554,16 @@ impl AgentLoop {
                 // 不执行工具（避免工具内 60s 阻塞被轮级超时掐断、oneshot 不落库丢失恢复现场），
                 // 而是把参数解析为群聊确认协议 JSON（{"askUser":true,...}）作为本轮内容返回，
                 // 由框架层解析为 TurnResult.confirmation → 房间确认流（无限等待 + 落库恢复）。
-                if self.ask_user_behavior == AskUserBehavior::TurnEnd && tc.function.name == "ask_user" {
-                    log::info!("[AgentLoop] 群聊拦截 ask_user，转为轮末确认请求: {}", tc.function.arguments);
-                    let confirmation_json = confirmation_json_from_ask_user_args(&tc.function.arguments)
-                        .ok_or_else(|| "ask_user 缺少 prompt 参数".to_string())?;
+                if self.ask_user_behavior == AskUserBehavior::TurnEnd
+                    && tc.function.name == "ask_user"
+                {
+                    log::info!(
+                        "[AgentLoop] 群聊拦截 ask_user，转为轮末确认请求: {}",
+                        tc.function.arguments
+                    );
+                    let confirmation_json =
+                        confirmation_json_from_ask_user_args(&tc.function.arguments)
+                            .ok_or_else(|| "ask_user 缺少 prompt 参数".to_string())?;
                     // 实时工具链闭合（群聊前端按 event_session_id 组装 ThinkingChain）。
                     self.emit_to_frontend(AgentLoopEvent::ToolResult {
                         id: tc.id.clone(),
@@ -1276,9 +1590,8 @@ impl AgentLoop {
                     match self.permission_rules.decide_command(cmd) {
                         Action::Deny => {
                             // 禁止：直接拦截，无需走审批流程
-                            let msg = format!(
-                                "安全拦截：命令命中禁止规则，已被阻止。命令: {}", cmd
-                            );
+                            let msg =
+                                format!("安全拦截：命令命中禁止规则，已被阻止。命令: {}", cmd);
                             self.emit_to_frontend(AgentLoopEvent::ToolResult {
                                 id: tc.id.clone(),
                                 name: tc.function.name.clone(),
@@ -1293,7 +1606,7 @@ impl AgentLoop {
                     }
                 } else if matches!(
                     tc.function.name.as_str(),
-                    "write_file" | "edit_file" | "read_file"
+                    "write_file" | "edit_file" | "read_file" | "read_image"
                 ) {
                     let args: serde_json::Value =
                         serde_json::from_str(&tc.function.arguments).unwrap_or_default();
@@ -1349,16 +1662,15 @@ impl AgentLoop {
                     };
 
                     // ── 命令授权缓存：同一 execute_command 不重复弹窗 ──
-                    let cmd_cached = if tc.function.name == "execute_command"
-                        && risk == RiskLevel::Medium
-                    {
-                        let args: serde_json::Value =
-                            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                        let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                        is_execute_command_approved(&self.approved_commands, cmd)
-                    } else {
-                        false
-                    };
+                    let cmd_cached =
+                        if tc.function.name == "execute_command" && risk == RiskLevel::Medium {
+                            let args: serde_json::Value =
+                                serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                            is_execute_command_approved(&self.approved_commands, cmd)
+                        } else {
+                            false
+                        };
 
                     let approved = if path_cached || cmd_cached {
                         log::info!(
@@ -1369,20 +1681,35 @@ impl AgentLoop {
                         );
                         true
                     } else if let Some(ref handler) = self.approval_handler {
-                        self.emit_to_frontend(AgentLoopEvent::ApprovalRequired {
-                            call_id: tc.id.clone(),
-                            tool_name: tc.function.name.clone(),
-                            arguments: tc.function.arguments.clone(),
-                            risk_description: risk.description().to_string(),
-                        });
-                        handler(&tc.id, &tc.function.name, &tc.function.arguments, risk.clone())
+                        // 仅"用户亲自审批"的路径才发弹窗事件；程序化裁决（群聊主持人等）
+                        // 由 handler 直接给出结论，不向前端请求审批。
+                        if self.notify_user_approval {
+                            self.emit_to_frontend(AgentLoopEvent::ApprovalRequired {
+                                call_id: tc.id.clone(),
+                                tool_name: tc.function.name.clone(),
+                                arguments: tc.function.arguments.clone(),
+                                risk_description: risk.description().to_string(),
+                            });
+                        }
+                        handler(
+                            &tc.id,
+                            &tc.function.name,
+                            &tc.function.arguments,
+                            risk.clone(),
+                        )
                     } else {
-                        log::warn!("[AgentLoop] 无审批回调，拒绝高风险工具: {}", tc.function.name);
+                        log::warn!(
+                            "[AgentLoop] 无审批回调，拒绝高风险工具: {}",
+                            tc.function.name
+                        );
                         false
                     };
 
                     if !approved {
-                        let msg = format!("{}拒绝了工具调用: {}", self.approval_label, tc.function.name);
+                        let msg = format!(
+                            "{}拒绝了工具调用: {}",
+                            self.approval_label, tc.function.name
+                        );
                         self.emit_to_frontend(AgentLoopEvent::ToolResult {
                             id: tc.id.clone(),
                             name: tc.function.name.clone(),
@@ -1415,12 +1742,17 @@ impl AgentLoop {
                 // 见文件尾部）：仅"无内部自管边界"的普通工具受 60s 盲超时保护，四类豁免工具
                 // （ask_user/generate_video/execute_command/execute_python）内部已自管执行边界，
                 // 外层不盲杀；豁免名单与时长只在该函数一处维护，与历史行为保持一致。
-                log::info!("[AgentLoop] 开始执行工具: {}, args={}", tc.function.name, tc.function.arguments);
+                log::info!(
+                    "[AgentLoop] 开始执行工具: {}, args={}",
+                    tc.function.name,
+                    tc.function.arguments
+                );
                 let tool_name_clone = tc.function.name.clone();
                 let exec_result = if let Some(secs) = tool_exec_timeout_secs(&tool_name_clone) {
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(secs),
-                        self.tool_registry.execute(&tc.function.name, &tc.function.arguments),
+                        self.tool_registry
+                            .execute(&tc.function.name, &tc.function.arguments),
                     )
                     .await
                     {
@@ -1429,11 +1761,17 @@ impl AgentLoop {
                         Err(_elapsed) => Err(format!("工具执行超时（超过 {} 秒）", secs)),
                     }
                 } else {
-                    self.tool_registry.execute(&tc.function.name, &tc.function.arguments).await
+                    self.tool_registry
+                        .execute(&tc.function.name, &tc.function.arguments)
+                        .await
                 };
                 match exec_result {
                     Ok(result) => {
-                        log::info!("[AgentLoop] 工具执行成功: {}, result_len={}", tool_name_clone, result.len());
+                        log::info!(
+                            "[AgentLoop] 工具执行成功: {}, result_len={}",
+                            tool_name_clone,
+                            result.len()
+                        );
                         self.emit_to_frontend(AgentLoopEvent::ToolResult {
                             id: tc.id.clone(),
                             name: tc.function.name.clone(),
@@ -1454,7 +1792,11 @@ impl AgentLoop {
                         }
                     }
                     Err(err) => {
-                        log::error!("[AgentLoop] 工具执行失败: {}, error={}", tool_name_clone, err);
+                        log::error!(
+                            "[AgentLoop] 工具执行失败: {}, error={}",
+                            tool_name_clone,
+                            err
+                        );
                         self.emit_to_frontend(AgentLoopEvent::ToolResult {
                             id: tc.id.clone(),
                             name: tc.function.name.clone(),
@@ -1483,7 +1825,10 @@ impl AgentLoop {
                         // 第一次达到阈值：注入收敛提示，给模型最后一次推进机会。
                         stall_prompted = true;
                         stall_count = 0;
-                        log::warn!("[AgentLoop] 连续 {} 轮无进展，注入收敛提示", STALL_THRESHOLD);
+                        log::warn!(
+                            "[AgentLoop] 连续 {} 轮无进展，注入收敛提示",
+                            STALL_THRESHOLD
+                        );
                         messages.push(ChatMessage::system(
                             "你已连续多轮未推进任务（未成功执行工具且未输出内容）。请基于已完成的工具结果直接给出最终结论；若确有必要，再调用具体工具继续推进，不要空转。",
                         ));
@@ -1499,7 +1844,10 @@ impl AgentLoop {
                             stall_count = 0;
                             log::info!("[AgentLoop] 停滞经裁决继续推进");
                         } else {
-                            log::warn!("[AgentLoop] 连续无进展（{} 轮）且裁决收尾，进入总结收尾", STALL_THRESHOLD + 1);
+                            log::warn!(
+                                "[AgentLoop] 连续无进展（{} 轮）且裁决收尾，进入总结收尾",
+                                STALL_THRESHOLD + 1
+                            );
                             return self.finish_with_summary(&messages, iteration).await;
                         }
                     }
@@ -1519,7 +1867,11 @@ impl AgentLoop {
     ) -> Result<AgentLoopOutput, String> {
         let tool_calls = extract_tool_calls(messages);
         let summary_text = self.summarize_work(messages).await;
-        log::info!("[AgentLoop] 收尾完成: iteration={}, summary_len={}", iteration, summary_text.len());
+        log::info!(
+            "[AgentLoop] 收尾完成: iteration={}, summary_len={}",
+            iteration,
+            summary_text.len()
+        );
         self.emit_to_frontend(AgentLoopEvent::Done {
             content: summary_text.clone(),
         });
@@ -1549,6 +1901,7 @@ impl AgentLoop {
             stream: false,
             temperature: Some(0.5),
             max_tokens: Some(2000),
+            response_format: None,
         };
         match self.client.chat(&request).await {
             Ok(resp) if !resp.content.trim().is_empty() => resp.content,
@@ -1604,7 +1957,11 @@ fn confirmation_json_from_ask_user_args(args: &str) -> Option<String> {
         .as_str()
         .or_else(|| v["reply_mode"].as_str())
         .unwrap_or("open");
-    let reply_mode = if reply_mode == "structured" { "structured" } else { "open" };
+    let reply_mode = if reply_mode == "structured" {
+        "structured"
+    } else {
+        "open"
+    };
     let title = v["title"]
         .as_str()
         .map(|s| s.trim().to_string())
@@ -1636,7 +1993,8 @@ fn confirmation_json_from_ask_user_args(args: &str) -> Option<String> {
 /// 使会话/群聊落库消息的思维链可回看推理过程（与实时 agent-reasoning 事件同源）。
 fn extract_tool_calls(messages: &[ChatMessage]) -> Vec<ThinkingChainStep> {
     let mut steps: Vec<ThinkingChainStep> = Vec::new();
-    let mut name_by_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut name_by_id: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     let now = crate::utils::now();
     let mut reasoning_seq: usize = 0;
 
@@ -1644,7 +2002,11 @@ fn extract_tool_calls(messages: &[ChatMessage]) -> Vec<ThinkingChainStep> {
         match m.role.as_str() {
             "assistant" => {
                 // 推理步骤（思考模型）：reasoning_content 随 assistant 消息原样回传，落库供回看。
-                if let Some(rc) = m.reasoning_content.as_deref().filter(|s| !s.trim().is_empty()) {
+                if let Some(rc) = m
+                    .reasoning_content
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                {
                     reasoning_seq += 1;
                     steps.push(ThinkingChainStep {
                         id: format!("reasoning-{}", reasoning_seq),
@@ -1751,7 +2113,11 @@ fn cache_approved_path(
     // 同时缓存父目录（该目录下所有 write_file 后续全免审批）
     if let Some(parent) = canonical.parent() {
         approved_dirs.lock().unwrap().insert(parent.to_path_buf());
-        log::info!("[AgentLoop] 路径授权缓存: file={}, dir={}", canonical.display(), parent.display());
+        log::info!(
+            "[AgentLoop] 路径授权缓存: file={}, dir={}",
+            canonical.display(),
+            parent.display()
+        );
     }
 }
 
@@ -1796,8 +2162,24 @@ fn trim_trailing_punct(s: &str) -> &str {
     s.trim().trim_end_matches(|c: char| {
         matches!(
             c,
-            ',' | ';' | '.' | '。' | '，' | '；' | '：' | ')' | '）' | ']' | '】'
-                | '"' | '\u{201C}' | '\u{201D}' | '\'' | '`' | '>' | '}' | '!'
+            ',' | ';'
+                | '.'
+                | '。'
+                | '，'
+                | '；'
+                | '：'
+                | ')'
+                | '）'
+                | ']'
+                | '】'
+                | '"'
+                | '\u{201C}'
+                | '\u{201D}'
+                | '\''
+                | '`'
+                | '>'
+                | '}'
+                | '!'
         )
     })
 }
@@ -1805,10 +2187,7 @@ fn trim_trailing_punct(s: &str) -> &str {
 /// 是否 Windows 盘符绝对路径（如 `C:\foo\bar` / `D:/x`）。
 fn is_abs_windows_path(s: &str) -> bool {
     let b = s.as_bytes();
-    b.len() >= 3
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && (b[2] == b'\\' || b[2] == b'/')
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
 
 /// 检查 execute_command 的命令是否已在授权缓存中
@@ -1859,3 +2238,39 @@ fn estimate_non_system(messages: &[ChatMessage]) -> usize {
         .sum()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 审批尺度只由「工具授权」（`security_mode`）决定：模式越严，越低的风险等级也要问。
+    /// 回归点：旧实现把阈值交给另一套 `AuthLevel`，导致「工具授权」对命令/路径以外的工具
+    /// 完全不起作用（工作流里选任何模式都静默放行）。
+    #[test]
+    fn approval_floor_follows_security_mode() {
+        assert_eq!(approval_floor(SecurityMode::Strict), Some(RiskLevel::Low));
+        assert_eq!(
+            approval_floor(SecurityMode::Standard),
+            Some(RiskLevel::Medium)
+        );
+        assert_eq!(approval_floor(SecurityMode::Relaxed), Some(RiskLevel::High));
+        assert_eq!(approval_floor(SecurityMode::Unrestricted), None);
+    }
+
+    /// 各模式的判定结果：严格全问、标准问中高、宽松只问高危、无限制不问。
+    #[test]
+    fn approval_decision_by_mode() {
+        let needs = |mode: SecurityMode, risk: RiskLevel| matches!(approval_floor(mode), Some(floor) if risk >= floor);
+
+        assert!(needs(SecurityMode::Strict, RiskLevel::Low));
+        assert!(needs(SecurityMode::Strict, RiskLevel::High));
+
+        assert!(!needs(SecurityMode::Standard, RiskLevel::Low));
+        assert!(needs(SecurityMode::Standard, RiskLevel::Medium));
+        assert!(needs(SecurityMode::Standard, RiskLevel::High));
+
+        assert!(!needs(SecurityMode::Relaxed, RiskLevel::Medium));
+        assert!(needs(SecurityMode::Relaxed, RiskLevel::High));
+
+        assert!(!needs(SecurityMode::Unrestricted, RiskLevel::High));
+    }
+}

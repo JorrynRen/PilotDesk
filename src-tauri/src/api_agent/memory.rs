@@ -185,7 +185,10 @@ mod tests {
     use super::*;
 
     fn temp_store() -> MemoryStore {
-        let tmp = std::env::temp_dir().join(format!("pilotdesk_test_memories_{}.json", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "pilotdesk_test_memories_{}.json",
+            std::process::id()
+        ));
         let path = tmp.to_string_lossy().to_string();
         let store = MemoryStore::new(path.clone());
         // Clean up after test

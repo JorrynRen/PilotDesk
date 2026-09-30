@@ -41,7 +41,10 @@ impl CliRunner for PilotDeskCliRunner {
     ) -> Result<CliOutput, String> {
         let agent_type = config.command.as_str();
 
-        let conn = self.pool.get().map_err(|e| format!("数据库连接失败: {}", e))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| format!("数据库连接失败: {}", e))?;
         let agent_config = crate::commands::agents::get_agent_inner(&conn, agent_type)
             .map_err(|e| format!("查询 Agent 配置失败: {}", e))?
             .ok_or_else(|| format!("未知 Agent 类型: {}", agent_type))?;
@@ -94,7 +97,10 @@ impl CliRunner for PilotDeskCliRunner {
 
         // 更新跨轮会话 id
         if let Some(sid) = new_sid.lock().unwrap().clone() {
-            self.sessions.lock().unwrap().insert(agent_type.to_string(), sid);
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(agent_type.to_string(), sid);
         }
 
         if result.exit_code != 0 {
@@ -111,6 +117,9 @@ impl CliRunner for PilotDeskCliRunner {
             ));
         }
 
-        Ok(CliOutput { stdout: result.stdout, session_id: resume_session_id })
+        Ok(CliOutput {
+            stdout: result.stdout,
+            session_id: resume_session_id,
+        })
     }
 }

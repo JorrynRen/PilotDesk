@@ -89,7 +89,12 @@ impl GroupChatEvent {
         e
     }
 
-    pub fn stance_updated(room_id: &str, participant_id: &str, stance: &str, attitude: Attitude) -> Self {
+    pub fn stance_updated(
+        room_id: &str,
+        participant_id: &str,
+        stance: &str,
+        attitude: Attitude,
+    ) -> Self {
         let mut e = Self::new(room_id, "stance_updated");
         e.participant_id = Some(participant_id.to_string());
         e.stance = Some(stance.to_string());

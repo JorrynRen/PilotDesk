@@ -17,6 +17,8 @@ export interface Session {
   apiModel?: string;
   /** Agent-side session ID (e.g. Claude Code session UUID) for session continuity */
   agentSessionId?: string;
+  /** 会话来源：'workflow' = 工作流 Agent 节点自动创建；缺省 = 用户会话 */
+  origin?: string;
   /** 模型温度 (0.0-2.0) */
   temperature?: number;
   /** 最大生成 token 数 */
@@ -330,6 +332,38 @@ export interface UsageSummary {
 /** 拉取全局用量汇总。days<=0 表示全量，否则为近 N 天窗口。 */
 export async function getUsageSummary(days = 30): Promise<UsageSummary> {
   return await _invoke('get_usage_summary', { days });
+}
+
+/**
+ * 单个成本归因维度：既是聚合口径（totals 供「按归因」总览），也是明细入口（groups 供下钻）。
+ * key ∈ `session` | `groupchat` | `workflow` | `knowledge`。
+ */
+export interface UsageDimension {
+  key: string;
+  /** 该维度合计（各分组四桶累加，命中率按累加结果重算）。 */
+  totals: UsageTotals;
+  /**
+   * 明细分组：会话=一行一会话；群聊=一房间一行；工作流=一定义一行；知识库=一库一行。
+   *
+   * **知识库维度的 `name` 是库 id**（知识库定义在 MEMORY.db，用量查询在主库上，跨库不 JOIN），
+   * 由 `UsageStats` 用 `kb_list_bases` 映射成库名展示；映射不到（库已删）就显示 id。
+   */
+  groups: UsageGroup[];
+}
+
+/**
+ * 成本归因维度汇总（固定顺序：会话 → 群聊 → 工作流 → 知识库）。
+ * 前两者与工作流归因自 `api_usage_log.session_id` 的命名约定与会话来源推导；
+ * 知识库按 `kb:{kbId}` 前缀识别（写入方 `commands/knowledge.rs::record_kb_usage`）。
+ * CLI Agent（终端/插件/CLI 会话）不经宿主发起调用，无用量行，故合计可能小于全局总量。
+ */
+export interface UsageAttribution {
+  dimensions: UsageDimension[];
+}
+
+/** 拉取三维成本归因。days<=0 表示全量，否则为近 N 天窗口。 */
+export async function getUsageAttribution(days = 30): Promise<UsageAttribution> {
+  return await _invoke('get_usage_attribution', { days });
 }
 
 /** 群聊房间用量（director + 各参与者，按 model/provider 聚合）。 */

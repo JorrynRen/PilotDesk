@@ -6,8 +6,8 @@
 //
 //  噪声过滤已迁移至 line_processor 模块（L0 平台层 + L1 Agent 配置层）。
 
-use crate::agent::line_processor::LineProcessor;
 use crate::agent::config::AgentConfig;
+use crate::agent::line_processor::LineProcessor;
 
 /// 进程交互协议抽象
 pub trait ProcessHandler: Send + Sync {
@@ -43,7 +43,6 @@ impl StdioHandler {
             line_processor,
         }
     }
-
 }
 
 impl ProcessHandler for StdioHandler {
@@ -141,17 +140,14 @@ impl ProcessHandler for StdioHandler {
             "stdout-text" | "stderr-text" => {
                 extract_session_id_from_text(line, &self.config.session_id_field)
             }
-            "stdout-json" | "stderr-json" => {
-                extract_session_id_from_json(
-                    line,
-                    &self.config.session_id_event_type,
-                    &self.config.session_id_field,
-                )
-            }
+            "stdout-json" | "stderr-json" => extract_session_id_from_json(
+                line,
+                &self.config.session_id_event_type,
+                &self.config.session_id_field,
+            ),
             _ => None,
         }
     }
-
 }
 
 // ──────────────────────────────────────────────
@@ -267,9 +263,18 @@ mod tests {
 
     #[test]
     fn test_strip_ansi() {
-        assert_eq!(crate::agent::line_processor::strip_ansi_text("\x1b[36mHello\x1b[0m"), "Hello");
-        assert_eq!(crate::agent::line_processor::strip_ansi_text("\x1b[1m\x1b[31mRed Bold\x1b[0m"), "Red Bold");
-        assert_eq!(crate::agent::line_processor::strip_ansi_text("No ANSI"), "No ANSI");
+        assert_eq!(
+            crate::agent::line_processor::strip_ansi_text("\x1b[36mHello\x1b[0m"),
+            "Hello"
+        );
+        assert_eq!(
+            crate::agent::line_processor::strip_ansi_text("\x1b[1m\x1b[31mRed Bold\x1b[0m"),
+            "Red Bold"
+        );
+        assert_eq!(
+            crate::agent::line_processor::strip_ansi_text("No ANSI"),
+            "No ANSI"
+        );
         assert_eq!(crate::agent::line_processor::strip_ansi_text(""), "");
     }
 

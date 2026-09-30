@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::utils::errors::AppError;
+use serde::{Deserialize, Serialize};
 
 /// Version check result for a single component
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,12 +46,15 @@ fn http_client() -> Result<reqwest::Client, AppError> {
 /// Fetch JSON from a URL with User-Agent header.
 async fn http_get_json(url: &str) -> Result<serde_json::Value, AppError> {
     let client = http_client()?;
-    let resp = client.get(url)
+    let resp = client
+        .get(url)
         .header("User-Agent", "PilotDesk")
         .send()
         .await
         .map_err(|e| AppError::Network(format!("HTTP request failed: {}", e)))?;
-    resp.json().await.map_err(|e| AppError::Network(format!("JSON parse failed: {}", e)))
+    resp.json()
+        .await
+        .map_err(|e| AppError::Network(format!("JSON parse failed: {}", e)))
 }
 
 /// Check for PilotDesk updates only (GitHub releases).
@@ -65,17 +68,27 @@ pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppErro
     let latest = {
         let url = "https://api.github.com/repos/jorryn/pilotdesk/releases/latest";
         let body = http_get_json(url).await?;
-        let tag = body.get("tag_name").and_then(|t| t.as_str())
+        let tag = body
+            .get("tag_name")
+            .and_then(|t| t.as_str())
             .map(|t| t.trim_start_matches('v').to_string())
             .filter(|t| !t.is_empty());
         tag
     };
 
-    let has_update = latest.as_deref().map(|lat| is_version_older(&current, lat)).unwrap_or(false);
+    let has_update = latest
+        .as_deref()
+        .map(|lat| is_version_older(&current, lat))
+        .unwrap_or(false);
     let now = chrono::Local::now();
     let checked_at = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
-    log::info!("[update] PilotDesk: current={}, latest={:?}, has_update={}", current, latest, has_update);
+    log::info!(
+        "[update] PilotDesk: current={}, latest={:?}, has_update={}",
+        current,
+        latest,
+        has_update
+    );
 
     Ok(PilotdeskUpdateResponse {
         pilotdesk: VersionCheckResult {
@@ -103,14 +116,17 @@ pub async fn check_agent_update(
 
     let cmd = config.latest_version_cmd;
     if cmd.is_empty() {
-        return Err(AppError::Config(format!("{} 未配置版本查询命令", agent_type)));
+        return Err(AppError::Config(format!(
+            "{} 未配置版本查询命令",
+            agent_type
+        )));
     }
 
     let mgr = agent_mgr.lock().await;
-    let output = mgr.execute_command_output_async(
-        &cmd, "", 15,
-        &format!("{} 更新检查", agent_type),
-    ).await.map_err(|e| AppError::External(format!("版本查询失败: {}", e)))?;
+    let output = mgr
+        .execute_command_output_async(&cmd, "", 15, &format!("{} 更新检查", agent_type))
+        .await
+        .map_err(|e| AppError::External(format!("版本查询失败: {}", e)))?;
 
     Ok(VersionTimeInfo {
         version: output,

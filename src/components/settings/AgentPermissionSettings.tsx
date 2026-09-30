@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Loader2, Save } from 'lucide-react';
+import { Check, Loader2, Save } from 'lucide-react';
 import { SettingsSection, SettingsButton } from './index';
+import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
 
 // ============================================================
 // 权限清单（独立设置页）
@@ -89,7 +91,14 @@ export function PermissionSettings() {
   const [rules, setRules] = useState<PermissionRules>(EMPTY_RULES);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
+  /** 保存按钮上的短暂反馈（显示「已保存」两秒后复位） */
+  const [justSaved, setJustSaved] = useState(false);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 卸载时清掉未触发的复位定时器，避免对已卸载组件 setState
+  useEffect(() => () => {
+    if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -104,7 +113,9 @@ export function PermissionSettings() {
   }, []);
 
   useEffect(() => {
-    load();
+    // effect 体内不允许同步 setState（react-hooks/set-state-in-effect）：把首次加载推迟一个微任务，
+    // 仍在同一帧内执行，观感与原先一致
+    queueMicrotask(() => { void load(); });
   }, [load]);
 
   const save = async () => {
@@ -113,9 +124,13 @@ export function PermissionSettings() {
       const payload: PermissionRules = { ...rules };
       await invoke('set_permission_rules', { rules: payload });
       setRules(payload);
-      setSavedAt(new Date().toLocaleTimeString());
-    } catch {
-      // ignore
+      // 按钮本身给反馈：成功后短暂变成「已保存」（原先只在页面底部有一行小字，容易被忽略）
+      setJustSaved(true);
+      if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000);
+    } catch (err) {
+      // 这里原来是静默 ignore —— 保存失败时用户得不到任何提示，只会以为"点了没反应"
+      showToast(`保存失败: ${errorMessage(err)}`, 'error');
     } finally {
       setSaving(false);
     }
@@ -143,9 +158,9 @@ export function PermissionSettings() {
             onClick={save}
             variant="primary"
             disabled={saving}
-            icon={saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+            icon={saving ? <Loader2 size={12} className="animate-spin" /> : justSaved ? <Check size={12} /> : <Save size={12} />}
           >
-            保存
+            {saving ? '保存中…' : justSaved ? '已保存' : '保存'}
           </SettingsButton>
         }
       >
@@ -186,11 +201,6 @@ export function PermissionSettings() {
             onChange={(v) => setField('denyPaths', v)}
           />
         </div>
-        {savedAt && (
-          <p className="text-[10px] mt-2" style={{ color: 'var(--success)' }}>
-            已保存于 {savedAt}
-          </p>
-        )}
       </SettingsSection>
     </div>
   );

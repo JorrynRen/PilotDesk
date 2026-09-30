@@ -1,8 +1,12 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe, Settings } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe, Settings, Bell, LayoutDashboard, Library } from 'lucide-react';
 import type { ViewMode } from '../../TerminalManager';
 import { useCustomTabsStore } from '../../stores/customTabsStore';
+import { useNotificationStore, countUnread } from '../../stores/notificationStore';
+import { useCommandCenterStore } from '../../stores/commandCenterStore';
+import { useI18n } from '../../hooks/useI18n';
 
 export type StatusHintState = 'loading' | 'ready' | 'error' | 'saving' | 'saved' | 'save-error' | 'idle';
 
@@ -32,17 +36,22 @@ interface TitleBarProps {
   onModeChange?: (mode: ViewMode) => void;
   /** 设置在组合开关中作为独立段显示（设置页传 true，thumb 定位到该段） */
   settingsOpen?: boolean;
+  /** 知识库一直是独立路由（设置段那种「进入后才出现」不适用），点击即跳 /knowledge */
+  onOpenKnowledge?: () => void;
+  /** 知识库页传 true：thumb 定位到「知识库」段 */
+  knowledgeOpen?: boolean;
 }
 
 /** 标题栏状态提示徽标组件 */
 function StatusHintBadge({ hint }: { hint: StatusHint }) {
+  const { t } = useI18n();
   const config: Record<StatusHintState, { icon: string; color: string; bg: string; defaultText: string }> = {
-    loading:     { icon: '◎', color: 'var(--accent)',         bg: 'var(--accent-light)',           defaultText: '加载中...' },
-    ready:       { icon: '✓', color: 'var(--status-success)', bg: 'var(--status-success-bg)',       defaultText: '已就绪' },
-    error:       { icon: '✗', color: 'var(--status-danger)',  bg: 'var(--status-danger-bg)',        defaultText: '加载失败' },
-    saving:      { icon: '◎', color: 'var(--accent)',         bg: 'var(--accent-light)',           defaultText: '保存中...' },
-    saved:       { icon: '✓', color: 'var(--status-success)', bg: 'var(--status-success-bg)',       defaultText: '已保存' },
-    'save-error': { icon: '✗', color: 'var(--status-danger)', bg: 'var(--status-danger-bg)',        defaultText: '保存失败' },
+    loading:     { icon: '◎', color: 'var(--accent)',         bg: 'var(--accent-light)',           defaultText: t('statusHint.loading', '加载中...') },
+    ready:       { icon: '✓', color: 'var(--status-success)', bg: 'var(--status-success-bg)',       defaultText: t('statusHint.ready', '已就绪') },
+    error:       { icon: '✗', color: 'var(--status-danger)',  bg: 'var(--status-danger-bg)',        defaultText: t('statusHint.error', '加载失败') },
+    saving:      { icon: '◎', color: 'var(--accent)',         bg: 'var(--accent-light)',           defaultText: t('statusHint.saving', '保存中...') },
+    saved:       { icon: '✓', color: 'var(--status-success)', bg: 'var(--status-success-bg)',       defaultText: t('statusHint.saved', '已保存') },
+    'save-error': { icon: '✗', color: 'var(--status-danger)', bg: 'var(--status-danger-bg)',        defaultText: t('statusHint.saveError', '保存失败') },
     idle:        { icon: '',   color: 'var(--text-tertiary)', bg: 'transparent',                    defaultText: '' },
   };
 
@@ -68,43 +77,114 @@ function StatusHintBadge({ hint }: { hint: StatusHint }) {
   );
 }
 
-export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen, onOpenKnowledge, knowledgeOpen }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
+  const { t } = useI18n();
   const customTabs = useCustomTabsStore((s) => s.tabs);
   const activeCustomTabId = useCustomTabsStore((s) => s.activeTabId);
   const setActiveCustomTab = useCustomTabsStore((s) => s.setActiveTab);
   const [isMaximized, setIsMaximized] = useState(false);
   const [tauriReady, setTauriReady] = useState(true);
+  // 通知中心：铃铛 + 未读徽标（跨全部模式常驻，见 NotificationCenter）
+  const notificationItems = useNotificationStore((s) => s.items);
+  const notificationOpen = useNotificationStore((s) => s.open);
+  const setNotificationOpen = useNotificationStore((s) => s.setOpen);
+  const unreadCount = countUnread(notificationItems);
+  // 指挥中心入口：打开即刷新全部数据源（进行中/待处理/成本速览）
+  const centerOpen = useCommandCenterStore((s) => s.open);
+  const closeCenter = useCommandCenterStore((s) => s.closeCenter);
+  const openCenter = useCommandCenterStore((s) => s.openCenter);
+  // 「入口在这里」指引：首次关闭指挥中心后，图标脉冲 + 气泡告诉用户下次在哪打开
+  const entryHint = useCommandCenterStore((s) => s.entryHint);
+  const dismissEntryHint = useCommandCenterStore((s) => s.dismissEntryHint);
+  const centerBtnRef = useRef<HTMLButtonElement | null>(null);
+  /** 气泡位置（fixed 坐标）：气泡脱离顶栏渲染，避免被顶栏高度/邻近层裁掉或盖住 */
+  const [hintPos, setHintPos] = useState<{ top: number; right: number } | null>(null);
 
-  // 组合开关段：固定 4 模式 + 自定义标签（动态并入，参与 thumb 滑动）+ 设置段（仅设置页）
+  useEffect(() => {
+    // 气泡只在 entryHint 为真时渲染（见下方 `entryHint && hintPos` 守卫），
+    // 所以关闭时不必把位置清空 —— 那是一次 effect 体内的同步 setState，
+    // 会多一轮级联渲染，而对渲染结果没有任何影响。
+    if (!entryHint) return;
+    const el = centerBtnRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      setHintPos({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) });
+    }
+    // 8 秒足够读完一句话；到点自动收起，不让指引变成常驻装饰
+    const timer = setTimeout(() => dismissEntryHint(), 8000);
+    return () => clearTimeout(timer);
+  }, [entryHint, dismissEntryHint]);
+  // 待处理徽标沿用通知中心的未决项（工具审批 / 工作流待人工输入），与铃铛口径一致
+  const pendingCount = notificationItems.filter((i) => i.pending).length;
+
+  /**
+   * 知识库「待确认」角标：全部库的待核实候选总数。
+   *
+   * 为什么在这里单独拉而不复用 `knowledgeStore`：那个 store 是**懒加载**的（进知识库页才 loadBases），
+   * 而角标要跨全部路由常驻。`kb_list_bases` 只做计数（子查询），开销很小，故轻量轮询即可。
+   * 拿不到就不显示角标 —— 顶栏不该因为知识库模块出错而报错。
+   */
+  const [kbPending, setKbPending] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const refresh = async () => {
+      try {
+        const bases = await invoke<{ pendingCount: number }[]>('kb_list_bases');
+        if (alive) setKbPending(bases.reduce((n, b) => n + (b.pendingCount ?? 0), 0));
+      } catch {
+        /* 忽略：保持上一次的值 */
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // 组合开关段：会话 / 群聊 / 工作流 / 知识库（独立路由，常驻）/ 终端 + 自定义标签（动态并入，参与 thumb 滑动）+ 设置段（仅设置页）
   const segments: { key: string; icon: ReactNode; label: string; title: string; tabId?: string }[] = [
-    { key: 'workflow', icon: <Workflow size={11} />, label: '工作流', title: '工作流管理' },
-    { key: 'session', icon: <MessageSquare size={11} />, label: '会话', title: '切换到会话模式' },
-    { key: 'groupchat', icon: <Users size={11} />, label: '群聊', title: '多 Agent 群聊' },
-    { key: 'terminal', icon: <Terminal size={11} />, label: '终端', title: '切换到终端模式' },
-    ...customTabs.map((t) => ({
-      key: `custom:${t.id}`,
-      tabId: t.id,
+    { key: 'session', icon: <MessageSquare size={11} />, label: t('titleBar.session', '会话'), title: t('titleBar.session.title', '切换到会话模式') },
+    { key: 'groupchat', icon: <Users size={11} />, label: t('titleBar.groupchat', '群聊'), title: t('titleBar.groupchat.title', '多 Agent 群聊') },
+    { key: 'workflow', icon: <Workflow size={11} />, label: t('titleBar.workflow', '工作流'), title: t('titleBar.workflow.title', '工作流管理') },
+    {
+      key: 'knowledge',
+      icon: <Library size={11} />,
+      label: t('titleBar.knowledge', '知识库'),
+      title: kbPending > 0
+        ? t('titleBar.knowledge.title.pending', `知识库（${kbPending} 条待核实）`, { count: kbPending })
+        : t('titleBar.knowledge.title', '知识库：片段 / 文件知识 / 图谱'),
+    },
+    { key: 'terminal', icon: <Terminal size={11} />, label: t('titleBar.terminal', '终端'), title: t('titleBar.terminal.title', '切换到终端模式') },
+    ...customTabs.map((t_) => ({
+      key: `custom:${t_.id}`,
+      tabId: t_.id,
       icon: <Globe size={11} />,
-      label: t.label,
-      title: t.url,
+      label: t_.label,
+      title: t_.url,
     })),
     ...(settingsOpen
-      ? [{ key: 'settings', icon: <Settings size={11} />, label: '设置', title: '设置页面' }]
+      ? [{ key: 'settings', icon: <Settings size={11} />, label: t('titleBar.settings', '设置'), title: t('titleBar.settings.title', '设置页面') }]
       : []),
   ];
-  // 当前激活段的 key：设置页固定为设置段；custom 模式时按 activeCustomTabId 精确定位到对应标签段
-  const activeSegmentKey = settingsOpen
-    ? 'settings'
-    : (mode === 'custom'
-      ? (activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
-      : mode);
+  // 当前激活段的 key：知识库页固定为知识库段、设置页固定为设置段；custom 模式时按 activeCustomTabId 精确定位
+  const activeSegmentKey = knowledgeOpen
+    ? 'knowledge'
+    : settingsOpen
+      ? 'settings'
+      : (mode === 'custom'
+        ? (activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
+        : mode);
   const modeIndex = mode ? segments.findIndex((s) => s.key === activeSegmentKey) : -1;
 
   // 组合开关 thumb 像素定位：按钮宽度自适应（左右内边距），按实际段位置滑动
   const segRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const thumbRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  const modeGroupRef = useRef<HTMLDivElement>(null);
+
+  const syncThumb = useCallback(() => {
     const thumb = thumbRef.current;
     const el = modeIndex >= 0 ? segRefs.current[modeIndex] : null;
     if (thumb && el) {
@@ -114,7 +194,27 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
     } else if (thumb) {
       thumb.style.opacity = '0';
     }
-  }, [modeIndex, customTabs]);
+  }, [modeIndex]);
+
+  useEffect(() => {
+    syncThumb();
+  }, [syncThumb, customTabs]);
+
+  /**
+   * 段宽会随文案变化 —— 最典型的是**切换语言**（「会话」↔「Sessions」宽度差近一倍）。
+   * 那一刻 modeIndex 与 customTabs 都没变，上面那个 effect 不会重跑，thumb 便停在旧位置，
+   * 看起来就是"按钮背景框错位"。
+   *
+   * 所以直接盯容器的实际尺寸，凡是会引起重排的变化（切语言、字体加载完成、自定义标签改名）
+   * 都能自动跟上，而不用逐个去猜该把哪些值塞进依赖数组。
+   */
+  useEffect(() => {
+    const group = modeGroupRef.current;
+    if (!group || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => syncThumb());
+    ro.observe(group);
+    return () => ro.disconnect();
+  }, [syncThumb]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -206,7 +306,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
     }
   }, []);
 
-  const handleHeaderMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const handleHeaderMouseMove = useCallback(() => {
     const pos = mouseDownPosRef.current;
     if (pos && !draggingRef.current) {
       // Start OS-level drag immediately to avoid cursor ghosting
@@ -251,11 +351,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               onClick={onBack || onOpenSettings}
               className="pd-btn p-1 rounded transition-colors hover:opacity-80"
               style={{ color: 'var(--text-secondary)' }}
-              title="返回"
+              title={t('titleBar.back', '返回')}
             >
               <ArrowLeft size={16} />
             </button>
-            <span className="text-xs font-medium pointer-events-none" style={{ color: 'var(--text-primary)' }}>{titleText || '设置'}</span>
+            <span className="text-xs font-medium pointer-events-none" style={{ color: 'var(--text-primary)' }}>{titleText || t('titleBar.settings', '设置')}</span>
             {statusHint && statusHint.state !== 'idle' && (
               <StatusHintBadge hint={statusHint} />
             )}
@@ -273,14 +373,17 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
          *  兼容旧用法：未提供 mode/onModeChange 时回退到 工作流CTA+会话/终端切换。
          */}
       <div className="flex items-center h-full">
-        {/* ✦ 内层 stretch 包容器：组合开关 + 分隔符 + 折叠按钮 三者高度自动完全对齐，
-            无需手动计算 border/padding 像素；外层 items-center 保证整组在 header 垂直居中。 */}
+        {/* ✦ 内层 stretch 包容器：组合开关 + 分隔符 + 折叠按钮 + 通知铃铛 的高度自动完全对齐，
+            无需手动计算 border/padding 像素；外层 items-center 保证整组在 header 垂直居中。
+            注：铃铛自带确定高度（见下），不参与自适应拉伸 —— 编辑器页等没有模式开关的路由，
+            这一组只剩铃铛自己，若靠 stretch 撑高，同一颗钮子在不同路由就会不一样大。 */}
         <div className="flex items-stretch">
           {!showBackButton && (mode && onModeChange) && (
             <div
+              ref={modeGroupRef}
               className="relative flex items-center select-none"
               role="radiogroup"
-              aria-label="工作模式切换"
+              aria-label={t('titleBar.modeGroup', '工作模式切换')}
               style={{
                 backgroundColor: 'var(--bg-tertiary)',
                 border: '1px solid var(--border-strong, rgba(0,0,0,0.12))',
@@ -292,18 +395,23 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               }}
             >
               {segments.map((seg, index) => {
-                // 设置页打开时只有「设置」段激活，其它段（含原模式段）一律取消高亮，
-                // 否则进入设置页后上一个按钮的文本仍保持白色。
-                const isActive = settingsOpen
-                  ? seg.key === 'settings'
-                  : seg.tabId
-                    ? mode === 'custom' && activeCustomTabId === seg.tabId
-                    : mode === seg.key;
+                // 知识库/设置段：只有激活态区分，进入后其它段一律取消高亮（否则上一个按钮的文本仍保持白色）
+                const isActive = knowledgeOpen
+                  ? seg.key === 'knowledge'
+                  : settingsOpen
+                    ? seg.key === 'settings'
+                    : seg.tabId
+                      ? mode === 'custom' && activeCustomTabId === seg.tabId
+                      : mode === seg.key;
                 return (
                   <button
                     key={seg.key}
                     ref={(el) => { segRefs.current[index] = el; }}
                     onClick={() => {
+                      if (seg.key === 'knowledge') {
+                        onOpenKnowledge?.();
+                        return;
+                      }
                       if (seg.key === 'settings') {
                         onOpenSettings?.();
                         return;
@@ -328,6 +436,24 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                   >
                     {seg.icon}
                     <span className="truncate max-w-[96px]">{seg.label}</span>
+                    {/* 知识库待核实角标：绝对定位（不改变段宽 → 不影响 thumb 定位） */}
+                    {seg.key === 'knowledge' && kbPending > 0 && (
+                      <span
+                        className="absolute flex items-center justify-center rounded-full text-[9px] font-medium"
+                        style={{
+                          top: -4,
+                          right: -2,
+                          minWidth: 13,
+                          height: 13,
+                          padding: '0 3px',
+                          backgroundColor: '#F59E0B',
+                          color: '#fff',
+                          lineHeight: 1,
+                        }}
+                      >
+                        {kbPending > 99 ? '99+' : kbPending}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -356,7 +482,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             <div
               className="relative flex items-center select-none"
               role="group"
-              aria-label="工作流 / 视图模式"
+              aria-label={t('titleBar.viewGroup', '工作流 / 视图模式')}
               style={{
                 backgroundColor: 'var(--bg-tertiary)',
                 border: '1px solid var(--border-strong, rgba(0,0,0,0.12))',
@@ -409,10 +535,10 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                       const thumb = (e.currentTarget.parentElement?.querySelector('[data-role="workflow-thumb"]') || null) as HTMLElement | null;
                       if (thumb) thumb.style.backgroundColor = 'var(--accent)';
                     }}
-                    title="工作流管理"
+                    title={t('titleBar.workflow.title', '工作流管理')}
                   >
                     <Workflow size={12} />
-                    工作流
+                    {t('titleBar.workflow', '工作流')}
                   </button>
                 </div>
               )}
@@ -427,7 +553,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 <div
                   className="relative flex items-center h-full flex-1 min-w-0"
                   role="radiogroup"
-                  aria-label="视图模式切换"
+                  aria-label={t('titleBar.viewToggle', '视图模式切换')}
                 >
                   {/* 段 2：客户端 */}
                   <button
@@ -439,10 +565,10 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                       color: !isTerminalOpen ? '#fff' : 'var(--text-secondary)',
                       fontWeight: !isTerminalOpen ? 600 : 500,
                     }}
-                    title="切换到客户端模式"
+                    title={t('titleBar.client.title', '切换到客户端模式')}
                   >
                     <MessageSquare size={11} />
-                    客户端
+                    {t('titleBar.client', '客户端')}
                   </button>
                   {/* 段 3：终端 */}
                   <button
@@ -454,10 +580,10 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                       color: isTerminalOpen ? '#fff' : 'var(--text-secondary)',
                       fontWeight: isTerminalOpen ? 600 : 500,
                     }}
-                    title="切换到终端模式"
+                    title={t('titleBar.terminal.title', '切换到终端模式')}
                   >
                     <Terminal size={11} />
-                    终端
+                    {t('titleBar.terminal', '终端')}
                   </button>
                   {/* 滑动 thumb：只在右侧 62% 区域内移动 */}
                   <div
@@ -488,25 +614,112 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               onClick={onToggleRightPanel}
               className="flex items-center justify-center hover:opacity-80 transition-all shrink-0"
               style={{
-                /* 在父级 flex items-stretch 容器中，此按钮自动撑满与组合开关相同的高度，
-                   含 border + padding 全尺寸完全匹配，无需再手动写死 height 值。 */
-                width: 26,
+                /* 与应用级动作按钮同尺寸（28×28 / 圆角 8）：此前一颗靠父级 stretch 撑高、
+                   另两颗写死 26×30，三颗高度不齐且只隔 4px，看起来"贴成一坨" */
+                width: 28,
+                height: 28,
+                alignSelf: 'center',
                 padding: 0,
                 border: '1px solid var(--border)',
-                borderRadius: 6,
+                borderRadius: 8,
                 color: rightPanelOpen ? 'var(--accent)' : 'var(--text-secondary)',
                 background: rightPanelOpen ? 'var(--border)' : 'transparent',
               }}
-              title={rightPanelOpen ? '关闭侧边栏' : '打开侧边栏'}
+              title={rightPanelOpen ? t('titleBar.sidebar.close', '关闭侧边栏') : t('titleBar.sidebar.open', '打开侧边栏')}
             >
               <PanelIcon size={13} />
             </button>
           )}
+          {/* 指挥中心：进行中 / 待处理 / 成本速览 / 快捷入口 的聚合入口（置于铃铛之前） */}
+          <button
+            ref={centerBtnRef}
+            onClick={() => { if (centerOpen) closeCenter(); else void openCenter(); }}
+            className="relative flex items-center justify-center hover:opacity-80 transition-all shrink-0 ml-2"
+            style={{
+              width: 28,
+              height: 28,
+              alignSelf: 'center',
+              padding: 0,
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              color: centerOpen || entryHint ? 'var(--accent)' : 'var(--text-secondary)',
+              background: centerOpen ? 'var(--border)' : 'transparent',
+              // 指引期间图标本身也亮起来（与脉冲外圈一起，视线一眼落到入口）
+              boxShadow: entryHint ? '0 0 0 1px var(--accent)' : undefined,
+            }}
+            title={pendingCount > 0
+              ? t('titleBar.commandCenter.pending', `指挥中心（${pendingCount} 项待处理）`, { count: pendingCount })
+              : t('titleBar.commandCenter', '指挥中心')}
+          >
+            {entryHint && (
+              <span
+                aria-hidden
+                className="pd-animate-guide-ring absolute inset-0 rounded-[6px]"
+                style={{ border: '2px solid var(--accent)', pointerEvents: 'none' }}
+              />
+            )}
+            <LayoutDashboard size={13} />
+            {pendingCount > 0 && (
+              <span
+                className="absolute flex items-center justify-center rounded-full text-[9px] font-medium"
+                style={{
+                  top: -3,
+                  right: -3,
+                  minWidth: 13,
+                  height: 13,
+                  padding: '0 3px',
+                  backgroundColor: '#F59E0B',
+                  color: '#fff',
+                  lineHeight: 1,
+                }}
+              >
+                {pendingCount > 99 ? '99+' : pendingCount}
+              </span>
+            )}
+          </button>
+          {/* 通知中心铃铛：固定 26×30 并自居中 —— 不靠父级 stretch 决定高度，
+              这样在"有模式开关"（组高 30.5）与"只剩铃铛"（编辑器页）的路由下渲染完全一致。 */}
+          <button
+            onClick={() => setNotificationOpen(!notificationOpen)}
+            className="relative flex items-center justify-center hover:opacity-80 transition-all shrink-0 ml-2"
+            style={{
+              width: 28,
+              height: 28,
+              alignSelf: 'center',
+              padding: 0,
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              color: notificationOpen ? 'var(--accent)' : 'var(--text-secondary)',
+              background: notificationOpen ? 'var(--border)' : 'transparent',
+            }}
+            title={unreadCount > 0
+              ? t('titleBar.notifications.unread', `通知中心（${unreadCount} 条未读）`, { count: unreadCount })
+              : t('titleBar.notifications', '通知中心')}
+          >
+            <Bell size={13} />
+            {unreadCount > 0 && (
+              <span
+                className="absolute flex items-center justify-center rounded-full text-[9px] font-medium"
+                style={{
+                  top: -3,
+                  right: -3,
+                  minWidth: 13,
+                  height: 13,
+                  padding: '0 3px',
+                  backgroundColor: '#EF4444',
+                  color: '#fff',
+                  lineHeight: 1,
+                }}
+              >
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </button>
         </div>
 
-        {/* Separator */}
+        {/* Separator：应用动作区 与 窗口控制区 分道（窗口控制是无边框 32×满高，留白要够才不混成一排） */}
         <div
-          className="w-px h-4 mx-1.5"
+          className="w-px h-4 mx-2"
           style={{ backgroundColor: 'var(--border)' }}
         />
 
@@ -516,14 +729,14 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             <button
               onClick={handleMinimize}
               className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
-              title="最小化"
+              title={t('titleBar.window.minimize', '最小化')}
             >
               <Minus size={13} style={{ color: 'var(--text-secondary)' }} />
             </button>
             <button
               onClick={handleToggleMaximize}
               className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
-              title={isMaximized ? '还原' : '最大化'}
+              title={isMaximized ? t('titleBar.window.restore', '还原') : t('titleBar.window.maximize', '最大化')}
             >
               {isMaximized ? (
                 <Copy size={11} style={{ color: 'var(--text-secondary)' }} />
@@ -534,13 +747,59 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             <button
               onClick={handleClose}
               className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
-              title="关闭"
+              title={t('titleBar.window.close', '关闭')}
             >
               <X size={13} style={{ color: 'var(--text-secondary)' }} />
             </button>
           </>
         )}
       </div>
+
+      {/* 「入口在这里」指引气泡：首次关闭指挥中心后出现（fixed 定位脱离顶栏，避免被裁/被盖），
+          8 秒后或点「知道了」收起，用户再次打开面板也会立即收起 */}
+      {entryHint && hintPos && (
+        <div
+          className="pd-animate-guide-pop fixed z-[99] rounded-lg px-3 py-2"
+          style={{
+            top: hintPos.top,
+            right: hintPos.right,
+            width: 208,
+            backgroundColor: 'var(--bg-primary)',
+            border: '1px solid var(--accent)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {/* 指向图标的小箭头 */}
+          <span
+            aria-hidden
+            className="absolute"
+            style={{
+              top: -5,
+              right: 14,
+              width: 8,
+              height: 8,
+              transform: 'rotate(45deg)',
+              backgroundColor: 'var(--bg-primary)',
+              borderLeft: '1px solid var(--accent)',
+              borderTop: '1px solid var(--accent)',
+            }}
+          />
+          <div className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
+            {t('titleBar.hint.title', '指挥中心的入口在这里')}
+          </div>
+          <div className="text-[10px] leading-relaxed mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+            {t('titleBar.hint.body', '下次要看「进行中 / 待处理 / 用量统计」，点这个图标就能再打开')}
+          </div>
+          <button
+            onClick={dismissEntryHint}
+            className="pd-btn mt-1.5 px-2 py-0.5 rounded text-[10px]"
+            style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+          >
+            {t('titleBar.hint.ok', '知道了')}
+          </button>
+        </div>
+      )}
     </header>
   );
 }

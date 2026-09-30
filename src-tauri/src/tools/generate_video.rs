@@ -37,7 +37,14 @@ impl GenerateVideoTool {
         app: Option<tauri::AppHandle>,
         session_id: String,
     ) -> Self {
-        Self { api_endpoint, api_key, resolve, get_models, app, session_id }
+        Self {
+            api_endpoint,
+            api_key,
+            resolve,
+            get_models,
+            app,
+            session_id,
+        }
     }
 
     /// 校验 model 是否在当前 provider 的合法模型列表中，不在则返回引导错误。
@@ -60,11 +67,14 @@ impl GenerateVideoTool {
     /// 向前端发射进度事件（`agent-tool-progress`），弥补视频生成期间的工具执行空白期。
     fn emit_progress(&self, message: &str) {
         if let Some(app) = &self.app {
-            let _ = app.emit("agent-tool-progress", serde_json::json!({
-                "sessionId": self.session_id,
-                "toolName": "generate_video",
-                "message": message,
-            }));
+            let _ = app.emit(
+                "agent-tool-progress",
+                serde_json::json!({
+                    "sessionId": self.session_id,
+                    "toolName": "generate_video",
+                    "message": message,
+                }),
+            );
         }
         log::info!("[GenerateVideo] 进度: {}", message);
     }
@@ -107,11 +117,11 @@ impl ToolHandler for GenerateVideoTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "视频生成模型名（必填，原样复制自 list_models 清单，含完整 namespace 前缀，禁止自行缩短或编造）"
+                    "description": "视频生成模型名（必填，原样复制自 list_models 清单；若模型名自身含斜杠/命名空间（如 TeleAI/xxx），必须原样保留；禁止自行缩短、编造，也禁止把 provider_id 拼进来）"
                 },
                 "provider": {
                     "type": "string",
-                    "description": "可选：目标提供商 id（先用 list_models 查看可用提供商）；省略时使用当前会话提供商。跨提供商时需与 model 配合指定。"
+                    "description": "必填：目标提供商 id，逐字取 list_models 清单里的 provider_id（标 ★ 的是当前会话提供商）；provider 与 model 必须分别传入，禁止拼成 provider_id/model"
                 },
                 "image": {
                     "type": "string",
@@ -134,7 +144,7 @@ impl ToolHandler for GenerateVideoTool {
                     "description": "帧率 1~60，默认 24"
                 }
             },
-            "required": ["prompt", "model"]
+            "required": ["prompt", "model", "provider"]
         })
     }
 
@@ -174,17 +184,26 @@ impl ToolHandler for GenerateVideoTool {
             .as_str()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        // provider 与 model 必须分别传入：缺 provider 时不再静默回退会话提供商
+        if provider_arg.is_none() {
+            return Err("缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。请先调用 list_models，从清单里挑出目标模型所在那一行（标 ★ 的是当前会话提供商），把 provider_id 与模型名分别填入 provider / model".to_string());
+        }
         let (endpoint_base, api_key) = match (&provider_arg, &self.resolve) {
             (Some(pid), Some(resolve)) => match resolve(pid) {
                 Some((ep, key, _fmt)) => (ep, key),
-                None => return Err(format!("提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商", pid)),
+                None => {
+                    return Err(format!(
+                        "提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商",
+                        pid
+                    ))
+                }
             },
             _ => (self.api_endpoint.clone(), self.api_key.clone()),
         };
         let base = endpoint_base.trim_end_matches('/').to_string();
 
         // 校验 model 是否在合法清单内
-        let provider_id = provider_arg.as_deref().unwrap_or("__default__");
+        let provider_id = provider_arg.as_deref().unwrap_or("");
         self.validate_model(&model, provider_id)?;
 
         // 1. 创建视频任务（endpoint_base 已含 /v1，与图片/音频工具一致）
@@ -218,9 +237,16 @@ impl ToolHandler for GenerateVideoTool {
             .await
             .map_err(|e| format!("视频任务创建请求失败: {}", e))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         if !status.is_success() {
-            return Err(format!("视频任务创建失败 (HTTP {}): {}", status.as_u16(), text));
+            return Err(format!(
+                "视频任务创建失败 (HTTP {}): {}",
+                status.as_u16(),
+                text
+            ));
         }
         let task_json: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| format!("解析响应失败: {}", e))?;
@@ -231,7 +257,11 @@ impl ToolHandler for GenerateVideoTool {
             .or_else(|| task_json["id"].as_str())
             .ok_or_else(|| format!("响应缺少任务标识 (task_id/video_id): {}", text))?
             .to_string();
-        log::info!("[GenerateVideo] 任务已创建: task_id={}, prompt_len={}", task_id, prompt.len());
+        log::info!(
+            "[GenerateVideo] 任务已创建: task_id={}, prompt_len={}",
+            task_id,
+            prompt.len()
+        );
         // 立即告知用户任务已创建（弥补生成期间空白期）
         self.emit_progress("视频生成任务已创建，正在生成中，请耐心等待…");
 
@@ -267,10 +297,14 @@ impl ToolHandler for GenerateVideoTool {
                 .await
                 .map_err(|e| format!("读取任务状态失败: {}", e))?;
             if !status_code.is_success() {
-                return Err(format!("查询任务状态失败 (HTTP {}): {}", status_code.as_u16(), body_text));
+                return Err(format!(
+                    "查询任务状态失败 (HTTP {}): {}",
+                    status_code.as_u16(),
+                    body_text
+                ));
             }
-            let j: serde_json::Value = serde_json::from_str(&body_text)
-                .map_err(|e| format!("解析任务状态失败: {}", e))?;
+            let j: serde_json::Value =
+                serde_json::from_str(&body_text).map_err(|e| format!("解析任务状态失败: {}", e))?;
 
             // 1) 响应已含视频 URL（兼容 video_url / remixed_from_video_id / result / data 嵌套）→ 完成
             if let Some(url) = extract_video_url(&j) {

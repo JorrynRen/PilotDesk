@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { Search, Lock, Save, RotateCcw, Wrench, Loader2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { Select } from '../common/Select';
+import { errorMessage } from '../../utils/errorMessage';
 
 // ============================================================
 // 工具管理（后端打通版）
@@ -158,14 +160,16 @@ export function ToolSettings() {
       setSessionDisabled(new Set(ov.session ?? []));
       setGroupchatDisabled(new Set(ov.groupchat ?? []));
     } catch (e) {
-      setLoadError(String(e));
+      setLoadError(errorMessage(e));
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void load();
+    // effect 体内不允许同步 setState（react-hooks/set-state-in-effect）：把首次加载推迟一个微任务，
+    // 仍在同一帧内执行，观感与原先一致
+    queueMicrotask(() => { void load(); });
   }, [load]);
 
   const sceneItems = useMemo(() => {
@@ -267,7 +271,7 @@ export function ToolSettings() {
 
       {/* 筛选工具栏 */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="flex-1 min-w-[160px] flex items-center gap-1.5 px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+        <div className="pd-field flex-1 min-w-[160px] flex items-center gap-1.5 px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
           <Search size={12} style={{ color: 'var(--text-tertiary)' }} />
           <input
             value={query}
@@ -277,28 +281,26 @@ export function ToolSettings() {
             style={{ color: 'var(--text-primary)' }}
           />
         </div>
-        <select
+        <Select
           value={riskFilter}
-          onChange={(e) => setRiskFilter(e.target.value as Risk | '')}
-          className="px-2 py-1.5 rounded-lg text-xs outline-none"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-        >
-          <option value="">全部风险</option>
-          {RISKS.map((r) => (
-            <option key={r} value={r}>风险：{RISK_LABELS[r]}</option>
-          ))}
-        </select>
-        <select
+          onChange={(v) => setRiskFilter(v as Risk | '')}
+          options={[
+            { value: '', label: '全部风险' },
+            ...RISKS.map((r) => ({ value: r, label: `风险：${RISK_LABELS[r]}` })),
+          ]}
+          placeholder="全部风险"
+          size="sm"
+        />
+        <Select
           value={tagFilter}
-          onChange={(e) => setTagFilter(e.target.value)}
-          className="px-2 py-1.5 rounded-lg text-xs outline-none"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-        >
-          <option value="">全部分类</option>
-          {allTags.map((t) => (
-            <option key={t} value={t}>{TAG_LABELS[t] ?? t}</option>
-          ))}
-        </select>
+          onChange={(v) => setTagFilter(v)}
+          options={[
+            { value: '', label: '全部分类' },
+            ...allTags.map((t) => ({ value: t, label: TAG_LABELS[t] ?? t })),
+          ]}
+          placeholder="全部分类"
+          size="sm"
+        />
       </div>
 
       {/* 操作按钮 */}

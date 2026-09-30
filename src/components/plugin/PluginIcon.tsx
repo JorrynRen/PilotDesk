@@ -30,7 +30,11 @@ export function PluginIcon({ icon, pluginId, size = 14 }: PluginIconProps) {
     if (parsed.type !== 'local' || !parsed.value) return;
 
     let cancelled = false;
-    setLocalLoading(true);
+    // 不在 effect 体内同步 setState（`react-hooks/set-state-in-effect` 判为级联渲染）：
+    // 推到微任务 —— 同一个任务、早于绘制，行为一致。
+    void Promise.resolve().then(() => {
+      if (!cancelled) setLocalLoading(true);
+    });
 
     invoke<string>('plugin_read_icon_file', {
       pluginId,

@@ -4,6 +4,8 @@ import {
   History, Undo2, Loader2, RefreshCw, Search, Trash2, FileText,
 } from 'lucide-react';
 import { SettingsSection, SettingsButton } from './index';
+import { Select } from '../common/Select';
+import { confirmDialog } from '../../stores/confirmStore';
 
 // ============================================================
 // 文件修改历史（独立设置页）
@@ -87,9 +89,9 @@ export function FileHistorySettings() {
     }
   }, [sessionFilter, keyword]);
 
-  // 筛选条件变化时重置重载
+  // 筛选条件变化时重置重载（effect 体内不允许同步 setState：把加载推迟一个微任务，观感与原先一致）
   useEffect(() => {
-    load(0, false);
+    queueMicrotask(() => { void load(0, false); });
   }, [load]);
 
   const refreshAll = useCallback(async () => {
@@ -121,7 +123,12 @@ export function FileHistorySettings() {
         : scope === 'session'
           ? `确定清空该${sessionFilter && kindMap.get(sessionFilter) === 'room' ? '群聊房间' : '会话'}（${sessionFilter?.slice(0, 8) || ''}…）的全部历史记录吗？`
           : '确定删除该条历史记录吗？';
-    if (!window.confirm(text)) return;
+    const ok = await confirmDialog({
+      title: scope === 'one' ? '确认删除' : '确认清空',
+      message: text,
+      confirmText: scope === 'one' ? '删除' : '清空',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await invoke('delete_file_history', {
@@ -154,19 +161,18 @@ export function FileHistorySettings() {
     >
       {/* 筛选工具栏 */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <select
+        <Select
           value={sessionFilter}
-          onChange={(e) => setSessionFilter(e.target.value)}
-          className="px-2 py-1.5 rounded-lg text-xs outline-none"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-        >
-          <option value="">全部（{total} 条）</option>
-          {sessions.map((s) => (
-            <option key={s.id} value={s.id}>{scopeLabel(s.id, s.kind)}</option>
-          ))}
-        </select>
+          onChange={(v) => setSessionFilter(v)}
+          options={[
+            { value: '', label: `全部（${total} 条）` },
+            ...sessions.map((s) => ({ value: s.id, label: scopeLabel(s.id, s.kind) })),
+          ]}
+          placeholder={`全部（${total} 条）`}
+          size="sm"
+        />
         <div
-          className="flex-1 min-w-[140px] flex items-center gap-1.5 px-2 py-1.5 rounded-lg"
+          className="pd-field flex-1 min-w-[140px] flex items-center gap-1.5 px-2 py-1.5 rounded-lg"
           style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
         >
           <Search size={12} style={{ color: 'var(--text-tertiary)' }} />

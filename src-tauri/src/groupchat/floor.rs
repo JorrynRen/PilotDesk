@@ -21,7 +21,11 @@ pub struct FloorManager {
 
 impl FloorManager {
     pub fn new(order: Vec<String>) -> Self {
-        Self { order, cursor: 0, current: None }
+        Self {
+            order,
+            cursor: 0,
+            current: None,
+        }
     }
 
     /// 选择下一发言者。
@@ -31,7 +35,9 @@ impl FloorManager {
             return None;
         }
         let speaker = match preferred {
-            Some(p) if self.order.iter().any(|o| o == normalize_ref(p)) => normalize_ref(p).to_string(),
+            Some(p) if self.order.iter().any(|o| o == normalize_ref(p)) => {
+                normalize_ref(p).to_string()
+            }
             _ => {
                 let idx = self.cursor % self.order.len();
                 self.cursor += 1;

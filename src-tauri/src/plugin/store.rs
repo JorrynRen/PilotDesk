@@ -31,6 +31,10 @@ pub struct OnlinePluginInfo {
     pub base_url: String,
     pub icon: Option<String>,
     pub size: Option<String>,
+    /// 入口文件的 sha256（十六进制）。远程安装时的完整性锚点；
+    /// 索引缺失该字段时安装会被拒绝，不做静默放行。
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 /// 插件索引
@@ -86,22 +90,25 @@ fn http_client() -> &'static reqwest::Client {
 async fn fetch_url(url: &str) -> Result<String, String> {
     let mut last_err = String::new();
     for attempt in 1..=MAX_RETRIES {
-        let response = http_client()
-            .get(url)
-            .send()
-            .await;
+        let response = http_client().get(url).send().await;
 
         match response {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 if status == 200 {
-                    return resp.text()
+                    return resp
+                        .text()
                         .await
                         .map_err(|e| format!("读取响应失败: {}", e));
                 } else if status >= 500 && attempt < MAX_RETRIES {
                     // 5xx 错误可重试
                     last_err = format!("HTTP {}: {}", status, url);
-                    log::warn!("[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    log::warn!(
+                        "[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...",
+                        attempt,
+                        last_err,
+                        RETRY_DELAY_MS
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                     continue;
                 } else {
@@ -115,7 +122,12 @@ async fn fetch_url(url: &str) -> Result<String, String> {
                     } else {
                         format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
                     };
-                    log::warn!("[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    log::warn!(
+                        "[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...",
+                        attempt,
+                        last_err,
+                        RETRY_DELAY_MS
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                     continue;
                 }
@@ -138,22 +150,25 @@ async fn fetch_url(url: &str) -> Result<String, String> {
 async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let mut last_err = String::new();
     for attempt in 1..=MAX_RETRIES {
-        let response = http_client()
-            .get(url)
-            .send()
-            .await;
+        let response = http_client().get(url).send().await;
 
         match response {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 if status == 200 {
-                    return resp.bytes()
+                    return resp
+                        .bytes()
                         .await
                         .map(|b| b.to_vec())
                         .map_err(|e| format!("读取响应失败: {}", e));
                 } else if status >= 500 && attempt < MAX_RETRIES {
                     last_err = format!("HTTP {}: {}", status, url);
-                    log::warn!("[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    log::warn!(
+                        "[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...",
+                        attempt,
+                        last_err,
+                        RETRY_DELAY_MS
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                     continue;
                 } else {
@@ -167,7 +182,12 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
                     } else {
                         format!("连接失败 ({}s): {}", CONNECT_TIMEOUT_SECS, url)
                     };
-                    log::warn!("[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    log::warn!(
+                        "[HTTP] 第 {} 次请求失败 ({}), {}ms 后重试...",
+                        attempt,
+                        last_err,
+                        RETRY_DELAY_MS
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                     continue;
                 }
@@ -189,12 +209,16 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 #[tauri::command]
 /// 从所有服务器源尝试获取并解析插件索引（复用 market::fetch_market_json）
 async fn fetch_plugin_index(force: bool) -> Result<IndexFetchResult, String> {
-    let json = crate::utils::market::fetch_market_json(crate::utils::market::PLUGINS_INDEX_PATH).await?;
-    let index: PluginIndex = serde_json::from_value(json)
-        .map_err(|e| format!("解析索引失败: {}", e))?;
+    let json =
+        crate::utils::market::fetch_market_json(crate::utils::market::PLUGINS_INDEX_PATH).await?;
+    let index: PluginIndex =
+        serde_json::from_value(json).map_err(|e| format!("解析索引失败: {}", e))?;
 
     if index.schema_version != INDEX_SCHEMA_VERSION {
-        return Err(format!("索引 schema 版本不兼容: {} (期望: {})", index.schema_version, INDEX_SCHEMA_VERSION));
+        return Err(format!(
+            "索引 schema 版本不兼容: {} (期望: {})",
+            index.schema_version, INDEX_SCHEMA_VERSION
+        ));
     }
 
     // source 由 market.rs 内部根据成功响应的 URL 判断
@@ -224,7 +248,9 @@ pub async fn plugin_store_install(
 ) -> Result<InstallResult, String> {
     // 获取索引找到插件信息（复用公共 fetch 函数）
     let index_result = fetch_plugin_index(false).await?;
-    let online_plugin = index_result.plugins.iter()
+    let online_plugin = index_result
+        .plugins
+        .iter()
         .find(|p| p.id == plugin_id)
         .ok_or_else(|| format!("在线商店中未找到插件: {}", plugin_id))?
         .clone();
@@ -252,11 +278,9 @@ pub async fn plugin_store_install(
 
     let target_dir = plugins_dir.join(&plugin_id);
     if target_dir.exists() {
-        std::fs::remove_dir_all(&target_dir)
-            .map_err(|e| format!("清理旧插件目录失败: {}", e))?;
+        std::fs::remove_dir_all(&target_dir).map_err(|e| format!("清理旧插件目录失败: {}", e))?;
     }
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("创建插件目录失败: {}", e))?;
+    std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建插件目录失败: {}", e))?;
 
     let base_url = online_plugin.base_url.clone();
 
@@ -280,7 +304,10 @@ pub async fn plugin_store_install(
         }
         Err(e) => {
             // 安装失败，回滚：删除残留的插件目录
-            log::warn!("[PluginInstall] 安装失败，回滚删除目录: {}", target_dir.display());
+            log::warn!(
+                "[PluginInstall] 安装失败，回滚删除目录: {}",
+                target_dir.display()
+            );
             if target_dir.exists() {
                 let _ = std::fs::remove_dir_all(&target_dir);
             }
@@ -311,19 +338,37 @@ async fn install_plugin_files(
     // 下载入口文件
     let entry_main = manifest.entry.main.clone();
     let entry_url = format!("{}/{}", base_url, entry_main);
-    match fetch_bytes(&entry_url).await {
-        Ok(data) => {
-            let entry_path = target_dir.join(&entry_main);
-            if let Some(parent) = entry_path.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            std::fs::write(&entry_path, &data)
-                .map_err(|e| format!("写入入口文件失败: {}", e))?;
-        }
-        Err(e) => {
-            log::warn!("[PluginInstall] 入口文件下载失败 (可能不存在): {}", e);
-        }
+
+    // 完整性校验锚点：索引必须提供入口文件的 sha256，缺失即拒绝安装（不静默放行）
+    let expected_sha = online_plugin
+        .sha256
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "插件 '{}' 的索引缺少完整性信息（sha256），已拒绝安装",
+                online_plugin.id
+            )
+        })?;
+
+    let entry_data = fetch_bytes(&entry_url)
+        .await
+        .map_err(|e| format!("入口文件下载失败: {}", e))?;
+
+    let actual_sha = crate::api_agent::knowledge::sha256_hex(&entry_data);
+    if !actual_sha.eq_ignore_ascii_case(expected_sha) {
+        return Err(format!(
+            "插件 '{}' 入口文件完整性校验失败：期望 sha256={}，实际={}",
+            online_plugin.id, expected_sha, actual_sha
+        ));
     }
+
+    let entry_path = target_dir.join(&entry_main);
+    if let Some(parent) = entry_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&entry_path, &entry_data).map_err(|e| format!("写入入口文件失败: {}", e))?;
 
     // 下载图标（如果存在，支持 .png / .ico）
     if let Some(icon) = &online_plugin.icon {
@@ -354,8 +399,6 @@ async fn install_plugin_files(
             }
         }
     }
-
-
 
     // 下载 README.md（可选，硬编码路径，不依赖索引字段）
     let readme_url = format!("{}/README.md", base_url);
@@ -390,10 +433,13 @@ pub fn plugin_store_get_local_versions(
     host.discover();
     let plugins = host.list_plugins();
 
-    Ok(plugins.iter().map(|p| LocalPluginVersion {
-        id: p.manifest.id.clone(),
-        version: p.manifest.version.clone(),
-    }).collect())
+    Ok(plugins
+        .iter()
+        .map(|p| LocalPluginVersion {
+            id: p.manifest.id.clone(),
+            version: p.manifest.version.clone(),
+        })
+        .collect())
 }
 
 /// 读取插件 README.md 内容
@@ -418,25 +464,24 @@ pub async fn read_plugin_readme(
             .build()
             .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-        let resp = client
-            .get(&readme_url)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    format!("请求超时（10秒）: {}", readme_url)
-                } else if e.is_connect() {
-                    format!("连接失败: {}", readme_url)
-                } else {
-                    format!("请求失败: {} - {}", e, readme_url)
-                }
-            })?;
+        let resp = client.get(&readme_url).send().await.map_err(|e| {
+            if e.is_timeout() {
+                format!("请求超时（10秒）: {}", readme_url)
+            } else if e.is_connect() {
+                format!("连接失败: {}", readme_url)
+            } else {
+                format!("请求失败: {} - {}", e, readme_url)
+            }
+        })?;
 
         if !resp.status().is_success() {
             return Err(format!("HTTP {}: {}", resp.status().as_u16(), readme_url));
         }
 
-        let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
         Ok(text)
     } else {
         // 本地模式：从插件目录读取 README.md 文件

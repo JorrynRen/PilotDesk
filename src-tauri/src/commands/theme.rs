@@ -1,5 +1,5 @@
-use crate::utils::errors::AppError;
 use crate::commands::app_settings;
+use crate::utils::errors::AppError;
 
 /// Get the persisted theme setting from app_settings table
 pub fn get_theme(conn: &rusqlite::Connection) -> Result<String, AppError> {
@@ -11,7 +11,7 @@ pub fn get_theme(conn: &rusqlite::Connection) -> Result<String, AppError> {
     }
 
     // Fallback: migrate from legacy theme.txt
-    let legacy_path = crate::utils::paths::app_data_dir().join("theme.txt");
+    let legacy_path = crate::utils::paths::app_root_dir().join("theme.txt");
     if legacy_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&legacy_path) {
             let trimmed = content.trim().to_string();

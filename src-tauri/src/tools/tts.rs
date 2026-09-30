@@ -27,7 +27,14 @@ impl TtsTool {
         cwd: String,
         session_id: String,
     ) -> Self {
-        Self { api_endpoint, api_key, resolve, cwd, session_id, get_models }
+        Self {
+            api_endpoint,
+            api_key,
+            resolve,
+            cwd,
+            session_id,
+            get_models,
+        }
     }
 
     /// 校验 model 是否在当前 provider 的合法模型列表中，不在则返回引导错误。
@@ -70,11 +77,11 @@ impl ToolHandler for TtsTool {
                 },
                 "provider": {
                     "type": "string",
-                    "description": "可选：目标提供商 id（先用 list_models 查看可用提供商）；省略时使用当前会话提供商"
+                    "description": "必填：目标提供商 id，逐字取 list_models 清单里的 provider_id（标 ★ 的是当前会话提供商）；provider 与 model 必须分别传入，禁止拼成 provider_id/model"
                 },
                 "model": {
                     "type": "string",
-                    "description": "语音合成模型名（必填，原样复制自 list_models 清单，含完整 namespace 前缀如 TeleAI/xxx，禁止自行缩短或编造）"
+                    "description": "语音合成模型名（必填，原样复制自 list_models 清单；若模型名自身含斜杠/命名空间（如 TeleAI/xxx），必须原样保留；禁止自行缩短、编造，也禁止把 provider_id 拼进来）"
                 },
                 "voice": {
                     "type": "string",
@@ -94,7 +101,7 @@ impl ToolHandler for TtsTool {
                     "description": "语速（0.25~4.0），默认 1.0"
                 }
             },
-            "required": ["text", "model"]
+            "required": ["text", "model", "provider"]
         })
     }
 
@@ -116,23 +123,41 @@ impl ToolHandler for TtsTool {
             .map(|s| s.trim().trim_start_matches('@').to_string())
             .filter(|s| !s.is_empty())
             .ok_or("缺少 model 参数：请先调用 list_models 查看可用模型，从清单中复制完整的模型名（含 namespace 前缀）传入，不要自行编造")?;
-        let voice = arguments["voice"].as_str().map(|s| s.to_string()).unwrap_or_else(|| "alloy".to_string());
+        let voice = arguments["voice"]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "alloy".to_string());
         let language = arguments["language"].as_str().map(|s| s.to_string());
-        let response_format = arguments["response_format"].as_str().unwrap_or("mp3").to_string();
+        let response_format = arguments["response_format"]
+            .as_str()
+            .unwrap_or("mp3")
+            .to_string();
         let speed = arguments["speed"].as_f64().unwrap_or(1.0).clamp(0.25, 4.0);
 
         // 跨提供商解析（key 仅用于请求构造，不进返回值）
-        let provider_arg = arguments["provider"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let provider_arg = arguments["provider"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        // provider 与 model 必须分别传入：缺 provider 时不再静默回退会话提供商
+        if provider_arg.is_none() {
+            return Err("缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。请先调用 list_models，从清单里挑出目标模型所在那一行（标 ★ 的是当前会话提供商），把 provider_id 与模型名分别填入 provider / model".to_string());
+        }
         let (endpoint_base, api_key) = match (&provider_arg, &self.resolve) {
             (Some(pid), Some(resolve)) => match resolve(pid) {
                 Some((ep, key, _fmt)) => (ep, key),
-                None => return Err(format!("提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商", pid)),
+                None => {
+                    return Err(format!(
+                        "提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商",
+                        pid
+                    ))
+                }
             },
             _ => (self.api_endpoint.clone(), self.api_key.clone()),
         };
 
         // 校验 model 是否在合法清单内
-        let provider_id = provider_arg.as_deref().unwrap_or("__default__");
+        let provider_id = provider_arg.as_deref().unwrap_or("");
         self.validate_model(&model, provider_id)?;
 
         let endpoint = format!("{}/audio/speech", endpoint_base.trim_end_matches('/'));
@@ -161,7 +186,10 @@ impl ToolHandler for TtsTool {
             let text = resp.text().await.unwrap_or_default();
             return Err(format!("语音合成失败 (HTTP {}): {}", status.as_u16(), text));
         }
-        let audio_bytes = resp.bytes().await.map_err(|e| format!("读取音频失败: {}", e))?;
+        let audio_bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("读取音频失败: {}", e))?;
         if audio_bytes.is_empty() {
             return Err("服务端返回空音频".to_string());
         }
@@ -177,7 +205,11 @@ impl ToolHandler for TtsTool {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let ext = if response_format == "mp3" { "mp3" } else { &response_format };
+        let ext = if response_format == "mp3" {
+            "mp3"
+        } else {
+            &response_format
+        };
         let path = dir.join(format!("tts_{}.{}", ts, ext));
         std::fs::write(&path, &audio_bytes).map_err(|e| format!("写入音频文件失败: {}", e))?;
 

@@ -30,14 +30,18 @@ use crate::tools::ToolHandler;
 use std::sync::Arc;
 
 /// 构建群聊参与者工具集。`cwd` 为工作区目录（用于相对路径解析与越界保护）。
-/// `api_format` / `image` 取自参与者自己的 provider 配置；技能加载器读取全局技能目录。
+/// `api_format` / `image` 取自参与者自己的 provider 配置；`model` 为该参与者的模型名
+/// （read_image 缺省模型）；`vision` 为 read_image 的 (endpoint, key)，两种协议通用。
+/// 技能加载器读取全局技能目录。
 /// `app` / `pool` / `room_id` 用于组装文件写入副作用服务（历史快照 + diff 事件），
 /// 历史记录以 room_id 作为归属标识落库（与会话模式隔离）。
 pub fn build_groupchat_tool_registry(
     conn: &rusqlite::Connection,
     cwd: &str,
+    model: &str,
     api_format: ApiFormat,
     image: Option<(String, String)>,
+    vision: Option<(String, String)>,
     app: &tauri::AppHandle,
     pool: &DbPool,
     room_id: &str,
@@ -69,15 +73,27 @@ pub fn build_groupchat_tool_registry(
     // 模型能力查询与跨 provider 解析（闭包持有连接池；key 只在后端解析，绝不进 LLM 上下文）。
     // 群聊 v1.2 解禁 list_models：参与者可查模型清单自主选模型（配合图片等生成工具）。
     let pool_for_providers = pool.clone();
-    let list_providers: Option<Arc<dyn Fn() -> Vec<crate::tools::ProviderModelInfo> + Send + Sync>> = Some(Arc::new(move || {
-        let Ok(conn) = pool_for_providers.get() else { return Vec::new() };
+    let list_providers: Option<
+        Arc<dyn Fn() -> Vec<crate::tools::ProviderModelInfo> + Send + Sync>,
+    > = Some(Arc::new(move || {
+        let Ok(conn) = pool_for_providers.get() else {
+            return Vec::new();
+        };
         crate::commands::api_provider::collect_provider_models(&conn)
     }));
     let pool_for_resolve = pool.clone();
-    let resolve_provider: Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>> = Some(Arc::new(move |pid| {
-        let Ok(conn) = pool_for_resolve.get() else { return None };
-        let Ok(Some(p)) = crate::commands::api_provider::get_api_provider(&conn, pid) else { return None };
-        let Ok(Some(key)) = crate::commands::api_provider::get_api_key(&conn, pid) else { return None };
+    let resolve_provider: Option<
+        Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>,
+    > = Some(Arc::new(move |pid| {
+        let Ok(conn) = pool_for_resolve.get() else {
+            return None;
+        };
+        let Ok(Some(p)) = crate::commands::api_provider::get_api_provider(&conn, pid) else {
+            return None;
+        };
+        let Ok(Some(key)) = crate::commands::api_provider::get_api_key(&conn, pid) else {
+            return None;
+        };
         Some((p.api_endpoint, key, p.api_format))
     }));
 
@@ -85,22 +101,27 @@ pub fn build_groupchat_tool_registry(
         cwd: cwd.to_string(),
         api_format,
         image: image.clone(),
+        vision,
         audio: image,
         list_providers,
         resolve_provider,
         search_config: crate::commands::search::load_search_config(conn),
         client: None,
-        model: String::new(),
+        model: model.to_string(),
         skill_loader: crate::get_api_agent_skills_dir().map(|dir| {
             log::info!("[群聊] 技能目录: {}", dir);
             Arc::new(SkillLoader::new(Some(dir)))
         }),
         memory_store: None,
+        // 知识库检索与记忆工具同源，群聊一并缺省（只读，日后要放开从这里给上即可）
+        knowledge_store: None,
         app: None,
         session_id: String::new(),
         pending: None,
         file_history,
-        permission_rules: Some(Arc::new(crate::commands::permission::load_rules(conn).unwrap_or_default())),
+        permission_rules: Some(Arc::new(
+            crate::commands::permission::load_rules(conn).unwrap_or_default(),
+        )),
     };
 
     let mut registry = ToolRegistry::new();
@@ -124,7 +145,11 @@ pub fn build_groupchat_tool_registry(
     if let Some(assets) = mcp {
         for (server, infos) in &assets.entries {
             for info in infos {
-                let handler = crate::tools::mcp::McpToolHandler::new(assets.pool.clone(), server.clone(), info.clone());
+                let handler = crate::tools::mcp::McpToolHandler::new(
+                    assets.pool.clone(),
+                    server.clone(),
+                    info.clone(),
+                );
                 if !crate::tools::is_disabled(&profile, handler.name()) {
                     registry.register(Arc::new(handler));
                 }
@@ -139,7 +164,10 @@ pub fn build_groupchat_tool_registry(
 pub struct RoomMcpAssets {
     pub pool: crate::tools::mcp::McpConnectionPool,
     /// (服务器配置, 枚举出的工具信息)
-    pub entries: Vec<(crate::tools::mcp::McpServerConfig, Vec<crate::tools::mcp::McpToolInfo>)>,
+    pub entries: Vec<(
+        crate::tools::mcp::McpServerConfig,
+        Vec<crate::tools::mcp::McpToolInfo>,
+    )>,
 }
 
 /// 异步构建房间级 MCP 资产：连接一次并枚举全部已配置服务器的工具。

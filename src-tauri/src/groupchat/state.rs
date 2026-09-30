@@ -50,7 +50,11 @@ pub struct RoomStateMachine {
 
 impl RoomStateMachine {
     pub fn new(status: RoomStatus) -> Self {
-        Self { status, sub_phase: SubPhase::Discuss, round: 0 }
+        Self {
+            status,
+            sub_phase: SubPhase::Discuss,
+            round: 0,
+        }
     }
 
     pub fn start(&mut self) {

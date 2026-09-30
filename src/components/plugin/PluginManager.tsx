@@ -2,12 +2,14 @@ import { useEffect, useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X, Search } from 'lucide-react';
-import { usePluginStore } from '../../stores/pluginStore';
+import { usePluginStore, pluginSupportsWorkflow } from '../../stores/pluginStore';
 import { PluginReadmeDialog } from './PluginReadmeDialog';
 import { OnlinePluginStore } from './OnlinePluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
+import { confirmDialog } from '../../stores/confirmStore';
 import { PluginIcon as SharedPluginIcon } from './PluginIcon';
 import type { PermissionCheck, PluginInstance } from '../../types/plugin';
+import { errorMessage } from '../../utils/errorMessage';
 
 /** 单个插件面板入口（来自 RightPanel 按插件分组的 registeredPanels） */
 export interface PluginPanelEntry {
@@ -182,9 +184,12 @@ function PluginIcon({ plugin }: { plugin: PluginInstance }) {
   const [iconSrc, setIconSrc] = useState<string | null>(null);
   const [iconError, setIconError] = useState(false);
 
+  // 优先使用 manifest 顶层 icon 字段，fallback 到第一个面板的 icon
+  // （抽出变量：依赖数组需要可静态检查的简单表达式）
+  const panelIcon = plugin.manifest.contributes?.panels?.[0]?.icon;
+
   useEffect(() => {
-    // 优先使用 manifest 顶层 icon 字段，fallback 到第一个面板的 icon
-    const iconPath = plugin.manifest.icon || plugin.manifest.contributes?.panels?.[0]?.icon;
+    const iconPath = plugin.manifest.icon || panelIcon;
     if (iconPath) {
       // 去掉 "icon: " 前缀（如果存在）
       const cleanPath = iconPath.replace(/^icon:\s*/i, '');
@@ -195,12 +200,15 @@ function PluginIcon({ plugin }: { plugin: PluginInstance }) {
         .then((dataUrl) => setIconSrc(dataUrl))
         .catch(() => setIconError(true));
     } else {
-      setIconError(true);
+      // 不在 effect 体内同步 setState（`react-hooks/set-state-in-effect` 判为级联渲染）：
+      // 推到微任务 —— 同一个任务、早于绘制，行为一致。
+      void Promise.resolve().then(() => setIconError(true));
     }
-  }, [plugin.manifest.id, plugin.manifest.icon, plugin.manifest.contributes?.panels?.[0]?.icon]);
+  }, [plugin.manifest.id, plugin.manifest.icon, panelIcon]);
 
   return (
     <div
+      title={plugin.manifest.name}
       style={{
         width: 20,
         height: 20,
@@ -236,7 +244,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
   const [storeSearchQuery, setStoreSearchQuery] = useState('');
   const [storeLoading, setStoreLoading] = useState(false);
   const [readmePlugin, setReadmePlugin] = useState<PluginInstance | null>(null);
-  const [confirmUninstall, setConfirmUninstall] = useState<PluginInstance | null>(null);
+
   const [storeStats, setStoreStats] = useState<{ total: number; filtered: number } | null>(null);
 
   useEffect(() => {
@@ -267,7 +275,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
       await discover();
       setTimeout(() => setInstallStatus(null), 3000);
     } catch (err) {
-      setInstallStatus('安装失败: ' + String(err));
+      setInstallStatus('安装失败: ' + errorMessage(err));
     }
   }, [installZip, discover]);
 
@@ -284,31 +292,35 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
   }, []);
 
   const handleUninstall = useCallback(async (plugin: PluginInstance) => {
-    setConfirmUninstall(plugin);
-  }, []);
-
-  const confirmUninstallAction = useCallback(async () => {
-    if (!confirmUninstall) return;
+    // 卸载前二次确认（统一走全局确认弹窗）
+    const ok = await confirmDialog({
+      title: '确认卸载',
+      message: `确定要卸载插件「${plugin.manifest.name}」吗？此操作将删除插件文件。`,
+      confirmText: '卸载',
+    });
+    if (!ok) return;
     try {
-      await uninstall(confirmUninstall.manifest.id);
-      await pluginRegistry.unloadPlugin(confirmUninstall.path);
+      await uninstall(plugin.manifest.id);
+      await pluginRegistry.unloadPlugin(plugin.path);
       await discover();
     } catch (err) {
       console.error('Uninstall failed:', err);
-    } finally {
-      setConfirmUninstall(null);
     }
-  }, [confirmUninstall, uninstall, discover]);
+  }, [uninstall, discover]);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      <div className="shrink-0 px-4 pt-4 pb-2">
+    <div className="flex flex-col">
+      {/* 左右内边距交给外层（设置页内容区）：标题行、工具栏与卡片列表左右对齐 */}
+      <div className="pt-4 pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             {showStore && <Store size={16} style={{ color: 'var(--accent)' }} />}
-            <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
-              {showStore ? '在线插件商店' : '插件管理'}
-            </h3>
+            {/* 插件管理（非商店态）不再显示标题文字，仅保留沙箱徽标与右侧操作按钮 */}
+            {showStore && (
+              <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                插件商店
+              </h3>
+            )}
             {!showStore && (
             <span
               className="text-[9px] px-1.5 py-0.5 rounded font-medium"
@@ -330,7 +342,9 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
               <>
               {storeStats && (
                 <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginRight: 4 }}>
-                  共 {storeStats.total} 个插件{storeStats.filtered !== storeStats.total ? `，筛选后 ${storeStats.filtered} 个` : ''}
+                  共{storeStats.filtered !== storeStats.total
+                    ? `${storeStats.filtered}/${storeStats.total}`
+                    : storeStats.total}个
                 </span>
               )}
               <button
@@ -430,12 +444,10 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 pb-4">
+      <div className="pb-4">
       {showStore ? (
         <OnlinePluginStore
-          onClose={() => setShowStore(false)}
           searchQuery={storeSearchQuery}
-          onSearchChange={setStoreSearchQuery}
           onStatsChange={(total, filtered) => setStoreStats({ total, filtered })}
         />
       ) : showSandbox ? (
@@ -520,7 +532,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
               return (
                 <div
                   key={plugin.manifest.id}
-                  className="px-3 py-2.5 rounded-lg transition-colors"
+                  className="px-3 py-2.5 rounded-lg transition-colors overflow-hidden"
                   style={{
                     backgroundColor: 'var(--bg-secondary)',
                     border: '1px solid var(--border)',
@@ -530,13 +542,13 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <PluginIcon plugin={plugin} />
-                      <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                      {/* 名称在设置页（宽栏）放得下，直接显示；窄栏时代只靠图标 title 提示 */}
+                      <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }} title={plugin.manifest.name}>
                         {plugin.manifest.name}
                       </span>
-                      <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                      <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }} title={`版本 v${plugin.manifest.version}`}>
                         v{plugin.manifest.version}
                       </span>
-
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <button
@@ -579,10 +591,10 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
                   <div className="my-2" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
 
                   <div>
-                    <p className="text-[10px] line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                    <p className="text-[10px] line-clamp-2 break-words" style={{ color: 'var(--text-secondary)' }}>
                       {plugin.manifest.description}
                     </p>
-                    <div className="flex items-center gap-1.5 mt-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5 min-w-0">
                       <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                         {plugin.manifest.author}
                       </span>
@@ -591,7 +603,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
                       ))}
                     </div>
                     {plugin.manifest.contributes && (
-                      <div className="flex items-center gap-1.5 mt-1">
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1 min-w-0">
                         {plugin.manifest.contributes.panels && plugin.manifest.contributes.panels.length > 0 && (
                           <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(59,130,246,0.1)', color: '#3B82F6' }}>
                             {plugin.manifest.contributes.panels.length} 面板
@@ -604,9 +616,13 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
                           <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>
                             {plugin.manifest.contributes.hooks.length} 钩子
                           </span>)}
-                        {plugin.manifest.contributes.workflow_config && (
-                          <span className="text-[9px] px-1 py-0.5 rounded" style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22C55E' }}>
-                            1 工作流节点
+                        {pluginSupportsWorkflow(plugin) && (
+                          <span
+                            className="text-[9px] px-1 py-0.5 rounded"
+                            style={{ backgroundColor: 'rgba(34,197,94,0.1)', color: '#22C55E' }}
+                            title="可在工作流的「插件」节点里选用：参数表单来自插件自写组件或命令的 input 模式"
+                          >
+                            工作流可用
                           </span>)}
                       </div>)}
                   </div>
@@ -634,9 +650,9 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
                       ))}
                     </div>
                   )}
-                  {plugin.error && (<p className="text-[10px] mt-1.5" style={{ color: '#EF4444' }}>{plugin.error}</p>)}
-                  {plugin.has_unauthorized_permissions && (<p className="text-[10px] mt-1" style={{ color: '#F59E0B' }}>包含未授权权限声明，请联系插件开发者或检查 manifest.json</p>)}
-                  {loadState?.error && (<p className="text-[10px] mt-1" style={{ color: '#EF4444' }}>加载错误: {loadState.error}</p>)}
+                  {plugin.error && (<p className="text-[10px] mt-1.5 break-words" style={{ color: '#EF4444' }}>{plugin.error}</p>)}
+                  {plugin.has_unauthorized_permissions && (<p className="text-[10px] mt-1 break-words" style={{ color: '#F59E0B' }}>包含未授权权限声明，请联系插件开发者或检查 manifest.json</p>)}
+                  {loadState?.error && (<p className="text-[10px] mt-1 break-words" style={{ color: '#EF4444' }}>加载错误: {loadState.error}</p>)}
                 </div>
               );
             })}
@@ -651,42 +667,6 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
           pluginName={readmePlugin.manifest.name}
           onClose={() => setReadmePlugin(null)}
         />
-      )}
-      {confirmUninstall && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => setConfirmUninstall(null)}
-        >
-          <div
-            className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
-            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-              确认卸载
-            </div>
-            <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              确定要卸载插件 <strong style={{ color: 'var(--text-primary)' }}>{confirmUninstall.manifest.name}</strong> 吗？此操作将删除插件文件。
-            </div>
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => setConfirmUninstall(null)}
-                className="pd-btn px-3 py-1.5 rounded text-[11px]"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-              >
-                取消
-              </button>
-              <button
-                onClick={confirmUninstallAction}
-                className="pd-btn px-3 py-1.5 rounded text-[11px]"
-                style={{ backgroundColor: '#EF4444', color: '#fff' }}
-              >
-                确认卸载
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

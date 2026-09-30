@@ -73,7 +73,11 @@ impl ToolHandler for GlobTool {
             if matched.is_empty() {
                 Ok(format!("未找到匹配 \"{}\" 的文件", pattern))
             } else {
-                Ok(format!("找到 {} 个匹配文件：\n{}", matched.len(), matched.join("\n")))
+                Ok(format!(
+                    "找到 {} 个匹配文件：\n{}",
+                    matched.len(),
+                    matched.join("\n")
+                ))
             }
         })
         .await

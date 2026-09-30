@@ -1,8 +1,14 @@
-import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
+import { CheckSquare, Loader2, Sparkles, X } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { MessageSelectionBar } from './MessageSelectionBar';
+import { copyToClipboard, useMessageSelection } from './messageSelection';
+import { SaveToKnowledgeDialog, type KbDigestInput } from '../knowledge/SaveToKnowledgeDialog';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
 import type { Message, Session } from '../../types';
 import { isApiSession } from '../../utils/sessionType';
 import type { ThinkingChainStep } from '../layout/MainPanel';
@@ -12,18 +18,26 @@ interface MessageListProps {
   messages: Message[];
   session: Session | null;
   isGenerating?: boolean;
-  streamingStatus?: string;
   /** 工具执行进度（generate_video 等），在流式助手消息气泡内展示 */
   streamingProgress?: string;
   thinkingChain?: ThinkingChainStep[];
   /** ask_user 确认块（内嵌到最后一条 assistant 消息）。 */
   confirmation?: ConfirmationBlockData | null;
   onEditMessage?: (content: string) => void;
-  onSaveInspiration?: (content: string) => void;
   onResendMessage?: (content: string) => void;
+  /**
+   * 搜索栏右侧的操作位（会话页放「转为工作流 / 转为群聊」）。
+   * 用插槽而不是具体按钮：消息列表保持通用，业务动作仍定义在会话页。
+   */
+  headerActions?: ReactNode;
+  /**
+   * 关闭当前会话（渲染在顶部操作行**最右侧**）。会话页传 `startNewSession`：
+   * 只清空选中、回到「快捷开始」，不删除任何数据。
+   */
+  onCloseSession?: () => void;
 }
 
-export function MessageList({ messages, session, isGenerating, streamingStatus, streamingProgress, thinkingChain, confirmation, onEditMessage, onSaveInspiration, onResendMessage }: MessageListProps) {
+export function MessageList({ messages, session, isGenerating, streamingProgress, thinkingChain, confirmation, onEditMessage, onResendMessage, headerActions, onCloseSession }: MessageListProps) {
   const { getTheme } = useAgentRegistry();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [searchResultIndex, setSearchResultIndex] = useState(0);
@@ -31,8 +45,57 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
   const [searchResults, setSearchResults] = useState<Message[] | null>(null);
   const [isSearchingMessages, setIsSearchingMessages] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  /** 多选态：勾选若干条消息 → 作为**一段对话**交给 AI 整理成知识（状态机与选择条见 MessageSelection） */
+  const { selectMode, selectedIds, enter: enterSelectMode, exit: exitSelectMode, clear: clearSelection, toggle: toggleSelect } = useMessageSelection();
+  /** 待沉淀的消息（非空时弹出入库弹窗） */
+  const [kbMessages, setKbMessages] = useState<KbDigestInput[] | null>(null);
+
+  /**
+   * 选中的消息，**按对话顺序**（不是勾选顺序）—— 整理要按"谁先说、谁后说"来理解上下文。
+   * 系统提示（错误/超时通知）不参与沉淀：它是会话运行状态，不是知识。
+   */
+  const selectedMessages = useMemo(
+    () => messages.filter((m) => selectedIds.includes(m.id) && m.role !== 'system'),
+    [messages, selectedIds],
+  );
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 依赖用**基本类型**（sessionId）而不是 `session?.id`：后者会被 React Compiler 判为
+  // "手工依赖比推断出的依赖更具体"（preserve-manual-memoization），换用基本类型两边一致。
+  const sessionId = session?.id;
+
+  /**
+   * 「整理为知识」（显式命令）：把本会话**自上次整理以来的新增**交给知识库模型整理成候选。
+   *
+   * 与「多选 → 沉淀为知识」的区别：多选是用户**自己挑**一段；这里不挑，交给后端按水位取增量
+   * （目标库也由模型按内容选）。**不受「自动沉淀开关」与自动限频约束** —— 用户点了就该做，
+   * 只受后端"同一会话在途互斥"和"没有新增内容"两道约束。
+   */
+  const [sedimenting, setSedimenting] = useState(false);
+  const handleSediment = useCallback(async () => {
+    if (!sessionId) return;
+    setSedimenting(true);
+    try {
+      const r = await invoke<{ count: number; truncated: boolean; skipped: string }>(
+        'kb_sediment_session',
+        { sessionId },
+      );
+      const cut = r.truncated ? '（内容过长，仅整理了前一部分）' : '';
+      if (r.count > 0) {
+        showToast(`已整理 ${r.count} 条候选，去「知识库 › 待确认」核对${cut}`, 'success');
+      } else if (r.skipped === 'busy') {
+        showToast('该会话正在整理中，请稍候', 'info');
+      } else if (r.skipped === 'no_base') {
+        showToast('还没有知识库，请先在「知识库」页新建一个', 'info');
+      } else {
+        showToast('没有新的可沉淀内容', 'info');
+      }
+    } catch (e) {
+      showToast(`整理失败: ${errorMessage(e)}`, 'error');
+    } finally {
+      setSedimenting(false);
+    }
+  }, [sessionId]);
 
   const handleMessageSearch = useCallback((query: string) => {
     setSearchQuery(query);
@@ -51,7 +114,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
       setIsSearchingMessages(true);
       try {
         const results = await invoke<Message[]>('search_messages', {
-          sessionId: session?.id ?? null,
+          sessionId: sessionId ?? null,
           query: query.trim(),
           limit: 50,
         });
@@ -60,7 +123,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
       } catch { /* ignore */ }
       setIsSearchingMessages(false);
     }, 300);
-  }, [session?.id]);
+  }, [sessionId]);
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -74,15 +137,19 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
 
   // 切换会话时 → 滚动到底部
   useEffect(() => {
-    if (session?.id && session.id !== prevSessionIdRef.current) {
-      prevSessionIdRef.current = session.id;
+    if (sessionId && sessionId !== prevSessionIdRef.current) {
+      prevSessionIdRef.current = sessionId;
+      // 换会话就退出多选：上一段对话的勾选在新会话里毫无意义
+      exitSelectMode();
       if (messages.length > 0) {
         setTimeout(() => {
           virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'auto' });
         }, 100);
       }
     }
-  }, [session?.id]);
+    // `messages.length` 只在上面那个"会话真的换了"的判据成立时才起作用：新消息到达时
+    // 该判据为假，这里什么也不做（否则每来一条消息都会强制滚到底）
+  }, [sessionId, messages.length, exitSelectMode]);
 
   const itemContent = useCallback((index: number) => {
     const msg = messages[index];
@@ -101,11 +168,13 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
         isStreaming={isLastAssistant}
         isHighlighted={highlightedMessageId === msg.id}
         onEdit={onEditMessage}
-        onSaveInspiration={onSaveInspiration}
         onResend={onResendMessage}
+        selectable={selectMode}
+        selected={selectedIds.includes(msg.id)}
+        onToggleSelect={toggleSelect}
       />
     );
-  }, [messages, session, thinkingChain, isGenerating, streamingProgress, confirmation, highlightedMessageId, onEditMessage, onSaveInspiration, onResendMessage]);
+  }, [messages, session, thinkingChain, isGenerating, streamingProgress, confirmation, highlightedMessageId, onEditMessage, onResendMessage, selectMode, selectedIds, toggleSelect]);
 
 
   if (!session) {
@@ -129,7 +198,7 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
             style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            从左侧创建或选择会话开始对话
+            输入消息开始新会话（先选择会话模型与工作目录），或从左侧选择已有会话或新建
           </div>
         </div>
       </div>
@@ -169,10 +238,11 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Floating search bar - outside Virtuoso, stays at top */}
+      {/* 顶部一栏：搜索框 + 检索导航 + 业务操作位（会话页的「转为工作流 / 转为群聊」）。
+          会话标题不再占这一行——标题在左侧列表里已有，省下的横向空间留给搜索与操作。 */}
       {messages.length > 0 && (
-        <div className="shrink-0 px-4 flex items-center border-b" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-primary)', height: '36px' }}>
-          <div className="flex items-center gap-2 flex-1">
+        <div className="shrink-0 px-4 flex items-center gap-2 border-b" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-primary)', height: '36px' }}>
+          <div className="flex items-center gap-2 flex-1 min-w-0">
             <div className="relative flex-1">
               <input
                 type="text"
@@ -258,7 +328,64 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
               </div>
             )}
           </div>
+          {headerActions && (
+            <div className="flex items-center gap-1 shrink-0">{headerActions}</div>
+          )}
+          {/* 多选态下隐藏：同屏出现「沉淀为知识」与「整理为知识」两个"知识"动作，用户会分不清该点哪个 */}
+          {!selectMode && (
+            <button
+              onClick={() => void handleSediment()}
+              disabled={!sessionId || sedimenting}
+              className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors disabled:opacity-40"
+              style={{ color: 'var(--text-secondary)' }}
+              title="把本会话的新增内容交给知识库模型整理成候选（进「待确认」，不直入库）"
+            >
+              {sedimenting ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+              {sedimenting ? '整理中' : '整理为知识'}
+            </button>
+          )}
+          <button
+            onClick={() => (selectMode ? exitSelectMode() : enterSelectMode())}
+            className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
+            style={{
+              color: selectMode ? 'var(--accent)' : 'var(--text-secondary)',
+              backgroundColor: selectMode ? 'var(--accent-light)' : 'transparent',
+            }}
+            title="多选消息：勾选若干条，交给 AI 整理成多条知识"
+          >
+            {selectMode ? <X size={11} /> : <CheckSquare size={11} />}
+            {selectMode ? '退出多选' : '多选'}
+          </button>
+          {/* 关闭会话：行尾图标按钮（样式与群聊页的关闭按钮一致，不带文字） */}
+          {onCloseSession && (
+            <button
+              onClick={onCloseSession}
+              className="p-1.5 rounded-md hover:opacity-70 transition-opacity shrink-0"
+              style={{ color: 'var(--text-tertiary)' }}
+              title="关闭当前会话（回到「快捷开始」，不删除任何数据）"
+            >
+              <X size={13} />
+            </button>
+          )}
         </div>
+      )}
+
+      {/* 选择条：多选态下出现。把勾选的消息**按对话顺序**交给 AI 整理成 0..N 条知识 */}
+      {selectMode && (
+        <MessageSelectionBar
+          count={selectedMessages.length}
+          hint="按对话顺序整理成多条知识（系统提示不参与）"
+          onCopy={() =>
+            void copyToClipboard(
+              selectedMessages.map((m) => `${m.role === 'user' ? '用户' : '助手'}：${m.content}`).join('\n\n'),
+              `已复制 ${selectedMessages.length} 条消息`,
+            )
+          }
+          onDigest={() =>
+            setKbMessages(selectedMessages.map((m) => ({ role: m.role, content: m.content })))
+          }
+          onClear={clearSelection}
+        />
       )}
 
       <Virtuoso
@@ -272,6 +399,15 @@ export function MessageList({ messages, session, isGenerating, streamingStatus, 
           Footer: () => null,
         }}
       />
+
+      {/* 沉淀弹窗：把选中的一段对话交给 AI 整理成 0..N 条知识（成功后退出多选） */}
+      {kbMessages && (
+        <SaveToKnowledgeDialog
+          messages={kbMessages}
+          onClose={() => setKbMessages(null)}
+          onSaved={exitSelectMode}
+        />
+      )}
     </div>
   );
 }

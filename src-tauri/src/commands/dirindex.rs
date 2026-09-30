@@ -1,13 +1,15 @@
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use tauri::http::header::CONTENT_TYPE;
 use tauri::http::{Request, Response, StatusCode};
-use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 
 /// 判断路径是否为目录（供前端自定义标签决定 iframe 使用目录索引协议还是 asset 文件协议）
 #[tauri::command]
 pub fn path_is_directory(path: String) -> bool {
-    std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
+    std::fs::metadata(&path)
+        .map(|m| m.is_dir())
+        .unwrap_or(false)
 }
 
 /// HTML 转义（防止路径/文件名中的特殊字符破坏页面结构）
@@ -38,7 +40,10 @@ fn parse_path_param(query: Option<&str>) -> Option<String> {
         let mut it = pair.splitn(2, '=');
         if let (Some(k), Some(v)) = (it.next(), it.next()) {
             if k == "path" {
-                return percent_decode_str(v).decode_utf8().ok().map(|s| s.into_owned());
+                return percent_decode_str(v)
+                    .decode_utf8()
+                    .ok()
+                    .map(|s| s.into_owned());
             }
         }
     }
@@ -82,7 +87,10 @@ fn render_dir_index(dir: &Path) -> String {
     files.sort_by(cmp_ci);
 
     let mut body = String::new();
-    body.push_str(&format!("<h1>{}</h1>", html_escape(&dir.display().to_string())));
+    body.push_str(&format!(
+        "<h1>{}</h1>",
+        html_escape(&dir.display().to_string())
+    ));
     if let Some(parent) = dir.parent() {
         body.push_str(&format!(
             "<p class=\"parent\"><a href=\"?path={}\">↑ 上级目录</a></p>",

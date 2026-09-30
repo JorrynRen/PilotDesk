@@ -5,6 +5,7 @@
  */
 
 import { globalEventBus } from '../plugin/GlobalEventBus';
+import type { JsonValue } from '../types/plugin';
 import type {
   WorkflowInstance,
   WorkflowInstanceStatus,
@@ -50,7 +51,7 @@ export function createInstance(
 
 // ── 事件发射 ──
 
-export type WorkflowEventHandler = (event: { type: WorkflowEventType; instanceId: string; nodeId?: string; data?: any; timestamp: string }) => void;
+export type WorkflowEventHandler = (event: { type: WorkflowEventType; instanceId: string; nodeId?: string; data?: JsonValue; timestamp: string }) => void;
 
 let globalHandler: WorkflowEventHandler | null = null;
 
@@ -62,7 +63,7 @@ export function emitWorkflowEvent(
   type: WorkflowEventType,
   instanceId: string,
   nodeId?: string,
-  data?: any,
+  data?: JsonValue,
 ): void {
   const event = { type, instanceId, nodeId, data, timestamp: new Date().toISOString() };
 

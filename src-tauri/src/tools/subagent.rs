@@ -72,6 +72,7 @@ impl ToolHandler for TaskTool {
             stream: false,
             temperature: Some(0.3),
             max_tokens: Some(2048),
+            response_format: None,
         };
 
         let resp = if matches!(self.api_format, ApiFormat::Anthropic) {

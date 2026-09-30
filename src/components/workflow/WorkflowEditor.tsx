@@ -14,7 +14,9 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { flushSync } from 'react-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { showToast } from '../../utils/toast';
+import { showToast, showLiveToast, showLiveToastOnce } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
+import { confirmDialog } from '../../stores/confirmStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -25,14 +27,23 @@ interface ExecutionPlan {
   ordered_stage_ids: string[][];
 }
 
-import { getNodeTypeMeta, generateId, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePosition, clampNodePositionNoSnap, sanitizeMappingReferences } from '../../workflow/WorkflowDefinition';
+/** `get_node_executions` 返回的单条节点执行记录（后端事件派生的 JSON） */
+interface NodeExecutionRecord {
+  nodeId: string;
+  status: string;
+  output?: unknown;
+  error?: string | null;
+}
+
+import { getNodeTypeMeta, generateEdgeId, generateStageId, autoAssignStage, createWorkflowNode, clampNodePositionNoSnap, nodeDragOffsetRange, visibleContentWindow, sanitizeMappingReferences, formatStageNodeLabel } from '../../workflow/WorkflowDefinition';
 import WorkflowNodeItem from './WorkflowNodeItem';
 import { WorkflowNodeConfig } from './WorkflowNodeConfig';
-import type { WorkflowDefinition, WorkflowNode, WorkflowEdge, WorkflowNodeType, Stage, GateConfig, ExecutionProgressPayload, ValidationResult } from '../../types/workflow';
+import { Select } from '../common/Select';
+import { WorkflowInputDialog } from './WorkflowInputDialog';
+import type { WorkflowNode, WorkflowEdge, Stage, GateConfig, ExecutionProgressPayload, ValidationResult, PendingToolApproval } from '../../types/workflow';
 
 interface Props {
   definitionId: string;
-  onClose?: () => void;
   onNameChange?: (name: string) => void;
   onSaveResult?: (success: boolean) => void;
   onImported?: (newId: string) => void;
@@ -41,6 +52,8 @@ interface Props {
 // ── 布局常量（画布 & 阶段 & 节点尺寸） ──
 const STAGE_W = 480;
 const STAGE_COLLAPSED_W = 72;
+/** 折叠阶段的实际渲染高度（宽 72、标题 54 + 说明区）；命中判定必须与渲染同源，否则底部会漏判 */
+const STAGE_COLLAPSED_H = 174;
 const STAGE_GAP = 36;
 const STAGE_TOP = 20;
 const TITLE_H = 36;
@@ -48,12 +61,99 @@ const GATE_H = 64;
 const CONTENT_H = 500;
 const NODE_W = 160;
 const NODE_H = 60;
-const SNAP_SIZE = 20;
 const PAN_THRESHOLD = 3;
 const NODE_DRAG_THRESHOLD = 3;
+/** 右下角浮动工具栏整体放大倍数（只放大工具栏与图标，弹窗内容反向缩放回原尺寸） */
+const FLOAT_BAR_SCALE = 1.25;
+/** 浮动工具栏内弹窗（操作帮助/工作流统计）的反向缩放因子：抵消容器放大，内容保持原尺寸 */
+const FLOAT_BAR_POPUP_SCALE = 1 / FLOAT_BAR_SCALE;
 
 /** 工具栏节点类型固定显示顺序（Agent任务、插件调用、人工交互、API调用、代码转换、子工作流、结束） */
 const PALETTE_ORDER = ['agent', 'plugin', 'interact', 'api', 'transform', 'subflow', 'end'];
+
+/**
+ * 拖放目标阶段（纯函数，模块级）：几何命中优先，未命中时取离落点最近的阶段。
+ *
+ * 阶段盒子只占画布左上角一块，画布其余区域都是空白；若拖放严格按几何命中判定，阶段下方/右侧的
+ * 空白就只会显示禁止光标、节点无处可落（用户感知为"部分区域不能放节点"）。这里补上"最近阶段"回退，
+ * 画布任意位置都能落点。列位用与渲染同源的累计算法。
+ */
+function pickDropStageId(
+  cx: number,
+  cy: number,
+  stages: Stage[],
+  collapsedStages: Set<string>,
+  stageOffsets: Record<string, number>,
+  stageOffsetsY: Record<string, number>,
+): string | null {
+  let leftOffset = 20;
+  let hit: string | null = null;
+  let nearest: string | null = null;
+  let nearestDist = Number.POSITIVE_INFINITY;
+  for (const stage of stages) {
+    const isCollapsed = collapsedStages.has(stage.id);
+    const left = leftOffset + (stageOffsets[stage.id] ?? 0);
+    const top = STAGE_TOP + (stageOffsetsY[stage.id] ?? 0);
+    const width = isCollapsed ? STAGE_COLLAPSED_W : STAGE_W;
+    const height = isCollapsed ? STAGE_COLLAPSED_H : TITLE_H + CONTENT_H + GATE_H + 4;
+    if (cx >= left && cx <= left + width && cy >= top && cy <= top + height) {
+      hit = stage.id;
+    }
+    // 点到矩形的最短距离（落在矩形内为 0）
+    const dx = Math.max(left - cx, 0, cx - (left + width));
+    const dy = Math.max(top - cy, 0, cy - (top + height));
+    const dist = Math.hypot(dx, dy);
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearest = stage.id;
+    }
+    leftOffset += isCollapsed ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
+  }
+  return hit ?? nearest;
+}
+
+/** 边条件支持的运算符（与后端 evaluate_condition 保持一致；含无值运算符） */
+const CONDITION_OPERATORS = ['==', '!=', '>=', '<=', '>', '<', 'contains', 'starts_with', 'ends_with', 'is_empty', 'is_not_empty'];
+
+// ── 边标签块（节点间连线上的条件标签）：宽度按内容自适应 ──
+// SVG 的 <rect> 没有盒模型，无法"只设内边距、宽度交给浏览器"，只能先量出文本宽度再定框宽。
+/** 标签字号（基准 px，绘制时乘 1/scale 抵消画布缩放，屏幕上恒为 9px） */
+const EDGE_LABEL_FONT_SIZE = 9;
+/** 标签左右内边距（基准 px） */
+const EDGE_LABEL_PAD_X = 6;
+/** 标签块最大宽度（基准 px）：超长条件标签封顶，避免横跨画布遮挡相邻节点 */
+const EDGE_LABEL_MAX_W = 160;
+/** 与 --font-sans 同源，保证 canvas 测量结果与 SVG 实际渲染一致 */
+const EDGE_LABEL_FONT = `${EDGE_LABEL_FONT_SIZE}px 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif`;
+
+let edgeLabelCtx: CanvasRenderingContext2D | null = null;
+
+/** 测量标签文本宽度（复用同一个离屏 2D context；取不到 canvas 时按平均字宽兜底估算） */
+function measureEdgeLabel(text: string): number {
+  if (!edgeLabelCtx) {
+    edgeLabelCtx = document.createElement('canvas').getContext('2d');
+  }
+  if (!edgeLabelCtx) return text.length * EDGE_LABEL_FONT_SIZE * 0.6;
+  edgeLabelCtx.font = EDGE_LABEL_FONT;
+  return edgeLabelCtx.measureText(text).width;
+}
+
+/**
+ * 计算边标签块的显示文本与宽度。
+ * - 宽度 = 文本实测宽度 + 左右内边距（内容多宽、框就多宽）；
+ * - 超过上限（[`EDGE_LABEL_MAX_W`]）时从尾部截断并加 `…`，完整文本由调用方用 `<title>` 悬浮展示。
+ */
+function layoutEdgeLabel(label: string): { text: string; width: number } {
+  const maxTextW = EDGE_LABEL_MAX_W - EDGE_LABEL_PAD_X * 2;
+  let text = label;
+  if (measureEdgeLabel(text) > maxTextW) {
+    let cut = text.length;
+    while (cut > 1 && measureEdgeLabel(text.slice(0, cut) + '…') > maxTextW) cut -= 1;
+    text = text.slice(0, cut) + '…';
+  }
+  const width = Math.min(measureEdgeLabel(text) + EDGE_LABEL_PAD_X * 2, EDGE_LABEL_MAX_W);
+  return { text, width };
+}
 
 /** 获取工具栏节点类型列表（固定顺序，动态类型追加在末尾） */
 function useNodePalette() {
@@ -61,7 +161,7 @@ function useNodePalette() {
     PALETTE_ORDER.map(type => ({ type, ...getNodeTypeMeta(type) }))
   );
   useEffect(() => {
-    invoke<Array<{ typeId: string; name: string; category: string; configSchema?: any }>>('list_node_types')
+    invoke<Array<{ typeId: string; name: string; category: string; configSchema?: unknown }>>('list_node_types')
       .then(types => {
         if (types.length > 0) {
           const known = PALETTE_ORDER.filter(id => types.some(t => t.typeId === id));
@@ -99,7 +199,7 @@ interface StageConnectingPreview {
   mouseCanvasY: number;
 }
 
-/** 删除确认弹窗状态 */
+/** 待删除对象的描述符（二次确认由全局 confirmDialog 弹出，不再自建弹窗状态） */
 interface ConfirmAction {
   type: 'deleteStage' | 'deleteNode' | 'deleteEdge' | 'deleteNodes' | 'deleteStageEdge';
   targetId: string;
@@ -122,8 +222,8 @@ interface AwaitingInputPayload {
   default_value?: string;
 }
 
-export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameChange, onSaveResult, onImported }) => {
-  const { definitions, instances, selectedInstanceId, updateDefinition, loadDefinitions, respondHumanInput, loadPendingInputs, pendingInputs } = useWorkflowStore();
+export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, onSaveResult, onImported }) => {
+  const { definitions, instances, updateDefinition, respondHumanInput, loadPendingInputs, pendingInputs, pendingApprovals, loadPendingApprovals, respondToolApproval } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
   const [stages, setStages] = useState<Stage[]>(def?.stages || []);
@@ -135,6 +235,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [stageOffsetsY, setStageOffsetsY] = useState<Record<string, number>>({});
   const stageOffsetsRef = useRef<Record<string, number>>({});
   const stageOffsetsYRef = useRef<Record<string, number>>({});
+  // 阶段内容层平移（纯视图位移，不持久化；正值=内容右/下移，与画布 pan 同向）
+  const [stagePans, setStagePans] = useState<Record<string, { x: number; y: number }>>({});
+  const stagePansRef = useRef<Record<string, { x: number; y: number }>>({});
   const saveStageLayoutRef = useRef<() => void>(() => {});
   const [draggingStageId, setDraggingStageId] = useState<string | null>(null);
   const dragStartXRef = useRef<number>(0);
@@ -162,12 +265,18 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     collapsedStages: new Set<string>(),
     stageOffsets: {} as Record<string, number>,
     stageOffsetsY: {} as Record<string, number>,
+    stagePans: {} as Record<string, { x: number; y: number }>,
   });
   
   // 同步状态到 boxStateRef（必须在 pan/scale/stages/isBoxSelecting 声明之后）
   
   // ── 节点尺寸缓存 ──
   const nodeSizesRef = useRef<Map<string, { width: number; height: number }>>(new Map());
+  /**
+   * 尺寸的渲染期镜像：渲染期不能读 ref（react-hooks/refs），画布包围盒计算读这个 state；
+   * 事件回调（框选命中判定）仍读 ref。测量完成后 setState 会让包围盒跟着刷新。
+   */
+  const [nodeSizes, setNodeSizes] = useState<Record<string, { width: number; height: number }>>({});
   const measuredNodeTypesRef = useRef<Set<string>>(new Set());
   const boxSelectStartRef = useRef<{ x: number; y: number; stageId: string } | null>(null);
 
@@ -182,6 +291,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           width: el.offsetWidth,
           height: el.offsetHeight
         });
+        setNodeSizes(Object.fromEntries(nodeSizesRef.current));
       }
     });
   }, []);
@@ -207,7 +317,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, []);
 
   const [name, setName] = useState(def?.name || '');
-  const [description, setDescription] = useState(def?.description || '');
+  // description 仅用于保存时回写（编辑器不提供描述编辑入口，故不需要 setter）
+  const [description] = useState(def?.description || '');
   const [connecting, setConnecting] = useState<ConnectingPreview | null>(null);
   const [conditionInput, setConditionInput] = useState<{ source: string; target: string; stageId: string } | null>(null);
   const [condField, setCondField] = useState('__auto__');
@@ -216,49 +327,67 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [condLabel, setCondLabel] = useState('');
   const [condAdvanced, setCondAdvanced] = useState(false);
   const [condRawExpr, setCondRawExpr] = useState('');
+  /** 从源节点最近一次执行产出里探测到的候选字段（点选填入比较字段） */
+  const [condProbeFields, setCondProbeFields] = useState<string[]>([]);
+  const [condProbing, setCondProbing] = useState(false);
+  /** 比较字段候选下拉是否展开 */
+  const [condFieldOpen, setCondFieldOpen] = useState(false);
   const [gateInput, setGateInput] = useState<{ stageId: string } | null>(null);
   const [gateError, setGateError] = useState<string | null>(null);
   const [gateStrategy, setGateStrategy] = useState<string>('all');
   const [showCustomMode, setShowCustomMode] = useState(false);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const collapsedStagesRef = useRef(collapsedStages);
-  collapsedStagesRef.current = collapsedStages;
-  saveStageLayoutRef.current = () => {
-    const offX = stageOffsetsRef.current;
-    const offY = stageOffsetsYRef.current;
-    setStages(prev => {
-      const updated = prev.map(s => ({
-        ...s,
-        offsetX: offX[s.id] ?? s.offsetX ?? 0,
-        offsetY: offY[s.id] ?? s.offsetY ?? 0,
-      }));
-      // 异步保存到数据库
-      if (definitionId) {
-        invoke('save_workflow_dag', { id: definitionId, stages: updated }).catch((err: any) =>
-          console.warn('[WorkflowEditor] 保存阶段布局失败:', err)
-        );
-      }
-      return updated;
-    });
-  };
+  // 渲染期不能读写 ref（react-hooks/refs）：两个"最新值"镜像改在 effect 里同步。
+  // 消费方都是事件回调 / effect / 定时器，都在 commit 之后才读，语义不变。
+  useEffect(() => {
+    collapsedStagesRef.current = collapsedStages;
+  }, [collapsedStages]);
+  useEffect(() => {
+    saveStageLayoutRef.current = () => {
+      const offX = stageOffsetsRef.current;
+      const offY = stageOffsetsYRef.current;
+      setStages(prev => {
+        const updated = prev.map(s => ({
+          ...s,
+          offsetX: offX[s.id] ?? s.offsetX ?? 0,
+          offsetY: offY[s.id] ?? s.offsetY ?? 0,
+        }));
+        // 异步保存到数据库
+        if (definitionId) {
+          invoke('save_workflow_dag', { id: definitionId, stages: updated }).catch((err: unknown) =>
+            console.warn('[WorkflowEditor] 保存阶段布局失败:', err)
+          );
+        }
+        return updated;
+      });
+    };
+  });
   const [customMode, setCustomMode] = useState<string>('selector');
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [dragOverStageId, setDragOverStageId] = useState<string | null>(null);
+  /**
+   * 拖放落点预览：与真实落点用同一套换算（居中 + clamp 进内容区），
+   * 让用户在松手前就看到节点会落在哪里 —— 否则贴着阶段边缘放下时节点会"被吸到别处"，
+   * 看起来像那个区域放不了节点（其实只是节点必须完整落在内容区内）。
+   */
+  const [dropPreview, setDropPreview] = useState<{ stageId: string; x: number; y: number; w: number; h: number } | null>(null);
   const [showGrid, setShowGrid] = useState(false);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ edgeId: string; x: number; y: number } | null>(null);
-
-  // 删除二次确认
-  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
 
   // 人工交互等待输入弹窗
   const [awaitingInput, setAwaitingInput] = useState<AwaitingInputPayload | null>(null);
   const [awaitingInputValue, setAwaitingInputValue] = useState<string>('');
   const [awaitingSubmitting, setAwaitingSubmitting] = useState(false);
 
+  // 工具审批等待裁决弹窗（Agent 节点命中「工具授权」策略后暂停）
+  const [awaitingApproval, setAwaitingApproval] = useState<PendingToolApproval | null>(null);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
+
   // 执行状态（模拟/预览用，key: nodeId | stageId:stepIndex）
   const [stepStates, setStepStates] = useState<Record<string, StepRunState>>({});
-  const [nodeResults, setNodeResults] = useState<Record<string, any>>({});
+  const [nodeResults, setNodeResults] = useState<Record<string, unknown>>({});
 
   // 画布平移和缩放状态
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -276,6 +405,36 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   useEffect(() => { boxStateRef.current.collapsedStages = collapsedStages; }, [collapsedStages]);
   useEffect(() => { boxStateRef.current.stageOffsets = stageOffsets; }, [stageOffsets]);
   useEffect(() => { boxStateRef.current.stageOffsetsY = stageOffsetsY; }, [stageOffsetsY]);
+  useEffect(() => { boxStateRef.current.stagePans = stagePans; }, [stagePans]);
+  useEffect(() => { stagePansRef.current = stagePans; }, [stagePans]);
+
+  // ── 阶段列位 / 画布→内容坐标换算 ──
+  // 这几个纯计算必须声明在**工具栏拖拽 effect** 之前：该 effect 会在回调里调用
+  // canvasToContentPos，声明在后会被 react-hooks 判为"在变量声明前访问"
+  // （同样的原因也让原来的 useCallback 记忆化无法被编译器保留）。
+  const getStagePositions = useCallback(() => {
+    let leftOffset = 20;
+    const map: Record<string, number> = {};
+    for (const stage of stages) {
+      map[stage.id] = leftOffset + (stageOffsets[stage.id] ?? 0);
+      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
+    }
+    return map;
+  }, [stages, collapsedStages, stageOffsets]);
+
+  const stagePositionsMap = getStagePositions();
+
+  /** 画布坐标 → 阶段内容层坐标（内容层已按 stagePans 平移，故需减去该平移量） */
+  const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
+    const stageLeft = stagePositionsMap[stageId];
+    const stagePan = stagePans[stageId] ?? { x: 0, y: 0 };
+    // 阶段垂直位移必须计入：否则拖动过阶段的画布上，落点会按原始 Y 换算，节点落在离鼠标很远的位置
+    const stageTop = STAGE_TOP + (stageOffsetsY[stageId] ?? 0);
+    return {
+      x: canvasX - stageLeft - stagePan.x,
+      y: canvasY - stageTop - TITLE_H - stagePan.y,
+    };
+  }, [stagePositionsMap, stagePans, stageOffsetsY]);
 
   // 备份下拉：点击容器外部自动关闭
   useEffect(() => {
@@ -292,7 +451,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  // 阶段内平移的起手快照；非 null 时本次拖拽只移动该阶段内容层
+  const stagePanStartRef = useRef<{ x: number; y: number; stageId: string; panX: number; panY: number } | null>(null);
   const panThresholdRef = useRef<{ startX: number; startY: number; triggered: boolean } | null>(null);
+  /**
+   * `panThresholdRef.current.triggered` 的渲染期镜像（渲染期不能读 ref）：
+   * 光标的 "grabbing/default" 由它决定；这里与 ref 在同一处一起更新，语义不变。
+   */
+  const [panTriggered, setPanTriggered] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // 监听画布容器尺寸变化（用于无限画布动态计算）
@@ -310,7 +476,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, []);
 
   
-  const dragOverCanvasRef = useRef<boolean>(false);
+  // 拖拽 ghosts 是否悬停在画布上方（渲染期要读 → 用 state；原先的 ref 在渲染期读会被
+  // react-hooks/refs 拦下，且它与 dragOverStageId 永远在同一个事件回调里更新，改成 state 语义不变）
+  const [dragOverCanvas, setDragOverCanvas] = useState<boolean>(false);
 
   // 工具栏节点模拟拖拽状态（替代HTML5 DnD，解决Tauri WebView2不触发dragstart问题）
   const [toolbarDrag, setToolbarDrag] = useState<{
@@ -329,6 +497,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   // Toolbar drag mouse tracking
   useEffect(() => {
     if (!toolbarDrag) return;
+    // 落点 → 目标阶段（几何命中优先，画布空白处退到最近阶段）
+    const pickDropStage = (cx: number, cy: number) =>
+      pickDropStageId(cx, cy, stages, collapsedStages, stageOffsets, stageOffsetsY);
+    // 目标阶段的可视窗口平移量（落点按该窗口夹紧，保证新节点一定落在看得见的位置）
+    const panOf = (stageId: string) => stagePans[stageId] ?? { x: 0, y: 0 };
     const handleMove = (e: MouseEvent) => {
       setToolbarDrag(prev => prev ? { ...prev, ghostX: e.clientX, ghostY: e.clientY } : null);
       if (ghostRef.current) {
@@ -346,12 +519,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               e.clientY >= rect.top && e.clientY <= rect.bottom) {
             const cx = (e.clientX - rect.left - pan.x) / scale;
             const cy = (e.clientY - rect.top - pan.y) / scale;
-            const targetStageId = getStageAtCanvasPos(cx, cy);
+            const targetStageId = pickDropStage(cx, cy);
             if (targetStageId) {
-              // 纯算术计算放置位置
+              // 纯算术计算放置位置（落点 → 内容坐标，再由 createWorkflowNode 夹进该阶段可视窗口）
                 const rel = canvasToContentPos(cx, cy, targetStageId);
-                // 统一创建方法（传入鼠标位置，自动 clamp + snap）
-                const newNode = createWorkflowNode(toolbarDrag.type, { x: rel.x, y: rel.y }, undefined, scale);
+                const newNode = createWorkflowNode(toolbarDrag.type, { x: rel.x, y: rel.y }, undefined, scale, panOf(targetStageId));
               setStages(prev => prev.map(s => {
                 if (s.id === targetStageId) {
                   return { ...s, nodes: [...s.nodes, newNode] };
@@ -374,7 +546,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               e.clientY >= rect.top && e.clientY <= rect.bottom) {
             const cx = (e.clientX - rect.left - pan.x) / scale;
             const cy = (e.clientY - rect.top - pan.y) / scale;
-            validDrop = !!getStageAtCanvasPos(cx, cy);
+            validDrop = !!pickDropStage(cx, cy);
           }
         }
         // ghost shake动画表示无效
@@ -391,14 +563,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           }, 250);
           setToolbarDrag(null);
           setDragOverStageId(null);
-          dragOverCanvasRef.current = false;
+          setDropPreview(null);
+          setDragOverCanvas(false);
           toolbarDragRef.current = null;
           return;
         }
       }
       setToolbarDrag(null);
       setDragOverStageId(null);
-      dragOverCanvasRef.current = false;
+      setDropPreview(null);
+      setDragOverCanvas(false);
       toolbarDragRef.current = null;
       if (ghostRef.current) {
         ghostRef.current.remove();
@@ -412,11 +586,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         const rect = canvasEl.getBoundingClientRect();
         if (e.clientX >= rect.left && e.clientX <= rect.right &&
             e.clientY >= rect.top && e.clientY <= rect.bottom) {
-          dragOverCanvasRef.current = true;
+          setDragOverCanvas(true);
           const cx = (e.clientX - rect.left - pan.x) / scale;
           const cy = (e.clientY - rect.top - pan.y) / scale;
-          const hitStage = getStageAtCanvasPos(cx, cy);
+          const hitStage = pickDropStage(cx, cy);
           setDragOverStageId(hitStage);
+          if (hitStage) {
+            // 预览矩形 = 松手后节点的真实位置：直接复用同一个创建函数算位置，
+            // 避免"预览与实际落点"两套换算走偏
+            const meta = getNodeTypeMeta(toolbarDrag.type);
+            const rel = canvasToContentPos(cx, cy, hitStage);
+            const p = createWorkflowNode(toolbarDrag.type, { x: rel.x, y: rel.y }, undefined, scale, panOf(hitStage)).position!;
+            setDropPreview({ stageId: hitStage, x: p.x, y: p.y, w: meta.nodeW, h: meta.nodeH });
+          } else {
+            setDropPreview(null);
+          }
           // 更新ghost样式：可放置=accent色，不可放置=红色
           if (ghostRef.current) {
             if (hitStage) {
@@ -430,8 +614,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             }
           }
         } else {
-          dragOverCanvasRef.current = false;
+          setDragOverCanvas(false);
           setDragOverStageId(null);
+          setDropPreview(null);
           if (ghostRef.current) {
             ghostRef.current.style.borderColor = 'var(--border)';
             ghostRef.current.style.background = 'var(--bg-tertiary)';
@@ -448,7 +633,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', handleMoveHighlight);
       window.removeEventListener('mouseup', handleUp);
     };
-  }, [toolbarDrag, pan, scale, stages, collapsedStages]);
+  }, [toolbarDrag, pan, scale, stages, collapsedStages, stageOffsets, stageOffsetsY, stagePans]);
 
   // 节点拖拽状态
   // ── 对齐辅助线 ──
@@ -478,44 +663,36 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [cycleTargetId, setCycleTargetId] = useState<string | null>(null);
   const [reachableTargets, setReachableTargets] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    if (def) {
-      const sanitized = sanitizeMappingReferences(def.stages);
-      setStages(sanitized);
-      setName(def.name);
-      // 从 stages 恢复折叠状态和位置偏移
-      const collapsed = new Set<string>();
-      const offsetsX: Record<string, number> = {};
-      const offsetsY: Record<string, number> = {};
-      for (const s of sanitized) {
-        if (s.collapsed) collapsed.add(s.id);
-        if (s.offsetX) offsetsX[s.id] = s.offsetX;
-        if (s.offsetY) offsetsY[s.id] = s.offsetY;
-      }
-      setCollapsedStages(collapsed);
-      if (Object.keys(offsetsX).length > 0) setStageOffsets(offsetsX);
-      if (Object.keys(offsetsY).length > 0) setStageOffsetsY(offsetsY);
-      
-      // 首次打开工作流时，批量测量所有节点类型尺寸
-      measureAllNodeTypes();
+  /**
+   * 定义变化时把 stages / 名称 / 折叠 / 偏移同步进编辑器状态。
+   *
+   * 用「渲染期调整状态」（React 官方写法）而不是 effect：在 effect 里同步 setState 会触发级联渲染
+   * （react-hooks/set-state-in-effect），最终渲染结果与原先一致（少一轮渲染）。
+   */
+  const [syncedDef, setSyncedDef] = useState(def);
+  if (def && syncedDef !== def) {
+    setSyncedDef(def);
+    const sanitized = sanitizeMappingReferences(def.stages);
+    setStages(sanitized);
+    setName(def.name);
+    // 从 stages 恢复折叠状态和位置偏移
+    const collapsed = new Set<string>();
+    const offsetsX: Record<string, number> = {};
+    const offsetsY: Record<string, number> = {};
+    for (const s of sanitized) {
+      if (s.collapsed) collapsed.add(s.id);
+      if (s.offsetX) offsetsX[s.id] = s.offsetX;
+      if (s.offsetY) offsetsY[s.id] = s.offsetY;
     }
-  }, [def, measureAllNodeTypes]);
+    setCollapsedStages(collapsed);
+    if (Object.keys(offsetsX).length > 0) setStageOffsets(offsetsX);
+    if (Object.keys(offsetsY).length > 0) setStageOffsetsY(offsetsY);
+  }
 
-  // 组件挂载时：加载实例数据并取消旧的 running 实例
+  // 首次打开工作流时，批量测量所有节点类型尺寸（要等 DOM 渲染完，故留在 effect）
   useEffect(() => {
-    if (!definitionId) return;
-    // 先刷新实例数据，确保拿到最新状态
-    useWorkflowStore.getState().loadInstances().then(() => {
-      const currentInstances = useWorkflowStore.getState().instances;
-      const runningInstances = currentInstances.filter(
-        inst => inst.definitionId === definitionId && inst.status === 'running'
-      );
-      for (const inst of runningInstances) {
-        console.log('[WorkflowEditor] 取消旧的 running 实例:', inst.id);
-        useWorkflowStore.getState().cancelWorkflow(inst.id);
-      }
-    });
-  }, [definitionId]);
+    measureAllNodeTypes();
+  }, [def, measureAllNodeTypes]);
 
   const handleExportWorkflow = useCallback(async () => {
     if (!definitionId) return;
@@ -530,9 +707,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         showToast('工作流导出成功', 'success');
         onSaveResult?.(true);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('导出工作流失败:', err);
-      showToast(`导出工作流失败: ${err}`, 'error');
+      showToast(`导出工作流失败: ${errorMessage(err)}`, 'error');
       onSaveResult?.(false);
     }
   }, [definitionId, name, onSaveResult]);
@@ -555,8 +732,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           if (result?.id) {
             lastImportedId = result.id;
           }
-        } catch (innerErr: any) {
-          const fileName = filePath.split(/[\/]/).pop();
+        } catch (innerErr: unknown) {
+          const fileName = filePath.split(/[/]/).pop();
           showToast(`导入工作流「${fileName}」失败: ${innerErr}`, 'error');
         }
       }
@@ -566,7 +743,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           onImported(lastImportedId);
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('导入工作流失败:', err);
     }
   }, [onImported]);
@@ -586,20 +763,32 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   const [isRunning, setIsRunning] = useState(false);
   const executionIdRef = useRef<string | null>(null);
   const definitionIdRef = useRef(definitionId);
-  definitionIdRef.current = definitionId;
+  // 同上：最新值镜像在 effect 里同步（消费方是事件监听回调）
+  useEffect(() => {
+    definitionIdRef.current = definitionId;
+  }, [definitionId]);
   const [restoredExecutionId, setRestoredExecutionId] = useState<string | null>(null);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+  /** 进程内真在跑的实例 id（打开编辑器时拉一次）：用于区分"实时执行"与"历史/中断记录" */
+  const liveExecutionIdsRef = useRef<Set<string>>(new Set());
   const [showVersions, setShowVersions] = useState(false);
+  /** 「运行」前的入参表单（定义声明了 inputSchema 时先收参数再执行） */
+  const [showInputDialog, setShowInputDialog] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<{ id: string; version: number } | null>(null);
   const palette = useNodePalette();
   const [versions, setVersions] = useState<Array<{ id: string; workflowId: string; version: number; snapshot: string; createdAt: number }>>([]);
-  const restoredSnapshotRef = useRef<any>(null);
-  const restoredModCountRef = useRef<number>(0);
-  const modCountRef = useRef<number>(0);
+  /**
+   * 恢复历史执行时的 stages 快照（用于标记"配置已变更"的节点）。
+   * 用 state 而不是 ref：渲染期要用它算 isConfigChangedMap，渲染期读 ref 会被 react-hooks/refs 拦下。
+   */
+  const [restoredSnapshot, setRestoredSnapshot] = useState<Stage[] | null>(null);
 
   // ── 自动保存 ──
   const stagesRef = useRef(stages);
-  stagesRef.current = stages;
+  // 同上：最新值镜像在 effect 里同步（消费方是自动保存定时器）
+  useEffect(() => {
+    stagesRef.current = stages;
+  }, [stages]);
   const isDirtyRef = useRef(false);
 
   // 追踪 stages 深度变化，标记脏数据
@@ -651,7 +840,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       };
       const snapshot = JSON.stringify(fullDef);
       await invoke('save_workflow_version', { workflowId: definitionId, snapshot });
-      setVersions(prev => [{ id: '', workflowId: definitionId, version: prev.length + 1, snapshot: '' as any, createdAt: Math.floor(Date.now() / 1000) }, ...prev]);
+      setVersions(prev => [{ id: '', workflowId: definitionId, version: prev.length + 1, snapshot: '', createdAt: Math.floor(Date.now() / 1000) }, ...prev]);
       showToast('备份已保存', 'success');
     } catch (err) {
       console.error('[WorkflowEditor] 保存版本失败:', err);
@@ -703,11 +892,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   };
 
-  /** 恢复指定历史执行的节点状态 */
-  const handleRestoreExecution = async (executionId: string) => {
+  /**
+   * 恢复指定执行的节点状态到画布。
+   *
+   * `opts.live = true` 表示这条执行**此刻还在跑**（打开编辑器时接上后台执行）：
+   * - running 的节点保持 `running`（历史查看里才按"已中断"处理成 cancelled，否则用户看到的是
+   *   "工作流在后台跑着、画布却说节点已取消"）；
+   * - 不置 `restoredExecutionId`：那是"查看历史结果"的标记，画布会被标成已恢复的历史结果，
+   *   而这里呈现的是实时执行。
+   */
+  const handleRestoreExecution = async (executionId: string, opts?: { live?: boolean }) => {
+    const live = opts?.live === true;
     try {
-      const nodeExecs = await invoke<any[]>('get_node_executions', { executionId });
-      const results: Record<string, any> = {};
+      const nodeExecs = await invoke<NodeExecutionRecord[]>('get_node_executions', { executionId });
+      const results: Record<string, unknown> = {};
       const states: Record<string, StepRunState> = {};
       for (const ne of nodeExecs) {
         if (ne.status === 'completed' && ne.output !== undefined) {
@@ -717,7 +915,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           results['node_' + ne.nodeId] = { error: ne.error || '执行失败' };
           states['node_' + ne.nodeId] = 'failed';
         } else if (ne.status === 'running') {
-          states['node_' + ne.nodeId] = 'cancelled';
+          states['node_' + ne.nodeId] = live ? 'running' : 'cancelled';
         } else if (ne.status === 'cancelled') {
           states['node_' + ne.nodeId] = 'cancelled';
         } else if (ne.status === 'skipped') {
@@ -735,10 +933,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           states['stage_' + stage.id] = 'running';
         }
       }
-      // 记录恢复时的工作流快照（用于后续检测配置变更）
-      restoredSnapshotRef.current = JSON.parse(JSON.stringify(stages));
-      restoredModCountRef.current = modCountRef.current;
-      setRestoredExecutionId(executionId);
+      if (live) {
+        setRestoredExecutionId(null);
+        setRestoredSnapshot(null);
+      } else {
+        // 记录恢复时的工作流快照（用于后续检测配置变更）
+        setRestoredSnapshot(JSON.parse(JSON.stringify(stages)));
+        setRestoredExecutionId(executionId);
+      }
       setNodeResults(results);
       setStepStates(states);
     } catch (err) {
@@ -746,8 +948,42 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }
   };
 
-  const handleRunWorkflow = async () => {
-    console.log('[WorkflowEditor] handleRunWorkflow called, isRunning:', isRunning, ', executionIdRef:', executionIdRef.current);
+  // 组件挂载时刷新实例，并**接上**该定义正在后台跑的实例（如果有）。
+  //
+  // 两件事都不能少：
+  // 1. 这里**不能**取消正在跑的实例：工作流可在后台跑完（定时 / 事件触发就是证据），
+  //    用户点进编辑器看一眼、或从实例列表切过来，都不该把人家正在跑的执行杀掉；
+  // 2. 也不能装作没在跑："真的在跑"以进程内的运行登记表为准（list_live_executions），
+  //    命中就把画布接到这条实时执行上——否则用户看到的是"未运行 + 节点已取消"，
+  //    与后台实际状态完全不符（残留的中断记录则不会被选中，那种才该按历史处理）。
+  //
+  // 本 effect 必须声明在它用到的 setIsRunning / setSelectedHistoryId / handleRestoreExecution 之后：
+  // 声明在前会被 react-hooks 判为"在变量声明前访问"。
+  useEffect(() => {
+    if (!definitionId) return;
+    void (async () => {
+      await useWorkflowStore.getState().loadInstances();
+      const liveIds = await invoke<string[]>('list_live_executions').catch(() => [] as string[]);
+      liveExecutionIdsRef.current = new Set(liveIds);
+      if (liveIds.length === 0) return;
+      const inst = useWorkflowStore.getState().instances.find(
+        (i) => i.definitionId === definitionId && liveIds.includes(i.id),
+      );
+      if (!inst) return;
+      console.log('[WorkflowEditor] 接上后台运行中的执行:', inst.id);
+      executionIdRef.current = inst.id;
+      setIsRunning(true);
+      setSelectedHistoryId(inst.id);
+      await handleRestoreExecution(inst.id, { live: true });
+    })();
+  }, [definitionId]);
+
+  /**
+   * 真正发起执行。`runInput` 来自「运行前入参表单」（定义声明了 inputSchema 时先收参数，
+   * 顶层没有上游节点可以补齐这些字段）；未填写时传 `undefined`，由后端 default 兜底。
+   */
+  const runWorkflow = async (runInput?: Record<string, unknown>) => {
+    console.log('[WorkflowEditor] runWorkflow called, isRunning:', isRunning, ', executionIdRef:', executionIdRef.current);
     if (!definitionId) return;
 
     // 执行前验证（调用后端 validate_workflow 命令）
@@ -768,7 +1004,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
     } catch (err) {
       console.error('[WorkflowEditor] validate_workflow error:', err);
-      showToast(`工作流验证调用失败: ${err}`, 'error');
+      showToast(`工作流验证调用失败: ${errorMessage(err)}`, 'error');
       setIsRunning(false);
       return;
     }
@@ -780,7 +1016,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     // 重置 executionIdRef
-    console.log('[WorkflowEditor] handleRunWorkflow: resetting executionIdRef');
+    console.log('[WorkflowEditor] runWorkflow: resetting executionIdRef');
     executionIdRef.current = null;
     // 强制立即渲染 isRunning=true，避免 React 18 自动批处理合并状态更新
     flushSync(() => {
@@ -793,35 +1029,65 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setSelectedStageId(null);
       setSelectedHistoryId(null);
     });
+    // 预生成实例 ID：invoke 前就设置 ref（消除 IPC 竞态：快速工作流可能在响应返回前就完成），
+    // 失败分支也要用它把选择器停在本次记录上，因此在 try 之外声明。
+    const preGeneratedId = crypto.randomUUID();
     try {
       // 清除历史恢复标记（开始真实执行）
       setRestoredExecutionId(null);
-      restoredSnapshotRef.current = null;
+      setRestoredSnapshot(null);
       // 先保存当前编辑状态（轻量：仅保存 stages，不触发全量 reload）
       const preSaveStages = sanitizeMappingReferences(stages);
       setStages(preSaveStages);
       await invoke('save_workflow_dag', { id: definitionId, stages: preSaveStages });
-      // 预生成实例 ID 并在 invoke 前设置 ref（消除 IPC 竞态：快速工作流可能在响应返回前就完成）
-      const preGeneratedId = crypto.randomUUID();
       executionIdRef.current = preGeneratedId;
-      await useWorkflowStore.getState().safeStartWorkflow(definitionId, undefined, preGeneratedId);
+      const startedId = await useWorkflowStore.getState().safeStartWorkflow(definitionId, runInput, preGeneratedId);
       // 加载实例数据（初始状态）
       await useWorkflowStore.getState().loadInstances();
+      // 本次执行结束后，把「查看历史执行记录」选择器停在刚跑完的这条记录上：
+      // 默认项（空值）只表示"未查看/取消查看"，不应在每次执行后自动回流过去，
+      // 否则看不出刚跑的是哪一条、也无法直接对它做单点/链式执行。
+      // 只设选中值、**不走"恢复历史"**：restoredExecutionId 保持 null，画布仍是本次执行的实时结果，
+      // 不会把刚跑完的结果标成"历史查看（配置已变更）"。
+      if (startedId) setSelectedHistoryId(startedId);
     } catch (err) {
       console.error('执行工作流失败:', err);
       setIsRunning(false);
       executionIdRef.current = null;
+      // 执行失败（含门控未通过）同样停在本次记录上：实例已落库、有终态与错误信息可回看。
+      // 若实例根本没建起来（保存/启动阶段就失败），候选里查不到该 ID，保持默认项。
+      try {
+        await useWorkflowStore.getState().loadInstances();
+        if (useWorkflowStore.getState().instances.some((i) => i.id === preGeneratedId)) {
+          setSelectedHistoryId(preGeneratedId);
+        }
+      } catch {
+        // 失败路径不再叠加错误
+      }
     }
+  };
+
+  /**
+   * 运行按钮入口：定义声明了入参就先弹表单收集（顶层没有上游节点可以补齐），
+   * 收齐后再走 [`runWorkflow`]；没有入参声明则直接执行。
+   */
+  const handleRunWorkflow = () => {
+    const schema = def?.inputSchema;
+    if (schema && Object.keys(schema).length > 0) {
+      setShowInputDialog(true);
+      return;
+    }
+    void runWorkflow();
   };
 
   /** 单点执行：只执行选中的单个节点 */
   const handleExecuteSingleNode = async () => {
     if (!selectedNodeId || !selectedHistoryId) {
-      showToast('请先选择一个节点，且存在执行记录', 'warning');
+      showLiveToast('请先选择一个节点，且存在执行记录', 'warning');
       return;
     }
     if (isRunning) {
-      showToast('当前有工作流正在执行，请等待完成', 'warning');
+      showLiveToast('当前有工作流正在执行，请等待完成', 'warning');
       return;
     }
     // 断点执行：不清空已有节点视觉状态。
@@ -834,7 +1100,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
       console.error('单点执行失败:', err);
-      showToast(`单点执行失败: ${err}`, 'error');
+      // 运行失败已有终态通知（引擎写入并广播），这里只做现场提示，避免同一失败记两条
+      showLiveToast(`单点执行失败: ${errorMessage(err)}`, 'error');
     } finally {
       setIsRunning(false);
       executionIdRef.current = null;
@@ -844,11 +1111,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   /** 断点执行：从选中节点开始执行后续所有拓扑节点 */
   const handleExecuteFromNode = async () => {
     if (!selectedNodeId || !selectedHistoryId) {
-      showToast('请先选择一个节点，且存在执行记录', 'warning');
+      showLiveToast('请先选择一个节点，且存在执行记录', 'warning');
       return;
     }
     if (isRunning) {
-      showToast('当前有工作流正在执行，请等待完成', 'warning');
+      showLiveToast('当前有工作流正在执行，请等待完成', 'warning');
       return;
     }
     // 链式执行：不清空已有节点视觉状态，前序节点保持原状态。
@@ -860,7 +1127,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
       console.error('断点执行失败:', err);
-      showToast(`断点执行失败: ${err}`, 'error');
+      // 同上：终态通知已覆盖这次失败
+      showLiveToast(`断点执行失败: ${errorMessage(err)}`, 'error');
     } finally {
       setIsRunning(false);
       executionIdRef.current = null;
@@ -870,11 +1138,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   /** 补全执行：跳过已完成节点，按拓扑顺序执行所有未完成节点 */
   const handleExecuteCompletion = async () => {
     if (!selectedHistoryId) {
-      showToast('请先选择一个执行实例', 'warning');
+      showLiveToast('请先选择一个执行实例', 'warning');
       return;
     }
     if (isRunning) {
-      showToast('当前有工作流正在执行，请等待完成', 'warning');
+      showLiveToast('当前有工作流正在执行，请等待完成', 'warning');
       return;
     }
     // 补全执行：不清空已有节点视觉状态，已完成节点保持 success 状态。
@@ -886,7 +1154,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       await useWorkflowStore.getState().loadInstances();
     } catch (err) {
       console.error('补全执行失败:', err);
-      showToast(`补全执行失败: ${err}`, 'error');
+      // 同上：终态通知已覆盖这次失败
+      showLiveToast(`补全执行失败: ${errorMessage(err)}`, 'error');
     } finally {
       setIsRunning(false);
       executionIdRef.current = null;
@@ -932,23 +1201,31 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   useEffect(() => {
     let unlistenProgress: UnlistenFn | null = null;
     let unlistenAwaiting: UnlistenFn | null = null;
+    // 卸载与 listen() 的 Promise 竞态：cleanup 跑在 await 返回之前时，变量还是 null，
+    // 监听器就永远留着了（StrictMode 双跑 effect 时必然发生一次），
+    // 结果是同一帧被多份监听各处理一遍（重复弹提示/重复推送）。disposed 兜底把它们摘掉。
+    let disposed = false;
+    const track = (fn: UnlistenFn, assign: (f: UnlistenFn) => void) => {
+      if (disposed) { fn(); return; }
+      assign(fn);
+    };
 
     const setupListeners = async () => {
       console.log('[WorkflowEditor] setupListeners: registering unified progress listener...');
       // 人工交互节点等待用户输入
-      unlistenAwaiting = await listen<AwaitingInputPayload>('workflow:awaiting-input', (event) => {
+      track(await listen<AwaitingInputPayload>('workflow:awaiting-input', (event) => {
         const p = event.payload;
         // 匹配当前编辑器对应的 executionId（只处理当前正在执行的实例）
         if (executionIdRef.current && p.execution_id !== executionIdRef.current) return;
         setAwaitingInput(p);
         setAwaitingInputValue(p.default_value ?? '');
         console.log('[WorkflowEditor] 收到 awaiting-input:', p);
-      });
+      }), (fn) => { unlistenAwaiting = fn; });
 
-      unlistenProgress = await listen<ExecutionProgressPayload>('workflow:execution-progress', (event) => {
+      track(await listen<ExecutionProgressPayload>('workflow:execution-progress', (event) => {
         const p = event.payload;
         // 过滤非当前工作流的进度事件（通过 definitionId 匹配）
-        if ((p as any).definition_id !== definitionIdRef.current) return;
+        if (p.definition_id !== definitionIdRef.current) return;
 
         // 处理节点状态变更
         if (p.node) {
@@ -959,8 +1236,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: node.output }));
           } else if (status === 'failed') {
             setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: node.error || '执行失败' } }));
+          } else if (status === 'skipped' && node.error) {
+            // 跳过会带原因（不在执行路径上 / 上游未产出）——存下来，否则用户只看到"跳过"不知为何
+            setNodeResults(prev => ({ ...prev, ['node_' + nodeId]: { error: node.error } }));
           }
-          setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : status === 'cancelled' ? 'cancelled' : prev['node_' + nodeId] }));
+          setStepStates(prev => ({ ...prev, ['node_' + nodeId]: status === 'completed' ? 'success' : status === 'failed' ? 'failed' : status === 'running' ? 'running' : status === 'cancelled' ? 'cancelled' : status === 'skipped' ? 'skipped' : prev['node_' + nodeId] }));
         }
 
         // 处理阶段状态变更
@@ -973,7 +1253,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           } else if (status === 'gate_failed') {
             setStepStates(prev => ({ ...prev, ['stage_' + stageId]: 'failed' }));
             const detail = reason || error || '';
-            showToast(`${name || '阶段'} 门控策略未通过${detail ? ': ' + detail : ''}`, 'error');
+            // 阶段门控未通过是运行期过程信息：现场提示即可，
+            // 权威记录由执行终态那条通知承担（其中已含同一原因），避免同一件事记两条
+            showLiveToastOnce(
+              `${p.execution_id}:gate:${stageId}`,
+              `${name || '阶段'} 门控策略未通过${detail ? ': ' + detail : ''}`,
+              'error',
+            );
           } else if (status === 'cancelled') {
             setStepStates(prev => ({ ...prev, ['stage_' + stageId]: 'cancelled' }));
           }
@@ -982,25 +1268,24 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         // 处理执行状态变更
         if (p.execution) {
           const { status } = p.execution;
-          if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+          // 实例终态字面量：success/failed/cancelled（后端 resolve_terminal_status；不是 "completed"）
+          if (status === 'success' || status === 'completed' || status === 'failed' || status === 'cancelled') {
             console.log('[WorkflowEditor] execution', status, ', setting isRunning=false');
             setIsRunning(false);
-            // 取消时：将所有 running 状态的阶段和节点标记为 cancelled
-            if (status === 'cancelled') {
-              setStepStates(prev => {
-                const next = { ...prev };
-                for (const key of Object.keys(next)) {
-                  if (next[key] === 'running') {
-                    next[key] = 'cancelled';
-                  }
-                }
-                return next;
-              });
-            }
+            // 执行已结束 → 收敛仍停在 running 的节点/阶段：只要有一终态事件没到手（任务 panic、
+            // 事件被过滤、节点未上报），节点卡就会永远转圈——用户看到的是"工作流已结束、节点还在运行中"。
+            setStepStates(prev => {
+              const next = { ...prev };
+              for (const key of Object.keys(next)) {
+                if (next[key] !== 'running') continue;
+                next[key] = status === 'success' || status === 'completed' ? 'success' : 'cancelled';
+              }
+              return next;
+            });
             useWorkflowStore.getState().loadInstances();
           }
         }
-      });
+      }), (fn) => { unlistenProgress = fn; });
 
       console.log('[WorkflowEditor] setupListeners: unified progress listener registered successfully');
     };
@@ -1008,45 +1293,54 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setupListeners();
 
     return () => {
+      disposed = true;
       unlistenProgress?.();
       unlistenAwaiting?.();
     };
   }, []);
 
-  // 组件卸载时取消当前执行
-  useEffect(() => {
-    return () => {
-      // 取消当前正在执行的实例（fire-and-forget，不等待结果）
-      if (executionIdRef.current) {
-        const execId = executionIdRef.current;
-        console.log('[WorkflowEditor] 组件卸载，取消执行:', execId);
-        invoke('cancel_workflow', { executionId: execId }).catch(() => {});
-        executionIdRef.current = null;
-      }
-    };
-  }, []);
+  // 组件卸载时**不**取消执行：工作流可在后台跑完（定时 / 事件触发不需要页面在场），
+  // 切路由/离开编辑器就中断会让"后台运行"这件事自相矛盾。
+  // 手动终止走 [`handleCancelExecution`]（用户明确点击），重跑由 `safeStartWorkflow` 清理。
 
-  // 运行中定期拉取 pending inputs，应对用户中途打开编辑器的场景
-  // （awaiting-input 事件之前已经发出，监听器无法获取到历史事件）
+  // 运行中定期拉取待办（人工输入 + 工具审批），应对用户中途打开编辑器的场景
+  // （awaiting-input / approval-required 事件之前已经发出，监听器无法获取到历史事件）
   useEffect(() => {
-    if (!isRunning && !awaitingInput) return;
+    // 先无条件补一次：待办可能在面板打开前就已发出（事件早于订阅，监听器拿不到历史事件）
     loadPendingInputs();
-    const timer = setInterval(loadPendingInputs, 2500);
+    loadPendingApprovals();
+    if (!isRunning && !awaitingInput && !awaitingApproval) return;
+    const timer = setInterval(() => {
+      loadPendingInputs();
+      loadPendingApprovals();
+    }, 2500);
     return () => clearInterval(timer);
-  }, [isRunning]);
+  }, [isRunning, awaitingInput, awaitingApproval, loadPendingInputs, loadPendingApprovals]);
+
+  // 根据 pendingApprovals 同步打开审批弹窗（事件早于订阅/页面刚打开时靠这条补齐）
+  useEffect(() => {
+    const cur = executionIdRef.current;
+    if (!cur) return;
+    const live = pendingApprovals.filter(a => !a.stale && a.executionId === cur);
+    setAwaitingApproval(prev => {
+      // 正在展示的那条还在队列里就保持不变，避免每次轮询闪一下
+      if (prev && live.some(a => a.callId === prev.callId)) return prev;
+      return live[0] ?? null;
+    });
+  }, [pendingApprovals]);
 
   // 根据 pendingInputs 同步打开输入弹窗（仅当未通过事件方式打开时）
   useEffect(() => {
     if (awaitingInput) return;
     const cur = executionIdRef.current;
     if (!cur) return;
-    const match = pendingInputs.find(p => p.execution_id === cur);
+    const match = pendingInputs.find(p => p.executionId === cur);
     if (!match) return;
     setAwaitingInput({
-      execution_id: match.execution_id,
-      node_id: match.node_id,
+      execution_id: match.executionId,
+      node_id: match.nodeId,
       prompt: match.prompt,
-      input_type: match.input_type,
+      input_type: match.inputType,
       timeout_minutes: 30,
     });
     setAwaitingInputValue('');
@@ -1074,7 +1368,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   }, [stages]);
 
   const handleAddStage = () => {
-    modCountRef.current++;
     const newStage: Stage = {
       id: generateStageId(),
       name: `阶段 ${stages.length + 1}`,
@@ -1140,16 +1433,29 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     }, 0);
   };
 
-  const handleDeleteStage = (stageId: string) => {
-    modCountRef.current++;
-    setConfirmAction({ type: 'deleteStage', targetId: stageId, label: stages.find(s => s.id === stageId)?.name || '此阶段' });
+  /** 统一二次确认：应用内确认弹窗（替代自建弹窗），确认后才执行删除。 */
+  const askDelete = async (action: ConfirmAction) => {
+    const suffix =
+      action.type === 'deleteStage' ? '阶段'
+      : action.type === 'deleteNode' ? '节点'
+      : action.type === 'deleteNodes' ? ''
+      : '连线';
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: `是否删除「${action.label}」${suffix}？此操作不可撤销。`,
+      confirmText: '删除',
+    });
+    if (ok) performDelete(action);
   };
 
-  const confirmDelete = () => {
-    if (!confirmAction) return;
-    if (confirmAction.type === 'deleteStage') {
-      const deleted = stages.find(s => s.id === confirmAction.targetId);
-      const remaining = stages.filter(s => s.id !== confirmAction.targetId);
+  const handleDeleteStage = async (stageId: string) => {
+    await askDelete({ type: 'deleteStage', targetId: stageId, label: stages.find(s => s.id === stageId)?.name || '此阶段' });
+  };
+
+  const performDelete = (action: ConfirmAction) => {
+    if (action.type === 'deleteStage') {
+      const deleted = stages.find(s => s.id === action.targetId);
+      const remaining = stages.filter(s => s.id !== action.targetId);
       // 如果被删阶段含end节点，将其迁移到新的最后阶段
       const endNode = deleted?.nodes.find(n => n.type === 'end');
       if (endNode && remaining.length > 0) {
@@ -1181,29 +1487,29 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         }
       }
       // 同步清理引用被删除阶段的 stageEdges
-      const deletedStageId = confirmAction.targetId;
+      const deletedStageId = action.targetId;
       const cleaned = sanitizeMappingReferences(remaining.map((s, i) => ({
         ...s,
         order: i,
         stageEdges: (s.stageEdges || []).filter(e => e.source !== deletedStageId && e.target !== deletedStageId),
       })));
       setStages(cleaned);
-    } else if (confirmAction.type === 'deleteNode') {
+    } else if (action.type === 'deleteNode') {
       const afterDeleteNode = stages.map((s) => ({
         ...s,
-        nodes: s.nodes.filter((n) => n.id !== confirmAction.targetId),
-        edges: s.edges.filter((e) => e.source !== confirmAction.targetId && e.target !== confirmAction.targetId),
+        nodes: s.nodes.filter((n) => n.id !== action.targetId),
+        edges: s.edges.filter((e) => e.source !== action.targetId && e.target !== action.targetId),
       }));
       setStages(sanitizeMappingReferences(afterDeleteNode));
-      if (selectedNodeId === confirmAction.targetId) { setSelectedNodeId(null); setSelectedStageId(null); }
-    } else if (confirmAction.type === 'deleteEdge') {
+      if (selectedNodeId === action.targetId) { setSelectedNodeId(null); setSelectedStageId(null); }
+    } else if (action.type === 'deleteEdge') {
       const afterDeleteEdge = stages.map((s) => ({
         ...s,
-        edges: s.edges.filter((e) => e.id !== confirmAction.targetId),
+        edges: s.edges.filter((e) => e.id !== action.targetId),
       }));
       setStages(sanitizeMappingReferences(afterDeleteEdge));
-    } else if (confirmAction.type === 'deleteStageEdge') {
-      const edgeId = confirmAction.targetId;
+    } else if (action.type === 'deleteStageEdge') {
+      const edgeId = action.targetId;
       const edge = stageEdges.find(e => e.id === edgeId);
       const srcStage = edge ? stages.find(s => s.id === edge.source) : null;
       const tgtStage = edge ? stages.find(s => s.id === edge.target) : null;
@@ -1215,8 +1521,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         stageEdges: (s.stageEdges || []).filter(e => e.id !== edgeId),
       })));
       showToast(`已删除阶段连线「${srcLabel} → ${tgtLabel}」`, 'success');
-      setConfirmAction(null);
-    } else if (confirmAction.type === 'deleteNodes') {
+    } else if (action.type === 'deleteNodes') {
       // 批量删除选中节点（仅保护起始节点，End 节点可删除）
       const startIds = new Set<string>();
       for (const s of stages) {
@@ -1227,7 +1532,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       // 如果选中的全部是起始节点，拒绝删除
       if (startIds.size === selectedNodeIds.size) {
         showToast('起始节点不可删除', 'warning');
-        setConfirmAction(null);
         return;
       }
       const toDelete = new Set([...selectedNodeIds].filter(id => !startIds.has(id)));
@@ -1241,26 +1545,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setSelectedNodeId(null);
       setSelectedStageId(null);
     }
-    setConfirmAction(null);
   };
 
-  const handleAddNode = (type: string, stageId: string) => {
-    modCountRef.current++;
-    // 收集阶段内已有节点位置，用于 findFreePosition
-    const stage = stages.find(s => s.id === stageId);
-    const existing = stage?.nodes.map(n => n.position ?? { x: 20, y: 20 }) ?? [];
-    // 统一创建方法（不传 position → 自动计算空闲位置）
-    const newNode = createWorkflowNode(type, undefined, existing, scale);
-    setStages(stages.map((s) =>
-      s.id === stageId ? { ...s, nodes: [...s.nodes, newNode] } : s
-    ));
-    
-    // 新类型节点：触发尺寸测量
-    measureNodeSize(type);
-  };
-
-  const handleDeleteNode = (nodeId: string) => {
-    modCountRef.current++;
+  const handleDeleteNode = async (nodeId: string) => {
     // 仅起始节点不允许删除，End 节点可删除
     for (const s of stages) {
       const node = s.nodes.find(n => n.id === nodeId);
@@ -1269,11 +1556,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         return;
       }
     }
-    setConfirmAction({ type: 'deleteNode', targetId: nodeId, label: stages.flatMap(s => s.nodes).find(n => n.id === nodeId)?.label || '此节点' });
+    await askDelete({ type: 'deleteNode', targetId: nodeId, label: stages.flatMap(s => s.nodes).find(n => n.id === nodeId)?.label || '此节点' });
   };
 
-  const handleDeleteEdge = (edgeId: string) => {
-    modCountRef.current++;
+  const handleDeleteEdge = async (edgeId: string) => {
     const flatNodes = stages.flatMap(s => s.nodes);
     const edge = stages.flatMap(s => s.edges).find(e => e.id === edgeId);
     let label = '此连线';
@@ -1284,12 +1570,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         label = srcNode.label + ' → ' + tgtNode.label;
       }
     }
-    setConfirmAction({ type: 'deleteEdge', targetId: edgeId, label });
+    await askDelete({ type: 'deleteEdge', targetId: edgeId, label });
   };
 
-  const handleDeleteStageEdge = (edgeId: string) => {
-    modCountRef.current++;
-    setConfirmAction({ type: 'deleteStageEdge', targetId: edgeId, label: getStageEdgeLabel(edgeId) });
+  const handleDeleteStageEdge = async (edgeId: string) => {
+    await askDelete({ type: 'deleteStageEdge', targetId: edgeId, label: getStageEdgeLabel(edgeId) });
   };
   // Helper: get readable stage edge label for delete confirmation
   const getStageEdgeLabel = (edgeId: string) => {
@@ -1304,8 +1589,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
 
   const handleUpdateNode = (nodeId: string, updates: Partial<WorkflowNode>) => {
-    modCountRef.current++;
-    setStages(stages.map((s) => ({
+    // 用函数式更新：同一个 tick 里可能有多次 onUpdate（插件表单挂载时会连写多个参数），
+    // 若以闭包里的 stages 为底，后一次写入会把前一次的结果丢掉。
+    setStages((prev) => prev.map((s) => ({
       ...s,
       nodes: s.nodes.map((n) => n.id === nodeId ? { ...n, ...updates } : n),
     })));
@@ -1337,7 +1623,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setSelectedNodeId(nodeId);
       setSelectedStageId(stageId);
     }
-  }, [selectedNodeId, selectedNodeIds]);
+  }, [selectedNodeId]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedNodeIds(new Set());
@@ -1416,10 +1702,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     })));
   }, [getMultiSelectPositions]);
 
-  const handleBatchDelete = useCallback(() => {
+  const handleBatchDelete = () => {
     if (selectedNodeIds.size === 0) return;
-    setConfirmAction({ type: 'deleteNodes', targetId: 'batch', label: `${selectedNodeIds.size} 个选中节点` });
-  }, [selectedNodeIds]);
+    void askDelete({ type: 'deleteNodes', targetId: 'batch', label: `${selectedNodeIds.size} 个选中节点` });
+  };
+  // handleBatchDelete 每轮渲染都会重建，其调用链（askDelete → performDelete）过长无法安全 useCallback 收口。
+  // 用 ref 持有最新引用：下面的 Delete 键 effect 通过 ref 调用，就不必把函数写进依赖导致监听器每轮重注册。
+  const handleBatchDeleteRef = useRef(handleBatchDelete);
+  useEffect(() => { handleBatchDeleteRef.current = handleBatchDelete; });
 
   // ── 连线操作（带实时预览） ──
   const handleStartConnect = (e: React.MouseEvent, nodeId: string, stageId: string) => {
@@ -1463,20 +1753,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
     }
     return visited.has(stageConnecting?.sourceStageId ?? '');
-  }, [stages, stageConnecting?.sourceStageId]);
+  }, [stageConnecting?.sourceStageId, stageEdges]);
 
-
-  const getStagePositions = useCallback(() => {
-    let leftOffset = 20;
-    const map: Record<string, number> = {};
-    for (const stage of stages) {
-      map[stage.id] = leftOffset + (stageOffsets[stage.id] ?? 0);
-      leftOffset += collapsedStages.has(stage.id) ? STAGE_COLLAPSED_W + STAGE_GAP : STAGE_W + STAGE_GAP;
-    }
-    return map;
-  }, [stages, collapsedStages, stageOffsets]);
-
-  const stagePositionsMap = getStagePositions();
 
   // 动态画布尺寸：max(视口/scale, 内容包围盒+padding)
   const canvasSize = useMemo(() => {
@@ -1493,7 +1771,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const stageTop = 20 + yOffset;
       // 阶段内节点的实际范围（取最大节点位置）
       for (const node of stage.nodes) {
-        const size = nodeSizesRef.current.get(node.type);
+        const size = nodeSizes[node.type];
         const nw = size?.width ?? NODE_W;
         const nh = size?.height ?? NODE_H;
         const nx = stageLeft + (node.position?.x ?? 0) + nw;
@@ -1516,15 +1794,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       width: Math.max(Math.ceil(Math.max(contentW, viewW)), 400),
       height: Math.max(Math.ceil(Math.max(contentH, viewH)), 300),
     };
-  }, [stages, collapsedStages, stagePositionsMap, scale, viewportSize]);
+  }, [stages, collapsedStages, stagePositionsMap, scale, viewportSize, nodeSizes, stageOffsetsY]);
 
-  const canvasToContentPos = useCallback((canvasX: number, canvasY: number, stageId: string) => {
-    const stageLeft = stagePositionsMap[stageId];
-    return {
-      x: canvasX - stageLeft,
-      y: canvasY - STAGE_TOP - TITLE_H,
-    };
-  }, [stagePositionsMap]);
 
 
   /**
@@ -1580,6 +1851,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     if (!stage) return;
     let targetId: string | null = null;
     const stageLeft = stagePositionsMap[connecting.stageId];
+    const stagePan = stagePans[connecting.stageId] ?? { x: 0, y: 0 };
     const potentialTargets = new Set<string>();
     for (const node of stage.nodes) {
       if (node.id === connecting.source) continue;
@@ -1588,8 +1860,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const nPos = node.position ?? { x: 20, y: 20 };
       const nW = 160;
       const nH = 60;
-      const nodeCX = stageLeft + nPos.x + nW / 2;
-      const nodeCY = (20 + (stageOffsetsY[connecting.stageId] ?? 0)) + TITLE_H + nPos.y + nH / 2;
+      const nodeCX = stageLeft + stagePan.x + nPos.x + nW / 2;
+      const nodeCY = (20 + (stageOffsetsY[connecting.stageId] ?? 0) + stagePan.y) + TITLE_H + nPos.y + nH / 2;
       const halfW = nW / (2 * scale);
       const halfH = nH / (2 * scale);
       // 第一层：鼠标在节点整体视觉区域内 → 潜在目标（变色）
@@ -1612,10 +1884,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setCycleTargetId(null);
       setConnectTargetId(targetId);
     }
-  }, [connecting, pan, scale, stages, canvasToContentPos]);
+  }, [connecting, pan, scale, stages, stagePans, hasCycle, stageOffsetsY, stagePositionsMap]);
 
   const handleEndConnect = useCallback((nodeId: string, stageId: string) => {
-    modCountRef.current++;
     if (!connecting || connecting.source === nodeId) {
       setConnecting(null);
       setCycleTargetId(null);
@@ -1678,7 +1949,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     setCycleTargetId(null);
     setReachableTargets(new Set());
     setStages((prev) => autoAssignStage(prev));
-  }, [connecting, stages]);
+  }, [connecting, stages, hasCycle]);
 
   const handleCancelConnect = useCallback(() => {
     setConnecting(null);
@@ -1716,7 +1987,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, [connecting, handleUpdateConnectingPos]);
+  }, [connecting, handleUpdateConnectingPos, handleEndConnect]);
 
   // ── Delete 键：批量删除选中节点 / 删除确认 ──
   useEffect(() => {
@@ -1725,7 +1996,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         if ((e.target as HTMLElement).closest('input, textarea, [contenteditable]')) return;
         if (selectedNodeIds.size > 0) {
           e.preventDefault();
-          handleBatchDelete();
+          handleBatchDeleteRef.current();
         }
       }
       // Escape: clear multi-select
@@ -1738,16 +2009,114 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeIds, connecting, handleBatchDelete, handleClearSelection]);
+  }, [selectedNodeIds, connecting, handleClearSelection]);
+
+  /** 无值运算符（不需要比较值） */
+  const isValuelessOperator = (op: string) => op === 'is_empty' || op === 'is_not_empty';
 
   const buildConditionExpr = () => {
     const field = condField !== '__auto__' ? `${condField} ` : '';
-    return `${field}${condOperator} ${condValue}`.trim();
+    return `${field}${condOperator}${isValuelessOperator(condOperator) ? '' : ` ${condValue}`}`.trim();
   };
 
   const buildAutoLabel = () => {
     const field = condField === '__auto__' ? '输出' : condField;
-    return `${field} ${condOperator} ${condValue}`.trim();
+    return `${field} ${condOperator}${isValuelessOperator(condOperator) ? '' : ` ${condValue}`}`.trim();
+  };
+
+  /** 当前编辑模式下的最终条件表达式（高级模式取原始输入，结构化模式取拼装结果） */
+  const resolveConditionExpr = () => (condAdvanced ? condRawExpr.trim() : buildConditionExpr());
+
+  /** 反解条件表达式为结构化字段；无法解析时返回 null */
+  const parseConditionExpr = (expr: string): { field: string; operator: string; value: string } | null => {
+    const parts = (expr || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return null;
+    // 省略字段：`运算符 值` / `is_empty`
+    if (CONDITION_OPERATORS.includes(parts[0])) {
+      return { field: '__auto__', operator: parts[0], value: parts.slice(1).join(' ') };
+    }
+    // 完整格式：`字段 运算符 值`
+    if (parts.length >= 2 && CONDITION_OPERATORS.includes(parts[1])) {
+      return { field: parts[0], operator: parts[1], value: parts.slice(2).join(' ') };
+    }
+    return null;
+  };
+
+  /** 打开条件编辑弹窗：以该边当前的条件初始化全部编辑态 */
+  const openConditionEditor = (edge: WorkflowEdge, stageId: string) => {
+    const expr = (edge.condition || '').trim();
+    const parsed = parseConditionExpr(expr);
+    if (expr && !parsed) {
+      // 存量表达式无法结构化解析：直接进高级模式，避免误改原表达式
+      setCondAdvanced(true);
+      setCondRawExpr(expr);
+      setCondField('__auto__');
+      setCondOperator('==');
+      setCondValue('');
+    } else {
+      setCondAdvanced(false);
+      setCondField(parsed?.field ?? '__auto__');
+      setCondOperator(parsed?.operator ?? '==');
+      setCondValue(parsed?.value ?? '');
+      setCondRawExpr(expr);
+    }
+    setCondLabel(edge.label || '');
+    setCondProbeFields([]);
+    setCondFieldOpen(false);
+    setConditionInput({ source: edge.source, target: edge.target, stageId });
+  };
+
+  /** 关闭条件编辑弹窗并复位编辑态，避免下次打开残留上一次的参数 */
+  const closeConditionEditor = () => {
+    setConditionInput(null);
+    setCondProbeFields([]);
+    setCondProbing(false);
+    setCondFieldOpen(false);
+    setCondAdvanced(false);
+    setCondField('__auto__');
+    setCondOperator('==');
+    setCondValue('');
+    setCondLabel('');
+    setCondRawExpr('');
+  };
+
+  /** 结构化 / 高级模式切换：双向同步编辑值，保证预览与提交一致 */
+  const toggleConditionMode = () => {
+    if (condAdvanced) {
+      const parsed = parseConditionExpr(condRawExpr);
+      if (parsed) {
+        setCondField(parsed.field);
+        setCondOperator(parsed.operator);
+        setCondValue(parsed.value);
+      }
+      setCondAdvanced(false);
+    } else {
+      setCondRawExpr(buildConditionExpr());
+      setCondAdvanced(true);
+    }
+  };
+
+  /**
+   * 从源节点最近一次执行的产出里探测可选字段（后端按 outputMapping 暴露语义展开），
+   * 解决"多字段 JSON 在设计期不知道字段名"的问题；结果以可点选的候选展示。
+   */
+  const probeConditionFields = async () => {
+    if (!conditionInput || !definitionId) return;
+    setCondProbing(true);
+    try {
+      const fields = await invoke<string[]>('probe_node_output_fields', {
+        definitionId,
+        nodeId: conditionInput.source,
+      });
+      setCondProbeFields(fields);
+      if (fields.length === 0) {
+        showToast('未探测到可选字段：该节点还没有执行产出，请先运行一次工作流', 'warning');
+      }
+    } catch (err) {
+      showToast(`探测字段失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setCondProbing(false);
+    }
   };
 
   const handleConfirmCondition = (condition: string, label: string) => {
@@ -1795,7 +2164,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         s.id === stageId ? { ...s, collapsed: newCollapsed.has(stageId) } : s
       );
       if (definitionId) {
-        invoke('save_workflow_dag', { id: definitionId, stages: updated }).catch((err: any) =>
+        invoke('save_workflow_dag', { id: definitionId, stages: updated }).catch((err: unknown) =>
           console.warn('[WorkflowEditor] 保存折叠状态失败:', err)
         );
       }
@@ -1808,8 +2177,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const instance = instances.find(i => i.definitionId === definitionId && i.status !== 'pending');
     if (!instance) return;
     // 异步拉取节点执行记录
-    invoke<any[]>('get_node_executions', { executionId: instance.id }).then(nodeExecs => {
-      const results: Record<string, any> = {};
+    invoke<NodeExecutionRecord[]>('get_node_executions', { executionId: instance.id }).then(nodeExecs => {
+      const results: Record<string, unknown> = {};
       for (const ne of nodeExecs) {
         if (ne.status === 'completed' && ne.output !== undefined) {
           results[`node_${ne.nodeId}`] = ne.output;
@@ -1849,10 +2218,23 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       } else {
         handleClearSelection();
       }
+      // 手势分流：阶段内容区空白（左键）→ 只平移该阶段内容；中键 / 阶段外空白 → 平移整个画布
+      const stageContentEl = (e.target as HTMLElement).closest('[data-stage-content]');
+      const contentStageId = stageContentEl?.getAttribute('data-stage-content') ?? null;
+      if (e.button === 0 && contentStageId && !nodeEl) {
+        const cur = stagePansRef.current[contentStageId] ?? { x: 0, y: 0 };
+        setIsPanning(true);
+        panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+        panThresholdRef.current = { startX: e.clientX, startY: e.clientY, triggered: false };
+        setPanTriggered(false);
+        stagePanStartRef.current = { x: e.clientX, y: e.clientY, stageId: contentStageId, panX: cur.x, panY: cur.y };
+        return;
+      }
       // Start panning (left or middle click anywhere pans)
       setIsPanning(true);
       panStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
       panThresholdRef.current = { startX: e.clientX, startY: e.clientY, triggered: e.button === 1 };
+      setPanTriggered(e.button === 1);
       return;
     }
     // Right button (2): box-select in content area
@@ -1876,8 +2258,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           }
           const stageLeft = _tl;
           const stageTop = 20 + (bs.stageOffsetsY[stageId] ?? 0);
-          const contentX = cx - stageLeft;
-          const contentY = cy - stageTop - TITLE_H;
+          const stagePan = bs.stagePans[stageId] ?? { x: 0, y: 0 };
+          const contentX = cx - stageLeft - stagePan.x;
+          const contentY = cy - stageTop - TITLE_H - stagePan.y;
           setIsBoxSelecting(true);
           boxSelectStartRef.current = { x: cx, y: cy, stageId };
           const initialRect = { x1: contentX, y1: contentY, x2: contentX, y2: contentY, stageId };
@@ -1888,7 +2271,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
       return;
     }
-  }, [pan.x, pan.y, edgeContextMenu, handleSelectNode, handleClearSelection, scale, stagePositionsMap]);
+  }, [pan.x, pan.y, edgeContextMenu, handleSelectNode, handleClearSelection, scale]);
 
   useEffect(() => {
     if (!isPanning) return;
@@ -1900,9 +2283,21 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         const dy = Math.abs(e.clientY - th.startY);
         if (dx < PAN_THRESHOLD && dy < PAN_THRESHOLD) return;
         th.triggered = true;
+        setPanTriggered(true);
       }
       const dx = e.clientX - panStartRef.current.x;
       const dy = e.clientY - panStartRef.current.y;
+      // 阶段内平移：只移动该阶段的内容层，画布 pan/scale 不变
+      const stagePanStart = stagePanStartRef.current;
+      if (stagePanStart) {
+        const next = {
+          x: stagePanStart.panX + e.clientX - stagePanStart.x,
+          y: stagePanStart.panY + e.clientY - stagePanStart.y,
+        };
+        stagePansRef.current = { ...stagePansRef.current, [stagePanStart.stageId]: next };
+        setStagePans(prev => ({ ...prev, [stagePanStart.stageId]: next }));
+        return;
+      }
       setPan({
         x: panStartRef.current.panX + dx,
         y: panStartRef.current.panY + dy,
@@ -1912,6 +2307,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       setIsPanning(false);
       panStartRef.current = null;
       panThresholdRef.current = null;
+      setPanTriggered(false);
+      stagePanStartRef.current = null;
     };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
@@ -1959,8 +2356,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const stageId = boxSelectStartRef.current.stageId;
       const stageLeft = targetLeft;
       const stageTop = 20 + (currentOffsetsY[stageId] ?? 0);
-      const contentX = cx - stageLeft;
-      const contentY = cy - stageTop - TITLE_H;
+      const stagePan = boxStateRef.current.stagePans[stageId] ?? { x: 0, y: 0 };
+      const contentX = cx - stageLeft - stagePan.x;
+      const contentY = cy - stageTop - TITLE_H - stagePan.y;
       
       // 更新框选矩形
       const updatedRect = {
@@ -1974,7 +2372,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       boxSelectRectRef.current = updatedRect;
     };
     
-    const handleUp = (e: MouseEvent) => {
+    const handleUp = () => {
       // 错误处理
       if (!boxSelectStartRef.current) {
         resetBoxSelect();
@@ -2029,7 +2427,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
-  }, []); // 静态注册，空依赖数组
+  }, [resetBoxSelect]); // resetBoxSelect 是稳定 useCallback，effect 仍只注册一次
 
   // ── 鼠标滚轮缩放（以光标位置为中心） ──
   useEffect(() => {
@@ -2068,6 +2466,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     stages: Stage[];
     stageLeft: number;
     stageOffsetY: number;
+    stagePanX: number;
+    stagePanY: number;
     stageNodes: { id: string; position: { x: number; y: number }; type: string }[];
   } | null>(null);
 
@@ -2084,13 +2484,13 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     // 计算鼠标在内容区的起始位置（用于后续 delta 计算）
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const stageLeft = stagePositionsMap[stageId];
     const rawCanvasX = e.clientX - rect.left;
     const rawCanvasY = e.clientY - rect.top;
     const canvasX = (rawCanvasX - pan.x) / scale;
     const canvasY = (rawCanvasY - pan.y) / scale;
-    const mouseContentX = canvasX - stageLeft;
-    const mouseContentY = canvasY - STAGE_TOP - TITLE_H;
+    const mouseContentPos = canvasToContentPos(canvasX, canvasY, stageId);
+    const mouseContentX = mouseContentPos.x;
+    const mouseContentY = mouseContentPos.y;
     // Store original positions for multi-drag
     const isMulti = selectedNodeIds.has(nodeId) && selectedNodeIds.size > 1;
     const origPositions: Record<string, { x: number; y: number }> = {};
@@ -2120,6 +2520,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       stages: stages,
       stageLeft: stagePositionsMap[stageId],
       stageOffsetY: stageOffsetsY[stageId] ?? 0,
+      stagePanX: (stagePans[stageId] ?? { x: 0, y: 0 }).x,
+      stagePanY: (stagePans[stageId] ?? { x: 0, y: 0 }).y,
       stageNodes: (stages.find(s => s.id === stageId)?.nodes ?? []).map(n => ({
         id: n.id,
         position: { ...(n.position ?? { x: 20, y: 20 }) },
@@ -2143,7 +2545,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     });
     setSelectedNodeId(nodeId);
     setSelectedStageId(stageId);
-  }, [stages, stagePositionsMap, pan, scale]);
+  }, [stages, stagePositionsMap, pan, scale, stagePans, canvasToContentPos, selectedNodeIds, stageOffsetsY]);
 
   useEffect(() => {
     if (!draggingNode) return;
@@ -2163,8 +2565,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const canvasY = (rawCanvasY - pan.y) / scale;
       // P0-3: 从快照ref计算content坐标，不再依赖闭包canvasToContentPos
       const snap = dragSnapshotRef.current;
-      const relX = canvasX - (snap?.stageLeft ?? 0);
-      const relY = canvasY - STAGE_TOP - TITLE_H;
+      const stagePanX = snap?.stagePanX ?? 0;
+      const stagePanY = snap?.stagePanY ?? 0;
+      const relX = canvasX - (snap?.stageLeft ?? 0) - stagePanX;
+      // 必须与 canvasToContentPos 同源（含阶段垂直位移）：否则阶段被上下移动过时，
+      // deltaY 会整整差出一个 stageOffsetY —— 表现为"一按住节点就跳走"、对齐辅助线也错位。
+      const relY = canvasY - (STAGE_TOP + (snap?.stageOffsetY ?? 0)) - TITLE_H - stagePanY;
       let deltaX = relX - d.startContentX;
       let deltaY = relY - d.startContentY;
       // 节点对齐吸附：只与同阶段内其他节点对齐
@@ -2178,7 +2584,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         let bestXDiff = Infinity, bestYDiff = Infinity;
         let bestXLine: number | null = null, bestYLine: number | null = null;
         const stageLeft = dragSnapshotRef.current?.stageLeft ?? 0;
-        const stageTopY = 20 + (dragSnapshotRef.current?.stageOffsetY ?? 0) + TITLE_H;
+        // 辅助线绘制在画布坐标系，需加上该阶段的内容层平移量
+        const stageTopY = 20 + (dragSnapshotRef.current?.stageOffsetY ?? 0) + TITLE_H + stagePanY;
         let snapTargetId: string | null = null;
         for (const node of snapStageNodes) {
           if (draggedNodeIds.has(node.id)) continue;
@@ -2197,11 +2604,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             const tTop = nOrigCSS.y, tBottom = tTop + nH, tCY = tTop + nH / 2;
             // 在纯CSS坐标空间比较：辅助线SVG在scale()容器内，坐标为内容坐标
             const xPairs: [number, number, number][] = [
-              [dLeft, tLeft, stageLeft + tLeft],
-              [dRight, tRight, stageLeft + tRight],
-              [dLeft, tRight, stageLeft + tRight],
-              [dRight, tLeft, stageLeft + tLeft],
-              [dCenterX, tCX, stageLeft + tCX],
+              [dLeft, tLeft, stageLeft + stagePanX + tLeft],
+              [dRight, tRight, stageLeft + stagePanX + tRight],
+              [dLeft, tRight, stageLeft + stagePanX + tRight],
+              [dRight, tLeft, stageLeft + stagePanX + tLeft],
+              [dCenterX, tCX, stageLeft + stagePanX + tCX],
             ];
             for (const [dV, tV, lineV] of xPairs) {
               const vDiff = tV - dV;
@@ -2233,6 +2640,31 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         setAlignLines(lines);
         setSnapHighlightNodeId(snapTargetId);
       }
+      // 位移与落点同源：拖动过程中就把位移夹进"阶段可视窗口"，否则节点会先跟着鼠标跑出窗口、
+      // 松手才被夹回来 —— 看起来就是"拖拽跳动 + 节点溢出阶段框"。
+      const draggedIds = d.multiSelect ? selectedNodeIds : new Set([d.nodeId]);
+      const dragPan = { x: stagePanX, y: stagePanY };
+      let dxLo = -Infinity, dxHi = Infinity, dyLo = -Infinity, dyHi = Infinity;
+      for (const id of draggedIds) {
+        const orig = d.origPositions?.[id];
+        if (!orig) continue;
+        const meta = getNodeTypeMeta(snapStageNodes.find((n) => n.id === id)?.type || 'agent');
+        const r = nodeDragOffsetRange(orig, meta.nodeW, meta.nodeH, dragPan);
+        dxLo = Math.max(dxLo, r.minX); dxHi = Math.min(dxHi, r.maxX);
+        dyLo = Math.max(dyLo, r.minY); dyHi = Math.min(dyHi, r.maxY);
+      }
+      // 区间为空（理论上不会）时不限制，避免把节点"冻死"
+      let clampedOut = false;
+      if (dxLo <= dxHi) {
+        const cx = Math.min(Math.max(deltaX, dxLo), dxHi);
+        if (cx !== deltaX) { deltaX = cx; clampedOut = true; }
+      }
+      if (dyLo <= dyHi) {
+        const cy = Math.min(Math.max(deltaY, dyLo), dyHi);
+        if (cy !== deltaY) { deltaY = cy; clampedOut = true; }
+      }
+      // 被边界夹住说明吸附目标已经达不到：清掉辅助线，避免"线留在原处、节点在别处"
+      if (clampedOut) { setAlignLines([]); setSnapHighlightNodeId(null); }
       // P0-2: 只更新轻量 dragOffset，不触发 stages 级联重渲染
       dragOffsetRef.current = { dx: deltaX, dy: deltaY };
       setDragOffset({ dx: deltaX, dy: deltaY });
@@ -2243,6 +2675,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       if (finalOffset.dx !== 0 || finalOffset.dy !== 0) {
         const offDx = finalOffset.dx;
         const offDy = finalOffset.dy;
+        // 落点边界与拖动过程同源：阶段可视窗口（拖动中已经夹过，这里再夹一次保证一致）
+        const dropPan = { x: dragSnapshotRef.current?.stagePanX ?? 0, y: dragSnapshotRef.current?.stagePanY ?? 0 };
         setStages((prev) => prev.map((s) => {
           if (s.id !== draggingNode.stageId) return s;
           return {
@@ -2251,7 +2685,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               if (!draggingNode.origPositions || !draggingNode.origPositions[n.id]) return n;
               const meta = getNodeTypeMeta(n.type);
               const orig = draggingNode.origPositions[n.id];
-              return { ...n, position: clampNodePositionNoSnap(orig.x + offDx, orig.y + offDy, meta.nodeW, meta.nodeH, scale) };
+              return { ...n, position: clampNodePositionNoSnap(orig.x + offDx, orig.y + offDy, meta.nodeW, meta.nodeH, dropPan) };
             }),
           };
         }));
@@ -2385,25 +2819,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, [draggingStageId, scale, pan.x, pan.y, stages, collapsedStages, stagePositionsMap, stageOffsetsY, ALIGN_THRESHOLD]);
-
-
-
-
-  const getStageAtCanvasPos = useCallback((cx: number, cy: number) => {
-    for (const stage of stages) {
-      const left = stagePositionsMap[stage.id];
-      const yOffset = stageOffsetsY[stage.id] ?? 0;
-      const width = collapsedStages.has(stage.id) ? STAGE_COLLAPSED_W : STAGE_W;
-      const height = collapsedStages.has(stage.id) ? 123 : TITLE_H + CONTENT_H + GATE_H + 4;
-      const stageTop = STAGE_TOP + yOffset;
-      if (cx >= left && cx <= left + width && cy >= stageTop && cy <= stageTop + height) {
-        return stage.id;
-      }
-    }
-    return null;
-  }, [stages, collapsedStages, stagePositionsMap, stageOffsetsY]);
-
+  }, [draggingStageId, scale, pan.x, pan.y, stages, collapsedStages, stagePositionsMap, stageOffsetsY, stageOffsets, ALIGN_THRESHOLD]);
 
 
   // ── 渲染：节点 ──
@@ -2431,10 +2847,30 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const srcPosY = (sourceNode.position?.y ?? 20) + (srcOff?.dy ?? 0);
     const tgtPosX = (targetNode.position?.x ?? 20) + (tgtOff?.dx ?? 0);
     const tgtPosY = (targetNode.position?.y ?? 20) + (tgtOff?.dy ?? 0);
-    const SX = srcPosX + halfW + halfW * invScale; // output: 右边缘
-    const SY = srcPosY + halfH;                      // Y中心
-    const TX = tgtPosX + halfW - halfW * invScale;  // input: 左边缘
-    const TY = tgtPosY + halfH;                      // Y中心
+    // 阶段内容区 = 窗口（内容层按 stagePan 平移）：连线只能在窗口内绘制。
+    const win = visibleContentWindow(stagePans[stageId] ?? { x: 0, y: 0 });
+    const clampX = (v: number) => Math.max(win.left, Math.min(v, win.right));
+    const clampY = (v: number) => Math.max(win.top, Math.min(v, win.bottom));
+    const vW = halfW * invScale; // 节点视觉半宽（内容坐标，随画布缩放变化）
+    const vH = halfH * invScale;
+    // 路由：目标在源的下方、且水平方向不绕远（同列/相邻列）时，走「源底部 → 目标顶部」的垂直路由，
+    // 连线只穿过两行卡片之间的空隙；否则走原来的「源右侧 → 目标左侧」。
+    // 两条路由的端点都夹进窗口，避免缩放/贴边时起始段被窗口裁掉（表现为「断线」）。
+    const vertical = (tgtPosY - srcPosY) > halfH
+      && Math.abs(tgtPosX - srcPosX) < halfW * 3;
+    // 主方向轴统一按 X 轴计算，垂直路由时用 P() 把 (a,b) 映射回 (x,y) = (b,a)
+    const lo = vertical ? win.top : win.left;
+    const hi = vertical ? win.bottom : win.right;
+    const cLo = vertical ? win.left : win.top;
+    const cHi = vertical ? win.right : win.bottom;
+    const a1 = vertical ? clampY(srcPosY + halfH + vH) : clampX(srcPosX + halfW + vW);
+    const b1 = vertical ? clampX(srcPosX + halfW) : clampY(srcPosY + halfH);
+    const a2 = vertical ? clampY(tgtPosY + halfH - vH) : clampX(tgtPosX + halfW - vW);
+    const b2 = vertical ? clampX(tgtPosX + halfW) : clampY(tgtPosY + halfH);
+    const P = (a: number, b: number) => (vertical ? { x: b, y: a } : { x: a, y: b });
+    const p0 = P(a1, b1);
+    const p5 = P(a2, b2);
+    const SX = p0.x; const SY = p0.y; const TX = p5.x; const TY = p5.y;
 
     const edgeRunState = (() => {
       const srcState = stepStates[`node_${sourceNode.id}`];
@@ -2451,19 +2887,31 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const isHovered = hoveredEdgeId === edge.id;
 
     const H_SEG = 10 * invScale;
-    const startHEndX = SX + H_SEG;
-    const endHStartX = TX - H_SEG;
-    const dx = Math.abs(endHStartX - startHEndX);
-    const cpOffset = Math.max(20 * invScale, dx * 0.4);
-
-    const arrowSize = 5 * invScale;
-    const arrowLen = arrowSize * 1.5; // 箭头尖端到基线的水平距离
-    const pathEndX = TX - arrowLen;    // 连线路径终点（箭头基线），箭头尖端精确在 TX
-    const baseD = `M ${SX} ${SY} H ${startHEndX} C ${startHEndX + cpOffset} ${SY}, ${pathEndX - cpOffset} ${TY}, ${pathEndX} ${TY}`;
-    const arrowPoints = `${pathEndX},${TY - arrowSize} ${TX},${TY} ${pathEndX},${TY + arrowSize}`;
+    const a1e = Math.max(a1, Math.min(a1 + H_SEG, hi));   // 出口短段末
+    const a2s = Math.min(a2, Math.max(a2 - H_SEG, lo));   // 入口短段起
+    const da = Math.abs(a2s - a1e);
+    // 箭头高度夹进窗口（贴边时压小，避免缺角）
+    const arrowSize = Math.max(0, Math.min(5 * invScale, b2 - cLo, cHi - b2));
+    const arrowLen = arrowSize * 1.5; // 箭头尖端到基线的距离
+    const a2e = Math.max(a2 - arrowLen, lo);   // 路径终点（箭头基线），箭头尖端精确在 a2
+    // 控制点余量同时受三个约束：不小于基础弧、不越过两端（短边 S 弯不鼓出）、不越过窗口边
+    const cpOffset = Math.min(
+      Math.max(20 * invScale, da * 0.4),
+      da * 0.45,
+      Math.max(0, Math.min(hi - a1e, a2e - lo)),
+    );
+    const q1 = P(a1e, b1);
+    const q2 = P(a1e + cpOffset, b1);
+    const q3 = P(a2e - cpOffset, b2);
+    const q4 = P(a2e, b2);
+    const baseD = `M ${p0.x} ${p0.y} L ${q1.x} ${q1.y} C ${q2.x} ${q2.y} ${q3.x} ${q3.y} ${q4.x} ${q4.y}`;
+    const arrowA = P(a2e, b2 - arrowSize);
+    const arrowB = P(a2, b2);
+    const arrowC = P(a2e, b2 + arrowSize);
+    const arrowPoints = `${arrowA.x},${arrowA.y} ${arrowB.x},${arrowB.y} ${arrowC.x},${arrowC.y}`;
 
     const lineColor = isHovered ? '#58a6ff' : edgeRunState === 'running' ? '#58a6ff' : edgeRunState === 'success' ? '#3fb950'
-      : edgeRunState === 'cancelled' ? '#d29922' : edgeRunState === 'failed' ? '#f85149' : 'var(--border)';
+      : edgeRunState === 'cancelled' ? '#d29922' : edgeRunState === 'failed' ? '#f85149' : 'var(--text-secondary)';
 
     return (
       <g key={edge.id}>
@@ -2478,13 +2926,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           strokeDasharray={edgeRunState === 'running' ? '6 3' : 'none'} style={{ pointerEvents: 'none', transition: 'stroke 0.15s ease, stroke-width 0.15s ease' }} />
         <polygon points={arrowPoints} fill={lineColor} style={{ pointerEvents: 'none' }} />
         {edgeRunState === 'running' && (<path d={baseD} stroke="#58a6ff" strokeWidth={4 * invScale} fill="none" strokeDasharray="8 12" opacity={0.3} style={{ pointerEvents: 'none', animation: 'flowDash 0.3s linear infinite' }} />)}
-        {edge.label && (
-          <g pointerEvents="all" onClick={() => handleDeleteEdge(edge.id)}>
-            <rect x={(SX + TX) / 2 - 20 * invScale} y={(SY + TY) / 2 - 18 * invScale} width={40 * invScale} height={16 * invScale} rx={3 * invScale}
-              fill="var(--bg-primary)" stroke="var(--border)" strokeWidth={0.5 * invScale} />
-            <text x={(SX + TX) / 2} y={(SY + TY) / 2 - 8 * invScale} fill="var(--text-secondary)" fontSize={9 * invScale} textAnchor="middle">{edge.label}</text>
-          </g>
-        )}
+        {edge.label && (() => {
+          // 标签块宽度按文本内容自适应（超长截断 + 省略号），完整文本走 <title> 悬浮提示
+          const { text: labelText, width: labelW } = layoutEdgeLabel(edge.label);
+          const cx = (SX + TX) / 2;
+          const cy = (SY + TY) / 2;
+          return (
+            <g pointerEvents="all" onClick={() => handleDeleteEdge(edge.id)}>
+              <title>{edge.label}</title>
+              <rect x={cx - (labelW * invScale) / 2} y={cy - 18 * invScale} width={labelW * invScale} height={16 * invScale} rx={3 * invScale}
+                fill="var(--bg-primary)" stroke="var(--border)" strokeWidth={0.5 * invScale} />
+              <text x={cx} y={cy - 8 * invScale} fill="var(--text-secondary)" fontSize={EDGE_LABEL_FONT_SIZE * invScale} textAnchor="middle">{labelText}</text>
+            </g>
+          );
+        })()}
       </g>
     );
   };
@@ -2503,11 +2958,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     const SX = srcPosX + halfW + halfW * invScale;
     const SY = srcPosY + halfH;
 
-    // 鼠标位置：画布坐标 → 内容区坐标
+    // 鼠标位置：画布坐标 → 内容层坐标（减去该阶段的内容层平移量）
     const stageLeft = stagePositionsMap[stageId];
     const stageTop = 20 + (stageOffsetsY[stageId] ?? 0);
-    const mx = connecting.mouseCanvasX - stageLeft;
-    const my = connecting.mouseCanvasY - stageTop - TITLE_H;
+    const stagePan = stagePans[stageId] ?? { x: 0, y: 0 };
+    const mx = connecting.mouseCanvasX - stageLeft - stagePan.x;
+    const my = connecting.mouseCanvasY - stageTop - TITLE_H - stagePan.y;
 
     const H_SEG = 10 * invScale;
     const hEndX = SX + H_SEG;
@@ -2520,7 +2976,28 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
   };
   // ── 渲染：阶段间连线 ──
   const gateStrategyLabel = (s: string) => ({ all: '全部执行成功', count: '指定数量成功', threshold: '合并运算判断' }[s] || s);
-  const gateStrategyDesc = (s: string) => ({ all: '所有节点执行成功后继续', count: '指定数量节点执行成功后继续', threshold: '合并运算值满足条件后继续' }[s] || s);
+  const gateStrategyDesc = (s: string) => ({
+    all: '所有节点执行成功才继续',
+    count: '指定数量节点执行成功才继续',
+    threshold: '合并运算值满足条件才继续',
+  }[s] || s);
+  /** 解析门控阈值表达式（如 ">= 60"）；非 threshold 策略时返回空值 */
+  const gateThresholdParts = (stageId: string) => {
+    const gate = stages.find(s => s.id === stageId)?.gate;
+    if (gate?.strategy !== 'threshold') return { op: '>=', value: '' };
+    const text = (gate.threshold || '').trim();
+    const m = text.match(/^(>=|<=|==|>|<)\s*(.*)$/);
+    return m ? { op: m[1], value: m[2] } : { op: '>=', value: text };
+  };
+  /** 解析门控选择器脚本 calc:<filter>:<merge_as>:<value_op>，用于回填三个下拉 */
+  const gateCalcParts = (stageId: string) => {
+    const script = stages.find(s => s.id === stageId)?.gate.customScript || '';
+    const parts = script.split(':');
+    if (parts[0] === 'calc' && parts.length >= 4) {
+      return { filter: parts[1], mergeAs: parts[2], valueOp: parts[3] };
+    }
+    return { filter: 'all', mergeAs: 'array', valueOp: 'none' };
+  };
   const mergeStrategyLabel = (s: string) => ({ merge: '合并为对象', concat: '合并为数组', pick_first: '取第一个结果', pick_last: '取最后个结果', custom: '自定义处理' }[s] || s);
   const renderStageLinks = () => {
     // 从 stageEdges 渲染（而非按 order 自动生成）
@@ -2572,7 +3049,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       const tgtState = stepStates[`stage_${tgtStage.id}`];
             // 历史查看模式下，不存在的目标阶段视为 idle 而非 running
       const rs = tgtState === 'running' ? 'running' : tgtState === 'success' ? 'success' : tgtState === 'failed' ? 'failed' : tgtState === 'cancelled' ? 'cancelled' : srcState === 'success' && !tgtState ? (restoredExecutionId ? 'idle' : isRunning ? 'running' : 'idle') : 'idle';
-      const lc = rs === 'running' ? '#58a6ff' : rs === 'success' ? '#3fb950' : rs === 'failed' ? '#f85149' : rs === 'cancelled' ? '#d29922' : 'var(--border)';
+      const lc = rs === 'running' ? '#58a6ff' : rs === 'success' ? '#3fb950' : rs === 'failed' ? '#f85149' : rs === 'cancelled' ? '#d29922' : 'var(--text-secondary)';
       const sw = (rs === 'running' ? 2.5 : 2) * invScale;
       const as = 5 * invScale;
 
@@ -2664,8 +3141,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               inputMapping: n.inputMapping,
               outputMapping: n.outputMapping,
               timeoutMs: n.timeoutMs,
-              retryCount: n.retryCount,
-              retryDelayMs: n.retryDelayMs,
               delayMs: n.delayMs,
               pluginId: n.pluginId,
               commandId: n.commandId,
@@ -2690,7 +3165,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
     }, 300);
     return () => { cancelled = true; if (planTimerRef.current) clearTimeout(planTimerRef.current); };
-  }, [stages]);
+  }, [stages, definitionId, name, def?.version, def?.createdAt, def?.updatedAt]);
 
 // ── 计算不可达节点（从后端执行计划获取） ──
   const reachableNodeIds = useMemo(
@@ -2701,14 +3176,17 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
     () => new Set(stages.flatMap(s => s.nodes).map(n => n.id).filter(nid => !reachableNodeIds.has(nid))),
     [stages, reachableNodeIds]
   );
+  // 断点执行门禁：仅在执行计划已成功获取时才按可达性禁用按钮
+  // （执行计划未加载/请求失败时 reachableNodeIds 为空，不能据此判定所有节点不可达）
+  const selectedNodeUnreachable = executionPlan !== null && !!selectedNodeId && unreachableNodeIds.has(selectedNodeId);
 
   // 预计算每个节点的 isConfigChanged（useMemo 避免渲染时对每个节点执行 IIFE + JSON.stringify）
   const isConfigChangedMap = useMemo(() => {
-    const snap = restoredSnapshotRef.current;
+    const snap = restoredSnapshot;
     if (!snap) return new Map<string, boolean>();
     const map = new Map<string, boolean>();
     for (const s of snap) {
-      const cur = stages.find((st: any) => st.id === s.id);
+      const cur = stages.find((st) => st.id === s.id);
       const stageChanged = !cur
         || s.nodes.length !== cur.nodes.length
         || s.edges.length !== cur.edges.length;
@@ -2717,7 +3195,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         continue;
       }
       for (const n of s.nodes) {
-        const curNode = cur.nodes.find((cn: any) => cn.id === n.id);
+        const curNode = cur.nodes.find((cn) => cn.id === n.id);
         if (!curNode) { map.set(n.id, true); continue; }
         if (JSON.stringify(n.params) !== JSON.stringify(curNode.params) || n.type !== curNode.type || n.label !== curNode.label) {
           map.set(n.id, true); continue;
@@ -2726,7 +3204,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
       }
     }
     return map;
-  }, [stages]);
+  }, [stages, restoredSnapshot]);
+
   // ── JSX ──
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -2757,56 +3236,42 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         <div className="flex items-center gap-1.5">
           
           <div className="relative">
-            <select
+            <Select
               value={selectedHistoryId || ''}
-              onChange={(e) => {
-                const execId = e.target.value;
+              onChange={(execId) => {
                 if (!execId) {
                   setSelectedHistoryId(null);
                   setRestoredExecutionId(null);
                   setNodeResults({});
                   setStepStates({});
-                  restoredSnapshotRef.current = null;
+                  setRestoredSnapshot(null);
                   return;
                 }
-                handleRestoreExecution(execId);
+                // 选到的若是仍在跑的实例，按"实时执行"恢复（running 保持 running，不标历史结果）
+                handleRestoreExecution(execId, { live: liveExecutionIdsRef.current.has(execId) });
                 setSelectedHistoryId(execId);
               }}
-              className="text-[11px] px-2 py-1 rounded outline-none appearance-none cursor-pointer"
-              style={{
-                border: '1px solid var(--border)',
-                background: 'var(--bg-tertiary)',
-                color: 'var(--text-secondary)',
-                minWidth: 120,
-                maxWidth: 200,
-                paddingRight: 20,
-              }}
+              options={[
+                { value: '', label: '查看历史执行记录' },
+                ...instances
+                  .filter(i => i.definitionId === definitionId && i.status !== 'pending')
+                  .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+                  .slice(0, 20)
+                  .map((inst) => {
+                    const dateStr = inst.createdAt ? new Date(inst.createdAt * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+                    const statusMap: Record<string, string> = { success: '✓', failed: '✗', running: '▶', cancelled: '○', timeout: '△' };
+                    const icon = statusMap[inst.status] || '?';
+                    return {
+                      value: inst.id,
+                      label: `${icon} ${dateStr} — ${inst.status}(${Math.round((inst.completionRate || 0) * 100)}%${(inst.skippedCount ?? 0) > 0 ? `, 跳过 ${inst.skippedCount}` : ''})`,
+                    };
+                  }),
+              ]}
+              placeholder="查看历史执行记录"
+              size="sm"
+              style={{ minWidth: 120, maxWidth: 200 }}
               title="选择历史执行记录恢复节点执行状态"
-            >
-              <option value="">查看历史执行记录</option>
-              {instances
-                .filter(i => i.definitionId === definitionId && i.status !== 'pending')
-                .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-                .slice(0, 20)
-                .map((inst) => {
-                  const dateStr = inst.createdAt ? new Date(inst.createdAt * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-                  const statusMap: Record<string, string> = { success: '✓', failed: '✗', running: '▶', cancelled: '○', timeout: '△' };
-                  const icon = statusMap[inst.status] || '?';
-                  return (
-                    <option key={inst.id} value={inst.id}>
-                      {icon} {dateStr} — {inst.status}({Math.round((inst.completionRate || 0) * 100)}%)
-                    </option>
-                  );
-                })}
-            </select>
-            {/* 自定义下拉箭头 */}
-            <svg
-              width="10" height="10" viewBox="0 0 10 10"
-              style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-tertiary)' }}
-              fill="none" stroke="currentColor" strokeWidth="1.3"
-            >
-              <path d="M2.5 3.5L5 6.5 7.5 3.5" />
-            </svg>
+            />
           </div>
         </div>
 
@@ -3011,11 +3476,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           cursor: connecting
             ? 'crosshair'
             : isPanning
-              ? (panThresholdRef.current?.triggered ? 'grabbing' : 'default')
+              ? (panTriggered ? 'grabbing' : 'default')
               : draggingNode?.started
                 ? 'default'
                 : isBoxSelecting ? 'crosshair'
-                : dragOverStageId === null ? (dragOverCanvasRef.current ? 'not-allowed' : 'grab') : 'grab',
+                : dragOverStageId === null ? (dragOverCanvas ? 'not-allowed' : 'grab') : 'grab',
           userSelect: stageConnecting ? 'none' : undefined,
         }}
         onMouseDown={handleCanvasMouseDown}
@@ -3039,10 +3504,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             }}
           />
         )}
-        {/* 缩放控制 + 统计 + 帮助 浮动Bar */}
+        {/* 缩放控制 + 统计 + 帮助 浮动Bar（FLOAT_BAR_SCALE：放大工具栏与图标；transformOrigin 保证仍贴
+            右下角。内部弹窗自行反向缩放，内容保持原尺寸） */}
         <div
           className="absolute bottom-3 right-3 z-30 flex items-center gap-1 rounded-lg px-2 py-1.5"
-          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
+          style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', transform: `scale(${FLOAT_BAR_SCALE})`, transformOrigin: 'bottom right' }}
         >
           {/* 执行工作流按钮 */}
           <button
@@ -3075,8 +3541,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 background: '#d2992222',
                 color: '#d29922',
                 border: 'none',
+                opacity: selectedNodeUnreachable ? 0.4 : 1,
+                cursor: selectedNodeUnreachable ? 'not-allowed' : undefined,
               }}
-              title="单点执行（仅执行选中节点）"
+              disabled={selectedNodeUnreachable}
+              title={selectedNodeUnreachable ? '选中节点不可达（不在执行路径上），无法单点执行' : '单点执行（仅执行选中节点）'}
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                 <circle cx="6" cy="6" r="5" fill="none" stroke="currentColor" strokeWidth="1.5"/>
@@ -3093,8 +3562,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 background: '#58a6ff22',
                 color: '#58a6ff',
                 border: 'none',
+                opacity: selectedNodeUnreachable ? 0.4 : 1,
+                cursor: selectedNodeUnreachable ? 'not-allowed' : undefined,
               }}
-              title="链式执行（从选中节点向后）"
+              disabled={selectedNodeUnreachable}
+              title={selectedNodeUnreachable ? '选中节点不可达（不在执行路径上），无法链式执行' : '链式执行（从选中节点向后）'}
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                 <polygon points="3,1 10,6 3,11" />
@@ -3150,10 +3622,11 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </button>
             {/* 热桥：覆盖弹窗 mb-2 (8px) 空隙，确保 hover 路径从按钮顶部连续到弹窗底部 */}
             <div className="absolute left-0 right-0 bottom-full h-2" aria-hidden />
-            <div className="absolute bottom-full right-0 mb-2 w-[310px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
+            <div className="absolute bottom-full right-0 mb-2 w-[310px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100, transform: `scale(${FLOAT_BAR_POPUP_SCALE})`, transformOrigin: 'bottom right' }}>
               <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}><span className="inline-flex items-center gap-1"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><circle cx="6" cy="6" r="4.5" /><path d="M4.5 5a1.5 1.5 0 0 1 3 0c0 1-1.5 1-1.5 2.5" /><circle cx="6" cy="9" r="0.5" fill="currentColor" /></svg>操作帮助</span></div>
               <div className="space-y-0 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>平移画布</span><span style={{ color: 'var(--text-tertiary)' }}>空白区左键拖拽 / 中键</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>平移阶段内容</span><span style={{ color: 'var(--text-tertiary)' }}>阶段内空白左键拖拽</span></div>
+                <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>平移画布</span><span style={{ color: 'var(--text-tertiary)' }}>中键拖拽 / 阶段外空白左键拖拽</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>缩放画布</span><span style={{ color: 'var(--text-tertiary)' }}>鼠标滚轮</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>添加节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽工具栏节点到阶段</span></div>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>连接节点</span><span style={{ color: 'var(--text-tertiary)' }}>拖拽输出锚点→输入锚点</span></div>
@@ -3183,7 +3656,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </button>
             {/* 热桥：覆盖弹窗 mb-2 (8px) 空隙 */}
             <div className="absolute left-0 right-0 bottom-full h-2" aria-hidden />
-            <div className="absolute bottom-full right-0 mb-2 w-[220px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100 }}>
+            <div className="absolute bottom-full right-0 mb-2 w-[220px] rounded-lg p-3 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)', zIndex: 100, transform: `scale(${FLOAT_BAR_POPUP_SCALE})`, transformOrigin: 'bottom right' }}>
               <div className="text-[10px] font-semibold mb-2 pb-1.5" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}><span className="inline-flex items-center gap-1"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="1" y="6" width="2.5" height="5" rx="0.5" /><rect x="4.75" y="3" width="2.5" height="8" rx="0.5" /><rect x="8.5" y="1" width="2.5" height="10" rx="0.5" /></svg>工作流统计</span></div>
               <div className="space-y-0 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                 <div className="flex justify-between py-1.5" style={{ borderBottom: '1px dashed var(--border)' }}><span>阶段</span><span style={{ color: 'var(--text-primary)' }}>{stats.totalStages}</span></div>
@@ -3321,7 +3794,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         )}
 
         {/* 拖拽到画布空白区——不可放置提示 */}
-        {dragOverCanvasRef.current && dragOverStageId === null && (
+        {dragOverCanvas && dragOverStageId === null && (
           <div
             className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none"
             style={{ background: 'rgba(248, 81, 73, 0.05)' }}
@@ -3355,17 +3828,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
 
 
 
-          {/* SVG 层：阶段间连线（画布坐标，pointer-events:none） */}
+          {/* SVG 层：阶段间连线（画布坐标）。zIndex 40 高于阶段面板(2/30)：
+              否则连线经过阶段框时会被阶段背景盖住，看起来像"断线" */}
           <svg
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, overflow: 'visible' }}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 40, overflow: 'visible', pointerEvents: 'none' }}
           >
 
             {renderStageLinks()}
           </svg>
 
-          {/* 对齐辅助线（独立SVG，zIndex高于阶段div=2，pointer-events:none不拦截鼠标） */}
+          {/* 对齐辅助线（独立SVG，pointer-events:none不拦截鼠标）。
+              层序必须高于"正在被拖动的阶段"（阶段容器拖动时抬到 30），
+              否则辅助线会被阶段自身背景盖住 —— 表现为"辅助线沉到阶段画布下面看不见"。 */}
           {alignLines.length > 0 && (
-            <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 5, overflow: 'visible', pointerEvents: 'none' }}>
+            <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 60, overflow: 'visible', pointerEvents: 'none' }}>
               {alignLines.map((line, i) => {
                 const invScale = 1 / scale;
                 if (line.axis === 'x') {
@@ -3397,6 +3873,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           {stages.map((stage, stageIndex) => {
             const isCollapsed = collapsedStages.has(stage.id);
             const stageRunState = stepStates[`stage_${stage.id}`];
+            const stagePan = stagePans[stage.id] ?? { x: 0, y: 0 };
             return (
               <React.Fragment key={stage.id}>
                 <div
@@ -3407,7 +3884,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     top: 20 + (stageOffsetsY[stage.id] ?? 0),
                     left: stagePositions[stageIndex],
                     width: isCollapsed ? 72 : 480,
-                    height: isCollapsed ? 174 : TITLE_H + CONTENT_H + GATE_H + 4,
+                    height: isCollapsed ? STAGE_COLLAPSED_H : TITLE_H + CONTENT_H + GATE_H + 4,
                     borderRadius: 8,
                     background: 'var(--bg-secondary)',
                     border: stageRunState === 'running' ? '1px solid #58a6ff' : stageRunState === 'success' ? '1px solid #3fb950' : stageRunState === 'failed' ? '1px solid #f85149' : '1px solid var(--border)',
@@ -3419,7 +3896,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       : stageRunState === 'cancelled' ? '0 0 8px #f59e0b22' : 'var(--shadow-sm)',
                     display: 'flex',
                     flexDirection: 'column',
-                    zIndex: 2,
+                    // 正在拖动（阶段本身或其中的节点）时抬高层序：否则框外内容会被相邻阶段的框盖住
+                    zIndex: draggingStageId === stage.id || draggingNode?.stageId === stage.id || dropPreview?.stageId === stage.id ? 30 : 2,
                   }}
                 >
                   {/* 网格辅助线 — 阶段工作区内 */}
@@ -3506,14 +3984,16 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   {/* 阶段内容区 — 反向缩放保持节点固定大小 */}
                   {!isCollapsed && (
                     <>
-                      {/* 拖放高亮层：不受反向缩放影响，覆盖整个可视内容区域 */}
+                      {/* 拖放高亮层：不受反向缩放影响。
+                          只覆盖**内容区**（不含下方 Gate 区域）：节点只能落在内容区里，
+                          高亮跟着内容区走才不会让标题栏/Gate 区看起来"也能放"。 */}
                       <div
                         className="absolute"
                         style={{
                           top: 36, // 标题栏高度
                           left: 2, // CONTENT_PAD
                           width: 476, // STAGE_W - CONTENT_PAD*2
-                          height: 500 + 56 + 4, // 内容区 + Gate区域 + 间距
+                          height: 500, // 内容区高度（不含 Gate）
                           border: dragOverStageId === stage.id ? '2px dashed var(--accent)' : '2px dashed transparent',
                           borderRadius: 6,
                           background: dragOverStageId === stage.id ? 'var(--accent-light)' : 'transparent',
@@ -3528,53 +4008,122 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         style={{
                           height: 500,
                           padding: 12,
+                          // 阶段内容区 = 一个**窗口**：节点与连线都不会画到这个框外面。
+                          // 阶段内平移（stagePan）时窗口固定、内容移动，因此"超出窗口的部分"拖动画布即可查看；
+                          // 放置也被限制在这个窗口内（见 WorkflowDefinition.visibleContentWindow），
+                          // 所以不会出现"掉在看不见的地方"的节点。
                           overflow: 'hidden',
                         }}
                       >
-                        {/* 阶段内连线 SVG — 在内容区内渲染，overflow:hidden 自然裁剪 */}
-                        <svg
-                          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, pointerEvents: 'none' }}
+                        {/* 内容层：连线 SVG 与节点同层，阶段内平移时整体位移，保证连线与节点不错位 */}
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: '100%',
+                            transform: `translate(${stagePan.x}px, ${stagePan.y}px)`,
+                            // 高于本阶段标题栏(10)与 Gate 区(10)：内容层是窗口，窗口内的节点/连线
+                            // 不应被同阶段的边框条压住
+                            zIndex: 12,
+                          }}
                         >
-                          {stage.edges.map((e) => renderEdge(e, stage.id))}
-                          {connecting && connecting.stageId === stage.id && renderConnectingPreview(stage.id)}
-                          {/* 框选矩形 */}
-                          {isBoxSelecting && boxSelectRect && boxSelectRect.stageId === stage.id && (() => {
-                            const r = boxSelectRect;
-                            const x = Math.min(r.x1, r.x2), y = Math.min(r.y1, r.y2);
-                            const w = Math.abs(r.x2 - r.x1), h = Math.abs(r.y2 - r.y1);
-                            if (w < 3 || h < 3) return null;
-                            const inv = 1 / scale;
-                            return (
-                              <g style={{ pointerEvents: 'none' }}>
-                                <rect x={x} y={y} width={w} height={h} rx={2}
-                                  fill="var(--accent)" fillOpacity={0.08}
-                                  stroke="var(--accent)" strokeWidth={1.5 * inv} />
-                                {/* Corner handles */}
-                                <circle cx={x} cy={y} r={2.5 * inv} fill="var(--accent)" />
-                                <circle cx={x + w} cy={y} r={2.5 * inv} fill="var(--accent)" />
-                                <circle cx={x} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
-                                <circle cx={x + w} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
-                              </g>
-                            );
-                          })()}
-                        </svg>
-                        {/* 节点 zIndex:2 确保在连线之上 */}
-                        {stage.nodes.map((node) => (
-                          <>
-                            {/* P0-2: dragVisualOffset — 拖拽中节点用 offset wrapper 渲染 */}
-                            {draggingNode && draggingNode.started && draggingNode.origPositions?.[node.id] ? (
-                              <div style={{
+                          {/* 阶段内连线 SVG — 内容坐标，由内容区窗口统一裁剪，不会画到阶段框外。
+                              zIndex 3 高于节点卡片(2)：连线被卡片压住会"断线"，抬高层序保证连线始终完整可见
+                              （命中区域同层，删除连线有确认弹窗兜底） */}
+                          <svg
+                            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 3, overflow: 'visible', pointerEvents: 'none' }}
+                          >
+                            {stage.edges.map((e) => renderEdge(e, stage.id))}
+                            {connecting && connecting.stageId === stage.id && renderConnectingPreview(stage.id)}
+                            {/* 框选矩形 */}
+                            {isBoxSelecting && boxSelectRect && boxSelectRect.stageId === stage.id && (() => {
+                              const r = boxSelectRect;
+                              const x = Math.min(r.x1, r.x2), y = Math.min(r.y1, r.y2);
+                              const w = Math.abs(r.x2 - r.x1), h = Math.abs(r.y2 - r.y1);
+                              if (w < 3 || h < 3) return null;
+                              const inv = 1 / scale;
+                              return (
+                                <g style={{ pointerEvents: 'none' }}>
+                                  <rect x={x} y={y} width={w} height={h} rx={2}
+                                    fill="var(--accent)" fillOpacity={0.08}
+                                    stroke="var(--accent)" strokeWidth={1.5 * inv} />
+                                  {/* Corner handles */}
+                                  <circle cx={x} cy={y} r={2.5 * inv} fill="var(--accent)" />
+                                  <circle cx={x + w} cy={y} r={2.5 * inv} fill="var(--accent)" />
+                                  <circle cx={x} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
+                                  <circle cx={x + w} cy={y + h} r={2.5 * inv} fill="var(--accent)" />
+                                </g>
+                              );
+                            })()}
+                          </svg>
+                          {/* 拖放落点预览：与松手后的实际落点同源同层（跟随阶段内平移），
+                              缩放补偿与节点一致（transformOrigin 取节点中心） */}
+                          {dropPreview?.stageId === stage.id && (
+                            <div
+                              style={{
                                 position: 'absolute',
-                                left: node.position?.x ?? 20,
-                                top: node.position?.y ?? 20,
-                                width: 160, height: 60,
-                                transform: `translate(${dragOffset.dx}px, ${dragOffset.dy}px)`,
+                                left: dropPreview.x,
+                                top: dropPreview.y,
+                                width: dropPreview.w,
+                                height: dropPreview.h,
+                                border: '2px dashed var(--accent)',
+                                borderRadius: 8,
+                                background: 'var(--accent-light)',
+                                opacity: 0.75,
                                 pointerEvents: 'none',
-                                zIndex: 100,
-                              }}>
+                                zIndex: 99,
+                                transformOrigin: '80px 30px',
+                                transform: `scale(${1 / scale})`,
+                              }}
+                            />
+                          )}
+                          {/* 节点 zIndex:2 确保在连线之上 */}
+                          {stage.nodes.map((node) => (
+                            <>
+                              {/* P0-2: dragVisualOffset — 拖拽中节点用 offset wrapper 渲染 */}
+                              {draggingNode && draggingNode.started && draggingNode.origPositions?.[node.id] ? (
+                                <div style={{
+                                  position: 'absolute',
+                                  left: node.position?.x ?? 20,
+                                  top: node.position?.y ?? 20,
+                                  width: 160, height: 60,
+                                  transform: `translate(${dragOffset.dx}px, ${dragOffset.dy}px)`,
+                                  pointerEvents: 'none',
+                                  zIndex: 100,
+                                }}>
+                                  <WorkflowNodeItem
+                                    key={"offset-" + node.id}
+                                    node={{ ...node, position: { x: 0, y: 0 } }}
+                                    stageId={stage.id}
+                                    scale={scale}
+                                    selectedNodeId={selectedNodeId}
+                                    selectedNodeIds={selectedNodeIds}
+                                    draggingNode={draggingNode}
+                                    hoveredNodeId={hoveredNodeId}
+                                    connectTargetId={connectTargetId}
+                                    cycleTargetId={cycleTargetId}
+                                    reachableTargets={reachableTargets}
+                                    connecting={connecting}
+                                    stepStates={stepStates}
+                                    nodeResults={nodeResults}
+                                    snapHighlightNodeId={snapHighlightNodeId}
+                                    isUnreachable={unreachableNodeIds.has(node.id)}
+                                    isRestoredResult={restoredExecutionId !== null}
+                                    isConfigChanged={isConfigChangedMap.get(node.id) ?? false}
+                                    onSelectNode={handleSelectNode}
+                                    onNodeMouseDown={handleNodeMouseDown}
+                                    onDeleteNode={handleDeleteNode}
+                                    onEndConnect={handleEndConnect}
+                                    onStartConnect={handleStartConnect}
+                                    onHoverNode={setHoveredNodeId}
+                                  />
+                                </div>
+                              ) : (
                                 <WorkflowNodeItem
-                                  key={"offset-" + node.id}
-                                  node={{ ...node, position: { x: 0, y: 0 } }}
+                                  key={node.id}
+                                  node={node}
                                   stageId={stage.id}
                                   scale={scale}
                                   selectedNodeId={selectedNodeId}
@@ -3598,37 +4147,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                                   onStartConnect={handleStartConnect}
                                   onHoverNode={setHoveredNodeId}
                                 />
-                              </div>
-                            ) : (
-                              <WorkflowNodeItem
-                                key={node.id}
-                                node={node}
-                                stageId={stage.id}
-                                scale={scale}
-                                selectedNodeId={selectedNodeId}
-                                selectedNodeIds={selectedNodeIds}
-                                draggingNode={draggingNode}
-                                hoveredNodeId={hoveredNodeId}
-                                connectTargetId={connectTargetId}
-                                cycleTargetId={cycleTargetId}
-                                reachableTargets={reachableTargets}
-                                connecting={connecting}
-                                stepStates={stepStates}
-                                nodeResults={nodeResults}
-                                snapHighlightNodeId={snapHighlightNodeId}
-                                isUnreachable={unreachableNodeIds.has(node.id)}
-                                isRestoredResult={restoredExecutionId !== null}
-                                isConfigChanged={isConfigChangedMap.get(node.id) ?? false}
-                                onSelectNode={handleSelectNode}
-                                onNodeMouseDown={handleNodeMouseDown}
-                                onDeleteNode={handleDeleteNode}
-                                onEndConnect={handleEndConnect}
-                                onStartConnect={handleStartConnect}
-                                onHoverNode={setHoveredNodeId}
-                              />
-                            )}
-                          </>
-                        ))}
+                              )}
+                            </>
+                          ))}
+                        </div>
                       </div>
 
                       {/* Gate 区域（正向缩放，不做反向补偿） */}
@@ -3661,10 +4183,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                         <div style={{borderTop: '1px solid var(--border)', marginBottom: '6px'}}></div>
                         <div className="flex items-center gap-3">
                           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{gateStrategyLabel(stage.gate.strategy)}</span>
+                            门控策略: <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ color: 'var(--text-primary)', background: 'var(--bg-tertiary)' }}>{gateStrategyLabel(stage.gate.strategy)}</span>
                             <span className="ml-1" style={{ color: 'var(--text-tertiary)' }}>{gateStrategyDesc(stage.gate.strategy)}</span>
                             {stage.gate.threshold !== undefined && stage.gate.strategy === 'count' && (
-                              <span className="ml-1 text-[10px]" style={{ color: 'var(--accent)' }}>(完成节点数: {stage.gate.threshold})</span>
+                              <span className="ml-1 text-[10px]" style={{ color: 'var(--accent)' }}>(指定数: {stage.gate.threshold})</span>
                             )}
                             {stage.gate.threshold !== undefined && stage.gate.strategy === 'threshold' && (
                               <span className="ml-1 text-[10px]" style={{ color: 'var(--accent)' }}>(阈值: {stage.gate.threshold})</span>
@@ -3834,7 +4356,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       style={{ color: 'var(--text-primary)', background: 'transparent', border: 'none' }}
                       onClick={() => {
                         setEdgeContextMenu(null);
-                        setConditionInput({ source: edge.source, target: edge.target, stageId: edgeStage.id });
+                        openConditionEditor(edge, edgeStage.id);
                       }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-light)'; e.currentTarget.style.color = 'var(--accent)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-primary)'; }}
@@ -3864,47 +4386,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </>
       )}
 
-      {/* ── 删除二次确认弹窗 ── */}
-      {confirmAction && (
-        <div className="absolute inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
-          <div
-            className="rounded-xl p-5 w-[320px]"
-            style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
-              确认删除
-            </h3>
-            <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              {confirmAction.type === 'deleteStage' && '是否删除'}
-              {confirmAction.type === 'deleteNode' && '是否删除'}
-              {confirmAction.type === 'deleteNodes' && '是否删除'}
-              {confirmAction.type === 'deleteEdge' && '是否删除'}
-              {confirmAction.type === 'deleteStageEdge' && '是否删除'}
-              {' '}<span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{'「'}{confirmAction.label}{'」'}</span>
-              {confirmAction.type === 'deleteStage' && '阶段？'}
-              {confirmAction.type === 'deleteNode' && '节点？'}
-              {confirmAction.type === 'deleteNodes' && '？'}
-              {confirmAction.type === 'deleteEdge' && '连线？'}
-              {confirmAction.type === 'deleteStageEdge' && '连线？'}
-              {' '}此操作不可撤销。
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setConfirmAction(null)}
-                className="pd-btn px-4 py-1.5 text-xs rounded"
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
-              >取消</button>
-              <button
-                onClick={confirmDelete}
-                className="pd-btn px-4 py-1.5 text-xs rounded"
-                style={{ background: 'var(--status-danger)', color: '#fff', border: 'none' }}
-              >删除</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── 条件编辑弹窗（结构化） ── */}
       {conditionInput && (
         <div className="absolute inset-0 flex items-center justify-center z-[1000]" style={{ background: 'var(--bg-overlay)' }}>
@@ -3916,7 +4397,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>编辑条件</h3>
               <button
-                onClick={() => setCondAdvanced(!condAdvanced)}
+                onClick={toggleConditionMode}
                 className="text-[10px] px-2 py-0.5 rounded"
                 style={{
                   border: '1px solid var(--border)',
@@ -3932,26 +4413,161 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             {/* ── 结构化模式 ── */}
             {!condAdvanced && (
               <>
-                {/* 字段选择 */}
+                {/* 字段选择：支持源节点输出映射键与点号路径（如 output.result），也可从执行产出探测 */}
                 <div className="mb-2.5">
                   <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>比较字段</label>
-                  <select
-                    value={condField}
-                    onChange={(e) => setCondField(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
-                    style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
-                  >
-                    <option value="__auto__">自动（取第一个值）</option>
-                    {(() => {
-                      // 从源节点的 outputMapping 提取字段名
-                      const srcStage = stages.find(s => s.nodes.find(n => n.id === conditionInput.source));
-                      const srcNode = srcStage?.nodes.find(n => n.id === conditionInput.source);
-                      const outputMapping = srcNode?.outputMapping || {};
-                      return Object.keys(outputMapping).map(k => (
-                        <option key={k} value={k}>{k}</option>
-                      ));
-                    })()}
-                  </select>
+                  {(() => {
+                    const srcStage = stages.find(s => s.nodes.find(n => n.id === conditionInput.source));
+                    const srcNode = srcStage?.nodes.find(n => n.id === conditionInput.source);
+                    const mappingKeys = Object.keys(srcNode?.outputMapping || {});
+                    const typed = condField === '__auto__' ? '' : condField;
+                    const query = typed.toLowerCase();
+                    const match = (k: string) => query === '' || k.toLowerCase().includes(query);
+                    const mappingCandidates = mappingKeys.filter(match);
+                    const probeCandidates = condProbeFields.filter(k => !mappingKeys.includes(k)).filter(match);
+                    const rootKey = typed === '' ? '' : typed.split(/[.[]/)[0];
+                    const unknownField = rootKey !== '' && !mappingKeys.includes(rootKey) && !condProbeFields.includes(rootKey);
+                    const pickField = (v: string) => { setCondField(v); setCondFieldOpen(false); };
+
+                    const renderOption = (k: string) => (
+                      <div
+                        key={k}
+                        onClick={() => pickField(k)}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-tertiary)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        style={{
+                          padding: '5px 12px',
+                          cursor: 'pointer',
+                          color: 'var(--text-primary)',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: 'var(--fs-11)',
+                          lineHeight: '18px',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                        title={k}
+                      >{k}</div>
+                    );
+                    const renderGroupHeader = (title: string) => (
+                      <div
+                        style={{
+                          padding: '4px 12px',
+                          fontSize: 'var(--fs-10)',
+                          lineHeight: '16px',
+                          fontWeight: 600,
+                          color: 'var(--text-tertiary)',
+                          background: 'var(--bg-tertiary)',
+                          borderBottom: '1px solid var(--border)',
+                          userSelect: 'none',
+                        }}
+                      >{title}</div>
+                    );
+
+                    return (
+                      <>
+                        <div className="flex gap-1.5">
+                          <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                            <input
+                              value={typed}
+                              onChange={(e) => {
+                                setCondField(e.target.value.trim() === '' ? '__auto__' : e.target.value);
+                                setCondFieldOpen(true);
+                              }}
+                              onFocus={() => setCondFieldOpen(true)}
+                              onKeyDown={(e) => { if (e.key === 'Escape') setCondFieldOpen(false); }}
+                              placeholder="留空=自动取第一个值，或输入字段/路径"
+                              className="w-full px-3 py-1.5 rounded-lg text-xs outline-none"
+                              style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                            />
+                            {condFieldOpen && (
+                              <>
+                                <div onClick={() => setCondFieldOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 99 }} />
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    left: 0,
+                                    right: 0,
+                                    top: '100%',
+                                    marginTop: 4,
+                                    zIndex: 100,
+                                    maxHeight: 176,
+                                    overflow: 'auto',
+                                    borderRadius: 'var(--radius-md)',
+                                    border: '1px solid var(--border)',
+                                    background: 'var(--bg-primary)',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                  }}
+                                >
+                                  {mappingCandidates.length > 0 && renderGroupHeader('源节点输出映射')}
+                                  {mappingCandidates.map(renderOption)}
+                                  {probeCandidates.length > 0 && renderGroupHeader('上次执行探测')}
+                                  {probeCandidates.map(renderOption)}
+                                  {mappingCandidates.length + probeCandidates.length === 0 && (
+                                    <div style={{ padding: '10px 12px', textAlign: 'center', fontSize: 'var(--fs-10)', lineHeight: '16px', color: 'var(--text-tertiary)' }}>
+                                      无可选字段，可直接输入字段或路径
+                                    </div>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          <button
+                            onClick={probeConditionFields}
+                            disabled={condProbing}
+                            className="pd-btn px-2 py-1.5 rounded text-[10px] shrink-0"
+                            style={{
+                              position: 'relative',
+                              zIndex: 101,
+                              border: '1px solid var(--border)',
+                              background: 'var(--bg-secondary)',
+                              color: 'var(--text-secondary)',
+                              cursor: condProbing ? 'wait' : 'pointer',
+                            }}
+                            title="从源节点最近一次执行的产出里探测可用字段"
+                          >{condProbing ? '探测中…' : '探测字段'}</button>
+                        </div>
+                        {condProbeFields.length > 0 && (
+                          <div className="flex flex-wrap" style={{ gap: 4, marginTop: 6, paddingLeft: 2 }}>
+                            {condProbeFields.map(f => (
+                              <button
+                                key={f}
+                                onClick={() => pickField(f)}
+                                style={{
+                                  padding: '2px 8px',
+                                  borderRadius: 'var(--radius-md)',
+                                  border: '1px solid var(--border)',
+                                  background: 'var(--bg-secondary)',
+                                  color: 'var(--text-secondary)',
+                                  fontSize: 'var(--fs-10)',
+                                  lineHeight: '16px',
+                                  fontFamily: 'var(--font-mono)',
+                                  cursor: 'pointer',
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-light)'; e.currentTarget.style.color = 'var(--accent)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg-secondary)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                                title="点选填入比较字段"
+                              >{f}</button>
+                            ))}
+                          </div>
+                        )}
+                        {unknownField && (
+                          <div
+                            style={{
+                              marginTop: 6,
+                              padding: '4px 12px',
+                              borderRadius: 'var(--radius-md)',
+                              border: '1px solid var(--border)',
+                              background: 'var(--bg-tertiary)',
+                              color: 'var(--text-tertiary)',
+                              fontSize: 'var(--fs-10)',
+                              lineHeight: '16px',
+                            }}
+                          >
+                            提示：字段「{rootKey}」不在源节点输出映射里（仅提示，不影响保存）
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
                 {/* 运算符 */}
@@ -4018,8 +4634,22 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                   autoFocus
                 />
-                <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-                  格式：[字段名] 运算符 值，支持 ==, !=, &gt;, &lt;, &gt;=, &lt;=, contains, starts_with, ends_with, is_empty, is_not_empty
+                <div
+                  style={{
+                    marginTop: 6,
+                    padding: '6px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg-tertiary)',
+                    color: 'var(--text-tertiary)',
+                    fontSize: 'var(--fs-10)',
+                    lineHeight: '18px',
+                  }}
+                >
+                  <div>格式：[字段名] 运算符 值（字段可省略；支持路径，如 out.status）</div>
+                  <div>比较：== 等于、!= 不等于、&gt; 大于、&gt;= 大于等于、&lt; 小于、&lt;= 小于等于</div>
+                  <div>文本：contains 包含、starts_with 开头是、ends_with 结尾是</div>
+                  <div>存在性：is_empty 为空、is_not_empty 不为空</div>
                 </div>
               </div>
             )}
@@ -4044,12 +4674,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             {/* 按钮 */}
             <div className="flex gap-2 justify-end">
               <button
-                onClick={() => { setConditionInput(null); setCondAdvanced(false); }}
+                onClick={closeConditionEditor}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
               >取消</button>
               <button
-                onClick={() => handleConfirmCondition(buildConditionExpr(), condLabel || buildAutoLabel())}
+                onClick={() => { const expr = resolveConditionExpr(); handleConfirmCondition(expr, condLabel || expr); }}
                 className="pd-btn px-4 py-1.5 text-xs rounded"
                 style={{ background: 'var(--accent)', color: '#fff', border: 'none' }}
               >确认</button>
@@ -4073,7 +4703,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               </div>
             )}
             <div className="mb-4">
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>聚合策略</label>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>门控策略</label>
               <select
                 id="gate-strategy"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
@@ -4096,9 +4726,10 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <option value="count">指定数量成功</option>
                 <option value="threshold">合并运算判断</option>
               </select>
+              <div className="text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>决定本阶段能否继续</div>
             </div>
             <div className="mb-4" style={{ display: gateStrategy === 'count' ? 'block' : 'none' }}>
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>完成节点数（指定数量完成策略）</label>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>完成节点数（门控策略：指定数量成功）</label>
               <input
                 id="gate-count"
                 type="number"
@@ -4106,17 +4737,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 step="1"
                 pattern="[0-9]*"
                 className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.threshold ?? ''}
+                defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.strategy === 'count'
+                  ? (stages.find(s => s.id === gateInput.stageId)?.gate.threshold ?? '')
+                  : ''}
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                 placeholder="例如: 3"
               />
             </div>
             <div className="mb-4" style={{ display: gateStrategy === 'threshold' ? 'block' : 'none' }}>
-              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值（合并运算判断策略）</label>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>阈值（门控策略：合并运算判断）</label>
               <div className="flex gap-2 items-center">
                 <select
                   id="gate-threshold-op"
                   className="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs outline-none"
+                  defaultValue={gateThresholdParts(gateInput.stageId).op}
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                 >
                   <option value=">=">大于等于</option>
@@ -4129,7 +4763,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   id="gate-threshold"
                   type="text"
                   className="flex-1 px-3 py-1.5 rounded-lg text-xs outline-none"
-                  defaultValue={''}
+                  defaultValue={gateThresholdParts(gateInput.stageId).value}
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                   placeholder="输入阈值，如 60"
                 />
@@ -4137,6 +4771,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </div>
             <div className="mb-4">
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-tertiary)' }}>合并策略</label>
+              <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>{'决定下游引用 {{gate_output.阶段}} 时取到什么值（与门控策略无关）'}</div>
               <div className="flex gap-2">
                 <select
                   id="gate-merge"
@@ -4161,6 +4796,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <select
                   id="gate-custom-mode"
                   className="w-[100px] px-2 py-2 rounded-lg text-xs outline-none"
+                  defaultValue={customMode}
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)', display: showCustomMode ? 'block' : 'none' }}
                   onChange={(e) => {
                     const mode = e.target.value;
@@ -4177,14 +4813,14 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <div className="flex gap-2 mb-2">
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>过滤</label>
-                    <select id="gate-script-filter" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                    <select id="gate-script-filter" defaultValue={gateCalcParts(gateInput.stageId).filter} className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
                       <option value="all">保留全部</option>
                       <option value="success">只保留成功</option>
                     </select>
                   </div>
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>合并为</label>
-                    <select id="gate-script-merge" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                    <select id="gate-script-merge" defaultValue={gateCalcParts(gateInput.stageId).mergeAs} className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
                       <option value="object">合并成一个对象</option>
                       <option value="array">合并成一个数组</option>
                       <option value="flat">展开成一维数组</option>
@@ -4192,7 +4828,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   </div>
                   <div className="flex-1">
                     <label className="text-[9px] block mb-0.5" style={{ color: 'var(--text-tertiary)' }}>取值</label>
-                    <select id="gate-script-value" className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+                    <select id="gate-script-value" defaultValue={gateCalcParts(gateInput.stageId).valueOp} className="w-full px-2 py-1.5 rounded-lg text-[10px] outline-none" style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
                       <option value="none">保留原始值</option>
                       <option value="max">取最大值</option>
                       <option value="min">取最小值</option>
@@ -4207,7 +4843,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                   id="gate-script"
                   rows={3}
                   className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none font-mono"
-                  defaultValue={stages.find(s => s.id === gateInput.stageId)?.gate.customScript ?? ''}
+                  defaultValue={customMode === 'editor' ? (stages.find(s => s.id === gateInput.stageId)?.gate.customScript ?? '') : ''}
                   style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                   placeholder="在此编写自定义脚本，例如: (results) =&gt; results.map(r =&gt; r.data)"
                 />
@@ -4258,7 +4894,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                       const mergeAs = (document.getElementById('gate-script-merge') as HTMLSelectElement)?.value || 'array';
                       const valueOp = (document.getElementById('gate-script-value') as HTMLSelectElement)?.value || 'none';
                       // 自动生成脚本
-                      let lines: string[] = [];
+                      const lines: string[] = [];
                       if (filter === 'success') {
                         lines.push('  const filtered = results.filter(r => r.success);');
                       } else {
@@ -4310,7 +4946,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
           style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}
         >
           <WorkflowNodeConfig
-            node={stages.find((s) => s.id === selectedStageId)?.nodes.find((n) => n.id === selectedNodeId)!}
+            node={stages.find((s) => s.id === selectedStageId)!.nodes.find((n) => n.id === selectedNodeId)!}
             onUpdate={(updates) => handleUpdateNode(selectedNodeId, updates)}
             onClose={() => { setSelectedNodeId(null); setSelectedStageId(null); }}
             stages={stages}
@@ -4348,12 +4984,12 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3l8 8M11 3l-8 8" /></svg>
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-3">
+            <div className="flex-1 overflow-y-auto p-3 pd-scroll-stable">
               {versions.length === 0 ? (
                 <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无版本记录</div>
               ) : (
                 <div className="space-y-2">
-                  {versions.map((v: any) => (
+                  {versions.map((v) => (
                     <div
                       key={v.id}
                       className="flex items-center justify-between p-2 rounded"
@@ -4398,6 +5034,105 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
         </div>
       )}
 
+      {/* 工具审批弹窗：Agent 节点命中「工具授权」策略后暂停等待裁决 */}
+      {awaitingApproval && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}>
+          <div
+            className="rounded-xl shadow-2xl w-[520px] max-w-[90vw] flex flex-col"
+            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center justify-center rounded-md text-[10px] font-bold w-6 h-6" style={{ background: 'var(--status-warning-light)', color: 'var(--status-warning)' }}>⚑</span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>工具调用审批 — 等待裁决</span>
+              </div>
+              <span className="text-[10px] px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+                超时 30 分钟自动拒绝
+              </span>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                节点 <span style={{ color: 'var(--text-primary)' }}>{formatStageNodeLabel(stages, awaitingApproval.nodeId, awaitingApproval.nodeLabel)}</span> 请求调用
+                <span className="font-medium" style={{ color: 'var(--text-primary)' }}> {awaitingApproval.toolName} </span>
+                （风险 {awaitingApproval.risk}）
+              </div>
+              <pre
+                className="text-[11px] px-2 py-2 rounded-md overflow-auto"
+                style={{
+                  maxHeight: 200,
+                  backgroundColor: 'var(--bg-secondary)',
+                  color: 'var(--text-secondary)',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-all',
+                }}
+              >{awaitingApproval.arguments}</pre>
+            </div>
+
+            <div className="flex justify-end gap-2 px-4 py-3" style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={async () => {
+                  if (approvalSubmitting) return;
+                  setApprovalSubmitting(true);
+                  try {
+                    await respondToolApproval(awaitingApproval.callId, false);
+                    setAwaitingApproval(null);
+                  } finally {
+                    setApprovalSubmitting(false);
+                  }
+                }}
+                disabled={approvalSubmitting}
+                className="px-3 py-1.5 text-xs rounded-md font-medium transition-colors"
+                style={{
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
+                  cursor: approvalSubmitting ? 'default' : 'pointer',
+                  opacity: approvalSubmitting ? 0.6 : 1,
+                }}
+              >
+                拒绝
+              </button>
+              <button
+                onClick={async () => {
+                  if (approvalSubmitting) return;
+                  setApprovalSubmitting(true);
+                  try {
+                    await respondToolApproval(awaitingApproval.callId, true);
+                    setAwaitingApproval(null);
+                  } finally {
+                    setApprovalSubmitting(false);
+                  }
+                }}
+                disabled={approvalSubmitting}
+                className="px-3 py-1.5 text-xs rounded-md font-medium transition-colors"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  cursor: approvalSubmitting ? 'default' : 'pointer',
+                  opacity: approvalSubmitting ? 0.6 : 1,
+                }}
+              >
+                {approvalSubmitting ? '提交中...' : '批准'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 运行前入参表单（定义声明了 inputSchema 时） */}
+      {showInputDialog && def?.inputSchema && (
+        <WorkflowInputDialog
+          definitionName={def.name}
+          schema={def.inputSchema}
+          onRun={(input) => {
+            setShowInputDialog(false);
+            void runWorkflow(input);
+          }}
+          onClose={() => setShowInputDialog(false)}
+        />
+      )}
+
       {/* 人工交互输入弹窗 */}
       {awaitingInput && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center" style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}>
@@ -4416,6 +5151,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
             </div>
 
             <div className="p-4 space-y-4">
+              <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                节点 <span style={{ color: 'var(--text-primary)' }}>{formatStageNodeLabel(stages, awaitingInput.node_id)}</span>
+              </div>
               <div>
                 <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>提示文案</div>
                 <div className="text-sm leading-5" style={{ color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
@@ -4453,28 +5191,19 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
               {awaitingInput.input_type === 'select' && (
                 <div>
                   <label className="text-[10px] mb-1 block" style={{ color: 'var(--text-tertiary)' }}>选项</label>
-                  <select
+                  <Select
                     value={awaitingInput.options?.some(o => o.value === awaitingInputValue) ? awaitingInputValue : ''}
-                    onChange={(e) => setAwaitingInputValue(e.target.value)}
-                    style={{
-                      width: '100%',
-                      fontSize: 'var(--fs-12)',
-                      padding: '6px 10px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid var(--border)',
-                      backgroundColor: 'var(--bg-primary)',
-                      color: 'var(--text-primary)',
-                      outline: 'none',
-                    }}
-                  >
-                    <option value="">请选择...</option>
-                    {(awaitingInput.options && awaitingInput.options.length > 0
-                      ? awaitingInput.options
-                      : [{ label: '通过', value: 'approve' }, { label: '拒绝', value: 'reject' }]
-                    ).map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
+                    onChange={setAwaitingInputValue}
+                    options={[
+                      { value: '', label: '请选择...' },
+                      ...(awaitingInput.options && awaitingInput.options.length > 0
+                        ? awaitingInput.options
+                        : [{ label: '通过', value: 'approve' }, { label: '拒绝', value: 'reject' }]
+                      ).map((opt) => ({ value: opt.value, label: opt.label })),
+                    ]}
+                    placeholder="请选择..."
+                    className="w-full"
+                  />
                   {awaitingInput.allow_custom && (
                     <div className="mt-3">
                       <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>自定义值（可选，与上面二选一）</div>
@@ -4566,9 +5295,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                             setAwaitingInputValue(content);
                             showToast(`已读取文件内容（${content.length} 字符）`, 'success');
                           }
-                        } catch (e: any) {
+                        } catch (e: unknown) {
                           console.error('[WorkflowEditor] 读取文件内容失败:', e);
-                          showToast(`读取文件失败: ${e}`, 'error');
+                          showToast(`读取文件失败: ${errorMessage(e)}`, 'error');
                         }
                       }}
                       className="px-3 py-1.5 rounded-md text-xs font-medium"
@@ -4617,9 +5346,9 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onClose, onNameC
                     await respondHumanInput(awaitingInput.execution_id, awaitingInput.node_id, value);
                     setAwaitingInput(null);
                     setAwaitingInputValue('');
-                  } catch (err: any) {
+                  } catch (err: unknown) {
                     console.error('[WorkflowEditor] 提交人工输入失败:', err);
-                    showToast(`提交失败: ${err}`, 'error');
+                    showToast(`提交失败: ${errorMessage(err)}`, 'error');
                   } finally {
                     setAwaitingSubmitting(false);
                   }

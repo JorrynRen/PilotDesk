@@ -1,21 +1,23 @@
+use crate::agent::async_process::AsyncConsole;
+use crate::agent::config::AgentConfig;
+use crate::agent::handler::ProcessHandler;
+use crate::utils::errors::AppError;
+use crate::utils::process::{
+    check_process_state, make_still_alive_error, summarize_stderr, TimeoutPolicy,
+};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
-use crate::agent::config::AgentConfig;
-use crate::agent::handler::ProcessHandler;
-use crate::agent::async_process::AsyncConsole;
-use crate::utils::errors::AppError;
-use crate::utils::process::{TimeoutPolicy, check_process_state, make_still_alive_error, summarize_stderr};
 
 use crate::decode_windows_output;
 pub mod async_process;
+pub mod config;
 pub mod handler;
 pub mod line_processor;
 pub mod list_skills;
-pub mod config;
 
 // ------------------------------------------------------------------
 //  统一错误映射
@@ -30,18 +32,28 @@ fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> Strin
     }
     if d.contains("403") {
         let detail = &stderr[..stderr.len().min(200)];
-        return format!("请求被拒 (HTTP 403)：{}。请检查 API Key 权限、账户余额或模型可用性。", detail);
+        return format!(
+            "请求被拒 (HTTP 403)：{}。请检查 API Key 权限、账户余额或模型可用性。",
+            detail
+        );
     }
     if d.contains("401") {
         return "认证失败 (HTTP 401)：API Key 无效或已过期。请检查 API Key 是否正确。".into();
     }
     if d.contains("model") && (d.contains("not found") || d.contains("not support")) {
         let detail = &stderr[..stderr.len().min(200)];
-        return format!("模型不可用：{}。请检查模型名称是否正确，或更换模型后重试。", detail);
+        return format!(
+            "模型不可用：{}。请检查模型名称是否正确，或更换模型后重试。",
+            detail
+        );
     }
 
     let detail = &stderr[..stderr.len().min(300)];
-    if detail.is_empty() { prefix } else { format!("{}：{}", prefix, detail) }
+    if detail.is_empty() {
+        prefix
+    } else {
+        format!("{}：{}", prefix, detail)
+    }
 }
 
 // ------------------------------------------------------------------
@@ -74,7 +86,6 @@ pub struct AsyncOptions {
     /// 超时策略
     pub timeout: TimeoutPolicy,
 }
-
 
 /// 异步 IO 回调集
 ///
@@ -119,7 +130,6 @@ impl AgentManager {
         }
     }
 
-
     // ------------------------------------------------------------------
     //  统一命令执行入口
     // ------------------------------------------------------------------
@@ -155,7 +165,14 @@ impl AgentManager {
         agent_session_id: Option<&str>,
     ) -> Result<ExecuteResult, String> {
         if async_opts.is_some() {
-            self.execute_async(async_opts.unwrap(), callbacks.unwrap(), config.unwrap(), message.unwrap(), agent_session_id).await
+            self.execute_async(
+                async_opts.unwrap(),
+                callbacks.unwrap(),
+                config.unwrap(),
+                message.unwrap(),
+                agent_session_id,
+            )
+            .await
         } else {
             Err("同步执行路径已移除，请使用 execute_command_output_async".to_string())
         }
@@ -182,7 +199,9 @@ impl AgentManager {
         agent_session_id: Option<&str>,
     ) -> Result<ExecuteResult, String> {
         let cwd = if async_opts.cwd.is_empty() {
-            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
         } else {
             async_opts.cwd.clone()
         };
@@ -191,31 +210,38 @@ impl AgentManager {
         let timeout = async_opts.timeout;
         let agent_type = config.agent_type.clone();
 
-        log::info!("[Agent/execute_async] session='{}' agent_type='{}' cwd='{}' msg_len={}",
-            session_id, agent_type, cwd, message.len());
+        log::info!(
+            "[Agent/execute_async] session='{}' agent_type='{}' cwd='{}' msg_len={}",
+            session_id,
+            agent_type,
+            cwd,
+            message.len()
+        );
 
         // 创建异步进程控制台
         let mut console = async_process::TokioConsole::new();
 
         let process_handler = handler::StdioHandler::from_config(config.clone());
 
-
         // 构建命令：直接启动 CLI 进程（不经 cmd.exe /C），交由 Rust 的 argv 转义统一处理，
         // 避免手动引号 + cmd.exe 二次转义导致中文消息被错误拆分。
-        let (exe, spawn_args): (String, Vec<String>) = process_handler.build_command(message, agent_session_id);
+        let (exe, spawn_args): (String, Vec<String>) =
+            process_handler.build_command(message, agent_session_id);
 
-        log::info!("[Agent/execute_async] CMD: {} {} | session_id={:?}", exe, spawn_args.join(" "), agent_session_id);
+        log::info!(
+            "[Agent/execute_async] CMD: {} {} | session_id={:?}",
+            exe,
+            spawn_args.join(" "),
+            agent_session_id
+        );
 
         let spawn_args_refs: Vec<&str> = spawn_args.iter().map(|s| s.as_str()).collect();
 
-
         // Spawn 进程
         let (pid, mut stdout_rx, mut stderr_rx) = console
-            .spawn(&exe, &spawn_args_refs, &cwd).await
-            .map_err(|e| {
-                format!("启动进程失败: {}", e)
-            })?;
-
+            .spawn(&exe, &spawn_args_refs, &cwd)
+            .await
+            .map_err(|e| format!("启动进程失败: {}", e))?;
 
         (callbacks.on_pid)(pid);
         log::info!("[Agent/execute_async] async console spawned, pid={}", pid);
@@ -224,16 +250,18 @@ impl AgentManager {
         {
             let aborted = Arc::new(AtomicBool::new(false));
             let aborted_clone = aborted.clone();
-            self.processes.lock().unwrap().insert(session_id.clone(), AgentProcess {
-                pid: Some(pid),
-                aborted: aborted_clone,
-            });
+            self.processes.lock().unwrap().insert(
+                session_id.clone(),
+                AgentProcess {
+                    pid: Some(pid),
+                    aborted: aborted_clone,
+                },
+            );
         }
 
         // stderr 缓冲区（共享）
         let stderr_buf = Arc::new(Mutex::new(String::new()));
         let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-
 
         // 主线程读取 stdout + 智能超时轮询
         let mut full_output = String::new();
@@ -261,15 +289,24 @@ impl AgentManager {
                     "",
                 ) {
                     match error {
-                        crate::utils::process::TimeoutError::ProcessExited { exit_code, .. } => {
-                            log::warn!("[Agent/execute_async] process exited early: code={}", exit_code);
+                        crate::utils::process::TimeoutError::ProcessExited {
+                            exit_code, ..
+                        } => {
+                            log::warn!(
+                                "[Agent/execute_async] process exited early: code={}",
+                                exit_code
+                            );
                         }
                         crate::utils::process::TimeoutError::StillAlive { .. } => {
-                            log::error!("[Agent/execute_async] max wait exceeded, killing pid={}", pid);
+                            log::error!(
+                                "[Agent/execute_async] max wait exceeded, killing pid={}",
+                                pid
+                            );
                             let _ = console.kill().await;
                             // 构建 stderr 摘要
                             let _stderr_summary = {
-                                let lines = stderr_lines.lock().map(|l| l.clone()).unwrap_or_default();
+                                let lines =
+                                    stderr_lines.lock().map(|l| l.clone()).unwrap_or_default();
                                 summarize_stderr(&lines, 300, 5)
                             };
                             return Err(make_still_alive_error(
@@ -302,7 +339,8 @@ impl AgentManager {
             let sid_from_stderr = config.session_id_source.starts_with("stderr-");
 
             // 超时计算
-            let recv_timeout = if elapsed >= timeout.max_wait.saturating_sub(timeout.check_interval) {
+            let recv_timeout = if elapsed >= timeout.max_wait.saturating_sub(timeout.check_interval)
+            {
                 timeout.max_wait.saturating_sub(elapsed)
             } else {
                 timeout.check_interval
@@ -357,18 +395,25 @@ impl AgentManager {
             }
         }
 
-        log::info!("[Agent/execute_async] read loop ended, output_len={}", full_output.len());
+        log::info!(
+            "[Agent/execute_async] read loop ended, output_len={}",
+            full_output.len()
+        );
 
         // 等待进程退出
-        let exit_code = console.wait().await
+        let exit_code = console
+            .wait()
+            .await
             .map_err(|e| format!("异步控制台 wait 失败: {}", e))?;
 
-        let stderr_text = stderr_buf.lock()
-            .map(|b| b.clone())
-            .unwrap_or_default();
+        let stderr_text = stderr_buf.lock().map(|b| b.clone()).unwrap_or_default();
 
-        log::info!("[Agent/execute_async] done: exit_code={}, output_len={}, stderr_len={}",
-            exit_code, full_output.len(), stderr_text.len());
+        log::info!(
+            "[Agent/execute_async] done: exit_code={}, output_len={}, stderr_len={}",
+            exit_code,
+            full_output.len(),
+            stderr_text.len()
+        );
 
         // 异步路径也返回 ExecuteResult（统一出口类型）
         // agent_session_id 已通过 on_session_id 回调推送到前端
@@ -396,39 +441,53 @@ impl AgentManager {
         label: &str,
     ) -> Result<String, String> {
         let work_dir = if cwd.is_empty() {
-            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
         } else {
             cwd.to_string()
         };
 
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis()).unwrap_or(0);
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
         let session_id = format!("async_cmd_{}_{}", label, ts);
 
-        log::info!("[Agent/execute_command_output_async] session='{}' cmd='{}' cwd='{}'",
-            session_id, command, work_dir);
+        log::info!(
+            "[Agent/execute_command_output_async] session='{}' cmd='{}' cwd='{}'",
+            session_id,
+            command,
+            work_dir
+        );
 
-        // Windows: cmd /C 包装
+        // Windows: cmd /C 包装；其余平台：sh -c。
+        // Windows 下把命令行"原样"交给 cmd.exe：argv 传递会为含引号的参数插入 `\"` 转义，
+        // 而 cmd.exe 不识别该转义（含引号的命令会被误解析为以 `\\` 开头的 UNC 路径）。
         #[cfg(target_os = "windows")]
-        let (exe, args): (&str, Vec<&str>) = ("cmd", vec!["/C", command]);
+        let exe = "cmd";
         #[cfg(not(target_os = "windows"))]
-        let (exe, args): (&str, Vec<&str>) = ("sh", vec!["-c", command]);
+        let exe = "sh";
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            async {
-                let mut cmd = tokio::process::Command::new(exe);
-                cmd.args(&args)
-                    .current_dir(&work_dir)
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .env_remove("PYTHONHOME")
-                    .kill_on_drop(true);
-
-                cmd.output().await
+        let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+            let mut cmd = tokio::process::Command::new(exe);
+            #[cfg(target_os = "windows")]
+            {
+                cmd.raw_arg(format!("/C {}", command));
             }
-        ).await;
+            #[cfg(not(target_os = "windows"))]
+            {
+                cmd.args(["-c", command]);
+            }
+            cmd.current_dir(&work_dir)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .env_remove("PYTHONHOME")
+                .kill_on_drop(true);
+
+            cmd.output().await
+        })
+        .await;
 
         match result {
             Ok(Ok(output)) => {
@@ -437,15 +496,15 @@ impl AgentManager {
                     Ok(stdout.trim().to_string())
                 } else {
                     let stderr = decode_windows_output(&output.stderr);
-                    Err(format!("命令执行失败 (exit code {:?}): {}", output.status.code(), stderr.trim()))
+                    Err(format!(
+                        "命令执行失败 (exit code {:?}): {}",
+                        output.status.code(),
+                        stderr.trim()
+                    ))
                 }
             }
-            Ok(Err(e)) => {
-                Err(format!("启动进程失败: {}", e))
-            }
-            Err(_) => {
-                Err(format!("命令执行超时 ({}s): {}", timeout_secs, command))
-            }
+            Ok(Err(e)) => Err(format!("启动进程失败: {}", e)),
+            Err(_) => Err(format!("命令执行超时 ({}s): {}", timeout_secs, command)),
         }
     }
 
@@ -482,16 +541,22 @@ impl AgentManager {
 
         let callbacks = AsyncCallbacks {
             on_chunk: Box::new(move |chunk| {
-                let _ = app_for_chunk.emit("agent-chunk", serde_json::json!({
-                    "sessionId": sid_for_chunk,
-                    "content": chunk,
-                }));
+                let _ = app_for_chunk.emit(
+                    "agent-chunk",
+                    serde_json::json!({
+                        "sessionId": sid_for_chunk,
+                        "content": chunk,
+                    }),
+                );
             }),
             on_session_id: std::sync::Arc::new(move |sid_agent| {
-                let _ = app_for_sid.emit("agent-session", serde_json::json!({
-                    "sessionId": sid_for_sid,
-                    "agentSessionId": sid_agent,
-                }));
+                let _ = app_for_sid.emit(
+                    "agent-session",
+                    serde_json::json!({
+                        "sessionId": sid_for_sid,
+                        "agentSessionId": sid_agent,
+                    }),
+                );
             }),
             abort_check: Box::new(move || {
                 // 检查 aborted 标志
@@ -507,7 +572,11 @@ impl AgentManager {
                 val
             }),
             on_pid: Box::new(move |spawned_pid: u32| {
-                log::info!("[Agent/send_message] on_pid callback: session={}, pid={}", &*session_for_pid, spawned_pid);
+                log::info!(
+                    "[Agent/send_message] on_pid callback: session={}, pid={}",
+                    &*session_for_pid,
+                    spawned_pid
+                );
             }),
         };
 
@@ -515,44 +584,70 @@ impl AgentManager {
         let sid_for_result = session_id.clone();
         let source_type_for_error = source_type.clone();
 
-        let result = self.execute_command(
-            Some(async_opts),
-            Some(callbacks),
-            Some(&config),
-            Some(&message),
-            agent_session_id.as_deref(),
-        ).await;
+        let result = self
+            .execute_command(
+                Some(async_opts),
+                Some(callbacks),
+                Some(&config),
+                Some(&message),
+                agent_session_id.as_deref(),
+            )
+            .await;
 
         match result {
             Ok(exec_result) => {
                 if exec_result.exit_code != 0 {
                     // 某些 CLI 工具（如 Codex、Claude）将错误写入 stdout（JSON 流）
                     // 而非 stderr，因此需合并两路输出查找错误详情
-                    let combined_error = if exec_result.stderr.is_empty() && !exec_result.stdout.is_empty() {
+                    let combined_error = if exec_result.stderr.is_empty()
+                        && !exec_result.stdout.is_empty()
+                    {
                         exec_result.stdout.clone()
                     } else if !exec_result.stderr.is_empty() {
                         exec_result.stderr.clone()
                     } else {
                         "（stdout 和 stderr 均为空，请检查 CLI 工具是否已安装并正确配置 API Key 和模型）".to_string()
                     };
-                    let err_msg = friendly_agent_error(&source_type_for_error, exec_result.exit_code, &combined_error);
-                    let _ = app_for_result.emit("agent-error", serde_json::json!({
-                        "sessionId": sid_for_result,
-                        "error": err_msg,
-                    }));
+                    let err_msg = friendly_agent_error(
+                        &source_type_for_error,
+                        exec_result.exit_code,
+                        &combined_error,
+                    );
+                    let _ = app_for_result.emit(
+                        "agent-error",
+                        serde_json::json!({
+                            "sessionId": sid_for_result,
+                            "error": err_msg,
+                        }),
+                    );
+                } else {
+                    // 事件触发钩子：用户会话一轮生成结束（仅成功轮；工作流 Agent 节点走 execute_once，不经此处）
+                    crate::workflow::triggers::dispatch_event(
+                        &app_for_result,
+                        "session.completed",
+                        serde_json::json!({
+                            "sessionId": sid_for_result,
+                        }),
+                    );
                 }
             }
             Err(e) => {
-                let _ = app_for_result.emit("agent-error", serde_json::json!({
-                    "sessionId": sid_for_result,
-                    "error": format!("{}", e),
-                }));
+                let _ = app_for_result.emit(
+                    "agent-error",
+                    serde_json::json!({
+                        "sessionId": sid_for_result,
+                        "error": format!("{}", e),
+                    }),
+                );
             }
         }
 
-        let _ = app_for_result.emit("agent-done", serde_json::json!({
-            "sessionId": sid_for_result,
-        }));
+        let _ = app_for_result.emit(
+            "agent-done",
+            serde_json::json!({
+                "sessionId": sid_for_result,
+            }),
+        );
 
         Ok(())
     }
@@ -610,24 +705,34 @@ impl AgentManager {
                 let processes_pid = Arc::clone(&self.processes);
                 let session_pid = _temp_session_id.to_string();
                 Box::new(move |spawned_pid: u32| {
-                    log::info!("[Agent/execute_once] on_pid callback: session={}, pid={}", session_pid, spawned_pid);
+                    log::info!(
+                        "[Agent/execute_once] on_pid callback: session={}, pid={}",
+                        session_pid,
+                        spawned_pid
+                    );
                     let aborted = Arc::new(AtomicBool::new(false));
                     let aborted_clone = aborted.clone();
-                    processes_pid.lock().unwrap().insert(session_pid.clone(), AgentProcess {
-                        pid: Some(spawned_pid),
-                        aborted: aborted_clone,
-                    });
+                    processes_pid.lock().unwrap().insert(
+                        session_pid.clone(),
+                        AgentProcess {
+                            pid: Some(spawned_pid),
+                            aborted: aborted_clone,
+                        },
+                    );
                 })
             },
         };
 
-        let result = self.execute_command(
-            Some(async_opts),
-            Some(callbacks),
-            Some(config),
-            Some(prompt),
-            agent_session_id,
-        ).await.map_err(|e| AppError::External(e))?;
+        let result = self
+            .execute_command(
+                Some(async_opts),
+                Some(callbacks),
+                Some(config),
+                Some(prompt),
+                agent_session_id,
+            )
+            .await
+            .map_err(|e| AppError::External(e))?;
 
         if result.exit_code != 0 {
             let combined_error = if result.stderr.is_empty() && !result.stdout.is_empty() {
@@ -636,7 +741,9 @@ impl AgentManager {
                 result.stderr.clone()
             };
             return Err(AppError::External(friendly_agent_error(
-                &source_type, result.exit_code, &combined_error,
+                &source_type,
+                result.exit_code,
+                &combined_error,
             )));
         }
 
@@ -683,7 +790,7 @@ impl AgentManager {
         log::info!("[Agent] Session created: {}", session_id);
     }
 
-        /// 停止 Agent 子进程（&self 版本，不需要 &mut self）
+    /// 停止 Agent 子进程（&self 版本，不需要 &mut self）
     ///
     /// 与 stop_generation 功能相同，但接受 &self 而非 &mut self，
     /// 因此调用方不需要持有 AsyncMutex<AgentManager> 的可变锁。
@@ -725,23 +832,23 @@ impl AgentManager {
         log::info!("[Agent] Session closed: {}", session_id);
     }
 
-    pub async fn list_skills(_agent_type: &str, config: Option<&crate::agent::config::AgentConfig>) -> Vec<crate::db::models::SkillInfo> {
-        if let Some(cfg) = config {
-            if !cfg.skills_dir.is_empty() {
-                let resolved = cfg.skills_dir.replace("{agent_type}", &cfg.agent_type);
-                let skills_dir = if resolved.starts_with("~/") {
-                    if let Some(home) = home_dir() {
-                        home.join(&resolved[2..])
-                    } else {
-                        std::path::PathBuf::from(&resolved)
-                    }
-                } else {
-                    std::path::PathBuf::from(&resolved)
-                };
-                return scan_skills_dir(&skills_dir, &cfg.skill_entry_file, &cfg.skill_display_mode);
-            }
+    pub async fn list_skills(
+        _agent_type: &str,
+        config: Option<&crate::agent::config::AgentConfig>,
+    ) -> Vec<crate::db::models::SkillInfo> {
+        // 技能根解析 + 扫描统一在 agent::list_skills 里（安装/卸载/读写也复用同一套路径口径）
+        let Some(cfg) = config else { return vec![] };
+        if cfg.skills_dir.is_empty() {
+            return vec![];
         }
-        vec![]
+        match crate::agent::list_skills::resolve_skills_dir(&cfg.skills_dir, &cfg.agent_type) {
+            Some(dir) => crate::agent::list_skills::scan_skills_dir(
+                &dir,
+                &cfg.skill_entry_file,
+                &cfg.skill_display_mode,
+            ),
+            None => vec![],
+        }
     }
 }
 
@@ -774,73 +881,8 @@ impl Drop for AgentManager {
     }
 }
 
-/// 获取用户 home 目录（跨平台）
-fn home_dir() -> Option<std::path::PathBuf> {
-    dirs::home_dir()
-}
-
 // ------------------------------------------------------------------
 //  Skill 解析与扫描
 // ------------------------------------------------------------------
-
-fn parse_skill_md(path: &std::path::Path) -> Option<crate::db::models::SkillInfo> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    let raw = raw.trim();
-    if !raw.starts_with("---") {
-        return None;
-    }
-    // 找到第二个 "---"
-    let end = raw[3..].find("---")?;
-    let frontmatter = &raw[3..3 + end];
-
-    // 用 serde_yaml 解析 frontmatter
-    let value: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
-    let mapping = value.as_mapping()?;
-
-    let name = mapping.get(&serde_yaml::Value::String("name".into()))?
-        .as_str()?.to_string();
-    let description = mapping.get(&serde_yaml::Value::String("description".into()))?
-        .as_str()?.trim_matches('"').to_string();
-
-        Some(crate::db::models::SkillInfo::new(&name, &description, ""))
-}
-
-/// 扫描技能目录
-/// display_mode: recursive（递归显示全部）或 collection（只显示集合名）
-fn scan_skills_dir(skills_dir: &std::path::Path, entry_file: &str, display_mode: &str) -> Vec<crate::db::models::SkillInfo> {
-    if !skills_dir.exists() || !skills_dir.is_dir() {
-        return vec![];
-    }
-
-    let mut skills = Vec::new();
-
-    // 如果当前目录有入口文件，直接解析并返回
-    let own_skill = skills_dir.join(entry_file);
-    if own_skill.exists() {
-        if let Some(info) = parse_skill_md(&own_skill) {
-            skills.push(info);
-        }
-        // collection 模式：只显示集合名，不递归子目录
-        if display_mode == "collection" {
-            return skills;
-        }
-        // recursive 模式：解析入口文件后继续递归子目录
-        if display_mode != "recursive" {
-            return skills;
-        }
-    }
-
-    // 递归遍历子目录
-    let entries = match std::fs::read_dir(skills_dir) {
-        Ok(e) => e,
-        Err(_) => return skills,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            skills.extend(scan_skills_dir(&path, entry_file, display_mode));
-        }
-    }
-    skills
-}
+//  实现已统一到 `agent::list_skills`（扫描结果带落盘路径，安装/卸载/主文件读写也在此模块），
+//  此处不再保留副本，避免两套口径漂移。

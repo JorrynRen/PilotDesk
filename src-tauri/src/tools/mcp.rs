@@ -113,12 +113,10 @@ impl McpClient {
             // 内层读取超时：MCP 服务器长期无响应（卡死/断连未被察觉）时不让调用方无限阻塞。
             // 超时返回 Err（含"MCP 请求超时"），McpToolHandler::execute 的池逻辑照常 evict 并
             // 重连一次，外部可见行为不变。
-            let read_result = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                self.read_line(),
-            )
-            .await
-            .map_err(|_| "MCP 请求超时（30 秒无响应）".to_string())?;
+            let read_result =
+                tokio::time::timeout(std::time::Duration::from_secs(30), self.read_line())
+                    .await
+                    .map_err(|_| "MCP 请求超时（30 秒无响应）".to_string())?;
             match read_result? {
                 None => return Err("MCP 服务器连接已关闭".to_string()),
                 Some(line) => {
@@ -194,10 +192,7 @@ impl McpClient {
     /// 调用指定工具，返回文本结果
     pub async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<String, String> {
         let result = self
-            .request(
-                "tools/call",
-                json!({"name": name, "arguments": arguments}),
-            )
+            .request("tools/call", json!({"name": name, "arguments": arguments}))
             .await?;
 
         let content = result
@@ -329,7 +324,10 @@ impl McpConnectionPool {
     }
 
     /// 获取（必要时懒连接）某服务器的共享客户端；连接失败返回 Err（不缓存失败）。
-    pub async fn get_or_connect(&self, server: &McpServerConfig) -> Result<Arc<Mutex<McpClient>>, String> {
+    pub async fn get_or_connect(
+        &self,
+        server: &McpServerConfig,
+    ) -> Result<Arc<Mutex<McpClient>>, String> {
         if let Some(c) = self
             .connections
             .lock()

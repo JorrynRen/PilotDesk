@@ -99,7 +99,7 @@ export interface GroupChatToolCall {
   success?: boolean;
 }
 
-export type TaskStatus = 'discussing' | 'pending' | 'running' | 'success' | 'failed' | 'skipped';
+export type TaskStatus = 'discussing' | 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'aborted';
 
 export interface GroupChatTask {
   id: string;
@@ -113,6 +113,24 @@ export interface GroupChatTask {
   error?: string;
   startedAt?: number;
   completedAt?: number;
+}
+
+/** 手动新增子任务入参（dependsOn 传任务 id，下标换算由后端完成） */
+export interface GroupChatAddTaskInput {
+  roomId: string;
+  description: string;
+  dependsOn: string[];
+  assignee?: string | null;
+}
+
+/** 依赖变更预览：确认卡据此说明"改完会阻塞/解锁谁、是否成环"（纯计算，不落库） */
+export interface GroupChatDepChangePreview {
+  /** 变更后陷入依赖环的任务编号（会被判死锁失败，提交时后端会直接拒绝） */
+  cycleTaskNos: number[];
+  /** 变更后由等待变为就绪的任务编号 */
+  unblockedTaskNos: number[];
+  /** 变更后由就绪变为等待的任务编号 */
+  blockedTaskNos: number[];
 }
 
 export interface GroupChatParticipantInput {

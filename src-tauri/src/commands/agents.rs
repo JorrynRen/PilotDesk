@@ -1,8 +1,8 @@
 // use serde::{Deserialize, Serialize};  // unused in current scope
-use rusqlite::{params, Connection};
 use crate::utils::errors::AppError;
 use crate::utils::now;
 use base64::Engine;
+use rusqlite::{params, Connection};
 
 use crate::agent::config::{AgentConfig, CreateAgentPayload, UpdateAgentPayload};
 
@@ -17,25 +17,37 @@ pub fn list_agents(state: tauri::State<'_, crate::DbState>) -> Result<Vec<AgentC
 }
 
 #[tauri::command]
-pub fn get_agent(state: tauri::State<'_, crate::DbState>, agent_type: String) -> Result<Option<AgentConfig>, AppError> {
+pub fn get_agent(
+    state: tauri::State<'_, crate::DbState>,
+    agent_type: String,
+) -> Result<Option<AgentConfig>, AppError> {
     let conn = state.get_conn()?;
     get_agent_inner(&conn, &agent_type)
 }
 
 #[tauri::command]
-pub fn add_agent(state: tauri::State<'_, crate::DbState>, payload: CreateAgentPayload) -> Result<AgentConfig, AppError> {
+pub fn add_agent(
+    state: tauri::State<'_, crate::DbState>,
+    payload: CreateAgentPayload,
+) -> Result<AgentConfig, AppError> {
     let conn = state.get_conn()?;
     add_agent_inner(&conn, payload)
 }
 
 #[tauri::command]
-pub fn update_agent(state: tauri::State<'_, crate::DbState>, payload: UpdateAgentPayload) -> Result<AgentConfig, AppError> {
+pub fn update_agent(
+    state: tauri::State<'_, crate::DbState>,
+    payload: UpdateAgentPayload,
+) -> Result<AgentConfig, AppError> {
     let conn = state.get_conn()?;
     update_agent_inner(&conn, payload)
 }
 
 #[tauri::command]
-pub fn delete_agent(state: tauri::State<'_, crate::DbState>, agent_type: String) -> Result<(), AppError> {
+pub fn delete_agent(
+    state: tauri::State<'_, crate::DbState>,
+    agent_type: String,
+) -> Result<(), AppError> {
     let conn = state.get_conn()?;
     delete_agent_inner(&conn, &agent_type)
 }
@@ -45,7 +57,10 @@ pub fn delete_agent(state: tauri::State<'_, crate::DbState>, agent_type: String)
 // ──────────────────────────────────────────────
 
 #[tauri::command]
-pub fn export_agents_json(state: tauri::State<'_, crate::DbState>, file_path: String) -> Result<(), AppError> {
+pub fn export_agents_json(
+    state: tauri::State<'_, crate::DbState>,
+    file_path: String,
+) -> Result<(), AppError> {
     let conn = state.get_conn()?;
     let agents = list_agents_inner(&conn)?;
     // 使用与 Agent 市场一致的格式：{ version: 1, agents: [...] }
@@ -61,7 +76,10 @@ pub fn export_agents_json(state: tauri::State<'_, crate::DbState>, file_path: St
 }
 
 #[tauri::command]
-pub fn import_agents_json(state: tauri::State<'_, crate::DbState>, file_path: String) -> Result<ImportResult, AppError> {
+pub fn import_agents_json(
+    state: tauri::State<'_, crate::DbState>,
+    file_path: String,
+) -> Result<ImportResult, AppError> {
     let conn = state.get_conn()?;
     let json = std::fs::read_to_string(&file_path)
         .map_err(|e| AppError::External(format!("读取文件失败: {}", e)))?;
@@ -97,7 +115,10 @@ pub fn import_agents_json(state: tauri::State<'_, crate::DbState>, file_path: St
 
     // 先执行 __action 删除（绕过 is_builtin 检查）
     for agent_type in &delete_targets {
-        match conn.execute("DELETE FROM agents WHERE agent_type = ?1", params![agent_type]) {
+        match conn.execute(
+            "DELETE FROM agents WHERE agent_type = ?1",
+            params![agent_type],
+        ) {
             Ok(affected) => {
                 if affected > 0 {
                     success += 1;
@@ -114,74 +135,83 @@ pub fn import_agents_json(state: tauri::State<'_, crate::DbState>, file_path: St
         if delete_targets.contains(&agent.agent_type) {
             continue;
         }
-        if agent.agent_type.is_empty() || agent.display_name.is_empty() || agent.cli_command.is_empty() {
+        if agent.agent_type.is_empty()
+            || agent.display_name.is_empty()
+            || agent.cli_command.is_empty()
+        {
             errors.push(format!("跳过无效配置: {}", agent.display_name));
             continue;
         }
         // Try add first, if exists then update
-        match add_agent_inner(&conn, CreateAgentPayload {
-            agent_type: agent.agent_type.clone(),
-            display_name: agent.display_name.clone(),
-            description: Some(agent.description.clone()),
-            cli_command: agent.cli_command.clone(),
-            npm_package: agent.npm_package.clone(),
-            pip_package: agent.pip_package.clone(),
-            install_cmd: Some(agent.install_cmd.clone()),
-            uninstall_cmd: Some(agent.uninstall_cmd.clone()),
-            update_cmd: Some(agent.update_cmd.clone()),
-            version_cmd: Some(agent.version_cmd.clone()),
-            latest_version_cmd: Some(agent.latest_version_cmd.clone()),
-            run_cmd_template: Some(agent.run_cmd_template.clone()),
-            output_parser: Some(agent.output_parser.clone()),
-            output_filter_regex: Some(agent.output_filter_regex.clone()),
-            version_pattern: Some(agent.version_pattern.clone()),
-            supports_session_continuity: Some(agent.supports_session_continuity),
-            session_id_source: Some(agent.session_id_source.clone()),
-            session_id_event_type: Some(agent.session_id_event_type.clone()),
-            session_id_field: Some(agent.session_id_field.clone()),
-            resume_arg_template: Some(agent.resume_arg_template.clone()),
-            skills_dir: Some(agent.skills_dir.clone()),
-            skill_entry_file: Some(agent.skill_entry_file.clone()),
-            skill_display_mode: Some(agent.skill_display_mode.clone()),
-            color: Some(agent.color.clone()),
-            icon: Some(agent.icon.clone()),
-            sort_order: Some(agent.sort_order),
-            is_enabled: Some(agent.is_enabled),
-            version: Some(agent.version.clone()),
-        }) {
+        match add_agent_inner(
+            &conn,
+            CreateAgentPayload {
+                agent_type: agent.agent_type.clone(),
+                display_name: agent.display_name.clone(),
+                description: Some(agent.description.clone()),
+                cli_command: agent.cli_command.clone(),
+                npm_package: agent.npm_package.clone(),
+                pip_package: agent.pip_package.clone(),
+                install_cmd: Some(agent.install_cmd.clone()),
+                uninstall_cmd: Some(agent.uninstall_cmd.clone()),
+                update_cmd: Some(agent.update_cmd.clone()),
+                version_cmd: Some(agent.version_cmd.clone()),
+                latest_version_cmd: Some(agent.latest_version_cmd.clone()),
+                run_cmd_template: Some(agent.run_cmd_template.clone()),
+                output_parser: Some(agent.output_parser.clone()),
+                output_filter_regex: Some(agent.output_filter_regex.clone()),
+                version_pattern: Some(agent.version_pattern.clone()),
+                supports_session_continuity: Some(agent.supports_session_continuity),
+                session_id_source: Some(agent.session_id_source.clone()),
+                session_id_event_type: Some(agent.session_id_event_type.clone()),
+                session_id_field: Some(agent.session_id_field.clone()),
+                resume_arg_template: Some(agent.resume_arg_template.clone()),
+                skills_dir: Some(agent.skills_dir.clone()),
+                skill_entry_file: Some(agent.skill_entry_file.clone()),
+                skill_display_mode: Some(agent.skill_display_mode.clone()),
+                color: Some(agent.color.clone()),
+                icon: Some(agent.icon.clone()),
+                sort_order: Some(agent.sort_order),
+                is_enabled: Some(agent.is_enabled),
+                version: Some(agent.version.clone()),
+            },
+        ) {
             Ok(_) => success += 1,
             Err(_) => {
                 // Agent exists, try update
-                match update_agent_inner(&conn, UpdateAgentPayload {
-                    agent_type: agent.agent_type.clone(),
-                    display_name: Some(agent.display_name.clone()),
-                    description: Some(agent.description.clone()),
-                    cli_command: Some(agent.cli_command.clone()),
-                    npm_package: agent.npm_package.clone(),
-                    pip_package: agent.pip_package.clone(),
-                    install_cmd: Some(agent.install_cmd.clone()),
-                    uninstall_cmd: Some(agent.uninstall_cmd.clone()),
-                    update_cmd: Some(agent.update_cmd.clone()),
-                    version_cmd: Some(agent.version_cmd.clone()),
-                    latest_version_cmd: Some(agent.latest_version_cmd.clone()),
-                    run_cmd_template: Some(agent.run_cmd_template.clone()),
-                    output_parser: Some(agent.output_parser.clone()),
-                    output_filter_regex: Some(agent.output_filter_regex.clone()),
-                    version_pattern: Some(agent.version_pattern.clone()),
-                    supports_session_continuity: Some(agent.supports_session_continuity),
-                    session_id_source: Some(agent.session_id_source.clone()),
-                    session_id_event_type: Some(agent.session_id_event_type.clone()),
-                    session_id_field: Some(agent.session_id_field.clone()),
-                    resume_arg_template: Some(agent.resume_arg_template.clone()),
-                    skills_dir: Some(agent.skills_dir.clone()),
-                    skill_entry_file: Some(agent.skill_entry_file.clone()),
-                    skill_display_mode: Some(agent.skill_display_mode.clone()),
-                    color: Some(agent.color.clone()),
-                    icon: Some(agent.icon.clone()),
-                    sort_order: Some(agent.sort_order),
-                    is_enabled: Some(agent.is_enabled),
-                    version: Some(agent.version.clone()),
-                }) {
+                match update_agent_inner(
+                    &conn,
+                    UpdateAgentPayload {
+                        agent_type: agent.agent_type.clone(),
+                        display_name: Some(agent.display_name.clone()),
+                        description: Some(agent.description.clone()),
+                        cli_command: Some(agent.cli_command.clone()),
+                        npm_package: agent.npm_package.clone(),
+                        pip_package: agent.pip_package.clone(),
+                        install_cmd: Some(agent.install_cmd.clone()),
+                        uninstall_cmd: Some(agent.uninstall_cmd.clone()),
+                        update_cmd: Some(agent.update_cmd.clone()),
+                        version_cmd: Some(agent.version_cmd.clone()),
+                        latest_version_cmd: Some(agent.latest_version_cmd.clone()),
+                        run_cmd_template: Some(agent.run_cmd_template.clone()),
+                        output_parser: Some(agent.output_parser.clone()),
+                        output_filter_regex: Some(agent.output_filter_regex.clone()),
+                        version_pattern: Some(agent.version_pattern.clone()),
+                        supports_session_continuity: Some(agent.supports_session_continuity),
+                        session_id_source: Some(agent.session_id_source.clone()),
+                        session_id_event_type: Some(agent.session_id_event_type.clone()),
+                        session_id_field: Some(agent.session_id_field.clone()),
+                        resume_arg_template: Some(agent.resume_arg_template.clone()),
+                        skills_dir: Some(agent.skills_dir.clone()),
+                        skill_entry_file: Some(agent.skill_entry_file.clone()),
+                        skill_display_mode: Some(agent.skill_display_mode.clone()),
+                        color: Some(agent.color.clone()),
+                        icon: Some(agent.icon.clone()),
+                        sort_order: Some(agent.sort_order),
+                        is_enabled: Some(agent.is_enabled),
+                        version: Some(agent.version.clone()),
+                    },
+                ) {
                     Ok(_) => success += 1,
                     Err(e) => errors.push(format!("{}: {}", agent.agent_type, e)),
                 }
@@ -212,15 +242,21 @@ pub fn upload_agent_icon(
     }
 
     // 获取文件扩展名
-    let ext = source.extension()
+    let ext = source
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("png")
         .to_lowercase();
 
     // 验证扩展名
     match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "ico" | "svg" | "webp" => {},
-        _ => return Err(AppError::InvalidInput(format!("不支持的图片格式: .{} (支持: png/jpg/gif/ico/svg/webp)", ext))),
+        "png" | "jpg" | "jpeg" | "gif" | "ico" | "svg" | "webp" => {}
+        _ => {
+            return Err(AppError::InvalidInput(format!(
+                "不支持的图片格式: .{} (支持: png/jpg/gif/ico/svg/webp)",
+                ext
+            )))
+        }
     }
 
     // 目标文件名: {agentType}_icon.{ext}
@@ -234,15 +270,17 @@ pub fn upload_agent_icon(
     }
 
     // 复制文件
-    std::fs::copy(&source, &dest)
-        .map_err(|e| AppError::Io(format!("复制图标文件失败: {}", e)))?;
+    std::fs::copy(&source, &dest).map_err(|e| AppError::Io(format!("复制图标文件失败: {}", e)))?;
 
     // 返回 file: 协议路径
     Ok(format!("file:{}", file_name))
 }
 
 #[tauri::command]
-pub fn read_agent_icon(icon_name: String, resources: tauri::State<'_, crate::ResourcePaths>) -> Result<String, AppError> {
+pub fn read_agent_icon(
+    icon_name: String,
+    resources: tauri::State<'_, crate::ResourcePaths>,
+) -> Result<String, AppError> {
     // icon_name: "claude_icon.ico" (不含 file: 前缀)
     // 路径规则（按优先级）：
     //   1. 用户资源目录: user/icons/xxx.ico（用户上传的自定义图标）
@@ -255,7 +293,11 @@ pub fn read_agent_icon(icon_name: String, resources: tauri::State<'_, crate::Res
             user_path
         } else {
             // 2. 内置资源目录（生产模式）
-            let builtin_path = resources.builtin.join("resources").join("icons").join(&icon_name);
+            let builtin_path = resources
+                .builtin
+                .join("resources")
+                .join("icons")
+                .join(&icon_name);
             if builtin_path.exists() {
                 builtin_path
             } else {
@@ -279,8 +321,8 @@ pub fn read_agent_icon(icon_name: String, resources: tauri::State<'_, crate::Res
             }
         }
     };
-    let data = std::fs::read(&icon_path)
-        .map_err(|e| AppError::Io(format!("读取图标文件失败: {}", e)))?;
+    let data =
+        std::fs::read(&icon_path).map_err(|e| AppError::Io(format!("读取图标文件失败: {}", e)))?;
     // 检测文件扩展名确定 MIME 类型
     let mime = match icon_path.extension().and_then(|e| e.to_str()) {
         Some("ico") => "image/x-icon",
@@ -299,7 +341,8 @@ pub fn read_agent_icon(icon_name: String, resources: tauri::State<'_, crate::Res
 //  内部实现（可被其他模块调用）
 // ──────────────────────────────────────────────
 
-const SELECT_COLS: &str = "agent_type, display_name, description, cli_command, npm_package, pip_package,
+const SELECT_COLS: &str =
+    "agent_type, display_name, description, cli_command, npm_package, pip_package,
     install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
     output_parser, output_filter_regex, version_pattern, supports_session_continuity,
     session_id_source, session_id_event_type, session_id_field, resume_arg_template,
@@ -343,9 +386,10 @@ fn row_to_agent(row: &rusqlite::Row) -> rusqlite::Result<AgentConfig> {
 }
 
 pub fn list_agents_inner(conn: &Connection) -> Result<Vec<AgentConfig>, AppError> {
-    let mut stmt = conn.prepare(
-        &format!("SELECT {} FROM agents ORDER BY sort_order ASC, agent_type ASC", SELECT_COLS)
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM agents ORDER BY sort_order ASC, agent_type ASC",
+        SELECT_COLS
+    ))?;
 
     let agents = stmt.query_map([], |row| row_to_agent(row))?;
     let mut result = Vec::new();
@@ -393,10 +437,14 @@ pub fn get_agent_config_by_type(agent_type: &str) -> Option<AgentConfig> {
     })
 }
 
-pub(crate) fn get_agent_inner(conn: &Connection, agent_type: &str) -> Result<Option<AgentConfig>, AppError> {
-    let mut stmt = conn.prepare(
-        &format!("SELECT {} FROM agents WHERE agent_type = ?1", SELECT_COLS)
-    )?;
+pub(crate) fn get_agent_inner(
+    conn: &Connection,
+    agent_type: &str,
+) -> Result<Option<AgentConfig>, AppError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM agents WHERE agent_type = ?1",
+        SELECT_COLS
+    ))?;
 
     let mut rows = stmt.query_map(params![agent_type], |row| row_to_agent(row))?;
     match rows.next() {
@@ -406,31 +454,56 @@ pub(crate) fn get_agent_inner(conn: &Connection, agent_type: &str) -> Result<Opt
     }
 }
 
-pub fn add_agent_inner(conn: &Connection, payload: CreateAgentPayload) -> Result<AgentConfig, AppError> {
+pub fn add_agent_inner(
+    conn: &Connection,
+    payload: CreateAgentPayload,
+) -> Result<AgentConfig, AppError> {
     let now_ts = now();
     let description = payload.description.unwrap_or_default();
     let install_cmd = payload.install_cmd.unwrap_or_default();
     let uninstall_cmd = payload.uninstall_cmd.unwrap_or_default();
     let update_cmd = payload.update_cmd.unwrap_or_default();
-    let version_cmd = payload.version_cmd.unwrap_or_else(|| format!("{} --version", payload.cli_command));
+    let version_cmd = payload
+        .version_cmd
+        .unwrap_or_else(|| format!("{} --version", payload.cli_command));
     let latest_version_cmd = payload.latest_version_cmd.unwrap_or_default();
-    let run_cmd_template = payload.run_cmd_template.unwrap_or_else(|| format!("{} {{message}}", payload.cli_command));
-    let output_parser = payload.output_parser.unwrap_or_else(|| "raw-text".to_string());
+    let run_cmd_template = payload
+        .run_cmd_template
+        .unwrap_or_else(|| format!("{} {{message}}", payload.cli_command));
+    let output_parser = payload
+        .output_parser
+        .unwrap_or_else(|| "raw-text".to_string());
     let output_filter_regex = payload.output_filter_regex.unwrap_or_default();
-    let version_pattern = payload.version_pattern.unwrap_or_else(|| r"v?(\d+\.\d+\.\d+[\w.-]*)".to_string());
-    let supports_session_continuity = if payload.supports_session_continuity.unwrap_or(false) { 1 } else { 0 };
-    let session_id_source = payload.session_id_source.unwrap_or_else(|| "none".to_string());
+    let version_pattern = payload
+        .version_pattern
+        .unwrap_or_else(|| r"v?(\d+\.\d+\.\d+[\w.-]*)".to_string());
+    let supports_session_continuity = if payload.supports_session_continuity.unwrap_or(false) {
+        1
+    } else {
+        0
+    };
+    let session_id_source = payload
+        .session_id_source
+        .unwrap_or_else(|| "none".to_string());
     let session_id_event_type = payload.session_id_event_type.unwrap_or_default();
     let session_id_field = payload.session_id_field.unwrap_or_default();
     let resume_arg_template = payload.resume_arg_template.unwrap_or_default();
     let skills_dir = payload.skills_dir.unwrap_or_default();
-    let skill_entry_file = payload.skill_entry_file.unwrap_or_else(|| "SKILL.md".to_string());
-    let skill_display_mode = payload.skill_display_mode.unwrap_or_else(|| "collection".to_string());
+    let skill_entry_file = payload
+        .skill_entry_file
+        .unwrap_or_else(|| "SKILL.md".to_string());
+    let skill_display_mode = payload
+        .skill_display_mode
+        .unwrap_or_else(|| "collection".to_string());
     let color = payload.color.unwrap_or_else(|| "#6366F1".to_string());
-    let icon = payload.icon.unwrap_or_default();  // 空字符串表示使用首字母
+    let icon = payload.icon.unwrap_or_default(); // 空字符串表示使用首字母
     let sort_order = payload.sort_order.unwrap_or(0);
     let version = payload.version.unwrap_or_default();
-    let is_enabled = if payload.is_enabled.unwrap_or(true) { 1 } else { 0 };
+    let is_enabled = if payload.is_enabled.unwrap_or(true) {
+        1
+    } else {
+        0
+    };
 
     conn.execute(
         "INSERT INTO agents (agent_type, display_name, description, cli_command, npm_package, pip_package,
@@ -486,7 +559,10 @@ pub fn add_agent_inner(conn: &Connection, payload: CreateAgentPayload) -> Result
     })
 }
 
-pub fn update_agent_inner(conn: &Connection, payload: UpdateAgentPayload) -> Result<AgentConfig, AppError> {
+pub fn update_agent_inner(
+    conn: &Connection,
+    payload: UpdateAgentPayload,
+) -> Result<AgentConfig, AppError> {
     let existing = get_agent_inner(conn, &payload.agent_type)?
         .ok_or_else(|| AppError::NotFound(format!("Agent 类型 '{}' 不存在", payload.agent_type)))?;
 
@@ -500,24 +576,66 @@ pub fn update_agent_inner(conn: &Connection, payload: UpdateAgentPayload) -> Res
     let uninstall_cmd = payload.uninstall_cmd.unwrap_or(existing.uninstall_cmd);
     let update_cmd = payload.update_cmd.unwrap_or(existing.update_cmd);
     let version_cmd = payload.version_cmd.unwrap_or(existing.version_cmd);
-    let latest_version_cmd = payload.latest_version_cmd.unwrap_or(existing.latest_version_cmd);
-    let run_cmd_template = payload.run_cmd_template.unwrap_or(existing.run_cmd_template);
+    let latest_version_cmd = payload
+        .latest_version_cmd
+        .unwrap_or(existing.latest_version_cmd);
+    let run_cmd_template = payload
+        .run_cmd_template
+        .unwrap_or(existing.run_cmd_template);
     let output_parser = payload.output_parser.unwrap_or(existing.output_parser);
-    let output_filter_regex = payload.output_filter_regex.unwrap_or(existing.output_filter_regex);
+    let output_filter_regex = payload
+        .output_filter_regex
+        .unwrap_or(existing.output_filter_regex);
     let version_pattern = payload.version_pattern.unwrap_or(existing.version_pattern);
-    let supports_session_continuity = if let Some(v) = payload.supports_session_continuity { if v { 1 } else { 0 } } else { if existing.supports_session_continuity { 1 } else { 0 } };
-    let session_id_source = payload.session_id_source.unwrap_or(existing.session_id_source);
-    let session_id_event_type = payload.session_id_event_type.unwrap_or(existing.session_id_event_type);
-    let session_id_field = payload.session_id_field.unwrap_or(existing.session_id_field);
-    let resume_arg_template = payload.resume_arg_template.unwrap_or(existing.resume_arg_template);
+    let supports_session_continuity = if let Some(v) = payload.supports_session_continuity {
+        if v {
+            1
+        } else {
+            0
+        }
+    } else {
+        if existing.supports_session_continuity {
+            1
+        } else {
+            0
+        }
+    };
+    let session_id_source = payload
+        .session_id_source
+        .unwrap_or(existing.session_id_source);
+    let session_id_event_type = payload
+        .session_id_event_type
+        .unwrap_or(existing.session_id_event_type);
+    let session_id_field = payload
+        .session_id_field
+        .unwrap_or(existing.session_id_field);
+    let resume_arg_template = payload
+        .resume_arg_template
+        .unwrap_or(existing.resume_arg_template);
     let skills_dir = payload.skills_dir.unwrap_or(existing.skills_dir);
-    let skill_entry_file = payload.skill_entry_file.unwrap_or(existing.skill_entry_file);
-    let skill_display_mode = payload.skill_display_mode.unwrap_or(existing.skill_display_mode);
+    let skill_entry_file = payload
+        .skill_entry_file
+        .unwrap_or(existing.skill_entry_file);
+    let skill_display_mode = payload
+        .skill_display_mode
+        .unwrap_or(existing.skill_display_mode);
     let color = payload.color.unwrap_or(existing.color);
-    let icon = payload.icon.unwrap_or(existing.icon);  // None=保留旧值, Some("")=清空
+    let icon = payload.icon.unwrap_or(existing.icon); // None=保留旧值, Some("")=清空
     let sort_order = payload.sort_order.unwrap_or(existing.sort_order);
     let version = payload.version.unwrap_or(existing.version);
-    let is_enabled = if let Some(v) = payload.is_enabled { if v { 1 } else { 0 } } else { if existing.is_enabled { 1 } else { 0 } };
+    let is_enabled = if let Some(v) = payload.is_enabled {
+        if v {
+            1
+        } else {
+            0
+        }
+    } else {
+        if existing.is_enabled {
+            1
+        } else {
+            0
+        }
+    };
 
     conn.execute(
         "UPDATE agents SET display_name=?1, description=?2, cli_command=?3, npm_package=?4,
@@ -528,13 +646,37 @@ pub fn update_agent_inner(conn: &Connection, payload: UpdateAgentPayload) -> Res
          resume_arg_template=?19, skills_dir=?20, skill_entry_file=?21, skill_display_mode=?22,
          color=?23, icon=?24, sort_order=?25, is_enabled=?26, version=?27,
          updated_at=?28 WHERE agent_type=?29",
-        params![display_name, description, cli_command, npm_package, pip_package,
-            install_cmd, uninstall_cmd, update_cmd, version_cmd,
-            latest_version_cmd, run_cmd_template, output_parser, output_filter_regex,
-            version_pattern, supports_session_continuity, session_id_source,
-            session_id_event_type, session_id_field, resume_arg_template,
-            skills_dir, skill_entry_file, skill_display_mode,
-            color, icon, sort_order, is_enabled, version, now_ts, payload.agent_type],
+        params![
+            display_name,
+            description,
+            cli_command,
+            npm_package,
+            pip_package,
+            install_cmd,
+            uninstall_cmd,
+            update_cmd,
+            version_cmd,
+            latest_version_cmd,
+            run_cmd_template,
+            output_parser,
+            output_filter_regex,
+            version_pattern,
+            supports_session_continuity,
+            session_id_source,
+            session_id_event_type,
+            session_id_field,
+            resume_arg_template,
+            skills_dir,
+            skill_entry_file,
+            skill_display_mode,
+            color,
+            icon,
+            sort_order,
+            is_enabled,
+            version,
+            now_ts,
+            payload.agent_type
+        ],
     )?;
 
     Ok(AgentConfig {
@@ -577,18 +719,30 @@ pub fn delete_agent_inner(conn: &Connection, agent_type: &str) -> Result<(), App
     let existing = get_agent_inner(conn, agent_type)?;
     if let Some(agent) = &existing {
         if agent.is_builtin {
-            return Err(AppError::InvalidInput(format!("预置 Agent '{}' 不可删除", agent_type)));
+            return Err(AppError::InvalidInput(format!(
+                "预置 Agent '{}' 不可删除",
+                agent_type
+            )));
         }
     }
-    let affected = conn.execute("DELETE FROM agents WHERE agent_type = ?1", params![agent_type])?;
+    let affected = conn.execute(
+        "DELETE FROM agents WHERE agent_type = ?1",
+        params![agent_type],
+    )?;
     if affected == 0 {
-        return Err(AppError::NotFound(format!("Agent 类型 '{}' 不存在", agent_type)));
+        return Err(AppError::NotFound(format!(
+            "Agent 类型 '{}' 不存在",
+            agent_type
+        )));
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn reorder_agents(state: tauri::State<'_, crate::DbState>, agent_types: Vec<String>) -> Result<(), AppError> {
+pub fn reorder_agents(
+    state: tauri::State<'_, crate::DbState>,
+    agent_types: Vec<String>,
+) -> Result<(), AppError> {
     let conn = state.get_conn()?;
     for (index, agent_type) in agent_types.iter().enumerate() {
         let sort_order = (index + 1) as i64;

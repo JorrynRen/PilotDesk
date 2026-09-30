@@ -17,10 +17,9 @@ pub async fn terminal_create(
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<serde_json::Value, String> {
-    let id = session_id.unwrap_or_else(|| format!("term-{}", uuid::Uuid::new_v4().to_string()[..8].to_string()));
-    let shell = shell_type.unwrap_or_else(|| {
-        "cmd".to_string()
-    });
+    let id = session_id
+        .unwrap_or_else(|| format!("term-{}", uuid::Uuid::new_v4().to_string()[..8].to_string()));
+    let shell = shell_type.unwrap_or_else(|| "cmd".to_string());
     let cwd_dir = cwd.unwrap_or_else(|| {
         std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
@@ -28,7 +27,8 @@ pub async fn terminal_create(
     });
 
     let mut mgr = terminal_mgr.lock().await;
-    mgr.create_session(id.clone(), &shell, &cwd_dir, app, cols, rows).await?;
+    mgr.create_session(id.clone(), &shell, &cwd_dir, app, cols, rows)
+        .await?;
 
     Ok(serde_json::json!({
         "session_id": id,
@@ -69,7 +69,6 @@ pub async fn terminal_close(
     mgr.close_session(&session_id)
 }
 
-
 /// Start reading stdout for a terminal session (call after frontend registers listeners)
 #[tauri::command]
 pub async fn terminal_attach(
@@ -103,8 +102,10 @@ fn detect_os_type() -> &'static str {
     #[cfg(target_os = "linux")]
     return "Linux";
 
+    // 只在本项目不发布的平台上会走到这里（上面三个分支覆盖 Win / macOS / Linux）。
+    // 给一个中性值而不是 panic："换了个平台"属于能力缺失，不该让进程崩掉。
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    panic!("Unsupported operating system");
+    return "Unknown";
 }
 
 /// Get console configuration info for status bar

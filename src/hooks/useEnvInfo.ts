@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { EnvInfo } from '../types';
@@ -25,14 +25,14 @@ interface EnvState {
   agentStatus: Record<string, AgentDetectStatus>;
 }
 
-let globalState: EnvState = {
+const globalState: EnvState = {
   info: null,
   loading: false,
   agentStatus: {},
 };
-let globalListeners = new Set<() => void>();
+const globalListeners = new Set<() => void>();
 let globalFetchPromise: Promise<EnvInfo | null> | null = null;
-let unlistenFns: Array<() => void> = [];
+const unlistenFns: Array<() => void> = [];
 let listenersSetup = false;
 
 function notifyListeners() {

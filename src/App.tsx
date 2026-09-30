@@ -6,9 +6,10 @@ import { useSessionStore } from './stores/sessionStore';
 import { useSkillStore } from './stores/skillStore';
 import { useAgentEvent } from './hooks/useAgentEvent';
 import { commandDispatcher } from './plugin/CommandDispatcher';
-import { usePluginStore } from './stores/pluginStore';
+import { usePluginStore, applyCommandParamDefaults } from './stores/pluginStore';
+import { errorMessage } from './utils/errorMessage';
 import { pluginRegistry } from './plugin/PluginRegistry';
-import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar } from './components/layout';
+import { TitleBar, SessionList, MainPanel, RightPanel, StatusBar, NotificationCenter, CommandCenter } from './components/layout';
 import { TerminalPanel } from './components/TerminalPanel';
 import { CustomTabHost } from './components/custom/CustomTabHost';
 import { useCustomTabsStore } from './stores/customTabsStore';
@@ -16,10 +17,15 @@ import { MarketPage } from './components/inspiration/MarketPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { WorkflowPage } from './pages/WorkflowPage';
 import { GroupChatPage } from './pages/GroupChatPage';
-import { subscribeGroupChat } from './stores/groupChatStore';
+import { KnowledgePage } from './pages/KnowledgePage';
+import { subscribeGroupChat, useGroupChatStore } from './stores/groupChatStore';
+import { subscribeNotifications } from './stores/notificationEvents';
+import { useCommandCenterStore } from './stores/commandCenterStore';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
-import { TerminalProvider, useTerminal } from './TerminalManager';
+import { TerminalProvider } from './TerminalProvider';
+import { useTerminal } from './TerminalManager';
 import { ImagePreview } from './components/message/ImagePreview';
+import { ConfirmDialog } from './components/common/ConfirmDialog';
 import './styles/ui.css';
 
 function MainLayout() {
@@ -39,10 +45,6 @@ function MainLayout() {
     setSidePanelOpen((prev) => ({ ...prev, [rightPanelMode]: !prev[rightPanelMode] }));
   };
   const navigate = useNavigate();
-  const currentSession = useSessionStore((s) => {
-    const cs = s.sessions.find((ses) => ses.id === s.currentSessionId);
-    return cs;
-  });
 
   // Agent Event status monitoring (replaces WebSocket)
   useAgentEvent({
@@ -62,6 +64,25 @@ function MainLayout() {
     useCustomTabsStore.getState().load();
   }, []);
 
+  /**
+   * 离开「会话 / 群聊」模式即清空各自列表的选中项：两者每次进入都是「未选中任何条目」的干净状态，
+   * 由用户自行点选。
+   *
+   * 之所以在"离开时"清、而不是"进入时"清：指挥中心 / 通知中心 / 会话转群聊都是「先选中再 setMode」，
+   * 进入时清空会把这些显式跳转的落点一起抹掉；离开时清则只清残留（否则上次选中的条目会在下次进入时
+   * 仍高亮，看起来像"默认选中"）。仅清本地选中，不发后端请求、不动任何数据。
+   */
+  useEffect(() => {
+    if (viewMode !== 'session') {
+      const { currentSessionId, startNewSession } = useSessionStore.getState();
+      if (currentSessionId) startNewSession();
+    }
+    if (viewMode !== 'groupchat') {
+      const { currentRoomId, selectRoom } = useGroupChatStore.getState();
+      if (currentRoomId) void selectRoom('');
+    }
+  }, [viewMode]);
+
   return (
     <div className="pilotdesk-window-shell">
       <div className="pilotdesk-window-content flex flex-col h-full">
@@ -69,6 +90,7 @@ function MainLayout() {
           mode={viewMode}
           onModeChange={setMode}
           onOpenSettings={() => navigate('/settings')}
+          onOpenKnowledge={() => navigate('/knowledge')}
           onToggleRightPanel={rightPanelMode ? toggleRightPanel : undefined}
           rightPanelOpen={rightPanelMode ? rightPanelOpen : undefined}
         />
@@ -135,6 +157,24 @@ function App() {
     subscribeGroupChat();
   }, []);
 
+  // 注册通知中心的事件来源（工作流待人工输入、后台执行失败；全局单例）
+  useEffect(() => {
+    subscribeNotifications();
+  }, []);
+
+  // 空状态 + 首次使用：自动打开指挥中心（内含使用向导），让新用户一进来就知道能做什么。
+  // guideSeen 落地在 localStorage：用户看过一次后不再自动弹出。
+  const sessionsLen = useSessionStore((s) => s.sessions.length);
+  const archivedLen = useSessionStore((s) => s.archivedSessions.length);
+  const sessionsLoading = useSessionStore((s) => s.isLoadingSessions);
+  const ccOpen = useCommandCenterStore((s) => s.open);
+  const ccGuideSeen = useCommandCenterStore((s) => s.guideSeen);
+  useEffect(() => {
+    if (ccOpen || ccGuideSeen || sessionsLoading) return;
+    if (sessionsLen > 0 || archivedLen > 0) return;
+    void useCommandCenterStore.getState().openCenter();
+  }, [ccOpen, ccGuideSeen, sessionsLoading, sessionsLen, archivedLen]);
+
   // Update window title based on current route
   useEffect(() => {
     const base = 'PilotDesk';
@@ -147,6 +187,8 @@ function App() {
       document.title = `${base} - 工作流管理`;
     } else if (path === '/settings') {
       document.title = `${base} - 设置`;
+    } else if (path === '/knowledge') {
+      document.title = `${base} - 知识库`;
     } else {
       const currentSession = useSessionStore.getState().currentSessionId;
       const session = useSessionStore.getState().sessions.find((s) => s.id === currentSession);
@@ -165,12 +207,15 @@ function App() {
       node_id: string;
       plugin_id: string;
       command_id: string;
-      params: any;
+      params: Record<string, unknown>;
       timeout_seconds: number;
     }>('workflow:plugin-execute', async (event) => {
       const { execution_id, node_id, plugin_id, command_id, params, timeout_seconds } = event.payload;
       try {
-        const cmdResult = await commandDispatcher.execute(plugin_id, command_id, params, {
+        // 用命令声明的 default 兜底：插件表单可能只把默认值显示出来而从没写进节点参数，
+        // 直接执行会让 handler 收到空值/别的命令的取值（表现为"选默认项报错、换一个选项就正常"）
+        const commandParams = applyCommandParamDefaults(plugin_id, command_id, params);
+        const cmdResult = await commandDispatcher.execute(plugin_id, command_id, commandParams, {
           timeout: (timeout_seconds ?? 30) * 1000,
         });
         await invoke('respond_plugin_execute', {
@@ -189,7 +234,7 @@ function App() {
           result: {
             success: false,
             data: null,
-            error: String(err),
+            error: errorMessage(err),
           },
         });
       }
@@ -210,6 +255,12 @@ function App() {
     <TerminalProvider>
       {/* 全局图片放大预览（会话/群聊/工作流等所有页面共用） */}
       <ImagePreview />
+      {/* 全局确认弹窗（替代 window.confirm：Tauri WebView 下后者常不触发） */}
+      <ConfirmDialog />
+      {/* 全局通知中心（顶栏铃铛触发；App 级挂载，所有模式/页面都能打开） */}
+      <NotificationCenter />
+      {/* 全局指挥中心（顶栏入口触发：进行中 / 待处理 / 成本速览 / 快捷入口） */}
+      <CommandCenter />
       <Routes>
         <Route path="/" element={<MainLayout />} />
         <Route path="/market" element={<MarketPage onBack={() => window.history.back()} />} />
@@ -218,6 +269,8 @@ function App() {
         <Route path="/groupchat" element={<ModeRedirect mode="groupchat" />} />
         <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
         <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
+        {/* 知识库：独立路由（顶部组合菜单的「知识库」段进入） */}
+        <Route path="/knowledge" element={<KnowledgePage />} />
       </Routes>
     </TerminalProvider>
   );

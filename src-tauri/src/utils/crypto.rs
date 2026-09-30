@@ -137,7 +137,7 @@ mod dpapi {
 // ──────────────────────────────────────────────
 
 /// 获取或创建 AES-256 密钥文件。
-/// 密钥文件存储在 app_data_dir/.key，内容通过 DPAPI 加密保护（Windows 平台）。
+/// 密钥文件存储在 app_root_dir/.key，内容通过 DPAPI 加密保护（Windows 平台）。
 fn get_or_create_key() -> Result<[u8; 32], String> {
     let key_path = key_file_path();
 
@@ -167,7 +167,10 @@ fn get_or_create_key() -> Result<[u8; 32], String> {
     let protected = dpapi::protect(encoded.as_bytes())?;
     fs::write(&key_path, &protected).map_err(|e| format!("写入密钥文件失败: {}", e))?;
 
-    log::info!("[crypto] AES-256 key generated and DPAPI-protected at {:?}", key_path);
+    log::info!(
+        "[crypto] AES-256 key generated and DPAPI-protected at {:?}",
+        key_path
+    );
     Ok(key.into())
 }
 
@@ -183,8 +186,7 @@ fn key_file_path() -> PathBuf {
 /// 返回 base64(nonce || ciphertext)。
 pub fn encrypt(plaintext: &str) -> Result<String, String> {
     let key = get_or_create_key()?;
-    let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("创建 cipher 失败: {}", e))?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("创建 cipher 失败: {}", e))?;
 
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
@@ -199,8 +201,7 @@ pub fn encrypt(plaintext: &str) -> Result<String, String> {
 /// 解密 base64(nonce || ciphertext)。
 pub fn decrypt(encoded: &str) -> Result<String, String> {
     let key = get_or_create_key()?;
-    let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("创建 cipher 失败: {}", e))?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| format!("创建 cipher 失败: {}", e))?;
 
     let combined = BASE64
         .decode(encoded)

@@ -30,9 +30,8 @@ pub(crate) fn normalize_http_url(raw: &str) -> Option<String> {
     let url = &s[idx..];
     // 尾部剥除集：空白、反引号、全角标点、Markdown 尖括号闭合 `>` 与链接闭合 `)`（`![x](<url>)` 整段传入时）、
     // 正文英文逗号/叹号/问号。**保留** `.` `;` `:` `'` `(` 等 URL 合法字符，避免截断真实 URL。
-    let trimmed = url.trim_end_matches(
-        |c: char| c.is_whitespace() || "`>，。；：！？、,!?)".contains(c),
-    );
+    let trimmed =
+        url.trim_end_matches(|c: char| c.is_whitespace() || "`>，。；：！？、,!?)".contains(c));
     if trimmed.is_empty() {
         None
     } else {
@@ -112,11 +111,7 @@ pub(crate) async fn upload_to_images_endpoint(
 ) -> Result<String, String> {
     use reqwest::multipart::{Form, Part};
 
-    let endpoint = format!(
-        "{}/images/{}",
-        api_endpoint.trim_end_matches('/'),
-        path
-    );
+    let endpoint = format!("{}/images/{}", api_endpoint.trim_end_matches('/'), path);
 
     let image_part = Part::bytes(image_png)
         .file_name("image.png")
@@ -156,7 +151,12 @@ pub(crate) async fn upload_to_images_endpoint(
 
     if !status.is_success() {
         let code = status.as_u16();
-        log::warn!("[image_common] /images/{} 上传失败: endpoint={}, status={}", path, endpoint, code);
+        log::warn!(
+            "[image_common] /images/{} 上传失败: endpoint={}, status={}",
+            path,
+            endpoint,
+            code
+        );
         let mut msg = format!("图片生成失败 (HTTP {}): {}", code, text);
         // 404/405/501：服务商/模型很可能未实现 /images/{path} 端点（聚合渠道常见：只开放
         // generations 生成、不开放 edits 编辑）。此时提示改用 generate_image 图生图降级，

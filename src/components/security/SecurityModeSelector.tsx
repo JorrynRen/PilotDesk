@@ -1,53 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
-import { Shield, ShieldCheck, ShieldAlert, AlertTriangle, type LucideIcon } from 'lucide-react';
+import { SECURITY_MODES } from './securityModes';
 
 // ============================================================
 // 会话安全模式选择器（会话窗口/群聊窗口共用）
 // - 不显示选择器标题；选项显示「模式名称 + 行为说明」
 // - 默认标准模式；无限制模式红色警示
 // - 运行时随消息/波次传参，不持久化
+// - 说明按"审批尺度"口径写：模式越严，越低风险的调用也要确认（命令/路径
+//   另按各自的子策略矩阵分级，见 agent_loop.rs 的 command_action/path_action）
 // ============================================================
 
 export type SecurityModeValue = 'strict' | 'standard' | 'relaxed' | 'unrestricted';
-
-export const SECURITY_MODES: {
-  value: SecurityModeValue;
-  name: string;
-  desc: string;
-  icon: LucideIcon;
-  color: string;
-  danger?: boolean;
-}[] = [
-  {
-    value: 'strict',
-    name: '严格模式',
-    desc: '所有命令和路径均严格审核',
-    icon: ShieldAlert,
-    color: '#F59E0B',
-  },
-  {
-    value: 'standard',
-    name: '标准模式',
-    desc: '只审核风险和未知命令及路径',
-    icon: ShieldCheck,
-    color: 'var(--accent)',
-  },
-  {
-    value: 'relaxed',
-    name: '宽松模式',
-    desc: '只阻止风险命令和路径',
-    icon: Shield,
-    color: 'var(--text-secondary)',
-  },
-  {
-    value: 'unrestricted',
-    name: '无限制模式',
-    desc: '所有命令和路径均可执行，高风险',
-    icon: AlertTriangle,
-    color: 'var(--status-danger)',
-    danger: true,
-  },
-];
 
 export function SecurityModeSelector({
   value,
@@ -102,11 +65,12 @@ export function SecurityModeSelector({
         </svg>
       </button>
 
-      {/* 下拉（向上、左对齐展开）：模式名称 + 行为说明 */}
+      {/* 下拉（向上、左对齐展开）：模式名称 + 行为说明。
+          宽度取够一行放下最长说明（"风险/未知命令与路径、中高风险工具需确认"），说明不再折行 */}
       {open && (
         <div
           className="absolute left-0 bottom-full mb-1 rounded-lg shadow-lg py-1 z-50"
-          style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border)', minWidth: 200 }}
+          style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border)', minWidth: 276 }}
         >
           {SECURITY_MODES.map((m) => {
             const active = m.value === value;
@@ -140,7 +104,7 @@ export function SecurityModeSelector({
                 </span>
                 <span
                   className="text-[10px]"
-                  style={{ color: 'var(--text-tertiary)', textAlign: 'left', paddingLeft: 19 }}
+                  style={{ color: 'var(--text-tertiary)', textAlign: 'left', paddingLeft: 19, whiteSpace: 'nowrap' }}
                 >
                   {m.desc}
                 </span>

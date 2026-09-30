@@ -1,7 +1,7 @@
 //! API Agent 类型定义
 
-use std::str::FromStr;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// API 格式（决定请求结构和解析方式）
 #[derive(Debug, Clone, Default)]
@@ -47,12 +47,16 @@ pub struct ChatRequest {
     pub temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// 结构化输出约束（如 `{"type":"json_object"}`）。仅 OpenAI 兼容格式使用；
+    /// provider 不支持时请求会被拒（HTTP 400），调用方需降级重试。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<serde_json::Value>,
 }
 
 /// Chat 消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,        // "system" | "user" | "assistant" | "tool"
+    pub role: String, // "system" | "user" | "assistant" | "tool"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     /// 多模态输入：图片（base64 data URL 或 http(s) URL）。仅用于 user 消息，发送时转成 content parts。
@@ -99,7 +103,11 @@ impl ChatMessage {
         Self {
             role: "user".into(),
             content: Some(content.into()),
-            images: if images.is_empty() { None } else { Some(images) },
+            images: if images.is_empty() {
+                None
+            } else {
+                Some(images)
+            },
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -128,7 +136,11 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             name: None,
-            reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning.to_string()) },
+            reasoning_content: if reasoning.is_empty() {
+                None
+            } else {
+                Some(reasoning.to_string())
+            },
         }
     }
 
@@ -153,7 +165,11 @@ impl ChatMessage {
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             name: None,
-            reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning.to_string()) },
+            reasoning_content: if reasoning.is_empty() {
+                None
+            } else {
+                Some(reasoning.to_string())
+            },
         }
     }
 
@@ -174,7 +190,7 @@ impl ChatMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     #[serde(rename = "type")]
-    pub tool_type: String,  // "function"
+    pub tool_type: String, // "function"
     pub function: FunctionDef,
 }
 
@@ -205,14 +221,14 @@ pub struct FunctionDef {
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
-    pub call_type: String,   // "function"
+    pub call_type: String, // "function"
     pub function: ToolCallFunction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallFunction {
     pub name: String,
-    pub arguments: String,  // JSON 字符串
+    pub arguments: String, // JSON 字符串
 }
 
 /// SSE 流式事件
@@ -298,9 +314,18 @@ pub enum AgentLoopEvent {
     #[serde(rename = "chunk")]
     Chunk { content: String },
     #[serde(rename = "tool_start")]
-    ToolStart { id: String, name: String, arguments: String },
+    ToolStart {
+        id: String,
+        name: String,
+        arguments: String,
+    },
     #[serde(rename = "tool_result")]
-    ToolResult { id: String, name: String, result: String, success: bool },
+    ToolResult {
+        id: String,
+        name: String,
+        result: String,
+        success: bool,
+    },
     #[serde(rename = "approval_required")]
     ApprovalRequired {
         call_id: String,
@@ -310,8 +335,6 @@ pub enum AgentLoopEvent {
     },
     #[serde(rename = "done")]
     Done { content: String },
-    #[serde(rename = "error")]
-    Error { message: String },
     /// 迭代达到上限，请求用户确认是否继续
     #[serde(rename = "iteration_limit")]
     IterationLimit { current: usize, max: usize },
@@ -324,6 +347,10 @@ pub enum AgentLoopEvent {
         #[serde(default)]
         cached_tokens: u32,
     },
+    /// 运行被协作式取消（用户点"停止生成"）：携带中断时已累积的正文，
+    /// 供前端把已产出的内容收尾落库，而不是按失败丢弃。
+    #[serde(rename = "cancelled")]
+    Cancelled { content: String },
 }
 
 /// 思维链/工具调用步骤（与前端 `ThinkingChainStep` 及会话模式 `messages.tool_calls` 持久化格式对齐）。

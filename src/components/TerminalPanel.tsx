@@ -101,7 +101,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   const [showShellMenu, setShowShellMenu] = useState(false);
   const [showThemeMenu, setShowThemeMenu] = useState(false);
   const [terminalDims, setTerminalDims] = useState<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
-  const [consoleConfig, setConsoleConfig] = useState<{ consoleType: string; bufferSize: number; maxLines: number | null } | null>(null);
+  // 终端后端配置仅写入、当前 UI 未读取展示
+  const [, setConsoleConfig] = useState<{ consoleType: string; bufferSize: number; maxLines: number | null } | null>(null);
   // Terminal cols/rows are FIXED at creation time — never changed by resize.
   // Initial size is measured from the container to fill the content area exactly.
 
@@ -139,16 +140,110 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   // Transmission state machine: idle | sending | waiting | receiving
   const txStateRef = useRef<Map<string, { state: 'idle' | 'sending' | 'waiting' | 'receiving'; lastRxTime: number }>>(new Map());
 
+  // ── 1s 轮询状态 ──
+  // 声明位置须早于 setupTerminalListeners / createTerminal：它们的回调会写这些 state，
+  // 而 react-hooks/immutability 不允许引用"声明在后的变量"。
+  const [, setTick] = useState(0); // 仅用于触发重渲染（吞吐 / 耗时展示）
+  const [displayUptime, setDisplayUptime] = useState(0);
+  const [displayAlive, setDisplayAlive] = useState(true);
+  const [displayBufferLines, setDisplayBufferLines] = useState(0);
+  const [displayTxState, setDisplayTxState] = useState<'idle' | 'sending' | 'waiting' | 'receiving'>('idle');
+  // Per-second throughput: poll reads + resets counters, displays last-second values
+  const [displaySecRx, setDisplaySecRx] = useState(0);
+  const [displaySecTx, setDisplaySecTx] = useState(0);
 
-  // Mirror tabs count in a ref for ResizeObserver callback (avoids stale closure)
+  // Mirror tabs count in a ref for closeTerminal (avoids stale closure)
   const tabsCountRef = useRef(terminalTabs.length);
-  tabsCountRef.current = terminalTabs.length;
+  useEffect(() => {
+    tabsCountRef.current = terminalTabs.length;
+  }, [terminalTabs.length]);
+
+  // ── Setup event listeners ──
+  // 声明在 createTerminal 之前：createTerminal 的依赖数组会引用它，且其回调要写上面的轮询 state。
+
+  const setupTerminalListeners = useCallback((tabId: string, term: Terminal): Promise<void> => {
+    const unlistens: UnlistenFn[] = [];
+
+    // Listen for terminal://created to capture pid
+    const p_created = listen<{ session_id: string; pid: number }>('terminal://created', (event) => {
+      if (event.payload.session_id === tabId) {
+        setTerminalTabs(prev => prev.map(t => t.id === tabId ? { ...t, pid: event.payload.pid } : t));
+      }
+    }).then(fn => unlistens.push(fn));
+
+    const p1 = listen<string>(`terminal://output/${tabId}`, (event) => {
+      const payload = event.payload;
+      if (payload) {
+        const tracker = bytesTrackerRef.current.get(tabId);
+        if (tracker) {
+          tracker.rx += payload.length;
+          setDisplaySecRx(tracker.rx);
+          setTick(t => t + 1);
+        }
+        // Update tx state machine
+        const txState = txStateRef.current.get(tabId);
+        if (txState) {
+          if (txState.state === 'sending' || txState.state === 'waiting') {
+            txState.state = 'receiving';
+          }
+          txState.lastRxTime = Date.now();
+        }
+      }
+      term.write(payload);
+    }).then((fn) => {
+      unlistens.push(fn);
+    });
+
+    const p2 = listen<{ session_id: string }>('terminal://exited', (event) => {
+      if (event.payload?.session_id === tabId) {
+        const meta = sessionMetaRef.current.get(tabId);
+        if (meta) meta.alive = false;
+        term.writeln('\r\n\x1b[90m[Process exited]\x1b[0m');
+      }
+    }).then((fn) => { unlistens.push(fn); });
+
+    term.onData((data) => {
+      const tracker = bytesTrackerRef.current.get(tabId);
+      if (tracker) {
+        tracker.tx += data.length;
+        setDisplaySecTx(tracker.tx);
+        setTick(t => t + 1);
+      }
+      // Detect Enter key to start tx state machine (only from idle state)
+      if (data === '\r') {
+        const txState = txStateRef.current.get(tabId);
+        if (txState && txState.state === 'idle') {
+          txState.state = 'sending';
+          // After 150ms, if still sending, transition to waiting
+          setTimeout(() => {
+            const s = txStateRef.current.get(tabId);
+            if (s && s.state === 'sending') s.state = 'waiting';
+          }, 150);
+        }
+      }
+      invoke('terminal_write', {
+        sessionId: tabId,
+        data,
+      }).catch((err) => {
+        console.error('[Terminal] Write error:', err);
+      });
+    });
+
+    unlistenRefs.current.set(tabId, unlistens);
+    return Promise.all([p_created, p1, p2]).then(() => {
+      // 注册期间该标签页就被关掉的话，unlistens 已从 ref 摘除（数组对象本身还在），
+      // 关标签那条路径遍历的是当时已 resolve 的项——这里补一次反注册，
+      // 避免监听器跟着已关闭的终端残留。
+      if (unlistenRefs.current.get(tabId) !== unlistens) {
+        unlistens.forEach((fn) => fn());
+      }
+    });
+  }, [setTerminalTabs]);
 
   // ── Create terminal ──
 
   const createTerminal = useCallback(async () => {
     if (creatingRef.current) return; // Already creating
-    const container = containerRef.current;
 
     creatingRef.current = true;
     try {
@@ -287,81 +382,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
     } finally {
       creatingRef.current = false;
     }
-  }, [terminalShellType, terminalTheme]);
-
-  // ── Setup event listeners ──
-
-  const setupTerminalListeners = useCallback((tabId: string, term: Terminal): Promise<void> => {
-    const unlistens: UnlistenFn[] = [];
-
-    // Listen for terminal://created to capture pid
-    const p_created = listen<{ session_id: string; pid: number }>('terminal://created', (event) => {
-      if (event.payload.session_id === tabId) {
-        setTerminalTabs(prev => prev.map(t => t.id === tabId ? { ...t, pid: event.payload.pid } : t));
-      }
-    }).then(fn => unlistens.push(fn));
-
-    const p1 = listen<string>(`terminal://output/${tabId}`, (event) => {
-      const payload = event.payload;
-      if (payload) {
-        const tracker = bytesTrackerRef.current.get(tabId);
-        if (tracker) {
-          tracker.rx += payload.length;
-          setDisplaySecRx(tracker.rx);
-          setTick(t => t + 1);
-        }
-        // Update tx state machine
-        const txState = txStateRef.current.get(tabId);
-        if (txState) {
-          if (txState.state === 'sending' || txState.state === 'waiting') {
-            txState.state = 'receiving';
-          }
-          txState.lastRxTime = Date.now();
-        }
-      }
-      term.write(payload);
-    }).then((fn) => {
-      unlistens.push(fn);
-    });
-
-    const p2 = listen(`terminal://exited`, (event: any) => {
-      if (event.payload?.session_id === tabId) {
-        const meta = sessionMetaRef.current.get(tabId);
-        if (meta) meta.alive = false;
-        term.writeln('\r\n\x1b[90m[Process exited]\x1b[0m');
-      }
-    }).then((fn) => { unlistens.push(fn); });
-
-    term.onData((data) => {
-      const tracker = bytesTrackerRef.current.get(tabId);
-      if (tracker) {
-        tracker.tx += data.length;
-        setDisplaySecTx(tracker.tx);
-        setTick(t => t + 1);
-      }
-      // Detect Enter key to start tx state machine (only from idle state)
-      if (data === '\r') {
-        const txState = txStateRef.current.get(tabId);
-        if (txState && txState.state === 'idle') {
-          txState.state = 'sending';
-          // After 150ms, if still sending, transition to waiting
-          setTimeout(() => {
-            const s = txStateRef.current.get(tabId);
-            if (s && s.state === 'sending') s.state = 'waiting';
-          }, 150);
-        }
-      }
-      invoke('terminal_write', {
-        sessionId: tabId,
-        data,
-      }).catch((err) => {
-        console.error('[Terminal] Write error:', err);
-      });
-    });
-
-    unlistenRefs.current.set(tabId, unlistens);
-    return Promise.all([p_created, p1, p2]).then(() => {});
-  }, []);
+  }, [terminalShellType, terminalTheme, setupTerminalListeners, setTerminalTabs, setActiveTerminalTabId]);
 
   // ── Close terminal tab ──
   //    Uses functional state updates to avoid stale closure issues with activeTerminalTabId.
@@ -421,7 +442,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
       });
       return next;
     });
-  }, []);
+  }, [setTerminalTabs, setActiveTerminalTabId]);
 
   // ── Tab switch: CSS display toggle + focus only (NO fit ever) ──
 
@@ -485,16 +506,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = () => {
   }, [createTerminal]);
 
   // ── 1s poll: direct state updates from refs (recursive setTimeout, no setInterval) ──
-  const [tick, setTick] = useState(0);
-  const [displayUptime, setDisplayUptime] = useState(0);
-  const [displayAlive, setDisplayAlive] = useState(true);
-  const [displayBufferLines, setDisplayBufferLines] = useState(0);
-  const [displayTxState, setDisplayTxState] = useState<'idle' | 'sending' | 'waiting' | 'receiving'>('idle');
-
-  // Per-second throughput: poll reads + resets counters, displays last-second values
-  const [displaySecRx, setDisplaySecRx] = useState(0);
-  const [displaySecTx, setDisplaySecTx] = useState(0);
-
+  //    （轮询用到的 state 声明在文件上方，供 setupTerminalListeners 的回调共用）
   useEffect(() => {
     let running = true;
     const poll = () => {

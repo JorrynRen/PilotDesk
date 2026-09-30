@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::utils::errors::AppError;
 
 use super::models::{MessageRow, ParticipantRow, Room, StanceRow, TaskRow};
-use super::participant::{Attitude, resolve_attitude};
+use super::participant::{resolve_attitude, Attitude};
 
 // ── Room ──
 
@@ -62,12 +62,33 @@ pub fn list_rooms(conn: &Connection) -> Result<Vec<Room>, AppError> {
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-/// 删除房间及其全部关联数据：事件（room_events 已事件化消息/任务）+ 立场/参与者/房间。
+/// 删除房间及其全部关联数据：事件（room_events 已事件化消息/任务）+ 立场/参与者/房间，
+/// 以及该房间的用量记录（口径与「删会话即清用量」一致：删实体即清用量，不留悬空归因）。
+/// 用量 scope 为 `groupchat:{roomId}`，历史行可能带 `:{participantId}` 后缀，故按前缀一并清理。
 pub fn delete_room(conn: &Connection, room_id: &str) -> Result<(), AppError> {
-    conn.execute("DELETE FROM room_events WHERE room_id = ?1", params![room_id])?;
-    conn.execute("DELETE FROM groupchat_stances WHERE room_id = ?1", params![room_id])?;
-    conn.execute("DELETE FROM groupchat_participants WHERE room_id = ?1", params![room_id])?;
-    conn.execute("DELETE FROM groupchat_rooms WHERE id = ?1", params![room_id])?;
+    conn.execute(
+        "DELETE FROM room_events WHERE room_id = ?1",
+        params![room_id],
+    )?;
+    conn.execute(
+        "DELETE FROM groupchat_stances WHERE room_id = ?1",
+        params![room_id],
+    )?;
+    conn.execute(
+        "DELETE FROM groupchat_participants WHERE room_id = ?1",
+        params![room_id],
+    )?;
+    conn.execute(
+        "DELETE FROM groupchat_rooms WHERE id = ?1",
+        params![room_id],
+    )?;
+    conn.execute(
+        "DELETE FROM api_usage_log WHERE session_id = ?1 OR session_id LIKE ?2",
+        params![
+            format!("groupchat:{}", room_id),
+            format!("groupchat:{}:%", room_id)
+        ],
+    )?;
     Ok(())
 }
 
@@ -79,7 +100,11 @@ pub fn update_room_status(conn: &Connection, room_id: &str, status: &str) -> Res
     Ok(())
 }
 
-pub fn update_room_director(conn: &Connection, room_id: &str, director_id: &str) -> Result<(), AppError> {
+pub fn update_room_director(
+    conn: &Connection,
+    room_id: &str,
+    director_id: &str,
+) -> Result<(), AppError> {
     conn.execute(
         "UPDATE groupchat_rooms SET director_id = ?1, updated_at = ?2 WHERE id = ?3",
         params![director_id, crate::utils::now(), room_id],
@@ -87,7 +112,11 @@ pub fn update_room_director(conn: &Connection, room_id: &str, director_id: &str)
     Ok(())
 }
 
-pub fn update_room_current_task(conn: &Connection, room_id: &str, task_id: &str) -> Result<(), AppError> {
+pub fn update_room_current_task(
+    conn: &Connection,
+    room_id: &str,
+    task_id: &str,
+) -> Result<(), AppError> {
     conn.execute(
         "UPDATE groupchat_rooms SET current_task_id = ?1, updated_at = ?2 WHERE id = ?3",
         params![task_id, crate::utils::now(), room_id],
@@ -103,7 +132,11 @@ pub fn update_room_topic(conn: &Connection, room_id: &str, topic: &str) -> Resul
     Ok(())
 }
 
-pub fn update_room_goal_notes(conn: &Connection, room_id: &str, goal_notes: &str) -> Result<(), AppError> {
+pub fn update_room_goal_notes(
+    conn: &Connection,
+    room_id: &str,
+    goal_notes: &str,
+) -> Result<(), AppError> {
     conn.execute(
         "UPDATE groupchat_rooms SET goal_notes = ?1, updated_at = ?2 WHERE id = ?3",
         params![goal_notes, crate::utils::now(), room_id],
@@ -111,7 +144,11 @@ pub fn update_room_goal_notes(conn: &Connection, room_id: &str, goal_notes: &str
     Ok(())
 }
 
-pub fn update_room_output_dir(conn: &Connection, room_id: &str, output_dir: &str) -> Result<(), AppError> {
+pub fn update_room_output_dir(
+    conn: &Connection,
+    room_id: &str,
+    output_dir: &str,
+) -> Result<(), AppError> {
     conn.execute(
         "UPDATE groupchat_rooms SET output_dir = ?1, updated_at = ?2 WHERE id = ?3",
         params![output_dir, crate::utils::now(), room_id],
@@ -173,7 +210,10 @@ pub fn get_participant(
     .map_err(Into::into)
 }
 
-pub fn list_participants(conn: &Connection, room_id: &str) -> Result<Vec<ParticipantRow>, AppError> {
+pub fn list_participants(
+    conn: &Connection,
+    room_id: &str,
+) -> Result<Vec<ParticipantRow>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT id, room_id, participant_type, agent_config, display_name, system_role, status
          FROM groupchat_participants WHERE room_id = ?1 ORDER BY id ASC",
@@ -249,7 +289,10 @@ pub fn insert_message(conn: &Connection, m: &MessageRow) -> Result<(), AppError>
 /// 从 `room_events(kind='message')` 派生消息投影，按消息 `seq` 升序返回。
 /// payload 为整行消息 JSON（camelCase），反序列化为 `MessageRow`。
 /// 排序取消息自身 seq：事件追加序与业务 seq 在恢复/回放场景可能不一致。
-pub fn derive_messages_from_events(conn: &Connection, room_id: &str) -> Result<Vec<MessageRow>, AppError> {
+pub fn derive_messages_from_events(
+    conn: &Connection,
+    room_id: &str,
+) -> Result<Vec<MessageRow>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT payload FROM room_events WHERE room_id = ?1 AND kind = 'message' ORDER BY seq ASC",
     )?;
@@ -443,7 +486,11 @@ pub fn list_tasks(conn: &Connection, room_id: &str) -> Result<Vec<TaskRow>, AppE
     derive_task_snapshots(conn, room_id)
 }
 
-pub fn get_task(conn: &Connection, room_id: &str, task_id: &str) -> Result<Option<TaskRow>, AppError> {
+pub fn get_task(
+    conn: &Connection,
+    room_id: &str,
+    task_id: &str,
+) -> Result<Option<TaskRow>, AppError> {
     Ok(derive_task_snapshots(conn, room_id)?
         .into_iter()
         .find(|t| t.id == task_id))
@@ -540,7 +587,10 @@ mod tests {
         assert_eq!(t.result_summary.as_deref(), Some("ok"));
         assert_eq!(t.started_at, Some(100));
         assert_eq!(t.completed_at, Some(200));
-        assert_eq!(get_task(&conn, "r1", "t1").unwrap().unwrap().status, "success");
+        assert_eq!(
+            get_task(&conn, "r1", "t1").unwrap().unwrap().status,
+            "success"
+        );
         assert!(get_task(&conn, "r1", "nope").unwrap().is_none());
     }
 
@@ -550,6 +600,59 @@ mod tests {
         insert_task(&conn, &task("b", 2, "pending")).unwrap();
         insert_task(&conn, &task("a", 1, "pending")).unwrap();
         let tasks = list_tasks(&conn, "r1").unwrap();
-        assert_eq!(tasks.iter().map(|t| t.task_no).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            tasks.iter().map(|t| t.task_no).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    /// 删房间须连带清理本房间用量（含历史参与者级 scope），且不得误删其它实体用量。
+    #[test]
+    fn delete_room_clears_room_and_its_usage() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "CREATE TABLE api_usage_log (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id        TEXT NOT NULL,
+                prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+                created_at        INTEGER NOT NULL);
+             CREATE TABLE groupchat_rooms (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '');
+             CREATE TABLE groupchat_participants (
+                room_id TEXT NOT NULL, id TEXT NOT NULL, participant_type TEXT NOT NULL DEFAULT '',
+                agent_config TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL DEFAULT '',
+                system_role TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (room_id, id));
+             CREATE TABLE groupchat_stances (
+                room_id TEXT NOT NULL, participant_id TEXT NOT NULL, stance TEXT NOT NULL DEFAULT '',
+                attitude TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL,
+                PRIMARY KEY (room_id, participant_id));
+             INSERT INTO groupchat_rooms (id, title) VALUES ('r1', '房间一');
+             INSERT INTO api_usage_log (session_id, prompt_tokens, created_at) VALUES
+                ('groupchat:r1', 100, 1),
+                ('groupchat:r1:pA', 50, 1),
+                ('groupchat:r2', 999, 1),
+                ('s1', 7, 1);",
+        )
+        .unwrap();
+
+        delete_room(&conn, "r1").unwrap();
+
+        let left: Vec<(String, i64)> = conn
+            .prepare("SELECT session_id, prompt_tokens FROM api_usage_log ORDER BY session_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(
+            left,
+            vec![("groupchat:r2".to_string(), 999), ("s1".to_string(), 7)],
+            "仅本房间（含参与者级 scope）用量被清理"
+        );
+        let rooms: i64 = conn
+            .query_row("SELECT COUNT(*) FROM groupchat_rooms", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rooms, 0);
     }
 }

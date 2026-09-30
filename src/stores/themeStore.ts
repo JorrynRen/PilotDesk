@@ -21,7 +21,7 @@ interface ThemeStoreState {
   resetColors: () => Promise<void>;
 }
 
-export const useThemeStore = create<ThemeStoreState>((set, get) => ({
+export const useThemeStore = create<ThemeStoreState>((set) => ({
   colors: DEFAULT_COLORS,
   loaded: false,
 
@@ -30,13 +30,16 @@ export const useThemeStore = create<ThemeStoreState>((set, get) => ({
       const saved = await invoke<string | null>('get_app_setting', { key: 'theme_colors' });
       if (saved) {
         const parsed = JSON.parse(saved) as Partial<ThemeColors>;
-        set({
-          colors: { ...DEFAULT_COLORS, ...parsed },
-          loaded: true,
-        });
+        const colors = { ...DEFAULT_COLORS, ...parsed };
+        set({ colors, loaded: true });
+        // 已自定义过强调色：启动时也要套用，否则重启后用户选的色会丢
+        applyThemeColors(colors);
         return;
       }
     } catch { /* ignore */ }
+    // 未自定义：**不**写内联变量，让主题自带的强调色生效
+    //（否则 深空 Nightfall 的天青会被这条默认蓝盖掉）
+    clearThemeColorOverrides();
     set({ loaded: true });
   },
 
@@ -58,7 +61,8 @@ export const useThemeStore = create<ThemeStoreState>((set, get) => ({
     try {
       await invoke('set_app_setting', { key: 'theme_colors', value: '' });
     } catch { /* ignore */ }
-    applyThemeColors(DEFAULT_COLORS);
+    // 重置 = 回到"跟随主题"，而不是回到某个写死的蓝
+    clearThemeColorOverrides();
   },
 }));
 
@@ -82,4 +86,15 @@ function applyThemeColors(colors: ThemeColors) {
   document.documentElement.style.setProperty('--accent', colors.accent);
   document.documentElement.style.setProperty('--accent-hover', colors.accentHover);
   document.documentElement.style.setProperty('--accent-light', colors.accentLight);
+}
+
+/**
+ * 移除自定义强调色的内联覆盖，交回当前主题自带的 --accent。
+ * 内联样式优先级高于任何样式表规则，不主动移除的话主题色永远被盖住。
+ */
+function clearThemeColorOverrides() {
+  const root = document.documentElement;
+  root.style.removeProperty('--accent');
+  root.style.removeProperty('--accent-hover');
+  root.style.removeProperty('--accent-light');
 }

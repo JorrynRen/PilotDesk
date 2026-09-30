@@ -1,62 +1,59 @@
-import { useState, useEffect, useCallback } from 'react';
+/**
+ * i18n — 轻量国际化（Context + 中文内联兜底）
+ *
+ * 两条设计决定，都是为了"改一次界面不用再同步一次词条"：
+ *
+ * ① **中文原文就写在调用处**：`t('session.new', '新建会话')`。
+ *    所以中文永远正确 —— en-US.json 缺词条时回落到调用处那段中文，而不是回落成
+ *    `session.new` 这种原始 key（那比不翻译更糟）。改中文文案只改这一处，不用动任何 JSON。
+ *    代价是英文词条要多带一个 key，这是刻意的取舍。
+ *
+ * ② **必须是 Context，不能是各自 useState 的 hook**：语言是全局状态。独立 hook 每调用一次
+ *    就持有一份自己的 state，切换语言时只有"触发切换的那个组件实例"会更新，其余组件
+ *    还停在旧语言 —— 这正是一个看似能用、实则错位的设计。
+ *
+ * 因此 `locales/zh-CN.json` 不再被读取（中文以内联原文为准），只保留 `en-US.json`。
+ */
 
-type Locale = 'zh-CN' | 'en-US';
+import { createContext, useContext } from 'react';
 
-interface I18nStore {
-  locale: Locale;
-  messages: Record<string, string>;
-}
+export type Locale = 'zh-CN' | 'en-US';
 
-const STORAGE_KEY = 'pilotdesk-locale';
+/** 语言偏好落 localStorage 的键（沿用既有键名，避免老用户偏好丢失） */
+export const LOCALE_STORAGE_KEY = 'pilotdesk-locale';
 
-const loadedMessages: Record<Locale, Record<string, string> | null> = {
-  'zh-CN': null,
-  'en-US': null,
+/** 语言在设置页的展示名：**不翻译**，各语言用自身文字书写 */
+export const LOCALE_LABEL: Record<Locale, string> = {
+  'zh-CN': '简体中文',
+  'en-US': 'English',
 };
 
-async function loadLocale(locale: Locale): Promise<Record<string, string>> {
-  if (loadedMessages[locale]) return loadedMessages[locale]!;
-  try {
-    const mod = await import(`../locales/${locale}.json`);
-    loadedMessages[locale] = mod.default;
-    return mod.default;
-  } catch {
-    return {};
-  }
+export const LOCALES: Locale[] = ['zh-CN', 'en-US'];
+
+export interface I18nContextValue {
+  locale: Locale;
+  setLocale: (locale: Locale) => void;
+  /**
+   * 取词条。
+   *
+   * @param key  词条键（en-US.json 里的键）
+   * @param zh   **中文原文**，内联在调用处；英文缺词条时回落到它
+   * @param params `{name}` 形式的插值参数
+   */
+  t: (key: string, zh: string, params?: Record<string, string | number>) => string;
 }
 
-/**
- * useI18n — 轻量国际化 hook。
- *
- * 使用 JSON 文件存储翻译，通过动态 import 按需加载。
- * 语言偏好持久化到 localStorage。
- */
-export function useI18n() {
-  const [store, setStore] = useState<I18nStore>({ locale: 'zh-CN', messages: {} });
+/** 无 Provider 时的兜底（独立渲染某个组件、测试场景）：一律返回中文原文 */
+const noop = () => {
+  /* 无 Provider 时不持久化，仅保持默认中文 */
+};
 
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
-    const locale = saved || 'zh-CN';
-    loadLocale(locale).then((messages) => {
-      setStore({ locale, messages });
-    });
-  }, []);
+export const I18nContext = createContext<I18nContextValue>({
+  locale: 'zh-CN',
+  setLocale: noop,
+  t: (_key, zh) => zh,
+});
 
-  const setLocale = useCallback(async (locale: Locale) => {
-    localStorage.setItem(STORAGE_KEY, locale);
-    const messages = await loadLocale(locale);
-    setStore({ locale, messages });
-  }, []);
-
-  const t = useCallback((key: string, params?: Record<string, string | number>): string => {
-    let msg = store.messages[key] || key;
-    if (params) {
-      Object.entries(params).forEach(([k, v]) => {
-        msg = msg.replace(`{${k}}`, String(v));
-      });
-    }
-    return msg;
-  }, [store.messages]);
-
-  return { locale: store.locale, setLocale, t };
+export function useI18n(): I18nContextValue {
+  return useContext(I18nContext);
 }

@@ -65,8 +65,12 @@ impl ToolHandler for EditFileTool {
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
         let raw_path = arguments["path"].as_str().ok_or("缺少 path 参数")?;
-        let old_string = arguments["old_string"].as_str().ok_or("缺少 old_string 参数")?;
-        let new_string = arguments["new_string"].as_str().ok_or("缺少 new_string 参数")?;
+        let old_string = arguments["old_string"]
+            .as_str()
+            .ok_or("缺少 old_string 参数")?;
+        let new_string = arguments["new_string"]
+            .as_str()
+            .ok_or("缺少 new_string 参数")?;
 
         if old_string.is_empty() {
             return Err("old_string 不能为空".to_string());

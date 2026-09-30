@@ -1,6 +1,7 @@
-pub mod paths;
-pub mod errors;
 pub mod crypto;
+pub mod errors;
+pub mod paths;
+pub mod text;
 
 /// 生成 UUID v4 字符串 ID
 pub fn new_id() -> String {

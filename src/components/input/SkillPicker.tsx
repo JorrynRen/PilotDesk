@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Search, X, Cpu, Loader2 } from 'lucide-react';
-import { useSkillStore, type SkillInfo } from '../../stores/skillStore';
+import { useSkillStore } from '../../stores/skillStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 
 interface SkillPickerProps {

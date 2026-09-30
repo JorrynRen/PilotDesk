@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { X, FileText, Loader2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { MarkdownRenderer } from '../message/MarkdownRenderer';
+import { errorMessage } from '../../utils/errorMessage';
 
 interface Props {
   /** 本地插件 ID 或远程 baseUrl */
@@ -36,7 +38,7 @@ export function PluginReadmeDialog({ basePath, pluginName, isRemote, onClose }: 
         const text = await Promise.race([readPromise, timeoutPromise]);
         setContent(text);
       } catch (err) {
-        const msg = String(err);
+        const msg = errorMessage(err);
         if (msg.includes('NOT_FOUND') || msg.includes('HTTP 404') || msg.includes('404')) {
           setNotFound(true);
         } else if (msg.includes('超时') || msg.includes('timeout') || msg.includes('TimedOut')) {
@@ -61,71 +63,6 @@ export function PluginReadmeDialog({ basePath, pluginName, isRemote, onClose }: 
       }
     };
   }, [basePath, isRemote]);
-
-  function renderMarkdown(text: string): string {
-    // 1. 代码块（必须最先处理，避免内部内容被后续规则污染）
-    let html = text.replace(/```(\w*)[\s\S]*?```/g, (match) => {
-      const lang = match.match(/```(\w*)/)?.[1] || '';
-      let code = match.replace(/```\w*\n?/, '').replace(/```$/, '');
-      // 去掉代码块内部的所有空行（逐行过滤，不留任何空行）
-      code = code.split('\n').filter(line => line.trim() !== '').join('\n');
-      return '<pre><code' + (lang ? ' class="language-' + lang + '"' : '') + '>' + escapeHtml(code.trim()) + '</code></pre>';
-    });
-
-    // 2. 行内代码
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // 3. 粗体
-    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-    // 4. 链接
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-
-    // 5. 标题
-    html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
-    html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-
-    // 6. 无序列表
-    html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>');
-
-    // 7. 段落：将连续的非空行包裹在 <p> 中
-    const lines = html.split('\n');
-    const result: string[] = [];
-    let inParagraph = false;
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed === '') {
-        if (inParagraph) { result.push('</p>'); inParagraph = false; }
-        continue;
-      }
-      // 已经是 HTML 标签的行，直接保留
-      if (trimmed.startsWith('<h') || trimmed.startsWith('<li') || trimmed.startsWith('<pre') || trimmed.startsWith('</pre') || trimmed.startsWith('<ul') || trimmed.startsWith('</ul') || trimmed.startsWith('<ol') || trimmed.startsWith('</ol')) {
-        if (inParagraph) { result.push('</p>'); inParagraph = false; }
-        result.push(line);
-        continue;
-      }
-      if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
-        if (inParagraph) { result.push('</p>'); inParagraph = false; }
-        result.push(line);
-        continue;
-      }
-      // 普通文本行，包裹在 <p> 中
-      if (!inParagraph) { result.push('<p>'); inParagraph = true; }
-      else { result.push(' '); }
-      result.push(line);
-    }
-    if (inParagraph) result.push('</p>');
-
-    return result.join('\n');
-  }
-
-  function escapeHtml(str: string): string {
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
 
   return (
     <div
@@ -164,13 +101,7 @@ export function PluginReadmeDialog({ basePath, pluginName, isRemote, onClose }: 
           {error && (
             <div className="text-xs py-4 text-center" style={{ color: '#EF4444' }}>{error}</div>
           )}
-          {content && (
-            <div
-              className="readme-content text-xs leading-relaxed"
-              style={{ color: 'var(--text-primary)' }}
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
-            />
-          )}
+          {content && <MarkdownRenderer content={content} />}
         </div>
         <div style={{ height: 20, flexShrink: 0 }} />
       </div>

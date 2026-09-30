@@ -76,15 +76,29 @@ pub enum TimeoutError {
 impl std::fmt::Display for TimeoutError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TimeoutError::ProcessExited { exit_code, stderr_summary } => {
+            TimeoutError::ProcessExited {
+                exit_code,
+                stderr_summary,
+            } => {
                 if stderr_summary.is_empty() {
                     write!(f, "进程已退出 (code={})", exit_code)
                 } else {
-                    write!(f, "进程已退出 (code={}), stderr: {}", exit_code, stderr_summary)
+                    write!(
+                        f,
+                        "进程已退出 (code={}), stderr: {}",
+                        exit_code, stderr_summary
+                    )
                 }
             }
-            TimeoutError::StillAlive { elapsed_secs, max_wait_secs } => {
-                write!(f, "超过最大等待时间 ({:.0}s)，进程仍在运行 (已等待 {:.0}s)", max_wait_secs, elapsed_secs)
+            TimeoutError::StillAlive {
+                elapsed_secs,
+                max_wait_secs,
+            } => {
+                write!(
+                    f,
+                    "超过最大等待时间 ({:.0}s)，进程仍在运行 (已等待 {:.0}s)",
+                    max_wait_secs, elapsed_secs
+                )
             }
             TimeoutError::ChannelDisconnected(msg) => {
                 write!(f, "执行通道异常断开: {}", msg)
@@ -114,10 +128,8 @@ pub fn check_process_state(
     try_wait_result: Option<i32>,
     elapsed: Duration,
     max_wait: Duration,
-    #[allow(unused_variables)]
-    operation_name: &str,
-    #[allow(unused_variables)]
-    stderr_summary: &str,
+    #[allow(unused_variables)] operation_name: &str,
+    #[allow(unused_variables)] stderr_summary: &str,
 ) -> Option<TimeoutError> {
     match try_wait_result {
         Some(exit_code) => {
@@ -153,17 +165,35 @@ pub fn make_exited_error(
     stderr_summary: &str,
 ) -> String {
     if stderr_summary.is_empty() {
-        format!("{} 超时 ({:.1}s)，进程已退出 (code={})", operation_name, elapsed.as_secs_f64(), exit_code)
+        format!(
+            "{} 超时 ({:.1}s)，进程已退出 (code={})",
+            operation_name,
+            elapsed.as_secs_f64(),
+            exit_code
+        )
     } else {
-        format!("{} 超时 ({:.1}s)，进程已退出 (code={}), stderr: {}",
-            operation_name, elapsed.as_secs_f64(), exit_code, stderr_summary)
+        format!(
+            "{} 超时 ({:.1}s)，进程已退出 (code={}), stderr: {}",
+            operation_name,
+            elapsed.as_secs_f64(),
+            exit_code,
+            stderr_summary
+        )
     }
 }
 
 /// 构建进程仍在运行的超时错误消息（便捷函数）。
-pub fn make_still_alive_error(operation_name: &str, elapsed: Duration, max_wait: Duration) -> String {
-    format!("{} 超过最大等待时间 ({:.0}s)，进程仍在运行 (已等待 {:.0}s)",
-        operation_name, max_wait.as_secs_f64(), elapsed.as_secs_f64())
+pub fn make_still_alive_error(
+    operation_name: &str,
+    elapsed: Duration,
+    max_wait: Duration,
+) -> String {
+    format!(
+        "{} 超过最大等待时间 ({:.0}s)，进程仍在运行 (已等待 {:.0}s)",
+        operation_name,
+        max_wait.as_secs_f64(),
+        elapsed.as_secs_f64()
+    )
 }
 
 /// 获取 stderr 的摘要文本（截取最后 N 个字符，避免错误消息过长）。
@@ -179,19 +209,23 @@ pub fn summarize_stderr(stderr_lines: &[String], max_chars: usize, tail_lines: u
     let tail: Vec<&String> = if stderr_lines.len() <= tail_lines {
         stderr_lines.iter().collect()
     } else {
-        stderr_lines[stderr_lines.len() - tail_lines..].iter().collect()
+        stderr_lines[stderr_lines.len() - tail_lines..]
+            .iter()
+            .collect()
     };
 
-    let joined = tail.iter()
+    let joined = tail
+        .iter()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" | ");
 
-    if joined.len() <= max_chars {
+    if joined.chars().count() <= max_chars {
         joined
     } else {
-        format!("...{}", &joined[joined.len() - max_chars..])
+        // 按字符取尾部：进程输出（构建报错等）常含中文，按字节取尾会切进字符内部 panic
+        crate::utils::text::elide_tail(&joined, max_chars)
     }
 }
 
@@ -236,7 +270,10 @@ mod tests {
         );
         assert!(result.is_some());
         match result.unwrap() {
-            TimeoutError::ProcessExited { exit_code, stderr_summary } => {
+            TimeoutError::ProcessExited {
+                exit_code,
+                stderr_summary,
+            } => {
                 assert_eq!(exit_code, 1);
                 assert_eq!(stderr_summary, "some error");
             }
@@ -255,7 +292,10 @@ mod tests {
         );
         assert!(result.is_some());
         match result.unwrap() {
-            TimeoutError::StillAlive { elapsed_secs, max_wait_secs } => {
+            TimeoutError::StillAlive {
+                elapsed_secs,
+                max_wait_secs,
+            } => {
                 assert_eq!(elapsed_secs, 600.0);
                 assert_eq!(max_wait_secs, 600.0);
             }
@@ -274,9 +314,21 @@ mod tests {
         // 实现语义：取最后 3 行 join（"line 7 | line 8 | line 9"），长度 24 > max_chars 20
         // → 只保留末尾 20 字符并在开头补 "..."，因此不再以整行开头。
         let summary = summarize_stderr(&lines, 20, 3);
-        assert!(summary.starts_with("..."), "截断应带省略号前缀: {}", summary);
-        assert!(summary.ends_with("line 9"), "应保留最后一行结尾: {}", summary);
+        assert!(
+            summary.starts_with("..."),
+            "截断应带省略号前缀: {}",
+            summary
+        );
+        assert!(
+            summary.ends_with("line 9"),
+            "应保留最后一行结尾: {}",
+            summary
+        );
         assert_eq!(summary.len(), 23, "3 个省略号 + 末尾 20 字符: {}", summary);
-        assert!(summary.contains("line 8"), "应包含倒数第二行内容: {}", summary);
+        assert!(
+            summary.contains("line 8"),
+            "应包含倒数第二行内容: {}",
+            summary
+        );
     }
 }

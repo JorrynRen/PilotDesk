@@ -51,10 +51,7 @@ fn block_style(b: &Value) -> (Option<String>, Option<String>, bool, bool, Option
 
 /// 读取本地图片像素尺寸（px）。
 fn image_dimensions(path: &str) -> Option<(u32, u32)> {
-    image::ImageReader::open(path)
-        .ok()?
-        .into_dimensions()
-        .ok()
+    image::ImageReader::open(path).ok()?.into_dimensions().ok()
 }
 
 /// `#RRGGBB` → (r, g, b) 0-255（printpdf 0.6 通道为 f32）。
@@ -93,12 +90,20 @@ fn parse_blocks(content: &str) -> Vec<Value> {
 fn is_slide_element(t: &str) -> bool {
     matches!(
         t,
-        "title" | "subtitle" | "section_title"
-            | "paragraph" | "list"
-            | "info" | "soft_skills"
-            | "divider" | "decorative_line"
-            | "card" | "timeline_item" | "skill_group"
-            | "decorative_circle" | "highlight_text"
+        "title"
+            | "subtitle"
+            | "section_title"
+            | "paragraph"
+            | "list"
+            | "info"
+            | "soft_skills"
+            | "divider"
+            | "decorative_line"
+            | "card"
+            | "timeline_item"
+            | "skill_group"
+            | "decorative_circle"
+            | "highlight_text"
     )
 }
 
@@ -138,7 +143,11 @@ fn validate_blocks(blocks: &[Value], format: &str) -> Result<(), String> {
 /// 输出路径解析（绝对或相对 cwd）
 fn resolve_out(cwd: &str, file: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(file.trim());
-    let abs = if p.is_absolute() { p } else { PathBuf::from(cwd).join(&p) };
+    let abs = if p.is_absolute() {
+        p
+    } else {
+        PathBuf::from(cwd).join(&p)
+    };
     if let Some(parent) = abs.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {}", e))?;
@@ -206,8 +215,12 @@ impl ToolHandler for CreateDocumentTool {
     }
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
-        let format = arguments["format"].as_str().ok_or("缺少 format 参数（docx/xlsx/pptx/pdf）")?;
-        let file = arguments["file"].as_str().ok_or("缺少 file 参数（输出路径）")?;
+        let format = arguments["format"]
+            .as_str()
+            .ok_or("缺少 format 参数（docx/xlsx/pptx/pdf）")?;
+        let file = arguments["file"]
+            .as_str()
+            .ok_or("缺少 file 参数（输出路径）")?;
         let content = arguments["content"].as_str().ok_or("缺少 content 参数")?;
         let abs = resolve_out(&self.cwd, file)?;
         let blocks = parse_blocks(content);
@@ -218,7 +231,10 @@ impl ToolHandler for CreateDocumentTool {
             "xlsx" => write_xlsx(&abs, &blocks),
             "pptx" => write_pptx(&abs, &blocks),
             "pdf" => write_pdf(&abs, &blocks),
-            other => Err(format!("不支持的格式: {}（支持 docx/xlsx/pptx/pdf）", other)),
+            other => Err(format!(
+                "不支持的格式: {}（支持 docx/xlsx/pptx/pdf）",
+                other
+            )),
         }?;
 
         Ok(format!("已创建文档：{}", abs.display()))
@@ -229,7 +245,14 @@ impl ToolHandler for CreateDocumentTool {
 
 /// 渲染一个 docx 段落（含样式：颜色/对齐/加粗/斜体/字号）。
 /// 返回 (段落 XML, 是否非空文本)。
-fn docx_paragraph_xml(text: &str, color: &Option<String>, align: &Option<String>, bold: bool, italic: bool, size: Option<f64>) -> String {
+fn docx_paragraph_xml(
+    text: &str,
+    color: &Option<String>,
+    align: &Option<String>,
+    bold: bool,
+    italic: bool,
+    size: Option<f64>,
+) -> String {
     let t = xml_escape(text);
     let mut rpr = String::new();
     if bold {
@@ -275,11 +298,19 @@ fn docx_body_xml(blocks: &[Value]) -> (String, Vec<(String, Vec<u8>, usize, i64,
                 let level = b["level"].as_u64().unwrap_or(1);
                 let hsize = if level <= 1 { 20.0 } else { 15.0 };
                 let text = b["text"].as_str().unwrap_or("");
-                body.push_str(&docx_paragraph_xml(text, &color, &align, true, italic, size.or(Some(hsize))));
+                body.push_str(&docx_paragraph_xml(
+                    text,
+                    &color,
+                    &align,
+                    true,
+                    italic,
+                    size.or(Some(hsize)),
+                ));
             }
             Some("image") => {
                 if let Some(path) = b["path"].as_str() {
-                    if let (Ok(bytes), Some((w, h))) = (std::fs::read(path), image_dimensions(path)) {
+                    if let (Ok(bytes), Some((w, h))) = (std::fs::read(path), image_dimensions(path))
+                    {
                         // 宽度上限 6 英寸（5486400 EMU），等比缩放
                         let scale = if w > 600 { 600.0 / w as f64 } else { 1.0 };
                         let cx = ((w as f64) * 9525.0 * scale) as i64;
@@ -351,13 +382,17 @@ fn docx_body_xml(blocks: &[Value]) -> (String, Vec<(String, Vec<u8>, usize, i64,
                 if let Some(items) = b["items"].as_array() {
                     for it in items {
                         let text = format!("- {}", it.as_str().unwrap_or(""));
-                        body.push_str(&docx_paragraph_xml(&text, &color, &align, bold, italic, size));
+                        body.push_str(&docx_paragraph_xml(
+                            &text, &color, &align, bold, italic, size,
+                        ));
                     }
                 }
             }
             _ => {
                 for line in b["text"].as_str().unwrap_or("").lines() {
-                    body.push_str(&docx_paragraph_xml(line, &color, &align, bold, italic, size));
+                    body.push_str(&docx_paragraph_xml(
+                        line, &color, &align, bold, italic, size,
+                    ));
                 }
             }
         }
@@ -395,9 +430,16 @@ fn write_docx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
     let cursor = std::io::Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
     let options = SimpleFileOptions::default();
-    let add = |writer: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>, name: &str, data: &[u8]| -> Result<(), String> {
-        writer.start_file(name, options).map_err(|e| format!("打包失败（{}）: {}", name, e))?;
-        writer.write_all(data).map_err(|e| format!("写入失败: {}", e))?;
+    let add = |writer: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>,
+               name: &str,
+               data: &[u8]|
+     -> Result<(), String> {
+        writer
+            .start_file(name, options)
+            .map_err(|e| format!("打包失败（{}）: {}", name, e))?;
+        writer
+            .write_all(data)
+            .map_err(|e| format!("写入失败: {}", e))?;
         Ok(())
     };
     add(&mut writer, "[Content_Types].xml", content_types.as_bytes())?;
@@ -417,12 +459,18 @@ fn write_docx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
             ));
         }
         doc_rels.push_str("</Relationships>");
-        add(&mut writer, "word/_rels/document.xml.rels", doc_rels.as_bytes())?;
+        add(
+            &mut writer,
+            "word/_rels/document.xml.rels",
+            doc_rels.as_bytes(),
+        )?;
         for (media_name, bytes, _, _, _) in &images {
             add(&mut writer, &format!("word/media/{}", media_name), bytes)?;
         }
     }
-    let cursor = writer.finish().map_err(|e| format!("DOCX 打包失败: {}", e))?;
+    let cursor = writer
+        .finish()
+        .map_err(|e| format!("DOCX 打包失败: {}", e))?;
     std::fs::write(abs, cursor.into_inner()).map_err(|e| format!("写入文件失败: {}", e))
 }
 
@@ -512,9 +560,16 @@ fn write_xlsx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
                     .unwrap_or((ri, None, false));
                 xlsx_style_idx(false, t_bold, t_align.as_deref())
             };
-            let s_attr = if s > 0 { format!(" s=\"{}\"", s) } else { String::new() };
+            let s_attr = if s > 0 {
+                format!(" s=\"{}\"", s)
+            } else {
+                String::new()
+            };
             if let Ok(num) = cell.trim().parse::<f64>() {
-                sheet.push_str(&format!("<c r=\"{}\"{}><v>{}</v></c>", refname, s_attr, num));
+                sheet.push_str(&format!(
+                    "<c r=\"{}\"{}><v>{}</v></c>",
+                    refname, s_attr, num
+                ));
             } else {
                 sheet.push_str(&format!(
                     "<c r=\"{}\"{} t=\"inlineStr\"><is><t>{}</t></is></c>",
@@ -579,10 +634,16 @@ fn write_xlsx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
         ("xl/styles.xml", styles.as_bytes()),
         ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
     ] {
-        writer.start_file(name, options).map_err(|e| format!("打包失败（{}）: {}", name, e))?;
-        writer.write_all(data).map_err(|e| format!("写入失败: {}", e))?;
+        writer
+            .start_file(name, options)
+            .map_err(|e| format!("打包失败（{}）: {}", name, e))?;
+        writer
+            .write_all(data)
+            .map_err(|e| format!("写入失败: {}", e))?;
     }
-    let cursor = writer.finish().map_err(|e| format!("XLSX 打包失败: {}", e))?;
+    let cursor = writer
+        .finish()
+        .map_err(|e| format!("XLSX 打包失败: {}", e))?;
     std::fs::write(abs, cursor.into_inner()).map_err(|e| format!("写入文件失败: {}", e))
 }
 
@@ -606,14 +667,43 @@ const PPTX_THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone=
 
 /// PPTX 渲染项（文本行或图片）
 enum PptxItem {
-    Text { size: f64, text: String, bold: bool, italic: bool, color: Option<String>, align: Option<String> },
-    Image { path: String, w: u32, h: u32 },
+    Text {
+        size: f64,
+        text: String,
+        bold: bool,
+        italic: bool,
+        color: Option<String>,
+        align: Option<String>,
+    },
+    Image {
+        path: String,
+        w: u32,
+        h: u32,
+    },
 }
 
 /// PPTX 页内形状（文本框或图片）
 enum PptxShape {
-    Text { x: i64, y: i64, w: i64, h: i64, size: f64, text: String, bold: bool, italic: bool, color: Option<String>, align: Option<String> },
-    Pic { x: i64, y: i64, cx: i64, cy: i64, id: i64, rel_id: u32 },
+    Text {
+        x: i64,
+        y: i64,
+        w: i64,
+        h: i64,
+        size: f64,
+        text: String,
+        bold: bool,
+        italic: bool,
+        color: Option<String>,
+        align: Option<String>,
+    },
+    Pic {
+        x: i64,
+        y: i64,
+        cx: i64,
+        cy: i64,
+        id: i64,
+        rel_id: u32,
+    },
 }
 
 /// blocks 平铺为渲染项（含样式与图片）。
@@ -637,7 +727,11 @@ fn pptx_items(blocks: &[Value]) -> Vec<PptxItem> {
             Some("image") => {
                 if let Some(path) = b["path"].as_str() {
                     if let Some((w, h)) = image_dimensions(path) {
-                        items.push(PptxItem::Image { path: path.to_string(), w, h });
+                        items.push(PptxItem::Image {
+                            path: path.to_string(),
+                            w,
+                            h,
+                        });
                     }
                 }
             }
@@ -646,7 +740,12 @@ fn pptx_items(blocks: &[Value]) -> Vec<PptxItem> {
                     for r in rs {
                         let row: Vec<String> = r
                             .as_array()
-                            .map(|cells| cells.iter().map(|c| c.as_str().unwrap_or("").to_string()).collect())
+                            .map(|cells| {
+                                cells
+                                    .iter()
+                                    .map(|c| c.as_str().unwrap_or("").to_string())
+                                    .collect()
+                            })
                             .unwrap_or_default();
                         items.push(PptxItem::Text {
                             size: 16.0,
@@ -705,8 +804,14 @@ fn normalize_color(s: &str) -> Option<String> {
 /// slide 元素 → PptxItem（兼容技能 schema：font_size/font_color 等字段别名）。
 fn slide_element_items(e: &Value) -> Vec<PptxItem> {
     let t = e["type"].as_str().unwrap_or("");
-    let color = e["font_color"].as_str().and_then(normalize_color).or_else(|| e["color"].as_str().and_then(normalize_color));
-    let size = e["font_size"].as_f64().or_else(|| e["size"].as_f64()).filter(|s| *s > 0.0);
+    let color = e["font_color"]
+        .as_str()
+        .and_then(normalize_color)
+        .or_else(|| e["color"].as_str().and_then(normalize_color));
+    let size = e["font_size"]
+        .as_f64()
+        .or_else(|| e["size"].as_f64())
+        .filter(|s| *s > 0.0);
     let bold = e["bold"].as_bool().unwrap_or(false);
     let align = e["align"].as_str().map(|s| s.to_string());
     let text = |v: &Value| v["text"].as_str().unwrap_or("").to_string();
@@ -723,12 +828,21 @@ fn slide_element_items(e: &Value) -> Vec<PptxItem> {
         "title" => vec![text_item(size.unwrap_or(32.0), text(e), true)],
         "subtitle" => vec![text_item(size.unwrap_or(22.0), text(e), false)],
         "section_title" => vec![text_item(size.unwrap_or(24.0), text(e), true)],
-        "paragraph" => text(e).lines().map(|l| text_item(size.unwrap_or(18.0), l.to_string(), bold)).collect(),
+        "paragraph" => text(e)
+            .lines()
+            .map(|l| text_item(size.unwrap_or(18.0), l.to_string(), bold))
+            .collect(),
         "list" => e["items"]
             .as_array()
             .map(|arr| {
                 arr.iter()
-                    .map(|it| text_item(size.unwrap_or(18.0), format!("- {}", it.as_str().unwrap_or("")), bold))
+                    .map(|it| {
+                        text_item(
+                            size.unwrap_or(18.0),
+                            format!("- {}", it.as_str().unwrap_or("")),
+                            bold,
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default(),
@@ -747,7 +861,10 @@ fn slide_element_items(e: &Value) -> Vec<PptxItem> {
                     lines.push(format!("  · {}", d.as_str().unwrap_or("")));
                 }
             }
-            lines.into_iter().map(|l| text_item(size.unwrap_or(16.0), l, false)).collect()
+            lines
+                .into_iter()
+                .map(|l| text_item(size.unwrap_or(16.0), l, false))
+                .collect()
         }
         "timeline_item" => {
             let mut lines = Vec::new();
@@ -775,15 +892,27 @@ fn slide_element_items(e: &Value) -> Vec<PptxItem> {
                     lines.push(format!("  · {}", r.as_str().unwrap_or("")));
                 }
             }
-            lines.into_iter().map(|l| text_item(size.unwrap_or(16.0), l, false)).collect()
+            lines
+                .into_iter()
+                .map(|l| text_item(size.unwrap_or(16.0), l, false))
+                .collect()
         }
         "skill_group" => {
             let category = e["category"].as_str().unwrap_or("");
             let tags = e["tags"]
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("、"))
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str())
+                        .collect::<Vec<_>>()
+                        .join("、")
+                })
                 .unwrap_or_default();
-            vec![text_item(size.unwrap_or(16.0), format!("{}：{}", category, tags), bold)]
+            vec![text_item(
+                size.unwrap_or(16.0),
+                format!("{}：{}", category, tags),
+                bold,
+            )]
         }
         // 装饰元素忽略
         _ => Vec::new(),
@@ -794,7 +923,10 @@ fn slide_element_items(e: &Value) -> Vec<PptxItem> {
 fn pptx_slides(blocks: &[Value]) -> Vec<PptxSlide> {
     let has_slide = blocks.iter().any(|b| b["type"].as_str() == Some("slide"));
     if !has_slide {
-        return vec![PptxSlide { background: None, items: pptx_items(blocks) }];
+        return vec![PptxSlide {
+            background: None,
+            items: pptx_items(blocks),
+        }];
     }
     let mut out = Vec::new();
     for b in blocks {
@@ -806,7 +938,10 @@ fn pptx_slides(blocks: &[Value]) -> Vec<PptxSlide> {
                     items.extend(slide_element_items(e));
                 }
             }
-            out.push(PptxSlide { background: bg, items });
+            out.push(PptxSlide {
+                background: bg,
+                items,
+            });
         } else {
             out.push(PptxSlide {
                 background: None,
@@ -840,7 +975,18 @@ fn pptx_slide_xml(shapes: &[PptxShape], first_id: i64, background: &Option<Strin
     let mut id = first_id;
     for shape in shapes {
         match shape {
-            PptxShape::Text { x, y, w, h, size, text, bold, italic, color, align } => {
+            PptxShape::Text {
+                x,
+                y,
+                w,
+                h,
+                size,
+                text,
+                bold,
+                italic,
+                color,
+                align,
+            } => {
                 let t = xml_escape(text);
                 let sz = (size * 100.0) as i64;
                 let mut rpr = format!("lang=\"zh-CN\" sz=\"{}\"", sz);
@@ -852,7 +998,10 @@ fn pptx_slide_xml(shapes: &[PptxShape], first_id: i64, background: &Option<Strin
                 }
                 let mut rpr_body = String::new();
                 if let Some(c) = color {
-                    rpr_body.push_str(&format!("<a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>", c));
+                    rpr_body.push_str(&format!(
+                        "<a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>",
+                        c
+                    ));
                 }
                 let algn = match align.as_deref() {
                     Some("center") => "ctr",
@@ -869,7 +1018,14 @@ fn pptx_slide_xml(shapes: &[PptxShape], first_id: i64, background: &Option<Strin
                     id, id, x, y, w, h, algn, rpr, rpr_body, t
                 ));
             }
-            PptxShape::Pic { x, y, cx, cy, id: pid, rel_id } => {
+            PptxShape::Pic {
+                x,
+                y,
+                cx,
+                cy,
+                id: pid,
+                rel_id,
+            } => {
                 out.push_str(&format!(
                     "<p:pic><p:nvPicPr><p:cNvPr id=\"{}\" name=\"Picture {}\"/><p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>\
                     <p:blipFill><a:blip r:embed=\"rId{}\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>\
@@ -935,7 +1091,11 @@ fn write_pptx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
                 PptxItem::Text { size, .. } => (size * 25_000.0) as i64 + 100_000,
                 PptxItem::Image { w, h, .. } => {
                     let max_w = PPTX_SLIDE_W - 2 * PPTX_MARGIN;
-                    let scale = if *w as i64 > max_w { max_w as f64 / *w as f64 } else { 1.0 };
+                    let scale = if *w as i64 > max_w {
+                        max_w as f64 / *w as f64
+                    } else {
+                        1.0
+                    };
                     (*h as f64 * 9525.0 * scale) as i64
                 }
             };
@@ -948,7 +1108,14 @@ fn write_pptx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
                 y = PPTX_MARGIN;
             }
             match item {
-                PptxItem::Text { size, text, bold, italic, color, align } => {
+                PptxItem::Text {
+                    size,
+                    text,
+                    bold,
+                    italic,
+                    color,
+                    align,
+                } => {
                     shapes.push(PptxShape::Text {
                         x: PPTX_MARGIN,
                         y,
@@ -964,7 +1131,11 @@ fn write_pptx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
                 }
                 PptxItem::Image { path, w, h } => {
                     let max_w = PPTX_SLIDE_W - 2 * PPTX_MARGIN;
-                    let scale = if w as i64 > max_w { max_w as f64 / w as f64 } else { 1.0 };
+                    let scale = if w as i64 > max_w {
+                        max_w as f64 / w as f64
+                    } else {
+                        1.0
+                    };
                     let cx = (w as f64 * 9525.0 * scale) as i64;
                     let cy = (h as f64 * 9525.0 * scale) as i64;
                     rel_count += 1;
@@ -1104,9 +1275,16 @@ fn write_pptx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
     let cursor = std::io::Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
     let options = SimpleFileOptions::default();
-    let add = |writer: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>, name: &str, data: &[u8]| -> Result<(), String> {
-        writer.start_file(name, options).map_err(|e| format!("打包失败（{}）: {}", name, e))?;
-        writer.write_all(data).map_err(|e| format!("写入失败: {}", e))?;
+    let add = |writer: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>,
+               name: &str,
+               data: &[u8]|
+     -> Result<(), String> {
+        writer
+            .start_file(name, options)
+            .map_err(|e| format!("打包失败（{}）: {}", name, e))?;
+        writer
+            .write_all(data)
+            .map_err(|e| format!("写入失败: {}", e))?;
         Ok(())
     };
     add(&mut writer, "[Content_Types].xml", content_types.as_bytes())?;
@@ -1114,15 +1292,43 @@ fn write_pptx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
     add(&mut writer, "docProps/core.xml", core_props.as_bytes())?;
     add(&mut writer, "docProps/app.xml", app_props.as_bytes())?;
     add(&mut writer, "ppt/presentation.xml", presentation.as_bytes())?;
-    add(&mut writer, "ppt/_rels/presentation.xml.rels", presentation_rels.as_bytes())?;
-    add(&mut writer, "ppt/slideMasters/slideMaster1.xml", master.as_bytes())?;
-    add(&mut writer, "ppt/slideMasters/_rels/slideMaster1.xml.rels", master_rels.as_bytes())?;
-    add(&mut writer, "ppt/slideLayouts/slideLayout1.xml", layout.as_bytes())?;
-    add(&mut writer, "ppt/slideLayouts/_rels/slideLayout1.xml.rels", layout_rels.as_bytes())?;
-    add(&mut writer, "ppt/theme/theme1.xml", PPTX_THEME_XML.as_bytes())?;
+    add(
+        &mut writer,
+        "ppt/_rels/presentation.xml.rels",
+        presentation_rels.as_bytes(),
+    )?;
+    add(
+        &mut writer,
+        "ppt/slideMasters/slideMaster1.xml",
+        master.as_bytes(),
+    )?;
+    add(
+        &mut writer,
+        "ppt/slideMasters/_rels/slideMaster1.xml.rels",
+        master_rels.as_bytes(),
+    )?;
+    add(
+        &mut writer,
+        "ppt/slideLayouts/slideLayout1.xml",
+        layout.as_bytes(),
+    )?;
+    add(
+        &mut writer,
+        "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+        layout_rels.as_bytes(),
+    )?;
+    add(
+        &mut writer,
+        "ppt/theme/theme1.xml",
+        PPTX_THEME_XML.as_bytes(),
+    )?;
     for (i, slide_xml) in slides.iter().enumerate() {
         let n = i + 1;
-        add(&mut writer, &format!("ppt/slides/slide{}.xml", n), slide_xml.as_bytes())?;
+        add(
+            &mut writer,
+            &format!("ppt/slides/slide{}.xml", n),
+            slide_xml.as_bytes(),
+        )?;
         add(
             &mut writer,
             &format!("ppt/slides/_rels/slide{}.xml.rels", n),
@@ -1134,7 +1340,9 @@ fn write_pptx(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
             add(&mut writer, &format!("ppt/media/{}", name), bytes)?;
         }
     }
-    let cursor = writer.finish().map_err(|e| format!("PPTX 打包失败: {}", e))?;
+    let cursor = writer
+        .finish()
+        .map_err(|e| format!("PPTX 打包失败: {}", e))?;
     std::fs::write(abs, cursor.into_inner()).map_err(|e| format!("写入文件失败: {}", e))
 }
 
@@ -1162,12 +1370,8 @@ fn system_font_candidates() -> Vec<String> {
 
 fn write_pdf(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
     use printpdf::{BuiltinFont, Color, Mm, PdfDocument, Rgb};
-    let (doc, page1, layer1) = PdfDocument::new(
-        "PilotDesk Document",
-        Mm(210.0),
-        Mm(297.0),
-        "Layer 1",
-    );
+    let (doc, page1, layer1) =
+        PdfDocument::new("PilotDesk Document", Mm(210.0), Mm(297.0), "Layer 1");
 
     // 中文字体：优先系统 TTF（ttc 集合不被 rusttype 支持，故仅单字体 ttf 文件）
     let mut font = None;
@@ -1238,11 +1442,18 @@ fn write_pdf(abs: &PathBuf, blocks: &[Value]) -> Result<(), String> {
             Some("list") => {
                 let items: Vec<String> = b["items"]
                     .as_array()
-                    .map(|arr| arr.iter().map(|it| format!("- {}", it.as_str().unwrap_or(""))).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|it| format!("- {}", it.as_str().unwrap_or("")))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 (size.unwrap_or(12.0), items.join("\n"))
             }
-            _ => (size.unwrap_or(12.0), b["text"].as_str().unwrap_or("").to_string()),
+            _ => (
+                size.unwrap_or(12.0),
+                b["text"].as_str().unwrap_or("").to_string(),
+            ),
         };
 
         // 文字颜色（printpdf 通道 0-255）

@@ -1,18 +1,27 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Plus, Trash2, UserCheck, Clock, CheckCircle, XCircle, AlertCircle, Upload, Download, Settings, GitBranch, Activity, BarChart3, Layout, FileText, Tag, Layers, Zap, Copy, Slash, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, Sparkles } from 'lucide-react';
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, Sparkles, ScrollText, Play, Loader2, Square } from 'lucide-react';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { showToast } from '../utils/toast';
+import { showToast, showLiveToastOnce } from '../utils/toast';
+import { confirmDialog } from '../stores/confirmStore';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
 import { WorkflowPropertyDialog } from '../components/workflow/WorkflowPropertyDialog';
+import { WorkflowInputDialog } from '../components/workflow/WorkflowInputDialog';
 import { WorkflowMonitor } from '../components/workflow/WorkflowMonitor';
+import { WorkflowOutputCard } from '../components/workflow/WorkflowOutputCard';
+import { WorkflowNodeTimeline } from '../components/workflow/WorkflowNodeTimeline';
+import type { NodeExecRow } from '../components/workflow/WorkflowNodeTimeline';
 import { ExecutionStats } from '../components/workflow/ExecutionStats';
 import { WorkflowTemplateMarket } from '../components/workflow/WorkflowTemplateMarket';
-import type { WorkflowDefinition, WorkflowInstance, PendingHumanInput } from '../types/workflow';
+import { Select } from '../components/common/Select';
+import type { WorkflowDefinition, WorkflowInstance, ExecutionProgressPayload } from '../types/workflow';
+import type { JsonValue } from '../types/plugin';
+import { useCommandCenterStore } from '../stores/commandCenterStore';
+import { errorMessage } from '../utils/errorMessage';
 
 interface WorkflowPageProps {
   onBack?: () => void;
@@ -26,7 +35,7 @@ function describeCron(expr: string): string {
   const parts = expr.trim().split(/\s+/);
   if (parts.length < 6) return expr;
 
-  const [sec, min, hour, day, month, week] = parts;
+  const [, min, hour, day, month, week] = parts;
 
   // 星期映射
   const weekMap: Record<string, string> = {
@@ -116,12 +125,37 @@ function describeCron(expr: string): string {
   return `${fmtTime(hour, min)}`;
 }
 
-export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
+/** 仍在进行中的实例状态（用于卡片上的"运行中"标记） */
+const ACTIVE_INSTANCE_STATUSES = ['pending', 'running', 'paused'];
+
+/** 已运行时长（卡片上的"运行中 · 12s"） */
+function formatElapsed(startedAt?: number | null): string {
+  if (!startedAt) return '进行中';
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - Number(startedAt)));
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m${secs % 60}s`;
+  return `${Math.floor(mins / 60)}h${mins % 60}m`;
+}
+
+export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const navigate = useNavigate();
-  const { definitions, instances, pendingInputs, loading, error, loadDefinitions, loadInstances, loadPendingInputs, respondHumanInput, createDefinition, updateDefinition, deleteDefinition, deleteExecution, selectDefinition } = useWorkflowStore();
+  const { definitions, instances, schedules, pendingInputs, pendingApprovals, loading, error, loadDefinitions, loadInstances, loadSchedules, loadPendingInputs, loadPendingApprovals, createDefinition, updateDefinition, deleteDefinition, deleteExecutions, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats' | 'templates'>('definitions');
   const [showPropertyDialog, setShowPropertyDialog] = useState<'create' | 'edit' | null>(null);
   const [editingDef, setEditingDef] = useState<WorkflowDefinition | null>(null);
+  /** 「查看结果」抽屉：直接给最近一次产出，省去跳实例页再翻记录 */
+  const [resultDefId, setResultDefId] = useState<string | null>(null);
+  /** 列表页「运行」：正在启动中的定义（按钮转圈）与待收参数的入参表单 */
+  const [runningDefId, setRunningDefId] = useState<string | null>(null);
+  const [stoppingDefId, setStoppingDefId] = useState<string | null>(null);
+  const [inputDialogDef, setInputDialogDef] = useState<WorkflowDefinition | null>(null);
+  /** 抽屉里那次执行的逐节点记录（事件派生：node/start + node/status + node/result） */
+  const [nodeExecs, setNodeExecs] = useState<NodeExecRow[]>([]);
+  const [nodeExecsLoading, setNodeExecsLoading] = useState(false);
+  const [nodeExecsError, setNodeExecsError] = useState<string | null>(null);
+  /** 待审批（不含失效的）+ 待人工输入 = 待处理入口上的计数（与指挥中心同一口径） */
+  const pendingCount = pendingApprovals.filter((a) => !a.stale).length + pendingInputs.length;
   const DEF_PAGE_SIZE = 8;
   const [defPage, setDefPage] = useState(1);
 
@@ -177,6 +211,59 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
     return map;
   }, [instances]);
 
+  /** 「查看结果」抽屉的取材：最近一次**有产出**的执行；都没有则退回最近一次执行（用于展示空态原因） */
+  const resultInstance = useMemo<WorkflowInstance | null>(() => {
+    if (!resultDefId) return null;
+    const list = instances
+      .filter(i => i.definitionId === resultDefId)
+      .sort((a, b) => Number(b.createdAt ?? 0) - Number(a.createdAt ?? 0));
+    return list.find(i => i.output !== undefined && i.output !== null) ?? list[0] ?? null;
+  }, [instances, resultDefId]);
+
+  const resultDefName = definitions.find(d => d.id === resultDefId)?.name || '';
+
+  // 逐节点记录：抽屉一打开就取（按 inspected 的执行 id 变化重新取）
+  const resultExecutionId = resultInstance?.id;
+  // 换执行 / 关抽屉时先把记录与错误归位：用「渲染期修正」（React adjust-during-render）而不是在
+  // effect 里同步 setState（后者会多一轮级联渲染，且 `react-hooks/set-state-in-effect` 会报）。
+  const [nodeExecsIdPrev, setNodeExecsIdPrev] = useState<string | undefined>(resultExecutionId);
+  if (nodeExecsIdPrev !== resultExecutionId) {
+    setNodeExecsIdPrev(resultExecutionId);
+    setNodeExecs([]);
+    setNodeExecsError(null);
+    setNodeExecsLoading(Boolean(resultExecutionId));
+  }
+
+  useEffect(() => {
+    if (!resultExecutionId) return;
+    let aborted = false;
+    invoke<NodeExecRow[]>('get_node_executions', { executionId: resultExecutionId })
+      .then((rows) => { if (!aborted) setNodeExecs(rows || []); })
+      .catch((err) => { if (!aborted) setNodeExecsError(errorMessage(err)); })
+      .finally(() => { if (!aborted) setNodeExecsLoading(false); });
+    return () => { aborted = true; };
+  }, [resultExecutionId]);
+
+  /** nodeId → 节点名/类型（来自当前定义；定义被改过或已删时退回节点 id） */
+  const resultNodeMeta = useMemo<Record<string, { label: string; type: string }>>(() => {
+    const map: Record<string, { label: string; type: string }> = {};
+    const def = definitions.find(d => d.id === resultDefId);
+    def?.stages?.forEach(stage => {
+      stage.nodes?.forEach(node => {
+        map[node.id] = { label: node.label || node.id, type: node.type };
+      });
+    });
+    return map;
+  }, [definitions, resultDefId]);
+
+  // Esc 关闭结果弹窗（看长内容时不必再移动鼠标去找关闭按钮）
+  useEffect(() => {
+    if (!resultDefId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setResultDefId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [resultDefId]);
+
   // 筛选 + 排序（结果为 filteredDefs，分页基于它计算）
   const filteredDefs = useMemo(() => {
     const kw = defFilterKeyword.trim().toLowerCase();
@@ -221,28 +308,54 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
     return result;
   }, [definitions, defFilterKeyword, defFilterEnabled, defFilterTrigger, defSortKey, defSortAsc]);
 
-  // 筛选条件/排序变化时回到第 1 页
-  useEffect(() => {
+  // 筛选条件/排序变化时回到第 1 页：用「渲染期修正」（React adjust-during-render）而不是 effect ——
+  // 在 effect 里同步 setState 会多一轮级联渲染，且 `react-hooks/set-state-in-effect` 会报。
+  // 判据取各筛选态拼出的签名，变化即归零；本帧直接以第 1 页渲染，最终状态与原 effect 一致。
+  const defFilterSignature = `${defFilterKeyword}|${defFilterEnabled}|${defFilterTrigger}|${defSortKey}|${defSortAsc}`;
+  // 前值哨兵初值用 null（而非当帧签名）：筛选项在首帧就可能已有非默认值，
+  // 用当帧值作初值会让判据第一帧就不成立，归零那次被静默丢掉。
+  const [syncedFilterSignature, setSyncedFilterSignature] = useState<string | null>(null);
+  if (syncedFilterSignature !== defFilterSignature) {
+    setSyncedFilterSignature(defFilterSignature);
     setDefPage(1);
-  }, [defFilterKeyword, defFilterEnabled, defFilterTrigger, defSortKey, defSortAsc]);
+  }
 
   useEffect(() => {
     loadDefinitions();
     loadInstances();
+    loadSchedules();
     loadPendingInputs();
-    const pendingInterval = setInterval(loadPendingInputs, 5000);
-    // 检测崩溃后残留的 running/paused 实例
+    loadPendingApprovals();
+    // 两类待办一起轮询：漏掉事件（页面重挂/事件早于订阅）也能在 5 秒内补齐
+    const pendingInterval = setInterval(() => {
+      loadPendingInputs();
+      loadPendingApprovals();
+    }, 5000);
+    // 检测**中断的**执行（进程重启后残留的 running/paused；后台正在跑的已被后端按运行登记表排除）。
+    //
+    // 两点必须做对，否则就是刷屏：
+    // ① 这段在每次进工作流页时都会跑（StrictMode 下还会双跑），用按 key 去重的现场提示，
+    //    同一条残留只提示一次，而不是每进一次页面再弹一遍；
+    // ② 它讲的是"发现的残留状态"，不是刚发生的事——失败本身已有权威通知
+    //    （`notificationEvents` 的「xx 执行失败」），所以不进通知中心，只现场提示。
     invoke<Array<{ executionId: string; definitionName: string; status: string }>>('list_recoverable_executions')
       .then(recoverable => {
         if (recoverable.length > 0) {
-          showToast('检测到 ' + recoverable.length + ' 个未完成的执行记录（已自动标记为失败）', 'warning');
+          showLiveToastOnce(
+            `recoverable:${recoverable.map(r => r.executionId).sort().join(',')}`,
+            // 措辞按实际可做的操作写：这类实例还是 running，删除会被后端跳过（未结束不许删），
+            // 得先补全执行、或先停止再清理。
+            `有 ${recoverable.length} 个中断未完成的执行记录，可到「执行实例」补全执行或停止`,
+            'warning',
+          );
         }
       })
       .catch(() => {});
     return () => {
       clearInterval(pendingInterval);
     };
-  }, []);
+    // store 的 action 引用恒定（zustand 只创建一次），补进依赖后本 effect 仍等价于「挂载时跑一次」
+  }, [loadDefinitions, loadInstances, loadSchedules, loadPendingInputs, loadPendingApprovals]);
 
   const handleExportSingle = async (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation();
@@ -256,9 +369,9 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
         await invoke('export_workflow_to_file', { id, dirPath });
         showToast('工作流导出成功', 'success');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('导出工作流失败:', err);
-      showToast(`导出工作流失败: ${err}`, 'error');
+      showToast(`导出工作流失败: ${errorMessage(err)}`, 'error');
     }
   };
 
@@ -275,8 +388,8 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
         try {
           await invoke('import_workflow_from_file', { filePath });
           successCount++;
-        } catch (innerErr: any) {
-          const fileName = filePath.split(/[\/]/).pop();
+        } catch (innerErr) {
+          const fileName = filePath.split(/[/]/).pop();
           showToast(`导入工作流「${fileName}」失败: ${innerErr}`, 'error');
         }
       }
@@ -284,7 +397,7 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
         showToast(`成功导入 ${successCount} 个工作流`, 'success');
       }
       await loadDefinitions();
-    } catch (err: any) {
+    } catch (err) {
       console.error('导入工作流失败:', err);
     }
   };
@@ -307,7 +420,7 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
     trigger: { triggerType: 'manual' | 'cron' | 'event'; cron?: string };
     enabled: boolean;
     icon?: string;
-    inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
+    inputSchema?: Record<string, { type: string; description?: string; required?: boolean; default?: JsonValue }>;
     outputSchema?: Record<string, { type: string; description?: string }>;
   }) => {
     setShowPropertyDialog(null);
@@ -347,71 +460,73 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
     }
   };
 
-  const handleStart = async (e: React.MouseEvent, id: string, name: string) => {
-    e.stopPropagation();
-    try {
-      setRunningIds(prev => new Set(prev).add(id));
-      await useWorkflowStore.getState().safeStartWorkflow(id);
-    } catch (err) {
-      setRunningIds(prev => { const next = new Set(prev); next.delete(id); return next; });
-      console.error(`启动工作流「${name}」失败:`, err);
-      showToast(`启动工作流「${name}」失败: ${err}`, 'error');
-    }
-  };
-
   // ── 删除二次确认弹窗 ──
-  // ── 执行中状态追踪 + 结果通知 ──
-  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
 
-
-  // 监听执行状态事件（全局，组件挂载时注册）
+  /**
+   * 监听执行进度（组件挂载时注册）。
+   *
+   * 两处历史包袱在这里一次修掉：
+   * 1. 原先监听的 `workflow:execution-status` 后端**从未发出过**——引擎早已把
+   *    node/stage/execution 三类事件合并成 `workflow:execution-progress`（见 engine.rs emit_progress），
+   *    所以那段"执行结束提示 + 刷新实例"的代码一直是死监听；
+   * 2. 定时任务执行后卡片上"上次执行"总显示"从未"：调度器写的是库里的 last_run_at，
+   *    而前端只在页面挂载时读过一次排期——没有任何刷新时机。这里补上。
+   */
   useEffect(() => {
     let unlisten: (() => void) | null = null;
-    listen<{ execution_id: string; definition_id: string; definition_name: string; status: string; error?: string }>('workflow:execution-status', (event) => {
-      const { status, definition_id: defId, definition_name: defName } = event.payload;
-      // 直接使用事件 payload 中的 definition_id，不再依赖 store 查找（消除竞态）
-      setRunningIds(prev => {
-        const next = new Set(prev);
-        if (status === 'running') {
-          next.add(defId);
-        } else {
-          next.delete(defId);
-        }
-        return next;
-      });
-      if (status === 'completed' || status === 'failed' || status === 'cancelled') {
-        if (status === 'completed') {
-          showToast(`${defName} 执行成功`, 'success');
-        } else if (status === 'failed') {
-          showToast(`${defName} 执行失败${event.payload.error ? ': ' + event.payload.error : ''}`, 'error');
-        } else {
-          showToast(`${defName} 已取消`, 'warning');
-        }
+    // 卸载与 listen() 的 Promise 是竞态：先卸载后 resolve 时，cleanup 拿到的还是 null，
+    // 监听器就永远留着了。StrictMode 下每次挂载都双跑一次 effect，会稳定泄漏一个，
+    // 于是同一帧被多份监听各推一次通知（"门控策略未通过"曾一次推 4 条就是这个原因）。
+    let disposed = false;
+    listen<ExecutionProgressPayload>('workflow:execution-progress', (event) => {
+      const p = event.payload;
+      // 只要带 execution.status（起始 running / 终态 completed·failed·cancelled）就刷新：
+      // 实例记录在执行开始前就已落库，所以起始帧到达即可让卡片上的"运行中"立刻出现；
+      // 排期（上次/下次执行）由调度器在执行前写好，同样靠这一步跟上。
+      if (p.execution?.status) {
         useWorkflowStore.getState().loadInstances();
-        useWorkflowStore.getState().loadPendingInputs();
+        useWorkflowStore.getState().loadSchedules();
       }
-    }).then(fn => { unlisten = fn; });
-
-    // 监听阶段门控失败事件
-    listen<{ execution_id: string; stage_id: string; stage_name: string; status: string; reason?: string; error?: string }>('workflow:stage-status', (event) => {
-      const { status, stage_name: stageName, reason, error } = event.payload;
-      if (status === 'gate_failed') {
-        const detail = reason || error || '';
-        showToast(`${stageName} 门控策略未通过${detail ? ': ' + detail : ''}`, 'error');
+      // 阶段门控未通过：**只做现场提示**，不进通知中心历史。
+      // 权威记录由执行终态那条通知承担（`notificationEvents` 的 "xx 执行失败"，detail 就是这里的原因），
+      // 再记一条等于同一件事说两遍。按 执行+阶段 去重：同一帧被多份监听收到也只弹一次。
+      if (p.stage?.status === 'gate_failed') {
+        const detail = p.stage.reason || p.stage.error || '';
+        showLiveToastOnce(
+          `${p.execution_id}:gate:${p.stage.id}`,
+          `${p.stage.name || '阶段'} 门控策略未通过${detail ? ': ' + detail : ''}`,
+          'error',
+        );
       }
+    }).then(fn => {
+      if (disposed) { fn(); return; }
+      unlisten = fn;
     });
 
-    return () => { unlisten?.(); };
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
-  const [confirmDelete, setConfirmDelete] = useState<{
-    type: 'definition' | 'execution';
-    id: string;
-    name: string;
-  } | null>(null);
-
+  /**
+   * 删工作流定义（二次确认走全局确认弹窗；后端在有未结束执行时会拒绝并给出提示）。
+   */
   const handleDelete = async (id: string, name: string) => {
-    setConfirmDelete({ type: 'definition', id, name });
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: `确定删除工作流「${name}」？此操作不可撤销，其已结束的执行记录、以及节点自动创建的内部会话与用量记录将一并删除。若仍有未结束的执行，需先停止后才能删除。`,
+      confirmText: '删除',
+    });
+    if (!ok) return;
+    try {
+      const res = await deleteDefinition(id);
+      showToast(
+        res.deleted > 0
+          ? `已删除工作流「${name}」，并清理 ${res.deleted} 条执行记录`
+          : `已删除工作流「${name}」`,
+        'success',
+      );
+    } catch (err) {
+      showToast(`删除失败: ${errorMessage(err)}`, 'error');
+    }
   };
 
   const handleDuplicate = async (id: string, name: string) => {
@@ -422,33 +537,87 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
     }
   };
 
-  const handleDeleteExecution = async (executionId: string, name: string) => {
-    setConfirmDelete({ type: 'execution', id: executionId, name });
-  };
-
-  const confirmDeleteAction = async () => {
-    if (!confirmDelete) return;
+  /** 单个 / 批量删除执行记录共用入口（由 WorkflowMonitor 上抛选中集合与状态摘要） */
+  const handleDeleteExecutions = async (executionIds: string[], summary: string) => {
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: `确定删除选中的 ${executionIds.length} 条执行记录${summary ? `（${summary}）` : ''}？此操作不可撤销。关联的会话与磁盘工件不会被删除，但「统计」页指标会随之变化。`,
+      confirmText: '删除',
+    });
+    if (!ok) return;
     try {
-      if (confirmDelete.type === 'definition') {
-        await deleteDefinition(confirmDelete.id);
-      } else {
-        await deleteExecution(confirmDelete.id);
-      }
+      const res = await deleteExecutions(executionIds);
+      const skipped = res.skipped.length;
+      showToast(
+        skipped > 0
+          ? `已删除 ${res.deleted} 条执行记录，${skipped} 条未结束已跳过`
+          : `已删除 ${res.deleted} 条执行记录`,
+        skipped > 0 ? 'warning' : 'success',
+      );
     } catch (err) {
-      console.error('删除失败:', err);
+      showToast(`删除失败: ${errorMessage(err)}`, 'error');
     }
-    setConfirmDelete(null);
   };
 
-  const statusIcon = (status: string) => {
-    switch (status) {
-      case 'success': return <CheckCircle size={14} className="text-green-500" />;
-      case 'failed': return <XCircle size={14} className="text-red-500" />;
-      case 'running': return <AlertCircle size={14} className="text-blue-500" />;
-      case 'pending': return <Clock size={14} className="text-yellow-500" />;
-      case 'cancelled': return <Slash size={14} className="text-amber-500" />;
-      case 'timeout': return <AlertTriangle size={14} className="text-red-500" />;
-      default: return <Clock size={14} className="text-gray-400" />;
+  /**
+   * 直接运行一个定义（列表页快捷入口）。
+   *
+   * 与编辑器里的「运行」同口径：先 `validate_workflow`，error 级直接拦下（否则只会跑出一个
+   * 定义有错的实例），warning 级提示但不阻止；定义声明了 inputSchema 时先弹表单收参数
+   * （顶层没有上游节点可以补齐入参）。
+   */
+  const startDefinitionRun = async (def: WorkflowDefinition, input?: Record<string, unknown>) => {
+    if (runningDefId) return;
+    setRunningDefId(def.id);
+    try {
+      const result = await invoke<{ ok: boolean; checks: Array<{ severity: string; message: string }> }>(
+        'validate_workflow',
+        { workflowId: def.id },
+      );
+      if (!result.ok) {
+        const errors = result.checks.filter(c => c.severity === 'error').map(c => c.message).join('\n');
+        showToast(`工作流验证失败：${errors}`, 'error');
+        return;
+      }
+      const warnings = result.checks.filter(c => c.severity === 'warning');
+      if (warnings.length > 0) {
+        showToast(`验证提示：${warnings.map(c => c.message).join('; ')}`, 'warning');
+      }
+      await useWorkflowStore.getState().safeStartWorkflow(def.id, input);
+      showToast(`已开始执行「${def.name}」`, 'success');
+    } catch (err) {
+      showToast(`执行失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setRunningDefId(null);
+    }
+  };
+
+  const handleRunDefinition = (e: React.MouseEvent, def: WorkflowDefinition) => {
+    e.stopPropagation();
+    if (def.inputSchema && Object.keys(def.inputSchema).length > 0) {
+      setInputDialogDef(def);
+      return;
+    }
+    void startDefinitionRun(def);
+  };
+
+  /** 停掉该定义正在跑的实例：执行中被中断的节点本轮不再运行，已完成的产出留在这次记录里 */
+  const handleStopDefinition = async (e: React.MouseEvent, def: WorkflowDefinition, instance: WorkflowInstance) => {
+    e.stopPropagation();
+    const ok = await confirmDialog({
+      title: '停止执行',
+      message: `确定停止「${def.name}」正在运行的实例？未执行的节点不会再运行，已完成的节点产出会保留在这次记录里。`,
+      confirmText: '停止',
+    });
+    if (!ok) return;
+    setStoppingDefId(def.id);
+    try {
+      await useWorkflowStore.getState().cancelWorkflow(instance.id);
+      showToast('已停止执行', 'success');
+    } catch (err) {
+      showToast(`停止失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setStoppingDefId(null);
     }
   };
 
@@ -457,12 +626,31 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
   const safeDefPage = Math.min(defPage, totalDefPages);
   const paginatedDefs = filteredDefs.slice((safeDefPage - 1) * DEF_PAGE_SIZE, safeDefPage * DEF_PAGE_SIZE);
 
-  // Auto-correct page when data changes shrink the list beyond current page
-  useEffect(() => {
-    if (defPage > totalDefPages) {
-      setDefPage(totalDefPages);
+  // 数据变化导致当前页超出范围时回到末页：用「渲染期修正」（React adjust-during-render）而不是 effect ——
+  // 在 effect 里同步 setState 会多一轮级联渲染，且 `react-hooks/set-state-in-effect` 会报。
+  // 本帧已由 safeDefPage 兜底，渲染结果不变。
+  if (defPage > totalDefPages) {
+    setDefPage(totalDefPages);
+  }
+
+  /** 每个定义当前是否有正在进行的执行（卡片上的"运行中"标记） */
+  const runningByDef = useMemo(() => {
+    const map = new Map<string, WorkflowInstance>();
+    for (const inst of instances) {
+      if (ACTIVE_INSTANCE_STATUSES.includes(inst.status) && !map.has(inst.definitionId)) {
+        map.set(inst.definitionId, inst);
+      }
     }
-  }, [filteredDefs.length, totalDefPages, defPage]);
+    return map;
+  }, [instances]);
+
+  // 有执行在跑时每秒重渲染一次，让"运行中 · 12s"真的在走（没有运行中的实例就不挂定时器）
+  const [, setElapsedTick] = useState(0);
+  useEffect(() => {
+    if (runningByDef.size === 0) return;
+    const timer = setInterval(() => setElapsedTick((v) => v + 1), 1000);
+    return () => clearInterval(timer);
+  }, [runningByDef.size]);
 
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -508,6 +696,19 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
         <div className="flex-1" />
 
         <div className="flex items-center gap-2 pb-2">
+          {/* 待处理入口：审批卡与人工输入统一在指挥中心就地处理（这里只做入口与计数，
+              避免同一批待办在页面底部再堆一份、位置还随 tab 漂移） */}
+          {pendingCount > 0 && (
+            <button
+              onClick={() => useCommandCenterStore.getState().openCenter()}
+              className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+              style={{ border: '1px solid #F59E0B', backgroundColor: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}
+              title="有待审批的工具调用或等待输入，点击到指挥中心处理"
+            >
+              <AlertTriangle size={14} />
+              待处理 {pendingCount}
+            </button>
+          )}
           <button
             onClick={handleCreateAndEdit}
             className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
@@ -534,7 +735,7 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4 pd-scroll-stable">
         {loading && (
           <div className="flex items-center justify-center h-32 text-xs" style={{ color: 'var(--text-tertiary)' }}>
             加载中...
@@ -570,7 +771,7 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                     <span className="text-[11px]" style={{ color: 'var(--text-tertiary)', fontWeight: 500 }}>筛选：</span>
                   </div>
 
-                  {/* 启用状态药丸 */}
+                  {/* 启用状态药丸（容器固定 28px，与同行 Select(size=sm) 等高） */}
                   <div
                     aria-label="启用状态"
                     style={{
@@ -582,6 +783,7 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                       border: '1px solid var(--border)',
                       backgroundColor: 'var(--bg-primary)',
                       borderRadius: 4,
+                      height: 28,
                       overflowX: 'auto',
                       scrollbarWidth: 'thin',
                     }}
@@ -607,24 +809,47 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                     })}
                   </div>
 
-                  {/* 触发方式下拉 */}
-                  <select
-                    value={defFilterTrigger}
-                    onChange={e => setDefFilterTrigger(e.target.value as typeof defFilterTrigger)}
-                    className="pd-btn text-[11px] rounded py-1 px-2"
+                  {/* 触发方式：平铺按钮组（下拉看不到"有哪几种"，平铺更直观，也与左侧启用状态同形） */}
+                  <span className="inline-flex items-center gap-1 text-[11px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                    触发：
+                  </span>
+                  <div
+                    aria-label="触发方式"
                     style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      flexWrap: 'nowrap',
+                      padding: '2px 4px',
                       border: '1px solid var(--border)',
                       backgroundColor: 'var(--bg-primary)',
-                      color: 'var(--text-primary)',
-                      outline: 'none',
-                      minWidth: 88,
+                      borderRadius: 4,
+                      height: 28,
+                      overflowX: 'auto',
+                      scrollbarWidth: 'thin',
                     }}
-                    title="按触发方式筛选"
                   >
-                    {DEFINITION_TRIGGER_OPTIONS.map(t => (
-                      <option key={t.key} value={t.key}>{t.label}</option>
-                    ))}
-                  </select>
+                    {DEFINITION_TRIGGER_OPTIONS.map(opt => {
+                      const active = defFilterTrigger === opt.key;
+                      return (
+                        <button
+                          key={opt.key}
+                          onClick={() => setDefFilterTrigger(opt.key)}
+                          className="text-[10px] px-2 py-0.5 rounded-full transition-colors whitespace-nowrap"
+                          style={{
+                            border: active ? '1px solid var(--accent)' : '1px solid transparent',
+                            backgroundColor: active ? 'var(--accent-light)' : 'transparent',
+                            color: active ? 'var(--accent)' : 'var(--text-tertiary)',
+                            fontWeight: active ? 500 : 400,
+                            flexShrink: 0,
+                          }}
+                          title={`只看「${opt.label}」触发的工作流`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
 
                   {/* 排序 */}
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -632,23 +857,15 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                       <Calendar size={11} />
                       排序：
                     </span>
-                    <select
+                    <Select
                       value={defSortKey}
-                      onChange={e => setDefSortKey(e.target.value as typeof defSortKey)}
-                      className="pd-btn text-[11px] rounded py-1 px-2"
-                      style={{
-                        border: '1px solid var(--border)',
-                        backgroundColor: 'var(--bg-primary)',
-                        color: 'var(--text-primary)',
-                        outline: 'none',
-                        minWidth: 96,
-                      }}
+                      onChange={v => setDefSortKey(v as typeof defSortKey)}
+                      options={DEFINITION_SORT_OPTIONS.map(s => ({ value: s.key, label: s.label }))}
+                      size="sm"
+                      className="shrink-0"
+                      style={{ minWidth: 96 }}
                       title="排序方式"
-                    >
-                      {DEFINITION_SORT_OPTIONS.map(s => (
-                        <option key={s.key} value={s.key}>{s.label}</option>
-                      ))}
-                    </select>
+                    />
                     <button
                       onClick={() => setDefSortAsc(v => !v)}
                       className="pd-btn p-1 rounded transition-colors inline-flex items-center gap-0.5"
@@ -656,6 +873,7 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                         border: '1px solid var(--border)',
                         backgroundColor: defSortAsc ? 'var(--accent)' : 'var(--bg-primary)',
                         color: defSortAsc ? '#fff' : 'var(--text-secondary)',
+                        height: 28,
                       }}
                       title={defSortAsc ? '降序' : '升序'}
                     >
@@ -664,8 +882,9 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                     </button>
                   </div>
 
-                  {/* 关键字搜索 */}
+                  {/* 关键字搜索（高度对齐同行 Select(size=sm) 的 28px，不再靠内容撑高） */}
                   <div
+                    className="pd-field"
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
@@ -673,7 +892,8 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                       border: '1px solid var(--border)',
                       backgroundColor: 'var(--bg-primary)',
                       borderRadius: 4,
-                      padding: '2px 6px',
+                      height: 28,
+                      padding: '0 6px',
                       flex: '1 1 200px',
                       minWidth: 180,
                       maxWidth: 320,
@@ -703,7 +923,7 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                   <button
                     onClick={clearDefFilters}
                     disabled={!hasDefFilter}
-                    className="pd-btn px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap"
+                    className="pd-btn px-2 py-1 h-7 text-[11px] rounded transition-colors whitespace-nowrap inline-flex items-center"
                     style={{
                       border: '1px solid var(--border)',
                       background: hasDefFilter ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
@@ -754,6 +974,21 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                           }}>
                             {def.enabled ? '已启用' : '已禁用'}
                           </span>
+                          {/* 运行态：自动触发（定时/事件）的执行也在这里显形，不必再翻实例页 */}
+                          {runningByDef.has(def.id) && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setActiveTab('instances'); }}
+                              className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full transition-opacity hover:opacity-80"
+                              style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                              title="正在运行，点击查看执行实例"
+                            >
+                              <span
+                                className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
+                                style={{ backgroundColor: 'var(--accent)' }}
+                              />
+                              运行中 · {formatElapsed(runningByDef.get(def.id)?.startedAt)}
+                            </button>
+                          )}
                           {instCount > 0 && (
                             <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded" style={{
                               backgroundColor: 'rgba(59,130,246,0.1)',
@@ -765,6 +1000,46 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                           )}
                         </div>
                         <div className="flex items-center gap-1">
+                          {(() => {
+                            // 有实例在跑就变「停止」：同一位置一个按钮表达"开始/结束这件事"
+                            const runningInst = runningByDef.get(def.id);
+                            if (runningInst) {
+                              const stopping = stoppingDefId === def.id;
+                              return (
+                                <button
+                                  onClick={(e) => void handleStopDefinition(e, def, runningInst)}
+                                  disabled={stopping}
+                                  className="pd-btn p-1.5 rounded hover:opacity-80"
+                                  style={{ color: '#EF4444', cursor: stopping ? 'default' : 'pointer' }}
+                                  title={stopping ? '正在停止…' : '停止执行'}
+                                >
+                                  {stopping ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
+                                </button>
+                              );
+                            }
+                            const starting = runningDefId === def.id;
+                            return (
+                              <button
+                                onClick={(e) => handleRunDefinition(e, def)}
+                                disabled={starting}
+                                className="pd-btn p-1.5 rounded hover:opacity-80"
+                                style={{ color: 'var(--accent)', cursor: starting ? 'default' : 'pointer' }}
+                                title={starting ? '正在启动…' : '运行此工作流'}
+                              >
+                                {starting ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                              </button>
+                            );
+                          })()}
+                          {instCount > 0 && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setResultDefId(def.id); }}
+                              className="pd-btn p-1.5 rounded hover:opacity-80"
+                              style={{ color: 'var(--text-secondary)' }}
+                              title="查看最近一次执行结果"
+                            >
+                              <ScrollText size={14} />
+                            </button>
+                          )}
                           <button
                             onClick={(e) => { handleEditProperties(e, def); }}
                             className="pd-btn p-1.5 rounded hover:opacity-80"
@@ -819,7 +1094,14 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
                           {(() => {
                             const t = def.trigger;
                             if (!t || t.triggerType === 'manual') return '手动';
-                            if (t.triggerType === 'cron') return `定时（${describeCron(t.cron || '')}）`;
+                            if (t.triggerType === 'cron') {
+                              // 排期信息直接读出来挂在卡片上：以前要切到「定时任务」页才看得到
+                              // 上次/下次执行，改配置反而得多跳一次 tab
+                              const s = schedules.find(sc => sc.workflowId === def.id);
+                              const last = s?.lastRunAt ? new Date(Number(s.lastRunAt) * 1000).toLocaleString() : '从未';
+                              const next = s?.nextRunAt ? new Date(Number(s.nextRunAt) * 1000).toLocaleString() : '—';
+                              return `定时（${describeCron(t.cron || '')}，上次执行: ${last}，下次执行: ${next}）`;
+                            }
                             if (t.triggerType === 'event') return `事件${t.eventName ? ' - ' + t.eventName : ''}`;
                             return t.triggerType;
                           })()}
@@ -901,35 +1183,13 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
             )}
             </>)}
 
-        {/* 待审批提示条 */}
-        {pendingInputs.length > 0 && (
-          <div
-            className="p-3 rounded-lg mb-2"
-            style={{ backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)' }}
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <UserCheck size={14} style={{ color: '#F59E0B' }} />
-              <span className="text-xs font-medium" style={{ color: '#F59E0B' }}>
-                待审批 ({pendingInputs.length})
-              </span>
-            </div>
-            {pendingInputs.map((item) => (
-              <PendingInputCard
-                key={`${item.execution_id}-${item.node_id}`}
-                item={item}
-                onSubmit={(response) => respondHumanInput(item.execution_id, item.node_id, response)}
-              />
-            ))}
-          </div>
-        )}
-
         {activeTab === 'instances' && (
           <WorkflowMonitor
             onViewDefinition={(defId) => {
               selectDefinition(defId);
               navigate(`/workflow/editor?id=${defId}`);
             }}
-            onDeleteExecution={(id, name) => handleDeleteExecution(id, name)}
+            onDeleteExecutions={handleDeleteExecutions}
           />
         )}
 
@@ -939,7 +1199,6 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
 
         {activeTab === 'templates' && (
           <WorkflowTemplateMarket
-            onBack={() => setActiveTab('definitions')}
             onUseTemplate={(tplId) => {
               showToast(`已安装模板 ${tplId}，可在"工作流定义"中查看`, 'success');
               setActiveTab('definitions');
@@ -958,44 +1217,108 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
         />
       )}
 
-      {/* 删除二次确认弹窗 */}
-      {confirmDelete && (
+      {/* 运行前入参表单（定义声明了 inputSchema 时）：与编辑器里的「运行」同一流程 */}
+      {inputDialogDef?.inputSchema && (
+        <WorkflowInputDialog
+          definitionName={inputDialogDef.name}
+          schema={inputDialogDef.inputSchema}
+          onRun={(input) => {
+            const target = inputDialogDef;
+            setInputDialogDef(null);
+            void startDefinitionRun(target, input);
+          }}
+          onClose={() => setInputDialogDef(null)}
+        />
+      )}
+
+      {/* 「查看结果」悬浮侧栏：带外边距、四角圆角，不再是满屏抽屉也不会盖住整页 */}
+      {resultDefId && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => setConfirmDelete(null)}
+          className="fixed inset-0 z-40"
+          style={{ backgroundColor: 'rgba(0,0,0,0.3)' }}
+          onClick={() => setResultDefId(null)}
+        />
+      )}
+      {resultDefId && (
+        <div
+          className="fixed right-4 top-4 bottom-4 z-50 flex flex-col rounded-xl shadow-2xl overflow-hidden"
+          style={{ width: 'min(920px, 92vw)', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
         >
+          {/* Header：定义名 + 本次执行概览 */}
           <div
-            className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
-            style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
+            className="flex items-center gap-2 px-4 py-3 shrink-0"
+            style={{ borderBottom: '1px solid var(--border)' }}
           >
-            <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-              确认删除
-            </div>
-            <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              {confirmDelete.type === 'definition'
-                ? `确定删除工作流「${confirmDelete.name}」？此操作不可撤销，关联的执行记录也将被删除。`
-                : `确定删除执行记录「${confirmDelete.name}」？此操作不可撤销。`
-              }
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setConfirmDelete(null)}
-                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
-                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-              >
-                取消
-              </button>
-              <button
-                onClick={confirmDeleteAction}
-                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
-                style={{ backgroundColor: '#ef4444', color: '#fff' }}
-              >
-                确认删除
-              </button>
-            </div>
+            <ScrollText size={16} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+            <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)', maxWidth: 300 }}>
+              {resultDefName || '最近一次结果'}
+            </span>
+            {resultInstance && (
+              <span className="flex items-center gap-2 text-[10px] min-w-0" style={{ color: 'var(--text-tertiary)' }}>
+                <span
+                  className="px-1.5 py-0.5 rounded-full"
+                  style={{
+                    backgroundColor: resultInstance.status === 'success' ? 'rgba(16,185,129,0.12)' : resultInstance.status === 'failed' ? 'rgba(239,68,68,0.12)' : 'var(--bg-tertiary)',
+                    color: resultInstance.status === 'success' ? '#10B981' : resultInstance.status === 'failed' ? '#EF4444' : 'var(--text-tertiary)',
+                  }}
+                >
+                  {({ success: '成功', failed: '失败', cancelled: '已取消', timeout: '超时', running: '运行中', paused: '已暂停', pending: '待触发' } as Record<string, string>)[resultInstance.status] || resultInstance.status}
+                </span>
+                <span>{({ manual: '手动', cron: '定时', event: '事件' } as Record<string, string>)[resultInstance.trigger] || resultInstance.trigger}</span>
+                <span className="truncate">
+                  {resultInstance.completedAt ? new Date(Number(resultInstance.completedAt) * 1000).toLocaleString() : '未结束'}
+                </span>
+              </span>
+            )}
+            <span className="flex-1" />
+            <button
+              onClick={() => setResultDefId(null)}
+              className="pd-btn p-1 rounded hover:opacity-80 shrink-0"
+              style={{ color: 'var(--text-tertiary)' }}
+              title="关闭（Esc）"
+            >
+              <X size={14} />
+            </button>
           </div>
+
+          {resultInstance ? (
+            <>
+              <div className="flex-1 overflow-y-auto px-4 py-3.5 space-y-4">
+                <WorkflowOutputCard instance={resultInstance} compact />
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>执行记录</span>
+                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      共 {nodeExecs.length} 个节点，按执行顺序
+                    </span>
+                  </div>
+                  <WorkflowNodeTimeline
+                    rows={nodeExecs}
+                    meta={resultNodeMeta}
+                    loading={nodeExecsLoading}
+                    error={nodeExecsError}
+                    finalOutput={resultInstance.output}
+                  />
+                </div>
+              </div>
+              <div className="px-4 py-2.5 shrink-0 flex items-center justify-between" style={{ borderTop: '1px solid var(--border)' }}>
+                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  这是该工作流最近一次有产出的执行
+                </span>
+                <button
+                  onClick={() => { setResultDefId(null); setActiveTab('instances'); }}
+                  className="pd-btn text-[11px] px-2.5 py-1 rounded"
+                  style={{ border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+                >
+                  查看全部执行记录
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-xs py-16" style={{ color: 'var(--text-tertiary)' }}>
+              还没有执行记录
+            </div>
+          )}
         </div>
       )}
 
@@ -1005,82 +1328,6 @@ export function WorkflowPage({ onBack, embedded }: WorkflowPageProps) {
           onOpenEnvSettings={() => navigate('/settings?tab=environment')}
         />
       )}
-    </div>
-  );
-}
-
-/** 待审批输入卡片 */
-function PendingInputCard({ item, onSubmit }: { item: PendingHumanInput; onSubmit: (response: string) => void }) {
-  const [value, setValue] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleSubmit = async () => {
-    // 允许空字符串响应（避免节点卡死在等待输入状态）
-    if (submitting) return;
-    setSubmitting(true);
-    try {
-      await onSubmit(value);
-      setValue('');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div
-      className="p-2 rounded-md mb-2"
-      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
-    >
-      <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>
-        节点: {item.node_label}
-      </div>
-      <div className="text-xs mb-2" style={{ color: 'var(--text-primary)' }}>
-        {item.prompt}
-      </div>
-      <div className="flex gap-2">
-        {item.input_type === 'select' ? (
-          <select
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            className="flex-1 text-xs px-2 py-1 rounded-md"
-            style={{
-              backgroundColor: 'var(--bg-primary)',
-              border: '1px solid var(--border)',
-              color: 'var(--text-primary)',
-            }}
-          >
-            <option value="">请选择...</option>
-            <option value="approve">通过</option>
-            <option value="reject">拒绝</option>
-          </select>
-        ) : (
-          <input
-            type="text"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="请输入响应内容..."
-            className="flex-1 text-xs px-2 py-1 rounded-md"
-            style={{
-              backgroundColor: 'var(--bg-primary)',
-              border: '1px solid var(--border)',
-              color: 'var(--text-primary)',
-            }}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
-          />
-        )}
-        <button
-          onClick={handleSubmit}
-          disabled={submitting}
-          className="text-xs px-3 py-1 rounded-md font-medium transition-colors"
-          style={{
-            backgroundColor: 'var(--accent)',
-            color: '#fff',
-            cursor: 'pointer',
-          }}
-        >
-          {submitting ? '提交中...' : '提交'}
-        </button>
-      </div>
     </div>
   );
 }

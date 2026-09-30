@@ -19,6 +19,10 @@ pub struct Session {
     /// Agent-side session ID (e.g. Claude Code session UUID)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_session_id: Option<String>,
+    /// 会话来源：`Some("workflow")` = 工作流 Agent 节点自动创建，`None` = 用户会话。
+    /// 用于把工作流内部会话从「延续会话」候选等用户可见列表里排除。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
     /// 模型温度 (0.0-2.0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
@@ -99,13 +103,16 @@ pub struct LogEntry {
     pub level: String,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillInfo {
     pub name: String,
     pub description: String,
     pub category: String,
+    /// 技能所在目录（绝对路径）；空 = 未知（仅从内容解析出的条目没有落盘位置）
+    pub dir_path: String,
+    /// 技能入口文件（绝对路径，通常是 SKILL.md）；空 = 未知
+    pub entry_path: String,
 }
 
 impl SkillInfo {
@@ -114,6 +121,15 @@ impl SkillInfo {
             name: name.to_string(),
             description: description.to_string(),
             category: category.to_string(),
+            dir_path: String::new(),
+            entry_path: String::new(),
         }
+    }
+
+    /// 补上落盘位置（供"编辑主文件 / 卸载"按路径定位）
+    pub fn with_paths(mut self, dir: &std::path::Path, entry: &std::path::Path) -> Self {
+        self.dir_path = dir.to_string_lossy().into_owned();
+        self.entry_path = entry.to_string_lossy().into_owned();
+        self
     }
 }

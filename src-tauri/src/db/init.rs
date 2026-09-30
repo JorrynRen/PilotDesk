@@ -1,15 +1,15 @@
-use rusqlite::Connection;
+use crate::utils::errors::AppError;
+use crate::utils::paths::db_path;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use crate::utils::paths::db_path;
-use crate::utils::errors::AppError;
+use rusqlite::Connection;
 use std::fs;
 
 /// 对外 schema 版本：v5 起从"版本不一致即整库重置"改为增量迁移，历史库一律保留；
 /// 打开到比当前更新的库时明确报错，绝不 wipe。v1-v4 为预发布期整库重置，无独立旧库留存。
 /// 约定：每次修改 FINAL_SCHEMA_SQL 都必须把 SCHEMA_VERSION +1，
 /// 否则 user_version 相等的旧库走快速路径、不会补齐缺表/缺列。
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS "sessions" (
             api_provider TEXT,
             api_model TEXT,
             agent_session_id TEXT
+        , origin TEXT
         , temperature REAL DEFAULT 0.7, max_tokens INTEGER DEFAULT NULL);
 CREATE TABLE IF NOT EXISTS workflow_definitions (
             id TEXT PRIMARY KEY,
@@ -214,17 +215,20 @@ pub fn init_db() -> Result<DbPool, AppError> {
         fs::create_dir_all(parent)?;
     }
 
-    let manager = SqliteConnectionManager::file(&db_path);
-    let pool = Pool::builder()
-        .max_size(8)
-        .build(manager)?;
+    let manager = SqliteConnectionManager::file(&db_path).with_init(|c| {
+        // WAL 下同一时刻只有一个写者：未设 busy_timeout 时，并发写（多实例执行 + 群聊 Actor +
+        // 编辑器保存）会立刻返回 "database is locked"，而节点状态/事件的写入失败只记 warn。
+        // 结果是"节点记录凭空消失"——界面表现为节点一直停在运行中、执行记录缺行。
+        c.busy_timeout(std::time::Duration::from_secs(5))
+    });
+    let pool = Pool::builder().max_size(8).build(manager)?;
 
     // 数据库操作在单连接上进行
     let conn = pool.get()?;
 
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
-         PRAGMA foreign_keys = ON;"
+         PRAGMA foreign_keys = ON;",
     )?;
 
     // ── schema 增量迁移（v5 起）──
@@ -290,12 +294,33 @@ pub fn init_db() -> Result<DbPool, AppError> {
          "~/AppData/Local/hermes/skills/", "collection", "#8B5CF6", "file:hermes_icon.ico", 1),
     ];
 
-    for (agent_type, display_name, description, cli_command, npm_package, pip_package,
-         install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
-         output_parser, output_filter_regex, supports_session_continuity,
-         session_id_source, session_id_event_type, session_id_field, resume_arg_template,
-         skills_dir, skill_display_mode,
-         color, icon, sort_order) in agent_seeds {
+    for (
+        agent_type,
+        display_name,
+        description,
+        cli_command,
+        npm_package,
+        pip_package,
+        install_cmd,
+        uninstall_cmd,
+        update_cmd,
+        version_cmd,
+        latest_version_cmd,
+        run_cmd_template,
+        output_parser,
+        output_filter_regex,
+        supports_session_continuity,
+        session_id_source,
+        session_id_event_type,
+        session_id_field,
+        resume_arg_template,
+        skills_dir,
+        skill_display_mode,
+        color,
+        icon,
+        sort_order,
+    ) in agent_seeds
+    {
         conn.execute(
             "INSERT OR IGNORE INTO agents (agent_type, display_name, description, cli_command, npm_package, pip_package,
              install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
@@ -315,7 +340,9 @@ pub fn init_db() -> Result<DbPool, AppError> {
     }
 
     // App Settings 种子数据
-    let workspace_default = crate::utils::paths::app_data_dir().to_string_lossy().into_owned();
+    let workspace_default = crate::utils::paths::app_root_dir()
+        .to_string_lossy()
+        .into_owned();
     let settings_seeds: Vec<(String, String)> = vec![
         ("mode_prompt_native".into(), String::new()),
         ("mode_prompt_fast".into(), "快速简洁回答，直接给出结论，无需详细解释推理过程".into()),
@@ -334,10 +361,9 @@ pub fn init_db() -> Result<DbPool, AppError> {
     }
 
     // 权限规则默认种子：首启写入默认清单（原增量迁移的职责移交至此），已有自定义规则不被覆盖。
-    let rules_json = serde_json::to_string(
-        &crate::api_agent::agent_loop::default_permission_rules(),
-    )
-    .unwrap_or_else(|_| "{}".to_string());
+    let rules_json =
+        serde_json::to_string(&crate::api_agent::agent_loop::default_permission_rules())
+            .unwrap_or_else(|_| "{}".to_string());
     conn.execute(
         "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
         rusqlite::params![
@@ -381,6 +407,33 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
             "cache_write_tokens",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
+        // v5 → v6：会话来源落库。工作流 Agent 节点创建的会话标 origin='workflow'，
+        // 用户会话为 NULL——此前靠标题前缀「工作流 · 」判定来源，判据脆弱
+        // （前后端各持一份常量、用户改标题即误判）。历史行按前缀一次性回填，
+        // 此后前缀只作为展示用标题，不再承担判据职责。
+        ensure_column(conn, "sessions", "origin", "TEXT")?;
+        conn.execute(
+            "UPDATE sessions SET origin = 'workflow' WHERE origin IS NULL AND title LIKE '工作流 · %'",
+            [],
+        )?;
+        // v6 → v7：用量「四桶互斥」口径修正（历史数据一次性回填，仅 OpenAI 协议有确知语义）：
+        // 1) v5 之前的行只有单列 cached_tokens（= 缓存命中数），cache_read_tokens 只是被
+        //    加了 DEFAULT 0 的新列 → 回填为 cache_read_tokens = cached_tokens；
+        // 2) OpenAI 协议的 prompt_tokens 含缓存命中部分，落库口径要求「输入=未命中输入」
+        //    （与 Anthropic input_tokens 一致），故按命中数回冲输入。
+        // Anthropic 历史行的 cached_tokens 是 read+creation 之和、无法无损拆分，保持原样。
+        conn.execute(
+            "UPDATE api_usage_log SET cache_read_tokens = cached_tokens
+             WHERE api_format = 'OpenAI' AND cache_read_tokens = 0 AND cache_write_tokens = 0
+               AND cached_tokens > 0",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE api_usage_log SET prompt_tokens = prompt_tokens - cache_read_tokens
+             WHERE api_format = 'OpenAI' AND cache_read_tokens > 0
+               AND prompt_tokens >= cache_read_tokens",
+            [],
+        )?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
     Ok(())
@@ -388,12 +441,7 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
 
 /// 幂等补列：目标表已有该列则跳过，否则 `ALTER TABLE ADD COLUMN`。
 /// 新列一律带 DEFAULT，历史行自动回填默认值，不触发全表重写。
-fn ensure_column(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    decl: &str,
-) -> Result<(), AppError> {
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), AppError> {
     let exists = conn
         .prepare(&format!("PRAGMA table_info({})", table))?
         .query_map([], |row| row.get::<_, String>(1))?
@@ -487,6 +535,13 @@ mod tests {
         for col in ["cache_read_tokens", "cache_write_tokens"] {
             assert!(usage_sql.contains(col), "api_usage_log 缺少终态列 {}", col);
         }
+        // sessions 的来源列（工作流会话 vs 用户会话）必须在终态建表脚本中。
+        let sessions_sql: String = conn
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
+            .unwrap()
+            .query_row([], |r| r.get(0))
+            .unwrap();
+        assert!(sessions_sql.contains("origin"), "sessions 缺少 origin 列");
     }
 
     /// wipe_all_tables 已随 v5 整库重置策略一并删除；无 wipe 相关用例。
@@ -549,16 +604,134 @@ mod tests {
         migrate_schema(&conn).unwrap();
     }
 
+    /// v5 → v6 增量迁移：补 sessions.origin 列，并按标题前缀回填历史工作流会话。
+    /// 回填只发生这一次——此后会话来源以列为准，前缀不再参与判定。
+    #[test]
+    fn migrate_backfills_workflow_session_origin() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                agent_type TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                cwd TEXT DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_message_preview TEXT DEFAULT '',
+                message_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                api_provider TEXT,
+                api_model TEXT,
+                agent_session_id TEXT);
+            INSERT INTO sessions (id, agent_type, title, created_at, updated_at) VALUES
+                ('wf1', 'api', '工作流 · Agent 任务', 1, 1),
+                ('u1',  'api', '普通的会话', 1, 1);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 5i64).unwrap();
+
+        migrate_schema(&conn).unwrap();
+
+        let wf: Option<String> = conn
+            .query_row("SELECT origin FROM sessions WHERE id = 'wf1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let user: Option<String> = conn
+            .query_row("SELECT origin FROM sessions WHERE id = 'u1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(wf.as_deref(), Some("workflow"), "前缀命中的历史行应回填");
+        assert_eq!(user, None, "普通会话不应被标记");
+    }
+
+    /// v6 → v7 增量迁移：用量四桶口径修正。
+    /// - 老行（v5 之前只有单列 cached_tokens）：回填 cache_read_tokens = cached_tokens；
+    /// - OpenAI 行：prompt_tokens 含命中部分，按命中数回冲输入（输入=未命中）；
+    /// - Anthropic 行（cached 是 read+creation 之和，无法无损拆分）：保持原样。
+    #[test]
+    fn migrate_fixes_openai_usage_buckets() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE api_usage_log (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id        TEXT NOT NULL,
+                provider          TEXT NOT NULL DEFAULT '',
+                model             TEXT NOT NULL DEFAULT '',
+                api_format        TEXT NOT NULL DEFAULT '',
+                prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens      INTEGER NOT NULL DEFAULT 0,
+                cached_tokens     INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens  INTEGER NOT NULL DEFAULT 0,
+                cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                created_at        INTEGER NOT NULL);",
+        )
+        .unwrap();
+        // legacy：老行只写了 cached；modern：read 已由 v5 起的新代码落库
+        conn.execute_batch(
+            "INSERT INTO api_usage_log (session_id, api_format, prompt_tokens, completion_tokens, total_tokens, cached_tokens, cache_read_tokens, created_at)
+             VALUES ('legacy',  'OpenAI',    1000, 100, 1100,  600,    0, 1),
+                    ('modern',  'OpenAI',    2000, 200, 2200, 1500, 1500, 2),
+                    ('anthropic','Anthropic', 500,  50,  550,  300,    0, 3);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 6i64).unwrap();
+
+        migrate_schema(&conn).unwrap();
+
+        let rows: Vec<(String, i64, i64, i64, i64)> = conn
+            .prepare(
+                "SELECT session_id, prompt_tokens, cached_tokens, cache_read_tokens, cache_write_tokens
+                 FROM api_usage_log ORDER BY created_at",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("legacy".into(), 400, 600, 600, 0),
+                ("modern".into(), 500, 1500, 1500, 0),
+                ("anthropic".into(), 500, 300, 0, 0),
+            ]
+        );
+        // 迁移后版本提升；再次执行保持幂等（UPDATE 不重复回冲）。
+        let ver: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, SCHEMA_VERSION);
+        migrate_schema(&conn).unwrap();
+        let prompt: i64 = conn
+            .query_row(
+                "SELECT prompt_tokens FROM api_usage_log WHERE session_id = 'legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(prompt, 400, "重复迁移不得二次回冲");
+    }
+
     /// 比当前更新的库（未来版本应用创建）拒绝打开，绝不 wipe。
     #[test]
     fn migrate_rejects_newer_version_without_wiping() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE keep_me (id INTEGER);").unwrap();
+        conn.execute_batch("CREATE TABLE keep_me (id INTEGER);")
+            .unwrap();
         conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
             .unwrap();
 
         let err = migrate_schema(&conn).unwrap_err();
-        assert!(err.to_string().contains("升级"), "错误应提示升级应用: {}", err);
+        assert!(
+            err.to_string().contains("升级"),
+            "错误应提示升级应用: {}",
+            err
+        );
         let kept: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='keep_me'",
@@ -569,4 +742,3 @@ mod tests {
         assert_eq!(kept, 1, "未来版本库不得被清除");
     }
 }
-

@@ -1,0 +1,182 @@
+# 发布流水线：推送 v* tag（或手动触发）时构建三平台安装包并自动创建 GitHub Release
+#
+# 产出：
+#   - Windows: NSIS 安装包 (.exe) + .sig
+#   - macOS:   .app / .dmg + .app.tar.gz + .sig
+#   - Linux:   .AppImage / .deb + .sig
+#   - latest.json：供 tauri-plugin-updater 读取（app 内「检查更新」使用）
+#
+# ──────────────────────────────────────────────────────────────
+# 一、必须在 GitHub 仓库 Settings → Secrets and variables → Actions 里配置的 Secrets
+# ──────────────────────────────────────────────────────────────
+# 【不配就直接失败】
+#   TAURI_SIGNING_PRIVATE_KEY            updater 签名私钥（三平台共用，updater 安装包签名）
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   上面私钥的密码（生成时若留空则填空字符串）
+#     ⌁ 生成方式（只需做一次，私钥务必离线备份，丢失后老用户将无法再收到更新）：
+#         npm run tauri signer generate -- -w "$HOME/.tauri/pilotdesk.key"
+#       命令会输出 private key 与 public key：
+#         - private key 全文 → TAURI_SIGNING_PRIVATE_KEY
+#           （也支持用 TAURI_SIGNING_PRIVATE_KEY_PATH 指向文件路径，这里统一用变量传全文）
+#         - public key       → 粘贴进 src-tauri/tauri.conf.json 的 plugins.updater.pubkey，
+#                              替换当前的占位符 REPLACE_WITH_PUBLIC_KEY_FROM_TAURI_SIGNER_GENERATE
+#
+# 【仅 macOS 需要】
+#   APPLE_CERTIFICATE              Developer ID Application 证书导出的 .p12 文件内容（base64）
+#   APPLE_CERTIFICATE_PASSWORD     导出 .p12 时设置的密码
+#   APPLE_SIGNING_IDENTITY         签名标识，形如 "Developer ID Application: Your Name (TEAMID)"
+#   APPLE_ID                       你的 Apple ID（用于公证 notarization）
+#   APPLE_PASSWORD                 App 专用密码（appleid.apple.com 生成，非账号密码）
+#   APPLE_TEAM_ID                  10 位 Team ID（developer.apple.com 账号页可见）
+#     ⌁ 证书导出：钥匙串访问 → 我的证书 → 选中 Developer ID Application 证书
+#       → 右键导出 → 文件格式 .p12 → 设置密码 → 然后 base64 编码：
+#         macOS/Linux: base64 -i cert.p12 | pbcopy
+#         Windows:     [Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.p12"))
+#
+# 【仅 Windows 需要（代码签名，可选）】
+#   注意：Windows「代码签名」（Authenticode，消除 SmartScreen 警告）与上面的 updater 签名是
+#   两件不同的事——TAURI_SIGNING_PRIVATE_KEY 只用于 updater 校验，不会给 exe 打 Authenticode 签名。
+#   若拿到代码签名证书，按所用方式二选一：
+#     a) 证书已装进构建机的 Windows 证书存储：
+#          TAURI_WINDOWS_SIGNTOOL_THUMBPRINT   证书指纹
+#          TAURI_WINDOWS_SIGNTOOL_DIGEST_ALGORITHM  默认 sha256
+#     b) Azure Trusted Signing（云签名，2023 后新证书多为此）：
+#          AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET
+#          AZURE_CODE_SIGNING_ACCOUNT_NAME / AZURE_CERTIFICATE_PROFILE_NAME
+#          AZURE_CODE_SIGNING_ENDPOINT
+#     c) 其他方式：在 tauri.conf.json 的 bundle.windows.signCommand 里配置自定义签名命令。
+# ──────────────────────────────────────────────────────────────
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# tauri-action 需要写权限来创建 Release 并上传资产
+permissions:
+  contents: write
+
+jobs:
+  # 发布前置门禁：直接复用 ci.yml（tsc / eslint / build / fmt / check / test）
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  # 发布前置守卫：把"配错了、但要等到用户端才发现"的问题挡在这里。
+  preflight:
+    name: 发布前置守卫（updater 密钥）
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 公钥没替换时：构建会成功、latest.json 也会生成，但用户端是
+      # "能查到更新 → 下载 → 签名校验失败 → 装不上"，而且没有任何线索。
+      # 与其发一个装不了更新的包，不如在这里直接拦住。
+      - name: 校验 updater 公钥已替换占位符
+        run: |
+          if grep -q 'REPLACE_WITH_PUBLIC_KEY_FROM_TAURI_SIGNER_GENERATE' src-tauri/tauri.conf.json; then
+            echo "::error::src-tauri/tauri.conf.json 的 plugins.updater.pubkey 仍是占位符，请按本文件顶部说明生成密钥并替换后再发布。"
+            exit 1
+          fi
+
+      # secret 在 if 条件里不可直接引用，用 env 中转再判断。
+      - name: 校验 updater 私钥已配置
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::缺少 secret TAURI_SIGNING_PRIVATE_KEY（updater 签名私钥），见本文件顶部说明。"
+            exit 1
+          fi
+
+  release:
+    name: 构建并发布 (${{ matrix.platform }})
+    needs: [ci, preflight]
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            # Windows 上 updater 只支持 NSIS 安装包，故显式只打 nsis（同时避免 msi 混淆 latest.json）
+            args: '--bundles nsis'
+          - platform: macos-latest
+            # macOS 上 updater 使用 .app.tar.gz，dmg 供用户手动下载
+            args: '--bundles app,dmg'
+          - platform: ubuntu-22.04
+            # Linux 上 updater 使用 AppImage，deb 供用户手动下载
+            args: '--bundles appimage,deb'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 安装 Linux 系统依赖 (Tauri)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖 (npm ci)
+        run: npm ci
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 构建并创建 Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # ── updater 签名（三平台共用；对应 tauri.conf.json 的 plugins.updater.pubkey）──
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+          # ── macOS 代码签名 + 公证（非 macOS 上留空即被忽略）──
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+          # ── Windows 代码签名（可选，未配置会自动跳过）──
+          # 证书存储在构建机证书库里时使用：
+          TAURI_WINDOWS_SIGNTOOL_THUMBPRINT: ${{ secrets.TAURI_WINDOWS_SIGNTOOL_THUMBPRINT }}
+          # Azure Trusted Signing 时改用下面这组：
+          # AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          # AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          # AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # AZURE_CODE_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
+          # AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          # AZURE_CODE_SIGNING_ENDPOINT: ${{ secrets.AZURE_CODE_SIGNING_ENDPOINT }}
+        with:
+          # __VERSION__ 会被 tauri-action 替换为 src-tauri/tauri.conf.json 里的 version，
+          # 因此 tag 会固定为 v<version>。发版前务必先同步版本号（见 README「发布流程」）。
+          tagName: v__VERSION__
+          releaseName: 'PilotDesk v__VERSION__'
+          releaseBody: '下载对应平台安装包即可。支持应用内自动更新（设置 → 关于/更新检查）。'
+          # 必须发布为正式 Release（非 draft/prerelease），否则
+          # releases/latest/download/latest.json 无法解析，app 内自动更新会失效。
+          releaseDraft: false
+          prerelease: false
+          # latest.json（updater 清单）由 tauri-action 默认生成并上传，多平台 job 会自动合并各平台条目
+          args: ${{ matrix.args }}

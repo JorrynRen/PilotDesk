@@ -205,7 +205,11 @@ fn parse_bing_html(html: &str, num: usize) -> Vec<SearchResult> {
             .to_string();
 
         if !title.is_empty() && !url.is_empty() {
-            results.push(SearchResult { title, url, snippet });
+            results.push(SearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
     }
     results
@@ -261,7 +265,11 @@ async fn search_tavily(
         .map_err(|e| format!("读取 Tavily 响应失败: {}", e))?;
 
     if !status.is_success() {
-        return Err(format!("Tavily 搜索失败 (HTTP {}): {}", status.as_u16(), text));
+        return Err(format!(
+            "Tavily 搜索失败 (HTTP {}): {}",
+            status.as_u16(),
+            text
+        ));
     }
 
     let json: serde_json::Value =
@@ -276,7 +284,11 @@ async fn search_tavily(
         let url = item["url"].as_str().unwrap_or("").to_string();
         let snippet = item["content"].as_str().unwrap_or("").to_string();
         if !title.is_empty() && !url.is_empty() {
-            results.push(SearchResult { title, url, snippet });
+            results.push(SearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
     }
     Ok(results)
@@ -320,7 +332,11 @@ async fn search_bing_api(
         .map_err(|e| format!("读取 Bing API 响应失败: {}", e))?;
 
     if !status.is_success() {
-        return Err(format!("Bing API 搜索失败 (HTTP {}): {}", status.as_u16(), text));
+        return Err(format!(
+            "Bing API 搜索失败 (HTTP {}): {}",
+            status.as_u16(),
+            text
+        ));
     }
 
     let json: serde_json::Value =
@@ -335,7 +351,11 @@ async fn search_bing_api(
         let url = item["url"].as_str().unwrap_or("").to_string();
         let snippet = item["snippet"].as_str().unwrap_or("").to_string();
         if !title.is_empty() && !url.is_empty() {
-            results.push(SearchResult { title, url, snippet });
+            results.push(SearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
     }
     Ok(results)

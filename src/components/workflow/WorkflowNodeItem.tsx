@@ -1,7 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { invoke } from '@tauri-apps/api/core';
 import type { WorkflowNode } from '../../types/workflow';
 import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
+import { useImagePreviewStore } from '../../stores/imagePreviewStore';
+import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
 
 const NODE_W = 160;
 const NODE_H = 60;
@@ -39,6 +43,178 @@ function formatNodeResult(result: unknown): string {
   return JSON.stringify(Object.fromEntries(entries), null, 2);
 }
 
+/**
+ * 节点输出里可直接预览/打开的东西。
+ *
+ * 只做「抽取」、不改原文展示：节点输出常是 JSON 文本，整体 Markdown 化会把 JSON 当语法解析、
+ * 破坏可读性，所以原文照旧走 `formatNodeResult`，这里把其中能预览/能点的另列一块。
+ */
+interface NodeOutputRichLinks {
+  images: string[];
+  videos: string[];
+  paths: string[];
+}
+
+const IMAGE_URL_RE = /https?:\/\/[^\s"'<>()[\]{}，。；！？]+\.(?:png|jpe?g|gif|webp|bmp|svg|avif)(?:\?[^\s"'<>]*)?/gi;
+const VIDEO_URL_RE = /https?:\/\/[^\s"'<>()[\]{}，。；！？]+\.(?:mp4|webm|mov|m4v)(?:\?[^\s"'<>]*)?/gi;
+/**
+ * 盘符绝对路径。被引号/反引号包裹的（JSON 字段、markdown 行内代码里最常见）允许含空格，
+ * 裸路径到空白为止。不允许跨行，避免把上下文整段吞进来。
+ */
+const WRAPPED_WIN_PATH_RES = [
+  /"[A-Za-z]:\\[^\n"]*"/g,
+  /`[A-Za-z]:\\[^\n`]*`/g,
+];
+const BARE_WIN_PATH_RE = /[A-Za-z]:\\[^\s"'`<>|?*，。；：！？]+/g;
+/** 路径/URL 结尾常混入的标点、括号与包裹符（中英文都剥掉） */
+const TRAILING_JUNK_RE = /[.,;:!?。，；：！？)\]}>）】”"`']+$/;
+
+/**
+ * 从节点输出文本里抽取可预览的媒体 URL 与可打开的绝对路径。
+ *
+ * 本期只认网络 URL 的图片/视频：本地磁盘文件在 WebView 里要经 `convertFileSrc` + asset 协议
+ * 转换才能加载，未纳入（`generate_image` / `generate_video` 产出的都是网络 URL）。
+ *
+ * 路径分两条规则收集：引号内的可含空格（JSON 字段），裸路径到空白为止——
+ * 否则 `输出目录 E:\work\out 已创建` 会把后面的句子一起当作路径。
+ */
+function extractNodeOutputLinks(text: string): NodeOutputRichLinks {
+  const images = new Set<string>();
+  const videos = new Set<string>();
+  const paths = new Set<string>();
+
+  for (const m of text.match(IMAGE_URL_RE) ?? []) {
+    const url = m.replace(TRAILING_JUNK_RE, '');
+    if (url) images.add(url);
+  }
+  for (const m of text.match(VIDEO_URL_RE) ?? []) {
+    const url = m.replace(TRAILING_JUNK_RE, '');
+    if (url) videos.add(url);
+  }
+
+  const collectPath = (raw: string) => {
+    const p = raw
+      .replace(/^["`]|["`]$/g, '')
+      // JSON 文本里的路径是转义的（`E:\\dir\\a.png`），还原成真实路径再交给系统打开
+      .replace(/\\\\/g, '\\')
+      .replace(/[\\/]+$/, '')
+      .replace(TRAILING_JUNK_RE, '')
+      .trim();
+    if (p.length > 3) paths.add(p);
+  };
+  // 包裹形式先收（可含空格），并记下区间：裸路径规则会把 `"E:\Program Files\a.txt"` 截成
+  // `E:\Program`，落在这个区间的匹配一律跳过，避免多出一条打不开的噪音项。
+  const wrappedRanges: Array<[number, number]> = [];
+  for (const re of WRAPPED_WIN_PATH_RES) {
+    for (const m of text.matchAll(re)) {
+      const start = m.index ?? 0;
+      wrappedRanges.push([start, start + m[0].length]);
+      collectPath(m[0]);
+    }
+  }
+  for (const m of text.matchAll(BARE_WIN_PATH_RE)) {
+    const start = m.index ?? 0;
+    if (wrappedRanges.some(([s, e]) => start >= s && start < e)) continue;
+    collectPath(m[0]);
+  }
+
+  return { images: [...images], videos: [...videos], paths: [...paths] };
+}
+
+/**
+ * 「媒体与文件」区：图片点击走全局 lightbox（与会话消息同一套），视频直接播放，
+ * 文件/目录点击交系统默认程序打开（`open_path`，与会话消息里的路径链接同一命令）。
+ */
+function NodeOutputRichLinksPanel({ links, compact }: { links: NodeOutputRichLinks; compact: boolean }) {
+  const total = links.images.length + links.videos.length + links.paths.length;
+  if (total === 0) return null;
+
+  const thumb = compact ? 44 : 84;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        marginTop: compact ? 4 : 8,
+        maxHeight: compact ? 96 : 300,
+        overflowY: 'auto',
+      }}
+    >
+      <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-tertiary)' }}>
+        媒体与文件（{total}）
+      </div>
+
+      {links.images.length > 0 && (
+        <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 2 }}>
+          {links.images.map((url) => (
+            <img
+              key={url}
+              src={url}
+              alt=""
+              title="点击放大"
+              onClick={(e) => { e.stopPropagation(); useImagePreviewStore.getState().open(url); }}
+              style={{
+                width: thumb,
+                height: thumb,
+                objectFit: 'cover',
+                borderRadius: 4,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-tertiary)',
+                cursor: 'zoom-in',
+                flexShrink: 0,
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {links.videos.map((url) => (
+        <video
+          key={url}
+          src={url}
+          controls
+          preload="metadata"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            width: '100%',
+            maxHeight: compact ? 76 : 240,
+            borderRadius: 4,
+            border: '1px solid var(--border)',
+            background: '#000',
+          }}
+        />
+      ))}
+
+      {links.paths.map((p) => (
+        <div
+          key={p}
+          onClick={(e) => {
+            e.stopPropagation();
+            invoke('open_path', { path: p }).catch((err) => showToast(`打开失败：${errorMessage(err)}`, 'error'));
+          }}
+          title={`点击打开：${p}`}
+          style={{
+            padding: '2px 4px',
+            borderRadius: 3,
+            background: 'var(--bg-tertiary)',
+            color: 'var(--accent)',
+            fontSize: compact ? 9 : 11,
+            textDecoration: 'underline',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+          }}
+        >
+          {p}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface WorkflowNodeItemProps {
   node: WorkflowNode;
   stageId: string;
@@ -53,7 +229,7 @@ interface WorkflowNodeItemProps {
   reachableTargets: Set<string>;
   connecting: unknown;
   stepStates: Record<string, string>;
-  nodeResults: Record<string, any>;
+  nodeResults: Record<string, unknown>;
   isUnreachable?: boolean;
   isRestoredResult?: boolean;
   isConfigChanged?: boolean;
@@ -97,6 +273,12 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
     return () => document.removeEventListener('fullscreenchange', handler);
   }, []);
   const showResult = (selectedNodeId === node.id || selectedNodeIds.has(node.id)) && nodeResult !== undefined;
+  const resultText = useMemo(
+    () => (nodeResult === undefined ? '' : formatNodeResult(nodeResult)),
+    [nodeResult],
+  );
+  // 原文与「媒体与文件」区同源：抽取出来的图片/视频/路径不改动原文，只是另列一处便于预览与点击
+  const richLinks = useMemo(() => extractNodeOutputLinks(resultText), [resultText]);
 
   return (
     <div
@@ -215,7 +397,7 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             left: 0,
             top: NODE_H + 4,
             width: NODE_W,
-            maxHeight: 120,
+            maxHeight: 190,
             overflow: 'hidden',
             borderRadius: 6,
             backgroundColor: 'var(--bg-secondary)',
@@ -248,8 +430,9 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             whiteSpace: 'pre-wrap',
             fontFamily: 'var(--font-mono)',
           }}>
-            {formatNodeResult(nodeResult)}
+            {resultText}
           </div>
+          <NodeOutputRichLinksPanel links={richLinks} compact />
           {/* 放大查看按钮 */}
           <div
             onClick={(e) => { e.stopPropagation(); setExpanded(true); }}
@@ -321,6 +504,49 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
             border: '2px solid var(--bg-secondary)',
             cursor: 'crosshair',
             boxShadow: (!connecting && isHovered) ? '0 0 8px var(--accent-light)' : 'none',
+          }}
+        />
+      )}
+
+      {/* 顶部锚点（连线走垂直路由时，入线落在这里） */}
+      {meta.canHaveInputs && (
+        <div
+          data-anchor="input"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            if (connecting) onEndConnect(node.id, stageId);
+          }}
+          className="absolute rounded-full transition-all duration-150"
+          style={{
+            width: 10, height: 10,
+            top: -5, left: '50%', marginLeft: -5,
+            transform: isConnectTarget ? 'scale(1.5)' : 'scale(1)',
+            background: isCycleTarget ? 'var(--status-danger)'
+              : isConnectTarget ? 'var(--accent)'
+              : isReachableTarget ? '#3fb950'
+              : 'var(--border)',
+            border: '2px solid var(--bg-secondary)',
+            cursor: isConnectTarget ? 'cell' : isCycleTarget ? 'not-allowed' : 'crosshair',
+          }}
+        />
+      )}
+
+      {/* 底部锚点（连线走垂直路由时，出线从这里走） */}
+      {meta.canHaveOutputs && (
+        <div
+          data-anchor="output"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onStartConnect(e, node.id, stageId);
+          }}
+          className="absolute rounded-full transition-all duration-150"
+          style={{
+            width: 10, height: 10,
+            bottom: -5, left: '50%', marginLeft: -5,
+            transform: (!connecting && isHovered) ? 'scale(1.5)' : 'scale(1)',
+            background: (!connecting && isHovered) ? 'var(--accent)' : 'var(--border)',
+            border: '2px solid var(--bg-secondary)',
+            cursor: 'crosshair',
           }}
         />
       )}
@@ -446,8 +672,14 @@ const WorkflowNodeItem: React.FC<WorkflowNodeItemProps> = React.memo(({
                 wordBreak: 'break-all',
               }}
             >
-              {formatNodeResult(nodeResult)}
+              {resultText}
             </pre>
+            {/* 媒体与文件：图片/视频预览与文件·目录打开（本期只预览网络 URL） */}
+            {richLinks.images.length + richLinks.videos.length + richLinks.paths.length > 0 && (
+              <div style={{ flexShrink: 0, padding: '0 10px 8px', borderTop: '1px solid var(--border)' }}>
+                <NodeOutputRichLinksPanel links={richLinks} compact={false} />
+              </div>
+            )}
             {/* 右下角缩放提示 */}
             <div style={{
                 position: 'absolute',

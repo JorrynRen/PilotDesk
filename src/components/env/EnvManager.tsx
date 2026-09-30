@@ -1,13 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { CheckCircle, XCircle, Download, RefreshCw, Loader2, ArrowUpCircle, ExternalLink, Trash2 } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Download, RefreshCw, Loader2, ArrowUpCircle, Trash2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { open as openUrl } from '@tauri-apps/plugin-shell';
 import { InstallLog } from './InstallLog';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
-import type { EnvInfo } from '../../types';
+import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { SettingsSection, SettingsCard, SettingsButton, SettingsStatusIcon } from '../settings';
+import { errorMessage } from '../../utils/errorMessage';
 
 interface DependencyStatus {
   name: string;
@@ -32,9 +32,8 @@ export type { EnvManagerProps };
 
 export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const { envInfo, loading: envLoading, agentStatus, refresh: fetchEnv } = useEnvInfo();
-  const { agents, loading: agentsLoading, fetchAgents } = useAgentRegistry();
+  const { agents } = useAgentRegistry();
   const [installing, setInstalling] = useState<string | null>(null);
-  const [confirmAction, setConfirmAction] = useState<{ key: string; action: 'update' | 'uninstall' | 'reinstall' | 'install' } | null>(null);
   const [logs, setLogs] = useState<Array<{ timestamp: number; message: string; level: 'info' | 'warn' | 'error' | 'success' }>>([]);
   /** Latest versions from remote registries */
   const [latestVersions, setLatestVersions] = useState<Record<string, { version: string; releaseTime: string | null } | null>>({});
@@ -116,9 +115,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       addLog(`${name}: ${version || '未安装'}`, version ? 'success' : 'warn');
     });
 
-    let info: EnvInfo | null = null;
     try {
-      info = await fetchEnv();
+      await fetchEnv();
     } finally {
       // Clean up temporary listeners (even if fetchEnv fails)
       unlistenBase();
@@ -210,8 +208,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       await fetchEnv();
       // 安装完成后直接触发版本检测（autoDetected 守卫阻止 useEffect 重复执行）
       checkAgentUpdate(key);
-    } catch (err: any) {
-      const msg = err?.message || err?.details || (typeof err === 'string' ? err : JSON.stringify(err));
+    } catch (err) {
+      const msg = errorMessage(err);
       addLog(`${name} 安装失败: ${msg}`, 'error');
     }
     setInstalling(null);
@@ -227,8 +225,8 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
       addLog(`${name} 卸载成功`, 'success');
       await fetchEnv();
       setLatestVersions((prev) => ({ ...prev, [key]: null }));
-    } catch (err: any) {
-      const msg = err?.message || err?.details || (typeof err === 'string' ? err : JSON.stringify(err));
+    } catch (err) {
+      const msg = errorMessage(err);
       addLog(`${name} 卸载失败: ${msg}`, 'error');
     }
     setInstalling(null);
@@ -237,6 +235,35 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
   const getAgentName = (key: string) => {
     const agent = agents.find(a => a.agentType === key);
     return agent?.displayName || key;
+  };
+
+  /** 安装/更新/卸载前的统一二次确认（走全局确认弹窗；卸载为危险动作用红色确认键）。 */
+  const requestEnvAction = async (
+    key: string,
+    action: 'install' | 'update' | 'uninstall' | 'reinstall',
+  ) => {
+    const name = getAgentName(key);
+    const title =
+      action === 'uninstall' ? '确认卸载'
+      : action === 'update' ? '确认更新'
+      : action === 'reinstall' ? '确认重装'
+      : '确认安装';
+    const message =
+      action === 'uninstall' ? `确定要卸载 ${name} 吗？此操作将从系统中移除该工具。`
+      : action === 'update' ? `确定要更新 ${name} 到最新版本吗？`
+      : action === 'reinstall' ? `确定要重新安装 ${name} 吗？`
+      : `确定要安装 ${name} 吗？`;
+    const confirmText =
+      action === 'uninstall' ? '卸载' : action === 'update' ? '更新' : action === 'reinstall' ? '重装' : '安装';
+    const ok = await confirmDialog({
+      title,
+      message,
+      confirmText,
+      danger: action === 'uninstall',
+    });
+    if (!ok) return;
+    if (action === 'uninstall') await handleUninstall(key);
+    else await handleInstall(key);
   };
 
   return (
@@ -303,7 +330,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
               <div className="flex items-center gap-1.5 shrink-0">
                 {!dep.installed && (
                   <SettingsButton
-                    onClick={() => setConfirmAction({ key: dep.key, action: 'install' })}
+                    onClick={() => requestEnvAction(dep.key, 'install')}
                     disabled={!!dep.installing}
                     variant="primary"
                   >
@@ -317,7 +344,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                 {dep.hasUpdate && dep.installed && (
                   <>
                     <SettingsButton
-                      onClick={() => setConfirmAction({ key: dep.key, action: 'update' })}
+                      onClick={() => requestEnvAction(dep.key, 'update')}
                       disabled={!!dep.installing}
                       variant="warning"
                     >
@@ -328,7 +355,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       )}
                     </SettingsButton>
                     <SettingsButton
-                      onClick={() => setConfirmAction({ key: dep.key, action: 'uninstall' })}
+                      onClick={() => requestEnvAction(dep.key, 'uninstall')}
                       disabled={!!dep.installing}
                       variant="danger"
                       icon={<Trash2 size={11} />}
@@ -343,7 +370,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       已是最新
                     </span>
                     <SettingsButton
-                      onClick={() => setConfirmAction({ key: dep.key, action: 'uninstall' })}
+                      onClick={() => requestEnvAction(dep.key, 'uninstall')}
                       disabled={!!dep.installing}
                       variant="danger"
                       icon={<Trash2 size={11} />}
@@ -355,7 +382,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                 {dep.installed && !dep.hasUpdate && !dep.latestVersion && !dep.updateChecking && (
                   <>
                     <SettingsButton
-                      onClick={() => setConfirmAction({ key: dep.key, action: 'reinstall' })}
+                      onClick={() => requestEnvAction(dep.key, 'reinstall')}
                       disabled={!!dep.installing}
                       variant="secondary"
                       icon={<RefreshCw size={11} />}
@@ -363,7 +390,7 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
                       重装
                     </SettingsButton>
                     <SettingsButton
-                      onClick={() => setConfirmAction({ key: dep.key, action: 'uninstall' })}
+                      onClick={() => requestEnvAction(dep.key, 'uninstall')}
                       disabled={!!dep.installing}
                       variant="danger"
                       icon={<Trash2 size={11} />}
@@ -390,53 +417,6 @@ export function EnvManager({ onComplete: _onComplete }: EnvManagerProps) {
 
       {/* Install Log */}
       <InstallLog logs={logs} isActive={!!installing} onClear={() => { setLogs([]); invoke('clear_logs').catch(() => {}); }} />
-
-      {/* Confirmation Dialog */}
-      {confirmAction && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => setConfirmAction(null)}
-        >
-          <div
-            className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
-            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-              {confirmAction.action === 'uninstall' && '确认卸载'}
-              {confirmAction.action === 'update' && '确认更新'}
-              {confirmAction.action === 'reinstall' && '确认重装'}
-              {confirmAction.action === 'install' && '确认安装'}
-            </div>
-            <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              {confirmAction.action === 'uninstall' && `确定要卸载 ${getAgentName(confirmAction.key)} 吗？此操作将从系统中移除该工具。`}
-              {confirmAction.action === 'update' && `确定要更新 ${getAgentName(confirmAction.key)} 到最新版本吗？`}
-              {confirmAction.action === 'install' && `确定要安装 ${getAgentName(confirmAction.key)} 吗？`}
-              {confirmAction.action === 'reinstall' && `确定要重新安装 ${getAgentName(confirmAction.key)} 吗？`}
-            </div>
-            <div className="flex justify-end gap-2">
-              <SettingsButton variant="secondary" onClick={() => setConfirmAction(null)}>
-                取消
-              </SettingsButton>
-              <SettingsButton
-                variant={confirmAction.action === 'uninstall' ? 'danger' : 'primary'}
-                onClick={() => {
-                  const { key, action } = confirmAction;
-                  setConfirmAction(null);
-                  if (action === 'uninstall') {
-                    handleUninstall(key);
-                  } else {
-                    handleInstall(key);
-                  }
-                }}
-              >
-                {confirmAction.action === 'uninstall' ? '确认卸载' : confirmAction.action === 'install' ? '确认安装' : '确认'}
-              </SettingsButton>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

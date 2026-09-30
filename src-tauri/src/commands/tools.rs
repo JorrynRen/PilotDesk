@@ -14,8 +14,9 @@ use crate::api_agent::db::MemoryStore;
 use crate::api_agent::skills::SkillLoader;
 use crate::api_agent::types::ApiFormat;
 use crate::db::init::DbPool;
-use crate::PendingApprovals;
 use crate::tools::{self, RiskLevel, ToolHandler, ToolProfile};
+use crate::utils::errors::AppError;
+use crate::PendingApprovals;
 
 /// app_settings 存储键
 const OVERRIDES_KEY: &str = "tool_profile_overrides";
@@ -66,14 +67,17 @@ pub fn build_tool_catalog(
 ) -> Vec<ToolCatalogItem> {
     // list_models 数据源占位（catalog 仅展示元数据，不真正执行）：保证 list_models
     // 与图片等工具一样始终出现在目录中（否则依赖缺失导致缺席，前端无法统一管理）。
-    let list_providers: Option<Arc<dyn Fn() -> Vec<crate::tools::ProviderModelInfo> + Send + Sync>> =
-        Some(Arc::new(|| Vec::new()));
-    let resolve_provider: Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>> =
-        Some(Arc::new(|_| None));
+    let list_providers: Option<
+        Arc<dyn Fn() -> Vec<crate::tools::ProviderModelInfo> + Send + Sync>,
+    > = Some(Arc::new(|| Vec::new()));
+    let resolve_provider: Option<
+        Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>,
+    > = Some(Arc::new(|_| None));
     let env = tools::ToolEnv {
         cwd: String::new(),
         api_format: ApiFormat::OpenAI,
         image: Some((String::new(), String::new())),
+        vision: Some((String::new(), String::new())),
         audio: Some((String::new(), String::new())),
         list_providers,
         resolve_provider,
@@ -83,6 +87,10 @@ pub fn build_tool_catalog(
         skill_loader: Some(Arc::new(SkillLoader::new(None))),
         memory_store: crate::api_agent::system_prompt::get_pilotdesk_config_dir()
             .and_then(|d| MemoryStore::new(&d).ok())
+            .map(Arc::new),
+        // 工具管理页要把 search_knowledge 也列出来，所以这里与 memory_store 同样按配置目录打开
+        knowledge_store: crate::api_agent::system_prompt::get_pilotdesk_config_dir()
+            .and_then(|d| crate::api_agent::knowledge::KnowledgeStore::open(&d).ok())
             .map(Arc::new),
         app: Some(app),
         session_id: String::new(),
@@ -107,7 +115,11 @@ pub fn build_tool_catalog(
             RiskLevel::High => "high",
         }
         .to_string();
-        let tags = handler.tags().iter().map(|tag| format!("{:?}", tag)).collect::<Vec<_>>();
+        let tags = handler
+            .tags()
+            .iter()
+            .map(|tag| format!("{:?}", tag))
+            .collect::<Vec<_>>();
         let session_enabled = !tools::is_disabled(session_profile, &name);
         let session_locked = tools::is_default_disabled(session_profile, &name);
         let groupchat_enabled = !tools::is_disabled(groupchat_profile, &name);
@@ -136,7 +148,11 @@ pub fn build_tool_catalog(
         String::new(),
         pool.clone(),
     ));
-    items.push(to_catalog_item(todo_tool.as_ref(), &session_profile, &groupchat_profile));
+    items.push(to_catalog_item(
+        todo_tool.as_ref(),
+        &session_profile,
+        &groupchat_profile,
+    ));
 
     // 内部能力项：文件历史（非 LLM 工具，write_file/edit_file 的自动副作用）。
     // 与内建工具同构纳入清单，支持按场景差异化禁用（overrides 追加禁用）。
@@ -173,7 +189,7 @@ pub fn tool_catalog(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::DbState>,
 ) -> Result<Vec<ToolCatalogItem>, String> {
-    let conn = state.get_conn().map_err(|e| e.to_string())?;
+    let conn = state.get_conn()?;
     Ok(build_tool_catalog(&conn, app, &state.pool))
 }
 
@@ -182,7 +198,7 @@ pub fn tool_catalog(
 pub fn get_tool_overrides(
     state: tauri::State<'_, crate::DbState>,
 ) -> Result<ToolOverrides, String> {
-    let conn = state.get_conn().map_err(|e| e.to_string())?;
+    let conn = state.get_conn()?;
     Ok(load_tool_overrides(&conn))
 }
 
@@ -192,9 +208,10 @@ pub fn set_tool_overrides(
     state: tauri::State<'_, crate::DbState>,
     overrides: ToolOverrides,
 ) -> Result<(), String> {
-    let conn = state.get_conn().map_err(|e| e.to_string())?;
-    let json = serde_json::to_string(&overrides).map_err(|e| e.to_string())?;
-    crate::commands::app_settings::set_setting(&conn, OVERRIDES_KEY, &json).map_err(|e| e.to_string())
+    let conn = state.get_conn()?;
+    let json = serde_json::to_string(&overrides).map_err(AppError::from)?;
+    crate::commands::app_settings::set_setting(&conn, OVERRIDES_KEY, &json)
+        .map_err(|e| e.to_string())
 }
 
 /// 群聊文件历史当前开关状态（读取持久化 overrides：未在群聊禁用清单即视为启用）。
@@ -202,9 +219,12 @@ pub fn set_tool_overrides(
 pub fn groupchat_get_file_history_enabled(
     state: tauri::State<'_, crate::DbState>,
 ) -> Result<bool, String> {
-    let conn = state.get_conn().map_err(|e| e.to_string())?;
+    let conn = state.get_conn()?;
     let overrides = load_tool_overrides(&conn);
-    Ok(!overrides.groupchat.iter().any(|t| t == tools::FILE_HISTORY_CAP))
+    Ok(!overrides
+        .groupchat
+        .iter()
+        .any(|t| t == tools::FILE_HISTORY_CAP))
 }
 
 /// 群聊文件历史开关：持久化 overrides + 热切换共享运行期标记（当前房间立即生效）。
@@ -213,15 +233,22 @@ pub fn groupchat_set_file_history(
     state: tauri::State<'_, crate::DbState>,
     enabled: bool,
 ) -> Result<(), String> {
-    let conn = state.get_conn().map_err(|e| e.to_string())?;
+    let conn = state.get_conn()?;
     let mut overrides = load_tool_overrides(&conn);
     if enabled {
         overrides.groupchat.retain(|t| t != tools::FILE_HISTORY_CAP);
-    } else if !overrides.groupchat.iter().any(|t| t == tools::FILE_HISTORY_CAP) {
-        overrides.groupchat.push(tools::FILE_HISTORY_CAP.to_string());
+    } else if !overrides
+        .groupchat
+        .iter()
+        .any(|t| t == tools::FILE_HISTORY_CAP)
+    {
+        overrides
+            .groupchat
+            .push(tools::FILE_HISTORY_CAP.to_string());
     }
-    let json = serde_json::to_string(&overrides).map_err(|e| e.to_string())?;
-    crate::commands::app_settings::set_setting(&conn, OVERRIDES_KEY, &json).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(&overrides).map_err(AppError::from)?;
+    crate::commands::app_settings::set_setting(&conn, OVERRIDES_KEY, &json)
+        .map_err(|e| e.to_string())?;
     // 热切换运行期标记：无需重建参与者工具集，所有运行中的群聊房间立即停止/恢复记录。
     crate::tools::history::set_groupchat_file_history_enabled(enabled);
     Ok(())

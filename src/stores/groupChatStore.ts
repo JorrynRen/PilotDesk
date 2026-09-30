@@ -12,8 +12,10 @@ import type {
   GroupChatToolCall,
   CreateGroupChatRoomInput,
   GroupChatConfirmationResponseInput,
+  GroupChatDepChangePreview,
 } from '../types/groupchat';
 import type { Attachment } from '../types';
+import { errorMessage } from '../utils/errorMessage';
 
 /** 群聊消息分页大小（首屏 + 每次向上加载） */
 const GC_PAGE_SIZE = 100;
@@ -74,6 +76,14 @@ interface GroupChatStoreState {
   abort: () => Promise<void>;
   setDirector: (newDirectorId: string) => Promise<void>;
   setRoomOutputDir: (outputDir: string) => Promise<void>;
+  /** 任务级人工干预（跳过 / 追加新增 / 改依赖）。写库即对调度生效，变更由 task_updated 事件回流。 */
+  skipTask: (taskId: string) => Promise<void>;
+  addTask: (description: string, dependsOn: string[], assignee?: string | null) => Promise<void>;
+  updateTaskDeps: (taskId: string, dependsOn: string[]) => Promise<void>;
+  /** 依赖变更预览（纯计算，不落库）：确认卡展示"改完会阻塞/解锁谁、是否成环" */
+  previewTaskDeps: (taskId: string, dependsOn: string[]) => Promise<GroupChatDepChangePreview>;
+  /** 精准转换：把任务议程落库为可直接运行的工作流定义（返回新定义，供跳转编辑器）。 */
+  promoteWorkflow: () => Promise<{ id: string; name: string }>;
   exportWorkflow: () => Promise<Record<string, unknown>>;
   applyEvent: (event: GroupChatEvent) => void;
 }
@@ -132,7 +142,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         });
       }
     } catch (err) {
-      set({ error: String(err), loading: false });
+      set({ error: errorMessage(err), loading: false });
     }
   },
 
@@ -203,7 +213,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         },
       });
     } catch (err) {
-      set({ error: String(err), messagesLoading: false, actorAlive: false });
+      set({ error: errorMessage(err), messagesLoading: false, actorAlive: false });
       return;
     }
     // 探测当前房间 Actor 是否在进程内存活（区分真/假 running）。
@@ -240,7 +250,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         loadingEarlier: false,
       });
     } catch (err) {
-      set({ error: String(err), loadingEarlier: false });
+      set({ error: errorMessage(err), loadingEarlier: false });
     }
   },
 
@@ -308,7 +318,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         },
       });
     } catch (err) {
-      set({ error: String(err) });
+      set({ error: errorMessage(err) });
       throw err;
     }
   },
@@ -322,7 +332,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         input: { roomId, requestId, responses },
       });
     } catch (err) {
-      set({ error: String(err) });
+      set({ error: errorMessage(err) });
       throw err;
     }
   },
@@ -373,6 +383,39 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
     const roomId = get().currentRoomId;
     if (!roomId) throw new Error('未选择房间');
     return invoke<Record<string, unknown>>('groupchat_export_workflow', { roomId });
+  },
+
+  skipTask: async (taskId) => {
+    const roomId = get().currentRoomId;
+    if (!roomId) throw new Error('未选择房间');
+    await invoke<GroupChatTask>('groupchat_task_skip', { roomId, taskId });
+  },
+
+  addTask: async (description, dependsOn, assignee) => {
+    const roomId = get().currentRoomId;
+    if (!roomId) throw new Error('未选择房间');
+    await invoke<GroupChatTask>('groupchat_task_add', {
+      input: { roomId, description, dependsOn, assignee: assignee ?? null },
+    });
+  },
+
+  updateTaskDeps: async (taskId, dependsOn) => {
+    const roomId = get().currentRoomId;
+    if (!roomId) throw new Error('未选择房间');
+    await invoke<GroupChatTask>('groupchat_task_update_deps', { roomId, taskId, dependsOn });
+  },
+
+  previewTaskDeps: async (taskId, dependsOn) => {
+    const roomId = get().currentRoomId;
+    if (!roomId) throw new Error('未选择房间');
+    return invoke<GroupChatDepChangePreview>('groupchat_task_deps_preview', { roomId, taskId, dependsOn });
+  },
+
+  promoteWorkflow: async () => {
+    const roomId = get().currentRoomId;
+    if (!roomId) throw new Error('未选择房间');
+    const def = await invoke<{ id: string; name: string }>('groupchat_promote_workflow', { roomId });
+    return { id: def.id, name: def.name };
   },
 
   applyEvent: (event) => {
@@ -518,7 +561,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
         break;
       }
       case 'finished': {
-        set((s) => ({
+        set(() => ({
           currentSpeaker: null,
           streaming: {},
           toolCalls: {},

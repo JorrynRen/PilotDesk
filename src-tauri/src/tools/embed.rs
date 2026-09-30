@@ -23,7 +23,12 @@ impl EmbedTool {
         resolve: Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>>,
         get_models: Option<Arc<dyn Fn(String) -> Vec<String> + Send + Sync>>,
     ) -> Self {
-        Self { api_endpoint, api_key, resolve, get_models }
+        Self {
+            api_endpoint,
+            api_key,
+            resolve,
+            get_models,
+        }
     }
 
     /// 校验 model 是否在当前 provider 的合法模型列表中，不在则返回引导错误。
@@ -46,14 +51,22 @@ impl EmbedTool {
 fn format_vectors(vectors: &[Vec<f64>], max_dims: usize) -> String {
     let mut out = String::new();
     for (i, v) in vectors.iter().enumerate() {
-        let shown: Vec<String> = v.iter().take(max_dims).map(|x| format!("{:.4}", x)).collect();
+        let shown: Vec<String> = v
+            .iter()
+            .take(max_dims)
+            .map(|x| format!("{:.4}", x))
+            .collect();
         out.push_str(&format!(
             "[{}] 向量{}: [{}]（{} 维{}）\n",
             i + 1,
             i + 1,
             shown.join(", "),
             v.len(),
-            if v.len() > max_dims { format!("，前 {} 维示例", max_dims) } else { String::new() }
+            if v.len() > max_dims {
+                format!("，前 {} 维示例", max_dims)
+            } else {
+                String::new()
+            }
         ));
     }
     out
@@ -85,11 +98,11 @@ impl ToolHandler for EmbedTool {
                 },
                 "provider": {
                     "type": "string",
-                    "description": "可选：目标提供商 id（先用 list_models 查看可用提供商）；省略时使用当前会话提供商"
+                    "description": "必填：目标提供商 id，逐字取 list_models 清单里的 provider_id（标 ★ 的是当前会话提供商）；provider 与 model 必须分别传入，禁止拼成 provider_id/model"
                 },
                 "model": {
                     "type": "string",
-                    "description": "向量化模型名（必填，纯模型名不带 @ 前缀）：先调用 list_models 从清单选择支持向量化的模型"
+                    "description": "向量化模型名（必填）：先调用 list_models 从清单选择支持向量化的模型；原样复制模型名（自身含斜杠/命名空间则原样保留），禁止把 provider_id 拼进来"
                 },
                 "dimensions": {
                     "type": "integer",
@@ -100,7 +113,7 @@ impl ToolHandler for EmbedTool {
                     "description": "可选：批量并发上限，默认 16，最大 32"
                 }
             },
-            "required": ["input", "model"]
+            "required": ["input", "model", "provider"]
         })
     }
 
@@ -133,20 +146,35 @@ impl ToolHandler for EmbedTool {
             return Err("input 不能为空".to_string());
         }
         if texts.len() > 32 {
-            return Err(format!("批量输入超过上限（32 条，当前 {} 条）", texts.len()));
+            return Err(format!(
+                "批量输入超过上限（32 条，当前 {} 条）",
+                texts.len()
+            ));
         }
 
-        let provider_arg = arguments["provider"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let provider_arg = arguments["provider"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        // provider 与 model 必须分别传入：缺 provider 时不再静默回退会话提供商
+        if provider_arg.is_none() {
+            return Err("缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。请先调用 list_models，从清单里挑出目标模型所在那一行（标 ★ 的是当前会话提供商），把 provider_id 与模型名分别填入 provider / model".to_string());
+        }
         let (endpoint_base, api_key) = match (&provider_arg, &self.resolve) {
             (Some(pid), Some(resolve)) => match resolve(pid) {
                 Some((ep, key, _fmt)) => (ep, key),
-                None => return Err(format!("提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商", pid)),
+                None => {
+                    return Err(format!(
+                        "提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商",
+                        pid
+                    ))
+                }
             },
             _ => (self.api_endpoint.clone(), self.api_key.clone()),
         };
 
         // 校验 model 是否在合法清单内
-        let provider_id = provider_arg.as_deref().unwrap_or("__default__");
+        let provider_id = provider_arg.as_deref().unwrap_or("");
         self.validate_model(&model, provider_id)?;
 
         let endpoint = format!("{}/embeddings", endpoint_base.trim_end_matches('/'));
@@ -173,23 +201,24 @@ impl ToolHandler for EmbedTool {
             return Err(format!(
                 "向量化失败 (HTTP {}): {}. 可能原因：模型不支持向量化、指定的 dimensions 不被支持。",
                 status.as_u16(),
-                &text[..text.len().min(300)]
+                // 错误响应体可能含中文，按字符截断（原先的 &text[..300] 会切进字符内部 panic）
+                crate::utils::text::elide_head(&text, 300)
             ));
         }
 
         let json: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| format!("解析向量结果失败: {}", e))?;
-        let data = json["data"]
-            .as_array()
-            .ok_or_else(|| format!("响应缺少 data 数组: {}", &text[..text.len().min(200)]))?;
+        let data = json["data"].as_array().ok_or_else(|| {
+            format!(
+                "响应缺少 data 数组: {}",
+                crate::utils::text::elide_head(&text, 200)
+            )
+        })?;
 
         let mut vectors: Vec<Vec<f64>> = Vec::new();
         for item in data {
             if let Some(embedding) = item["embedding"].as_array() {
-                let v: Vec<f64> = embedding
-                    .iter()
-                    .filter_map(|x| x.as_f64())
-                    .collect();
+                let v: Vec<f64> = embedding.iter().filter_map(|x| x.as_f64()).collect();
                 if !v.is_empty() {
                     vectors.push(v);
                 }

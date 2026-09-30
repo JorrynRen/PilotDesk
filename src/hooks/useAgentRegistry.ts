@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { AgentConfig } from '../types';
+import { errorMessage } from '../utils/errorMessage';
 
 interface AgentTheme {
   color: string;
@@ -70,7 +71,7 @@ async function fetchAgentsGlobal(): Promise<AgentConfig[]> {
     globalError = null;
     return result;
   } catch (err) {
-    globalError = String(err);
+    globalError = errorMessage(err);
     return globalAgents;
   } finally {
     globalLoading = false;

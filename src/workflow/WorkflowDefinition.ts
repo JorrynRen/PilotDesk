@@ -50,6 +50,21 @@ export const NODE_DEFAULT_PARAMS: Record<string, Record<string, unknown>> = {
 };
 
 
+/**
+ * 由节点 id 反查归属，拼「阶段名·节点名」（界面显示用，多个同名节点据此区分）。
+ * 查不到归属时退回调用方给的节点名，再退回节点 id。
+ */
+export function formatStageNodeLabel(stages: Stage[], nodeId: string, fallbackLabel?: string): string {
+  for (const stage of stages) {
+    const node = stage.nodes.find((n) => n.id === nodeId);
+    if (node) {
+      const where = [stage.name, node.label].filter(Boolean).join('·');
+      if (where) return where;
+    }
+  }
+  return fallbackLabel || nodeId;
+}
+
 export function getNodeTypeMeta(type: string): NodeTypeMeta {
   const key = (type || '').toLowerCase();
   return NODE_TYPE_META[key] || { label: type, color: '#8b949e', icon: '❓', canHaveInputs: true, canHaveOutputs: true, maxInputs: 10, maxOutputs: 10, isBoundary: false, nodeW: 160, nodeH: 60 };
@@ -90,12 +105,40 @@ export const ANCHOR_OVERFLOW = 5;
 export const NODE_SAFE_MARGIN = ANCHOR_OVERFLOW;
 
 /**
- * 节点位置 clamp（padding-box 坐标）
+ * 阶段内画布平移量。
  *
- * 节点是 position:absolute，定位基准 = 内容区 div 的 padding-box 左上角。
- * clamp 确保节点（含锚点溢出）不超出内容区 padding-box。
- * x ∈ [MARGIN, STAGE_W - nodeW - MARGIN]
- * y ∈ [MARGIN, CONTENT_H - nodeH - MARGIN]
+ * 内容层整体按此平移，阶段框相当于一个**窗口**：
+ * 平移后能看见的内容坐标区间会跟着移动（见 `visibleContentWindow`）。
+ */
+export interface StagePan {
+  x: number;
+  y: number;
+}
+
+/**
+ * 阶段"可视窗口"在内容坐标下的范围。
+ *
+ * 内容层按 pan 平移，因此窗口在内容坐标里是**反向**移动的：
+ * 平移 pan 后可见的内容坐标 = [-pan, -pan + 尺寸]。
+ *
+ * 这个窗口同时是两个边界：
+ *   - **裁剪边界**：内容层 overflow:hidden，节点与连线都不会画到阶段框外（拖动画布可查看其余部分）；
+ *   - **放置边界**：节点只能落在看得见的位置，避免出现"掉在看不见的地方"的节点。
+ */
+export function visibleContentWindow(pan: StagePan = { x: 0, y: 0 }): { left: number; top: number; right: number; bottom: number } {
+  return {
+    left: -pan.x,
+    top: -pan.y,
+    right: -pan.x + STAGE_W,
+    bottom: -pan.y + CONTENT_H,
+  };
+}
+
+/**
+ * 节点位置 clamp（内容层坐标，网格对齐）
+ *
+ * 节点是 position:absolute，定位基准 = 内容层左上角；内容层已按 stagePan 平移，
+ * 所以边界用的是**可视窗口**而不是固定 [0, STAGE_W] —— 否则平移过阶段后再放置节点会被"夹回"原位置。
  */
 export function clampNodePosition(
   x: number,
@@ -103,25 +146,25 @@ export function clampNodePosition(
   nodeW: number,
   nodeH: number,
   scale: number = 1,
+  pan: StagePan = { x: 0, y: 0 },
 ): { x: number; y: number } {
   const M = NODE_SAFE_MARGIN;
   const halfW = nodeW / 2;
   const halfH = nodeH / 2;
+  const win = visibleContentWindow(pan);
 
   // Scale 感知 clamp：确保缩放时视觉边距恒定为 M
   // 节点反向缩放 scale(1/scale)，画布正向缩放 scale(scale)，复合缩放 = 1
-  // 视觉左边界 = (x + halfW) * scale - halfW >= M
-  // 视觉右边界 = (STAGE_W * scale) - ((x + halfW) * scale + halfW) >= M
-  const xMin = (M + halfW) / scale - halfW;
-  const xMax = STAGE_W - (M + halfW) / scale - halfW;
-  const yMin = (M + halfH) / scale - halfH;
-  const yMax = CONTENT_H - (M + halfH) / scale - halfH;
+  const xMin = win.left + (M + halfW) / scale - halfW;
+  const xMax = win.right - (M + halfW) / scale - halfW;
+  const yMin = win.top + (M + halfH) / scale - halfH;
+  const yMax = win.bottom - (M + halfH) / scale - halfH;
 
-  // 极端缩放时范围无效，退回居中
+  // 极端缩放时范围无效，退回窗口居中
   if (xMin > xMax || yMin > yMax) {
     return {
-      x: Math.round((STAGE_W - nodeW) / 2 / SNAP_SIZE) * SNAP_SIZE,
-      y: Math.round((CONTENT_H - nodeH) / 2 / SNAP_SIZE) * SNAP_SIZE,
+      x: Math.round((win.left + (STAGE_W - nodeW) / 2) / SNAP_SIZE) * SNAP_SIZE,
+      y: Math.round((win.top + (CONTENT_H - nodeH) / 2) / SNAP_SIZE) * SNAP_SIZE,
     };
   }
 
@@ -132,56 +175,74 @@ export function clampNodePosition(
 }
 
 /**
- * Clamp节点位置到阶段内容区内，不进行网格snap（用于拖动+吸附场景）
+ * 拖动时限制节点位置（不做网格 snap，便于吸附对齐）。
+ * 边界 = 阶段可视窗口（含锚点安全边距），与 `clampNodePosition` 同一套窗口。
  */
 export function clampNodePositionNoSnap(
   x: number,
   y: number,
   nodeW: number,
   nodeH: number,
-  scale: number = 1,
+  pan: StagePan = { x: 0, y: 0 },
 ): { x: number; y: number } {
   const M = NODE_SAFE_MARGIN;
-  const halfW = nodeW / 2;
-  const halfH = nodeH / 2;
-  const xMin = (M + halfW) / scale - halfW;
-  const xMax = STAGE_W - (M + halfW) / scale - halfW;
-  const yMin = (M + halfH) / scale - halfH;
-  const yMax = CONTENT_H - (M + halfH) / scale - halfH;
-  if (xMin > xMax || yMin > yMax) {
-    return {
-      x: (STAGE_W - nodeW) / 2,
-      y: (CONTENT_H - nodeH) / 2,
-    };
-  }
+  const win = visibleContentWindow(pan);
   return {
-    x: Math.max(xMin, Math.min(xMax, x)),
-    y: Math.max(yMin, Math.min(yMax, y)),
+    x: Math.max(win.left + M, Math.min(win.right - nodeW - M, x)),
+    y: Math.max(win.top + M, Math.min(win.bottom - nodeH - M, y)),
   };
 }
 
 /**
- * 计算节点默认初始位置（居中放置）
+ * 拖动位移的允许区间（与 `clampNodePositionNoSnap` 用同一套边界）。
+ *
+ * 拖动过程中就要把位移限制在区间内，否则节点会先跟着鼠标跑出窗口、松手才被夹回来
+ * ——看起来就是"拖拽时跳动 / 节点溢出阶段框"。
+ */
+export function nodeDragOffsetRange(
+  orig: { x: number; y: number },
+  nodeW: number,
+  nodeH: number,
+  pan: StagePan = { x: 0, y: 0 },
+): { minX: number; maxX: number; minY: number; maxY: number } {
+  const M = NODE_SAFE_MARGIN;
+  const win = visibleContentWindow(pan);
+  return {
+    minX: win.left + M - orig.x,
+    maxX: win.right - nodeW - M - orig.x,
+    minY: win.top + M - orig.y,
+    maxY: win.bottom - nodeH - M - orig.y,
+  };
+}
+
+/**
+ * 计算节点默认初始位置（窗口居中）
  * 用于边界节点和按钮手动添加的节点
  */
-export function getDefaultNodePosition(nodeW: number, nodeH: number): { x: number; y: number } {
+export function getDefaultNodePosition(
+  nodeW: number,
+  nodeH: number,
+  pan: StagePan = { x: 0, y: 0 },
+): { x: number; y: number } {
+  const win = visibleContentWindow(pan);
   return {
-    x: Math.floor((STAGE_W - nodeW) / 2),
-    y: Math.floor((CONTENT_H - nodeH) / 2),
+    x: Math.floor((win.left + (STAGE_W - nodeW) / 2)),
+    y: Math.floor((win.top + (CONTENT_H - nodeH) / 2)),
   };
 }
 
 /**
  * 计算按钮手动添加节点的初始位置（避开已有节点）
- * 从居中位置开始，按网格偏移寻找空闲位置
+ * 从窗口居中位置开始，按网格偏移寻找空闲位置
  */
 export function findFreePosition(
   existingPositions: { x: number; y: number }[],
   nodeW: number,
   nodeH: number,
   scale: number = 1,
+  pan: StagePan = { x: 0, y: 0 },
 ): { x: number; y: number } {
-  const center = getDefaultNodePosition(nodeW, nodeH);
+  const center = getDefaultNodePosition(nodeW, nodeH, pan);
   // 从居中位置开始，螺旋式搜索空闲位置
   for (let offset = 0; offset < 20; offset++) {
     for (let dx = -offset; dx <= offset; dx++) {
@@ -189,7 +250,7 @@ export function findFreePosition(
         if (Math.abs(dx) !== offset && Math.abs(dy) !== offset) continue;
         const px = Math.floor((center.x + dx * SNAP_SIZE * 2) / SNAP_SIZE) * SNAP_SIZE;
         const py = Math.floor((center.y + dy * SNAP_SIZE * 2) / SNAP_SIZE) * SNAP_SIZE;
-        const clamped = clampNodePosition(px, py, nodeW, nodeH, scale);
+        const clamped = clampNodePosition(px, py, nodeW, nodeH, scale, pan);
         // 检查是否与已有节点重叠（含间距）
         const GAP = 20;
         const overlaps = existingPositions.some(p =>
@@ -214,31 +275,34 @@ export function findFreePosition(
  * @param type  节点类型
  * @param position  可选的 content box 坐标（拖拽时传入鼠标位置）
  * @param existingPositions  阶段内已有节点位置列表（用于 findFreePosition）
+ * @param pan  目标阶段的画布平移量（决定可视窗口，落点按窗口夹紧，保证节点一定可见）
  */
 export function createWorkflowNode(
   type: string,
   position?: { x: number; y: number },
   existingPositions?: { x: number; y: number }[],
   scale: number = 1,
+  pan: StagePan = { x: 0, y: 0 },
 ): WorkflowNode {
   const meta = getNodeTypeMeta(type);
   let finalPosition: { x: number; y: number };
 
   if (position !== undefined) {
-    // 拖拽放置：使用传入位置 + clamp
+    // 拖拽放置：鼠标点居中 + 夹进阶段可视窗口（含锚点安全边距，不会溢出阶段框）
     finalPosition = clampNodePosition(
       position.x - meta.nodeW / 2,
       position.y - meta.nodeH / 2,
       meta.nodeW,
       meta.nodeH,
       scale,
+      pan,
     );
   } else if (meta.isBoundary) {
-    // 边界节点：居中放置
-    finalPosition = getDefaultNodePosition(meta.nodeW, meta.nodeH);
+    // 边界节点：窗口居中放置
+    finalPosition = getDefaultNodePosition(meta.nodeW, meta.nodeH, pan);
   } else {
     // 普通节点按钮添加：寻找空闲位置
-    finalPosition = findFreePosition(existingPositions || [], meta.nodeW, meta.nodeH, scale);
+    finalPosition = findFreePosition(existingPositions || [], meta.nodeW, meta.nodeH, scale, pan);
   }
 
   return {
@@ -460,7 +524,6 @@ export function getStageUpstreamMap(
   }
 
   // 传递上游（BFS）
-  const changed = true;
   let stable = false;
   while (!stable) {
     stable = true;
@@ -501,8 +564,12 @@ export function getStageUpstreamMap(
  *   段数 = 1：常量 / 短变量名（如 {{title}}），跳过检查
  *   段数 = 2：两段引用（如 {{gate_output.stageId}}），统一检查第二段阶段拓扑前序
  *   段数 >= 3：节点引用（如 {{key.nodeId.xxx}}），第二段为 nodeId：
- *     - session_id：强检查拓扑前序 + agent 类型一致
- *     - 其他（含 start 节点）：预检 nodeId 是否为 start 节点，是则跳过，不是则强检查
+ *     - 其他（含 start 节点与 session_id）：预检 nodeId 是否为 start 节点，是则跳过，不是则强检查
+ *
+ * 注意：本函数只校验**输入映射**的取值可达性（节点存在 + 拓扑前序）。
+ * 「agent 类型必须一致」不属于输入映射的约束（那只是取 session_id 值）；
+ * 它是**延续会话**（params.resume_session_ref）的约束，在选择器侧生效
+ * （见 WorkflowNodeConfig 里延续会话候选的过滤）。
  *
  * @param stages  工作流阶段列表（不会被修改，返回新的副本）
  * @returns 清理后的阶段列表
@@ -519,6 +586,8 @@ export function sanitizeMappingReferences(stages: Stage[], stageEdges?: Workflow
   }
 
   // 构建每个节点的上游 ID 集合（通过边 source→target 传递 + 跨阶段前序）
+  // 注意：集合必须传递到收敛，单趟遍历会因连线数组顺序不同而漏掉隔层上游，
+  // 进而把合法引用当作"非前序"静默清除。
   const upstreamMap = new Map<string, Set<string>>();
   for (const stage of stages) {
     for (const edge of stage.edges) {
@@ -526,10 +595,22 @@ export function sanitizeMappingReferences(stages: Stage[], stageEdges?: Workflow
         upstreamMap.set(edge.target, new Set());
       }
       upstreamMap.get(edge.target)!.add(edge.source);
-      const srcUpstream = upstreamMap.get(edge.source);
-      if (srcUpstream) {
-        for (const uid of srcUpstream) {
-          upstreamMap.get(edge.target)!.add(uid);
+    }
+  }
+  let upstreamStable = false;
+  while (!upstreamStable) {
+    upstreamStable = true;
+    for (const stage of stages) {
+      for (const edge of stage.edges) {
+        const srcUpstream = upstreamMap.get(edge.source);
+        const tgtUpstream = upstreamMap.get(edge.target);
+        if (srcUpstream && tgtUpstream) {
+          for (const uid of srcUpstream) {
+            if (!tgtUpstream.has(uid)) {
+              tgtUpstream.add(uid);
+              upstreamStable = false;
+            }
+          }
         }
       }
     }
@@ -559,7 +640,10 @@ export function sanitizeMappingReferences(stages: Stage[], stageEdges?: Workflow
   }
 
   // 构建阶段上游映射（通过 stageEdges 传递搜索）
-  const stageUpstreamMap = getStageUpstreamMap(stages, stageEdges);
+  // 调用方多数只传 stages，此时回退到阶段自身携带的 stageEdges；否则校验拿到空集，
+  // 会把所有 {{gate_output.阶段ID}} 引用当成非法引用清除。
+  const effectiveStageEdges = stageEdges ?? stages.flatMap(s => s.stageEdges || []);
+  const stageUpstreamMap = getStageUpstreamMap(stages, effectiveStageEdges);
 
   /** 从字符串中提取所有 {{...}} 占位符的内部内容 */
   const extractPlaceholders = (str: string): string[] => {
@@ -587,7 +671,6 @@ export function sanitizeMappingReferences(stages: Stage[], stageEdges?: Workflow
       }
 
       const nodeUpstream = upstreamMap.get(node.id);
-      const currentAgentType = node.type === 'agent' ? node.params?.agent_type : undefined;
       const stageUpstream = stageUpstreamMap.get(stage.id);
       const newMapping: Record<string, string> = {};
       let mappingChanged = false;
@@ -614,36 +697,42 @@ export function sanitizeMappingReferences(stages: Stage[], stageEdges?: Workflow
             // 段数 = 1：常量 / 短变量名，跳过检查
             continue;
           } else if (parts.length === 2) {
-            // 段数 = 2：统一按门控引用检查，第二段视为阶段ID
-            if (!stageUpstream?.has(parts[1])) {
-              console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 两段引用 ' + parts.join('.') + ' 的阶段 ' + parts[1] + ' 不是阶段拓扑前序');
-              allValid = false;
-              break;
+            // 段数 = 2：按第一段区分语义，避免把节点引用误当门控引用清除
+            //   {{gate_output.阶段ID}} → 校验阶段拓扑前序
+            //   {{节点ID.字段}}        → 校验节点拓扑前序
+            //   其它（子工作流参数、__input__/保留别名等）→ 不强校验，放行
+            if (parts[0] === 'gate_output') {
+              if (!stageUpstream?.has(parts[1])) {
+                console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 两段引用 ' + parts.join('.') + ' 的阶段 ' + parts[1] + ' 不是阶段拓扑前序');
+                allValid = false;
+                break;
+              }
+            } else if (allNodeIds.has(parts[0])) {
+              if (!(nodeUpstream?.has(parts[0]) ?? false)) {
+                console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 两段引用 ' + parts.join('.') + ' 的节点 ' + parts[0] + ' 不是拓扑前序节点');
+                allValid = false;
+                break;
+              }
             }
           } else {
             // 段数 >= 3：第二段 = nodeId
             const refNodeId = parts[1];
 
-            // session_id 引用：强检查拓扑前序 + agent 类型一致
-            if (parts[0] === 'session_id') {
-              const refNode = allNodes.get(refNodeId);
-              if (!refNode || !(nodeUpstream?.has(refNodeId) ?? false)) {
-                console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + refNodeId + ' 不是拓扑前序节点');
-                allValid = false;
-                break;
-              }
-              if (refNode.type !== 'agent') {
-                console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + refNodeId + ' 不是 agent 类型');
-                allValid = false;
-                break;
-              }
-              if (currentAgentType !== undefined && refNode.params?.agent_type !== currentAgentType) {
-                console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 session_id 节点 ' + refNodeId + ' agent_type 不一致（当前: ' + currentAgentType + ', 引用: ' + refNode.params?.agent_type + '）');
+            // 门控合并值下钻：{{gate_output.阶段ID.节点ID.字段}} → 校验阶段拓扑前序即可
+            // （节点ID 属于该阶段内部，不再逐节点校验，否则引用会被当成非法引用清除）
+            if (parts[0] === 'gate_output') {
+              if (!(stageUpstream?.has(parts[1]) ?? false)) {
+                console.log('[sanitizeMapping] 节点 ' + node.id + '(' + node.label + ') 引用 ' + placeholder + ' 的阶段 ' + parts[1] + ' 不是阶段拓扑前序');
                 allValid = false;
                 break;
               }
               continue;
             }
+
+            // 输入映射里的 session_id 引用：与普通字段引用同规则——只是取上游节点暴露的会话 ID 值，
+            // 不要求上游是同类型 agent（`{{session_id.上游agent.阶段}}` 在 api / CLI 节点里都能读）。
+            // 「agent 类型必须一致」是**延续会话**（params.resume_session_ref）的约束：
+            // 类型不一致无从延续，该约束在选择器侧生效（见 WorkflowNodeConfig 的延续会话候选过滤）。
 
             // 其他节点引用：预检是否为 start 节点
             if (startNodeIds.has(refNodeId)) {
@@ -704,20 +793,8 @@ export function remapImportedWorkflowIds(stages: Stage[], stageEdges?: WorkflowE
   // 捕获原始阶段连线（在 generateId 产生副作用前）
   const originalStageEdges = stageEdges;
 
-  // 2. 替换字符串中所有旧 ID 为新 ID
-  //    新格式 {{key.nodeId.stageId}} 中 nodeId 在第二段
-  //    gate_output 引用中无 nodeId，不替换
-  //    直接全局替换所有 nodeId 出现即可（阶段 ID 也会被替换，但 idMap 仅含节点 ID）
-  const replaceIds = (str: string): string => {
-    let result = str;
-    for (const [oldId, newId] of idMap) {
-      result = result.split(oldId).join(newId);
-    }
-    return result;
-  };
-
-  // 3. 替换 mapping 对象中的 ID 引用（节点 ID + 阶段 ID）
-  //    新引用格式: {{key.nodeId.stageId}}，两者都需要替换
+  // 2. 替换 mapping 对象中的 ID 引用（节点 ID + 阶段 ID）
+  //    新引用格式: {{key.nodeId.stageId}}，两者都需要替换；gate_output 引用中无 nodeId，不替换
   const replaceMappingIds = (mapping: Record<string, string> | undefined, stageIdMap: Map<string, string>): Record<string, string> | undefined => {
     if (!mapping) return mapping;
     const replaceAllIds = (str: string): string => {

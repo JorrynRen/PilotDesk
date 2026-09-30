@@ -6,6 +6,7 @@ import {
   userPreferencesTemplate,
   type ProjectMemoryInfo,
 } from '../../types';
+import { errorMessage } from '../../utils/errorMessage';
 
 const MAX_CHARS = 12000;
 
@@ -26,7 +27,7 @@ export function UserMemorySettings() {
         setLoaded(mem);
         setDraft(mem.content);
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
       }
     })();
   }, []);
@@ -44,7 +45,7 @@ export function UserMemorySettings() {
       setLoaded(mem);
       setDraft(mem.content);
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -55,7 +56,7 @@ export function UserMemorySettings() {
     try {
       setDraft(await userPreferencesTemplate());
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
   };
 

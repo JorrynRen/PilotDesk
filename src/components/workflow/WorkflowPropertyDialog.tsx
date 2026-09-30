@@ -1,6 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { X, Settings, Plus, HelpCircle } from 'lucide-react';
 import type { WorkflowDefinition, TriggerConfig } from '../../types/workflow';
+import type { JsonValue } from '../../types/plugin';
+import { Select } from '../common/Select';
+
+/** 入参字段规格（与 types/workflow.ts 的 inputSchema 一致；default 可能来自用户 JSON，形态未知） */
+type InputSchemaField = { type: string; description?: string; required?: boolean; default?: JsonValue };
+/** 产出字段规格（与 types/workflow.ts 的 outputSchema 一致） */
+type OutputSchemaField = { type: string; description?: string };
 
 interface Props {
   mode: 'create' | 'edit';
@@ -12,22 +21,22 @@ interface Props {
     trigger: TriggerConfig;
     enabled: boolean;
     icon?: string;
-    inputSchema?: Record<string, { type: string; description?: string; default?: any }>;
-    outputSchema?: Record<string, { type: string; description?: string }>;
+    inputSchema?: Record<string, InputSchemaField>;
+    outputSchema?: Record<string, OutputSchemaField>;
   }) => void;
   onClose: () => void;
 }
 
 // ── 预设 emoji 图标 ──
+// 2 列网格：分组数量保持偶数、且每组 5 个，左右两列才对得齐
 const EMOJI_GROUPS: Array<{ label: string; emojis: string[] }> = [
   { label: 'AI/Agent', emojis: ['🤖', '🧠', '💬', '✨', '⚡'] },
   { label: '数据/报表', emojis: ['📊', '📈', '📋', '🔍', '📁'] },
   { label: '自动化/运维', emojis: ['⚙️', '🔔', '🚀', '🔄', '🛡️'] },
-  { label: '内容/创作', emojis: ['✏️', '📝', '🎨', '📚'] },
+  { label: '内容/创作', emojis: ['✏️', '📝', '🎨', '📚', '🎬'] },
+  { label: '开发/技术', emojis: ['💻', '🧪', '🐛', '🔧', '🧩'] },
   { label: '通用/其他', emojis: ['🌐', '📌', '⭐', '💡', '🔗'] },
 ];
-
-const ALL_EMOJIS = EMOJI_GROUPS.flatMap(g => g.emojis);
 
 export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Props) {
   const [name, setName] = useState(initial?.name || '');
@@ -36,11 +45,30 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
   const [icon, setIcon] = useState<string | undefined>(initial?.icon);
   const [triggerType, setTriggerType] = useState<'manual' | 'cron' | 'event'>(initial?.trigger?.triggerType || 'manual');
   const [cronExpr, setCronExpr] = useState(initial?.trigger?.cron || '');
+  const [eventName, setEventName] = useState(initial?.trigger?.eventName || '');
+  const [events, setEvents] = useState<Array<{ name: string; label: string }>>([]);
+  /** 清单加载失败（例如运行中的应用还是旧版本、没有 list_workflow_events 命令）：
+   *  此时不能一直显示"加载中…"，那会让人以为在等数据。 */
+  const [eventsFailed, setEventsFailed] = useState(false);
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [inputSchemaText, setInputSchemaText] = useState(initial?.inputSchema ? JSON.stringify(initial.inputSchema, null, 2) : '');
   const [outputSchemaText, setOutputSchemaText] = useState(initial?.outputSchema ? JSON.stringify(initial.outputSchema, null, 2) : '');
   const [error, setError] = useState<string | null>(null);
   const [showCronHelp, setShowCronHelp] = useState(false);
+
+  // 事件名清单来自后端内置事件表（只有列在这里的事件才会被真正派发，
+  // 因此不给自由输入——否则用户会订阅到一个永远不会响的名字）
+  useEffect(() => {
+    let cancelled = false;
+    invoke<Array<{ name: string; label: string }>>('list_workflow_events')
+      .then((list) => { if (!cancelled) setEvents(list); })
+      .catch((e) => {
+        if (cancelled) return;
+        setEventsFailed(true);
+        console.warn('[WorkflowPropertyDialog] 加载内置事件清单失败:', e);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const CRON_PRESETS = [
     { label: '每日9点', expr: '0 0 9 * * *' },
@@ -49,6 +77,55 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
     { label: '每月1日9点', expr: '0 0 9 1 * *' },
     { label: '周一9点', expr: '0 0 9 * * 1' },
   ];
+
+  /** Cron 的"几点几分"按本机时区解释（后端调度器同一口径），显示出来免得口径不明 */
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || '本机时区';
+
+  /**
+   * Cron 帮助面板定位。
+   *
+   * 弹窗正文是滚动容器（overflow-y-auto），内联的 absolute 面板会被它裁掉，所以这里用
+   * position: fixed 定位，按需要**向上展开**（贴在图标的上面），并把可用空间写进 maxHeight。
+   * 关闭用 120ms 延时——图标与面板之间有 6px 间隙，鼠标穿过时不该立刻消失。
+   */
+  const cronHelpAnchorRef = useRef<HTMLDivElement>(null);
+  const [cronHelpStyle, setCronHelpStyle] = useState<CSSProperties>({});
+  const cronHelpTimer = useRef<number | null>(null);
+
+  const openCronHelp = () => {
+    if (cronHelpTimer.current !== null) {
+      window.clearTimeout(cronHelpTimer.current);
+      cronHelpTimer.current = null;
+    }
+    const rect = cronHelpAnchorRef.current?.getBoundingClientRect();
+    if (rect) {
+      const width = Math.min(420, window.innerWidth - 16);
+      const spaceAbove = rect.top - 12;
+      const spaceBelow = window.innerHeight - rect.bottom - 12;
+      const upward = spaceAbove >= 200 || spaceAbove >= spaceBelow;
+      const maxHeight = Math.max(160, Math.min(upward ? spaceAbove - 6 : spaceBelow - 6, window.innerHeight * 0.7));
+      setCronHelpStyle({
+        position: 'fixed',
+        right: Math.max(8, window.innerWidth - rect.right),
+        ...(upward
+          ? { bottom: window.innerHeight - rect.top + 6 }
+          : { top: rect.bottom + 6 }),
+        width,
+        maxHeight,
+      });
+    }
+    setShowCronHelp(true);
+  };
+
+  const scheduleCloseCronHelp = () => {
+    if (cronHelpTimer.current !== null) window.clearTimeout(cronHelpTimer.current);
+    cronHelpTimer.current = window.setTimeout(() => setShowCronHelp(false), 120);
+  };
+
+  // 卸载时清掉待触发的关闭定时器，避免弹窗已关仍在改状态
+  useEffect(() => () => {
+    if (cronHelpTimer.current !== null) window.clearTimeout(cronHelpTimer.current);
+  }, []);
 
   const handleConfirm = () => {
     const trimmedName = name.trim();
@@ -60,11 +137,15 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
       setError('定时触发器需要填写 Cron 表达式');
       return;
     }
+    if (triggerType === 'event' && !eventName) {
+      setError('事件触发器需要选择事件名');
+      return;
+    }
     setError(null);
 
     // 解析 input/output schema JSON
-    let inputSchema: Record<string, any> | undefined;
-    let outputSchema: Record<string, any> | undefined;
+    let inputSchema: Record<string, InputSchemaField> | undefined;
+    let outputSchema: Record<string, OutputSchemaField> | undefined;
     if (inputSchemaText.trim()) {
       try { inputSchema = JSON.parse(inputSchemaText); }
       catch { setError('输入 Schema JSON 格式错误'); return; }
@@ -83,7 +164,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
         ? { triggerType: 'manual' }
         : triggerType === 'cron'
           ? { triggerType: 'cron', cron: cronExpr.trim() }
-          : { triggerType: 'event' },
+          : { triggerType: 'event', eventName },
       inputSchema,
       outputSchema,
       enabled,
@@ -97,12 +178,12 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
       onClick={onClose}
     >
       <div
-        className="w-[540px] rounded-xl shadow-2xl flex flex-col"
+        className="w-[540px] max-h-[85vh] rounded-xl shadow-2xl flex flex-col"
         style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -120,7 +201,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 pd-scroll-stable">
           {/* 名称 */}
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
@@ -229,6 +310,35 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
                 </button>
               ))}
             </div>
+            {triggerType === 'event' && (
+              <div className="mt-2">
+                <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                  事件名 <span style={{ color: '#EF4444' }}>*</span>
+                </label>
+                <Select
+                  value={eventName}
+                  onChange={setEventName}
+                  options={events.map(e => ({ value: e.name, label: `${e.label}（${e.name}）` }))}
+                  placeholder={
+                    events.length > 0
+                      ? '请选择要订阅的事件'
+                      : eventsFailed
+                        ? '内置事件加载失败，请重启应用后重试'
+                        : '加载内置事件中…'
+                  }
+                  disabled={events.length === 0}
+                  className="w-full"
+                  title="事件触发：平台在内置事件发生时启动本工作流"
+                />
+                <div className="mt-1 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                  仅支持平台内置事件；事件负载会作为本工作流的输入数据，
+                  模板中可用 <span className="font-mono">{'{{sessionId}}'}</span>、
+                  <span className="font-mono">{'{{definitionId}}'}</span>、
+                  <span className="font-mono">{'{{executionId}}'}</span> 等字段。
+                  工作流自身完成的事件不会触发它自己。
+                </div>
+              </div>
+            )}
             {triggerType === 'cron' && (
               <div className="mt-2">
                 {/* 标题行：标签 + 快捷插入 + 帮助图标 */}
@@ -253,27 +363,29 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
                       </button>
                     ))}
                   </div>
-                  {/* 帮助图标 */}
-                  <div className="relative shrink-0">
+                  {/* 帮助图标：面板向上展开（见 openCronHelp） */}
+                  <div className="relative shrink-0" ref={cronHelpAnchorRef}>
                     <button
                       type="button"
-                      onMouseEnter={() => setShowCronHelp(true)}
-                      onMouseLeave={() => setShowCronHelp(false)}
+                      onMouseEnter={openCronHelp}
+                      onMouseLeave={scheduleCloseCronHelp}
                       className="pd-btn p-0.5 rounded hover:opacity-80"
-                      style={{ color: 'var(--text-tertiary)' }}
+                      style={{ color: showCronHelp ? 'var(--accent)' : 'var(--text-tertiary)' }}
                     >
                       <HelpCircle size={14} />
                     </button>
                     {showCronHelp && (
                       <div
-                        className="absolute right-0 top-full mt-1 z-50 w-[420px] max-h-[60vh] overflow-y-auto rounded-lg shadow-xl p-4 text-[11px] leading-relaxed"
+                        className="z-[300] overflow-y-auto rounded-lg shadow-xl p-4 text-[11px] leading-relaxed"
                         style={{
                           backgroundColor: 'var(--bg-primary)',
                           border: '1px solid var(--border)',
                           color: 'var(--text-primary)',
+                          boxShadow: '0 12px 32px rgba(0,0,0,0.28)',
+                          ...cronHelpStyle,
                         }}
-                        onMouseEnter={() => setShowCronHelp(true)}
-                        onMouseLeave={() => setShowCronHelp(false)}
+                        onMouseEnter={openCronHelp}
+                        onMouseLeave={scheduleCloseCronHelp}
                       >
                         <div className="font-medium mb-2">Cron 表达式详解</div>
                         <div className="space-y-2">
@@ -371,7 +483,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
                   placeholder="例如: 0 0 9 * * 1-5（工作日早9点）"
                 />
                 <p className="mt-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  格式: 秒 分 时 日 月 星期
+                  格式: 秒 分 时 日 月 星期（时区: {timeZone}，可写 5 字段「分 时 日 月 星期」）
                 </p>
               </div>
             )}
@@ -399,37 +511,56 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
             </span>
           </div>
 
-          {/* Schema 配置 */}
-          <div className="space-y-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+          {/* Schema 配置：两个框必须各自带标题——只写"输入/输出 Schema"时看不出哪个是哪个 */}
+          <div className="space-y-3 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
             <span className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-              输入/输出 Schema（JSON，可选）
+              Schema（JSON，均可不填）
             </span>
-            <textarea
-              value={inputSchemaText}
-              onChange={(e) => setInputSchemaText(e.target.value)}
-              placeholder='{"field": {"type": "string", "required": true}}'
-              className="w-full rounded px-2 py-1 text-[11px] resize-none"
-              style={{
-                backgroundColor: 'var(--bg-tertiary)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border)',
-                fontFamily: 'monospace',
-                height: 48,
-              }}
-            />
-            <textarea
-              value={outputSchemaText}
-              onChange={(e) => setOutputSchemaText(e.target.value)}
-              placeholder='{"field": {"type": "string", "description": "输出字段"}}'
-              className="w-full rounded px-2 py-1 text-[11px] resize-none"
-              style={{
-                backgroundColor: 'var(--bg-tertiary)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border)',
-                fontFamily: 'monospace',
-                height: 48,
-              }}
-            />
+
+            <div>
+              <label className="block text-[10px] font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                输入 Schema
+                <span className="ml-1.5 font-normal" style={{ color: 'var(--text-tertiary)' }}>
+                  入参字段：手动运行时弹表单填写（预填 default）；作为子工作流被调用时按 required / type 强制校验
+                </span>
+              </label>
+              <textarea
+                value={inputSchemaText}
+                onChange={(e) => setInputSchemaText(e.target.value)}
+                placeholder='{"topic": {"type": "string", "required": true, "default": "人工智能"}}'
+                className="w-full rounded px-2 py-1 text-[11px] resize-none"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                  fontFamily: 'monospace',
+                  height: 48,
+                }}
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
+                输出 Schema
+                <span className="ml-1.5 font-normal" style={{ color: 'var(--text-tertiary)' }}>
+                  产出字段：只保留列出的键（缺的补 null / default），供下游以{' '}
+                  <span className="font-mono">{'{{节点.字段}}'}</span> 引用
+                </span>
+              </label>
+              <textarea
+                value={outputSchemaText}
+                onChange={(e) => setOutputSchemaText(e.target.value)}
+                placeholder='{"summary": {"type": "string", "description": "最终摘要"}}'
+                className="w-full rounded px-2 py-1 text-[11px] resize-none"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                  fontFamily: 'monospace',
+                  height: 48,
+                }}
+              />
+            </div>
           </div>
 
           {/* 错误提示 */}

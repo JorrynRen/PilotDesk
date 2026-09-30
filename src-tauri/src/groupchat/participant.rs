@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
-use super::models::{ConfirmationItem, ConfirmationRequest, summarize_confirmation_title};
+use super::models::{summarize_confirmation_title, ConfirmationItem, ConfirmationRequest};
 
 /// 流式增量回调：框架把每个增量片段实时推给前端 `token_stream`。
 pub type DeltaFn = dyn Fn(&str) + Send + Sync;
@@ -28,11 +28,23 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn user(content: &str) -> Self {
-        Self { role: "user".into(), name: None, content: content.into(), images: None, reasoning_content: None }
+        Self {
+            role: "user".into(),
+            name: None,
+            content: content.into(),
+            images: None,
+            reasoning_content: None,
+        }
     }
     #[allow(dead_code)]
     pub fn assistant(content: &str) -> Self {
-        Self { role: "assistant".into(), name: None, content: content.into(), images: None, reasoning_content: None }
+        Self {
+            role: "assistant".into(),
+            name: None,
+            content: content.into(),
+            images: None,
+            reasoning_content: None,
+        }
     }
     /// assistant 消息携带思考链（reasoning_content），供思考模式模型原样回传。
     #[allow(dead_code)]
@@ -42,16 +54,32 @@ impl ChatMessage {
             name: None,
             content: content.into(),
             images: None,
-            reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning.to_string()) },
+            reasoning_content: if reasoning.is_empty() {
+                None
+            } else {
+                Some(reasoning.to_string())
+            },
         }
     }
     #[allow(dead_code)]
     pub fn system(content: &str) -> Self {
-        Self { role: "system".into(), name: None, content: content.into(), images: None, reasoning_content: None }
+        Self {
+            role: "system".into(),
+            name: None,
+            content: content.into(),
+            images: None,
+            reasoning_content: None,
+        }
     }
     #[allow(dead_code)]
     pub fn named(role: &str, name: &str, content: &str) -> Self {
-        Self { role: role.into(), name: Some(name.into()), content: content.into(), images: None, reasoning_content: None }
+        Self {
+            role: role.into(),
+            name: Some(name.into()),
+            content: content.into(),
+            images: None,
+            reasoning_content: None,
+        }
     }
 }
 
@@ -86,14 +114,30 @@ impl Attitude {
 
 /// 依据关键词分类立场态度（否定感知：关键词前 1-2 字符含 不/没/未 时态度反转；agree 优先判定）。
 pub fn classify_attitude(text: &str) -> Attitude {
-    if let Some(a) = match_attitude(text, &["支持", "同意", "赞成"], Attitude::Agree, Attitude::Disagree) {
+    if let Some(a) = match_attitude(
+        text,
+        &["支持", "同意", "赞成"],
+        Attitude::Agree,
+        Attitude::Disagree,
+    ) {
         return a;
     }
-    match_attitude(text, &["反对", "质疑", "拒绝"], Attitude::Disagree, Attitude::Agree).unwrap_or(Attitude::Neutral)
+    match_attitude(
+        text,
+        &["反对", "质疑", "拒绝"],
+        Attitude::Disagree,
+        Attitude::Agree,
+    )
+    .unwrap_or(Attitude::Neutral)
 }
 
 /// 扫描一组关键词：全部命中均带否定时返回 `negative`，存在无否定命中时返回 `positive`，未命中返回 None。
-fn match_attitude(text: &str, keywords: &[&str], positive: Attitude, negative: Attitude) -> Option<Attitude> {
+fn match_attitude(
+    text: &str,
+    keywords: &[&str],
+    positive: Attitude,
+    negative: Attitude,
+) -> Option<Attitude> {
     let mut found = false;
     let mut all_negated = true;
     for kw in keywords {
@@ -141,7 +185,7 @@ pub fn resolve_attitude(text: &str) -> Attitude {
             .map(str::trim_start);
         if let Some(rest) = rest {
             let attitude = match rest.chars().next() {
-                Some('支') => Some(Attitude::Agree),   // 支持
+                Some('支') => Some(Attitude::Agree),    // 支持
                 Some('反') => Some(Attitude::Disagree), // 反对
                 Some('中') => Some(Attitude::Neutral),  // 中立
                 _ => None,
@@ -319,8 +363,18 @@ impl Participant for LlmParticipant {
         on_delta: Option<Arc<DeltaFn>>,
         on_progress: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> TurnResult {
-        let role = self.role_prompt.read().map(|g| g.clone()).unwrap_or_default();
-        let system = build_llm_system_prompt(&view, &role, &self.id, &self.director_id, &self.disabled_skills);
+        let role = self
+            .role_prompt
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        let system = build_llm_system_prompt(
+            &view,
+            &role,
+            &self.id,
+            &self.director_id,
+            &self.disabled_skills,
+        );
         match self
             .llm
             .complete_with_tool_calls(&system, &view.messages, on_delta, on_progress)
@@ -389,10 +443,21 @@ impl Participant for CliParticipant {
         on_delta: Option<Arc<DeltaFn>>,
         _on_progress: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> TurnResult {
-        let role = self.role_prompt.read().map(|g| g.clone()).unwrap_or_default();
+        let role = self
+            .role_prompt
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
         let prompt = build_cli_prompt(&view, &role, &self.id, &self.director_id);
         match self.runner.run(&self.config, &prompt, on_delta).await {
-            Ok(out) => TurnResult { content: out.stdout, tool_calls: String::new(), reasoning_content: String::new(), metadata: None, error: None, confirmation: None },
+            Ok(out) => TurnResult {
+                content: out.stdout,
+                tool_calls: String::new(),
+                reasoning_content: String::new(),
+                metadata: None,
+                error: None,
+                confirmation: None,
+            },
             Err(e) => TurnResult {
                 content: String::new(),
                 tool_calls: String::new(),
@@ -423,7 +488,14 @@ impl Participant for UserParticipant {
         _on_delta: Option<Arc<DeltaFn>>,
         _on_progress: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> TurnResult {
-        TurnResult { content: String::new(), tool_calls: String::new(), reasoning_content: String::new(), metadata: None, error: None, confirmation: None }
+        TurnResult {
+            content: String::new(),
+            tool_calls: String::new(),
+            reasoning_content: String::new(),
+            metadata: None,
+            error: None,
+            confirmation: None,
+        }
     }
 }
 
@@ -444,7 +516,11 @@ fn build_participant_sections(view: &TurnView) -> ParticipantSections {
     } else {
         let mut s = String::from("\n[参与者名册]\n");
         for (id, _name, role) in &view.roster {
-            let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+            let role = if role.trim().is_empty() {
+                "未分配"
+            } else {
+                role.as_str()
+            };
             s.push_str(&format!("- [@{}]（角色：{}）\n", id, role));
         }
         s
@@ -467,7 +543,10 @@ fn build_participant_sections(view: &TurnView) -> ParticipantSections {
                 Attitude::Disagree => "反对",
                 Attitude::Neutral => "中立",
             };
-            s.push_str(&format!("- {}: [{}] {}\n", st.participant_id, tag, st.stance));
+            s.push_str(&format!(
+                "- {}: [{}] {}\n",
+                st.participant_id, tag, st.stance
+            ));
         }
         s
     };
@@ -492,12 +571,22 @@ fn build_participant_sections(view: &TurnView) -> ParticipantSections {
     } else {
         format!(
             "\n【产物目录】本房间所有参与者产出的文件必须统一写入目录：`{}`（绝对路径）。\
-             写入产物前确保该目录存在（必要时先创建该目录）；禁止随意选择其他位置（桌面、工作区根目录等）；\
+             该目录由系统创建好，写文件时缺失的上级目录会自动创建，**无需**用 mkdir 创建\
+             （尤其不要写 Unix 风格的 `mkdir -p`：本机是 cmd.exe，会把 `-p` 当成目录名，\
+             在工作目录里多出一个 `-p` 目录）；\
+             禁止随意选择其他位置（桌面、工作区根目录等）；\
              报告产物时仍按【产物规范】给出该目录下的绝对路径。",
             view.output_dir
         )
     };
-    ParticipantSections { roster, summary, stances, task_context, product_norm, output_dir }
+    ParticipantSections {
+        roster,
+        summary,
+        stances,
+        task_context,
+        product_norm,
+        output_dir,
+    }
 }
 
 /// 组装 API 参与者的 system prompt（身份 + 角色 + 议题 + 名册 + 摘要 + 立场）。
@@ -505,13 +594,21 @@ fn build_participant_sections(view: &TurnView) -> ParticipantSections {
 /// 追加技能目录 `<available_skills>` 块（与单 Agent 会话一致：Progressive Disclosure，
 /// 仅列 name+description，完整内容经 load_skill 按需加载）。`disabled_skills` 为群聊作用域
 /// 被禁技能名，只从目录块中隐藏（load_skill 仍可点名加载）。
-fn build_llm_system_prompt(view: &TurnView, role_prompt: &str, own_id: &str, director_id: &str, disabled_skills: &[String]) -> String {
+fn build_llm_system_prompt(
+    view: &TurnView,
+    role_prompt: &str,
+    own_id: &str,
+    director_id: &str,
+    disabled_skills: &[String],
+) -> String {
     let base = build_participant_prompt(
         view,
         role_prompt,
         own_id,
         director_id,
-        super::prompts::fragments::RULE_TOOL_DISCIPLINE_LLM.body.trim(),
+        super::prompts::fragments::RULE_TOOL_DISCIPLINE_LLM
+            .body
+            .trim(),
     );
     match available_skills_block(disabled_skills) {
         Some(block) => format!("{}\n\n{}", base, block),
@@ -560,17 +657,32 @@ fn build_cli_prompt(view: &TurnView, role_prompt: &str, own_id: &str, director_i
         role_prompt,
         own_id,
         director_id,
-        super::prompts::fragments::RULE_TOOL_DISCIPLINE_CLI.body.trim(),
+        super::prompts::fragments::RULE_TOOL_DISCIPLINE_CLI
+            .body
+            .trim(),
     )
 }
 
 /// 参与者提示词公共组装：共用模板 + 按模式注入工具纪律变体（{{VARIANT}}）。
-fn build_participant_prompt(view: &TurnView, role_prompt: &str, own_id: &str, director_id: &str, discipline: &str) -> String {
+fn build_participant_prompt(
+    view: &TurnView,
+    role_prompt: &str,
+    own_id: &str,
+    director_id: &str,
+    discipline: &str,
+) -> String {
     let s = build_participant_sections(view);
     super::prompts::render(
         super::prompts::blocks::PARTICIPANT.body,
         &super::prompts::PromptCtx::new()
-            .var("role", if role_prompt.is_empty() { "参与者" } else { role_prompt })
+            .var(
+                "role",
+                if role_prompt.is_empty() {
+                    "参与者"
+                } else {
+                    role_prompt
+                },
+            )
             .var("own_id", own_id)
             .var("director_id", director_id)
             .section("topic", &view.topic)
@@ -638,7 +750,11 @@ fn parse_confirmation_request(raw: &str) -> Option<ConfirmationRequest> {
     let items = if reply_mode == "structured" {
         v["items"]
             .as_array()
-            .map(|arr| arr.iter().map(|it| ConfirmationItem::from_json(it, "inputType")).collect())
+            .map(|arr| {
+                arr.iter()
+                    .map(|it| ConfirmationItem::from_json(it, "inputType"))
+                    .collect()
+            })
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -665,9 +781,13 @@ mod tests {
         let loader = crate::api_agent::skills::SkillLoader::new(None);
         assert!(render_skills_block(&loader.list_skills()).is_none());
         // 空临时目录同样不产生任何技能。
-        let tmp = std::env::temp_dir().join(format!("pilotdesk_gc_skills_empty_{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "pilotdesk_gc_skills_empty_{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
-        let loader = crate::api_agent::skills::SkillLoader::new(Some(tmp.to_string_lossy().to_string()));
+        let loader =
+            crate::api_agent::skills::SkillLoader::new(Some(tmp.to_string_lossy().to_string()));
         assert!(render_skills_block(&loader.list_skills()).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -676,11 +796,19 @@ mod tests {
     #[test]
     fn test_skills_block_renders_entries() {
         let block = render_skills_block(&[
-            SkillEntry { name: "web_search".into(), description: "联网搜索".into() },
-            SkillEntry { name: "read_file".into(), description: String::new() },
+            SkillEntry {
+                name: "web_search".into(),
+                description: "联网搜索".into(),
+            },
+            SkillEntry {
+                name: "read_file".into(),
+                description: String::new(),
+            },
         ])
         .unwrap();
-        assert!(block.starts_with("<available_skills>\n以下是可用的技能列表。调用 load_skill 工具加载完整技能内容：\n\n"));
+        assert!(block.starts_with(
+            "<available_skills>\n以下是可用的技能列表。调用 load_skill 工具加载完整技能内容：\n\n"
+        ));
         assert!(block.contains("- **web_search**: 联网搜索\n"));
         // description 为空时省略 `: ` 后缀。
         assert!(block.contains("- **read_file**\n"));

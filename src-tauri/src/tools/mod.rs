@@ -38,12 +38,14 @@ pub mod glob;
 pub mod grep;
 pub mod history;
 pub mod image_common;
+pub mod knowledge;
 pub mod list_files;
 pub mod list_models;
 pub mod mcp;
 pub mod memory;
 pub mod parse_document;
 pub mod read_file;
+pub mod read_image;
 pub mod search_web;
 pub mod skills;
 pub mod stt;
@@ -128,10 +130,14 @@ pub trait ToolHandler: Send + Sync {
     /// 参数定义（JSON Schema）
     fn parameters(&self) -> serde_json::Value;
     /// 工具风险等级（默认 Low）
-    fn risk_level(&self) -> RiskLevel { RiskLevel::Low }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::Low
+    }
     /// 分类标签（默认空，用于场景 allowlist 过滤；本轮装配层不消费，供未来前端管理页使用）
     #[allow(dead_code)]
-    fn tags(&self) -> &[ToolTag] { &[] }
+    fn tags(&self) -> &[ToolTag] {
+        &[]
+    }
     /// 执行工具
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String>;
 }
@@ -149,7 +155,9 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self { handlers: Vec::new() }
+        Self {
+            handlers: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, handler: Arc<dyn ToolHandler>) {
@@ -195,8 +203,8 @@ impl ToolRegistry {
 
     /// 执行指定工具
     pub async fn execute(&self, name: &str, arguments: &str) -> Result<String, String> {
-        let args: serde_json::Value = serde_json::from_str(arguments)
-            .unwrap_or(serde_json::Value::Null);
+        let args: serde_json::Value =
+            serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
 
         for handler in &self.handlers {
             if handler.name() == name {
@@ -214,7 +222,10 @@ impl ToolRegistry {
 
     /// 获取工具的风险等级
     pub fn get_risk_level(&self, name: &str) -> Option<RiskLevel> {
-        self.handlers.iter().find(|h| h.name() == name).map(|h| h.risk_level())
+        self.handlers
+            .iter()
+            .find(|h| h.name() == name)
+            .map(|h| h.risk_level())
     }
 }
 
@@ -249,14 +260,20 @@ pub struct ProviderModelInfo {
     /// 协议格式（openai/anthropic），供 LLM 判断调用方式差异。
     pub api_format: String,
     pub models: Vec<ModelSpec>,
+    /// 是否为当前会话正在使用的提供商（装配层标注；LLM 需据此填 provider 参数）。
+    pub is_session: bool,
 }
 
 /// 构建期环境依赖（运行时数据，不硬编码进清单）。
 pub struct ToolEnv {
     pub cwd: String,
     pub api_format: ApiFormat,
-    /// 图像工具依赖：(endpoint, key)。`None` 或 Anthropic 格式时不注册图像工具。
+    /// 图像生成/编辑工具依赖：(endpoint, key)。`None` 或 Anthropic 格式时不注册图像工具
+    /// （这两个工具走 OpenAI 专有的 `/images/generations`）。
     pub image: Option<(String, String)>,
+    /// read_image 依赖：会话 provider 的 (endpoint, key)，两种协议通用（走 chat / chat_anthropic 多模态）。
+    /// key 仅用于请求构造，绝不进入工具返回值/LLM 上下文。
+    pub vision: Option<(String, String)>,
     /// 音频工具依赖：(endpoint, key)。当前会话 provider 的 OpenAI 兼容地址（与 image 同源，
     /// Anthropic 时缺省不注册 tts/stt）；跨 provider 走 resolve_provider。
     pub audio: Option<(String, String)>,
@@ -264,7 +281,8 @@ pub struct ToolEnv {
     pub list_providers: Option<Arc<dyn Fn() -> Vec<ProviderModelInfo> + Send + Sync>>,
     /// 跨 provider 解析：providerId → (endpoint, key, api_format)。供生成工具按需换模型；
     /// **key 只进入工具内部请求构造，绝不进 LLM 上下文/返回值**。
-    pub resolve_provider: Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>>,
+    pub resolve_provider:
+        Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>>,
     pub search_config: SearchConfig,
     /// 子代理工具依赖（群聊缺省）。
     pub client: Option<ApiClient>,
@@ -273,6 +291,9 @@ pub struct ToolEnv {
     pub skill_loader: Option<Arc<SkillLoader>>,
     /// save_memory / search_memory 依赖（群聊缺省）。
     pub memory_store: Option<Arc<MemoryStore>>,
+    /// search_knowledge 依赖（群聊缺省）。与 memory_store 同源（同一个 MEMORY.db），
+    /// 只是知识库查询走 KnowledgeStore 那一套（带 kb_entry_links 的来源信息）。
+    pub knowledge_store: Option<Arc<crate::api_agent::knowledge::KnowledgeStore>>,
     /// ask_user 依赖（emit 事件 + 确认通道；群聊缺省）。
     pub app: Option<tauri::AppHandle>,
     pub session_id: String,
@@ -297,12 +318,16 @@ pub static SESSION_DISABLE: &[&str] = &[];
 /// 保留禁用原因：
 /// - task：群聊已是「Director 分派 → 执行者」多 agent 编排，执行者内再开子代理会层级爆炸
 /// - todo_write：与群聊 TaskRow / Director 任务分派体系重复冲突
-/// - save_memory / search_memory：多 agent 写入用户全局记忆库需审批治理，语义风险高
+/// - 记忆工具（save_memory / search_memory / list_memory / update_memory / delete_memory）：
+///   多 agent 读写用户全局记忆库需审批治理，语义风险高（尤其删除）
 pub static GROUPCHAT_DISABLE: &[&str] = &[
     "task",
     "todo_write",
     "save_memory",
     "search_memory",
+    "list_memory",
+    "update_memory",
+    "delete_memory",
 ];
 
 /// 内部能力项：文件历史（非 LLM 工具）。
@@ -332,11 +357,19 @@ pub struct ToolProfile {
 
 impl ToolProfile {
     pub fn session() -> Self {
-        Self { name: "session", disable: SESSION_DISABLE, extra_disable: Vec::new() }
+        Self {
+            name: "session",
+            disable: SESSION_DISABLE,
+            extra_disable: Vec::new(),
+        }
     }
 
     pub fn groupchat() -> Self {
-        Self { name: "groupchat", disable: GROUPCHAT_DISABLE, extra_disable: Vec::new() }
+        Self {
+            name: "groupchat",
+            disable: GROUPCHAT_DISABLE,
+            extra_disable: Vec::new(),
+        }
     }
 
     /// 追加用户覆盖的禁用项（来自工具管理页持久化的 overrides）。
@@ -432,20 +465,50 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
     // 文件写入副作用服务（历史快照 + diff 事件）经 env 统一注入，会话/群聊共用
     let history = env.file_history.clone();
     let rules = env.permission_rules.clone();
-    tools.push(Arc::new(write_file::WriteFileTool::new(cwd.clone(), history.clone(), rules)));
+    tools.push(Arc::new(write_file::WriteFileTool::new(
+        cwd.clone(),
+        history.clone(),
+        rules,
+    )));
     tools.push(Arc::new(edit_file::EditFileTool::new(cwd.clone(), history)));
 
     // ── 命令执行 ──
-    tools.push(Arc::new(execute_command::ExecuteCommandTool::new(cwd.clone())));
-    tools.push(Arc::new(execute_python::ExecutePythonTool::new(cwd.clone())));
+    tools.push(Arc::new(execute_command::ExecuteCommandTool::new(
+        cwd.clone(),
+    )));
+    tools.push(Arc::new(execute_python::ExecutePythonTool::new(
+        cwd.clone(),
+    )));
 
     // ── 技能 / 记忆（会话专属能力）──
     if let Some(loader) = &env.skill_loader {
-        tools.push(Arc::new(skills::LoadSkillTool::new(loader.as_ref().clone())));
+        tools.push(Arc::new(skills::LoadSkillTool::new(
+            loader.as_ref().clone(),
+        )));
     }
     if let Some(store) = &env.memory_store {
-        tools.push(Arc::new(memory::SaveMemoryTool::new(store.as_ref().clone())));
-        tools.push(Arc::new(memory::SearchMemoryTool::new(store.as_ref().clone())));
+        tools.push(Arc::new(memory::SaveMemoryTool::new(
+            store.as_ref().clone(),
+        )));
+        tools.push(Arc::new(memory::SearchMemoryTool::new(
+            store.as_ref().clone(),
+        )));
+        tools.push(Arc::new(memory::ListMemoryTool::new(
+            store.as_ref().clone(),
+        )));
+        tools.push(Arc::new(memory::UpdateMemoryTool::new(
+            store.as_ref().clone(),
+        )));
+        tools.push(Arc::new(memory::DeleteMemoryTool::new(
+            store.as_ref().clone(),
+        )));
+    }
+    // 知识库检索与记忆工具同源（同一个 MEMORY.db），所以同样"群聊缺省"。
+    // 它是**只读**的，日后要单独放给群聊，把这个判断与 memory_store 解耦即可。
+    if let Some(kb) = &env.knowledge_store {
+        tools.push(Arc::new(knowledge::SearchKnowledgeTool::new(kb.clone())));
+        tools.push(Arc::new(knowledge::ReadKnowledgeFileTool::new(kb.clone())));
+        tools.push(Arc::new(knowledge::SaveKnowledgeTool::new(kb.clone())));
     }
     // 注：todo_write 不在此构造——其状态已事件化到 session_events，构造需 session_id + 连接池，
     // 由 build_registry 在统一装配入口按 profile 注册（会话模式），见 build_registry。
@@ -468,6 +531,22 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
                 model_getter,
             )));
         }
+    }
+
+    // ── 图片读取（两种协议通用）──
+    // 图片字节不进入主上下文：工具内部复用会话 provider 的 endpoint/key 发起一次独立的
+    // 视觉调用，只把文本结果与图片绝对路径/URL 交回主循环（详见 read_image 模块文档）。
+    if let Some((endpoint, key)) = &env.vision {
+        tools.push(Arc::new(read_image::ReadImageTool::new(
+            endpoint.clone(),
+            key.clone(),
+            env.api_format.clone(),
+            env.model.clone(),
+            env.resolve_provider.clone(),
+            make_model_getter(&env.list_providers),
+            env.list_providers.clone(),
+            cwd.clone(),
+        )));
     }
 
     // ── 语音 / 向量化（仅 OpenAI 兼容格式且有 endpoint 配置；模型经 list_models + resolve_provider）──
@@ -517,7 +596,9 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
         env.cwd.clone(),
         env.session_id.clone(),
     )));
-    tools.push(Arc::new(create_document::CreateDocumentTool::new(env.cwd.clone())));
+    tools.push(Arc::new(create_document::CreateDocumentTool::new(
+        env.cwd.clone(),
+    )));
 
     // ── 模型能力查询（注入数据源时注册；会话/群聊均注入，群聊 v1.2 解禁）──
     if let Some(list) = &env.list_providers {
@@ -535,7 +616,9 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
     tools.push(Arc::new(browser::BrowserTool::new(cwd)));
 
     // ── 网络 ──
-    tools.push(Arc::new(search_web::SearchWebTool::new(env.search_config.clone())));
+    tools.push(Arc::new(search_web::SearchWebTool::new(
+        env.search_config.clone(),
+    )));
     tools.push(Arc::new(fetch_web::FetchWebTool::new()));
 
     // ── 人机交互（会话模式）──
@@ -564,7 +647,10 @@ pub fn assemble_tools(profile: &ToolProfile, env: &ToolEnv) -> Vec<Arc<dyn ToolH
 /// profile 追加注册（会话模式默认启用；群聊在 GROUPCHAT_DISABLE 中，命中 `is_disabled`
 /// 不注册，与 `assemble_tools` 的过滤语义一致）。
 /// `profile.disable` 不含 `mcp:*` 时从 DB 加载 MCP 服务器并连接注册。
-pub async fn build_registry(profile: &ToolProfile, ctx: &BuildContext<'_>) -> Result<Arc<ToolRegistry>, String> {
+pub async fn build_registry(
+    profile: &ToolProfile,
+    ctx: &BuildContext<'_>,
+) -> Result<Arc<ToolRegistry>, String> {
     let mut registry = ToolRegistry::new();
 
     for tool in assemble_tools(profile, ctx.env) {
@@ -608,14 +694,19 @@ pub async fn build_registry(profile: &ToolProfile, ctx: &BuildContext<'_>) -> Re
             };
             let tool_count = server_tools.len();
             for info in server_tools {
-                registry.register(Arc::new(
-                    crate::tools::mcp::McpToolHandler::new(pool.clone(), server.clone(), info),
-                ));
+                registry.register(Arc::new(crate::tools::mcp::McpToolHandler::new(
+                    pool.clone(),
+                    server.clone(),
+                    info,
+                )));
             }
-            log::info!("[MCP] 已加载服务器 {}（{} 个工具）", server.name, tool_count);
+            log::info!(
+                "[MCP] 已加载服务器 {}（{} 个工具）",
+                server.name,
+                tool_count
+            );
         }
     }
 
     Ok(Arc::new(registry))
 }
-

@@ -146,14 +146,75 @@
   --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
 }
 
-/* Dark mode button overlay uses lighter overlay */
-[data-theme="dark"] button:hover {
+/* ═══════════════════════════════════════════════════
+   深空 Nightfall — 第 4 个主题模式（深色系）
+   ═══════════════════════════════════════════════════
+   设计要点：
+   - 底色是**冷蓝黑**而不是中性黑：三层背景拉开明显阶梯，长时间阅读不闷；
+   - 强调色只留一个高饱和天青（#38BDF8），其余一律用 12–18% 透明，
+     保证"当前项 / 主操作 / 焦点"三处最醒目；
+   - 状态色改用亮色 + 低透明底（深色下浅色实底会刺眼）；
+   - 阴影加深：中性深色的 shadow 在蓝黑底上几乎不可见。
+   =================================================== */
+[data-theme="nightfall"] {
+  /* ── Background ── */
+  --bg-primary: #0B1020;
+  --bg-secondary: #111A2E;
+  --bg-tertiary: #1A2440;
+  --bg-panel: #0E1524;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-overlay: rgba(4, 8, 18, 0.62);
+
+  /* ── Text ── */
+  --text-primary: #E7ECF7;
+  --text-secondary: #A3AEC6;
+  /* 弱化文字在原 #6E7A96 时对 #0B1020 只有 ~4.4:1，略低于 WCAG AA 小字 4.5:1，提亮一档到 ~5.4:1 */
+  --text-tertiary: #7C88A6;
+  --text-inverse: #0B1020;
+
+  /* ── Border ── */
+  --border: #232E4A;
+  --border-light: #1A233A;
+
+  /* ── Accent ── */
+  --accent: #38BDF8;
+  --accent-hover: #0EA5E9;
+  --accent-light: rgba(56, 189, 248, 0.18);
+
+  /* ── Agent Tags ── */
+  --api-tag: #34D399;
+
+  /* ── Mode Colors ── */
+  --mode-native: var(--text-secondary);
+  --mode-fast: #34D399;
+  --mode-think: var(--accent);
+  --mode-expert: #A78BFA;
+
+  /* ── Status ── */
+  --status-success: #34D399;
+  --status-danger: #F87171;
+  --status-warning: #FBBF24;
+  --status-info: #60A5FA;
+  --status-success-bg: rgba(52, 211, 153, 0.16);
+  --status-danger-bg: rgba(248, 113, 113, 0.16);
+  --status-warning-bg: rgba(251, 191, 36, 0.16);
+  --status-info-bg: rgba(96, 165, 250, 0.16);
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 14px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* Dark mode button overlay uses lighter overlay。
+   用 data-theme-kind（深色族标记）而非具体主题名：以后再加深色主题不必回来改这些选择器。 */
+[data-theme-kind="dark"] button:hover {
   box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.06);
 }
-[data-theme="dark"] button:active {
+[data-theme-kind="dark"] button:active {
   box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.1);
 }
-[data-theme="dark"] .pd-btn:hover {
+[data-theme-kind="dark"] .pd-btn:hover {
   box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.06);
 }
 
@@ -370,6 +431,35 @@ button:disabled:hover {
   background-color: var(--bg-tertiary) !important;
 }
 
+/* ═══════════════════════════════════════════════════
+   下拉/级联选项（映射字段选择、延续会话选择等）
+   hover 一律交给 CSS：早期用 JS 直接改内联 background，
+   离开时写 'transparent' 会覆盖"选中态底色"，且 React 不同步 DOM →
+   选中项 hover 一次后高亮永久消失。
+   ═══════════════════════════════════════════════════ */
+.pd-option {
+  cursor: pointer;
+  background-color: transparent;
+  color: var(--text-primary);
+  transition: background-color 0.12s ease;
+  /* 选项一律单行：标签（如「已有会话」的 标题 · 时间）在生成时已按宽度截断，
+     这里兜底防止换行/溢出把下拉撑成两行 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pd-option:hover {
+  background-color: var(--bg-tertiary);
+}
+.pd-option-selected {
+  background-color: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.pd-option-selected:hover {
+  background-color: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 /* ── Button size variants ── */
 .pd-btn-sm {
   font-size: 12px;
@@ -380,6 +470,218 @@ button:disabled:hover {
   font-size: 11px;
   padding: 4px 10px;
   border-radius: 6px;
+}
+
+/* ═══════════════════════════════════════════════════
+   Field — 边框画在**外层容器**上的输入组（搜索框等）
+   ═══════════════════════════════════════════════════
+   这类输入把边框与底色画在外层容器上，内层 input/textarea 透明且无边框
+   （`bg-transparent outline-none`）。但全局 `:focus-visible` 会给内层元素画 1px accent 描边，
+   而 Tailwind 的 `outline-none` 属于 @layer utilities、优先级低于未分层的全局规则
+   → 聚焦时描边落在**内层**，视觉上变成"边框在外层、焦点圈在内层"的错位。
+
+   用法：给外层容器加 `pd-field` 即可（内层描边的压制由后代选择器负责，无需改内层）。
+   =================================================== */
+.pd-field:focus-within {
+  /* 容器的边框多由内联 style 给出，内联优先级最高，故此处需要 !important */
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+.pd-field input:focus,
+.pd-field input:focus-visible,
+.pd-field textarea:focus,
+.pd-field textarea:focus-visible {
+  outline: none;
+}
+
+/* ═══════════════════════════════════════════════════
+   Composer — 会话 / 群聊共用的输入区容器
+   ═══════════════════════════════════════════════════
+   改造原因：此前两页的 textarea 都是「透明 + 无边框」的裸输入，没有书写边界、
+   聚焦无任何反馈；附件预览另挂一块自己画的虚线外框（与"虚线=可放置"的拖拽语义
+   打架）；两侧字号还不一致（会话 14px / 群聊 12px）。
+
+   这里把「附件预览 + 文本 + 发送」收进一个可见容器，状态全挂在容器上：
+     - :focus-within  → accent 描边 + 柔光（键盘/鼠标聚焦都有反馈）
+     - [data-dragging] → 虚线 accent 描边 + 淡底（"可放置"语义收归容器）
+     - [data-disabled] → 整体降透明（无会话 / 无房间时）
+   两页共用这一份，避免样式再次漂移。
+   =================================================== */
+.pd-composer {
+  position: relative; /* 供灵感/技能选择器以 bottom-full 定位到自己上方 */
+  display: flex;
+  flex-direction: column; /* 文本域一行在上，「工具组 + 发送键」一行在下（见 .pd-composer-actions） */
+  gap: 6px;
+  padding: 8px 10px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background-color 0.12s ease;
+}
+.pd-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+.pd-composer[data-dragging="true"] {
+  border-style: dashed;
+  border-color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 7%, var(--bg-secondary));
+}
+.pd-composer[data-disabled="true"] {
+  opacity: 0.6;
+}
+
+/* 容器内左侧：附件行 + 文本域（纵向排列，容器高度随内容增长） */
+.pd-composer-body {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 工具栏行：与发送键同一行（DOM 上工具组在 actions 内、位于发送键之前）。
+   flex-basis 取 0（而不是 auto）——取 auto 时工具组的 max-content 会占满整行、
+   把发送键挤到下一行；取 0 后两者共享同行，宽度不足时由工具组内部换行消化。 */
+.pd-composer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  row-gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* 文本域：边界由容器提供，域自身保持无边框无底色。
+   min-height = 两行（line-height 20px × 2）——默认留出两行的书写空间，
+   高度随内容增长（上限 200px），且会话页/群聊页的自动高度都受它托底，
+   空输入时不会掉回一行。 */
+.pd-composer-input {
+  width: 100%;
+  min-height: 40px;
+  max-height: 200px;
+  padding: 0;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  resize: none;
+  font-size: 14px;
+  line-height: 20px;
+}
+.pd-composer-input::placeholder {
+  color: var(--text-tertiary);
+}
+/* 聚焦反馈统一由容器表达（.pd-composer:focus-within）。全局 :focus-visible 会给文本域
+   再画一层 1px accent 描边，与容器描边叠成"双层高亮"——这里用更高的选择器权重压掉。
+   （基础规则里的 outline:none 与全局 :focus-visible 同权重，靠源码顺序后者胜出。） */
+.pd-composer-input:focus,
+.pd-composer-input:focus-visible {
+  outline: none;
+}
+
+/* 主操作行：工具组在左、发送 / 停止键在右，同一行。
+   min-width:0 + flex-wrap 是关键——否则本行宽度会被工具组的 max-content 撑破，
+   在窄宽度下把发送键顶出容器（容器必须能收缩，宽度不足交给工具组内部换行消化）。 */
+.pd-composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end; /* 工具组成多行时，发送键与末行底部对齐 */
+  gap: 6px;
+  min-width: 0;
+  min-height: 28px;
+}
+
+/* 附件预览：容器内一行（图片缩略图 / 文件 chip），不再自己画虚线外框 */
+.pd-composer-att {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.pd-att-thumb {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--bg-tertiary);
+}
+.pd-att-file {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 160px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--bg-tertiary);
+}
+.pd-att-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background-color: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.pd-att-file .pd-att-x {
+  top: -5px;
+  right: -5px;
+}
+.pd-att-x:hover {
+  background-color: var(--status-danger);
+}
+
+/* 输入区右下的唯一主操作（发送 / 停止）：28px 圆形 */
+.pd-composer-send {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+.pd-composer-send[data-active="true"] {
+  background-color: var(--accent);
+  color: #fff;
+}
+.pd-composer-send[data-active="true"]:hover {
+  background-color: var(--accent-hover);
+}
+.pd-composer-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pd-composer-send[data-variant="stop"] {
+  background-color: color-mix(in srgb, var(--status-danger) 14%, transparent);
+  color: var(--status-danger);
 }
 
 /* ═══════════════════════════════════════════════════
@@ -443,6 +745,163 @@ button:disabled:hover {
   animation: pd-spin 1s linear infinite;
 }
 
+/* 指挥中心「入口在这里」指引：图标外圈扩散脉冲（循环，直到指引被收起）。
+   用途单一：用户（尤其新用户）关掉自动打开的面板后，知道下次在哪点开。 */
+@keyframes pd-guide-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.8;
+  }
+  70% {
+    transform: scale(1.75);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.75);
+    opacity: 0;
+  }
+}
+
+.pd-animate-guide-ring {
+  animation: pd-guide-ring 1.6s ease-out infinite;
+}
+
+/* 指引气泡的一次性入场（淡入 + 轻微下落） */
+@keyframes pd-guide-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pd-animate-guide-pop {
+  animation: pd-guide-pop 0.22s ease-out;
+}
+
+/* ═══════════════════════════════════════════════════
+   知识图谱：星空背景（零 DOM 的星点）
+   ═══════════════════════════════════════════════════ */
+
+/*
+ * 为什么用 CSS 背景而不是 SVG 里画几百个 <circle>：
+ *   ① 星点只需要"看起来在动"，不需要交互、不需要跟着节点走 —— 建 DOM 是纯浪费；
+ *   ② 背景层跑在合成器上，不占 JS 线程，也不会跟着每帧重算的节点坐标一起 diff；
+ *   ③ 远星不视差（物理上也是对的），所以"不跟着图平移缩放"不是缺陷。
+ *
+ * 三层不同 tile 尺寸的星点 + 一层中心辉光：tile 尺寸互质、各自以不同速度漂移，
+ * 叠起来既看不出重复的格子、又有层次（640px 那层比 240px 那层快 2.7 倍 = 视差）。
+ *
+ * 颜色与点径都按主题给：**浅色主题下"星"是偏深的蓝灰微尘**（白底上画白点等于没画，
+ * 0.26 透明的 1px 点在白底上实测几乎不可见），并且点要更大才撑得住同样的观感；
+ * 深色族才是白/淡蓝点。深色族统一挂 `data-theme-kind`（见文件上方约定），不逐主题列举。
+ */
+.pd-graph-sky,
+.pd-graph-sky-bright {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* 浅色主题（默认）：偏深、更实、点更大 */
+  --pd-star-1: rgba(51, 65, 85, 0.5);
+  --pd-star-2: rgba(37, 99, 235, 0.42);
+  --pd-star-bright: rgba(37, 99, 235, 0.62);
+  --pd-nebula: rgba(99, 102, 241, 0.1);
+  --pd-dot-1: 2px;
+  --pd-dot-2: 1.6px;
+  --pd-dot-3: 1.8px;
+  --pd-dot-4: 1.4px;
+  --pd-dot-bright: 3px;
+}
+
+[data-theme-kind='dark'] .pd-graph-sky,
+[data-theme-kind='dark'] .pd-graph-sky-bright {
+  --pd-star-1: rgba(255, 255, 255, 0.8);
+  --pd-star-2: rgba(186, 214, 255, 0.62);
+  --pd-star-bright: rgba(214, 234, 255, 0.95);
+  --pd-nebula: rgba(99, 102, 241, 0.14);
+  --pd-dot-1: 1.6px;
+  --pd-dot-2: 1.1px;
+  --pd-dot-3: 1.3px;
+  --pd-dot-4: 1px;
+  --pd-dot-bright: 2.2px;
+}
+
+.pd-graph-sky {
+  background-image:
+    radial-gradient(62% 62% at 50% 44%, var(--pd-nebula), transparent 72%),
+    radial-gradient(var(--pd-dot-1) var(--pd-dot-1) at 22% 28%, var(--pd-star-1), transparent),
+    radial-gradient(var(--pd-dot-2) var(--pd-dot-2) at 71% 63%, var(--pd-star-2), transparent),
+    radial-gradient(var(--pd-dot-3) var(--pd-dot-3) at 46% 84%, var(--pd-star-1), transparent),
+    radial-gradient(var(--pd-dot-4) var(--pd-dot-4) at 12% 72%, var(--pd-star-2), transparent);
+  background-size: 100% 100%, 240px 240px, 370px 370px, 520px 520px, 640px 640px;
+  background-repeat: no-repeat, repeat, repeat, repeat, repeat;
+}
+
+.pd-graph-sky-bright {
+  background-image:
+    radial-gradient(var(--pd-dot-bright) var(--pd-dot-bright) at 18% 14%, var(--pd-star-bright), transparent),
+    radial-gradient(var(--pd-dot-bright) var(--pd-dot-bright) at 63% 39%, var(--pd-star-bright), transparent),
+    radial-gradient(var(--pd-dot-bright) var(--pd-dot-bright) at 87% 71%, var(--pd-star-bright), transparent),
+    radial-gradient(var(--pd-dot-bright) var(--pd-dot-bright) at 41% 86%, var(--pd-star-bright), transparent);
+  /* 亮星 tile 远大于星场：两者的重复周期不会对齐，于是看不出"层" */
+  background-size: 620px 620px;
+  background-repeat: repeat;
+}
+
+/*
+ * 漂移：整层平移一个 tile 后回位。**必须正好一个 tile**，否则循环处会跳一下。
+ * 60s 一轮 ≈ 4px/s（640px 那层 10.7px/s）：慢到不抢注意力，但盯着看得出在动 ——
+ * 原来 240s ≈ 1px/s 是"理论上在动、肉眼一律看不见"，等于白做。
+ */
+@keyframes pd-sky-drift {
+  from {
+    background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
+  }
+  to {
+    background-position: 0 0, 240px 240px, -370px 370px, 520px -520px, -640px 640px;
+  }
+}
+
+/* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画 */
+@keyframes pd-sky-twinkle {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   知识图谱：动效开关（`.pd-motion`）
+   ═══════════════════════════════════════════════════ */
+
+/*
+ * 图谱里的**全部**动效（片段放射 / 连线依次画出 / 星点漂移与闪烁）只挂在这一个类下面，
+ * 由 JS 决定加不加 —— 而不是各自写一条 `@media (prefers-reduced-motion: reduce)`。
+ *
+ * 改成这样是踩出来的两条：
+ *   ① **媒体查询只能"关"、不能"开"**。系统关掉「动画效果」后 `prefers-reduced-motion`
+ *      恒为 reduce，CSS 里没有任何办法把它重新打开；而用户完全可能就是想在这台机器上
+ *      看到动效（图谱左侧「图谱动效」提供了这一档）。
+ *   ② **`@media` 不改变优先级**。原先那条 `@media (prefers-reduced-motion: reduce)`
+ *      写在基础规则**之前**，于是 `.pd-graph-sky { animation: pd-sky-drift … }` 直接把它覆盖掉，
+ *      `animation: none` 成了永远不生效的死代码 —— 不看实测根本发现不了。
+ * 现在只有一个真相来源：JS 读 `matchMedia` + 用户的三档偏好，折成加不加 `.pd-motion`。
+ * 代价是动效依赖 JS；反过来缺类名时表现为"静止"而不是"乱动"，是更安全的降级方向。
+ */
+.pd-motion .pd-graph-sky {
+  animation: pd-sky-drift 60s linear infinite;
+}
+
+.pd-motion .pd-graph-sky-bright {
+  animation: pd-sky-twinkle 9s ease-in-out infinite;
+}
+
 /* ═══════════════════════════════════════════════════
    Base Styles
    ═══════════════════════════════════════════════════ */
@@ -469,7 +928,7 @@ body {
   border: 1px solid rgba(128, 128, 128, 0.25);
 }
 
-[data-theme="dark"] #root {
+[data-theme-kind="dark"] #root {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -506,21 +965,33 @@ body {
 
 /* Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
+  /* 两端留白：滑块不伸进容器的圆角区域 */
+  margin: 4px;
   background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: var(--radius-sm);
+  /* 胶囊状滑块 + 内缩 2px：圆角窗口（下拉/弹窗/卡片）里滚动条不再顶出圆角 */
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
+}
+
+/* 滚动条槽位常驻：列表可滚动区统一加这个类。
+   不这样做的话，筛选/增删让内容变短时滚动条消失，容器可用宽度 +8px，
+   居中的内容会整体右移 4px、右对齐的按钮会整体左移 8px（"输入搜索词页面就抖一下"的根因）。 */
+.pd-scroll-stable {
+  scrollbar-gutter: stable;
 }
 
 /* Focus */
@@ -543,104 +1014,25 @@ textarea {
   scrollbar-width: none;
 }
 
-/* Prose overrides */
-[data-theme="dark"] .prose {
+/* Prose overrides（深色族统一走 data-theme-kind，见文件头说明） */
+[data-theme-kind="dark"] .prose {
   color: var(--text-primary);
 }
 
-[data-theme="dark"] .prose a {
+[data-theme-kind="dark"] .prose a {
   color: var(--accent);
 }
 
-[data-theme="dark"] .prose code {
+[data-theme-kind="dark"] .prose code {
   color: var(--accent);
 }
 
-[data-theme="dark"] .prose pre {
+[data-theme-kind="dark"] .prose pre {
   background-color: var(--bg-tertiary);
 }
 
-[data-theme="dark"] .prose pre code {
+[data-theme-kind="dark"] .prose pre code {
   background-color: var(--bg-primary);
-}
-
-/* ═══════════════════════════════════════════════════
-   Plugin README Content Styles
-   ═══════════════════════════════════════════════════ */
-.readme-content h2 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 16px 0 8px 0;
-  color: var(--text-primary);
-}
-
-.readme-content h3 {
-  font-size: 14px;
-  font-weight: 600;
-  margin: 14px 0 6px 0;
-  color: var(--text-primary);
-}
-
-.readme-content h4 {
-  font-size: 13px;
-  font-weight: 600;
-  margin: 12px 0 4px 0;
-  color: var(--text-primary);
-}
-
-.readme-content p {
-  margin: 6px 0;
-  line-height: 1.6;
-  color: var(--text-secondary);
-}
-
-.readme-content a {
-  color: var(--accent);
-  text-decoration: underline;
-}
-
-.readme-content a:hover {
-  opacity: 0.8;
-}
-
-.readme-content pre {
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 12px;
-  margin: 8px 0;
-  overflow-x: auto;
-}
-
-.readme-content pre code {
-  background: none;
-  padding: 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-}
-
-.readme-content code {
-  background-color: var(--bg-tertiary);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 11px;
-  color: var(--accent);
-  font-family: var(--font-mono);
-}
-
-.readme-content li {
-  margin: 3px 0;
-  padding-left: 4px;
-  color: var(--text-secondary);
-  list-style: disc;
-  margin-left: 16px;
-}
-
-.readme-content strong {
-  font-weight: 600;
-  color: var(--text-primary);
 }
 
 /* Markdown renderer */

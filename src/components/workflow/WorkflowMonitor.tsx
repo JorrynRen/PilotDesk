@@ -6,11 +6,14 @@
 
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useWorkflowStore } from '../../stores/workflowStore';
-import { Activity, Clock, CheckCircle, XCircle, AlertCircle, Ban, AlertTriangle, Square, Eye, ChevronDown, ChevronRight, ChevronLeft, GitBranch, Target, Play, Flag, Timer, Trash2, Search, X, Filter, RefreshCw } from 'lucide-react';
+import { Activity, Clock, CheckCircle, XCircle, AlertCircle, Ban, AlertTriangle, Square, Eye, ChevronDown, ChevronRight, Play, Flag, Timer, Trash2, Search, X, Filter, RefreshCw } from 'lucide-react';
+import { Select } from '../common/Select';
+import { WorkflowOutputCard, CollapsibleSection, ValuePreview } from './WorkflowOutputCard';
 
 interface Props {
   onViewDefinition: (definitionId: string) => void;
-  onDeleteExecution: (executionId: string, definitionName: string) => void;
+  /** 请求删除执行记录（单条传 1 个 id；调用方负责二次确认与提示） */
+  onDeleteExecutions: (executionIds: string[], summary: string) => void;
 }
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
@@ -24,11 +27,6 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; 
 };
 
 const triggerLabel = (t: string) => ({ manual: '手动', cron: '定时', event: '事件' }[t] || t);
-
-const formatTime = (ts: number | undefined | null) => {
-  if (!ts) return '';
-  return new Date(Number(ts) * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-};
 
 const formatFullTime = (ts: number | undefined | null) => {
   if (!ts) return '--';
@@ -66,16 +64,96 @@ const TRIGGER_OPTIONS = [
 
 const ALL_DEFINITION_ID = '__all__';
 
-export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExecution }) => {
+/** 只有已终态的实例才允许删除（与后端 delete_executions_inner 同一口径）：
+ *  未结束实例的执行记录一旦删掉，实例会从列表消失却仍在跑，且再也取消不掉。 */
+const TERMINAL_STATUSES = ['success', 'failed', 'cancelled', 'timeout'];
+const isDeletableStatus = (status: string) => TERMINAL_STATUSES.includes(status);
+
+/**
+ * 运行上下文查看器：默认「预览」（按节点归一化展示产出），可切到「原始数据」看全量 JSON。
+ *
+ * 预览跳过 `__`（内部变量）与 `gate_output.*`（引擎按阶段合并的中间产物，内容与节点产重复）；
+ * 「原始数据」不做任何过滤，保证信息不丢。
+ */
+const ContextViewer: React.FC<{ context: Record<string, unknown> }> = ({ context }) => {
+  const [mode, setMode] = useState<'preview' | 'raw'>('preview');
+  const entries = useMemo(() => Object.entries(context || {}), [context]);
+  const previewEntries = useMemo(
+    () => entries.filter(([k]) => !k.startsWith('__') && !k.startsWith('gate_output.')),
+    [entries],
+  );
+  const hiddenCount = entries.length - previewEntries.length;
+
+  if (entries.length === 0) {
+    return <span style={{ color: 'var(--text-tertiary)' }}>暂无上下文数据</span>;
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-1 mb-2">
+        {(['preview', 'raw'] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className="pd-btn text-[10px] px-1.5 py-0.5 rounded transition-colors"
+            style={{
+              border: '1px solid var(--border)',
+              backgroundColor: mode === m ? 'var(--accent-light)' : 'transparent',
+              color: mode === m ? 'var(--accent)' : 'var(--text-tertiary)',
+            }}
+          >
+            {m === 'preview' ? '预览' : '原始数据'}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'raw' ? (
+        <pre style={{ margin: 0, fontSize: 10, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'var(--font-mono, "Cascadia Code", "Fira Code", monospace)', lineHeight: 1.5 }}>
+          {JSON.stringify(context, null, 2)}
+        </pre>
+      ) : (
+        <div className="space-y-2.5">
+          {previewEntries.map(([key, value]) => (
+            <div key={key}>
+              <div
+                className="text-[9px] mb-0.5"
+                style={{ color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono, "Cascadia Code", monospace)' }}
+              >
+                {key}
+              </div>
+              <ValuePreview value={value} />
+            </div>
+          ))}
+          {hiddenCount > 0 && (
+            <div className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+              已隐藏 {hiddenCount} 个内部键（如 gate_output.*），切到「原始数据」可看全部
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExecutions }) => {
   const { instances, loading, loadInstances, cancelWorkflow } = useWorkflowStore();
   const [expandedInstance, setExpandedInstance] = useState<string | null>(null);
   const [tooltipInst, setTooltipInst] = useState<string | null>(null);
   const [page, setPage] = useState(0);
 
+  // ---- 批量删除 ----
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // 轮询回调在挂载时注册一次，用 ref 读取最新批量态（批量时不静默刷新，避免列表在勾选中跳动）
+  const batchModeRef = useRef(batchMode);
+  useEffect(() => { batchModeRef.current = batchMode; }, [batchMode]);
+
   // ---- 刷新 / 防抖状态 ----
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const loadingRef = useRef<boolean>(false); // 防止手动/定时器并发调用
+  /** loadingRef 的渲染期镜像：渲染期不能读 ref（react-hooks/refs），并发去重仍走 ref */
+  const [inFlight, setInFlight] = useState<boolean>(false);
 
   // ---- 筛选状态 ----
   const [filterDefinitionId, setFilterDefinitionId] = useState<string>(ALL_DEFINITION_ID);
@@ -87,6 +165,10 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
   const safeRefresh = async (silent: boolean) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
+    // 先让出同步执行栈再翻"忙"标记：effect 体内同步 setState 会触发级联渲染
+    // （react-hooks/set-state-in-effect）。这里只延后一个微任务，标记的可见时机不变。
+    await Promise.resolve();
+    setInFlight(true);
     if (!silent) setRefreshing(true);
     try {
       await loadInstances(undefined, silent);
@@ -94,15 +176,20 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
     } finally {
       if (!silent) setRefreshing(false);
       loadingRef.current = false;
+      setInFlight(false);
     }
   };
 
   // 首次加载：显式 loading，用户知道在初始化
   // 之后每 30s 轮询：仅当存在 running / paused / pending 的活实例才执行静默刷新
   useEffect(() => {
-    void safeRefresh(false);
+    // effect 体内不允许同步 setState（react-hooks/set-state-in-effect）：把首次刷新推迟一个微任务，
+    // 仍在同一帧内执行，观感与原先一致
+    queueMicrotask(() => { void safeRefresh(false); });
 
     const interval = setInterval(() => {
+      // 批量勾选中不刷新：列表若在勾选过程中变化（跨页选中、行消失）会让人怀疑自己选错了
+      if (batchModeRef.current) return;
       const hasAlive = instances.some(
         i => i.status === 'running' || i.status === 'paused' || i.status === 'pending'
       );
@@ -156,10 +243,31 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
     setFilterKeyword('');
   };
 
-  // 过滤条件变化时重置到第 0 页（用户主动改筛选，保持"从头看结果"的直觉）
-  useEffect(() => {
+  // ── 批量选择 ──
+  // 以下三类"派生重置"原先都写成 effect（effect 内同步 setState 会触发级联渲染），
+  // 改用 React 官方的「渲染期调整状态」写法：在发现条件变化的同一次渲染里直接修正，
+  // 最终渲染结果与原先一致。
+  //
+  // 1) 过滤条件变化 → 回第 0 页（用户主动改筛选，保持"从头看结果"的直觉）并清空选择
+  //    （否则会出现"看着选的是这批、实际还含被筛掉的行"）
+  const filtersKey = JSON.stringify([filterDefinitionId, filterStatus, filterTrigger, filterKeyword]);
+  const [prevFiltersKey, setPrevFiltersKey] = useState(filtersKey);
+  if (prevFiltersKey !== filtersKey) {
+    setPrevFiltersKey(filtersKey);
     setPage(0);
-  }, [filterDefinitionId, filterStatus, filterTrigger, filterKeyword]);
+    setSelectedIds(new Set());
+  }
+  // 2) 列表刷新后剔除已消失 / 已不可选的选中项，避免选中态指向不存在的行
+  if (selectedIds.size > 0) {
+    const alive = new Set(instances.filter(i => isDeletableStatus(i.status)).map(i => i.id));
+    const next = new Set([...selectedIds].filter(id => alive.has(id)));
+    if (next.size !== selectedIds.size) setSelectedIds(next);
+  }
+  // 3) 列表清空时退出批量模式，避免停留在"看不见的批量态"
+  if (batchMode && instances.length === 0) {
+    setBatchMode(false);
+    setSelectedIds(new Set());
+  }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   // 自动纠正页码：仅当当前 page 超出总页数时才修正（静默刷新导致 filtered 减少不会把用户弹回第 1 页）
@@ -171,6 +279,33 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
     }
   }, [safePage, page]);
   const paged = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  // 全选只覆盖可删（已终态）的实例；页内 / 全部筛选结果两个口径
+  const selectPage = () =>
+    setSelectedIds(new Set(paged.filter(i => isDeletableStatus(i.status)).map(i => i.id)));
+  const selectAllFiltered = () =>
+    setSelectedIds(new Set(filtered.filter(i => isDeletableStatus(i.status)).map(i => i.id)));
+  const toggleSelect = (id: string) =>
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+
+  /** 当前筛选结果里未结束（不可删）的条数：提示"全选"会跳过它们 */
+  const undeletableCount = filtered.filter(i => !isDeletableStatus(i.status)).length;
+
+  /** 交给调用方去二次确认：附状态分布摘要，让用户在弹窗里看清删的是什么 */
+  const handleBatchDelete = () => {
+    const byStatus = new Map<string, number>();
+    filtered
+      .filter(i => selectedIds.has(i.id))
+      .forEach(i => byStatus.set(i.status, (byStatus.get(i.status) ?? 0) + 1));
+    const summary = Array.from(byStatus.entries())
+      .map(([s, n]) => `${STATUS_CONFIG[s]?.label ?? s} ${n}`)
+      .join(' / ');
+    onDeleteExecutions([...selectedIds], summary);
+  };
 
   // 格式化"上次更新时间戳"
   const formatLastUpdate = (ts: number) => {
@@ -214,46 +349,31 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
               </div>
 
               {/* 工作流下拉 */}
-              <select
+              <Select
                 value={filterDefinitionId}
-                onChange={e => setFilterDefinitionId(e.target.value)}
-                className="pd-btn text-[11px] rounded py-1 px-2"
-                style={{
-                  border: '1px solid var(--border)',
-                  backgroundColor: 'var(--bg-primary)',
-                  color: 'var(--text-primary)',
-                  outline: 'none',
-                  minWidth: 130,
-                  maxWidth: 220,
-                }}
+                onChange={setFilterDefinitionId}
+                options={[
+                  { value: ALL_DEFINITION_ID, label: `全部工作流 (${definitionList.length})` },
+                  ...definitionList.map(d => ({ value: d.id, label: d.name })),
+                ]}
+                size="sm"
+                className="shrink-0"
+                style={{ minWidth: 130, maxWidth: 220 }}
                 title="按工作流筛选"
-              >
-                <option value={ALL_DEFINITION_ID}>全部工作流 ({definitionList.length})</option>
-                {definitionList.map(d => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
-              </select>
+              />
 
               {/* 触发方式下拉 */}
-              <select
+              <Select
                 value={filterTrigger}
-                onChange={e => setFilterTrigger(e.target.value)}
-                className="pd-btn text-[11px] rounded py-1 px-2"
-                style={{
-                  border: '1px solid var(--border)',
-                  backgroundColor: 'var(--bg-primary)',
-                  color: 'var(--text-primary)',
-                  outline: 'none',
-                  minWidth: 88,
-                }}
+                onChange={setFilterTrigger}
+                options={TRIGGER_OPTIONS.map(t => ({ value: t.key, label: t.label }))}
+                size="sm"
+                className="shrink-0"
+                style={{ minWidth: 88 }}
                 title="按触发方式筛选"
-              >
-                {TRIGGER_OPTIONS.map(t => (
-                  <option key={t.key} value={t.key}>{t.label}</option>
-                ))}
-              </select>
+              />
 
-              {/* 状态药丸标签（同行） */}
+              {/* 状态药丸标签（容器固定 28px，与同行 Select(size=sm) 等高） */}
               <div
                 aria-label="执行状态筛选"
                 style={{
@@ -265,6 +385,7 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                   border: '1px solid var(--border)',
                   backgroundColor: 'var(--bg-primary)',
                   borderRadius: 4,
+                  height: 28,
                   overflowX: 'auto',
                   maxWidth: 430,
                   scrollbarWidth: 'thin',
@@ -291,8 +412,9 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                 })}
               </div>
 
-              {/* 关键字搜索 */}
+              {/* 关键字搜索（高度对齐同行 Select(size=sm) 的 28px，不再靠内容撑高） */}
               <div
+                className="pd-field"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -300,7 +422,8 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                   border: '1px solid var(--border)',
                   backgroundColor: 'var(--bg-primary)',
                   borderRadius: 4,
-                  padding: '2px 6px',
+                  height: 28,
+                  padding: '0 6px',
                   flex: '1 1 180px',
                   minWidth: 160,
                   maxWidth: 300,
@@ -330,7 +453,7 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
               <button
                 onClick={clearFilters}
                 disabled={!hasFilter}
-                className="pd-btn px-2 py-1 text-[11px] rounded transition-colors whitespace-nowrap"
+                className="pd-btn px-2 py-1 h-7 text-[11px] rounded transition-colors whitespace-nowrap inline-flex items-center"
                 style={{
                   border: '1px solid var(--border)',
                   background: hasFilter ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
@@ -363,23 +486,112 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                   </span>
                 )}
                 <button
+                  onClick={() => { setBatchMode(v => !v); setSelectedIds(new Set()); }}
+                  className="pd-btn px-2 py-1 h-7 text-[11px] rounded transition-colors inline-flex items-center gap-1"
+                  style={{
+                    border: '1px solid var(--border)',
+                    background: batchMode ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
+                    color: batchMode ? 'var(--accent)' : 'var(--text-secondary)',
+                  }}
+                  title="批量删除执行记录"
+                >
+                  <Trash2 size={11} />
+                  批量
+                </button>
+                <button
                   onClick={() => void safeRefresh(false)}
-                  disabled={refreshing || loadingRef.current}
-                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors inline-flex items-center gap-1"
+                  disabled={refreshing || inFlight}
+                  className="pd-btn px-2 py-1 h-7 text-[11px] rounded transition-colors inline-flex items-center gap-1"
                   style={{
                     border: '1px solid var(--border)',
                     background: 'var(--bg-secondary)',
                     color: 'var(--accent)',
-                    opacity: (refreshing || loadingRef.current) ? 0.6 : 1,
+                    opacity: (refreshing || inFlight) ? 0.6 : 1,
                   }}
                   title="立即刷新实例列表"
                 >
-                  <RefreshCw size={11} style={{ animation: (refreshing || loadingRef.current) ? 'spin 0.8s linear infinite' : undefined }} />
+                  <RefreshCw size={11} style={{ animation: (refreshing || inFlight) ? 'spin 0.8s linear infinite' : undefined }} />
                   刷新
                 </button>
               </div>
             </div>
-          </div>
+
+            {/* ── 批量操作条（勾选口径：全选只覆盖已结束的实例） ── */}
+            {batchMode && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  flexWrap: 'wrap',
+                  paddingTop: 8,
+                  borderTop: '1px solid var(--border)',
+                }}
+              >
+                <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                  已选 <b style={{ color: 'var(--accent)' }}>{selectedIds.size}</b> 条
+                </span>
+                <button
+                  onClick={selectPage}
+                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  title="选中本页所有已结束的实例"
+                >
+                  全选本页 ({paged.filter(i => isDeletableStatus(i.status)).length})
+                </button>
+                <button
+                  onClick={selectAllFiltered}
+                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                  title="选中当前筛选结果中所有已结束的实例（跨页）"
+                >
+                  全选筛选结果 ({filtered.filter(i => isDeletableStatus(i.status)).length})
+                </button>
+                <button
+                  onClick={() => setSelectedIds(new Set())}
+                  disabled={selectedIds.size === 0}
+                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
+                  style={{
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg-primary)',
+                    color: 'var(--text-secondary)',
+                    opacity: selectedIds.size === 0 ? 0.5 : 1,
+                  }}
+                >
+                  清空
+                </button>
+                {undeletableCount > 0 && (
+                  <span
+                    className="text-[10px]"
+                    style={{ color: 'var(--text-tertiary)' }}
+                    title="未结束的实例不能删除：删掉它们的执行记录会让实例从列表消失却仍在跑，而且再也取消不掉。请先停止或等待结束。"
+                  >
+                    已跳过未结束 {undeletableCount} 条
+                  </span>
+                )}
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={handleBatchDelete}
+                  disabled={selectedIds.size === 0}
+                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
+                  style={{
+                    border: '1px solid var(--border)',
+                    background: selectedIds.size === 0 ? 'var(--bg-tertiary)' : '#ef4444',
+                    color: selectedIds.size === 0 ? 'var(--text-tertiary)' : '#fff',
+                  }}
+                >
+                  删除 ({selectedIds.size})
+                </button>
+                <button
+                  onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }}
+                  className="pd-btn px-2 py-1 text-[11px] rounded transition-colors"
+                  style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                >
+                  退出
+                </button>
+              </div>
+            )}
+            </div>
 
           {/* ── Instance rows ── */}
           {filtered.length === 0 ? (
@@ -403,29 +615,49 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
               const progress = instance.completionRate ?? 0;
               const isExpanded = expandedInstance === instance.id;
               const isHovered = tooltipInst === instance.id;
+              const selectable = isDeletableStatus(instance.status);
+              const checked = selectedIds.has(instance.id);
 
               return (
                 <div key={instance.id}>
                   {/* ── Card ── */}
                   <div
+                    onClick={batchMode && selectable ? () => toggleSelect(instance.id) : undefined}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',
                       gap: 4,
                       padding: '12px',
                       borderRadius: 6,
-                      backgroundColor: isExpanded ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
-                      border: '1px solid var(--border)',
+                      backgroundColor: checked ? 'rgba(88,166,255,0.08)' : isExpanded ? 'var(--bg-tertiary)' : 'var(--bg-secondary)',
+                      border: checked ? '1px solid var(--accent)' : '1px solid var(--border)',
                       fontSize: 12,
                       position: 'relative',
+                      cursor: batchMode && selectable ? 'pointer' : undefined,
                     }}
                   >
                     {/* ── Row 1: Name + Actions ── */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      {batchMode && (
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={!selectable}
+                          onChange={() => toggleSelect(instance.id)}
+                          onClick={(e) => e.stopPropagation()}
+                          title={selectable ? '选中' : '未结束的实例不能删除：请先停止或等待结束'}
+                          style={{ flexShrink: 0, cursor: selectable ? 'pointer' : 'not-allowed' }}
+                        />
+                      )}
                       <Activity size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                       <span
                         className="truncate font-medium"
-                        style={{ color: 'var(--text-primary)', flex: '0 1 280px', minWidth: 0 }}
+                        style={{
+                          color: 'var(--text-primary)',
+                          flex: '0 1 280px',
+                          minWidth: 0,
+                          opacity: batchMode && !selectable ? 0.55 : 1,
+                        }}
                         title={instance.definitionName}
                       >
                         {instance.definitionName}
@@ -434,7 +666,8 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                       {/* Spacer */}
                       <div style={{ flex: 1 }} />
 
-                      {/* Actions */}
+                      {/* Actions（批量模式下收起：避免与勾选语义混淆、误触） */}
+                      {!batchMode && (
                       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
                         {instance.status === 'running' && (
                           <button
@@ -449,11 +682,12 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            onDeleteExecution(instance.id, instance.definitionName);
+                            onDeleteExecutions([instance.id], `${cfg.label} 1`);
                           }}
                           className="text-[10px] px-2 py-0.5 rounded transition-colors"
                           style={{ border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-tertiary)' }}
-                          title="删除执行记录"
+                          title={selectable ? '删除执行记录' : '未结束的实例不能删除：请先停止'}
+                          disabled={!selectable}
                         >
                           <Trash2 size={10} />
                         </button>
@@ -474,6 +708,7 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                           {isExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
                         </button>
                       </div>
+                      )}
                     </div>
 
                     {/* ── Row 2: Status + Trigger + Progress + Times ── */}
@@ -552,6 +787,17 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                         <span className="text-[10px] font-medium" style={{ color: 'var(--accent)', minWidth: 28 }}>
                           {Math.round(progress * 100)}%
                         </span>
+                        {/* 跳过节点数：完成度已计入跳过（条件分支未走不是失败），
+                            单列出来避免"100% 但有些节点没跑"被误读 */}
+                        {(instance.skippedCount ?? 0) > 0 && (
+                          <span
+                            className="text-[10px]"
+                            style={{ color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}
+                            title={`条件分支未命中 / 上游无产出的节点 ${instance.skippedCount} 个（已计入完成度）`}
+                          >
+                            跳过 {instance.skippedCount}
+                          </span>
+                        )}
                       </span>
 
                       {/* Start time */}
@@ -580,28 +826,13 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                     </div>
                   </div>
 
-                  {/* ── Expanded: 输出上下文 ── */}
+                  {/* ── Expanded: 最终产出（主）+ 运行上下文（折叠） ── */}
                   {isExpanded && (
-                    <div
-                      style={{
-                        marginTop: 2,
-                        padding: '8px 12px',
-                        borderRadius: 6,
-                        backgroundColor: 'var(--bg-tertiary)',
-                        border: '1px solid var(--border)',
-                        fontSize: 11,
-                        maxHeight: 200,
-                        overflowY: 'auto',
-                      }}
-                    >
-                      <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 4, fontWeight: 500 }}>输出上下文</div>
-                      {instance.context && Object.keys(instance.context).length > 0 ? (
-                        <pre style={{ margin: 0, fontSize: 11, color: 'var(--text-primary)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'var(--font-mono, "Cascadia Code", "Fira Code", monospace)', lineHeight: 1.5 }}>
-                          {JSON.stringify(instance.context, null, 2)}
-                        </pre>
-                      ) : (
-                        <span style={{ color: 'var(--text-tertiary)' }}>暂无上下文数据</span>
-                      )}
+                    <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <WorkflowOutputCard instance={instance} />
+                      <CollapsibleSection title="运行上下文（各节点产出）" maxHeight={420}>
+                        <ContextViewer context={instance.context} />
+                      </CollapsibleSection>
                     </div>
                   )}
                 </div>

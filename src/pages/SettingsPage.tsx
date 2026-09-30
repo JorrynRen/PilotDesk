@@ -1,10 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Settings, Globe, Key, Info, Bot, Brain,
-  Sun, Moon, Monitor, FolderOpen, ChevronDown,
-  Plus, Trash2, Edit3, Check, X, Pencil,
-  Loader2, Zap, GripVertical, ShieldCheck, Plug, Search, Bookmark, Wrench, History,
+  Settings, Key, Bot, MemoryStick, Library,
+  Sun, Moon, Monitor, FolderOpen,
+  Plus, Trash2, Check, X, Pencil,
+  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Package, Cpu,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -26,6 +26,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useTheme } from '../hooks/useTheme';
+import { LOCALES, LOCALE_LABEL, useI18n } from '../hooks/useI18n';
 import { ThemeCustomizer } from '../components/settings/ThemeCustomizer';
 import { EnvManager } from '../components/env/EnvManager';
 import { AgentManager } from '../components/env/AgentManager';
@@ -37,72 +38,115 @@ import { SearchSettings } from '../components/settings/SearchSettings';
 import { FileHistorySettings } from '../components/settings/FileHistorySettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
 import { sendApiRequest } from '../utils/apiClient';
-import type { ApiProvider as StoreApiProvider } from '../stores/apiProviderStore';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 
 interface SettingsPageProps {
   onBack: () => void;
 }
 
-type SettingsTab = 'general' | 'environment' | 'agents' | 'api' | 'mode' | 'permission' | 'mcp' | 'search' | 'tools' | 'customtabs' | 'filehistory' | 'memory' | 'about';
+// 一级 tab：17 → 12。低频且同类的项收进「一级 tab + 子页签」：
+//   关于 → 通用设置 · 环境检测 → Agent 集成配置
+//   语音识别 / 对话模式 / 权限规则 → API 集成配置
+type SettingsTab =
+  | 'general' | 'agents' | 'api' | 'mcp' | 'search'
+  | 'tools' | 'skills' | 'plugins' | 'knowledge' | 'customtabs' | 'memory' | 'filehistory';
 
-interface SettingsTabItem {
-  id: SettingsTab;
-  icon: typeof Settings;
-  label: string;
-}
-
-// 设置项按类别分组，左侧侧边栏渲染（避免 11 个 tab 平铺顶部拥挤）
-const SETTINGS_GROUPS: { title: string; items: SettingsTabItem[] }[] = [
+// 设置项按类别分组，左侧侧边栏渲染（避免全部平铺顶部拥挤）
+//
+// 文案存 `key + 中文原文` 而不是直接存中文：这份常量在模块级，拿不到 `useI18n()`
+// （hook 只能在组件里调），所以把"取词条"推迟到渲染处用 `t(key, 中文)`。
+const SETTINGS_GROUPS: {
+  titleKey: string;
+  titleZh: string;
+  items: { id: SettingsTab; icon: typeof Settings; labelKey: string; labelZh: string }[];
+}[] = [
   {
-    title: '应用',
+    titleKey: 'settings.group.app',
+    titleZh: '应用',
     items: [
-      { id: 'general', icon: Settings, label: '通用设置' },
-      { id: 'environment', icon: Globe, label: '环境检测' },
-      { id: 'about', icon: Info, label: '关于' },
+      { id: 'general', icon: Settings, labelKey: 'settings.tab.general', labelZh: '通用设置' },
     ],
   },
   {
-    title: 'Agent 与 API',
+    titleKey: 'settings.group.agentApi',
+    titleZh: 'Agent 与 API',
     items: [
-      { id: 'agents', icon: Bot, label: 'Agent集成配置' },
-      { id: 'api', icon: Key, label: 'API集成配置' },
-      { id: 'mode', icon: Zap, label: '对话模式' },
-      { id: 'permission', icon: ShieldCheck, label: '权限规则' },
+      { id: 'agents', icon: Bot, labelKey: 'settings.tab.agents', labelZh: 'Agent集成配置' },
+      { id: 'api', icon: Key, labelKey: 'settings.tab.api', labelZh: 'API集成配置' },
     ],
   },
   {
-    title: '连接',
+    titleKey: 'settings.group.connection',
+    titleZh: '连接',
     items: [
-      { id: 'mcp', icon: Plug, label: 'MCP 服务器' },
-      { id: 'search', icon: Search, label: '联网搜索' },
+      { id: 'mcp', icon: Plug, labelKey: 'settings.tab.mcp', labelZh: 'MCP 服务器' },
+      { id: 'search', icon: Search, labelKey: 'settings.tab.search', labelZh: '联网搜索' },
     ],
   },
   {
-    title: '工具与扩展',
+    titleKey: 'settings.group.tools',
+    titleZh: '工具与扩展',
     items: [
-      { id: 'tools', icon: Wrench, label: '工具管理' },
-      { id: 'customtabs', icon: Bookmark, label: '自定义标签' },
+      { id: 'tools', icon: Wrench, labelKey: 'settings.tab.tools', labelZh: '工具管理' },
+      { id: 'skills', icon: Cpu, labelKey: 'settings.tab.skills', labelZh: '技能管理' },
+      { id: 'plugins', icon: Package, labelKey: 'settings.tab.plugins', labelZh: '插件管理' },
+      { id: 'knowledge', icon: Library, labelKey: 'settings.tab.knowledge', labelZh: '知识库' },
+      { id: 'customtabs', icon: Bookmark, labelKey: 'settings.tab.customtabs', labelZh: '自定义标签' },
     ],
   },
   {
-    title: '数据管理',
+    titleKey: 'settings.group.data',
+    titleZh: '数据管理',
     items: [
-      { id: 'memory', icon: Brain, label: '记忆管理' },
-      { id: 'filehistory', icon: History, label: '文件历史' },
+      { id: 'memory', icon: MemoryStick, labelKey: 'settings.tab.memory', labelZh: '记忆管理' },
+      { id: 'filehistory', icon: History, labelKey: 'settings.tab.filehistory', labelZh: '文件历史' },
     ],
   },
 ];
 
+/** 页内子页签条（样式与「工具管理」「记忆管理」的场景/子页签一致） */
+function SubTabs<T extends string>({
+  value,
+  onChange,
+  items,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  items: { key: T; label: string }[];
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      {items.map((t) => (
+        <button
+          key={t.key}
+          onClick={() => onChange(t.key)}
+          className={'pd-tab' + (value === t.key ? ' pd-tab-active' : '')}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 
 
 import { SettingsSection, SettingsButton } from '../components/settings';
+import { confirmDialog } from '../stores/confirmStore';
 import { UsageStats } from '../components/settings/UsageStats';
 import { CustomTabsSettings } from '../components/settings/CustomTabsSettings';
 import { ProjectMemorySettings } from '../components/settings/ProjectMemorySettings';
 import { UserMemorySettings } from '../components/settings/UserMemorySettings';
 import { KvMemorySettings } from '../components/settings/KvMemorySettings';
 import { ToolSettings } from '../components/settings/ToolSettings';
+import { PluginManager } from '../components/plugin/PluginManager';
+import { SkillBrowser } from '../components/panels/SkillBrowser';
+import { VoiceInputSettings } from '../components/settings/VoiceInputSettings';
+import { KbModelSettings } from '../components/settings/KbModelSettings';
+import { KbRootSettings } from '../components/settings/KbRootSettings';
+import { KbCloudSourceSettings } from '../components/settings/KbCloudSourceSettings';
+import { Select } from '../components/common/Select';
+import { isAutoRunNotifyEnabled, setAutoRunNotifyEnabled } from '../stores/notificationEvents';
 import { TitleBar, StatusBar } from '../components/layout';
 
 // ============================================================
@@ -110,11 +154,11 @@ import { TitleBar, StatusBar } from '../components/layout';
 // ============================================================
 function GeneralSettings() {
   const { theme, setTheme } = useTheme();
-  const [language] = useState('zh-CN');
+  const { locale, setLocale, t } = useI18n();
   const [workspace, setWorkspace] = useState('');
-  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [maxConcurrency, setMaxConcurrency] = useState(10);
   const [maxSubflowDepth, setMaxSubflowDepth] = useState(3);
+  const [autoRunNotify, setAutoRunNotify] = useState(isAutoRunNotifyEnabled());
   const [streamIdleSecs, setStreamIdleSecs] = useState(90);
 
   // Load workspace from SQLite on mount
@@ -136,14 +180,14 @@ function GeneralSettings() {
         const idle = await invoke<string | null>('get_app_setting', { key: 'api_stream_idle_secs' });
         if (idle && !Number.isNaN(parseInt(idle))) setStreamIdleSecs(parseInt(idle));
       } catch { /* ignore */ }
-      setWorkspaceLoaded(true);
     })();
   }, []);
 
   const themeOptions = [
-    { value: 'dark' as const, icon: Moon, label: '深色' },
-    { value: 'light' as const, icon: Sun, label: '浅色' },
-    { value: 'system' as const, icon: Monitor, label: '跟随系统' },
+    { value: 'dark' as const, icon: Moon, label: '深色', title: '中性深色（#0F1117）' },
+    { value: 'nightfall' as const, icon: Sparkles, label: '深空', title: '深空 Nightfall：冷蓝黑底 + 天青强调色（#38BDF8）' },
+    { value: 'light' as const, icon: Sun, label: '浅色', title: '浅色' },
+    { value: 'system' as const, icon: Monitor, label: '跟随系统', title: '跟随系统浅/深色' },
   ];
 
   const handleMaxConcurrencyChange = async (value: number) => {
@@ -191,10 +235,11 @@ function GeneralSettings() {
       {/* Theme */}
       <SettingsSection title="主题模式">
         <div className="flex gap-1">
-          {themeOptions.map(({ value, icon: Icon, label }) => (
+          {themeOptions.map(({ value, icon: Icon, label, title }) => (
             <button
               key={value}
               onClick={() => setTheme(value)}
+              title={title}
               className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs transition-colors"
               style={{
                 color: theme === value ? '#fff' : 'var(--text-secondary)',
@@ -231,24 +276,28 @@ function GeneralSettings() {
         </p>
       </SettingsSection>
 
-      {/* Language */}
-      <SettingsSection title="语言">
-        <div className="relative inline-block">
-          <div
-            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm cursor-default"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            <span>简体中文</span>
-            <ChevronDown size={12} style={{ color: 'var(--text-secondary)' }} />
-          </div>
-          <p className="text-xs mt-1" style={{ color: 'var(--text-tertiary)' }}>
-            更多语言支持即将推出
-          </p>
+      {/* 语言：切换立即生效（全局 Context），不需要重启 */}
+      <SettingsSection title={t('settings.language', '语言')}>
+        <div className="flex gap-1">
+          {LOCALES.map((l) => (
+            <button
+              key={l}
+              onClick={() => setLocale(l)}
+              className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs transition-colors"
+              style={{
+                color: locale === l ? '#fff' : 'var(--text-secondary)',
+                backgroundColor: locale === l ? 'var(--accent)' : 'var(--bg-tertiary)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              {locale === l && <Check size={12} />}
+              {LOCALE_LABEL[l]}
+            </button>
+          ))}
         </div>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          {t('settings.language.hint', '切换后立即生效；尚未翻译的界面文案会回落到中文。')}
+        </p>
       </SettingsSection>
 
       {/* Max Concurrency */}
@@ -296,6 +345,35 @@ function GeneralSettings() {
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           子工作流（Subflow 节点）允许的最大递归嵌套层数（1-10）。超过此限制将阻止执行以防止无限递归。
+        </p>
+      </SettingsSection>
+
+      {/* 自动运行提醒 */}
+      <SettingsSection title="自动运行提醒">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { const next = !autoRunNotify; setAutoRunNotifyEnabled(next); setAutoRunNotify(next); }}
+            className="relative rounded-full transition-colors shrink-0"
+            style={{
+              width: 36,
+              height: 20,
+              backgroundColor: autoRunNotify ? '#22c55e' : 'var(--bg-tertiary)',
+              border: '1px solid var(--border)',
+            }}
+            title={autoRunNotify ? '点击关闭' : '点击开启'}
+          >
+            <div
+              className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
+              style={{ left: autoRunNotify ? '18px' : '2px' }}
+            />
+          </button>
+          <span className="text-xs" style={{ color: autoRunNotify ? '#22c55e' : 'var(--text-tertiary)' }}>
+            {autoRunNotify ? '已开启' : '已关闭'}
+          </span>
+        </div>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          定时或事件触发的工作流启动时，在通知中心留一条提醒。手动运行不提醒（本身已有即时反馈）；
+          同一工作流 1 分钟内多次触发只提醒一次。
         </p>
       </SettingsSection>
 
@@ -364,7 +442,7 @@ async function testApiConnection(
   apiKey: string,
   models: string[],
 ): Promise<{ ok: boolean; message: string; latency: number }> {
-  const fmt = endpoint.includes('anthropic.com') || providerId === 'anthropic' ? 'anthropic' : 'openai';
+  const fmt = inferApiFormat(providerId, endpoint);
   const model = models[0] || (fmt === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
 
   const result = await sendApiRequest({
@@ -731,21 +809,17 @@ function SortableProviderCard({
                   <label className="text-[10px] " style={{ color: 'var(--text-tertiary)' }}>
                     API 协议格式
                   </label>
-                  <select
-                    value={editingProvider!.apiFormat}
-                    onChange={(e) =>
-                      onSetEditingProvider({ ...editingProvider!, apiFormat: e.target.value as 'openai' | 'anthropic' })
+                  <Select
+                    value={editingProvider!.apiFormat ?? 'openai'}
+                    onChange={(v) =>
+                      onSetEditingProvider({ ...editingProvider!, apiFormat: v as 'openai' | 'anthropic' })
                     }
-                    className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
-                    style={{
-                      backgroundColor: 'var(--bg-tertiary)',
-                      color: 'var(--text-primary)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    <option value="openai">OpenAI 兼容（默认）</option>
-                    <option value="anthropic">Anthropic 原生</option>
-                  </select>
+                    options={[
+                      { value: 'openai', label: 'OpenAI 兼容（默认）' },
+                      { value: 'anthropic', label: 'Anthropic 原生' },
+                    ]}
+                    className="w-full mt-0.5"
+                  />
                 </div>
               )}
             </div>
@@ -758,7 +832,11 @@ function SortableProviderCard({
 
 
 
-function ApiConfig() {
+/** API 集成配置的子页签（对话模式 / 权限规则随本 tab 收拢，语音识别为模型级配置） */
+type ApiSubTab = 'providers' | 'usage' | 'voice' | 'mode' | 'permission';
+
+function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
+  const { t } = useI18n();
   const { providers, loading, fetchProviders, saveProvider, deleteProvider, reorderProviders } = useApiProviderStore();
   const [editingProvider, setEditingProvider] = useState<EditingProvider | null>(null);
   // 模型备注：providerId → modelName → 用途描述（存 app_settings，供 list_models 工具带给 LLM）
@@ -766,7 +844,13 @@ function ApiConfig() {
   const [editingNotes, setEditingNotes] = useState('');
   const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map());
   const abortRef = useRef<Map<string, AbortController>>(new Map());
-  const [apiTab, setApiTab] = useState<'providers' | 'usage'>('providers');
+  const [searchParams] = useSearchParams();
+  const urlApiTab = searchParams.get('apiTab');
+  // 子页签支持 URL 直达（如 /settings?tab=api&apiTab=usage，供指挥中心「查看完整用量」精准跳转）：
+  // 页面内点击优先，故用 override 叠加在 URL 之上——避免在 effect 里 setState 的级联渲染。
+  const [apiTabOverride, setApiTabOverride] = useState<ApiSubTab | null>(deepLinkSub ?? null);
+  const urlSub: ApiSubTab = urlApiTab === 'usage' || urlApiTab === 'voice' ? urlApiTab : 'providers';
+  const apiTab: ApiSubTab = apiTabOverride ?? urlSub;
 
   // Load providers from SQLite on mount
   useEffect(() => {
@@ -774,7 +858,8 @@ function ApiConfig() {
     invoke<Record<string, Record<string, string>>>('get_model_notes_cmd')
       .then(setModelNotes)
       .catch(() => {});
-  }, []);
+    // store 的 action 引用恒定（zustand 只创建一次），补进依赖后本 effect 仍等价于「挂载时跑一次」
+  }, [fetchProviders]);
 
   // DnD sensors — use pointer sensor for drag, keyboard for accessibility
   const sensors = useSensors(
@@ -815,7 +900,12 @@ function ApiConfig() {
 
   // Delete provider
   const handleDeleteProvider = async (id: string) => {
-    if (!confirm('确定删除该 API 提供商配置吗？')) return;
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: '确定删除该 API 提供商配置吗？',
+      confirmText: '删除',
+    });
+    if (!ok) return;
     await deleteProvider(id);
     if (editingProvider?.id === id) setEditingProvider(null);
     setTestResults((prev) => { const m = new Map(prev); m.delete(id); return m; });
@@ -980,7 +1070,7 @@ function ApiConfig() {
     }));
   }, [providers]);
 
-  if (loading && providers.length === 0) {
+  if (apiTab === 'providers' && loading && providers.length === 0) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 size={20} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
@@ -990,18 +1080,21 @@ function ApiConfig() {
 
   return (
     <div className="space-y-4">
-      {/* 子 Tab：提供商列表 / 用量统计（与「工具管理」一致） */}
-      <div className="flex items-center gap-1">
+      {/* 子 Tab：提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则 */}
+      <div className="flex items-center gap-1 flex-wrap">
         {([
-          { key: 'providers', label: 'API 提供商列表' },
-          { key: 'usage', label: '用量统计' },
-        ] as const).map((t) => (
+          { key: 'providers', label: t('settings.sub.api.providers', 'API 提供商列表') },
+          { key: 'usage', label: t('settings.sub.api.usage', '用量统计') },
+          { key: 'voice', label: t('settings.sub.api.voice', '语音识别') },
+          { key: 'mode', label: t('settings.sub.api.mode', '对话模式') },
+          { key: 'permission', label: t('settings.sub.api.permission', '权限规则') },
+        ] as const).map((tab) => (
           <button
-            key={t.key}
-            onClick={() => setApiTab(t.key)}
-            className={'pd-tab' + (apiTab === t.key ? ' pd-tab-active' : '')}
+            key={tab.key}
+            onClick={() => setApiTabOverride(tab.key)}
+            className={'pd-tab' + (apiTab === tab.key ? ' pd-tab-active' : '')}
           >
-            {t.label}
+            {tab.label}
           </button>
         ))}
       </div>
@@ -1080,6 +1173,9 @@ function ApiConfig() {
       )}
 
       {apiTab === 'usage' && <UsageStats />}
+      {apiTab === 'voice' && <VoiceInputSettings />}
+      {apiTab === 'mode' && <ModePromptSettings />}
+      {apiTab === 'permission' && <PermissionSettings />}
     </div>
   );
 }
@@ -1089,8 +1185,6 @@ function ApiConfig() {
 // 5. About
 // ============================================================
 function AboutSection() {
-  const { theme, setTheme } = useTheme();
-
   return (
     <div className="flex flex-col items-center gap-6 py-8">
       {/* Logo */}
@@ -1153,22 +1247,63 @@ function AboutSection() {
   );
 }
 
+/**
+ * `/settings?tab=xxx` 直达解析。
+ *
+ * tab 合并后，部分旧链接（环境检测 / 关于 / 语音识别 / 对话模式 / 权限规则）已降级为**子页签**，
+ * 这里统一把旧链接翻译成「一级 tab + 子页签」，避免深链静默落到「通用设置」或指向已不存在的 tab。
+ * 白名单 = 全部一级 tab（都允许深链；漏配的代价是静默回落「通用设置」，很难排查）。
+ */
+const CANONICAL_TABS: SettingsTab[] = [
+  'general', 'agents', 'api', 'mcp', 'search',
+  'tools', 'skills', 'plugins', 'knowledge', 'customtabs', 'memory', 'filehistory',
+];
+
+function resolveDeepLink(
+  urlTab: string | null,
+  urlApiSub: string | null,
+): { tab: SettingsTab; sub: string | null } | null {
+  if (!urlTab) return null;
+  switch (urlTab) {
+    case 'environment': return { tab: 'agents', sub: 'env' };
+    case 'about': return { tab: 'general', sub: 'about' };
+    case 'voice': return { tab: 'api', sub: 'voice' };
+    case 'mode': return { tab: 'api', sub: 'mode' };
+    case 'permission': return { tab: 'api', sub: 'permission' };
+    case 'api': return { tab: 'api', sub: urlApiSub };
+    default:
+      return (CANONICAL_TABS as string[]).includes(urlTab)
+        ? { tab: urlTab as SettingsTab, sub: null }
+        : null;
+  }
+}
+
 export function SettingsPage({ onBack }: SettingsPageProps) {
+  const { t } = useI18n();
   const [searchParams] = useSearchParams();
   const urlTab = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
-    if (urlTab === 'environment') return 'environment';
-    if (urlTab === 'agents') return 'agents';
-    if (urlTab === 'customtabs') return 'customtabs';
-    if (urlTab === 'memory') return 'memory';
-    return 'general';
-  });
-  // URL 中 tab 参数变化时同步激活对应 tab（支持 /settings?tab=xxx 直接定位）
-  useEffect(() => {
-    if (urlTab === 'environment' || urlTab === 'agents' || urlTab === 'customtabs' || urlTab === 'memory') {
-      setActiveTab(urlTab);
+  const urlApiSub = searchParams.get('apiTab');
+  // 深链：URL 是「一级 tab + 子页签」的来源；页面内点击只改本地 state（URL 不变）。
+  const link = resolveDeepLink(urlTab, urlApiSub);
+
+  const [activeTab, setActiveTab] = useState<SettingsTab>(link?.tab ?? 'general');
+  // 合并后收纳进子页签的低频项
+  const [generalTab, setGeneralTab] = useState<'main' | 'about'>(link?.sub === 'about' ? 'about' : 'main');
+  const [agentTab, setAgentTab] = useState<'config' | 'env'>(link?.sub === 'env' ? 'env' : 'config');
+
+  // URL 深链变化时对齐状态：用「渲染期修正」（React adjust-during-render）而不是 effect ——
+  // 后者是「effect 体内同步 setState」，会多一轮级联渲染（`react-hooks/set-state-in-effect`），
+  // 两者行为一致。判据用「原始 URL 参数」而非解析结果，页面内点击 tab 不会触发重灌。
+  const linkKey = urlTab ? `${urlTab}|${urlApiSub ?? ''}` : null;
+  const [syncedLinkKey, setSyncedLinkKey] = useState<string | null>(linkKey);
+  if (linkKey !== syncedLinkKey) {
+    setSyncedLinkKey(linkKey);
+    if (link) {
+      setActiveTab(link.tab);
+      if (link.tab === 'general') setGeneralTab(link.sub === 'about' ? 'about' : 'main');
+      if (link.tab === 'agents') setAgentTab(link.sub === 'env' ? 'env' : 'config');
     }
-  }, [urlTab]);
+  }
 
   // 记忆管理页内部子 tab（项目记忆 / 全局 KV 记忆）
   const [memTab, setMemTab] = useState<'project' | 'user' | 'kv'>('project');
@@ -1192,6 +1327,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         showBackButton={false}
         settingsOpen
         onOpenSettings={() => { /* 已在设置页，无需动作 */ }}
+        onOpenKnowledge={() => navigate('/knowledge')}
       />
 
       {/* 主体：左侧分组侧边栏 + 右侧内容区 */}
@@ -1202,20 +1338,20 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
         >
           {SETTINGS_GROUPS.map((group) => (
-            <div key={group.title}>
+            <div key={group.titleKey}>
               <div className="px-2 pb-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                {group.title}
+                {t(group.titleKey, group.titleZh)}
               </div>
               <div className="space-y-0.5">
-                {group.items.map(({ id, icon: Icon, label }) => (
+                {group.items.map(({ id, icon: Icon, labelKey, labelZh }) => (
                   <button
                     key={id}
                     onClick={() => setActiveTab(id)}
                     className={"pd-side-item" + (activeTab === id ? " pd-side-item-active" : "")}
-                    title={label}
+                    title={t(labelKey, labelZh)}
                   >
                     <Icon size={13} className="shrink-0" />
-                    <span className="truncate">{label}</span>
+                    <span className="truncate">{t(labelKey, labelZh)}</span>
                   </button>
                 ))}
               </div>
@@ -1223,18 +1359,78 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           ))}
         </aside>
 
-        {/* 内容区 */}
-        <div className="flex-1 overflow-y-auto">
+        {/* 内容区：滚动条槽位常驻（pd-scroll-stable）——
+            否则内容随筛选变短时滚动条消失，居中内容会因多出 8px 宽度整体右移（搜索框输入时最明显） */}
+        <div className="flex-1 overflow-y-auto pd-scroll-stable">
           <div className="p-4 max-w-2xl mx-auto w-full">
-            {activeTab === 'general' && <GeneralSettings />}
-            {activeTab === 'environment' && <EnvManager />}
-            {activeTab === 'agents' && <AgentManager />}
-            {activeTab === 'api' && <ApiConfig />}
-            {activeTab === 'mode' && <ModePromptSettings />}
-            {activeTab === 'permission' && <PermissionSettings />}
+            {/* 通用设置：主题/工作区/语言/并发等 + 子页签「关于」（原独立 tab） */}
+            {activeTab === 'general' && (
+              <div className="space-y-4">
+                <SubTabs<'main' | 'about'>
+                  value={generalTab}
+                  onChange={setGeneralTab}
+                  items={[
+                    { key: 'main', label: t('settings.sub.general.main', '通用设置') },
+                    { key: 'about', label: t('settings.sub.general.about', '关于') },
+                  ]}
+                />
+                {generalTab === 'main' ? <GeneralSettings /> : <AboutSection />}
+              </div>
+            )}
+            {/* Agent 集成配置：Agent 配置 + 子页签「环境检测」（原独立 tab，是 Agent 运行前提） */}
+            {activeTab === 'agents' && (
+              <div className="space-y-4">
+                <SubTabs<'config' | 'env'>
+                  value={agentTab}
+                  onChange={setAgentTab}
+                  items={[
+                    { key: 'config', label: t('settings.sub.agents.config', 'Agent 配置') },
+                    { key: 'env', label: t('settings.sub.agents.env', '环境检测') },
+                  ]}
+                />
+                {agentTab === 'config' ? <AgentManager /> : <EnvManager />}
+              </div>
+            )}
+            {/* API 集成配置：提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则 */}
+            {activeTab === 'api' && (
+              <ApiConfig deepLinkSub={link?.tab === 'api' && link.sub ? (link.sub as ApiSubTab) : undefined} />
+            )}
             {activeTab === 'mcp' && <McpSettings />}
             {activeTab === 'search' && <SearchSettings />}
             {activeTab === 'tools' && <ToolSettings />}
+            {/* 技能管理：全部技能浏览（原会话右栏「技能」tab 迁来；会话内取用技能走输入框 Ctrl+K）。
+                技能来源是各 Agent 自己的技能目录，目录配置在「Agent集成配置」里，故给一条指引 */}
+            {activeTab === 'skills' && (
+              <div className="space-y-3">
+                <div
+                  className="flex items-center gap-2 text-[11px] rounded-lg px-3 py-2 flex-wrap"
+                  style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
+                >
+                  <span className="flex-1 min-w-[200px]">
+                    技能来自各 Agent 自身的技能目录；目录路径、入口文件与展示模式在 Agent 集成配置里设置。
+                  </span>
+                  <button
+                    onClick={() => setActiveTab('agents')}
+                    className="pd-btn px-2 py-1 rounded text-[11px] shrink-0"
+                    style={{ color: 'var(--accent)', border: '1px solid var(--border)' }}
+                  >
+                    去配置技能目录
+                  </button>
+                </div>
+                <SkillBrowser />
+              </div>
+            )}
+            {/* 插件管理：安装/卸载/启停/商店（全局低频运维，从会话右栏迁来）。
+                不设内部滚动与定高：内容自然展开，滚动交给设置页整页滚动条 */}
+            {activeTab === 'plugins' && <PluginManager />}
+            {/* 知识库：模型（整理/AI 生成）+ 文件根目录（换目录时可迁移原文）+ 云文档账号（投喂用） */}
+            {activeTab === 'knowledge' && (
+              <div className="space-y-6">
+                <KbModelSettings />
+                <KbRootSettings />
+                <KbCloudSourceSettings />
+              </div>
+            )}
             {activeTab === 'customtabs' && <CustomTabsSettings />}
             {activeTab === 'memory' && (
               <div className="space-y-4">
@@ -1260,7 +1456,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
               </div>
             )}
             {activeTab === 'filehistory' && <FileHistorySettings />}
-            {activeTab === 'about' && <AboutSection />}
           </div>
         </div>
       </div>

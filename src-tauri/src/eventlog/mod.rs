@@ -73,7 +73,14 @@ pub fn append_room_event(
     payload: &Value,
     model_visible: bool,
 ) -> Result<i64, AppError> {
-    insert_room_event_at(conn, room_id, kind, payload, model_visible, crate::utils::now())
+    insert_room_event_at(
+        conn,
+        room_id,
+        kind,
+        payload,
+        model_visible,
+        crate::utils::now(),
+    )
 }
 
 /// 以显式时间追加一条房间事件（历史一次性回放/测试专用，保留原始时间语义）。
@@ -169,7 +176,14 @@ pub fn append_session_event(
     payload: &Value,
     model_visible: bool,
 ) -> Result<i64, AppError> {
-    insert_session_event_at(conn, session_id, kind, payload, model_visible, crate::utils::now())
+    insert_session_event_at(
+        conn,
+        session_id,
+        kind,
+        payload,
+        model_visible,
+        crate::utils::now(),
+    )
 }
 
 /// 以显式时间追加一条会话事件（存量回放专用；生产写路径走 [`append_session_event`]）。
@@ -198,7 +212,10 @@ pub fn insert_session_event_at(
 
 /// 读取某会话的全部事件（seq 升序）。
 #[allow(dead_code)] // 同上。
-pub fn list_session_events(conn: &Connection, session_id: &str) -> Result<Vec<SessionEvent>, AppError> {
+pub fn list_session_events(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<SessionEvent>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT seq, session_id, kind, payload, model_visible, created_at
          FROM session_events WHERE session_id = ?1 ORDER BY seq ASC",
@@ -233,7 +250,10 @@ pub fn session_event_count(conn: &Connection, session_id: &str) -> Result<i64, A
 }
 
 /// 读取会话最新滚动摘要（`summary/result` 事件，seq 降序取首条）；无摘要返回 `None`。
-pub fn latest_session_summary(conn: &Connection, session_id: &str) -> Result<Option<String>, AppError> {
+pub fn latest_session_summary(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, AppError> {
     let payload: Option<String> = conn
         .query_row(
             "SELECT payload FROM session_events WHERE session_id = ?1 AND kind = 'summary/result' ORDER BY seq DESC LIMIT 1",
@@ -290,7 +310,14 @@ pub fn append_workflow_event(
     payload: &Value,
     model_visible: bool,
 ) -> Result<i64, AppError> {
-    insert_workflow_event_at(conn, execution_id, kind, payload, model_visible, crate::utils::now())
+    insert_workflow_event_at(
+        conn,
+        execution_id,
+        kind,
+        payload,
+        model_visible,
+        crate::utils::now(),
+    )
 }
 
 /// 以显式时间追加一条工作流事件（存量回放专用；生产写路径走 [`append_workflow_event`]）。
@@ -319,7 +346,10 @@ pub fn insert_workflow_event_at(
 
 /// 读取某执行实例的全部事件（seq 升序）。
 #[allow(dead_code)] // 同上。
-pub fn list_workflow_events(conn: &Connection, execution_id: &str) -> Result<Vec<WorkflowEvent>, AppError> {
+pub fn list_workflow_events(
+    conn: &Connection,
+    execution_id: &str,
+) -> Result<Vec<WorkflowEvent>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT seq, execution_id, kind, payload, model_visible, created_at
          FROM workflow_events WHERE execution_id = ?1 ORDER BY seq ASC",
@@ -366,8 +396,22 @@ mod tests {
     #[test]
     fn append_and_list_ascending() {
         let conn = mem_conn();
-        let s1 = append_room_event(&conn, "r1", "task/created", &serde_json::json!({"no": 1}), true).unwrap();
-        let s2 = append_room_event(&conn, "r1", "task/status", &serde_json::json!({"status": "running"}), true).unwrap();
+        let s1 = append_room_event(
+            &conn,
+            "r1",
+            "task/created",
+            &serde_json::json!({"no": 1}),
+            true,
+        )
+        .unwrap();
+        let s2 = append_room_event(
+            &conn,
+            "r1",
+            "task/status",
+            &serde_json::json!({"status": "running"}),
+            true,
+        )
+        .unwrap();
         assert!(s1 < s2);
 
         let events = list_room_events(&conn, "r1").unwrap();
@@ -392,7 +436,10 @@ mod tests {
         assert!(!r1.iter().any(|e| e.kind == "x"));
         let r2 = list_room_events(&conn, "r2").unwrap();
         assert_eq!(r2[0].model_visible, false);
-        assert_eq!(last_room_event_kind(&conn, "r1").unwrap().as_deref(), Some("b"));
+        assert_eq!(
+            last_room_event_kind(&conn, "r1").unwrap().as_deref(),
+            Some("b")
+        );
         assert_eq!(last_room_event_kind(&conn, "r3").unwrap(), None);
     }
 
@@ -400,8 +447,22 @@ mod tests {
     fn session_append_list_and_isolate() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SESSION_EVENTS_SCHEMA).unwrap();
-        let s1 = append_session_event(&conn, "s1", "user/message", &serde_json::json!({"role": "user"}), true).unwrap();
-        let s2 = append_session_event(&conn, "s1", "assistant/message", &serde_json::json!({"role": "assistant"}), true).unwrap();
+        let s1 = append_session_event(
+            &conn,
+            "s1",
+            "user/message",
+            &serde_json::json!({"role": "user"}),
+            true,
+        )
+        .unwrap();
+        let s2 = append_session_event(
+            &conn,
+            "s1",
+            "assistant/message",
+            &serde_json::json!({"role": "assistant"}),
+            true,
+        )
+        .unwrap();
         append_session_event(&conn, "s2", "title", &serde_json::json!({}), false).unwrap();
         assert!(s1 < s2);
         assert_eq!(session_event_count(&conn, "s1").unwrap(), 2);
@@ -431,7 +492,14 @@ mod tests {
         assert_eq!(single[0]["content"], "a");
 
         // 覆盖写取最新：中间混插其它 kind 不影响按 kind 取末条
-        append_session_event(&conn, "s1", "user/message", &serde_json::json!({"role": "user"}), true).unwrap();
+        append_session_event(
+            &conn,
+            "s1",
+            "user/message",
+            &serde_json::json!({"role": "user"}),
+            true,
+        )
+        .unwrap();
         let p2 = serde_json::json!({
             "todos": [
                 {"id": "t1", "content": "a", "status": "completed", "priority": "high"},
@@ -453,8 +521,22 @@ mod tests {
     fn workflow_append_list_and_count() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(WORKFLOW_EVENTS_SCHEMA).unwrap();
-        let e1 = append_workflow_event(&conn, "wf1", "node/start", &serde_json::json!({"node": "a"}), false).unwrap();
-        let e2 = append_workflow_event(&conn, "wf1", "node/end", &serde_json::json!({"node": "a"}), false).unwrap();
+        let e1 = append_workflow_event(
+            &conn,
+            "wf1",
+            "node/start",
+            &serde_json::json!({"node": "a"}),
+            false,
+        )
+        .unwrap();
+        let e2 = append_workflow_event(
+            &conn,
+            "wf1",
+            "node/end",
+            &serde_json::json!({"node": "a"}),
+            false,
+        )
+        .unwrap();
         append_workflow_event(&conn, "wf2", "node/start", &serde_json::json!({}), false).unwrap();
         assert!(e1 < e2);
         assert_eq!(workflow_event_count(&conn, "wf1").unwrap(), 2);

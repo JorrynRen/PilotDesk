@@ -1,3 +1,20 @@
+//! 统一错误类型 [`AppError`]。
+//!
+//! # 错误处理约定（内部 AppError、边界 String、前端契约不变）
+//!
+//! 1. **内部**：模块内部与辅助函数用 [`AppError`] 表达错误 —— 语义明确（`Db` / `Io` / `Lock` /
+//!    `NotFound` / `InvalidInput` / `Config` / `Network` / `External` / `Json`）、可携带
+//!    code/details、可用 `?` 传播，不再手写 `format!` 拼错误串。
+//! 2. **边界**：`#[tauri::command]` 的**返回类型仍是 `Result<T, String>`**。Tauri 会把 `Err`
+//!    序列化后交给前端 `invoke().catch`：`String` 序列化成**字符串**，而 [`AppError`] 会序列化成
+//!    **对象** `{code,message,details}`。前端大量 `catch (e) { showToast(`失败: ${e}`) }` 直接做
+//!    字符串插值 —— 边界若返回 [`AppError`] 会显示成 `[object Object]`。**故边界一律转成字符串。**
+//! 3. **转换**：靠本模块的 `impl From<AppError> for String`（产物即 [`AppError::message`]，
+//!    不含错误码前缀）。因此命令体内可以自然地 `?` 一个返回 `AppError` 的辅助函数，或在构造处
+//!    写 `Err(AppError::InvalidInput("...".into()).into())`。
+//!
+//! 结论：**对外（前端可见）的错误形状不变（仍是字符串）**，只把内部实现统一到 [`AppError`]。
+
 use serde::ser::SerializeStruct;
 use serde::Serialize;
 
@@ -38,6 +55,26 @@ impl AppError {
             AppError::Json(_) => "ERR_JSON",
         }
     }
+
+    /// 错误正文（面向人的文案，**不含**错误码前缀）。
+    ///
+    /// 错误码是给机器读的：`code()` 与 `Serialize`（`{code, message, details}`）都会带上它，
+    /// 前端据此分流。而 `Display` 的产物会直接进入**用户可见文案**——节点执行结果、执行记录
+    /// 的 `errorMessage`、命令返回的错误字符串、以及由其拼出的 Toast。所以 Display 只输出正文：
+    /// 否则同一次失败会出现两套文案（工作流侧 `[ERR_EXTERNAL] xxx`、会话通知侧 `xxx`）。
+    pub fn message(&self) -> &str {
+        match self {
+            AppError::Db(msg)
+            | AppError::Io(msg)
+            | AppError::Lock(msg)
+            | AppError::NotFound(msg)
+            | AppError::InvalidInput(msg)
+            | AppError::External(msg)
+            | AppError::Config(msg)
+            | AppError::Network(msg)
+            | AppError::Json(msg) => msg.as_str(),
+        }
+    }
 }
 
 impl Serialize for AppError {
@@ -73,22 +110,26 @@ impl Serialize for AppError {
 }
 
 impl std::fmt::Display for AppError {
+    /// 只输出正文，见 [`AppError::message`]：错误码经 `code()` / `Serialize` 传递，
+    /// 不能混进用户可见文案。
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {}", self.code(), match self {
-            AppError::Db(msg)
-            | AppError::Io(msg)
-            | AppError::Lock(msg)
-            | AppError::NotFound(msg)
-            | AppError::InvalidInput(msg)
-            | AppError::External(msg)
-            | AppError::Config(msg)
-            | AppError::Network(msg)
-            | AppError::Json(msg) => msg,
-        })
+        f.write_str(self.message())
     }
 }
 
 impl std::error::Error for AppError {}
+
+/// 边界转换：`AppError` → 前端可直接渲染的字符串。
+///
+/// 见文件头「错误处理约定」：`#[tauri::command]` 的 `Err` 侧保持 `String`，
+/// 本实现让命令体内可以 `?` 一个返回 `AppError` 的辅助函数（或 `.into()`）自动落到字符串，
+/// 前端仍是 `catch (e) => \`${e}\``，不会退化成 `[object Object]`。
+/// 产物等于 [`AppError::message`]（`Display` 正文），**不含** `[ERR_XXX]` 前缀。
+impl From<AppError> for String {
+    fn from(err: AppError) -> Self {
+        err.to_string()
+    }
+}
 
 impl From<rusqlite::Error> for AppError {
     fn from(err: rusqlite::Error) -> Self {
@@ -111,5 +152,26 @@ impl From<r2d2::Error> for AppError {
 impl From<serde_json::Error> for AppError {
     fn from(err: serde_json::Error) -> Self {
         AppError::Json(err.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+
+    /// 回归：`Display` 的产物会直接进入用户可见文案（节点执行结果、执行记录 errorMessage、
+    /// 命令返回的错误字符串、Toast），因此**不得**携带 `[ERR_XXX]` 前缀——否则同一次失败
+    /// 会在工作流侧与会话通知侧显示成两套文案。错误码仍由 `code()` / `Serialize` 传递。
+    #[test]
+    fn display_carries_no_error_code_prefix() {
+        let err = AppError::External("请求失败: 400 invalid model".to_string());
+        assert_eq!(err.to_string(), "请求失败: 400 invalid model");
+        assert_eq!(err.message(), "请求失败: 400 invalid model");
+        assert_eq!(err.code(), "ERR_EXTERNAL");
+
+        // 序列化仍带 code/message/details 三件套（前端分流用）
+        let v = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["code"], "ERR_EXTERNAL");
+        assert_eq!(v["details"], "请求失败: 400 invalid model");
     }
 }

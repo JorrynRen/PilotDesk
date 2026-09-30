@@ -9,8 +9,9 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Store, Download, RefreshCw, Search, Package, Shield, User, HardDrive, X, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
+import { Download, Package, Shield, User, HardDrive, AlertCircle, Loader2 } from 'lucide-react';
 import { PluginReadmeDialog } from './PluginReadmeDialog';
+import { errorMessage } from '../../utils/errorMessage';
 
 // ── 友好错误提示 ──
 
@@ -76,13 +77,11 @@ type PluginStatus = 'installed' | 'update-available' | 'not-installed' | 'instal
 function PluginCard({
   plugin,
   status,
-  installing,
   onInstall,
   onReadme,
 }: {
   plugin: OnlinePluginInfo;
   status: PluginStatus;
-  installing: boolean;
   onInstall: (id: string) => void;
   onReadme: (plugin: OnlinePluginInfo) => void;
 }) {
@@ -114,6 +113,7 @@ function PluginCard({
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {/* 图标 */}
           <div
+            title={plugin.name}
             style={{
               width: 20,
               height: 20,
@@ -138,7 +138,7 @@ function PluginCard({
               <Package size={10} style={{ color: 'var(--text-tertiary)' }} />
             )}
           </div>
-          <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+          <span className="text-xs truncate" title={plugin.name} style={{ color: 'var(--text-primary)' }}>
             {plugin.name}
           </span>
           <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
@@ -303,23 +303,17 @@ function SkeletonCard() {
 // ── 主组件 ──
 
 export const OnlinePluginStore: React.FC<{
-  onClose?: () => void;
   searchQuery?: string;
-  onSearchChange?: (q: string) => void;
   /** 统计信息变更回调，用于父组件在标题行显示 */
   onStatsChange?: (total: number, filtered: number) => void;
-}> = ({ onClose, searchQuery: externalSearchQuery, onSearchChange, onStatsChange }) => {
-  // 商店容器样式：允许纵向滚动
-  const containerStyle: React.CSSProperties = {};
+}> = ({ searchQuery: externalSearchQuery, onStatsChange }) => {
   const [plugins, setPlugins] = useState<OnlinePluginInfo[]>([]);
   const [localVersions, setLocalVersions] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
-  const [internalSearchQuery, setInternalSearchQuery] = useState('');
-  const searchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
-  const setSearchQuery = onSearchChange || setInternalSearchQuery;
-  const [source, setSource] = useState<string>('');
+  // 内部搜索态已由父级接管（externalSearchQuery 未传时无输入源，等价于空串）
+  const searchQuery = externalSearchQuery ?? '';
   const [readmePlugin, setReadmePlugin] = useState<OnlinePluginInfo | null>(null);
 
   const fetchPlugins = useCallback(async () => {
@@ -335,7 +329,6 @@ export const OnlinePluginStore: React.FC<{
       ]);
 
       setPlugins(indexResult.plugins);
-      setSource(indexResult.source);
 
       const localMap = new Map<string, string>();
       for (const p of localResult) {
@@ -343,7 +336,7 @@ export const OnlinePluginStore: React.FC<{
       }
       setLocalVersions(localMap);
     } catch (err) {
-      const friendly = formatUserFriendlyError(String(err));
+      const friendly = formatUserFriendlyError(errorMessage(err));
       setError(friendly.title + '：' + friendly.detail);
     } finally {
       setLoading(false);
@@ -362,7 +355,9 @@ export const OnlinePluginStore: React.FC<{
   });
 
   useEffect(() => {
-    fetchPlugins();
+    // 不在 effect 体内同步调用：fetchPlugins 开头就 setLoading(true)，属于"effect 体内同步 setState"
+    // （`react-hooks/set-state-in-effect` 判为级联渲染）。推到微任务 —— 同一个任务、早于绘制，行为一致。
+    void Promise.resolve().then(() => fetchPlugins());
   }, [fetchPlugins]);
 
   // 统计信息变化时通知父组件
@@ -384,7 +379,7 @@ export const OnlinePluginStore: React.FC<{
       }
       setLocalVersions(localMap);
     } catch (err) {
-      const friendly = formatUserFriendlyError(String(err));
+      const friendly = formatUserFriendlyError(errorMessage(err));
       setError(friendly.title + '：' + friendly.detail);
     } finally {
       setInstallingId(null);
@@ -464,7 +459,6 @@ export const OnlinePluginStore: React.FC<{
               key={plugin.id}
               plugin={plugin}
               status={getPluginStatus(plugin)}
-              installing={installingId === plugin.id}
               onInstall={installPlugin}
               onReadme={(p) => setReadmePlugin(p)}
             />

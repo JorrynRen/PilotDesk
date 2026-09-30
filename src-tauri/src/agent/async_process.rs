@@ -17,7 +17,11 @@ pub trait AsyncConsole: Send {
         command: &str,
         args: &[&str],
         cwd: &str,
-    ) -> io::Result<(u32, tokio::sync::mpsc::Receiver<String>, tokio::sync::mpsc::Receiver<String>)>;
+    ) -> io::Result<(
+        u32,
+        tokio::sync::mpsc::Receiver<String>,
+        tokio::sync::mpsc::Receiver<String>,
+    )>;
 
     /// 等待进程结束，返回退出码
     async fn wait(&mut self) -> io::Result<i32>;
@@ -70,7 +74,11 @@ impl AsyncConsole for TokioConsole {
         command: &str,
         args: &[&str],
         cwd: &str,
-    ) -> io::Result<(u32, tokio::sync::mpsc::Receiver<String>, tokio::sync::mpsc::Receiver<String>)> {
+    ) -> io::Result<(
+        u32,
+        tokio::sync::mpsc::Receiver<String>,
+        tokio::sync::mpsc::Receiver<String>,
+    )> {
         let mut cmd = tokio::process::Command::new(command);
         cmd.args(args)
             .current_dir(cwd)

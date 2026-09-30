@@ -6,6 +6,7 @@ import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { useTerminal, injectToActiveTerminal } from '../../TerminalManager';
 import { showToast } from '../../utils/toast';
+import { confirmDialog } from '../../stores/confirmStore';
 
 import { EMOJI_OPTIONS } from '../../constants';
 
@@ -54,7 +55,12 @@ export function InspirationPanel() {
   }, []);
 
   const handleDelete = async (id: string) => {
-    if (confirm('确定要删除这条灵感吗？')) {
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: '确定要删除这条灵感吗？',
+      confirmText: '删除',
+    });
+    if (ok) {
       await deleteInspiration(id);
     }
   };
@@ -155,7 +161,7 @@ export function InspirationPanel() {
       )}
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 pd-scroll-stable">
         {loading && !inspirations.length ? (
           <div className="flex items-center justify-center h-20">
             <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>加载中...</span>

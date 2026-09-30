@@ -77,15 +77,12 @@ impl SkillLoader {
     /// 获取技能所在目录的绝对路径（精确匹配，回退忽略大小写）。
     /// 供 `load_skill` 返回内容时注入技能根目录，模型据此以绝对路径调用技能脚本。
     pub fn skill_dir(&self, name: &str) -> Option<PathBuf> {
-        self.dirs
-            .get(name)
-            .cloned()
-            .or_else(|| {
-                self.dirs
-                    .iter()
-                    .find(|(k, _)| k.to_lowercase() == name.to_lowercase())
-                    .map(|(_, v)| v.clone())
-            })
+        self.dirs.get(name).cloned().or_else(|| {
+            self.dirs
+                .iter()
+                .find(|(k, _)| k.to_lowercase() == name.to_lowercase())
+                .map(|(_, v)| v.clone())
+        })
     }
 
     /// 扫描技能目录
@@ -196,13 +193,25 @@ fn parse_frontmatter(content: &str) -> (String, String) {
             let name = yaml_str
                 .lines()
                 .find(|l| l.starts_with("name:"))
-                .map(|l| l.trim_start_matches("name:").trim().trim_matches('"').trim_matches('\'').to_string())
+                .map(|l| {
+                    l.trim_start_matches("name:")
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'')
+                        .to_string()
+                })
                 .unwrap_or_else(|| "unknown_skill".to_string());
 
             let desc = yaml_str
                 .lines()
                 .find(|l| l.starts_with("description:"))
-                .map(|l| l.trim_start_matches("description:").trim().trim_matches('"').trim_matches('\'').to_string())
+                .map(|l| {
+                    l.trim_start_matches("description:")
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'')
+                        .to_string()
+                })
                 .unwrap_or_else(|| "No description".to_string());
 
             (name, desc)

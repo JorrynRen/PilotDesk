@@ -1,0 +1,244 @@
+{
+  "id": "math-calc",
+  "name": "数学计算",
+  "version": "1.0.0",
+  "description": "工作流节点插件：四则运算、幂与开方、对数、三角函数、阶乘、最大公约数/最小公倍数、聚合统计等数学计算，并带一个可直接试算的面板",
+  "author": "PilotDesk Team",
+  "minAppVersion": "0.1.0",
+  "permissions": [
+    "ui:panel"
+  ],
+  "entry": {
+    "main": "index.js"
+  },
+  "contributes": {
+    "panels": [
+      {
+        "id": "math-test-panel",
+        "title": "数学计算 · 测试"
+      }
+    ],
+    "commands": [
+      {
+        "id": "math.binary",
+        "title": "二元运算",
+        "input": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "number",
+              "description": "左操作数"
+            },
+            "op": {
+              "type": "string",
+              "description": "运算方式",
+              "default": "add",
+              "enum": ["add", "sub", "mul", "div", "mod", "pow"],
+              "enumLabels": ["add（相加）", "sub（相减）", "mul（相乘）", "div（相除）", "mod（取余）", "pow（求幂）"]
+            },
+            "b": {
+              "type": "number",
+              "description": "右操作数"
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "计算结果（裸值，下游节点可直接引用）"
+        }
+      },
+      {
+        "id": "math.unary",
+        "title": "一元运算",
+        "input": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "description": "输入值"
+            },
+            "op": {
+              "type": "string",
+              "description": "运算方式",
+              "default": "abs",
+              "enum": ["abs", "neg", "round", "floor", "ceil", "sqrt", "ln", "log10", "exp"],
+              "enumLabels": ["abs（绝对值）", "neg（取负）", "round（四舍五入）", "floor（向下取整）", "ceil（向上取整）", "sqrt（平方根）", "ln（自然对数）", "log10（常用对数）", "exp（指数 e^x）"]
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "计算结果（裸值）"
+        }
+      },
+      {
+        "id": "math.aggregate",
+        "title": "聚合统计",
+        "input": {
+          "type": "object",
+          "properties": {
+            "numbers": {
+              "type": "string",
+              "description": "数字列表，用逗号、空格或换行分隔（也可由上游节点输出数组）"
+            },
+            "op": {
+              "type": "string",
+              "description": "统计方式",
+              "default": "sum",
+              "enum": ["sum", "avg", "min", "max", "median", "count", "product"],
+              "enumLabels": ["sum（求和）", "avg（平均值）", "min（最小值）", "max（最大值）", "median（中位数）", "count（个数）", "product（求积）"]
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "统计结果（裸值）"
+        }
+      },
+      {
+        "id": "math.round",
+        "title": "按位四舍五入",
+        "input": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "description": "要处理的数"
+            },
+            "digits": {
+              "type": "integer",
+              "description": "保留小数位数（0~15）",
+              "default": 2
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "四舍五入后的结果（裸值）"
+        }
+      },
+      {
+        "id": "math.percentage",
+        "title": "百分比",
+        "input": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "description": "部分量"
+            },
+            "total": {
+              "type": "number",
+              "description": "总量（不能为 0）"
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "百分数（裸值，如 74 表示 74%）；要小数占比就再除以 100"
+        }
+      },
+      {
+        "id": "math.trigonometry",
+        "title": "三角函数",
+        "input": {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "description": "三角函数",
+              "default": "sin",
+              "enum": ["sin", "cos", "tan", "asin", "acos", "atan"],
+              "enumLabels": ["sin（正弦）", "cos（余弦）", "tan（正切）", "asin（反正弦）", "acos（反余弦）", "atan（反正切）"]
+            },
+            "value": {
+              "type": "number",
+              "description": "sin/cos/tan 填角度；asin/acos/atan 填比值（-1 ~ 1）"
+            },
+            "unit": {
+              "type": "string",
+              "description": "角度单位：sin/cos/tan 按它解释输入，asin/acos/atan 按它返回结果",
+              "default": "rad",
+              "enum": ["rad", "deg"],
+              "enumLabels": ["rad（弧度）", "deg（角度）"]
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "计算结果（裸值，按 unit 决定是比值还是角度）"
+        }
+      },
+      {
+        "id": "math.factorial",
+        "title": "阶乘",
+        "input": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "integer",
+              "description": "非负整数，最大 170"
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "n!（裸值）"
+        }
+      },
+      {
+        "id": "math.gcd_lcm",
+        "title": "最大公约数 / 最小公倍数",
+        "input": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "type": "integer",
+              "description": "整数 a"
+            },
+            "op": {
+              "type": "string",
+              "description": "运算方式",
+              "default": "gcd",
+              "enum": ["gcd", "lcm"],
+              "enumLabels": ["gcd（最大公约数）", "lcm（最小公倍数）"]
+            },
+            "b": {
+              "type": "integer",
+              "description": "整数 b"
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "gcd 或 lcm 的结果（裸值，非负）"
+        }
+      },
+      {
+        "id": "math.clamp",
+        "title": "区间限制",
+        "input": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "number",
+              "description": "要限制的值"
+            },
+            "min": {
+              "type": "number",
+              "description": "下界（含）"
+            },
+            "max": {
+              "type": "number",
+              "description": "上界（含）"
+            }
+          }
+        },
+        "output": {
+          "type": "number",
+          "description": "夹到 [min, max] 之后的值（裸值）"
+        }
+      }
+    ]
+  }
+}

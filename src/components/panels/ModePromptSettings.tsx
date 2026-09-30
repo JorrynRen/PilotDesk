@@ -41,7 +41,7 @@ export function ModePromptSettings() {
     }
     setSaving(null);
     setTimeout(() => setSaved(null), 2000);
-  }, [prompts, invoke]);
+  }, [prompts]);
 
   const handleReset = useCallback(async (mode: ChatMode) => {
     setPrompts((prev) => ({ ...prev, [mode]: '' }));
@@ -53,7 +53,7 @@ export function ModePromptSettings() {
     }
     setSaved(mode);
     setTimeout(() => setSaved(null), 2000);
-  }, [invoke]);
+  }, []);
 
   return (
     <SettingsSection

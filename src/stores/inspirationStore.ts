@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { listItems, saveItem, deleteItem, invokeAction } from '../utils/invokeHelper';
+import { errorMessage } from '../utils/errorMessage';
 
 export interface InspirationItem {
   id: string;
@@ -67,7 +68,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
       });
       set({ inspirations, loading: false });
     } catch (err) {
-      set({ error: String(err), loading: false });
+      set({ error: errorMessage(err), loading: false });
     }
   },
 
@@ -85,7 +86,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
       await get().fetchTags();
       return result;
     } catch (err) {
-      set({ error: String(err) });
+      set({ error: errorMessage(err) });
       return null;
     }
   },
@@ -96,7 +97,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
       await get().fetchInspirations();
       await get().fetchTags();
     } catch (err) {
-      set({ error: String(err) });
+      set({ error: errorMessage(err) });
     }
   },
 
@@ -105,7 +106,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
       await deleteItem('delete_inspiration', id);
       await get().fetchInspirations();
     } catch (err) {
-      set({ error: String(err) });
+      set({ error: errorMessage(err) });
     }
   },
 
@@ -122,7 +123,7 @@ export const useInspirationStore = create<InspirationState>((set, get) => ({
       });
       set({ inspirations: results, loading: false });
     } catch (err) {
-      set({ error: String(err), loading: false });
+      set({ error: errorMessage(err), loading: false });
     }
   },
 

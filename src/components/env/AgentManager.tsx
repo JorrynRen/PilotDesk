@@ -1,12 +1,15 @@
-import React, { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { Plus, Trash2, Pencil, Save, X, Loader2, Check, Palette, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen } from 'lucide-react';
+import React, { useState } from 'react';
+import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
+import { confirmDialog } from '../../stores/confirmStore';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { errorMessage } from '../../utils/errorMessage';
 
 import type { AgentConfig } from '../../types';
 import { SettingsSection, SettingsCard, SettingsButton } from '../settings';
+import { Select } from '../common/Select';
 import {
   DndContext,
   closestCenter,
@@ -28,7 +31,7 @@ import { CSS } from '@dnd-kit/utilities';
 // ──────────────────────────────────────────────
 
 export function AgentManager() {
-  const { agents, loading, fetchAgents, getTheme } = useAgentRegistry();
+  const { agents, loading, fetchAgents } = useAgentRegistry();
   const [editingType, setEditingType] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<AgentConfig> | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -36,8 +39,6 @@ export function AgentManager() {
   const [saving, setSaving] = useState(false);
   const [marketAgents, setMarketAgents] = useState<AgentConfig[]>([]);
   const [marketLoading, setMarketLoading] = useState(false);
-  const [showMarket, setShowMarket] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -90,8 +91,8 @@ export function AgentManager() {
       setEditingType(null);
       setEditForm(null);
       fetchAgents();
-    } catch (err: any) {
-      showToast(`更新失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`更新失败: ${errorMessage(err)}`, 'error');
     }
     setSaving(false);
   };
@@ -101,9 +102,19 @@ export function AgentManager() {
       await invoke('delete_agent', { agentType });
       showToast('Agent 已删除', 'success');
       fetchAgents();
-    } catch (err: any) {
-      showToast(`删除失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`删除失败: ${errorMessage(err)}`, 'error');
     }
+  };
+
+  /** 删除前二次确认（统一走全局确认弹窗） */
+  const requestDelete = async (agentType: string) => {
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: `确定要删除「${agentType}」的配置吗？此操作不可撤销。`,
+      confirmText: '删除',
+    });
+    if (ok) await handleDelete(agentType);
   };
 
   const handleAdd = async () => {
@@ -118,8 +129,8 @@ export function AgentManager() {
       setShowAddForm(false);
       setAddForm({});
       fetchAgents();
-    } catch (err: any) {
-      showToast(`添加失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`添加失败: ${errorMessage(err)}`, 'error');
     }
     setSaving(false);
   };
@@ -130,8 +141,8 @@ export function AgentManager() {
     try {
       const data = await invoke<{ agents?: AgentConfig[] }>('fetch_agents_config');
       setMarketAgents(data.agents || []);
-    } catch (err: any) {
-      showToast(`无法连接 Agent 市场，请检查网络连接 (${err})`, 'warning');
+    } catch (err) {
+      showToast(`无法连接 Agent 市场，请检查网络连接 (${errorMessage(err)})`, 'warning');
     }
     setMarketLoading(false);
   };
@@ -189,8 +200,8 @@ export function AgentManager() {
       });
       showToast(`已恢复 ${agent.displayName} 初始配置 (v${agent.version})`, 'success');
       fetchAgents();
-    } catch (err: any) {
-      showToast(`恢复失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`恢复失败: ${errorMessage(err)}`, 'error');
     }
     setSaving(false);
   };
@@ -245,8 +256,8 @@ export function AgentManager() {
         showToast(`已安装 ${agent.displayName} (${agent.version})`, 'success');
       }
       fetchAgents();
-    } catch (err: any) {
-      showToast(`操作失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`操作失败: ${errorMessage(err)}`, 'error');
     }
     setSaving(false);
   };
@@ -264,8 +275,8 @@ export function AgentManager() {
     try {
       await invoke('reorder_agents', { agentTypes: newOrder });
       fetchAgents();
-    } catch (err: any) {
-      showToast(`排序失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`排序失败: ${errorMessage(err)}`, 'error');
       fetchAgents();
     }
   };
@@ -276,8 +287,8 @@ export function AgentManager() {
         payload: { agentType: agent.agentType, isEnabled: !agent.isEnabled },
       });
       fetchAgents();
-    } catch (err: any) {
-      showToast(`操作失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`操作失败: ${errorMessage(err)}`, 'error');
     }
   };
 
@@ -296,8 +307,8 @@ export function AgentManager() {
         await invoke('export_agents_json', { filePath });
         showToast(`已导出 ${agents.length} 个 Agent 配置`, 'success');
       }
-    } catch (err: any) {
-      showToast(`导出失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`导出失败: ${errorMessage(err)}`, 'error');
     }
   };
 
@@ -318,8 +329,8 @@ export function AgentManager() {
         showToast(`成功导入 ${result.success} 个 Agent 配置`, 'success');
       }
       fetchAgents();
-    } catch (err: any) {
-      showToast(`导入失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`导入失败: ${errorMessage(err)}`, 'error');
     }
   };
 
@@ -397,11 +408,10 @@ export function AgentManager() {
                   setEditForm={setEditForm}
                   handleSave={handleSave}
                   saving={saving}
-                  editingType={editingType}
                   setEditingType={setEditingType}
                   handleToggleEnabled={handleToggleEnabled}
                   handleEdit={handleEdit}
-                  setDeleteConfirm={setDeleteConfirm}
+                  requestDelete={requestDelete}
                 />
               ))}
             </SortableContext>
@@ -417,7 +427,7 @@ export function AgentManager() {
             <SettingsButton
               variant="secondary"
               icon={<Download size={11} />}
-              onClick={() => { fetchMarket(); setShowMarket(true); }}
+              onClick={() => { fetchMarket(); }}
               disabled={marketLoading}
             >
               {marketLoading ? '加载中...' : '刷新'}
@@ -500,43 +510,6 @@ export function AgentManager() {
       </SettingsSection>
 
 
-      {/* 删除确认弹窗 */}
-      {deleteConfirm && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => setDeleteConfirm(null)}
-        >
-          <div
-            className="rounded-xl p-5 shadow-xl max-w-sm w-full mx-4"
-            style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-              确认删除
-            </div>
-            <div className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
-              确定要删除 <strong style={{ color: 'var(--text-primary)' }}>{deleteConfirm}</strong> 的配置吗？此操作不可撤销。
-            </div>
-            <div className="flex justify-end gap-2">
-              <SettingsButton variant="secondary" onClick={() => setDeleteConfirm(null)}>
-                取消
-              </SettingsButton>
-              <SettingsButton
-                variant="danger"
-                onClick={() => {
-                  const agentType = deleteConfirm;
-                  setDeleteConfirm(null);
-                  handleDelete(agentType);
-                }}
-              >
-                确认删除
-              </SettingsButton>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }
@@ -575,8 +548,8 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
 
       onChange({ ...form, icon: result });
       showToast('图标已上传', 'success');
-    } catch (err: any) {
-      showToast(`上传失败: ${err}`, 'error');
+    } catch (err) {
+      showToast(`上传失败: ${errorMessage(err)}`, 'error');
     }
   };
   return (
@@ -758,16 +731,12 @@ function SelectField({ label, value, onChange, options }: {
   return (
     <div>
       <label className="block text-[10px] mb-0.5" style={{ color: 'var(--text-secondary)' }}>{label}</label>
-      <select
+      <Select
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
-        style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>{opt.label}</option>
-        ))}
-      </select>
+        onChange={(v) => onChange(v)}
+        options={options}
+        className="w-full"
+      />
     </div>
   );
 }
@@ -775,18 +744,17 @@ function SelectField({ label, value, onChange, options }: {
 // ──────────────────────────────────────────────
 //  SortableAgentItem — 可拖拽排序的 Agent 卡片
 // ──────────────────────────────────────────────
-function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, editingType, setEditingType, handleToggleEnabled, handleEdit, setDeleteConfirm }: {
+function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave, saving, setEditingType, handleToggleEnabled, handleEdit, requestDelete }: {
   agent: AgentConfig;
   isEditing: boolean;
   editForm: Partial<AgentConfig> | null;
   setEditForm: (f: Partial<AgentConfig>) => void;
   handleSave: () => void;
   saving: boolean;
-  editingType: string | null;
   setEditingType: (t: string | null) => void;
   handleToggleEnabled: (agent: AgentConfig) => void;
   handleEdit: (agent: AgentConfig) => void;
-  setDeleteConfirm: (t: string | null) => void;
+  requestDelete: (agentType: string) => void;
 }) {
   const {
     attributes,
@@ -883,7 +851,7 @@ function SortableAgentItem({ agent, isEditing, editForm, setEditForm, handleSave
               />
               {!agent.isBuiltin && (
                 <SettingsButton
-                  onClick={() => setDeleteConfirm(agent.agentType)}
+                  onClick={() => requestDelete(agent.agentType)}
                   variant="danger"
                   title="删除此 Agent 配置"
                   icon={<Trash2 size={11} />}

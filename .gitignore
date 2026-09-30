@@ -145,8 +145,8 @@ vite.config.ts.timestamp-*
 
 
 # Rust / Tauri
+# 注意：Cargo.lock 必须入库——桌面二进制需要锁定依赖版本以保证构建可复现。
 src-tauri/target/
-src-tauri/Cargo.lock
 **/*.rs.bk
 
 # PilotDesk runtime

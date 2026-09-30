@@ -56,9 +56,14 @@ impl ToolHandler for ListModelsTool {
             "可用模型清单（provider 参数必须逐字使用 provider_id 原始值；provider_name 仅为显示名，禁止用于任何参数）：\n",
         );
         for p in &providers {
+            let session_mark = if p.is_session {
+                " ★当前会话提供商（provider 参数可直接填该 id）"
+            } else {
+                ""
+            };
             out.push_str(&format!(
-                "■ provider_id: {}（provider_name: {}）| api_format: {} | 接口: {}\n",
-                p.provider_id, p.provider_name, p.api_format, p.endpoint
+                "■ provider_id: {}（provider_name: {}）| api_format: {} | 接口: {}{}\n",
+                p.provider_id, p.provider_name, p.api_format, p.endpoint, session_mark
             ));
             for m in &p.models {
                 let desc = m.description.as_deref().unwrap_or("（未备注）");
@@ -67,11 +72,15 @@ impl ToolHandler for ListModelsTool {
                 } else {
                     ""
                 };
-                out.push_str(&format!("    - 模型: {} | 备注: {}{}\n", m.name, desc, mark));
+                out.push_str(&format!(
+                    "    - 模型: {} | 备注: {}{}\n",
+                    m.name, desc, mark
+                ));
             }
         }
         out.push_str(
-            "提示：调用生成/语音/向量化等工具时，provider 参数必须逐字使用上方 provider_id（禁止使用 provider_name/中文名/序号/联想值）；model 参数必须与上方模型名完全一致（包括 organization/ 等 namespace 前缀），禁止自行缩短、合并或省略前缀；仅可使用清单中列出的模型，绝对不要编造清单外的模型名；标注 ⚠️非文本 的模型严禁用于文本/对话任务。\n",
+            "提示：调用生成/语音/向量化等工具时，provider 参数必须逐字使用上方 provider_id（禁止使用 provider_name/中文名/序号/联想值）；model 参数必须与上方模型名完全一致（包括 organization/ 等 namespace 前缀），禁止自行缩短、合并或省略前缀；provider_id 与 model 必须分别放在两个参数里，绝对不要写成 provider_id/model 这种拼在一起的形式；若模型名自身含斜杠（如 TeleAI/xxx），那是模型名的一部分，必须原样保留在 model 里；改 provider 时请填清单里标了 ★ 的那一行（当前会话提供商）。仅可使用清单中列出的模型，绝对不要编造清单外的模型名；标注 ⚠️非文本 的模型严禁用于文本/对话任务。\n\
+             需要读取图片（read_image）时，请优先选择「备注」中注明支持图片/视觉输入的模型作为 model 参数；若省略，read_image 会先用会话模型，失败时自动改用备注中声明支持图片输入的模型重试一次。\n",
         );
         Ok(out)
     }
@@ -81,9 +90,8 @@ impl ToolHandler for ListModelsTool {
 /// 仅用于清单标注警示，不作为运行时硬校验。
 fn is_non_text_model(name: &str, desc: &str) -> bool {
     const NON_TEXT_KEYWORDS: &[&str] = &[
-        "image", "img", "vision", "dall", "dalle", "sd-", "flux", "video",
-        "tts", "stt", "audio", "speech", "embed", "vector",
-        "图片", "图像", "视频", "音频", "语音", "向量", "嵌入",
+        "image", "img", "vision", "dall", "dalle", "sd-", "flux", "video", "tts", "stt", "audio",
+        "speech", "embed", "vector", "图片", "图像", "视频", "音频", "语音", "向量", "嵌入",
     ];
     let haystack = format!("{} {}", name, desc).to_lowercase();
     NON_TEXT_KEYWORDS.iter().any(|k| haystack.contains(k))

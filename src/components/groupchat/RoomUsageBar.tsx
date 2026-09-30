@@ -23,9 +23,11 @@ function ModelRows({ rows }: { rows: UsageGroup[] }) {
           <tr style={{ color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border)' }}>
             <th className="text-left py-0.5">模型</th>
             <th className="text-right py-0.5">调用</th>
-            <th className="text-right py-0.5">输入</th>
+            <th className="text-right py-0.5" title="输入总量 = 未命中 + 缓存命中 + 缓存写">输入总量</th>
+            <th className="text-right py-0.5" title="未命中输入（缓存命中是单独一桶）">输入·未命中</th>
             <th className="text-right py-0.5">输出</th>
             <th className="text-right py-0.5">缓存命中</th>
+            <th className="text-right py-0.5">缓存写</th>
             <th className="text-right py-0.5">命中率</th>
           </tr>
         </thead>
@@ -34,6 +36,7 @@ function ModelRows({ rows }: { rows: UsageGroup[] }) {
             <tr key={g.name} style={{ color: 'var(--text-secondary)' }}>
               <td className="py-0.5 pr-2" style={{ color: 'var(--text-primary)' }}>{g.name}</td>
               <td className="text-right py-0.5">{fmt(g.totals.callCount)}</td>
+              <td className="text-right py-0.5">{fmt(g.totals.promptTokens + g.totals.cacheReadTokens + g.totals.cacheWriteTokens)}</td>
               <td className="text-right py-0.5">{fmt(g.totals.promptTokens)}</td>
               <td className="text-right py-0.5">{fmt(g.totals.completionTokens)}</td>
               <td className="text-right py-0.5">{fmt(g.totals.cacheReadTokens)}</td>
@@ -54,6 +57,15 @@ function ModelRows({ rows }: { rows: UsageGroup[] }) {
 export function RoomUsageBar({ roomId }: { roomId: string | null }) {
   const [data, setData] = useState<RoomUsage | null>(null);
   const [expanded, setExpanded] = useState(false);
+  // 切换房间时清空展示。用「渲染期修正」（React adjust-during-render）而不是 effect——
+  // 在 effect 里同步 setState 会多一轮级联渲染（`react-hooks/set-state-in-effect`），
+  // 而"外部值（roomId）变了就把本地状态重置"正是该写法的适用场景。
+  const [syncedRoomId, setSyncedRoomId] = useState(roomId);
+  if (syncedRoomId !== roomId) {
+    setSyncedRoomId(roomId);
+    setData(null);
+    setExpanded(false);
+  }
   const seqRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -68,14 +80,14 @@ export function RoomUsageBar({ roomId }: { roomId: string | null }) {
   };
 
   useEffect(() => {
-    setData(null);
-    setExpanded(false);
     if (!roomId) return;
     let disposed = false;
     let un: UnlistenFn | null = null;
     const rid = roomId;
 
-    refresh(rid);
+    // effect 体内不允许同步 setState（react-hooks/set-state-in-effect）：把首帧拉取推迟一个微任务，
+    // 仍在同一帧内执行，观感与原先一致
+    queueMicrotask(() => { void refresh(rid); });
 
     const onDirty = () => {
       if (disposed || document.hidden) return;
@@ -119,9 +131,13 @@ export function RoomUsageBar({ roomId }: { roomId: string | null }) {
         {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         <span>本房间用量（含历史累计）</span>
         <span>调用 {fmt(t.callCount)}</span>
-        <span>输入 {fmt(t.promptTokens)}</span>
-        <span>输出 {fmt(t.completionTokens)}</span>
-        <span>缓存命中 {fmt(t.cachedTokens)}</span>
+        <span style={{ opacity: 0.5 }}>|</span>
+        <span title="输入按「总量/未命中」展示；缓存命中是单独一桶">输入 {fmt(t.promptTokens + read + write)}/{fmt(t.promptTokens)}(未命中) tok</span>
+        <span style={{ opacity: 0.5 }}>|</span>
+        <span>输出 {fmt(t.completionTokens)} tok</span>
+        <span style={{ opacity: 0.5 }}>|</span>
+        <span title="缓存命中只算缓存读取；命中率 = 缓存命中 / 总输入">缓存命中 {fmt(t.cacheReadTokens)} tok</span>
+        <span style={{ opacity: 0.5 }}>|</span>
         <span>命中率 {fmtRate(rate)}</span>
       </button>
       {expanded && (

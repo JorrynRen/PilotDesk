@@ -4,3 +4,5 @@ export { SessionList } from './SessionList';
 export { MainPanel } from './MainPanel';
 export { RightPanel } from './RightPanel';
 export { StatusBar } from './StatusBar';
+export { NotificationCenter } from './NotificationCenter';
+export { CommandCenter } from './CommandCenter';

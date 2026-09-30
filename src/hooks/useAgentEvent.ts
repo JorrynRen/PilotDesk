@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAgentRegistry } from './useAgentRegistry';
 import { subscribeAgentBus } from './agentEventBus';
 import type { Attachment } from '../types';
+import { errorMessage } from '../utils/errorMessage';
 
 /**
  * useAgentEvent — 替代 useWebSocket。
@@ -15,11 +16,14 @@ import type { Attachment } from '../types';
 export interface AgentEventHandlers {
   onChunk?: (sessionId: string, content: string) => void;
   onDone?: (sessionId: string, fallbackContent?: string) => void;
+  /** 运行被取消（用户点"停止生成"）：正文已由事件总线按已产出内容落库，组件只需收起流式视图。 */
+  onCancelled?: (sessionId: string, content?: string) => void;
   onError?: (sessionId: string, error: string) => void;
   onStatus?: (sessionId: string, status: string) => void;
   onSession?: (sessionId: string, agentSessionId: string) => void;
-  onSkills?: (agentType: string, skills: Array<{ name: string; description: string; category?: string }>) => void;
+  onSkills?: (agentType: string, skills: Array<{ name: string; description: string; category?: string; dirPath?: string; entryPath?: string }>) => void;
   onApprovalRequired?: (sessionId: string, callId: string, toolName: string, toolArgs: string, riskDescription: string) => void;
+  onApprovalResolved?: (sessionId: string, callId: string, toolName: string, approved: boolean, timedOut: boolean, risk: string) => void;
   /** ask_user 工具确认请求（payload 与后端 agent-confirmation-request 事件一致）。 */
   onConfirmationRequest?: (payload: {
     sessionId: string;
@@ -34,8 +38,11 @@ export interface AgentEventHandlers {
   /** 工具执行进度提示（如 generate_video 任务创建成功 / 每 30s 状态）。 */
   onToolProgress?: (sessionId: string, toolName: string, message: string) => void;
   onFileDiff?: (sessionId: string, path: string, diff: string) => void;
+  /** 轮前系统步骤（如自动记忆检索）：非模型发起的工具调用，在思维链中独立成一步。 */
+  onSystemStep?: (sessionId: string, stepId: string, title: string, params: string, detail: string, success: boolean) => void;
   onReasoning?: (sessionId: string, content: string) => void;
-  onIterationLimit?: (sessionId: string, current: number, max: number) => void;
+  onIterationLimit?: (sessionId: string, current: number, max: number, id: string, deadline: number) => void;
+  onIterationLimitResolved?: (sessionId: string, shouldContinue: boolean, timedOut: boolean) => void;
   onUsage?: (sessionId: string, tokens: { prompt: number; completion: number; total: number }) => void;
 }
 
@@ -85,10 +92,10 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
           securityMode: securityMode || 'standard',
         });
       } catch (err) {
-        handlersRef.current?.onError?.(sessionId, String(err));
+        handlersRef.current?.onError?.(sessionId, errorMessage(err));
       }
     },
-    [],
+    [defaultAgentType],
   );
 
   const stopGeneration = useCallback(
@@ -128,13 +135,13 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
         console.error('[Agent] close session failed:', err);
       }
     },
-    [],
+    [defaultAgentType],
   );
 
   const requestSkills = useCallback(
     async (agentType: string) => {
       try {
-        const skills = await invoke<Array<{ name: string; description: string; category: string }>>('agent_list_skills', { agentType });
+        const skills = await invoke<Array<{ name: string; description: string; category: string; dirPath?: string; entryPath?: string }>>('agent_list_skills', { agentType });
         handlersRef.current?.onSkills?.(agentType, skills);
       } catch (err) {
         console.error('[Agent] list skills failed:', err);
@@ -169,7 +176,7 @@ export function useAgentEvent(handlers?: AgentEventHandlers) {
           agentSessionId: null,
         });
       } catch (err) {
-        handlersRef.current?.onError?.(sessionId, String(err));
+        handlersRef.current?.onError?.(sessionId, errorMessage(err));
       }
     },
     [],

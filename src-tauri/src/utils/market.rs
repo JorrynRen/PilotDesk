@@ -53,12 +53,18 @@ async fn fetch_url(url: &str) -> Result<String, String> {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 if status == 200 {
-                    return resp.text()
+                    return resp
+                        .text()
                         .await
                         .map_err(|e| format!("读取响应失败: {}", e));
                 } else if status >= 500 && attempt < MAX_RETRIES {
                     last_err = format!("HTTP {}: {}", status, url);
-                    log::warn!("[Market] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    log::warn!(
+                        "[Market] 第 {} 次请求失败 ({}), {}ms 后重试...",
+                        attempt,
+                        last_err,
+                        RETRY_DELAY_MS
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                     continue;
                 } else {
@@ -69,16 +75,29 @@ async fn fetch_url(url: &str) -> Result<String, String> {
                 if attempt < MAX_RETRIES && (e.is_timeout() || e.is_connect()) {
                     last_err = format!(
                         "{}: {}",
-                        if e.is_timeout() { "请求超时" } else { "连接失败" },
+                        if e.is_timeout() {
+                            "请求超时"
+                        } else {
+                            "连接失败"
+                        },
                         url
                     );
-                    log::warn!("[Market] 第 {} 次请求失败 ({}), {}ms 后重试...", attempt, last_err, RETRY_DELAY_MS);
+                    log::warn!(
+                        "[Market] 第 {} 次请求失败 ({}), {}ms 后重试...",
+                        attempt,
+                        last_err,
+                        RETRY_DELAY_MS
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
                     continue;
                 }
                 return Err(format!(
                     "{}: {}",
-                    if e.is_timeout() { "请求超时" } else { "连接失败" },
+                    if e.is_timeout() {
+                        "请求超时"
+                    } else {
+                        "连接失败"
+                    },
                     url
                 ));
             }

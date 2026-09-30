@@ -201,8 +201,10 @@ pub fn infer_context_window(model: &str) -> Option<usize> {
     if model_lower.contains("claude-3-7") || model_lower.contains("claude-3.7") {
         return Some(200_000);
     }
-    if model_lower.contains("claude-3-opus") || model_lower.contains("claude-3-sonnet")
-        || model_lower.contains("claude-3-haiku") {
+    if model_lower.contains("claude-3-opus")
+        || model_lower.contains("claude-3-sonnet")
+        || model_lower.contains("claude-3-haiku")
+    {
         return Some(200_000);
     }
     if model_lower.contains("claude-2") {
@@ -233,6 +235,29 @@ pub fn infer_context_window(model: &str) -> Option<usize> {
         return Some(128_000);
     }
     None
+}
+
+/// 目标模型是否需要（且接受）把历史思维链 `reasoning_content` 原样回传。
+///
+/// 会话可以中途换模型，于是历史里可能留着**另一个模型**产生的思维链：
+/// - 思考模型（DeepSeek-R 系列等）要求上轮 `reasoning_content` 原样带回，缺了会 HTTP 400；
+/// - 普通对话模型上这是个多余字段，部分 provider 会直接报错。
+///
+/// 所以回传与否看**当前**模型（发起本轮请求的那个），而不是思维链来自谁。
+/// 名单按模型名推断（与 [`infer_context_window`] 同一思路，集合取"已知需要回传的"）：
+/// 未命中即不回传——对未知的思考模型只是少带思维链（质量略有损失），
+/// 比把无效字段送给普通模型（可能整轮请求失败）代价小。
+pub fn supports_reasoning_content(model: &str) -> bool {
+    let m = model.to_lowercase();
+    const MARKERS: [&str; 6] = [
+        "reasoner",
+        "reasoning",
+        "deepseek-r1",
+        "qwq",
+        "glm-z1",
+        "thinking",
+    ];
+    MARKERS.iter().any(|k| m.contains(k))
 }
 
 #[cfg(test)]
@@ -269,10 +294,7 @@ mod tests {
 
     #[test]
     fn test_sliding_window_no_truncation() {
-        let messages = vec![
-            ChatMessage::user("hi"),
-            ChatMessage::assistant("hello"),
-        ];
+        let messages = vec![ChatMessage::user("hi"), ChatMessage::assistant("hello")];
         let window = SlidingWindow::new(10000);
         let trimmed = window.trim(&messages);
         assert_eq!(trimmed.len(), 2);
@@ -291,5 +313,29 @@ mod tests {
         let trimmed = window.trim(&messages);
         assert!(trimmed.len() < messages.len());
         assert!(trimmed.len() > 0);
+    }
+
+    /// 思维链回传要按"当前模型"判断：换模型后历史里可能留着别的模型产生的思维链。
+    #[test]
+    fn reasoning_content_is_gated_by_current_model() {
+        for m in [
+            "deepseek-reasoner",
+            "DeepSeek-R1",
+            "deepseek-ai/DeepSeek-R1-0528",
+            "qwq-32b",
+            "glm-z1-air",
+            "qwen3-thinking",
+        ] {
+            assert!(supports_reasoning_content(m), "应当回传思维链: {}", m);
+        }
+        for m in [
+            "deepseek-chat",
+            "deepseek-v3",
+            "gpt-4o",
+            "claude-sonnet-4-5",
+            "qwen-max",
+        ] {
+            assert!(!supports_reasoning_content(m), "不该回传思维链: {}", m);
+        }
     }
 }

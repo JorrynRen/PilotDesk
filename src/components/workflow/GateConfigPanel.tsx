@@ -8,6 +8,7 @@
 
 import React from 'react';
 import type { GateConfig, GateStrategy, MergeStrategy } from '../../types/workflow';
+import { Select } from '../common/Select';
 
 interface Props {
   gate: GateConfig;
@@ -147,19 +148,12 @@ export const GateConfigPanel: React.FC<Props> = ({ gate, stageName, nodeCount, o
           <div style={{ marginBottom: 24, padding: '12px 16px', borderRadius: 8, border: '1px solid #21262d', background: '#0d1117' }}>
             <label style={{ fontSize: 11, color: '#8b949e', display: 'block', marginBottom: 6 }}>阈值表达式</label>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <select
+              <Select
                 value={currentOp}
-                onChange={(e) => handleOpChange(e.target.value)}
-                style={{
-                  padding: '8px 10px', borderRadius: 6, border: '1px solid #30363d',
-                  background: '#0d1117', color: '#c9d1d9', fontSize: 12, outline: 'none',
-                  minWidth: 88, cursor: 'pointer', flexShrink: 0,
-                }}
-              >
-                {THRESHOLD_OPS.map(op => (
-                  <option key={op.value} value={op.value}>{op.label}</option>
-                ))}
-              </select>
+                onChange={handleOpChange}
+                options={THRESHOLD_OPS}
+                style={{ minWidth: 88, flexShrink: 0 }}
+              />
               <input
                 value={currentValue}
                 onChange={(e) => handleValueChange(e.target.value)}

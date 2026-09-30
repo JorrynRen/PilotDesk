@@ -1,14 +1,16 @@
+use crate::utils::errors::AppError;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use crate::utils::errors::AppError;
 
 /// Get a setting value by key
 pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Result<Option<String>, AppError> {
-    let value: Option<String> = conn.query_row(
-        "SELECT value FROM app_settings WHERE key = ?",
-        params![key],
-        |row| row.get("value"),
-    ).optional()?;
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?",
+            params![key],
+            |row| row.get("value"),
+        )
+        .optional()?;
     Ok(value)
 }
 
@@ -80,7 +82,10 @@ pub fn load_skill_scope_disabled(conn: &rusqlite::Connection) -> SkillScopeDisab
 
 /// 持久化按作用域禁用集（整量覆盖写）。供后续前端管理 UI 的 Tauri 命令包装调用。
 #[allow(dead_code)]
-pub fn save_skill_scope_disabled(conn: &rusqlite::Connection, v: &SkillScopeDisabled) -> Result<(), AppError> {
+pub fn save_skill_scope_disabled(
+    conn: &rusqlite::Connection,
+    v: &SkillScopeDisabled,
+) -> Result<(), AppError> {
     let json = serde_json::to_string(v)?;
     set_setting(conn, SKILL_SCOPE_DISABLED_KEY, &json)
 }
@@ -109,6 +114,10 @@ const SETTING_DEFAULTS: &[(&str, &str)] = &[
     ),
     ("workflow_max_concurrency", "10"),
     (STREAM_IDLE_SECS_KEY, "90"),
+    // 意图检索注入开关：缺省启用（'1'）；置 '0' 即用户显式关闭。
+    (crate::api_agent::memory_intent::SETTING_ENABLED, "1"),
+    // 意图路由请求超时（秒）：与 DEFAULT_ROUTE_TIMEOUT_SECS 同值。
+    (crate::api_agent::memory_intent::SETTING_TIMEOUT_SECS, "4"),
 ];
 
 /// 返回某设置的代码默认值（未登记键返回 None）。
@@ -206,12 +215,19 @@ mod tests {
         assert!(!is_custom_setting(&conn, "mode_prompt_fast"));
 
         set_setting(&conn, "mode_prompt_fast", "自定义快速回答").unwrap();
-        assert_eq!(effective_setting(&conn, "mode_prompt_fast"), "自定义快速回答");
+        assert_eq!(
+            effective_setting(&conn, "mode_prompt_fast"),
+            "自定义快速回答"
+        );
         assert!(is_custom_setting(&conn, "mode_prompt_fast"));
 
         // 改回与默认一致 → 视为默认。
-        set_setting(&conn, "mode_prompt_fast", "快速简洁回答，直接给出结论，无需详细解释推理过程")
-            .unwrap();
+        set_setting(
+            &conn,
+            "mode_prompt_fast",
+            "快速简洁回答，直接给出结论，无需详细解释推理过程",
+        )
+        .unwrap();
         assert!(!is_custom_setting(&conn, "mode_prompt_fast"));
 
         // 未登记默认的键：落库即自定义；从未设置的键回退空串。

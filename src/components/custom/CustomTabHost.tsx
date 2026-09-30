@@ -57,30 +57,40 @@ export function CustomTabHost() {
     }
   }, [viewMode]);
 
-  // 同步设置中的删除：被移除配置的标签清出运行时状态，避免幽灵 chip / iframe
-  useEffect(() => {
+  // 同步设置中的删除：被移除配置的标签清出运行时状态，避免幽灵 chip / iframe。
+  // 用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮级联渲染
+  // （`react-hooks/set-state-in-effect`），而"外部值变了就修剪派生状态"正是 React 推荐的
+  // adjust-during-render 场景，两者行为一致。
+  const [prevTabs, setPrevTabs] = useState(tabs);
+  if (prevTabs !== tabs) {
+    setPrevTabs(tabs);
     const valid = new Set(tabs.map((t) => t.id));
     setClosedIds((prev) => prev.filter((id) => valid.has(id)));
     setActivatedIds((prev) => prev.filter((id) => valid.has(id)));
-  }, [tabs]);
+  }
 
-  // 当前激活标签（未关闭）首次出现时挂载其 iframe
-  useEffect(() => {
-    if (!active || closedSet.has(active.id)) return;
-    setActivatedIds((prev) => (prev.includes(active.id) ? prev : [...prev, active.id]));
-    // 依赖 active.url：修改地址后保证 iframe 以新地址重建（src 变化本身会触发加载）
-  }, [active?.id, active?.url, closedSet]);
+  // 当前激活标签（未关闭）首次出现时挂载其 iframe。同样用「渲染期修正」代替 effect。
+  // key 含 active.url：修改地址后也触发一次（幂等），iframe 以新地址重建（src 变化本身会触发加载）。
+  const activeKey = active ? `${active.id}|${active.url}` : null;
+  const [prevActiveKey, setPrevActiveKey] = useState<string | null>(null);
+  if (activeKey !== prevActiveKey) {
+    setPrevActiveKey(activeKey);
+    if (active && !closedSet.has(active.id)) {
+      setActivatedIds((prev) => (prev.includes(active.id) ? prev : [...prev, active.id]));
+    }
+  }
 
   // 本地路径判定：首次需要时异步检测目录/文件，结果按 url 缓存
+  const activeUrl = active?.url;
   useEffect(() => {
-    if (!active || /^https?:\/\//i.test(active.url)) return;
-    if (dirByUrl[active.url] !== undefined) return;
+    if (!activeUrl || /^https?:\/\//i.test(activeUrl)) return;
+    if (dirByUrl[activeUrl] !== undefined) return;
     let cancelled = false;
-    invoke<boolean>('path_is_directory', { path: active.url })
-      .then((isDir) => { if (!cancelled) setDirByUrl((m) => ({ ...m, [active.url]: isDir })); })
-      .catch(() => { if (!cancelled) setDirByUrl((m) => ({ ...m, [active.url]: false })); });
+    invoke<boolean>('path_is_directory', { path: activeUrl })
+      .then((isDir) => { if (!cancelled) setDirByUrl((m) => ({ ...m, [activeUrl]: isDir })); })
+      .catch(() => { if (!cancelled) setDirByUrl((m) => ({ ...m, [activeUrl]: false })); });
     return () => { cancelled = true; };
-  }, [active?.id, active?.url, dirByUrl]);
+  }, [activeUrl, dirByUrl]);
 
   const closeActive = useCallback(() => {
     if (!active) return;

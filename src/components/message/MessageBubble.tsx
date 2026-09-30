@@ -1,18 +1,21 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Copy, Edit3, Pencil, Bookmark, Check, User, FileText } from 'lucide-react';
+import { Copy, Edit3, Pencil, Bookmark, Check, User, FileText, BookPlus } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { MarkdownRenderer, linkifyUrls } from './MarkdownRenderer';
+import { MarkdownRenderer } from './MarkdownRenderer';
+import { linkifyUrls } from './markdownText';
 import { ThinkingChain } from './ThinkingChain';
 import { ConfirmationCard, type ConfirmationBlockData } from '../confirmation/ConfirmationCard';
 import { MODE_LABELS, MODE_COLORS } from '../../types';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useInspirationStore } from '../../stores/inspirationStore';
 import { useApiProviderStore } from '../../stores/apiProviderStore';
+import { elide } from '../../utils/text';
 import { showToast } from '../../utils/toast';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useImagePreviewStore } from '../../stores/imagePreviewStore';
 import { type Message } from '../../types';
 import { AgentIcon } from '../common/AgentIcon';
+import { SaveToKnowledgeDialog } from '../knowledge/SaveToKnowledgeDialog';
 import { isApiSession } from '../../utils/sessionType';
 import type { ThinkingChainStep } from '../layout/MainPanel';
 
@@ -29,8 +32,11 @@ interface MessageBubbleProps {
   /** ask_user 确认块（仅最后一条 assistant 消息内嵌渲染）。 */
   confirmation?: ConfirmationBlockData | null;
   onEdit?: (content: string) => void;
-  onSaveInspiration?: (content: string) => void;
   onResend?: (content: string) => void;
+  /** 多选态：在气泡左侧显示勾选框（仅消息列表进入多选时传） */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
 }
 
 function formatTimestamp(ts: number): string {
@@ -42,8 +48,10 @@ function formatTimestamp(ts: number): string {
   return `${y}/${m}/${d} ${time}`;
 }
 
-export function MessageBubble({ message, agentType, apiProviderId, apiModel, thinkingChain, isStreaming, isHighlighted, streamingProgress, confirmation, onEdit, onSaveInspiration, onResend }: MessageBubbleProps) {
+export function MessageBubble({ message, agentType, apiProviderId, apiModel, thinkingChain, isStreaming, isHighlighted, streamingProgress, confirmation, onEdit, onResend, selectable, selected, onToggleSelect }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
+  /** 「存为知识」弹窗：把这条消息显式沉淀进某个知识库（进「待确认」队列） */
+  const [saveToKb, setSaveToKb] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -91,9 +99,10 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
 
   const handleSaveInspiration = useCallback(async () => {
     const createInspiration = useInspirationStore.getState().createInspiration;
-    const preview = message.content.slice(0, 30).replace(/\n/g, ' ');
+    // 标题预览：按码点截断（emoji 不会被切成半个），换行压成空格
+    const preview = elide(message.content, 30, '...').replace(/\n/g, ' ');
     await createInspiration({
-      title: preview.length >= 30 ? preview + '...' : preview,
+      title: preview,
       content: message.content,
       sourceAgent: agentType,
     });
@@ -178,6 +187,41 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
                 fileDiff: s.fileDiff,
                 timestamp: s.ts || message.timestamp,
               });
+            } else if (s.type === 'approval') {
+              steps.push({
+                id: `persisted-approval-${s.id || steps.length}`,
+                type: 'approval',
+                toolName: s.toolName,
+                toolArgs: s.args,
+                approvalCallId: s.approvalCallId,
+                approvalApproved: s.approvalApproved,
+                approvalTimedOut: s.approvalTimedOut,
+                approvalRisk: s.approvalRisk,
+                approvalDeadline: s.approvalDeadline,
+                timestamp: s.ts || message.timestamp,
+              });
+            } else if (s.type === 'iteration_limit') {
+              steps.push({
+                id: `persisted-iterlimit-${s.id || steps.length}`,
+                type: 'iteration_limit',
+                iterId: s.iterId,
+                iterCurrent: s.iterCurrent,
+                iterMax: s.iterMax,
+                iterDeadline: s.iterDeadline,
+                iterDecision: s.iterDecision,
+                iterTimedOut: s.iterTimedOut,
+                timestamp: s.ts || message.timestamp,
+              });
+            } else if (s.type === 'system') {
+              steps.push({
+                id: `persisted-sys-${s.id || steps.length}`,
+                type: 'system',
+                sysTitle: s.sysTitle,
+                sysParams: s.sysParams,
+                sysDetail: s.sysDetail,
+                sysSuccess: s.sysSuccess !== false,
+                timestamp: s.ts || message.timestamp,
+              });
             }
           }
         }
@@ -205,6 +249,17 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
   return (
     <>
       <div className="w-full group flex gap-2.5 items-start px-4 py-[3px]">
+      {/* 多选勾选框：只在消息列表进入多选时出现（系统提示不参与沉淀） */}
+      {selectable && message.role !== 'system' && (
+        <input
+          type="checkbox"
+          checked={Boolean(selected)}
+          onChange={() => onToggleSelect?.(message.id)}
+          className="shrink-0 mt-1.5 cursor-pointer"
+          style={{ accentColor: 'var(--accent)' }}
+          title="选中后可与其它消息一起沉淀为知识"
+        />
+      )}
       {/* Avatar column */}
       <div className="shrink-0 pt-0.5 w-7">
         {isUser ? (
@@ -337,7 +392,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                       )}
                     </span>
-                    <p className="text-[12px] leading-relaxed m-0 flex-1 min-w-0" style={{ color: 'var(--text-secondary)' }}>{displayContent}</p>
+                    <p className="text-[12px] leading-relaxed m-0 flex-1 min-w-0 whitespace-pre-wrap break-all" style={{ color: 'var(--text-secondary)' }}>{displayContent}</p>
                   </div>
                 </div>
               );
@@ -347,6 +402,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
               {/* 思维链 */}
               <ThinkingChain
                 steps={mergedThinkingChain}
+                sessionId={message.sessionId}
                 defaultCollapsed={!isStreaming}
                 liveStepKeys={liveReasoningKey ? new Set([liveReasoningKey]) : undefined}
               />
@@ -386,6 +442,9 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
                 <button onClick={handleStartEdit} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="编辑"><Pencil size={11} />编辑</button>
               )}
               <button onClick={handleSaveInspiration} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="收藏灵感"><Bookmark size={11} />收藏灵感</button>
+              {message.content.trim() && (
+                <button onClick={() => setSaveToKb(true)} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="存为知识：选知识库后进入「待确认」，核对后采纳（正文不会被改写）"><BookPlus size={11} />存为知识</button>
+              )}
               {onResend && (
                 <button onClick={handleResend} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--accent)' }} title="重发">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>重发
@@ -398,11 +457,20 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
                 {copied ? <Check size={11} /> : <Copy size={11} />}{copied ? '已复制' : '复制'}
               </button>
               <button onClick={handleSaveInspiration} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="收藏灵感"><Bookmark size={11} />收藏灵感</button>
+              {message.content.trim() && (
+                <button onClick={() => setSaveToKb(true)} className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-all hover:bg-gray-200/60 dark:hover:bg-white/10 active:scale-95" style={{ color: 'var(--text-secondary)' }} title="存为知识：选知识库后进入「待确认」，核对后采纳（正文不会被改写）"><BookPlus size={11} />存为知识</button>
+              )}
             </div>
           ) : null}
         </div>
       </div>
       </div>
+      {saveToKb && (
+        <SaveToKnowledgeDialog
+          messages={[{ role: message.role, content: message.content }]}
+          onClose={() => setSaveToKb(false)}
+        />
+      )}
     </>
   );
 }

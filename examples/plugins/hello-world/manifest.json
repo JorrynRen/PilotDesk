@@ -7,8 +7,7 @@
   "minAppVersion": "0.1.0",
   "permissions": [
     "ui:panel",
-    "ui:toast",
-    "session:read"
+    "plugin:events"
   ],
   "entry": {
     "main": "index.js"
@@ -21,20 +20,48 @@
         "icon": "icon: favicon.png"
       }
     ],
+    "hooks": [
+      {
+        "event": "session:created",
+        "handler": "onSessionCreated"
+      }
+    ],
     "commands": [
       {
         "id": "hello.say",
-        "title": "Say Hello"
+        "title": "Say Hello",
+        "input": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "要问候的对象",
+              "default": "World"
+            }
+          }
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "问候语"
+            }
+          }
+        }
       },
       {
         "id": "hello.time",
-        "title": "Show Current Time"
-      }
-    ],
-    "hooks": [
-      {
-        "event": "message:before-send",
-        "handler": "onBeforeSend"
+        "title": "Show Current Time",
+        "output": {
+          "type": "object",
+          "properties": {
+            "time": {
+              "type": "string",
+              "description": "当前本地时间"
+            }
+          }
+        }
       }
     ]
   }

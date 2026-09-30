@@ -2,8 +2,8 @@
 //!
 //! write_file / edit_file 在覆盖文件前会记录旧内容快照，供用户撤销到上一个版本。
 
-use rusqlite::{params, OptionalExtension};
 use rusqlite::types::ToSql;
+use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 
@@ -64,7 +64,10 @@ pub struct FileHistoryPage {
 }
 
 /// 构造查询条件（session_id / path_keyword），返回 (WHERE 子句, 动态参数)。
-fn build_filters(session_id: &Option<String>, path_keyword: &Option<String>) -> (String, Vec<Box<dyn ToSql>>) {
+fn build_filters(
+    session_id: &Option<String>,
+    path_keyword: &Option<String>,
+) -> (String, Vec<Box<dyn ToSql>>) {
     let mut conds: Vec<String> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(sid) = session_id.as_deref() {
@@ -122,7 +125,8 @@ pub fn list_file_history(
             where_sql
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(item_params.as_slice(), row_to_entry)?
+        let rows = stmt
+            .query_map(item_params.as_slice(), row_to_entry)?
             .collect::<Result<Vec<_>, _>>()?;
         rows
     };
@@ -142,15 +146,20 @@ pub fn delete_file_history(
     let conn = state.get_conn()?;
     let deleted = match scope.as_str() {
         "one" => {
-            let id = history_id.ok_or_else(|| AppError::Config("缺少 history_id".to_string()))?;
+            let id =
+                history_id.ok_or_else(|| AppError::InvalidInput("缺少 history_id".to_string()))?;
             conn.execute("DELETE FROM file_history WHERE id = ?1", params![id])?
         }
         "session" => {
-            let sid = session_id.ok_or_else(|| AppError::Config("缺少 session_id".to_string()))?;
-            conn.execute("DELETE FROM file_history WHERE session_id = ?1", params![sid])?
+            let sid =
+                session_id.ok_or_else(|| AppError::InvalidInput("缺少 session_id".to_string()))?;
+            conn.execute(
+                "DELETE FROM file_history WHERE session_id = ?1",
+                params![sid],
+            )?
         }
         "all" => conn.execute("DELETE FROM file_history", [])?,
-        other => return Err(AppError::Config(format!("未知清理范围: {}", other))),
+        other => return Err(AppError::InvalidInput(format!("未知清理范围: {}", other))),
     };
     Ok(deleted as i64)
 }
@@ -167,7 +176,9 @@ pub struct FileHistorySession {
 /// 列出所有出现过文件修改历史的会话/房间 id（按最近修改时间倒序，供前端筛选下拉）。
 /// 通过 `sessions` 表区分：存在记录为会话，否则为群聊房间（room_id 不落 sessions 表）。
 #[tauri::command]
-pub fn list_file_history_sessions(state: State<'_, crate::DbState>) -> Result<Vec<FileHistorySession>, AppError> {
+pub fn list_file_history_sessions(
+    state: State<'_, crate::DbState>,
+) -> Result<Vec<FileHistorySession>, AppError> {
     let conn = state.get_conn()?;
     let mut stmt = conn.prepare(
         "SELECT fh.session_id, EXISTS(SELECT 1 FROM sessions s WHERE s.id = fh.session_id) AS is_session
@@ -179,7 +190,11 @@ pub fn list_file_history_sessions(state: State<'_, crate::DbState>) -> Result<Ve
             let is_session: bool = row.get(1)?;
             Ok(FileHistorySession {
                 id,
-                kind: if is_session { "session".to_string() } else { "room".to_string() },
+                kind: if is_session {
+                    "session".to_string()
+                } else {
+                    "room".to_string()
+                },
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -187,7 +202,10 @@ pub fn list_file_history_sessions(state: State<'_, crate::DbState>) -> Result<Ve
 }
 
 #[tauri::command]
-pub fn undo_file_history(state: State<'_, crate::DbState>, history_id: i64) -> Result<String, AppError> {
+pub fn undo_file_history(
+    state: State<'_, crate::DbState>,
+    history_id: i64,
+) -> Result<String, AppError> {
     let conn = state.get_conn()?;
 
     let (file_path, backup_content, file_existed) = conn
@@ -202,7 +220,7 @@ pub fn undo_file_history(state: State<'_, crate::DbState>, history_id: i64) -> R
             },
         )
         .optional()?
-        .ok_or_else(|| AppError::Config("未找到该历史记录".to_string()))?;
+        .ok_or_else(|| AppError::NotFound("未找到该历史记录".to_string()))?;
 
     if file_existed {
         std::fs::write(&file_path, backup_content.unwrap_or_default())
@@ -217,7 +235,10 @@ pub fn undo_file_history(state: State<'_, crate::DbState>, history_id: i64) -> R
     }
 
     // 撤销后删除该条历史记录
-    conn.execute("DELETE FROM file_history WHERE id = ?1", params![history_id])?;
+    conn.execute(
+        "DELETE FROM file_history WHERE id = ?1",
+        params![history_id],
+    )?;
 
     Ok(format!("已撤销对文件的修改: {}", file_path))
 }

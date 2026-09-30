@@ -8,6 +8,9 @@
  * - Request body building
  */
 
+import { headChars } from './text';
+import { errorMessage } from './errorMessage';
+
 export type ApiFormat = 'openai' | 'anthropic';
 
 export interface ApiRequestOptions {
@@ -133,7 +136,7 @@ export function friendlyApiError(status: number, detail: string): string {
   }
   // Generic 403 with detail
   if (status === 403 && detail) {
-    return `请求被拒 (HTTP 403)：${detail.slice(0, 200)}。请检查 API Key 权限、账户余额或模型可用性。`;
+    return `请求被拒 (HTTP 403)：${headChars(detail, 200)}。请检查 API Key 权限、账户余额或模型可用性。`;
   }
 
   // 404 - endpoint not found
@@ -210,7 +213,7 @@ export async function sendApiRequest(options: ApiRequestOptions): Promise<ApiRes
     }
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      const msg = friendlyApiError(res.status, errText.slice(0, 200));
+      const msg = friendlyApiError(res.status, headChars(errText, 200));
       return { ok: false, status: res.status, message: msg, latency };
     }
 
@@ -231,7 +234,7 @@ export async function sendApiRequest(options: ApiRequestOptions): Promise<ApiRes
     const latency = Math.round(performance.now() - start);
     const msg = err instanceof DOMException && err.name === 'TimeoutError'
       ? '连接超时 (15s)：API 端点无响应，请检查网络连接或 API 地址是否正确。'
-      : `网络错误: ${err instanceof Error ? err.message : String(err)}`;
+      : `网络错误: ${errorMessage(err)}`;
     return { ok: false, status: 0, message: msg, latency };
   }
 }

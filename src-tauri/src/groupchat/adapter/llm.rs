@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::api_agent::agent_loop::{
-    record_usage_row, ApprovalHandler, AskUserBehavior, AuthLevel, ContinueHandler, PermissionRules,
+    record_usage_row, ApprovalHandler, AskUserBehavior, ContinueHandler, PermissionRules,
     RiskLevel, SecurityMode, ToolRegistry,
 };
 use crate::api_agent::agent_turn::{run_agent_turn, AgentTurnInput, AgentTurnOptions};
@@ -25,7 +25,7 @@ pub struct PilotDeskLlmClient {
     format: ApiFormat,
     /// 用量归因（无工具补全分支）：写 `api_usage_log` 的 scope_key（房间级占位；None 不记录）。
     usage_key: Option<String>,
-    /// 用量归因：provider 名（写 `api_usage_log.provider`；默认空串）。
+    /// 用量归因：provider id（写 `api_usage_log.provider`；默认空串）。
     provider: String,
     /// 工具集（Some 时走 AgentLoop 工具循环，None 时走单次补全）。
     tool_registry: Option<Arc<ToolRegistry>>,
@@ -73,9 +73,14 @@ impl PilotDeskLlmClient {
         }
     }
 
-    /// 设置用量归因元数据 + AppHandle（构造时注入）：provider 名写 `api_usage_log.provider`，
+    /// 设置用量归因元数据 + AppHandle（构造时注入）：provider id 写 `api_usage_log.provider`，
     /// usage_key 为 scope_key（群聊房间级占位），AppHandle 用于拿 DbState 并发射 `usage-recorded`。
-    pub fn with_usage_meta(mut self, provider: String, usage_key: Option<String>, app: tauri::AppHandle) -> Self {
+    pub fn with_usage_meta(
+        mut self,
+        provider: String,
+        usage_key: Option<String>,
+        app: tauri::AppHandle,
+    ) -> Self {
         self.provider = provider;
         self.usage_key = usage_key;
         self.app_handle = Some(app);
@@ -108,7 +113,11 @@ impl PilotDeskLlmClient {
     }
 
     /// 工具模式（API 参与者）：复用 `run_agent_turn`。
-    pub fn with_tools(mut self, tool_registry: Arc<ToolRegistry>, app_handle: tauri::AppHandle) -> Self {
+    pub fn with_tools(
+        mut self,
+        tool_registry: Arc<ToolRegistry>,
+        app_handle: tauri::AppHandle,
+    ) -> Self {
         self.tool_registry = Some(tool_registry);
         self.app_handle = Some(app_handle);
         self
@@ -140,7 +149,11 @@ impl PilotDeskLlmClient {
 
     fn build_client(&self) -> ApiClient {
         let client = if matches!(self.format, ApiFormat::Anthropic) {
-            ApiClient::new(self.endpoint.clone(), self.api_key.clone(), self.format.clone())
+            ApiClient::new(
+                self.endpoint.clone(),
+                self.api_key.clone(),
+                self.format.clone(),
+            )
         } else {
             ApiClient::new_openai(self.endpoint.clone(), self.api_key.clone())
         };
@@ -166,6 +179,7 @@ impl PilotDeskLlmClient {
             stream: true,
             temperature: Some(0.7),
             max_tokens: None,
+            response_format: None,
         };
 
         // 思考模式（DeepSeek 等）：reasoning_content 由 chat_stream 累积进 ChatResponse，随下一轮原样回传。
@@ -221,10 +235,21 @@ impl PilotDeskLlmClient {
     /// 写 `api_usage_log`（缓存读/写拆分，`cached_tokens` 列=两者之和；含 provider 归因，
     /// scope_key = usage_key），成功后才发射脏标记。
     /// 未注入 usage_key/provider 或拿不到 DbState 时静默跳过，不影响主流程。
-    fn record_raw_usage(&self, prompt: u32, completion: u32, total: u32, cache_read: u32, cache_write: u32) {
+    fn record_raw_usage(
+        &self,
+        prompt: u32,
+        completion: u32,
+        total: u32,
+        cache_read: u32,
+        cache_write: u32,
+    ) {
         use tauri::Manager;
-        let (Some(scope_key), Some(app)) = (&self.usage_key, &self.app_handle) else { return };
-        let Some(state) = app.try_state::<crate::DbState>() else { return };
+        let (Some(scope_key), Some(app)) = (&self.usage_key, &self.app_handle) else {
+            return;
+        };
+        let Some(state) = app.try_state::<crate::DbState>() else {
+            return;
+        };
         let Ok(conn) = state.pool.get() else { return };
         if record_usage_row(
             &conn,
@@ -241,10 +266,13 @@ impl PilotDeskLlmClient {
         .is_ok()
         {
             use tauri::Emitter;
-            let _ = app.emit("usage-recorded", serde_json::json!({
-                "provider": self.provider,
-                "model": self.model,
-            }));
+            let _ = app.emit(
+                "usage-recorded",
+                serde_json::json!({
+                    "provider": self.provider,
+                    "model": self.model,
+                }),
+            );
         }
     }
 }
@@ -257,7 +285,9 @@ impl LlmClient for PilotDeskLlmClient {
         messages: &[ChatMessage],
         on_delta: Option<Arc<DeltaFn>>,
     ) -> Result<String, String> {
-        let (content, _, _) = self.complete_with_tool_calls(system, messages, on_delta, None).await?;
+        let (content, _, _) = self
+            .complete_with_tool_calls(system, messages, on_delta, None)
+            .await?;
         Ok(content)
     }
 
@@ -277,7 +307,10 @@ impl LlmClient for PilotDeskLlmClient {
         // 可能为空或以 assistant/director（scheduling/statement）结尾——例如发言者紧邻被
         // 再次点名、期间无新可分派给该参与者的消息。此处保证工具/纯补全两分支的请求
         // 恒包含 user 且以 user 结尾，从根上消除该 400。
-        let ends_with_user = api_messages.last().map(|m| m.role == "user").unwrap_or(false);
+        let ends_with_user = api_messages
+            .last()
+            .map(|m| m.role == "user")
+            .unwrap_or(false);
         if !ends_with_user {
             api_messages.push(ApiChatMessage::user(
                 "请基于以上上下文，继续完成你的本轮发言。",
@@ -286,9 +319,11 @@ impl LlmClient for PilotDeskLlmClient {
 
         if let (Some(registry), Some(app)) = (&self.tool_registry, &self.app_handle) {
             let approval_handler = self.approval_handler.clone().map(|h| {
-                Box::new(move |call_id: &str, tool_name: &str, args: &str, risk: RiskLevel| {
-                    h(call_id, tool_name, args, risk)
-                }) as ApprovalHandler
+                Box::new(
+                    move |call_id: &str, tool_name: &str, args: &str, risk: RiskLevel| {
+                        h(call_id, tool_name, args, risk)
+                    },
+                ) as ApprovalHandler
             });
             let continue_handler = self.continue_handler.clone().map(|h| {
                 Box::new(move |current: usize, max: usize| h(current, max)) as ContinueHandler
@@ -314,10 +349,11 @@ impl LlmClient for PilotDeskLlmClient {
                     on_delta,
                     on_progress,
                     approval_handler,
-                    auth_level: AuthLevel::Confirm,
                     continue_handler,
                     // 群聊场景审批方为 Director（主持人），拒绝文案据此区分来源
                     approval_label: Some("主持人".into()),
+                    // 群聊审批由主持人裁决，绝不向用户弹审批窗（避免切到会话页时串出无关审批）
+                    notify_user_approval: false,
                     // 协作式取消：停止/暂停时迭代边界提前结束（Director 无工具循环，不注入）
                     cancel_token: self.cancel.clone(),
                     // 持久化权限规则：群聊与会话共用同一规则体系（deny>risky>allow>默认）
@@ -328,12 +364,15 @@ impl LlmClient for PilotDeskLlmClient {
                     security_mode: self.security_mode,
                     // 用量归因：写 api_usage_log.provider（AgentLoop 优先取此注入值）
                     usage_provider: Some(self.provider.clone()),
+                    // 用量 scope：房间级，与无工具分支的 scope_key 一致
+                    usage_scope: self.usage_key.clone(),
                     // 群聊 ask_user：拦截工具调用 → 轮末确认（无超时、落库恢复现场）
                     ask_user_behavior: AskUserBehavior::TurnEnd,
                 },
             )
             .await?;
-            let tool_calls = serde_json::to_string(&output.tool_calls).unwrap_or_else(|_| "[]".into());
+            let tool_calls =
+                serde_json::to_string(&output.tool_calls).unwrap_or_else(|_| "[]".into());
             // 思考模式（DeepSeek 等）：从最终 assistant 消息提取 reasoning_content 供落库/回传。
             let reasoning = output
                 .messages
@@ -360,7 +399,10 @@ fn to_api_message(m: &ChatMessage) -> ApiChatMessage {
                 ApiChatMessage::user_with_images(&m.content, imgs)
             }
         }
-        "assistant" => ApiChatMessage::assistant_with_reasoning(&m.content, m.reasoning_content.as_deref().unwrap_or("")),
+        "assistant" => ApiChatMessage::assistant_with_reasoning(
+            &m.content,
+            m.reasoning_content.as_deref().unwrap_or(""),
+        ),
         _ => ApiChatMessage::system(&m.content),
     };
     msg.name = m.name.clone();

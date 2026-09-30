@@ -30,7 +30,13 @@ impl GenerateImageTool {
         current_provider: Option<String>,
         get_models: Option<Arc<dyn Fn(String) -> Vec<String> + Send + Sync>>,
     ) -> Self {
-        Self { api_endpoint, api_key, resolve, current_provider, get_models }
+        Self {
+            api_endpoint,
+            api_key,
+            resolve,
+            current_provider,
+            get_models,
+        }
     }
 
     /// 校验 model 是否在当前 provider 的合法模型列表中，不在则返回引导错误。
@@ -60,8 +66,7 @@ async fn normalize_image_ref(source: &str) -> Result<String, String> {
             .ok_or_else(|| "无法识别图片 URL".to_string());
     }
     let bytes = std::fs::read(source).map_err(|e| format!("读取图片文件失败: {}", e))?;
-    let format =
-        image::guess_format(&bytes).map_err(|e| format!("无法识别图片格式: {}", e))?;
+    let format = image::guess_format(&bytes).map_err(|e| format!("无法识别图片格式: {}", e))?;
     let mime = format.to_mime_type();
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:{};base64,{}", mime, b64))
@@ -87,7 +92,7 @@ impl ToolHandler for GenerateImageTool {
                 },
                 "provider": {
                     "type": "string",
-                    "description": "可选：目标提供商 id（先用 list_models 查看可用提供商）；省略时使用当前会话提供商。跨提供商时需与 model 配合指定。"
+                    "description": "必填：目标提供商 id，逐字取 list_models 清单里的 provider_id（标 ★ 的是当前会话提供商）；provider 与 model 必须分别传入，禁止拼成 provider_id/model"
                 },
                 "size": {
                     "type": "string",
@@ -95,7 +100,7 @@ impl ToolHandler for GenerateImageTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "图片生成模型名（必填，原样复制自 list_models 清单，含完整 namespace 前缀如 organization/model，禁止自行缩短或编造）"
+                    "description": "图片生成模型名（必填，原样复制自 list_models 清单；若模型名自身含斜杠/命名空间（如 TeleAI/xxx），必须原样保留；禁止自行缩短、编造，也禁止把 provider_id 拼进来）"
                 },
                 "n": {
                     "type": "integer",
@@ -107,7 +112,7 @@ impl ToolHandler for GenerateImageTool {
                     "description": "可选：图生图/图像编辑/图像变体时传入的参考图片数组。每项可为公网 URL、base64 Data URI 或本地绝对路径。省略则为纯文生图。"
                 }
             },
-            "required": ["prompt"]
+            "required": ["prompt", "model", "provider"]
         })
     }
 
@@ -120,9 +125,7 @@ impl ToolHandler for GenerateImageTool {
     }
 
     async fn execute(&self, arguments: serde_json::Value) -> Result<String, String> {
-        let prompt = arguments["prompt"]
-            .as_str()
-            .ok_or("缺少 prompt 参数")?;
+        let prompt = arguments["prompt"].as_str().ok_or("缺少 prompt 参数")?;
         let size = arguments["size"].as_str().unwrap_or("1024x1024");
         let n = arguments["n"].as_u64().unwrap_or(1).clamp(1, 4);
         // 模型名必须显式提供（各服务商可用模型不同，无通用默认值）：剥离前导 @ 与空白后为空则报错引导。
@@ -147,23 +150,32 @@ impl ToolHandler for GenerateImageTool {
         }
 
         // 跨提供商解析：指定 provider 时运行时查库取 endpoint/key（key 仅用于请求构造，不进返回值）。
-        let provider_arg = arguments["provider"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let provider_arg = arguments["provider"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        // provider 与 model 必须分别传入：缺 provider 时不再静默回退会话提供商，避免把别家的模型打到会话端点上
+        if provider_arg.is_none() {
+            return Err("缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。请先调用 list_models，从清单里挑出目标模型所在那一行（标 ★ 的是当前会话提供商），把 provider_id 与模型名分别填入 provider / model".to_string());
+        }
         let (endpoint_base, api_key) = match (&provider_arg, &self.resolve) {
             (Some(pid), Some(resolve)) => match resolve(pid) {
                 Some((ep, key, _fmt)) => (ep, key),
-                None => return Err(format!("提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商", pid)),
+                None => {
+                    return Err(format!(
+                        "提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商",
+                        pid
+                    ))
+                }
             },
             _ => (self.api_endpoint.clone(), self.api_key.clone()),
         };
 
         // 校验 model 是否在合法清单内
-        let provider_id = provider_arg.as_deref().unwrap_or("__default__");
+        let provider_id = provider_arg.as_deref().unwrap_or("");
         self.validate_model(&model, provider_id)?;
 
-        let endpoint = format!(
-            "{}/images/generations",
-            endpoint_base.trim_end_matches('/')
-        );
+        let endpoint = format!("{}/images/generations", endpoint_base.trim_end_matches('/'));
         let mut body = serde_json::json!({
             "model": model,
             "prompt": prompt,
@@ -190,11 +202,7 @@ impl ToolHandler for GenerateImageTool {
             .map_err(|e| format!("读取响应失败: {}", e))?;
 
         if !status.is_success() {
-            return Err(format!(
-                "图片生成失败 (HTTP {}): {}",
-                status.as_u16(),
-                text
-            ));
+            return Err(format!("图片生成失败 (HTTP {}): {}", status.as_u16(), text));
         }
 
         let json: serde_json::Value =

@@ -8,7 +8,7 @@
 
 use tauri::Emitter;
 
-use crate::groupchat::models::{ConfirmationItem, summarize_confirmation_title};
+use crate::groupchat::models::{summarize_confirmation_title, ConfirmationItem};
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
 use crate::PendingApprovals;
 
@@ -23,7 +23,11 @@ pub struct AskUserTool {
 
 impl AskUserTool {
     pub fn new(app: tauri::AppHandle, session_id: String, pending: PendingApprovals) -> Self {
-        Self { app, session_id, pending }
+        Self {
+            app,
+            session_id,
+            pending,
+        }
     }
 }
 
@@ -104,7 +108,11 @@ impl ToolHandler for AskUserTool {
         let items: Vec<ConfirmationItem> = if reply_mode == "structured" {
             args["items"]
                 .as_array()
-                .map(|arr| arr.iter().map(|it| ConfirmationItem::from_json(it, "inputType")).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|it| ConfirmationItem::from_json(it, "inputType"))
+                        .collect()
+                })
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -113,29 +121,43 @@ impl ToolHandler for AskUserTool {
         let call_id = uuid::Uuid::new_v4().to_string();
 
         // 1. 通知前端渲染确认块
-        let _ = self.app.emit("agent-confirmation-request", serde_json::json!({
-            "sessionId": self.session_id,
-            "callId": call_id,
-            "title": title,
-            "prompt": prompt,
-            "replyMode": reply_mode,
-            "items": items,
-        }));
+        let _ = self.app.emit(
+            "agent-confirmation-request",
+            serde_json::json!({
+                "sessionId": self.session_id,
+                "callId": call_id,
+                "title": title,
+                "prompt": prompt,
+                "replyMode": reply_mode,
+                "items": items,
+            }),
+        );
 
         // 2. 阻塞等待用户回复（60s 超时后交还模型，由模型决定继续或收尾）
         let rx = self.pending.register_confirmation(call_id.clone());
         match tokio::time::timeout(std::time::Duration::from_secs(CONFIRM_TIMEOUT_SECS), rx).await {
             Ok(Ok(reply)) => {
-                log::info!("[AskUser] 用户已回复: call_id={}, len={}", call_id, reply.len());
+                log::info!(
+                    "[AskUser] 用户已回复: call_id={}, len={}",
+                    call_id,
+                    reply.len()
+                );
                 Ok(reply)
             }
             Ok(Err(_)) => Err("确认通道已关闭".to_string()),
             Err(_) => {
-                log::warn!("[AskUser] 确认等待超时（{}s）: call_id={}", CONFIRM_TIMEOUT_SECS, call_id);
+                log::warn!(
+                    "[AskUser] 确认等待超时（{}s）: call_id={}",
+                    CONFIRM_TIMEOUT_SECS,
+                    call_id
+                );
                 // 超时不再等待用户回复：清理 confirmation map 中残留的 sender，避免泄漏；
                 // 此后前端若再回复该 call_id，respond_confirmation 按"未找到"处理（与超时语义一致）。
                 self.pending.discard_confirmation(&call_id);
-                Ok(format!("用户未在 {} 秒内回复，确认请求已超时，请根据已有信息自行决定如何继续或收尾。", CONFIRM_TIMEOUT_SECS))
+                Ok(format!(
+                    "用户未在 {} 秒内回复，确认请求已超时，请根据已有信息自行决定如何继续或收尾。",
+                    CONFIRM_TIMEOUT_SECS
+                ))
             }
         }
     }

@@ -45,7 +45,7 @@ hello-world/
 `contributes` 用于**静态声明**插件提供的扩展能力：
 - **panels**：在右侧栏下拉菜单中显示面板入口
 - **commands**：注册可执行命令（预留）
-- **hooks**：注册事件钩子（预留）
+- **hooks**：声明式订阅应用事件（`handler` 是入口 `export default` 里的函数名）
 
 ### icon 字段说明
 
@@ -68,9 +68,10 @@ hello-world/
 | `ui:panel` | 添加/移除面板 | 低 |
 | `ui:toast` | 显示通知（默认授权） | 低 |
 | `ui:modal` | 打开模态框 | 低 |
+| `plugin:events` | 订阅应用事件（声明性；当前订阅不加权限门） | 低 |
 | `session:read` | 读取会话和消息 | 中 |
 | `session:write` | 创建/修改/删除会话 | 中 |
-| `data:invoke` | 调用 Tauri 命令 | **高** |
+| `data:invoke` | 调用白名单内的只读命令（`get_api_key` 等高风险命令不可达） | **高** |
 | `storage:*` | 插件独立存储（默认授权） | 低 |
 | `fs:read` | 读取文件系统 | **高** |
 | `fs:write` | 写入文件系统 | **高** |
@@ -81,7 +82,21 @@ hello-world/
 2. **路径保护**：所有文件路径禁止包含 `..`，防止目录遍历攻击
 3. **权限校验**：未知权限自动拒绝，高风险权限标记警告
 4. **入口验证**：入口文件必须存在，路径必须在插件目录内
-5. **沙箱禁用时**：所有权限检查跳过，插件可正常加载
+5. **权限与沙箱解耦**：`fs` / `shell` / `agent` / `data.invoke` 一律按 manifest 声明的权限校验；禁用沙箱只解除 `fs` / `shell` 的沙箱门，**不会**跳过权限判定
+6. **全局遮蔽**：入口 JS 的 `window` / `globalThis` / `document` / `fetch` / `localStorage` / `Function` 等危险全局被"以同名参数"遮蔽为 `undefined`（纵深防御，非绝对隔离）
+   - `eval` / `arguments` **不在**遮蔽之列：函数体是严格模式，这两个名字不允许作形参名（放进去会让 `new Function` 直接抛 `SyntaxError`）。影响很小 —— 直接 `eval('window')` 仍在**当前函数作用域**求值，`window` 照样命中被遮蔽的形参
+7. **完整性校验**：从在线插件库安装时会比对入口文件的 sha256，不匹配或索引缺失该字段即拒绝安装
+
+> ℹ️ **应用事件（宿主 → 插件，仅通知）**：`api.events.on` / `api.hooks.on` / `contributes.hooks` 现在能收到宿主投递的事件，载荷**只含标识**（不含消息正文 / 密钥 / 文件内容）；handler 的返回值与异常都**不影响**应用，**没有**"发送前拦截"能力。当前支持：
+>
+> | 事件 | 触发时机 | 载荷 |
+> |------|---------|------|
+> | `session:created` | 新会话创建成功后 | `{ sessionId, agentType }` |
+> | `session:deleted` | 会话删除成功后 | `{ sessionId }` |
+> | `message:sent` | 消息已发出后（`role` 区分 user/assistant/system/tool） | `{ sessionId, messageId, role }` |
+> | `workflow:<类型>` | 工作流状态变化（如 `workflow:instance:completed`） | `{ instanceId, nodeId?, data?, timestamp }` |
+>
+> 上表只是示例，**完整合法权限清单（16 项）见插件开发 skill**：`ui:panel` `ui:toast` `ui:modal` `session:read` `session:write` `session:execute` `data:invoke` `storage:*` `fs:read` `fs:write` `shell:exec` `plugin:call` `plugin:events` `workflow:read` `workflow:write` `workflow:trigger`。写清单外的权限会被判定"含未授权权限"，插件禁止启用且不注册任何贡献点。
 
 ## 开发指南
 
@@ -159,15 +174,17 @@ api.ui.showToast(msg, type) // 显示通知
 ### data
 
 ```typescript
-api.data.invoke(cmd, params) // 调用 Tauri 命令
+api.data.invoke(cmd, params) // 调用白名单内的只读命令
 ```
 
 ### events
 
 ```typescript
-api.events.on(event, handler)  // 监听事件（返回取消函数）
-api.events.emit(event, ...args) // 触发事件
+api.events.on(event, handler)   // 订阅应用事件（宿主 session:* / message:* / workflow:*，以及其他插件的广播），返回取消函数
+api.events.emit(event, ...args) // 广播事件（等价于 api.global.emit）
 ```
+
+支持的事件见上文「应用事件」表；`api.hooks.on` 与 `api.events.on` **完全等价**（保留旧名以兼容）。
 
 ### storage
 

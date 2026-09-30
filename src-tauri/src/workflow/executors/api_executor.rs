@@ -1,9 +1,9 @@
+use super::super::template::TemplateEngine;
+use crate::utils::errors::AppError;
+use crate::workflow::registry::{NodeDef, NodeExecutorTrait, NodeOutput};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::utils::errors::AppError;
-use crate::workflow::registry::{NodeDef, NodeOutput, NodeExecutorTrait};
-use super::super::template::TemplateEngine;
 
 /// HTTP API 调用执行器
 pub struct ApiExecutor {
@@ -27,16 +27,22 @@ impl NodeExecutorTrait for ApiExecutor {
         _execution_id: &str,
         _emitter: &tauri::AppHandle,
     ) -> Result<NodeOutput, AppError> {
-        let url = node.config.get("url")
+        let url = node
+            .config
+            .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| AppError::Config("api 节点缺少 url 配置".into()))?;
-
-        let method = node.config.get("method")
+        let method = node
+            .config
+            .get("method")
             .and_then(|v| v.as_str())
             .unwrap_or("GET");
-
-        let timeout_secs = node.config.get("timeout_seconds")
-            .and_then(|v| v.as_u64())
+        // 节点超时（控制属性，ms）优先：配置了就与引擎层硬上限取同一值；
+        // 未配置时回退节点参数 timeout_seconds（默认 60s）。
+        let timeout_secs = node
+            .timeout_ms
+            .map(|ms| (ms / 1000).max(1))
+            .or_else(|| node.config.get("timeout_seconds").and_then(|v| v.as_u64()))
             .unwrap_or(60);
 
         // 将 resolved_input 作为模板上下文
@@ -53,49 +59,74 @@ impl NodeExecutorTrait for ApiExecutor {
         let request = match method.to_uppercase().as_str() {
             "GET" => self.http_client.get(url),
             "POST" => {
-                let raw_body = node.config.get("body_template")
+                let raw_body = node
+                    .config
+                    .get("body_template")
                     .and_then(|v| v.as_str())
                     .unwrap_or("{}");
-                let body = TemplateEngine::resolve(raw_body, &template_ctx)
-                    .unwrap_or_else(|_| raw_body.to_string());
-                self.http_client.post(url)
+                let body = resolve_body(raw_body, &template_ctx, &node.id);
+                self.http_client
+                    .post(url)
                     .header("Content-Type", "application/json")
                     .body(body)
             }
             "PUT" => {
-                let raw_body = node.config.get("body_template")
+                let raw_body = node
+                    .config
+                    .get("body_template")
                     .and_then(|v| v.as_str())
                     .unwrap_or("{}");
-                let body = TemplateEngine::resolve(raw_body, &template_ctx)
-                    .unwrap_or_else(|_| raw_body.to_string());
-                self.http_client.put(url)
+                let body = resolve_body(raw_body, &template_ctx, &node.id);
+                self.http_client
+                    .put(url)
                     .header("Content-Type", "application/json")
                     .body(body)
             }
             "DELETE" => self.http_client.delete(url),
             _ => return Err(AppError::Config(format!("不支持的 HTTP 方法: {}", method))),
         };
-
         let response = request
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .send()
             .await
             .map_err(|e| AppError::Network(format!("HTTP 请求失败: {}", e)))?;
-
         let status = response.status();
-        let body = response.text().await
+        let body = response
+            .text()
+            .await
             .map_err(|e| AppError::Network(format!("读取响应失败: {}", e)))?;
-
         if !status.is_success() {
             return Err(AppError::Network(format!(
-                "HTTP {} 响应: {} - {}", status.as_u16(), status.canonical_reason().unwrap_or(""), body
+                "HTTP {} 响应: {} - {}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or(""),
+                body
             )));
         }
 
         // 尝试解析为 JSON
-        let output = serde_json::from_str::<Value>(&body)
-            .unwrap_or(Value::String(body));
-
-        Ok(NodeOutput { output, session_id: None, input_data: None, artifacts_path: None })
+        let output = serde_json::from_str::<Value>(&body).unwrap_or(Value::String(body));
+        Ok(NodeOutput {
+            output,
+            session_id: None,
+            input_data: None,
+            artifacts_path: None,
+        })
     }
+}
+
+/// 解析请求体模板：未解析的占位符按**空**处理（不回退成 `{{...}}` 原文发给接口）。
+fn resolve_body(raw_body: &str, ctx: &HashMap<String, Value>, node_id: &str) -> String {
+    if !TemplateEngine::has_placeholder(raw_body) {
+        return raw_body.to_string();
+    }
+    let (body, unresolved) = TemplateEngine::resolve_lossy(raw_body, ctx);
+    if !unresolved.is_empty() {
+        log::warn!(
+            "[ApiExecutor] 节点 {} 请求体模板未解析（按空处理）：{:?}",
+            node_id,
+            unresolved
+        );
+    }
+    body
 }

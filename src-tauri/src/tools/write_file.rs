@@ -30,7 +30,11 @@ impl WriteFileTool {
         history: Option<Arc<FileHistoryService>>,
         rules: Option<Arc<crate::api_agent::agent_loop::PermissionRules>>,
     ) -> Self {
-        Self { cwd, history, rules }
+        Self {
+            cwd,
+            history,
+            rules,
+        }
     }
 }
 
@@ -141,7 +145,12 @@ impl ToolHandler for WriteFileTool {
             Ok(()) => {
                 // 文件历史 + diff 事件（经 FileHistoryService，会话/群聊共用）
                 if let Some(history) = &self.history {
-                    history.record(&abs_path.to_string_lossy(), &old_content, content, existed_before);
+                    history.record(
+                        &abs_path.to_string_lossy(),
+                        &old_content,
+                        content,
+                        existed_before,
+                    );
                     history.emit_diff(&abs_path.to_string_lossy(), &old_content, content);
                 }
                 Ok(format!("文件已成功写入: {}", abs_path.display()))
@@ -152,7 +161,8 @@ impl ToolHandler for WriteFileTool {
                         if let Some(home) = dirs::home_dir() {
                             let home_str = home.to_string_lossy().to_lowercase();
                             let abs_str = abs_path.to_string_lossy().to_lowercase();
-                            if abs_str.starts_with("c:\\users\\") && !abs_str.starts_with(&home_str) {
+                            if abs_str.starts_with("c:\\users\\") && !abs_str.starts_with(&home_str)
+                            {
                                 "（用户名不匹配——请使用当前用户路径而非猜测的用户名）"
                             } else {
                                 "（提示：可能被安全软件拦截，或目标目录需要管理员权限）"

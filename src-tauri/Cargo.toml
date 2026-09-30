@@ -35,6 +35,10 @@ reqwest = { version = "0.12", features = ["json", "gzip", "native-tls", "stream"
 scraper = "0.20"
 url = "2"
 tauri-plugin-dialog = "2.7.1"
+# 应用内自动更新：检查 GitHub Releases 上的 latest.json、下载并安装更新包
+tauri-plugin-updater = "2"
+# 安装完成后重启应用（Windows 由安装器接管；macOS/Linux 需主动 relaunch）
+tauri-plugin-process = "2"
 aes-gcm = "0.10"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
@@ -42,6 +46,7 @@ semver = "1.0"
 async-trait = "0.1"
 boa_engine = "0.19"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
 # 企业级工具：文档解析 / 文档创建
 pdf-extract = "0.8"
 calamine = "0.26"
@@ -55,5 +60,5 @@ percent-encoding = "2"
 tokio-tungstenite = "0.24"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Memory", "Win32_Globalization"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Memory", "Win32_Globalization", "Win32_UI_Shell"] }
 [target.'cfg(not(target_os = "windows"))'.dependencies]

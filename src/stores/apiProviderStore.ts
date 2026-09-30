@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { listItems, saveItem, deleteItem, invokeAction, getItem } from '../utils/invokeHelper';
+import { errorMessage } from '../utils/errorMessage';
 
 export interface ApiProvider {
   id: string;
@@ -8,6 +9,8 @@ export interface ApiProvider {
   apiKeyMasked: string;
   apiKeySet: boolean;
   models: string[];
+  /** 接口格式：openai（默认）/ anthropic。Anthropic 原生格式没有 /audio/transcriptions */
+  apiFormat?: string;
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
@@ -42,7 +45,7 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
       const providers = await listItems<ApiProvider>('list_api_providers');
       set({ providers, loading: false });
     } catch (err) {
-      set({ error: String(err), loading: false });
+      set({ error: errorMessage(err), loading: false });
     }
   },
 
@@ -53,7 +56,7 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
       await get().fetchProviders();
       return result;
     } catch (err) {
-      set({ error: String(err) });
+      set({ error: errorMessage(err) });
       throw err;
     }
   },
@@ -64,7 +67,7 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
       await deleteItem('delete_api_provider', id);
       await get().fetchProviders();
     } catch (err) {
-      set({ error: String(err) });
+      set({ error: errorMessage(err) });
       throw err;
     }
   },
@@ -74,7 +77,7 @@ export const useApiProviderStore = create<ApiProviderState>((set, get) => ({
       await invokeAction('reorder_api_providers', { ids });
       await get().fetchProviders();
     } catch (err) {
-      set({ error: String(err) });
+      set({ error: errorMessage(err) });
     }
   },
 }));

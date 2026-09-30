@@ -23,7 +23,12 @@ impl SttTool {
         resolve: Option<Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>>,
         get_models: Option<Arc<dyn Fn(String) -> Vec<String> + Send + Sync>>,
     ) -> Self {
-        Self { api_endpoint, api_key, resolve, get_models }
+        Self {
+            api_endpoint,
+            api_key,
+            resolve,
+            get_models,
+        }
     }
 
     /// 校验 model 是否在当前 provider 的合法模型列表中，不在则返回引导错误。
@@ -66,11 +71,11 @@ impl ToolHandler for SttTool {
                 },
                 "provider": {
                     "type": "string",
-                    "description": "可选：目标提供商 id（先用 list_models 查看可用提供商）；省略时使用当前会话提供商"
+                    "description": "必填：目标提供商 id，逐字取 list_models 清单里的 provider_id（标 ★ 的是当前会话提供商）；provider 与 model 必须分别传入，禁止拼成 provider_id/model"
                 },
                 "model": {
                     "type": "string",
-                    "description": "语音转写模型名（必填，原样复制自 list_models 清单，含完整 namespace 前缀，禁止自行缩短或编造）"
+                    "description": "语音转写模型名（必填，原样复制自 list_models 清单；若模型名自身含斜杠/命名空间（如 TeleAI/xxx），必须原样保留；禁止自行缩短、编造，也禁止把 provider_id 拼进来）"
                 },
                 "language": {
                     "type": "string",
@@ -86,7 +91,7 @@ impl ToolHandler for SttTool {
                     "description": "可选：采样温度（0~1），默认 0"
                 }
             },
-            "required": ["file", "model"]
+            "required": ["file", "model", "provider"]
         })
     }
 
@@ -106,8 +111,14 @@ impl ToolHandler for SttTool {
             .filter(|s| !s.is_empty())
             .ok_or("缺少 model 参数：请先调用 list_models 查看可用模型，从清单中复制完整的模型名（含 namespace 前缀）传入，不要自行编造")?;
         let language = arguments["language"].as_str().map(|s| s.to_string());
-        let response_format = arguments["response_format"].as_str().unwrap_or("json").to_string();
-        let temperature = arguments["temperature"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0);
+        let response_format = arguments["response_format"]
+            .as_str()
+            .unwrap_or("json")
+            .to_string();
+        let temperature = arguments["temperature"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
 
         // 读取音频字节（本地/URL/data URL）
         let audio_bytes = load_raw_bytes(file).await?;
@@ -115,24 +126,42 @@ impl ToolHandler for SttTool {
             return Err("音频文件为空或读取失败".to_string());
         }
         if audio_bytes.len() > 25 * 1024 * 1024 {
-            return Err(format!("音频过大（{} MB），超过 25MB 限制", audio_bytes.len() / 1024 / 1024));
+            return Err(format!(
+                "音频过大（{} MB），超过 25MB 限制",
+                audio_bytes.len() / 1024 / 1024
+            ));
         }
 
         // 跨提供商解析
-        let provider_arg = arguments["provider"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let provider_arg = arguments["provider"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        // provider 与 model 必须分别传入：缺 provider 时不再静默回退会话提供商
+        if provider_arg.is_none() {
+            return Err("缺少 provider 参数：provider 与 model 必须分别传，禁止写成 provider_id/model。请先调用 list_models，从清单里挑出目标模型所在那一行（标 ★ 的是当前会话提供商），把 provider_id 与模型名分别填入 provider / model".to_string());
+        }
         let (endpoint_base, api_key) = match (&provider_arg, &self.resolve) {
             (Some(pid), Some(resolve)) => match resolve(pid) {
                 Some((ep, key, _fmt)) => (ep, key),
-                None => return Err(format!("提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商", pid)),
+                None => {
+                    return Err(format!(
+                        "提供商 [@{}] 不存在或未配置，请先用 list_models 查看可用提供商",
+                        pid
+                    ))
+                }
             },
             _ => (self.api_endpoint.clone(), self.api_key.clone()),
         };
 
         // 校验 model 是否在合法清单内
-        let provider_id = provider_arg.as_deref().unwrap_or("__default__");
+        let provider_id = provider_arg.as_deref().unwrap_or("");
         self.validate_model(&model, provider_id)?;
 
-        let endpoint = format!("{}/audio/transcriptions", endpoint_base.trim_end_matches('/'));
+        let endpoint = format!(
+            "{}/audio/transcriptions",
+            endpoint_base.trim_end_matches('/')
+        );
         let form = reqwest::multipart::Form::new()
             .text("model", model)
             .text("response_format", response_format.clone())
@@ -173,17 +202,17 @@ impl ToolHandler for SttTool {
         }
 
         // json / verbose_json：解析 {text, ...}
-        let json: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| format!("解析转写结果失败: {}：{}", e, &body[..body.len().min(200)]))?;
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| format!("解析转写结果失败: {}：{}", e, &body[..body.len().min(200)]))?;
         let text = json["text"].as_str().unwrap_or("").trim().to_string();
         if text.is_empty() {
             return Err("转写结果为空（音频可能无有效语音）".to_string());
         }
         let lang = json["language"].as_str().unwrap_or("unknown");
-        let segments = json["segments"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0);
-        Ok(format!("转写文本（语言 {}，{} 段）：\n{}", lang, segments, text))
+        let segments = json["segments"].as_array().map(|a| a.len()).unwrap_or(0);
+        Ok(format!(
+            "转写文本（语言 {}，{} 段）：\n{}",
+            lang, segments, text
+        ))
     }
 }

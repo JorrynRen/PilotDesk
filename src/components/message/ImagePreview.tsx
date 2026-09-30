@@ -17,12 +17,20 @@ export function ImagePreview() {
   const dragRef = useRef<{ startX: number; startY: number; offsetX: number; offsetY: number; moved: boolean } | null>(null);
   const justDraggedRef = useRef(false);
 
-  // 打开时重置缩放与位置
+  // 打开/切换图片时重置缩放与位置。用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮
+  // 级联渲染（`react-hooks/set-state-in-effect`），而"外部值变了就把本地状态重置成它"正是 React
+  // 推荐的 adjust-during-render 场景。（src 变空时一并重置；此时组件返回 null，无可观察差异。）
+  const [prevSrc, setPrevSrc] = useState(src);
+  if (prevSrc !== src) {
+    setPrevSrc(src);
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+    setDragging(false);
+  }
+
+  // 拖拽标记只能写在 ref 上，而渲染期写 ref 会被 `react-hooks/refs` 判违规，故仍放在 effect
   useEffect(() => {
     if (src) {
-      setScale(1);
-      setOffset({ x: 0, y: 0 });
-      setDragging(false);
       dragRef.current = null;
       justDraggedRef.current = false;
     }

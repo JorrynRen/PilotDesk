@@ -4,6 +4,10 @@ export interface SkillInfo {
   name: string;
   description: string;
   category?: string;
+  /** 技能所在目录（绝对路径）；空/缺省 = 未知，此时无法定位（编辑主文件、卸载都依赖它） */
+  dirPath?: string;
+  /** 技能入口文件（绝对路径，通常是 SKILL.md）；空/缺省 = 未知 */
+  entryPath?: string;
 }
 
 interface SkillState {

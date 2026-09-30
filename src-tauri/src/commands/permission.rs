@@ -24,9 +24,7 @@ pub fn save_rules(conn: &rusqlite::Connection, rules: &PermissionRules) -> Resul
 }
 
 #[tauri::command]
-pub fn get_permission_rules(
-    state: State<'_, crate::DbState>,
-) -> Result<PermissionRules, AppError> {
+pub fn get_permission_rules(state: State<'_, crate::DbState>) -> Result<PermissionRules, AppError> {
     let conn = state.get_conn()?;
     load_rules(&conn)
 }

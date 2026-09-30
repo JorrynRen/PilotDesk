@@ -12,3 +12,12 @@ export function isApiSession(agentType: string): boolean {
 export function isAgentSession(agentType: string): boolean {
   return agentType !== 'api';
 }
+
+/**
+ * 会话是否由工作流节点自动创建的内部会话。
+ * 值形如 `workflow:{工作流定义id}`（历史行仅 `workflow`），故按前缀判定，
+ * 不依赖标题文案（标题是展示用的可变文案）。
+ */
+export function isWorkflowSession(origin?: string | null): boolean {
+  return typeof origin === 'string' && origin.startsWith('workflow');
+}

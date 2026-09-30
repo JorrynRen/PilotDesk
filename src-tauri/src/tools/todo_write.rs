@@ -98,8 +98,14 @@ impl ToolHandler for TodoWriteTool {
             .pool
             .get()
             .map_err(|e| format!("获取数据库连接失败: {}", e))?;
-        crate::eventlog::append_session_event(&conn, &self.session_id, "todo/state", &payload, false)
-            .map_err(|e| format!("保存任务列表失败: {}", e))?;
+        crate::eventlog::append_session_event(
+            &conn,
+            &self.session_id,
+            "todo/state",
+            &payload,
+            false,
+        )
+        .map_err(|e| format!("保存任务列表失败: {}", e))?;
 
         Ok(format!("任务列表已更新（共 {} 项）：\n{}", count, body))
     }

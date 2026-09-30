@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Save, Loader2, Search } from 'lucide-react';
 import { SettingsSection, SettingsButton } from './index';
+import { Select } from '../common/Select';
 
 // 与后端 api_agent/web.rs 的 SearchConfig / SearchProvider 对齐
 interface SearchConfig {
@@ -76,24 +77,14 @@ export function SearchSettings() {
       </div>
 
       <SettingsSection title="搜索后端">
-        <select
+        <Select
           value={config.provider}
-          onChange={(e) =>
-            setConfig((prev) => ({ ...prev, provider: e.target.value as SearchConfig['provider'] }))
+          onChange={(v) =>
+            setConfig((prev) => ({ ...prev, provider: v as SearchConfig['provider'] }))
           }
-          className="w-full px-2 py-1.5 rounded text-xs outline-none"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border)',
-          }}
-        >
-          {PROVIDERS.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
-        </select>
+          options={PROVIDERS.map((p) => ({ value: p.value, label: p.label }))}
+          className="w-full"
+        />
         <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)' }}>
           默认使用 Bing 中国版（无需 API Key），在国内可直连；如遇反爬限制会自动降级到本机无头浏览器。
         </p>

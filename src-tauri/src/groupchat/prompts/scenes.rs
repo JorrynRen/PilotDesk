@@ -25,7 +25,15 @@ pub const KICKOFF: SceneSpec = SceneSpec {
 pub const REPLAN: SceneSpec = SceneSpec {
     id: "scene.replan",
     flow: "flow.orchestrate",
-    input_sections: &["topic", "notes", "latest", "roster", "catalog", "failures", "existing_tasks"],
+    input_sections: &[
+        "topic",
+        "notes",
+        "latest",
+        "roster",
+        "catalog",
+        "failures",
+        "existing_tasks",
+    ],
     blocks: &["director.replan"],
 };
 
@@ -41,7 +49,19 @@ pub const REPLAN_FOR_ROSTER_CHANGE: SceneSpec = SceneSpec {
 pub const NEXT_SPEAKER: SceneSpec = SceneSpec {
     id: "scene.next_speaker",
     flow: "flow.discuss",
-    input_sections: &["topic", "summary", "task_manifest", "roster", "mention", "stances", "latest", "notes", "failures", "recent_speeches", "catalog"],
+    input_sections: &[
+        "topic",
+        "summary",
+        "task_manifest",
+        "roster",
+        "mention",
+        "stances",
+        "latest",
+        "notes",
+        "failures",
+        "recent_speeches",
+        "catalog",
+    ],
     blocks: &["director.next_speaker"],
 };
 
@@ -49,7 +69,15 @@ pub const NEXT_SPEAKER: SceneSpec = SceneSpec {
 pub const REVIEW: SceneSpec = SceneSpec {
     id: "scene.review",
     flow: "flow.review",
-    input_sections: &["topic", "notes", "latest", "task_manifest", "summary", "transcript", "stances"],
+    input_sections: &[
+        "topic",
+        "notes",
+        "latest",
+        "task_manifest",
+        "summary",
+        "transcript",
+        "stances",
+    ],
     blocks: &["director.review"],
 };
 
@@ -97,7 +125,14 @@ pub const PARSE_INPUT_REFS: SceneSpec = SceneSpec {
 pub const HANDLE_TASK_FAILURE: SceneSpec = SceneSpec {
     id: "scene.handle_task_failure",
     flow: "flow.execute",
-    input_sections: &["topic", "task_desc", "error", "previous_executors", "roster", "catalog"],
+    input_sections: &[
+        "topic",
+        "task_desc",
+        "error",
+        "previous_executors",
+        "roster",
+        "catalog",
+    ],
     blocks: &["director.handle_task_failure"],
 };
 
@@ -121,7 +156,15 @@ pub const DECIDE_STALL_CONTINUE: SceneSpec = SceneSpec {
 pub const PARTICIPANT_LLM: SceneSpec = SceneSpec {
     id: "scene.participant_llm",
     flow: "flow.discuss",
-    input_sections: &["topic", "roster", "summary", "stances", "task_context", "product_norm", "output_dir"],
+    input_sections: &[
+        "topic",
+        "roster",
+        "summary",
+        "stances",
+        "task_context",
+        "product_norm",
+        "output_dir",
+    ],
     blocks: &["participant"],
 };
 
@@ -129,7 +172,15 @@ pub const PARTICIPANT_LLM: SceneSpec = SceneSpec {
 pub const PARTICIPANT_CLI: SceneSpec = SceneSpec {
     id: "scene.participant_cli",
     flow: "flow.discuss",
-    input_sections: &["topic", "roster", "summary", "stances", "task_context", "product_norm", "output_dir"],
+    input_sections: &[
+        "topic",
+        "roster",
+        "summary",
+        "stances",
+        "task_context",
+        "product_norm",
+        "output_dir",
+    ],
     blocks: &["participant"],
 };
 

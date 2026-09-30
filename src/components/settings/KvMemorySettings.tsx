@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Search, Plus, Trash2, Pencil, X, Check, Star, Eraser } from 'lucide-react';
 import { SettingsSection, SettingsButton } from './index';
+import { Select } from '../common/Select';
 import {
   deleteMemoryEntry,
   getMemoryStats,
@@ -13,8 +15,44 @@ import {
   type MemoryStats,
 } from '../../types';
 import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
+import { confirmDialog } from '../../stores/confirmStore';
+import { useApiProviderStore } from '../../stores/apiProviderStore';
 
+/** 分类候选：值仍是英文枚举（与 DB / 工具口径一致），展示时带中文备注便于理解 */
 const CATEGORY_OPTIONS = ['fact', 'preference', 'skill', 'event'];
+const CATEGORY_LABEL: Record<string, string> = {
+  fact: '事实',
+  preference: '偏好',
+  skill: '技能',
+  event: '事件',
+};
+/** `fact（事实）`：值保持不变，只在显示层加备注 */
+const categoryLabel = (c: string) => (CATEGORY_LABEL[c] ? `${c}（${CATEGORY_LABEL[c]}）` : c);
+
+/**
+ * 解析 `memory_intent_model` 设置：
+ * - 新格式 `{"providerId":"...","model":"..."}`；
+ * - 旧格式（裸模型名）= 只覆盖模型名、沿用会话提供商，回显在 legacyModel 里提示用户重选一次。
+ */
+function parseIntentModelSetting(raw: string | null): {
+  providerId: string;
+  model: string;
+  legacyModel: string;
+} {
+  const text = (raw ?? '').trim();
+  if (!text) return { providerId: '', model: '', legacyModel: '' };
+  try {
+    const v = JSON.parse(text) as { providerId?: unknown; model?: unknown };
+    return {
+      providerId: typeof v.providerId === 'string' ? v.providerId.trim() : '',
+      model: typeof v.model === 'string' ? v.model.trim() : '',
+      legacyModel: '',
+    };
+  } catch {
+    return { providerId: '', model: '', legacyModel: text };
+  }
+}
 
 function formatTime(ts: number): string {
   const d = new Date(ts * 1000);
@@ -32,6 +70,13 @@ interface InlineForm {
 
 const inputStyle: CSSProperties = {
   backgroundColor: 'var(--bg-tertiary)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border)',
+};
+
+/** 置于 --bg-tertiary 面板内的输入框：面板本身就是该色，输入框须改用 --bg-primary 才能分辨。 */
+const inputOnPanelStyle: CSSProperties = {
+  backgroundColor: 'var(--bg-primary)',
   color: 'var(--text-primary)',
   border: '1px solid var(--border)',
 };
@@ -54,8 +99,105 @@ export function KvMemorySettings() {
   const [preview, setPreview] = useState<MemoryEntryView[]>([]);
   // 列表分块展示：初始/过滤后每块 100 条，底部「加载更多」逐步增加
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  // 跨异步调用即时防重入（React 状态更新有延迟，连点可能在重渲染前二次进入）
+  // 跨异步调用即时防重入（React 状态更新有延迟，连点在重渲染前二次进入）
   const busyRef = useRef(false);
+  // 意图检索注入设置（app_settings：memory_intent_enabled / memory_intent_model / memory_intent_timeout_secs）
+  const [intentEnabled, setIntentEnabled] = useState(true);
+  // 路由模型覆盖 = 提供商 + 模型（与知识库「指定模型」同一套口径）：
+  // 指定提供商后，endpoint / 格式 / Key 一并换，可以让路由单独走便宜的小模型。
+  const { providers, fetchProviders } = useApiProviderStore();
+  const [intentSaved, setIntentSaved] = useState<{ providerId: string; model: string }>({ providerId: '', model: '' });
+  const [intentProviderId, setIntentProviderId] = useState('');
+  const [intentModel, setIntentModel] = useState('');
+  // 旧值（早期只存了一个裸模型名）：仍按"只覆盖模型名"生效，界面提示重选一次
+  const [intentLegacyModel, setIntentLegacyModel] = useState('');
+  const [intentModelSaving, setIntentModelSaving] = useState(false);
+  const [intentTimeout, setIntentTimeout] = useState('');
+  const [intentTimeoutDraft, setIntentTimeoutDraft] = useState('');
+
+  // 读取意图检索设置：缺省视为启用；"0"/"false"/"off" 视为关闭
+  useEffect(() => {
+    void fetchProviders();
+    (async () => {
+      try {
+        const [enabled, model, timeout] = await Promise.all([
+          invoke<string | null>('get_app_setting', { key: 'memory_intent_enabled' }),
+          invoke<string | null>('get_app_setting', { key: 'memory_intent_model' }),
+          invoke<string | null>('get_app_setting', { key: 'memory_intent_timeout_secs' }),
+        ]);
+        const off = enabled != null && ['0', 'false', 'off'].includes(enabled.trim().toLowerCase());
+        setIntentEnabled(!off);
+        const parsed = parseIntentModelSetting(model);
+        setIntentSaved({ providerId: parsed.providerId, model: parsed.model });
+        setIntentProviderId(parsed.providerId);
+        setIntentModel(parsed.model);
+        setIntentLegacyModel(parsed.legacyModel);
+        setIntentTimeout(timeout ?? '');
+        setIntentTimeoutDraft(timeout ?? '');
+      } catch {
+        // 读取失败保持默认（启用，模型跟随会话），不影响其它功能
+      }
+    })();
+  }, [fetchProviders]);
+
+  const toggleIntent = async (next: boolean) => {
+    setIntentEnabled(next);
+    try {
+      await invoke('set_app_setting', { key: 'memory_intent_enabled', value: next ? '1' : '0' });
+      showToast(
+        next
+          ? '已启用意图检索注入（命中记忆与知识库时自动带入上下文）'
+          : '已关闭意图检索注入（记忆与知识库都不再自动注入，模型仍可调用 search_memory 按需检索）',
+        'success'
+      );
+    } catch (e) {
+      setIntentEnabled(!next);
+      showToast(`保存失败: ${errorMessage(e)}`, 'error');
+    }
+  };
+
+  const intentProvider = providers.find((p) => p.id === intentProviderId);
+  const intentModels = intentProvider?.models ?? [];
+  const intentProviderIsAnthropic = (intentProvider?.apiFormat ?? '').toLowerCase().includes('anthropic');
+  const intentModelDirty =
+    intentProviderId !== intentSaved.providerId || intentModel !== intentSaved.model;
+
+  /** 保存路由模型覆盖；空值 = 清掉覆盖，提供商与模型都跟随当前会话 */
+  const saveIntentModel = async (providerId: string, model: string) => {
+    const value = providerId && model ? JSON.stringify({ providerId, model }) : '';
+    setIntentModelSaving(true);
+    try {
+      await invoke('set_app_setting', { key: 'memory_intent_model', value });
+      setIntentSaved({ providerId, model });
+      setIntentProviderId(providerId);
+      setIntentModel(model);
+      setIntentLegacyModel('');
+      showToast(
+        value
+          ? `意图路由模型已设为 ${providers.find((p) => p.id === providerId)?.name ?? providerId} · ${model}`
+          : '已清空覆盖：意图路由跟随当前会话的提供商与模型',
+        'success'
+      );
+    } catch (e) {
+      showToast(`保存失败: ${errorMessage(e)}`, 'error');
+    } finally {
+      setIntentModelSaving(false);
+    }
+  };
+
+  const resetIntentModel = () => void saveIntentModel('', '');
+
+  const saveIntentTimeout = async () => {
+    const value = intentTimeoutDraft.trim();
+    if (value === intentTimeout.trim()) return;
+    try {
+      await invoke('set_app_setting', { key: 'memory_intent_timeout_secs', value });
+      setIntentTimeout(value);
+      showToast(value ? `意图路由超时已设为 ${value} 秒` : '已恢复为默认超时（60 秒）', 'success');
+    } catch (e) {
+      showToast(`保存失败: ${errorMessage(e)}`, 'error');
+    }
+  };
 
   const refresh = useCallback(async (cat?: string, q?: string) => {
     setLoading(true);
@@ -70,16 +212,18 @@ export function KvMemorySettings() {
       // 结果变少时收敛可见条数，避免越界空白
       setVisibleCount((prev) => Math.min(prev, Math.max(list.length, 1)));
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // 过滤条件变化：回到第一块
+  // 过滤条件变化：回到第一块并重新拉取（effect 体内不允许同步 setState：推迟一个微任务，观感与原先一致）
   useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-    refresh(category, query);
+    queueMicrotask(() => {
+      setVisibleCount(PAGE_SIZE);
+      void refresh(category, query);
+    });
   }, [category, query, refresh]);
 
   const startNew = () => setForm({ rowKey: null, key: '', value: '', category: 'fact', important: false, tags: '' });
@@ -96,21 +240,26 @@ export function KvMemorySettings() {
       setForm(null);
       await refresh(category, query);
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (key: string) => {
-    if (!window.confirm(`确定删除记忆「${key}」？删除后不可恢复。`)) return;
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: `确定删除记忆「${key}」？删除后不可恢复。`,
+      confirmText: '删除',
+    });
+    if (!ok) return;
     setError('');
     try {
       await deleteMemoryEntry(key);
       if (form?.rowKey === key) setForm(null);
       await refresh(category, query);
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
   };
 
@@ -120,7 +269,7 @@ export function KvMemorySettings() {
       await setMemoryPin(key, pin);
       await refresh(category, query);
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
   };
 
@@ -142,7 +291,7 @@ export function KvMemorySettings() {
       showToast(`可清理 ${list.length} 条冷记忆，请确认`, 'warning');
     } catch (e) {
       setCleanPhase('idle');
-      showToast(`预览冷记忆失败: ${String(e)}`, 'error');
+      showToast(`预览冷记忆失败: ${errorMessage(e)}`, 'error');
     } finally {
       busyRef.current = false;
     }
@@ -163,7 +312,7 @@ export function KvMemorySettings() {
       await refresh(category, query);
     } catch (e) {
       setCleanPhase('idle');
-      showToast(`清理失败: ${String(e)}`, 'error');
+      showToast(`清理失败: ${errorMessage(e)}`, 'error');
     } finally {
       busyRef.current = false;
     }
@@ -176,8 +325,86 @@ export function KvMemorySettings() {
   return (
     <SettingsSection title="全局 KV 记忆（MEMORY.db）">
       <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
-        全局跨项目记忆，与 <code>save_memory</code> / <code>search_memory</code> 工具读写同一库。发送消息时，系统会结合当前对话意图检索少量相关记忆注入模型上下文（重要/pin 记忆优先）；无相关记忆或意图路由不可用时可能回退到评分最高的条目，也可能不注入（模型仍可用 <code>search_memory</code> 按需检索）。
+        全局跨项目记忆，与 <code>search_memory</code> / <code>list_memory</code> / <code>save_memory</code> / <code>update_memory</code> / <code>delete_memory</code> 工具读写同一库；其中删除是高风险操作，每次调用都要你在会话里审批，且重要（pin）标记只免自动清理、<strong>不阻止删除</strong>。发送消息时，系统会先用一次轻量意图路由判断当前话题，命中相关记忆才注入模型上下文（重要/pin 记忆优先）；路由不可用或处于熔断冷却期时<strong>本轮不注入</strong>（模型仍可用 <code>search_memory</code> 按需检索）。<strong>知识库条目不在本列表</strong>——它们由「知识库」页管理（删除语义是"从库中移除"），但仍照旧参与记忆检索与注入。
       </p>
+
+      {/* 意图检索注入设置：开关 + 可选路由模型覆盖 */}
+      <div className="rounded-lg px-3 py-2 mb-2 text-[11px] space-y-2" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none" style={{ color: 'var(--text-primary)' }}>
+          <input
+            type="checkbox"
+            checked={intentEnabled}
+            onChange={(e) => toggleIntent(e.target.checked)}
+          />
+          {/* 这条开关现在同时管两条链路（会话记忆 + 知识库），标签必须说出来 ——
+              否则用户为了"别注入记忆"关掉它，会连带把知识库检索也关掉，而且看不出来 */}
+          启用意图检索注入（按当前消息意图检索记忆与知识库）
+        </label>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="shrink-0" style={{ color: 'var(--text-secondary)' }}>意图路由模型</span>
+          <Select
+            value={intentProviderId}
+            onChange={(v) => { setIntentProviderId(v); setIntentModel(''); }}
+            options={[
+              { value: '', label: '跟随当前会话' },
+              ...providers.map((p) => ({
+                value: p.id,
+                label: (p.apiFormat ?? '').toLowerCase().includes('anthropic') ? `${p.name}（不支持路由）` : p.name,
+              })),
+            ]}
+            placeholder="跟随当前会话"
+            size="sm"
+            title="路由用的提供商；指定后连接口地址与 Key 一并使用该提供商"
+          />
+          <Select
+            value={intentModel}
+            onChange={setIntentModel}
+            options={intentModels.map((m) => ({ value: m, label: m }))}
+            size="sm"
+            placeholder={intentProviderId ? (intentModels.length ? '选择模型' : '该提供商下没有模型') : '跟随当前会话'}
+            disabled={!intentProviderId || intentModels.length === 0}
+            title="路由用的模型；建议选更小更快的模型以降低每条消息的前置开销"
+          />
+          <SettingsButton
+            onClick={() => void saveIntentModel(intentProviderId, intentModel)}
+            disabled={intentModelSaving || !intentModelDirty || !intentProviderId || !intentModel}
+          >
+            保存
+          </SettingsButton>
+          {intentSaved.providerId && (
+            <SettingsButton onClick={resetIntentModel} disabled={intentModelSaving}>
+              改为跟随会话
+            </SettingsButton>
+          )}
+          {intentModelDirty && (
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>有未保存的改动</span>
+          )}
+        </div>
+        {intentProviderIsAnthropic && (
+          <div style={{ color: '#F59E0B' }}>
+            该提供商是 Anthropic 原生格式：没有 /chat/completions 端点，意图路由调用会被判为不可用（本轮不注入）。请改选 OpenAI 兼容的提供商。
+          </div>
+        )}
+        {intentLegacyModel && (
+          <div style={{ color: 'var(--text-tertiary)' }}>
+            当前是旧格式配置（只记了模型名「{intentLegacyModel}」，提供商跟随会话）。重新选择提供商与模型并保存后，会按新格式记录。
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <span className="shrink-0" style={{ color: 'var(--text-secondary)' }}>路由超时（秒）</span>
+          <input
+            value={intentTimeoutDraft}
+            onChange={(e) => setIntentTimeoutDraft(e.target.value)}
+            onBlur={saveIntentTimeout}
+            placeholder="留空 = 60（合法 1~60）"
+            className="w-40 px-2 py-1 rounded-md text-xs outline-none"
+            style={inputOnPanelStyle}
+          />
+        </div>
+        <div style={{ color: 'var(--text-tertiary)' }}>
+          关闭后不再发起意图路由调用，KV 记忆不再自动注入；<strong>MEMORY.md / USER.md 仍随 system prompt 注入</strong>，模型仍可调用 <code>search_memory</code> 按需检索。路由模型默认跟随当前会话，也可以单独指定提供商 + 模型（建议选更小/更快的模型以降低开销，例如主对话用大模型、路由用便宜的小模型）；路由超时是<strong>上限而非等待时长</strong> —— 模型返回即继续（实际可能只需 1~2 秒），只有上游卡住才会等满，因此填大不会让每条消息都变慢。
+        </div>
+      </div>
 
       {stats && policy && (
         <div className="rounded-lg px-3 py-2 mb-2 text-[11px] space-y-1" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
@@ -185,7 +412,7 @@ export function KvMemorySettings() {
             共 {stats.total} 条 · pin 保护 {stats.pinned} 条 · 自动维护候选 {stats.candidates} 条
           </div>
           <div style={{ color: 'var(--text-tertiary)' }}>
-            自动维护规则：总条数超 {policy.maxEntries} 条时按“最久未访问”驱逐；超过 {policy.idleDays} 天未被访问且访问次数 ≤ {policy.minAccess} 次的未 pin 条目会被清理（pin 条目永不自动删除）。
+            自动维护规则：总条数超 {policy.maxEntries} 条时按“最久未活跃”驱逐；超过 {policy.idleDays} 天既未被检索也未被编辑、且访问次数 ≤ {policy.minAccess} 次的未 pin 条目会被清理（pin 条目永不自动删除）。<strong>知识库条目不参与以上两项自动维护</strong>——它们既不占 {policy.maxEntries} 条配额，也不会被判为冷记忆；生命周期只由所属知识库决定（删库或从库中移除，且仅当不再被任何库关联时才连同条目删除）。
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {stats.injected.length > 0 ? (
@@ -241,22 +468,21 @@ export function KvMemorySettings() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索 key/value…"
+            placeholder="搜索 key/标签…"
             className="w-full pl-7 px-2.5 py-1.5 rounded-lg text-xs outline-none"
             style={inputStyle}
           />
         </div>
-        <select
+        <Select
           value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          className="px-2 py-1.5 rounded-lg text-xs outline-none"
-          style={inputStyle}
-        >
-          <option value="">全部分类</option>
-          {CATEGORY_OPTIONS.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
+          onChange={(v) => setCategory(v)}
+          options={[
+            { value: '', label: '全部分类' },
+            ...CATEGORY_OPTIONS.map((c) => ({ value: c, label: categoryLabel(c) })),
+          ]}
+          placeholder="全部分类"
+          size="sm"
+        />
         <SettingsButton onClick={startNew} icon={<Plus size={12} />} disabled={showNewRow}>
           新增
         </SettingsButton>
@@ -393,16 +619,13 @@ function InlineRowEditor({
           className="px-2 py-1.5 rounded-md text-xs outline-none"
           style={inputStyle}
         />
-        <select
+        <Select
           value={form.category || 'fact'}
-          onChange={(e) => change({ category: e.target.value })}
-          className="px-2 py-1.5 rounded-md text-xs outline-none"
-          style={inputStyle}
-        >
-          {CATEGORY_OPTIONS.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
+          onChange={(v) => change({ category: v })}
+          options={CATEGORY_OPTIONS.map((c) => ({ value: c, label: categoryLabel(c) }))}
+          className="w-full"
+          size="sm"
+        />
       </div>
       <textarea
         value={form.value}

@@ -125,14 +125,20 @@ impl ToolHandler for GrepTool {
             }
 
             let big_note = if skipped_big > 0 {
-                format!("\n（另有 {} 个超大文件被跳过，如需在其中搜索请改用 execute_python 定向处理）", skipped_big)
+                format!(
+                    "\n（另有 {} 个超大文件被跳过，如需在其中搜索请改用 execute_python 定向处理）",
+                    skipped_big
+                )
             } else {
                 String::new()
             };
             if out.is_empty() {
                 Ok(format!("未找到匹配 \"{}\" 的内容{}", pattern, big_note))
             } else {
-                Ok(format!("找到 {} 处匹配：\n{}{}", match_count, out, big_note))
+                Ok(format!(
+                    "找到 {} 处匹配：\n{}{}",
+                    match_count, out, big_note
+                ))
             }
         })
         .await

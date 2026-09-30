@@ -1,4 +1,5 @@
 import React from 'react';
+import { errorMessage } from '../../utils/errorMessage';
 
 /**
  * DefaultPluginPanel — 插件面板默认组件
@@ -14,7 +15,7 @@ export function DefaultPluginPanel({ pluginId }: { pluginId: string }) {
       invoke<string>('plugin_get_panel_content', { pluginId, panelId: 'default' })
         .then((result) => setPanelContent(result))
         .catch((err) => {
-          setPanelError(String(err));
+          setPanelError(errorMessage(err));
           setPanelContent('');
         });
     });

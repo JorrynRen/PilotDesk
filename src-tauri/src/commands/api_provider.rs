@@ -1,9 +1,9 @@
+use crate::tools::{ModelSpec, ProviderModelInfo};
+use crate::utils::crypto;
+use crate::utils::errors::AppError;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::utils::errors::AppError;
-use crate::utils::crypto;
-use crate::tools::{ModelSpec, ProviderModelInfo};
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +39,11 @@ fn parse_model_entries(models_json: &str) -> Vec<(String, String)> {
             let mut entries = Vec::with_capacity(arr.len());
             for x in arr {
                 if let Some(name) = x.get("name").and_then(|n| n.as_str()) {
-                    let note = x.get("note").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                    let note = x
+                        .get("note")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     entries.push((name.to_string(), note));
                 }
             }
@@ -56,8 +60,13 @@ fn parse_model_entries(models_json: &str) -> Vec<(String, String)> {
 
 fn row_to_provider(row: &rusqlite::Row) -> rusqlite::Result<ApiProvider> {
     let models_json: String = row.get("models")?;
-    let models: Vec<String> = parse_model_entries(&models_json).into_iter().map(|(n, _)| n).collect();
-    let api_format: String = row.get("api_format").unwrap_or_else(|_| "openai".to_string());
+    let models: Vec<String> = parse_model_entries(&models_json)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    let api_format: String = row
+        .get("api_format")
+        .unwrap_or_else(|_| "openai".to_string());
     Ok(ApiProvider {
         id: row.get("id")?,
         name: row.get("name")?,
@@ -78,13 +87,17 @@ pub fn list_api_providers(conn: &rusqlite::Connection) -> Result<Vec<ApiProvider
         "SELECT id, name, api_endpoint, api_key_masked, api_key_set, models, sort_order, created_at, updated_at
          FROM api_providers ORDER BY sort_order"
     )?;
-    let providers = stmt.query_map([], row_to_provider)?
+    let providers = stmt
+        .query_map([], row_to_provider)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(providers)
 }
 
 /// Get a single API provider by ID
-pub fn get_api_provider(conn: &rusqlite::Connection, id: &str) -> Result<Option<ApiProvider>, AppError> {
+pub fn get_api_provider(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<Option<ApiProvider>, AppError> {
     conn.query_row(
         "SELECT id, name, api_endpoint, api_key_masked, api_key_set, models, sort_order, created_at, updated_at
          FROM api_providers WHERE id = ?",
@@ -95,23 +108,26 @@ pub fn get_api_provider(conn: &rusqlite::Connection, id: &str) -> Result<Option<
 
 /// Get the raw API key for a provider (not exposed to frontend in list)
 pub fn get_api_key(conn: &rusqlite::Connection, id: &str) -> Result<Option<String>, AppError> {
-    let key: Option<String> = conn.query_row(
-        "SELECT api_key FROM api_providers WHERE id = ?",
-        params![id],
-        |row| row.get("api_key"),
-    ).optional()?;
+    let key: Option<String> = conn
+        .query_row(
+            "SELECT api_key FROM api_providers WHERE id = ?",
+            params![id],
+            |row| row.get("api_key"),
+        )
+        .optional()?;
     match key.filter(|k| !k.is_empty()) {
-        Some(encrypted) => {
-            crypto::decrypt(&encrypted)
-                .map(Some)
-                .map_err(|e| AppError::Config(format!("解密 API Key 失败: {}", e)))
-        }
+        Some(encrypted) => crypto::decrypt(&encrypted)
+            .map(Some)
+            .map_err(|e| AppError::Config(format!("解密 API Key 失败: {}", e))),
         None => Ok(None),
     }
 }
 
 /// Create or update an API provider
-pub fn upsert_api_provider(conn: &rusqlite::Connection, data: &CreateOrUpdateProvider) -> Result<ApiProvider, AppError> {
+pub fn upsert_api_provider(
+    conn: &rusqlite::Connection,
+    data: &CreateOrUpdateProvider,
+) -> Result<ApiProvider, AppError> {
     let now = crate::utils::now();
     let sort_order = data.sort_order.unwrap_or(now);
 
@@ -119,7 +135,11 @@ pub fn upsert_api_provider(conn: &rusqlite::Connection, data: &CreateOrUpdatePro
     // 保留已有模型备注；被移除的模型备注随之丢弃，消除孤儿数据。
     let existing_notes: HashMap<String, String> = {
         let cur: Option<String> = conn
-            .query_row("SELECT models FROM api_providers WHERE id = ?", params![data.id], |r| r.get(0))
+            .query_row(
+                "SELECT models FROM api_providers WHERE id = ?",
+                params![data.id],
+                |r| r.get(0),
+            )
             .optional()?;
         cur.as_deref()
             .map(parse_model_entries)
@@ -140,8 +160,13 @@ pub fn upsert_api_provider(conn: &rusqlite::Connection, data: &CreateOrUpdatePro
         Some(key) if !key.is_empty() => {
             let encrypted = crypto::encrypt(key)
                 .map_err(|e| AppError::Config(format!("加密 API Key 失败: {}", e)))?;
-            let masked = if key.len() > 8 {
-                format!("{}****{}", &key[..4], &key[key.len()-4..])
+            // 掩码按字符取：Key 一般是 ASCII，但这里是自由输入文本，中文/特殊字符按字节切会 panic
+            let masked = if key.chars().count() > 8 {
+                format!(
+                    "{}****{}",
+                    crate::utils::text::head_chars(key, 4),
+                    crate::utils::text::tail_chars(key, 4)
+                )
             } else {
                 "****".to_string()
             };
@@ -151,13 +176,20 @@ pub fn upsert_api_provider(conn: &rusqlite::Connection, data: &CreateOrUpdatePro
             // Keep existing key info if not updating
             let existing = get_api_provider(conn, &data.id)?;
             match existing {
-                Some(e) => (String::new(), e.api_key_masked, if e.api_key_set { 1 } else { 0 }),
+                Some(e) => (
+                    String::new(),
+                    e.api_key_masked,
+                    if e.api_key_set { 1 } else { 0 },
+                ),
                 None => (String::new(), "".to_string(), 0),
             }
         }
     };
 
-    let api_format = data.api_format.clone().unwrap_or_else(|| "openai".to_string());
+    let api_format = data
+        .api_format
+        .clone()
+        .unwrap_or_else(|| "openai".to_string());
 
     conn.execute(
         "INSERT INTO api_providers (id, name, api_endpoint, api_key, api_key_masked, api_key_set, models, api_format, sort_order, created_at, updated_at)
@@ -172,8 +204,9 @@ pub fn upsert_api_provider(conn: &rusqlite::Connection, data: &CreateOrUpdatePro
         ],
     )?;
 
-    let provider = get_api_provider(conn, &data.id)?
-        .ok_or_else(|| AppError::NotFound(format!("Provider {} not found after upsert", data.id)))?;
+    let provider = get_api_provider(conn, &data.id)?.ok_or_else(|| {
+        AppError::NotFound(format!("Provider {} not found after upsert", data.id))
+    })?;
     Ok(provider)
 }
 
@@ -200,7 +233,9 @@ pub fn reorder_api_providers(conn: &rusqlite::Connection, ids: &[String]) -> Res
 // get/set 命令签名不变，前端零改动。
 
 /// 读取全部模型备注（providerId → modelName → 备注，含空备注）。
-pub fn get_model_notes(conn: &rusqlite::Connection) -> Result<HashMap<String, HashMap<String, String>>, AppError> {
+pub fn get_model_notes(
+    conn: &rusqlite::Connection,
+) -> Result<HashMap<String, HashMap<String, String>>, AppError> {
     let mut stmt = conn.prepare("SELECT id, models FROM api_providers")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
     let mut map: HashMap<String, HashMap<String, String>> = HashMap::new();
@@ -219,9 +254,14 @@ pub fn set_model_notes(
     let now = crate::utils::now();
     for (pid, mnotes) in notes {
         let cur: Option<String> = conn
-            .query_row("SELECT models FROM api_providers WHERE id = ?", params![pid], |r| r.get(0))
+            .query_row(
+                "SELECT models FROM api_providers WHERE id = ?",
+                params![pid],
+                |r| r.get(0),
+            )
             .optional()?;
-        let mut entries: Vec<(String, String)> = cur.as_deref().map(parse_model_entries).unwrap_or_default();
+        let mut entries: Vec<(String, String)> =
+            cur.as_deref().map(parse_model_entries).unwrap_or_default();
         for (name, note) in mnotes {
             match entries.iter_mut().find(|(n, _)| n == name) {
                 Some(e) => e.1 = note.clone(),
@@ -265,22 +305,25 @@ pub fn collect_provider_models(conn: &rusqlite::Connection) -> Vec<ProviderModel
                 endpoint: p.api_endpoint,
                 api_format: p.api_format,
                 models,
+                is_session: false,
             }
         })
         .collect()
 }
 
 #[tauri::command]
-pub fn get_model_notes_cmd(state: tauri::State<'_, crate::DbState>) -> Result<HashMap<String, HashMap<String, String>>, AppError> {
+pub fn get_model_notes_cmd(
+    state: tauri::State<'_, crate::DbState>,
+) -> Result<HashMap<String, HashMap<String, String>>, String> {
     let conn = state.get_conn()?;
-    get_model_notes(&conn)
+    get_model_notes(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn set_model_notes_cmd(
     state: tauri::State<'_, crate::DbState>,
     notes: HashMap<String, HashMap<String, String>>,
-) -> Result<(), AppError> {
+) -> Result<(), String> {
     let conn = state.get_conn()?;
-    set_model_notes(&conn, &notes)
+    set_model_notes(&conn, &notes).map_err(|e| e.to_string())
 }

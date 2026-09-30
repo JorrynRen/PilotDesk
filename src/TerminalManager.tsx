@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext } from 'react';
 
 export type ViewMode = 'workflow' | 'session' | 'groupchat' | 'terminal' | 'custom';
 
@@ -10,7 +10,7 @@ export interface TerminalTabData {
   cwd?: string;
 }
 
-interface TerminalContextType {
+export interface TerminalContextType {
   /** Current main panel view mode */
   viewMode: ViewMode;
   /** Switch to a specific mode (workflow/session/groupchat/terminal) */
@@ -39,7 +39,7 @@ interface TerminalContextType {
   setTerminalTheme: (theme: string) => void;
 }
 
-const TerminalContext = createContext<TerminalContextType | undefined>(undefined);
+export const TerminalContext = createContext<TerminalContextType | undefined>(undefined);
 
 export const useTerminal = () => {
   const context = useContext(TerminalContext);
@@ -48,35 +48,6 @@ export const useTerminal = () => {
   }
   return context;
 };
-
-interface TerminalProviderProps {
-  children: React.ReactNode;
-}
-
-export const TerminalProvider: React.FC<TerminalProviderProps> = ({ children }) => {
-  const [viewMode, setViewMode] = useState<ViewMode>('session');
-  const [terminalTabs, setTerminalTabs] = useState<TerminalTabData[]>([]);
-  const [activeTerminalTabId, setActiveTerminalTabId] = useState<string | null>(null);
-  const [terminalShellType, setTerminalShellType] = useState('powershell');
-  const [terminalTheme, setTerminalTheme] = useState<string>('Catppuccin Dark');
-
-  const setMode = (mode: ViewMode) => setViewMode(mode);
-  const openConsole = () => setViewMode('terminal');
-  const closeConsole = () => setViewMode('session');
-  const toggleConsole = () => setViewMode((prev) => (prev === 'session' ? 'terminal' : 'session'));
-
-  return (
-    <TerminalContext.Provider value={{
-      viewMode, setMode, openConsole, closeConsole, toggleConsole,
-      terminalTabs, setTerminalTabs,
-      activeTerminalTabId, setActiveTerminalTabId,
-      terminalShellType, setTerminalShellType,
-      terminalTheme, setTerminalTheme,
-    }}>
-      {children}
-    </TerminalContext.Provider>
-  );
-}
 
 // ── 活跃终端注入桥 ──
 // TerminalPanel 将“向当前活跃终端输入点注入文本”的能力注册于此；

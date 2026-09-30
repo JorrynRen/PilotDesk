@@ -1,6 +1,7 @@
 import { Star, Send, Trash2 } from 'lucide-react';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { InspirationItem } from '../../stores/inspirationStore';
+import { elide } from '../../utils/text';
 
 interface InspirationCardProps {
   inspiration: InspirationItem;
@@ -67,9 +68,7 @@ export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession
         className="text-xs leading-relaxed mb-3 line-clamp-3"
         style={{ color: 'var(--text-secondary)' }}
       >
-        {inspiration.content.length > 150
-          ? inspiration.content.slice(0, 150) + '...'
-          : inspiration.content}
+        {elide(inspiration.content, 150, '...')}
       </p>
 
       {/* Tags */}

@@ -104,8 +104,6 @@ pub struct CreateAgentPayload {
     pub version: Option<String>,
 }
 
-
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAgentPayload {

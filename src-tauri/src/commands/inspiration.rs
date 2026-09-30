@@ -1,6 +1,6 @@
-use rusqlite::{params, Connection};
-use crate::utils::errors::AppError;
 pub use crate::db::models::Inspiration;
+use crate::utils::errors::AppError;
+use rusqlite::{params, Connection};
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +45,11 @@ fn row_to_inspiration(row: &rusqlite::Row<'_>) -> Result<Inspiration, rusqlite::
 }
 
 /// List all inspirations with optional tag filter
-pub fn list_inspirations(conn: &Connection, tag: Option<String>, favorite_only: bool) -> Result<Vec<Inspiration>, AppError> {
+pub fn list_inspirations(
+    conn: &Connection,
+    tag: Option<String>,
+    favorite_only: bool,
+) -> Result<Vec<Inspiration>, AppError> {
     let mut sql = String::from(
         "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at,          COALESCE(json_group_array(it.tag) FILTER (WHERE it.tag IS NOT NULL), '[]') as tags          FROM inspirations i          LEFT JOIN inspiration_tags it ON i.id = it.inspiration_id"
     );
@@ -58,7 +62,10 @@ pub fn list_inspirations(conn: &Connection, tag: Option<String>, favorite_only: 
 
     if let Some(ref t) = tag {
         if !t.is_empty() {
-            conditions.push(format!("i.id IN (SELECT inspiration_id FROM inspiration_tags WHERE tag = ?{})", params_vec.len() + 1));
+            conditions.push(format!(
+                "i.id IN (SELECT inspiration_id FROM inspiration_tags WHERE tag = ?{})",
+                params_vec.len() + 1
+            ));
             params_vec.push(Box::new(t.clone()));
         }
     }
@@ -70,7 +77,8 @@ pub fn list_inspirations(conn: &Connection, tag: Option<String>, favorite_only: 
     sql.push_str(" GROUP BY i.id ORDER BY i.updated_at DESC");
 
     let mut stmt = conn.prepare(&sql)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params_vec.iter().map(|p| p.as_ref()).collect();
     let rows: Vec<Inspiration> = stmt
         .query_map(param_refs.as_slice(), row_to_inspiration)?
         .filter_map(|r| r.ok())
@@ -84,12 +92,16 @@ pub fn get_inspiration(conn: &Connection, id: String) -> Result<Inspiration, App
         "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at,          COALESCE(json_group_array(it.tag) FILTER (WHERE it.tag IS NOT NULL), '[]') as tags          FROM inspirations i          LEFT JOIN inspiration_tags it ON i.id = it.inspiration_id          WHERE i.id = ?1          GROUP BY i.id"
     )?;
     let mut rows = stmt.query_map(params![id], row_to_inspiration)?;
-    rows.next().ok_or(AppError::NotFound("灵感不存在".to_string()))?
+    rows.next()
+        .ok_or(AppError::NotFound("灵感不存在".to_string()))?
         .map_err(|e| AppError::Db(e.to_string()))
 }
 
 /// Create a new inspiration
-pub fn create_inspiration(conn: &Connection, payload: CreateInspirationPayload) -> Result<Inspiration, AppError> {
+pub fn create_inspiration(
+    conn: &Connection,
+    payload: CreateInspirationPayload,
+) -> Result<Inspiration, AppError> {
     let id = crate::utils::new_id();
     let now = crate::utils::now();
     let icon = payload.icon.unwrap_or_else(|| "💡".to_string());
@@ -102,20 +114,28 @@ pub fn create_inspiration(conn: &Connection, payload: CreateInspirationPayload) 
 
     // Insert tags
     if let Some(tags) = payload.tags {
-        let mut tag_stmt = conn.prepare("INSERT OR IGNORE INTO inspiration_tags (inspiration_id, tag) VALUES (?1, ?2)")?;
+        let mut tag_stmt = conn.prepare(
+            "INSERT OR IGNORE INTO inspiration_tags (inspiration_id, tag) VALUES (?1, ?2)",
+        )?;
         for tag in tags {
             tag_stmt.execute(params![id, tag])?;
         }
     }
 
     // Trigger FTS5 reindex
-    conn.execute("INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')", [])?;
+    conn.execute(
+        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
+        [],
+    )?;
 
     get_inspiration(conn, id)
 }
 
 /// Update an existing inspiration
-pub fn update_inspiration(conn: &Connection, payload: UpdateInspirationPayload) -> Result<Inspiration, AppError> {
+pub fn update_inspiration(
+    conn: &Connection,
+    payload: UpdateInspirationPayload,
+) -> Result<Inspiration, AppError> {
     let now = crate::utils::now();
 
     // Check existence
@@ -136,16 +156,24 @@ pub fn update_inspiration(conn: &Connection, payload: UpdateInspirationPayload) 
     // Update tags if provided
     if let Some(tags) = payload.tags {
         // Delete existing tags
-        conn.execute("DELETE FROM inspiration_tags WHERE inspiration_id = ?1", params![payload.id])?;
+        conn.execute(
+            "DELETE FROM inspiration_tags WHERE inspiration_id = ?1",
+            params![payload.id],
+        )?;
         // Insert new tags
-        let mut tag_stmt = conn.prepare("INSERT OR IGNORE INTO inspiration_tags (inspiration_id, tag) VALUES (?1, ?2)")?;
+        let mut tag_stmt = conn.prepare(
+            "INSERT OR IGNORE INTO inspiration_tags (inspiration_id, tag) VALUES (?1, ?2)",
+        )?;
         for tag in tags {
             tag_stmt.execute(params![payload.id, tag])?;
         }
     }
 
     // Reindex FTS5
-    conn.execute("INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')", [])?;
+    conn.execute(
+        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
+        [],
+    )?;
 
     get_inspiration(conn, payload.id)
 }
@@ -160,7 +188,11 @@ pub fn delete_inspiration(conn: &Connection, id: String) -> Result<(), AppError>
 }
 
 /// Full-text search using FTS5
-pub fn search_inspirations(conn: &Connection, query: String, limit: u32) -> Result<Vec<Inspiration>, AppError> {
+pub fn search_inspirations(
+    conn: &Connection,
+    query: String,
+    limit: u32,
+) -> Result<Vec<Inspiration>, AppError> {
     let limit = limit.max(1).min(100);
     let sql = format!(
         "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at, \

@@ -241,7 +241,9 @@ fn extract_images(
         if saved >= limit {
             break;
         }
-        let Ok(mut f) = zip.by_name(&name) else { continue };
+        let Ok(mut f) = zip.by_name(&name) else {
+            continue;
+        };
         let mut bytes = Vec::new();
         let _ = f.read_to_end(&mut bytes);
         if bytes.is_empty() {
@@ -321,7 +323,10 @@ impl ToolHandler for ParseDocumentTool {
         let output = arguments["output"].as_str().unwrap_or("blocks").to_string();
         let include_images = arguments["include_images"].as_bool().unwrap_or(true);
         let page_range = arguments["page_range"].as_str();
-        let table_format = arguments["table_format"].as_str().unwrap_or("json").to_string();
+        let table_format = arguments["table_format"]
+            .as_str()
+            .unwrap_or("json")
+            .to_string();
 
         let path = PathBuf::from(file.trim());
         let abs = if path.is_absolute() {
@@ -340,8 +345,14 @@ impl ToolHandler for ParseDocumentTool {
         let result = match format {
             "pdf" => self.parse_pdf(&bytes, page_range, &table_format).await?,
             "xlsx" => self.parse_xlsx(&abs, &table_format).await?,
-            "docx" => self.parse_docx(&bytes, include_images, &table_format).await?,
-            "pptx" => self.parse_pptx(&bytes, include_images, &table_format).await?,
+            "docx" => {
+                self.parse_docx(&bytes, include_images, &table_format)
+                    .await?
+            }
+            "pptx" => {
+                self.parse_pptx(&bytes, include_images, &table_format)
+                    .await?
+            }
             _ => return Err(format!("暂不支持的格式: {}", format)),
         };
 
@@ -400,14 +411,10 @@ impl ParseDocumentTool {
         Ok(blocks)
     }
 
-    async fn parse_xlsx(
-        &self,
-        path: &Path,
-        table_format: &str,
-    ) -> Result<Vec<Value>, String> {
+    async fn parse_xlsx(&self, path: &Path, table_format: &str) -> Result<Vec<Value>, String> {
         use calamine::Reader;
-        let mut wb = calamine::open_workbook_auto(path)
-            .map_err(|e| format!("Excel 打开失败: {}", e))?;
+        let mut wb =
+            calamine::open_workbook_auto(path).map_err(|e| format!("Excel 打开失败: {}", e))?;
         let mut blocks = Vec::new();
         for name in wb.sheet_names() {
             let range = wb
@@ -444,7 +451,8 @@ impl ParseDocumentTool {
                 .by_name("word/document.xml")
                 .map_err(|e| format!("读取 document.xml 失败: {}", e))?;
             use std::io::Read;
-            f.read_to_string(&mut xml).map_err(|e| format!("读取 XML 失败: {}", e))?;
+            f.read_to_string(&mut xml)
+                .map_err(|e| format!("读取 XML 失败: {}", e))?;
         }
         let mut blocks = scan_docx(&xml);
         // 图片提取
@@ -472,7 +480,9 @@ impl ParseDocumentTool {
         // 按 slide 编号排序读取文本
         let mut slides: Vec<(u32, String)> = Vec::new();
         for i in 0..zip.len() {
-            let mut f = zip.by_index(i).map_err(|e| format!("读取包内文件失败: {}", e))?;
+            let mut f = zip
+                .by_index(i)
+                .map_err(|e| format!("读取包内文件失败: {}", e))?;
             let name = f.name().to_string();
             if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
                 let num: u32 = name
@@ -482,7 +492,8 @@ impl ParseDocumentTool {
                     .unwrap_or(0);
                 let mut xml = String::new();
                 use std::io::Read;
-                f.read_to_string(&mut xml).map_err(|e| format!("读取 slide 失败: {}", e))?;
+                f.read_to_string(&mut xml)
+                    .map_err(|e| format!("读取 slide 失败: {}", e))?;
                 slides.push((num, xml));
             }
         }
@@ -560,7 +571,12 @@ fn render_markdown(blocks: &[Value], _table_format: &str) -> String {
                         .first()
                         .map(|r| {
                             r.as_array()
-                                .map(|cells| cells.iter().map(|c| c.as_str().unwrap_or("").to_string()).collect())
+                                .map(|cells| {
+                                    cells
+                                        .iter()
+                                        .map(|c| c.as_str().unwrap_or("").to_string())
+                                        .collect()
+                                })
                                 .unwrap_or_default()
                         })
                         .unwrap_or_default();

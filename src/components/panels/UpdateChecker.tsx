@@ -1,50 +1,89 @@
 import { useState } from 'react';
 import { Download, Check, RefreshCw, Loader2, ExternalLink, Rocket } from 'lucide-react';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
-import { invoke } from '@tauri-apps/api/core';
+import { check, type Update as UpdateHandle } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { errorMessage } from '../../utils/errorMessage';
 
-interface VersionCheckResult {
-  name: string;
-  current: string | null;
-  latest: string | null;
-  hasUpdate: boolean;
-  error: string | null;
-}
+// 版本号单一来源：由 vite.config.ts 从根 package.json 注入
+const APP_VERSION = import.meta.env.VITE_APP_VERSION as string;
 
-interface UpdateCheckResponse {
-  pilotdesk: VersionCheckResult;
-  checkedAt: string;
+const RELEASES_URL = 'https://github.com/jorryn/pilotdesk/releases';
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 export function UpdateChecker() {
-  const [updateResult, setUpdateResult] = useState<UpdateCheckResponse | null>(null);
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<string>(APP_VERSION);
+  const [update, setUpdate] = useState<UpdateHandle | null>(null);
+  const [downloaded, setDownloaded] = useState(0);
+  const [contentLength, setContentLength] = useState<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+
+  const handleOpenReleasePage = async () => {
+    try {
+      await openUrl(RELEASES_URL);
+    } catch {
+      window.open(RELEASES_URL, '_blank');
+    }
+  };
 
   const fetchUpdates = async () => {
     setChecking(true);
     setError(null);
     try {
-      const result = await invoke<UpdateCheckResponse>('check_pilotdesk_update');
-      setUpdateResult(result);
-    } catch (e: any) {
-      const msg = e?.message || (typeof e === 'string' ? e : JSON.stringify(e));
+      // 释放上一次检查留下、且未安装的 Update 资源（避免 Rust 侧句柄泄漏）
+      if (update) {
+        await update.close().catch(() => {});
+        setUpdate(null);
+      }
+      const result = await check();
+      setUpdate(result);
+      setCurrentVersion(result?.currentVersion ?? APP_VERSION);
+      setCheckedAt(new Date().toLocaleString());
+    } catch (e) {
+      const msg = errorMessage(e);
       setError(`检查更新失败: ${msg}`);
     } finally {
       setChecking(false);
     }
   };
 
-  const pd = updateResult?.pilotdesk;
-
-  const handleOpenReleasePage = async () => {
-
+  const handleInstall = async () => {
+    if (!update) return;
+    setInstalling(true);
+    setError(null);
+    setDownloaded(0);
+    setContentLength(undefined);
     try {
-      await openUrl('https://github.com/jorryn/pilotdesk/releases');
-    } catch {
-      window.open('https://github.com/jorryn/pilotdesk/releases', '_blank');
+      await update.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          setContentLength(event.data.contentLength);
+        } else if (event.event === 'Progress') {
+          setDownloaded((prev) => prev + event.data.chunkLength);
+        }
+      });
+      // Windows 下安装器启动后应用会自动退出；macOS / Linux 需要主动重启以运行新版本
+      await relaunch();
+    } catch (e) {
+      const msg = errorMessage(e);
+      setError(`安装更新失败: ${msg}。可前往 GitHub Releases 手动下载。`);
+      setInstalling(false);
     }
   };
+
+  const hasUpdate = update !== null;
+  const percent =
+    contentLength && contentLength > 0
+      ? Math.min(100, Math.round((downloaded / contentLength) * 100))
+      : null;
 
   return (
     <div className="p-4 space-y-4">
@@ -55,7 +94,7 @@ export function UpdateChecker() {
         </h3>
         <button
           onClick={fetchUpdates}
-          disabled={checking}
+          disabled={checking || installing}
           className="pd-btn flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors disabled:opacity-50"
           style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
         >
@@ -69,9 +108,9 @@ export function UpdateChecker() {
       </div>
 
       {/* Last checked time */}
-      {updateResult && (
+      {checkedAt && (
         <p className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-          上次检查: {updateResult.checkedAt}
+          上次检查: {checkedAt}
         </p>
       )}
 
@@ -86,64 +125,61 @@ export function UpdateChecker() {
       )}
 
       {/* PilotDesk version card */}
-      {pd && (
-        <div
-          className="flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors"
-          style={{
-            backgroundColor: pd.hasUpdate ? 'rgba(245, 158, 11, 0.06)' : 'var(--bg-tertiary)',
-            border: pd.hasUpdate ? '1px solid rgba(245, 158, 11, 0.2)' : '1px solid transparent',
-          }}
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            {pd.hasUpdate ? (
-              <Download size={14} style={{ color: '#F59E0B', flexShrink: 0 }} />
-            ) : (
-              <Check size={14} style={{ color: '#10B981', flexShrink: 0 }} />
-            )}
-            <div className="min-w-0">
-              <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
-                PilotDesk
-              </span>
-              <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                当前: v{pd.current}
-                {pd.latest && pd.hasUpdate && (
-                  <span style={{ color: '#F59E0B' }}> | 最新: v{pd.latest}</span>
-                )}
-                {!pd.hasUpdate && pd.latest && (
-                  <span> ({pd.latest})</span>
-                )}
-              </div>
-              {pd.error && (
-                <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  {pd.error}
-                </div>
+      <div
+        className="flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors"
+        style={{
+          backgroundColor: hasUpdate ? 'rgba(245, 158, 11, 0.06)' : 'var(--bg-tertiary)',
+          border: hasUpdate ? '1px solid rgba(245, 158, 11, 0.2)' : '1px solid transparent',
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {hasUpdate ? (
+            <Download size={14} style={{ color: '#F59E0B', flexShrink: 0 }} />
+          ) : (
+            <Check size={14} style={{ color: '#10B981', flexShrink: 0 }} />
+          )}
+          <div className="min-w-0">
+            <span className="text-xs " style={{ color: 'var(--text-primary)' }}>
+              PilotDesk
+            </span>
+            <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+              当前: v{currentVersion}
+              {hasUpdate && (
+                <span style={{ color: '#F59E0B' }}> | 最新: v{update?.version}</span>
               )}
             </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            {pd.hasUpdate && (
-              <button
-                onClick={handleOpenReleasePage}
-                className="pd-btn flex items-center gap-1 px-2 py-1 rounded text-[10px]  transition-colors"
-                style={{ backgroundColor: '#F59E0B', color: '#fff' }}
-                title="前往 GitHub 下载新版本"
-              >
-                <ExternalLink size={11} />
-                下载
-              </button>
-            )}
-            {!pd.hasUpdate && (
-              <span className="text-[10px]" style={{ color: '#10B981' }}>
-                已是最新
-              </span>
+            {installing && (
+              <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                正在下载安装包{percent !== null ? ` (${percent}%)` : ''}
+                {contentLength ? ` · ${formatBytes(downloaded)} / ${formatBytes(contentLength)}` : ''}
+              </div>
             )}
           </div>
         </div>
-      )}
 
-      {/* Upgrade notice banner */}
-      {pd?.hasUpdate && (
+        <div className="flex items-center gap-2 shrink-0">
+          {hasUpdate && (
+            <button
+              onClick={handleInstall}
+              disabled={installing}
+              className="pd-btn flex items-center gap-1 px-2 py-1 rounded text-[10px]  transition-colors disabled:opacity-60"
+              style={{ backgroundColor: '#F59E0B', color: '#fff' }}
+              title="下载并安装新版本，随后自动重启"
+            >
+              {installing ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />}
+              {installing ? '安装中...' : '下载并安装'}
+            </button>
+          )}
+          {!hasUpdate && !checking && (
+            <span className="text-[10px]" style={{ color: '#10B981' }}>
+              已是最新
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Update notice banner */}
+      {hasUpdate && (
         <div
           className="flex items-start gap-2 px-3 py-2.5 rounded-lg"
           style={{ backgroundColor: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.15)' }}
@@ -151,10 +187,10 @@ export function UpdateChecker() {
           <Rocket size={14} style={{ color: '#F59E0B', flexShrink: 0, marginTop: 1 }} />
           <div>
             <p className="text-xs " style={{ color: '#F59E0B' }}>
-              发现新版本
+              发现新版本 v{update?.version}
             </p>
             <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-              建议更新至最新版本以获得最新功能和安全修复。前往{' '}
+              点击「下载并安装」将自动下载并重启应用。也可前往{' '}
               <span
                 className="cursor-pointer underline"
                 style={{ color: 'var(--accent)' }}
@@ -162,10 +198,22 @@ export function UpdateChecker() {
               >
                 GitHub Releases
               </span>{' '}
-              下载。
+              手动下载。
             </p>
           </div>
         </div>
+      )}
+
+      {/* Fallback entry when update exists but install failed */}
+      {hasUpdate && error && (
+        <button
+          onClick={handleOpenReleasePage}
+          className="pd-btn w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[10px] transition-colors"
+          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)', border: '1px solid var(--border)' }}
+        >
+          <ExternalLink size={11} />
+          前往 GitHub Releases 手动下载
+        </button>
       )}
 
       {/* Footer */}

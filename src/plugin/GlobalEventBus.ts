@@ -13,7 +13,7 @@ import type { CommandResult } from '../types/plugin';
 // ── 类型定义 ──
 
 /** 全局事件 handler */
-type GlobalEventHandler = (payload: any) => void;
+type GlobalEventHandler = (payload: unknown) => void;
 
 /** 已订阅的全局事件信息 */
 interface GlobalEventSubscription {
@@ -82,7 +82,7 @@ class GlobalEventBus {
    * 发布全局事件
    * 并行调用所有订阅者的 handler
    */
-  emit(event: string, payload?: any): void {
+  emit(event: string, payload?: unknown): void {
     const list = this.subscriptions.get(event);
     if (!list || list.length === 0) return;
 
@@ -106,12 +106,12 @@ class GlobalEventBus {
    * @param commandId 命令 ID
    * @param params 命令参数
    */
-  async call<T = any>(
+  async call(
     pluginId: string,
     commandId: string,
-    params?: any,
+    params?: Record<string, unknown>,
   ): Promise<CommandResult> {
-    return commandDispatcher.execute<T>(pluginId, commandId, params);
+    return commandDispatcher.execute(pluginId, commandId, params);
   }
 }
 

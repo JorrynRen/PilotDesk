@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::models::{ConfirmationItem, ConfirmationRequest, TaskRow, summarize_confirmation_title};
+use super::models::{summarize_confirmation_title, ConfirmationItem, ConfirmationRequest, TaskRow};
 use super::participant::{Attitude, ChatMessage, LlmClient, Stance};
 
 /// 组装「各参与者当前立场」区块文本（含态度标签）。
@@ -231,7 +231,11 @@ pub struct Director {
 
 impl Director {
     pub fn new(llm: Arc<dyn LlmClient>, director_id: String) -> Self {
-        Self { llm, director_id, last_reasoning: Mutex::new(String::new()) }
+        Self {
+            llm,
+            director_id,
+            last_reasoning: Mutex::new(String::new()),
+        }
     }
 
     /// 调用 LLM 完成一次决策：捕获思考链（reasoning_content）供落库展示，返回决策正文。
@@ -239,7 +243,12 @@ impl Director {
     async fn complete_decision(&self, prompt: &str) -> Result<String, String> {
         let (content, _tool_calls, reasoning) = self
             .llm
-            .complete_with_tool_calls(&self.system_prompt(), &[ChatMessage::user(prompt)], None, None)
+            .complete_with_tool_calls(
+                &self.system_prompt(),
+                &[ChatMessage::user(prompt)],
+                None,
+                None,
+            )
             .await?;
         if let Ok(mut g) = self.last_reasoning.lock() {
             *g = reasoning;
@@ -249,7 +258,10 @@ impl Director {
 
     /// 取走最近一次决策的思考链（取后清空，避免重复落库）。
     pub fn take_last_reasoning(&self) -> String {
-        self.last_reasoning.lock().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default()
+        self.last_reasoning
+            .lock()
+            .map(|mut g| std::mem::take(&mut *g))
+            .unwrap_or_default()
     }
 
     fn system_prompt(&self) -> String {
@@ -297,12 +309,13 @@ impl Director {
                 .section("roster", roster_section),
         );
 
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let json = strip_fences(&raw);
         let v: serde_json::Value = serde_json::from_str(&json).ok()?;
-        let goal = v["goal"].as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+        let goal = v["goal"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
         if goal.is_empty() {
             return None;
         }
@@ -316,8 +329,16 @@ impl Director {
                     .collect()
             })
             .unwrap_or_default();
-        let output_dir_name = v["output_dir_name"].as_str().map(|s| s.trim().to_string()).unwrap_or_default();
-        Some(GoalClarification { goal, need_confirmation, questions, output_dir_name })
+        let output_dir_name = v["output_dir_name"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        Some(GoalClarification {
+            goal,
+            need_confirmation,
+            questions,
+            output_dir_name,
+        })
     }
 
     /// 阶段A 确认回复消化（v3.5c）：主持人理解并消化用户对确认问题的回复，
@@ -358,12 +379,13 @@ impl Director {
                 .section("roster", roster_section),
         );
 
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let json = strip_fences(&raw);
         let v: serde_json::Value = serde_json::from_str(&json).ok()?;
-        let adjusted_goal = v["adjusted_goal"].as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+        let adjusted_goal = v["adjusted_goal"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
         if adjusted_goal.is_empty() {
             return None;
         }
@@ -379,7 +401,10 @@ impl Director {
                 .unwrap_or_default()
         };
         let need_more = v["need_more"].as_bool().unwrap_or(false);
-        let output_dir_name = v["output_dir_name"].as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+        let output_dir_name = v["output_dir_name"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
         Some(GoalClarifyReply {
             adjusted_goal,
             resolved: strings("resolved"),
@@ -408,7 +433,11 @@ impl Director {
         let roster = participants
             .iter()
             .map(|(id, name, role)| {
-                let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                let role = if role.trim().is_empty() {
+                    "未分配"
+                } else {
+                    role.as_str()
+                };
                 format!("- [@{}]（显示名：{}）（当前角色：{}）", id, name, role)
             })
             .collect::<Vec<_>>()
@@ -418,7 +447,10 @@ impl Director {
         let latest_section = if topic == latest {
             "（本轮无新增指令，直接围绕初始目标编排）".to_string()
         } else {
-            format!("【本轮新增指令（用户刚刚补充/确认，需纳入编排）】\n{}", latest)
+            format!(
+                "【本轮新增指令（用户刚刚补充/确认，需纳入编排）】\n{}",
+                latest
+            )
         };
         let notes_section = if notes.trim().is_empty() {
             "（暂无补充约束）".to_string()
@@ -450,9 +482,7 @@ impl Director {
                 .var("max_new_participants", max_new_participants.to_string()),
         );
 
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let json = strip_fences(&raw);
         let v: serde_json::Value = serde_json::from_str(&json).ok()?;
 
@@ -460,7 +490,10 @@ impl Director {
             .as_array()?
             .iter()
             .map(|t| TaskDraft {
-                description: t["description"].as_str().unwrap_or("未命名任务").to_string(),
+                description: t["description"]
+                    .as_str()
+                    .unwrap_or("未命名任务")
+                    .to_string(),
                 depends_on: t["depends_on"]
                     .as_array()
                     .map(|a| {
@@ -480,7 +513,10 @@ impl Director {
         if let Some(obj) = v["roles"].as_object() {
             for (k, val) in obj {
                 // 归一化 key：LLM 可能回显 [@id]/@id，直接作为 id 写库会匹配不到裸 id 行（角色分配不落库）。
-                roles.insert(normalize_ref(k), val.as_str().unwrap_or("参与者").to_string());
+                roles.insert(
+                    normalize_ref(k),
+                    val.as_str().unwrap_or("参与者").to_string(),
+                );
             }
         }
 
@@ -521,7 +557,11 @@ impl Director {
         let roster = participants
             .iter()
             .map(|(id, name, role)| {
-                let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                let role = if role.trim().is_empty() {
+                    "未分配"
+                } else {
+                    role.as_str()
+                };
                 format!("- [@{}]（显示名：{}）（当前角色：{}）", id, name, role)
             })
             .collect::<Vec<_>>()
@@ -573,9 +613,7 @@ impl Director {
                 .var("max_new_participants", max_new_participants.to_string()),
         );
 
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
 
         let operations = v["operations"]
@@ -597,7 +635,11 @@ impl Director {
                     .as_array()
                     .map(|a| {
                         a.iter()
-                            .filter_map(|x| x.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+                            .filter_map(|x| {
+                                x.as_str()
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
@@ -621,11 +663,18 @@ impl Director {
         if let Some(obj) = v["roles"].as_object() {
             for (k, val) in obj {
                 // 归一化 key：LLM 可能回显 [@id]/@id，直接作为 id 写库会匹配不到裸 id 行（角色分配不落库）。
-                roles.insert(normalize_ref(k), val.as_str().unwrap_or("参与者").to_string());
+                roles.insert(
+                    normalize_ref(k),
+                    val.as_str().unwrap_or("参与者").to_string(),
+                );
             }
         }
 
-        Some(ReplanPlan { operations, roles, new_participants: parse_new_participants(&v) })
+        Some(ReplanPlan {
+            operations,
+            roles,
+            new_participants: parse_new_participants(&v),
+        })
     }
 
     /// 名册变更后的重排：结合当前角色与任务完成情况，输出角色分配与任务重派。
@@ -641,7 +690,11 @@ impl Director {
         let roster_lines: Vec<String> = participants
             .iter()
             .map(|(id, name, role)| {
-                let role = if role.trim().is_empty() { "未分配".to_string() } else { role.clone() };
+                let role = if role.trim().is_empty() {
+                    "未分配".to_string()
+                } else {
+                    role.clone()
+                };
                 format!("- [@{}]（显示名：{}）（角色：{}）", id, name, role)
             })
             .collect();
@@ -666,7 +719,11 @@ impl Director {
                     t.status,
                     t.description,
                     assignee,
-                    if detail.is_empty() { String::new() } else { format!(" | 说明={}", detail) }
+                    if detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" | 说明={}", detail)
+                    }
                 )
             })
             .collect();
@@ -692,16 +749,17 @@ impl Director {
                 .section("existing_tasks", existing_text),
         );
 
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
 
         let mut roles = HashMap::new();
         if let Some(obj) = v["roles"].as_object() {
             for (k, val) in obj {
                 // 归一化 key：LLM 可能回显 [@id]/@id，直接作为 id 写库会匹配不到裸 id 行（角色分配不落库）。
-                roles.insert(normalize_ref(k), val.as_str().unwrap_or("参与者").to_string());
+                roles.insert(
+                    normalize_ref(k),
+                    val.as_str().unwrap_or("参与者").to_string(),
+                );
             }
         }
 
@@ -724,7 +782,11 @@ impl Director {
                     .as_array()
                     .map(|a| {
                         a.iter()
-                            .filter_map(|x| x.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+                            .filter_map(|x| {
+                                x.as_str()
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
@@ -768,7 +830,11 @@ impl Director {
             roster
                 .iter()
                 .map(|(id, name, role)| {
-                    let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                    let role = if role.trim().is_empty() {
+                        "未分配"
+                    } else {
+                        role.as_str()
+                    };
                     format!("- [@{}]（显示名：{}）（角色：{}）", id, name, role)
                 })
                 .collect::<Vec<_>>()
@@ -783,9 +849,7 @@ impl Director {
                 .section("roster", roster_section)
                 .section("latest", latest),
         );
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
         let intent = match v["intent"].as_str().unwrap_or("refine") {
             "change_goal" => "change_goal".to_string(),
@@ -814,12 +878,23 @@ impl Director {
             .as_str()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        Some(GoalIntent { intent, new_goal, amend, note, temp_task, director })
+        Some(GoalIntent {
+            intent,
+            new_goal,
+            amend,
+            note,
+            temp_task,
+            director,
+        })
     }
 
     /// 判断用户对确认请求的回复语义：`confirm`（回复/补充确认项）或 `directive`（新指令/改方向）。
     /// 完全由 LLM 依据内容语义判断，不约定硬编码规则；失败默认按 `confirm` 处理。
-    pub async fn classify_reply_intent(&self, confirmation_prompt: &str, reply: &str) -> Option<String> {
+    pub async fn classify_reply_intent(
+        &self,
+        confirmation_prompt: &str,
+        reply: &str,
+    ) -> Option<String> {
         // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_classify_reply_intent.prompt.md。
         let prompt = super::prompts::render(
             super::prompts::blocks::DIRECTOR_CLASSIFY_REPLY_INTENT.body,
@@ -827,9 +902,7 @@ impl Director {
                 .section("confirmation_prompt", confirmation_prompt)
                 .section("reply", reply),
         );
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
         Some(match v["intent"].as_str().unwrap_or("confirm") {
             "directive" => "directive".to_string(),
@@ -860,7 +933,11 @@ impl Director {
         let roster = participants
             .iter()
             .map(|(id, name, role)| {
-                let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                let role = if role.trim().is_empty() {
+                    "未分配"
+                } else {
+                    role.as_str()
+                };
                 format!("- [@{}]（显示名：{}）（当前角色：{}）", id, name, role)
             })
             .collect::<Vec<_>>()
@@ -918,18 +995,25 @@ impl Director {
                 .var("max_new_participants", max_new_participants.to_string()),
         );
 
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
-        let speaker = v["next_speaker"].as_str().map(str::trim).unwrap_or_default().to_string();
+        let speaker = v["next_speaker"]
+            .as_str()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
         let new_participants = parse_new_participants(&v);
         if speaker.is_empty() && new_participants.is_empty() {
             None
         } else {
             let reason = v["reason"].as_str().unwrap_or("").trim().to_string();
             let work_content = v["work_content"].as_str().unwrap_or("").trim().to_string();
-            Some(SpeakerDecision { speaker, reason, work_content, new_participants })
+            Some(SpeakerDecision {
+                speaker,
+                reason,
+                work_content,
+                new_participants,
+            })
         }
     }
 
@@ -943,9 +1027,7 @@ impl Director {
                 .section("speech", speech)
                 .var("speaker", speaker),
         );
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
         let attitude = match v["attitude"].as_str().unwrap_or("").trim() {
             "支持" => Attitude::Agree,
@@ -953,7 +1035,10 @@ impl Director {
             "中立" => Attitude::Neutral,
             _ => return None,
         };
-        let stance = v["stance"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+        let stance = v["stance"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())?;
         Some(StanceExtraction { attitude, stance })
     }
 
@@ -998,9 +1083,7 @@ impl Director {
                 .section("transcript", transcript)
                 .section("stances", stance_section),
         );
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
         let summary = v["summary"].as_str().unwrap_or("").trim().to_string();
         let next_action = match v["next_action"].as_str().unwrap_or("discuss").trim() {
@@ -1023,11 +1106,21 @@ impl Director {
             .as_array()
             .map(|a| {
                 a.iter()
-                    .filter_map(|x| x.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))
+                    .filter_map(|x| {
+                        x.as_str()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                    })
                     .collect()
             })
             .unwrap_or_default();
-        Some(ReviewOutcome { summary, next_action, reason, confirmation, completed_tasks })
+        Some(ReviewOutcome {
+            summary,
+            next_action,
+            reason,
+            confirmation,
+            completed_tasks,
+        })
     }
 
     /// 语义解析用户输入物引用（v3.4an LLM 层）：只输出锚点枚举 + 路径段结构，
@@ -1047,17 +1140,31 @@ impl Director {
             let anchor = item["anchor"].as_str().unwrap_or("").to_string();
             let subpath: Vec<String> = item["subpath"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
             if !subpath.is_empty() {
                 out.push((anchor, subpath));
             }
         }
-        if out.is_empty() { None } else { Some(out) }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     /// 收敛结论。
-    pub async fn conclude(&self, topic: &str, summary: &str, transcript: &str, task_manifest: &str) -> Option<String> {
+    pub async fn conclude(
+        &self,
+        topic: &str,
+        summary: &str,
+        transcript: &str,
+        task_manifest: &str,
+    ) -> Option<String> {
         // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_conclude.prompt.md。
         let prompt = super::prompts::render(
             super::prompts::blocks::DIRECTOR_CONCLUDE.body,
@@ -1067,9 +1174,7 @@ impl Director {
                 .section("task_manifest", task_manifest)
                 .section("transcript", transcript),
         );
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         Some(raw.trim().to_string())
     }
 
@@ -1096,7 +1201,11 @@ impl Director {
             roster
                 .iter()
                 .map(|(id, role)| {
-                    let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                    let role = if role.trim().is_empty() {
+                        "未分配"
+                    } else {
+                        role.as_str()
+                    };
                     format!("- [@{}]({})", id, role)
                 })
                 .collect::<Vec<_>>()
@@ -1129,9 +1238,7 @@ impl Director {
                 .var("attempt", attempt.to_string())
                 .var("max_new_participants", max_new_participants.to_string()),
         );
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
 
         let action = match v["action"].as_str().unwrap_or("skip").trim() {
@@ -1164,13 +1271,26 @@ impl Director {
             None
         };
 
-        Some(FailureDecision { action, assignee, reason, confirmation, new_participant, remove_participant })
+        Some(FailureDecision {
+            action,
+            assignee,
+            reason,
+            confirmation,
+            new_participant,
+            remove_participant,
+        })
     }
 
     /// 工具授权裁决：对中/高风险工具调用做轻量结构化裁决，返回是否放行及理由。
     /// 注入当前讨论目标作为「任务必要性」依据；请求失败/解析失败时按风险分级回退
     /// （High 拒绝，Medium/Low 放行），避免频繁工具调用因裁决不稳定而批量卡死。
-    pub async fn authorize_tool(&self, topic: &str, tool_name: &str, args: &str, risk: &str) -> ToolDecision {
+    pub async fn authorize_tool(
+        &self,
+        topic: &str,
+        tool_name: &str,
+        args: &str,
+        risk: &str,
+    ) -> ToolDecision {
         // v3.4aw 提示词资产化：模板位于 prompts/blocks/director_authorize_tool.prompt.md。
         let prompt = super::prompts::render(
             super::prompts::blocks::DIRECTOR_AUTHORIZE_TOOL.body,
@@ -1181,9 +1301,7 @@ impl Director {
                 .section("args", args),
         );
 
-        let raw = match self
-            .complete_decision(&prompt).await
-        {
+        let raw = match self.complete_decision(&prompt).await {
             Ok(r) => r,
             Err(e) => {
                 log::warn!(
@@ -1214,7 +1332,9 @@ impl Director {
             }
         };
 
-        let allow = v["allow"].as_bool().unwrap_or_else(|| fallback_decision(risk));
+        let allow = v["allow"]
+            .as_bool()
+            .unwrap_or_else(|| fallback_decision(risk));
         let reason = v["reason"].as_str().unwrap_or("").trim().to_string();
         log::info!(
             "[GroupChat] Director 工具授权裁决: tool={} allow={} reason={}",
@@ -1236,9 +1356,7 @@ impl Director {
                 .section("summary", summary),
         );
 
-        let raw = self
-            .complete_decision(&prompt).await
-            .ok()?;
+        let raw = self.complete_decision(&prompt).await.ok()?;
 
         let v: serde_json::Value = serde_json::from_str(strip_fences(&raw)).ok()?;
         let continue_loop = v["continue"].as_bool().unwrap_or(false);
@@ -1258,13 +1376,25 @@ fn fallback_decision(risk: &str) -> bool {
 }
 
 /// 从 Director 的 ask_user 决策 JSON 中构建确认请求；解析失败则退化为开放式确认。
-fn build_confirmation(topic: &str, task_id: &str, error: &str, v: &serde_json::Value) -> ConfirmationRequest {
-    let fallback = format!("初始目标：{}\n任务执行失败：{}\n请确认如何继续。", topic, error);
+fn build_confirmation(
+    topic: &str,
+    task_id: &str,
+    error: &str,
+    v: &serde_json::Value,
+) -> ConfirmationRequest {
+    let fallback = format!(
+        "初始目标：{}\n任务执行失败：{}\n请确认如何继续。",
+        topic, error
+    );
     build_confirmation_from_json(&v["confirmation"], task_id, &fallback)
 }
 
 /// 从 JSON 解析确认请求（title/reply_mode/prompt/items）；prompt 缺失时用 fallback。
-fn build_confirmation_from_json(c: &serde_json::Value, task_id: &str, fallback_prompt: &str) -> ConfirmationRequest {
+fn build_confirmation_from_json(
+    c: &serde_json::Value,
+    task_id: &str,
+    fallback_prompt: &str,
+) -> ConfirmationRequest {
     let reply_mode = match c["reply_mode"].as_str().unwrap_or("open") {
         "structured" => "structured".to_string(),
         _ => "open".to_string(),
@@ -1285,7 +1415,11 @@ fn build_confirmation_from_json(c: &serde_json::Value, task_id: &str, fallback_p
     let items = if reply_mode == "structured" {
         c["items"]
             .as_array()
-            .map(|arr| arr.iter().map(|it| ConfirmationItem::from_json(it, "input_type")).collect())
+            .map(|arr| {
+                arr.iter()
+                    .map(|it| ConfirmationItem::from_json(it, "input_type"))
+                    .collect()
+            })
             .unwrap_or_default()
     } else {
         Vec::new()

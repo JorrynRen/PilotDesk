@@ -2,7 +2,11 @@ import { Loader2, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useEnvInfo, type AgentDetectStatus } from '../../hooks/useEnvInfo';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
+import { useI18n } from '../../hooks/useI18n';
 import type { AgentConfig } from '../../types';
+
+// 版本号单一来源：由 vite.config.ts 从根 package.json 注入（见该文件注释）
+const APP_VERSION = import.meta.env.VITE_APP_VERSION as string;
 
 interface StatusBarProps {
   onOpenSettings?: () => void;
@@ -11,8 +15,9 @@ interface StatusBarProps {
 
 export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps) {
   const navigate = useNavigate();
-  const { envInfo, loading, agentStatus } = useEnvInfo();
+  const { envInfo, agentStatus } = useEnvInfo();
   const { agents } = useAgentRegistry();
+  const { t } = useI18n();
 
   // Show all enabled agents from DB, sorted by sortOrder
   const enabledAgents = agents
@@ -30,7 +35,7 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
       return { status: 'done', label: version, dotColor: agent.color || '#9CA3AF' };
     }
     if (status === 'error' || (status === 'done' && !version)) {
-      return { status: 'error', label: '未安装', dotColor: '#9CA3AF' };
+      return { status: 'error', label: t('statusBar.notInstalled', '未安装'), dotColor: '#9CA3AF' };
     }
     // pending or detecting — colon only, spinner indicates progress
     return { status: 'detecting', label: '', dotColor: '#9CA3AF' };
@@ -47,25 +52,25 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
           <button
             onClick={onOpenSettings}
             className="pd-btn flex items-center gap-1 rounded transition-colors hover:opacity-80 p-0.5"
-            title="设置"
+            title={t('statusBar.settings', '设置')}
             style={{ color: 'var(--text-secondary)', background: 'transparent' }}
           >
             <Settings size={12} />
-            <span>设置</span>
+            <span>{t('statusBar.settings', '设置')}</span>
           </button>
         )}
         {/* 分隔符（设置 vs Agent 状态区） */}
         <div className="w-px h-3" style={{ backgroundColor: 'var(--border)' }} />
-        <span className="flex items-center gap-1">Agent:</span>
+        <span className="flex items-center gap-1">{t('statusBar.agentLabel', 'Agent')}:</span>
         {enabledAgents.length === 0 && (
           <button
             onClick={() => navigate('/settings?tab=agents')}
             className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
-            title="点击前往设置页配置 Agent 集成"
+            title={t('statusBar.openAgentSettings', '点击前往设置页配置 Agent 集成')}
             style={{ color: 'var(--text-tertiary)' }}
           >
             <Settings size={10} />
-            未安装或未集成配置
+            {t('statusBar.notIntegrated', '未安装或未集成配置')}
           </button>
         )}
         {enabledAgents.map((agent) => {
@@ -79,7 +84,9 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
                 (onOpenEnvSettings ?? onOpenSettings)?.();
               }}
               className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
-              title={status === 'detecting' ? '点击刷新环境检测' : '点击查看环境检测'}
+              title={status === 'detecting'
+                ? t('statusBar.refreshEnv', '点击刷新环境检测')
+                : t('statusBar.viewEnv', '点击查看环境检测')}
             >
               <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: dotColor }} />
               {displayName}:{status === 'detecting' ? <Loader2 size={10} className="animate-spin" style={{ color: '#9CA3AF' }} /> : label ? ` ${label}` : ''}
@@ -88,7 +95,7 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
         })}
       </div>
       <div className="flex items-center gap-2">
-        <span style={{ color: 'var(--text-tertiary)' }}>PilotDesk v0.1.0</span>
+        <span style={{ color: 'var(--text-tertiary)' }}>PilotDesk v{APP_VERSION}</span>
       </div>
     </footer>
   );

@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ThinkingChainStep } from '../layout/MainPanel';
-import { collapseBlankLines } from './MarkdownRenderer';
+import { collapseBlankLines } from './markdownText';
+import { ApprovalCard } from '../confirmation/ApprovalCard';
 
 interface ThinkingChainProps {
   steps: ThinkingChainStep[];
   defaultCollapsed?: boolean;
   /** 当前正在流式输出的条目原始 id（如 reasoning 步骤），流式期间自动展开、结束后收起。 */
   liveStepKeys?: ReadonlySet<string>;
+  /** 所属会话 id：内联审批卡回调需要（会话模式由 MessageBubble 传入）。 */
+  sessionId?: string;
 }
 
 /**
@@ -40,16 +43,20 @@ function toolKey(id: string): string {
  * 用户点击后以用户状态为准，无任何自动展开干扰。工具调用行内嵌完成状态：
  * `🔧 调用 edit_file ✅ 完成`（调用中无徽标，完成后 ✅/❌）。
  */
-export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys }: ThinkingChainProps) {
+export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys, sessionId }: ThinkingChainProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   // 用户手动展开/折叠状态（条目唯一 key → boolean），点击后覆盖自动规则。
   const [manualState, setManualState] = useState<Map<string, boolean>>(() => new Map());
 
   // 外部折叠意图（defaultCollapsed）变化时同步面板状态：组件实例被列表（Virtuoso 等）
-  // 复用时 useState 不响应 prop 变化，由该 effect 兜底，保证"过程中展开、完成后自动折叠"可靠生效。
-  useEffect(() => {
+  // 复用时 useState 不响应 prop 变化，需要在变化的那一帧就按新值渲染。用「渲染期修正」而不是
+  // effect：在 effect 里同步 setState 会多一轮级联渲染（`react-hooks/set-state-in-effect`），
+  // 而"外部值变了就把本地状态重置成它"正是 React 推荐的 adjust-during-render 场景。
+  const [prevDefaultCollapsed, setPrevDefaultCollapsed] = useState(defaultCollapsed);
+  if (prevDefaultCollapsed !== defaultCollapsed) {
+    setPrevDefaultCollapsed(defaultCollapsed);
     setCollapsed(defaultCollapsed);
-  }, [defaultCollapsed]);
+  }
 
   if (steps.length === 0) return null;
 
@@ -70,7 +77,10 @@ export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys }: 
   type ChainItem =
     | { kind: 'reasoning'; id: string; content?: string }
     | { kind: 'tool'; tool: ToolItem }
-    | { kind: 'diff'; id: string; filePath?: string; diff?: string };
+    | { kind: 'diff'; id: string; filePath?: string; diff?: string }
+    | { kind: 'approval'; id: string; step: ThinkingChainStep }
+    | { kind: 'iteration_limit'; id: string; step: ThinkingChainStep }
+    | { kind: 'system'; id: string; step: ThinkingChainStep };
 
   const items: ChainItem[] = [];
   const toolIndex = new Map<string, number>(); // 归一化工具键 -> items 中 tool 条目下标
@@ -102,6 +112,42 @@ export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys }: 
       const n = (diffSeen.get(raw) ?? 0) + 1;
       diffSeen.set(raw, n);
       items.push({ kind: 'diff', id: n > 1 ? `${raw}#${n}` : raw, filePath: s.filePath, diff: s.fileDiff });
+    } else if (s.type === 'approval') {
+      items.push({ kind: 'approval', id: s.approvalCallId ?? s.id, step: s });
+    } else if (s.type === 'iteration_limit') {
+      items.push({ kind: 'iteration_limit', id: s.id, step: s });
+    } else if (s.type === 'system') {
+      // 轮前系统步骤（如自动记忆检索）：非模型发起的工具调用，独立成一步。
+      items.push({ kind: 'system', id: s.id, step: s });
+    }
+  }
+
+  // 审批卡归位到它所审批的工具：后端先发 tool_start、再发审批请求，并行工具调用时中间会插入
+  // 其它工具行，按出现顺序直接渲染，卡片会浮在整组工具之后、与它审批的工具脱节。
+  // 按工具调用键把卡片移到对应工具条目正下方；找不到对应工具行的审批（历史数据缺 start）保持原位。
+  const toolItemKeys = new Set<string>();
+  for (const it of items) {
+    if (it.kind === 'tool') toolItemKeys.add(toolKey(it.tool.id));
+  }
+  const cardsByTool = new Map<string, ChainItem[]>();
+  const withoutCards: ChainItem[] = [];
+  for (const it of items) {
+    // 仅归位审批卡；迭代上限卡不对应某个工具调用，保持出现顺序。
+    if (it.kind === 'approval' && toolItemKeys.has(toolKey(it.id))) {
+      const key = toolKey(it.id);
+      const cards = cardsByTool.get(key) ?? [];
+      cards.push(it);
+      cardsByTool.set(key, cards);
+      continue;
+    }
+    withoutCards.push(it);
+  }
+  const orderedItems: ChainItem[] = [];
+  for (const it of withoutCards) {
+    orderedItems.push(it);
+    if (it.kind === 'tool') {
+      const cards = cardsByTool.get(toolKey(it.tool.id));
+      if (cards) orderedItems.push(...cards);
     }
   }
 
@@ -109,6 +155,7 @@ export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys }: 
   const reasoningKeyOf = (id: string) => `reasoning:${id}`;
   const toolKeyOf = (id: string) => `tool:${id}`;
   const diffKeyOf = (id: string) => `diff:${id}`;
+  const systemKeyOf = (id: string) => `system:${id}`;
 
   // 展开规则：流式输出中的条目（liveStepKeys 命中的推理步骤 / 未完成的工具调用）自动展开，
   // 完成后自动折叠；用户手动点击后以用户状态为准（manualState 优先），无自动干扰。
@@ -166,7 +213,7 @@ export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys }: 
       </button>
 
       <div className="px-2.5 pb-2">
-        {items.map((item) => {
+        {orderedItems.map((item) => {
           if (item.kind === 'reasoning') {
             reasoningSeq += 1;
             const key = reasoningKeyOf(item.id);
@@ -313,6 +360,89 @@ export function ThinkingChain({ steps, defaultCollapsed = true, liveStepKeys }: 
                   </pre>
                 )}
               </div>
+            );
+          }
+          if (item.kind === 'system') {
+            const s = item.step;
+            const key = systemKeyOf(item.id);
+            const expanded = resolveExpanded(key, item.id);
+            const failed = s.sysSuccess === false;
+            return (
+              <div key={key} className="py-0.5">
+                {/* 系统步骤行：轮前框架步骤（如自动记忆检索），不是模型发起的工具调用，
+                    故不写「调用 xxx」，也不计入工具调用数。 */}
+                <button
+                  className="w-full flex items-center gap-1.5 text-left cursor-pointer hover:opacity-80"
+                  onClick={() => toggleItem(key)}
+                >
+                  <span className="text-[10px] shrink-0 mt-0.5">🧠</span>
+                  <span className="text-[11px] min-w-0 flex-1" style={{ color: 'var(--text-secondary)' }}>
+                    {s.sysTitle}
+                  </span>
+                  <span className="text-[10px] shrink-0" style={{ color: failed ? 'var(--danger, #ef4444)' : 'var(--success, #22c55e)' }}>
+                    {failed ? '❌ 失败' : '✅ 完成'}
+                  </span>
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="shrink-0 opacity-60"
+                    style={{ transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s ease' }}
+                  >
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+                {expanded && (
+                  <div className="pl-4 mt-0.5">
+                    {/* 参数行：该步骤实际使用的模型与解析结果（与工具行的"参数："对齐），
+                        与下方结论分开，便于分辨"模型没解析出关键词"和"关键词没命中记忆"。 */}
+                    {s.sysParams && (
+                      <div className="text-[10px] break-all" style={{ color: 'var(--text-secondary)' }}>
+                        参数：{s.sysParams}
+                      </div>
+                    )}
+                    <div className="text-[10px] break-all whitespace-pre-wrap" style={{ color: 'var(--text-tertiary)' }}>
+                      {collapseBlankLines(s.sysDetail ?? '')}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          }
+          if (item.kind === 'approval') {
+            const s = item.step;
+            return (
+              <ApprovalCard
+                key={`approval:${item.id}`}
+                callId={s.approvalCallId ?? item.id}
+                sessionId={sessionId ?? ''}
+                toolName={s.toolName ?? 'tool'}
+                args={s.toolArgs}
+                risk={s.approvalRisk}
+                deadline={s.approvalDeadline}
+                approved={s.approvalApproved}
+                timedOut={s.approvalTimedOut}
+              />
+            );
+          }
+          if (item.kind === 'iteration_limit') {
+            const s = item.step;
+            return (
+              <ApprovalCard
+                key={`iteration_limit:${item.id}`}
+                variant="continue"
+                sessionId={sessionId ?? ''}
+                current={s.iterCurrent ?? 0}
+                max={s.iterMax ?? 0}
+                deadline={s.iterDeadline}
+                decision={s.iterDecision}
+                timedOut={s.iterTimedOut}
+              />
             );
           }
           return null;

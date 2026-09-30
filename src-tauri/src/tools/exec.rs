@@ -15,11 +15,11 @@
 //! 自 `api_agent/exec.rs`（run_python）与 `lib.rs`（execute_command 内联逻辑）合并迁移
 //! （工具架构统一 v1.0，轮 4）。
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use tokio::io::AsyncReadExt;
 
 /// 静默观察窗：进程存活且无任何新输出持续超过该时长，才进入「疑似卡死」复核。
@@ -48,10 +48,7 @@ fn python_available() -> Result<bool, String> {
         .stderr(std::process::Stdio::null());
     #[cfg(windows)]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let ok = cmd
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
     *guard = Some(ok);
     Ok(ok)
 }
@@ -177,8 +174,26 @@ fn tail_preview(stdout: &[u8], stderr: &[u8]) -> String {
     if combined.chars().count() <= TAIL {
         return combined.to_string();
     }
-    let cut: String = combined.chars().skip(combined.chars().count() - TAIL).collect();
-    format!("…（以下为终止前输出尾部 {} 字符）\n{}", cut.chars().count(), cut)
+    let cut: String = combined
+        .chars()
+        .skip(combined.chars().count() - TAIL)
+        .collect();
+    format!(
+        "…（以下为终止前输出尾部 {} 字符）\n{}",
+        cut.chars().count(),
+        cut
+    )
+}
+
+/// 子进程命令行构造方式。
+///
+/// `RawTail` 用于 cmd.exe：Rust 的 argv 传递会为含引号/空格的参数插入 `\"` 转义，
+/// 而 cmd.exe 不识别该转义——`start "" "C:\a b\x.html"` 这类命令会被解析成以
+/// `\\` 开头的 UNC 路径，触发 Windows「找不到网络路径。」。原样追加可避免此破坏。
+enum Invocation<'a> {
+    Args(&'a [String]),
+    /// 程序名之后原样追加的整段命令行（Windows 专用路径）。
+    RawTail(&'a str),
 }
 
 /// 统一执行受管进程：异步管道实时读 + 活性检测 + 总执行上限 + 进程树终止。
@@ -186,13 +201,25 @@ fn tail_preview(stdout: &[u8], stderr: &[u8]) -> String {
 async fn run_managed(
     label: &str,
     program: &str,
-    args: &[String],
+    invocation: Invocation<'_>,
     cwd: &str,
     tmp_cleanup: Option<PathBuf>,
 ) -> Result<String, String> {
     let mut cmd = tokio::process::Command::new(program);
-    cmd.args(args)
-        .current_dir(cwd)
+    match invocation {
+        Invocation::Args(args) => {
+            cmd.args(args);
+        }
+        Invocation::RawTail(tail) => {
+            #[cfg(windows)]
+            cmd.raw_arg(tail);
+            #[cfg(not(windows))]
+            {
+                cmd.args(["-c", tail]);
+            }
+        }
+    }
+    cmd.current_dir(cwd)
         .stdin(std::process::Stdio::null()) // 杜绝交互等待输入挂起
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -312,7 +339,10 @@ async fn run_managed(
 
     if let Some(reason) = kill_reason {
         let (stdout, stderr) = {
-            let g = shared.lock().map(|g| (g.stdout.clone(), g.stderr.clone())).unwrap_or_default();
+            let g = shared
+                .lock()
+                .map(|g| (g.stdout.clone(), g.stderr.clone()))
+                .unwrap_or_default();
             g
         };
         let preview = tail_preview(&stdout, &stderr);
@@ -334,7 +364,10 @@ async fn run_managed(
         .await;
     }
     let (stdout, stderr) = {
-        let g = shared.lock().map(|g| (g.stdout.clone(), g.stderr.clone())).unwrap_or_default();
+        let g = shared
+            .lock()
+            .map(|g| (g.stdout.clone(), g.stderr.clone()))
+            .unwrap_or_default();
         g
     };
     cleanup_tmp(tmp_cleanup.as_ref());
@@ -394,26 +427,80 @@ async fn run_managed(
 /// 执行 Windows Shell 命令（cmd.exe /C），返回 stdout/stderr 与退出码。
 /// 异步管道实时读 + 活性检测 + 32KB head/tail 截断（详见模块注释）。
 pub async fn run_command(cwd: &str, command: &str) -> Result<String, String> {
-    run_managed(
-        "命令",
-        "cmd.exe",
-        &["/C".to_string(), command.to_string()],
-        cwd,
-        None,
-    )
-    .await
+    #[cfg(windows)]
+    {
+        let normalized = normalize_windows_command(command);
+        if normalized != command {
+            log::info!(
+                "[exec] 命令已按 cmd 语法归一化（剔除 Unix 风格 mkdir 选项）: {:?} -> {:?}",
+                command,
+                normalized
+            );
+        }
+        // 必须走"原样命令行"：cmd.exe 不识别 argv 的 `\"` 转义，含引号的命令
+        // （典型：`start "" "C:\path with space\x.html"`）会被误解析为 UNC 路径。
+        let tail = format!("/C {}", normalized);
+        run_managed("命令", "cmd.exe", Invocation::RawTail(&tail), cwd, None).await
+    }
+    #[cfg(not(windows))]
+    {
+        let args = vec!["-c".to_string(), command.to_string()];
+        run_managed("命令", "sh", Invocation::Args(&args), cwd, None).await
+    }
+}
+
+/// cmd.exe 命令归一化：剔除 `mkdir/md` 后面的 Unix 风格 `-p`/`--parents` 选项。
+///
+/// 为什么必须做：cmd 的内置 `mkdir`(md) **没有 `-p` 选项**，它把 `-p` 当成一个**目录名**，
+/// 于是 `mkdir -p outputs\demo` 会静默地在当前工作目录里创建一个字面量 `-p\` 目录
+/// （顺带把 outputs\demo 也建出来，命令还是"成功"的，所以只表现为"偶尔多出一个 -p 目录"）。
+/// 模型（尤其带 Linux 习惯）在写产物目录时很爱这么写。
+///
+/// 语义等价：cmd 的 `md` 本身就能创建多级目录，去掉 `-p` 与 Unix 的 `mkdir -p` 行为一致。
+/// 只在 `mkdir/md` 处于**命令位置**（开头或紧随 `&&`/`&`/`|`/`;`/`(`）时才处理，
+/// 因此 `echo mkdir -p` 这类仅出现在参数里的文本不会被动到。
+fn normalize_windows_command(command: &str) -> String {
+    const SEPARATORS: &[&str] = &["&&", "||", "&", "|", ";", "("];
+    let toks: Vec<&str> = command.split_whitespace().collect();
+    let mut drop: Vec<usize> = Vec::new();
+    for i in 1..toks.len() {
+        // 只认裸选项：`mkdir "-p"` 是显式要建名为 -p 的目录，不动
+        if !matches!(toks[i], "-p" | "-P" | "--parents") {
+            continue;
+        }
+        let prev = toks[i - 1].to_ascii_lowercase();
+        if !matches!(prev.as_str(), "mkdir" | "md") {
+            continue;
+        }
+        // mkdir 必须在命令位置：紧邻它的是开头或分隔符
+        let at_cmd_start = i == 1 || SEPARATORS.contains(&toks[i - 2]);
+        if at_cmd_start {
+            drop.push(i);
+        }
+    }
+    if drop.is_empty() {
+        return command.to_string();
+    }
+    toks.iter()
+        .enumerate()
+        .filter(|(i, _)| !drop.contains(i))
+        .map(|(_, t)| *t)
+        .collect::<Vec<&str>>()
+        .join(" ")
 }
 
 /// 执行 Python：`code` 与 `file` 二选一（file 优先），返回 stdout/stderr 与退出码。
 /// 与 `run_command` 同一套异步管道 + 活性检测机制。
-pub async fn run_python(cwd: &str, code: Option<&str>, file: Option<&str>) -> Result<String, String> {
+pub async fn run_python(
+    cwd: &str,
+    code: Option<&str>,
+    file: Option<&str>,
+) -> Result<String, String> {
     if !python_available()? {
-        return Err(
-            "当前系统未检测到 Python 环境。请安装 Python 后重试。\n\
+        return Err("当前系统未检测到 Python 环境。请安装 Python 后重试。\n\
              安装时请勾选 \"Add Python to PATH\"。\n\
              版本号请根据实际需求选择（建议使用当前最新稳定版）。"
-                .to_string(),
-        );
+            .to_string());
     }
 
     // ── 确定脚本源：优先 file（脚本文件），否则 code（内联代码写临时文件）──
@@ -450,5 +537,101 @@ pub async fn run_python(cwd: &str, code: Option<&str>, file: Option<&str>) -> Re
     };
 
     let target_str = target.to_string_lossy().into_owned();
-    run_managed("Python", "python", &[target_str], cwd, tmp_cleanup).await
+    let args = vec![target_str];
+    run_managed(
+        "Python",
+        "python",
+        Invocation::Args(&args),
+        cwd,
+        tmp_cleanup,
+    )
+    .await
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// 回归：含引号的命令必须以原样命令行交给 cmd.exe。
+    /// 走 argv 时 Rust 会插入 `\"` 转义（cmd.exe 不识别），把 `start "" "C:\a b\x"` 这类
+    /// 命令解析成以 `\\` 开头的 UNC 路径（Windows 报「找不到网络路径。」）。
+    /// 这里用 for 循环回显带空格路径：引号语义被破坏时会得不到 `[C:\Program Files]`。
+    #[tokio::test]
+    async fn command_with_quotes_reaches_cmd_verbatim() {
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let out = run_command(&cwd, "for %A in (\"C:\\Program Files\") do @echo [%~A]")
+            .await
+            .expect("命令应正常执行");
+        assert!(
+            out.contains("[C:\\Program Files]"),
+            "带空格路径的引号语义应完整保留，实际输出: {}",
+            out
+        );
+    }
+
+    /// 回归：`start` 的空标题写法（首参为空引号）不得被命令行转义破坏——
+    /// 用 `echo` 模拟同一引号序列，验证空引号与后续引号参数都原样抵达。
+    #[tokio::test]
+    async fn empty_quoted_title_argument_is_preserved() {
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+        let out = run_command(&cwd, "echo \"\" \"C:\\Program Files\\app\"")
+            .await
+            .expect("命令应正常执行");
+        assert!(
+            out.contains("C:\\Program Files\\app"),
+            "空引号 + 引号路径应原样传递，实际输出: {}",
+            out
+        );
+    }
+
+    /// 归一化：命令位置的 `mkdir/md` 后紧跟的 `-p`/`--parents` 被剔除（cmd 会把它当目录名）。
+    #[test]
+    fn unix_mkdir_p_flag_is_stripped() {
+        assert_eq!(
+            normalize_windows_command("mkdir -p outputs\\demo"),
+            "mkdir outputs\\demo"
+        );
+        assert_eq!(normalize_windows_command("MD -P a\\b"), "MD a\\b");
+        assert_eq!(normalize_windows_command("mkdir --parents x"), "mkdir x");
+        // 复合命令里的命令位置同样处理
+        assert_eq!(
+            normalize_windows_command("cd /d C:\\ws && mkdir -p out\\img"),
+            "cd /d C:\\ws && mkdir out\\img"
+        );
+    }
+
+    /// 不该动的情况：没有 `-p`、`mkdir` 不在命令位置（只是参数/回显文本）、显式引号写法。
+    #[test]
+    fn normalize_leaves_other_commands_untouched() {
+        for c in [
+            "mkdir a b",
+            "echo mkdir -p a",
+            "mkdir \"-p\"",
+            "rmdir /s /q build",
+            "git commit -m \"mkdir -p fix\"",
+        ] {
+            assert_eq!(normalize_windows_command(c), c, "不应改动: {}", c);
+        }
+    }
+
+    /// 端到端：`mkdir -p <dir>` 之后，工作目录里**只**应出现目标目录，
+    /// 不能多出字面量 `-p` 目录（这就是"工作区偶尔出现 -p/ 目录"的来源）。
+    #[tokio::test]
+    async fn mkdir_p_does_not_create_literal_dash_p_dir() {
+        let dir = std::env::temp_dir().join("pilotdesk_mkdir_p_probe");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("准备临时目录失败");
+        let cwd = dir.to_string_lossy().to_string();
+
+        run_command(&cwd, "mkdir -p outputs\\demo")
+            .await
+            .expect("命令应正常执行");
+
+        assert!(
+            dir.join("outputs").join("demo").exists(),
+            "目标多级目录应被创建"
+        );
+        assert!(!dir.join("-p").exists(), "不应创建字面量 -p 目录");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -61,16 +61,24 @@ pub fn render(template: &str, ctx: &PromptCtx) -> String {
     while depth < 64 {
         match find_fragment_placeholder(&out) {
             Some((placeholder, id, variant)) => {
-                let frag = fragments::ALL
-                    .iter()
-                    .find(|f| f.id == id)
-                    .unwrap_or_else(|| panic!("[prompts] 引用了未注册片段: {}", id));
-                if frag.variant.is_some() && variant.is_none() {
-                    panic!(
-                        "[prompts] 片段 {} 声明变体 `{}` 但引用未提供值",
-                        id,
-                        frag.variant.unwrap()
+                let Some(frag) = fragments::ALL.iter().find(|f| f.id == id) else {
+                    // 模板引用了未注册片段 = 模板与 fragments 清单不同步的开发期错配，
+                    // 但它发生在"一次群聊发言"的渲染路径上：panic 会把整个应用拖崩，代价远大于收益。
+                    // 这里保留占位符原样并停止展开，同时响亮地记一条 error ——
+                    // 没展开的 `{{FRAGMENT:xxx}}` 会原封不动留在 prompt 里（看得见），不会被误当成已展开。
+                    log::error!(
+                        "[prompts] 引用了未注册片段: {}（占位符保留原样，停止展开）",
+                        id
                     );
+                    break;
+                };
+                if frag.variant.is_some() && variant.is_none() {
+                    log::error!(
+                        "[prompts] 片段 {} 声明变体 `{}` 但引用未提供值（占位符保留原样，停止展开）",
+                        id,
+                        frag.variant.as_deref().unwrap_or("")
+                    );
+                    break;
                 }
                 let mut body = frag.body.trim().to_string();
                 if let Some(val) = variant {
@@ -176,17 +184,40 @@ pub struct BlockSpec {
     pub variant: Option<&'static str>,
 }
 
-pub const fn block(id: &'static str, usage: &'static str, flow: &'static str, body: &'static str) -> BlockSpec {
-    BlockSpec { id, usage, flow, body, variant: None }
+pub const fn block(
+    id: &'static str,
+    usage: &'static str,
+    flow: &'static str,
+    body: &'static str,
+) -> BlockSpec {
+    BlockSpec {
+        id,
+        usage,
+        flow,
+        body,
+        variant: None,
+    }
 }
 
-pub const fn block_variant(id: &'static str, usage: &'static str, flow: &'static str, body: &'static str, variant: &'static str) -> BlockSpec {
-    BlockSpec { id, usage, flow, body, variant: Some(variant) }
+pub const fn block_variant(
+    id: &'static str,
+    usage: &'static str,
+    flow: &'static str,
+    body: &'static str,
+    variant: &'static str,
+) -> BlockSpec {
+    BlockSpec {
+        id,
+        usage,
+        flow,
+        body,
+        variant: Some(variant),
+    }
 }
 
 /// 提示词块注册表（单一真相源）。
 pub mod blocks {
-    use super::{BlockSpec, block, block_variant};
+    use super::{block, block_variant, BlockSpec};
 
     pub const DIRECTOR_CLARIFY_GOAL: BlockSpec = block(
         "director.clarify_goal",
@@ -471,10 +502,8 @@ pub mod fragments {
 
     /// 仅供运行时（Rust 调用方）引用的片段：不出现在任何块模板的 `{{FRAGMENT:}}` 占位中，
     /// 由代码作为块级语义变体值（PromptCtx.variant）注入，如参与者工具纪律按 LLM/CLI 模式选择。
-    pub const RUNTIME_REFERENCED: &[&str] = &[
-        "rule.tool_discipline_llm",
-        "rule.tool_discipline_cli",
-    ];
+    pub const RUNTIME_REFERENCED: &[&str] =
+        &["rule.tool_discipline_llm", "rule.tool_discipline_cli"];
 }
 
 /// 场景（环节内的一次 LLM 调用）声明：输入数据段/记忆层 + 引用块。
@@ -548,13 +577,19 @@ pub fn validate() -> Result<(), String> {
         }
         let variant_count = b.body.matches("{{VARIANT}}").count();
         if variant_count > 1 {
-            return Err(format!("块 {} 含 {} 个 {{VARIANT}}（最多 1 个，请拆分）", b.id, variant_count));
+            return Err(format!(
+                "块 {} 含 {} 个 {{VARIANT}}（最多 1 个，请拆分）",
+                b.id, variant_count
+            ));
         }
         if b.variant.is_some() && variant_count != 1 {
             return Err(format!("块 {} 声明变体但 body 无 {{VARIANT}} 占位", b.id));
         }
         if b.variant.is_none() && variant_count != 0 {
-            return Err(format!("块 {} body 含 {{VARIANT}} 但未声明 variant 字段", b.id));
+            return Err(format!(
+                "块 {} body 含 {{VARIANT}} 但未声明 variant 字段",
+                b.id
+            ));
         }
     }
     // 1.3 片段自检：id 唯一、{{VARIANT}}≤1 且与 variant 字段一致、数据占位符已注册。
@@ -568,13 +603,19 @@ pub fn validate() -> Result<(), String> {
         }
         let variant_count = f.body.matches("{{VARIANT}}").count();
         if variant_count > 1 {
-            return Err(format!("片段 {} 含 {} 个 {{VARIANT}}（最多 1 个，请拆分）", f.id, variant_count));
+            return Err(format!(
+                "片段 {} 含 {} 个 {{VARIANT}}（最多 1 个，请拆分）",
+                f.id, variant_count
+            ));
         }
         if f.variant.is_some() && variant_count != 1 {
             return Err(format!("片段 {} 声明变体但 body 无 {{VARIANT}} 占位", f.id));
         }
         if f.variant.is_none() && variant_count != 0 {
-            return Err(format!("片段 {} body 含 {{VARIANT}} 但未声明 variant 字段", f.id));
+            return Err(format!(
+                "片段 {} body 含 {{VARIANT}} 但未声明 variant 字段",
+                f.id
+            ));
         }
         for (kind, name) in collect_var_section_names(f.body) {
             // 仅 SECTION 数据段需注册；VAR 单值由调用方提供。
@@ -595,7 +636,9 @@ pub fn validate() -> Result<(), String> {
     }
     for f in fragments::ALL {
         // 运行时引用片段（RUNTIME_REFERENCED）由 Rust 调用方作为变体值注入，不在块模板占位中，跳过孤立检测。
-        if !referenced_fragments.contains_key(f.id) && !fragments::RUNTIME_REFERENCED.contains(&f.id) {
+        if !referenced_fragments.contains_key(f.id)
+            && !fragments::RUNTIME_REFERENCED.contains(&f.id)
+        {
             return Err(format!("片段 {} 未被任何块引用（孤立冗余）", f.id));
         }
     }
@@ -648,7 +691,8 @@ mod tests {
     fn collect_placeholders(body: &str) -> Vec<(String, String)> {
         let mut out = Vec::new();
         let mut stack: Vec<String> = vec![body.to_string()];
-        let mut seen_fragments: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seen_fragments: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         while let Some(text) = stack.pop() {
             // match_indices 保证多字节字符（中文）边界安全。
             for (idx, _) in text.match_indices("{{") {
@@ -697,7 +741,9 @@ mod tests {
             }
             let rendered = render(b.body, &ctx);
             assert!(
-                !rendered.contains("{{SECTION:") && !rendered.contains("{{VAR:") && !rendered.contains("{{VARIANT}}"),
+                !rendered.contains("{{SECTION:")
+                    && !rendered.contains("{{VAR:")
+                    && !rendered.contains("{{VARIANT}}"),
                 "块 {} 存在未解析占位符",
                 b.id
             );

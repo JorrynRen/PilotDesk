@@ -29,7 +29,10 @@ pub fn conversation_stats(messages: &[ChatMessage]) -> ConversationStats {
         }
         token_estimate += TokenEstimator::estimate_message(m);
     }
-    ConversationStats { turn_count, token_estimate }
+    ConversationStats {
+        turn_count,
+        token_estimate,
+    }
 }
 
 /// 压缩策略：决定"何时把早期历史折叠进摘要"。
@@ -84,9 +87,18 @@ mod tests {
         assert_eq!(policy.retention(), (RECENT_TURN_LIMIT, RECENT_TOKEN_LIMIT));
 
         // 低于双阈值：不压缩。
-        assert!(!policy.should_compact(&ConversationStats { turn_count: RECENT_TURN_LIMIT, token_estimate: RECENT_TOKEN_LIMIT }));
+        assert!(!policy.should_compact(&ConversationStats {
+            turn_count: RECENT_TURN_LIMIT,
+            token_estimate: RECENT_TOKEN_LIMIT
+        }));
         // 任一侧越界：压缩。
-        assert!(policy.should_compact(&ConversationStats { turn_count: RECENT_TURN_LIMIT + 1, token_estimate: 0 }));
-        assert!(policy.should_compact(&ConversationStats { turn_count: 0, token_estimate: RECENT_TOKEN_LIMIT + 1 }));
+        assert!(policy.should_compact(&ConversationStats {
+            turn_count: RECENT_TURN_LIMIT + 1,
+            token_estimate: 0
+        }));
+        assert!(policy.should_compact(&ConversationStats {
+            turn_count: 0,
+            token_estimate: RECENT_TOKEN_LIMIT + 1
+        }));
     }
 }

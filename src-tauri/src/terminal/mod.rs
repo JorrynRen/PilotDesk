@@ -75,9 +75,10 @@ impl TerminalManager {
         let init_rows = initial_rows.unwrap_or(30);
         let (process, stdout) = tokio::task::spawn_blocking(move || {
             TerminalProcess::spawn(&cmdline_owned, &cwd_owned, init_cols, init_rows)
-        }).await.map_err(|e| format!("Spawn blocking failed: {}", e))?.map_err(|e| {
-            format!("Failed to start terminal: {}", e)
-        })?;
+        })
+        .await
+        .map_err(|e| format!("Spawn blocking failed: {}", e))?
+        .map_err(|e| format!("Failed to start terminal: {}", e))?;
 
         let pid = process.id();
 
@@ -114,9 +115,10 @@ impl TerminalManager {
 
     /// Resize terminal session (sync PTY window size)
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let session = self.sessions.get(id).ok_or_else(|| {
-            format!("terminal session {} not found", id)
-        })?;
+        let session = self
+            .sessions
+            .get(id)
+            .ok_or_else(|| format!("terminal session {} not found", id))?;
         session.process.resize(cols, rows)
     }
 
@@ -133,15 +135,19 @@ impl TerminalManager {
         Ok(())
     }
 
-/// Start reading stdout for a terminal session (call after frontend registers listeners)
+    /// Start reading stdout for a terminal session (call after frontend registers listeners)
     pub fn attach(&mut self, id: &str, app_handle: &tauri::AppHandle) -> Result<(), String> {
         let session = self
             .sessions
             .get_mut(id)
             .ok_or_else(|| format!("terminal session {} not found", id))?;
 
-        let stdout = session.stdout.take()
-            .ok_or_else(|| format!("terminal session {} already attached or stdout unavailable", id))?;
+        let stdout = session.stdout.take().ok_or_else(|| {
+            format!(
+                "terminal session {} already attached or stdout unavailable",
+                id
+            )
+        })?;
 
         let pid = session.process.id();
         let session_id = id.to_string();
@@ -159,7 +165,8 @@ impl TerminalManager {
                 tauri::async_runtime::spawn(async move {
                     let _ = tokio::task::spawn_blocking(move || {
                         terminal_unix_read_loop(reader, &session_id, &app, pid);
-                    }).await;
+                    })
+                    .await;
                 });
             }
         }

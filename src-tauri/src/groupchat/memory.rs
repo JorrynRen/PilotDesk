@@ -60,7 +60,8 @@ impl LayeredMemory {
     }
 
     pub fn update_stance(&mut self, participant_id: &str, stance: &str, attitude: Attitude) {
-        self.stances.insert(participant_id.to_string(), (stance.to_string(), attitude));
+        self.stances
+            .insert(participant_id.to_string(), (stance.to_string(), attitude));
     }
 
     pub fn stances(&self) -> Vec<Stance> {
@@ -140,7 +141,10 @@ impl LayeredMemory {
             return "中文".to_string();
         }
         let sample = &user_msgs[user_msgs.len() - take..];
-        let zh = sample.iter().filter(|m| is_chinese_dominant(&m.content)).count();
+        let zh = sample
+            .iter()
+            .filter(|m| is_chinese_dominant(&m.content))
+            .count();
         // 平票取中文（zh >= en 即 zh*2 >= take）。
         if zh * 2 >= take {
             "中文".to_string()
@@ -161,12 +165,19 @@ fn is_chinese_dominant(text: &str) -> bool {
     if effective.is_empty() {
         return false;
     }
-    let zh = effective.iter().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(&**c)).count();
+    let zh = effective
+        .iter()
+        .filter(|c| ('\u{4e00}'..='\u{9fff}').contains(&**c))
+        .count();
     zh * 10 >= effective.len() * 2
 }
 
 fn row_to_chat(m: &MessageRow, user_id: &str, is_privileged: bool) -> ChatMessage {
-    let role = if m.sender == user_id { "user" } else { "assistant" };
+    let role = if m.sender == user_id {
+        "user"
+    } else {
+        "assistant"
+    };
     // name 使用参与者唯一 id（显示名可能同名/删减，不可作为通信标识）；
     // 前端展示时再将 id 映射为 @显示名；LLM 语义关联由 TurnView.roster 提供。
     let name = m.sender.clone();
@@ -235,5 +246,11 @@ fn row_to_chat(m: &MessageRow, user_id: &str, is_privileged: bool) -> ChatMessag
         reasoning_content = Some(m.reasoning_content.clone());
     }
 
-    ChatMessage { role: role.to_string(), name: Some(name), content, images, reasoning_content }
+    ChatMessage {
+        role: role.to_string(),
+        name: Some(name),
+        content,
+        images,
+        reasoning_content,
+    }
 }

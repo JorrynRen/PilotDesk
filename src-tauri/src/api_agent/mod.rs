@@ -11,11 +11,15 @@
 pub mod agent_loop;
 pub mod agent_turn;
 pub mod client;
+pub mod cloud_doc;
 pub mod compaction;
 pub mod context;
 pub mod db;
+pub mod kb_llm;
+pub mod knowledge;
 pub mod memory;
 pub mod memory_intent;
+pub mod session_runs;
 pub mod skills;
 pub mod summarize;
 pub mod system_prompt;

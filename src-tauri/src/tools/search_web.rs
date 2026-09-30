@@ -69,7 +69,11 @@ Tavily 或 Bing API。"
             .iter()
             .enumerate()
             .map(|(i, r)| {
-                let snippet = if r.snippet.is_empty() { "(无摘要)" } else { &r.snippet };
+                let snippet = if r.snippet.is_empty() {
+                    "(无摘要)"
+                } else {
+                    &r.snippet
+                };
                 format!("{}. {}\nURL: {}\n{}\n", i + 1, r.title, r.url, snippet)
             })
             .collect::<Vec<_>>()

@@ -1,0 +1,46 @@
+{"schemaVersion":"1.0","updatedAt":"2026-06-21T22:33:25Z","plugins":[
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "description": "PilotDesk 示例插件，展示插件系统的基本用法和权限声明",
+  "author": "PilotDesk Team",
+  "minAppVersion": "0.1.0",
+  "path": "plugins/hello-world/1.0.0",
+  "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0",
+  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/favicon.png",
+  "size": "24K",
+  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/README.md",
+  "sha256": "d1337097f58d0fe5390b76a9c664d7e303750bfdc8b38f2dc7a2a3b1db2b8bf5"
+}
+,
+{
+  "id": "snippet-manager",
+  "name": "Snippet Manager",
+  "version": "1.0.0",
+  "description": "管理常用文本片段和提示词模板，支持保存、分类、搜索和快速插入到对话中",
+  "author": "PilotDesk Team",
+  "minAppVersion": "0.1.0",
+  "path": "plugins/snippet-manager/1.0.0",
+  "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0",
+  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/favicon.png",
+  "size": "28K",
+  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/README.md",
+  "sha256": "8d173fa1da34e73144067ce0c1cc82f4494e06ab9146e49c736662dda4f1bdb7"
+}
+,
+{
+  "id": "math-calc",
+  "name": "数学计算",
+  "version": "1.0.0",
+  "description": "工作流节点插件：四则运算、幂与开方、对数、聚合统计等数学计算，并带一个可直接试算的面板",
+  "author": "PilotDesk Team",
+  "minAppVersion": "0.1.0",
+  "path": "plugins/math-calc/1.0.0",
+  "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/math-calc/1.0.0",
+  "icon": "",
+  "size": "22K",
+  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/math-calc/1.0.0/README.md",
+  "sha256": "8020c2118246db866c32b6ed3c56b3d882701eb4c5d5a52859fda23ee12ec5a8"
+}
+]}

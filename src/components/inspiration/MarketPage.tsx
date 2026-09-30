@@ -6,6 +6,7 @@ import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { InspirationCard } from './InspirationCard';
 import { InspirationForm } from './InspirationForm';
 import { TagFilter } from './TagFilter';
+import { confirmDialog } from '../../stores/confirmStore';
 
 interface MarketPageProps {
   onBack: () => void;
@@ -82,7 +83,12 @@ export function MarketPage({ onBack }: MarketPageProps) {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm('确定要删除这条灵感吗？')) {
+    const ok = await confirmDialog({
+      title: '确认删除',
+      message: '确定要删除这条灵感吗？',
+      confirmText: '删除',
+    });
+    if (ok) {
       await deleteInspiration(id);
     }
   };
@@ -149,7 +155,7 @@ export function MarketPage({ onBack }: MarketPageProps) {
       </div>
 
       {/* Grid */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4 pd-scroll-stable">
         {error && (
           <div className="mb-3 px-3 py-2 rounded-lg text-xs" style={{ backgroundColor: 'var(--danger-bg)', color: 'var(--danger)' }}>
             {error}

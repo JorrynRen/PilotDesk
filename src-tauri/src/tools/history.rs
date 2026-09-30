@@ -53,11 +53,12 @@ impl FileHistoryService {
             old_content,
             existed,
         );
-        // 通知前端：群聊右侧面板文件历史徽标实时刷新（scope=room_id，前端按 roomId 过滤）；
-        // 会话模式无监听方，事件被忽略，无副作用。
+        // 通知前端：群聊右侧面板 / 会话右侧面板的「文件历史」列表实时刷新。
+        // scope 在群聊是 room_id、在会话是 session_id，两个键都发：群聊侧按 roomId 过滤，
+        // 会话侧按 sessionId 过滤，免得后来者猜"roomId 里装的其实是 sessionId"。
         let _ = self.app.emit(
             "file-history-updated",
-            serde_json::json!({ "roomId": self.scope }),
+            serde_json::json!({ "roomId": self.scope, "sessionId": self.scope }),
         );
     }
 

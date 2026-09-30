@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { SettingsSection, SettingsButton } from './index';
+import { Select } from '../common/Select';
 import {
   getProjectMemory,
   listProjectRoots,
@@ -7,6 +8,7 @@ import {
   updateProjectMemory,
   type ProjectMemoryInfo,
 } from '../../types';
+import { errorMessage } from '../../utils/errorMessage';
 
 const MAX_CHARS = 12000;
 
@@ -45,7 +47,7 @@ export function ProjectMemorySettings() {
         setLoaded(mem);
         setDraft(mem.content);
       } catch (e) {
-        setError(String(e));
+        setError(errorMessage(e));
       }
     })();
   }, [selected]);
@@ -63,7 +65,7 @@ export function ProjectMemorySettings() {
       setLoaded(mem);
       setDraft(mem.content);
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -76,7 +78,7 @@ export function ProjectMemorySettings() {
       const tpl = await projectMemoryTemplate();
       setDraft(tpl);
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     }
   };
 
@@ -97,18 +99,12 @@ export function ProjectMemorySettings() {
             <label className="block text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>
               项目（工作目录）
             </label>
-            <select
+            <Select
               value={selected}
-              onChange={(e) => setSelected(e.target.value)}
-              className="w-full px-2.5 py-2 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
-            >
-              {roots.map((r) => (
-                <option key={r} value={r} title={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setSelected(v)}
+              options={roots.map((r) => ({ value: r, label: r }))}
+              className="w-full"
+            />
           </div>
 
           {selected && (

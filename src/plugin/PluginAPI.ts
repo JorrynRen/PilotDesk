@@ -8,12 +8,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { pluginRegistry } from './PluginRegistry';
 import { commandDispatcher } from './CommandDispatcher';
-import { eventDispatcher } from './EventDispatcher';
 import { globalEventBus } from './GlobalEventBus';
 import { PluginFSAPI } from './PluginAPI.fs';
 import { PluginShellAPI } from './PluginAPI.shell';
 import { PluginAgentAPI } from './PluginAPI.agent';
-import type { PanelContribution, CommandHandler, EventHandler } from '../types/plugin';
+import type { PanelContribution, CommandHandler, EventHandler, CommandResult } from '../types/plugin';
 
 /** 插件存储（基于 localStorage，按插件 ID 隔离） */
 class PluginStorage {
@@ -36,70 +35,57 @@ class PluginStorage {
   }
 }
 
-/** 插件事件系统 */
-class PluginEventBus {
-  private listeners: Map<string, Set<(...args: unknown[]) => void>> = new Map();
-
-  on(event: string, handler: (...args: unknown[]) => void): () => void {
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, new Set());
-    }
-    this.listeners.get(event)!.add(handler);
-    return () => {
-      this.listeners.get(event)?.delete(handler);
-    };
-  }
-
-  emit(event: string, ...args: unknown[]): void {
-    this.listeners.get(event)?.forEach((handler) => {
-      try {
-        handler(...args);
-      } catch (err) {
-        console.warn('[PluginEventBus] Handler error for ' + event + ':', err);
-      }
-    });
-  }
-
-  clear(): void {
-    this.listeners.clear();
-  }
-}
-
 export class PluginAPI {
   readonly ui: {
-    addPanel: (config: PanelContribution & { component: React.ComponentType<any> }) => void;
+    addPanel: (config: PanelContribution & { component: React.ComponentType<{ pluginId: string }> }) => void;
     removePanel: (id: string) => void;
     showToast: (message: string, type: 'info' | 'success' | 'error') => void;
   };
   readonly data: {
     invoke: <T>(cmd: string, params?: Record<string, unknown>) => Promise<T>;
   };
-  readonly events: PluginEventBus;
+  /**
+   * 应用事件订阅（宿主 → 插件）。
+   * 与 `global` 走**同一条** globalEventBus 通道：`on` 收到宿主事件
+   * （session:created / session:deleted / message:sent / workflow:*）与其他插件的广播；
+   * `emit` 为兼容保留，等价于 `global.emit`（广播给包括自己在内的所有订阅者）。
+   */
+  readonly events: {
+    on: (event: string, handler: (payload: unknown) => void) => () => void;
+    emit: (event: string, ...args: unknown[]) => void;
+  };
   readonly storage: PluginStorage;
   readonly fs: PluginFSAPI;
   readonly shell: PluginShellAPI;
   readonly agent: PluginAgentAPI;
   readonly commands: {
     register: (commandId: string, handler: CommandHandler) => void;
-    execute: (commandId: string, params?: any) => Promise<import('../types/plugin').CommandResult>;
+    execute: (commandId: string, params?: Record<string, unknown>) => Promise<CommandResult>;
   };
   readonly hooks: {
     on: (event: string, handler: EventHandler) => () => void;
   };
   readonly global: {
-    on: (event: string, handler: (payload: any) => void) => () => void;
-    emit: (event: string, payload?: any) => void;
-    call: (targetPluginId: string, commandId: string, params?: any) => Promise<import('../types/plugin').CommandResult>;
+    on: (event: string, handler: (payload: unknown) => void) => () => void;
+    emit: (event: string, payload?: unknown) => void;
+    call: (targetPluginId: string, commandId: string, params?: Record<string, unknown>) => Promise<CommandResult>;
   };
 
   private pluginPath: string;
-  private pluginId: string;
+  readonly pluginId: string;
 
   constructor(pluginPath: string, pluginId: string, pluginName: string) {
     this.pluginPath = pluginPath;
     this.pluginId = pluginId;
 
-    this.events = new PluginEventBus();
+    this.events = {
+      // 订阅宿主事件总线：宿主（如会话/消息/工作流）与其它插件的广播都从这里来
+      on: (event, handler) => globalEventBus.on(pluginId, event, handler),
+      // 兼容保留：等价于 global.emit
+      emit: (event, ...args) => {
+        globalEventBus.emit(event, args.length === 1 ? args[0] : args);
+      },
+    };
     this.storage = new PluginStorage(pluginId);
     this.fs = new PluginFSAPI(pluginId);
     this.shell = new PluginShellAPI(pluginId);
@@ -119,8 +105,13 @@ export class PluginAPI {
     };
 
     this.data = {
+      // 不再裸透传：统一走 plugin_data_invoke（Rust 侧校验 data:invoke 权限 + 命令白名单）
       invoke: <T>(cmd: string, params?: Record<string, unknown>) => {
-        return invoke<T>(cmd, params || {});
+        return invoke<T>('plugin_data_invoke', {
+          pluginId: this.pluginId,
+          command: cmd,
+          args: params || {},
+        });
       },
     };
 
@@ -129,27 +120,28 @@ export class PluginAPI {
       register: (commandId: string, handler: CommandHandler) => {
         commandDispatcher.register(pluginId, commandId, handler);
       },
-      execute: (commandId: string, params?: any) => {
+      execute: (commandId: string, params?: Record<string, unknown>) => {
         return commandDispatcher.execute(pluginId, commandId, params);
       },
     };
 
-    // v2.0: 事件钩子注册
+    // v2.0: 事件钩子注册 —— 与 api.events.on **等价**（同一实现），
+    // 保留该 API 只为兼容已有插件与文档。两者都订阅 globalEventBus。
     this.hooks = {
       on: (event: string, handler: EventHandler) => {
-        return eventDispatcher.register(pluginId, event, handler);
+        return globalEventBus.on(pluginId, event, handler);
       },
     };
 
     // v2.0: 跨插件通信
     this.global = {
-      on: (event: string, handler: (payload: any) => void) => {
+      on: (event: string, handler: (payload: unknown) => void) => {
         return globalEventBus.on(pluginId, event, handler);
       },
-      emit: (event: string, payload?: any) => {
+      emit: (event: string, payload?: unknown) => {
         globalEventBus.emit(event, payload);
       },
-      call: (targetPluginId: string, commandId: string, params?: any) => {
+      call: (targetPluginId: string, commandId: string, params?: Record<string, unknown>) => {
         return globalEventBus.call(targetPluginId, commandId, params);
       },
     };
@@ -157,9 +149,9 @@ export class PluginAPI {
 
   /** 清理所有资源 */
   dispose(): void {
-    this.events.clear();
+    // events / hooks / global 的订阅都落在同一张 globalEventBus 上，
+    // offAll 一次把该插件的全部订阅（含 api.events.on）清干净。
     commandDispatcher.unregisterAll(this.pluginId);
-    eventDispatcher.unregisterAll(this.pluginId);
     globalEventBus.offAll(this.pluginId);
   }
 }

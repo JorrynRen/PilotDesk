@@ -87,7 +87,9 @@ fn save_attachments_to_dir(
                 .map_err(|e| AppError::InvalidInput(format!("附件数据解码失败: {}", e)))?;
             std::fs::write(&dest, bytes)?;
         } else {
-            return Err(AppError::InvalidInput("附件缺少 path 或 data 来源".to_string()));
+            return Err(AppError::InvalidInput(
+                "附件缺少 path 或 data 来源".to_string(),
+            ));
         }
 
         let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
@@ -136,7 +138,9 @@ pub fn delete_attachment(
     // 安全校验：目标必须直接位于该会话的附件目录内
     let parent = target.parent().map(|p| p.to_path_buf());
     if parent.as_deref() != Some(dir.as_path()) {
-        return Err(AppError::InvalidInput("拒绝删除附件目录之外的文件".to_string()));
+        return Err(AppError::InvalidInput(
+            "拒绝删除附件目录之外的文件".to_string(),
+        ));
     }
 
     match std::fs::remove_file(&target) {
@@ -199,35 +203,61 @@ fn guess_mime(name: &str) -> &'static str {
     }
 }
 
-/// 用系统默认方式打开本地路径：文件用默认程序打开，目录用资源管理器打开。
+/// 用系统默认方式打开本地路径：文件用默认程序打开，目录用资源管理器打开，URL 交给默认浏览器。
 #[tauri::command]
 pub fn open_path(path: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
-    if !p.exists() {
-        return Err(format!("路径不存在: {}", path));
+    // http(s) 地址交给系统默认浏览器，不该按本地路径校验存在性
+    let is_url = path.starts_with("http://") || path.starts_with("https://");
+    if !is_url && !p.exists() {
+        return Err(AppError::NotFound(format!("路径不存在: {}", path)).into());
     }
 
     #[cfg(target_os = "windows")]
     {
-        // explorer 对目录打开资源管理器，对文件委托默认关联程序打开
-        std::process::Command::new("explorer.exe")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("打开路径失败: {}", e))?;
+        // 走 ShellExecuteW（系统"打开"动词），**不要用 `explorer.exe <路径>`**：
+        // explorer 会对参数做二次解析，路径里带逗号（文件名常见）或其它特殊字符时会解析失败，
+        // 失败后它退化成打开默认窗口（表现为"点了却打开了文档目录"）。
+        // ShellExecuteW 不做二次解析，文件名里有空格/逗号/中文都安全。
+        use std::os::windows::ffi::OsStrExt;
+        let wide = |s: &std::ffi::OsStr| -> Vec<u16> {
+            s.encode_wide().chain(std::iter::once(0)).collect()
+        };
+        let operation = wide(std::ffi::OsStr::new("open"));
+        let file = wide(p.as_os_str());
+        // SAFETY: 全部指针都指向本调用内有效的 NUL 结尾宽字符串；ShellExecuteW 不保留这些指针。
+        let rc = unsafe {
+            windows_sys::Win32::UI::Shell::ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // SW_SHOWNORMAL
+            )
+        };
+        // 返回值 ≤ 32 表示失败（约定：大于 32 才是成功句柄）
+        if (rc as isize) <= 32 {
+            return Err(AppError::External(format!(
+                "打开路径失败（ShellExecute 返回 {}）",
+                rc as isize
+            ))
+            .into());
+        }
     }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
             .arg(&path)
             .spawn()
-            .map_err(|e| format!("打开路径失败: {}", e))?;
+            .map_err(|e| AppError::External(format!("打开路径失败: {}", e)))?;
     }
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
             .arg(&path)
             .spawn()
-            .map_err(|e| format!("打开路径失败: {}", e))?;
+            .map_err(|e| AppError::External(format!("打开路径失败: {}", e)))?;
     }
 
     Ok(())

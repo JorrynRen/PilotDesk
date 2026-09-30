@@ -48,12 +48,7 @@ pub enum SessionStatus {
 }
 
 impl ConsoleSession {
-    pub fn new(
-        session_id: String,
-        pid: u32,
-        command: String,
-        cwd: String,
-    ) -> Self {
+    pub fn new(session_id: String, pid: u32, command: String, cwd: String) -> Self {
         Self {
             session_id,
             pid,
@@ -103,13 +98,7 @@ impl ConsoleBridge {
     // ── 会话生命周期 ──
 
     /// 注册新会话（在 spawn 成功后调用）
-    pub fn register_session(
-        &mut self,
-        session_id: &str,
-        pid: u32,
-        command: &str,
-        cwd: &str,
-    ) {
+    pub fn register_session(&mut self, session_id: &str, pid: u32, command: &str, cwd: &str) {
         let session = ConsoleSession::new(
             session_id.to_string(),
             pid,
@@ -149,7 +138,10 @@ impl ConsoleBridge {
 
     /// 获取所有会话的可序列化视图
     pub fn list_session_views(&self) -> Vec<ConsoleSessionView> {
-        self.sessions.values().map(ConsoleSessionView::from).collect()
+        self.sessions
+            .values()
+            .map(ConsoleSessionView::from)
+            .collect()
     }
 
     /// 获取指定会话的可序列化视图

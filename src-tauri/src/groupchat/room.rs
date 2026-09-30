@@ -1,5 +1,6 @@
 //! 房间运行时（RoomRuntime Actor）+ 房间注册表（RoomRegistry）。
 
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::future::Future;
@@ -7,7 +8,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use serde::Serialize;
 use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
 
 use crate::agent::AgentManager;
@@ -18,14 +18,21 @@ use crate::db::models::Attachment;
 use crate::utils::errors::AppError;
 use tauri::Emitter;
 
-use super::adapter::{cli::PilotDeskCliRunner, llm::PilotDeskLlmClient};
 use super::adapter::tools::RoomMcpAssets;
-use super::director::{Director, KickoffPlan, NewParticipantDraft, ReplanOperation, SpeakerDecision};
+use super::adapter::{cli::PilotDeskCliRunner, llm::PilotDeskLlmClient};
+use super::director::{
+    Director, KickoffPlan, NewParticipantDraft, ReplanOperation, SpeakerDecision,
+};
 use super::event::GroupChatEvent;
 use super::floor::FloorManager;
 use super::memory::LayeredMemory;
-use super::models::{ConfirmationItem, ConfirmationRequest, MessageRow, ParticipantRow, Room, TaskRow};
-use super::participant::{Attitude, ChatMessage, CliConfig, CliParticipant, LlmClient, LlmParticipant, Participant, TurnResult, TurnView, UserParticipant, resolve_attitude};
+use super::models::{
+    ConfirmationItem, ConfirmationRequest, MessageRow, ParticipantRow, Room, TaskRow,
+};
+use super::participant::{
+    resolve_attitude, Attitude, ChatMessage, CliConfig, CliParticipant, LlmClient, LlmParticipant,
+    Participant, TurnResult, TurnView, UserParticipant,
+};
 use super::rules::RuleEngine;
 use super::state::{RoomStateMachine, RoomStatus};
 use super::{report, store, task};
@@ -62,7 +69,10 @@ async fn with_director_timeout<T>(fut: impl Future<Output = Option<T>>) -> Optio
     match tokio::time::timeout(Duration::from_secs(DIRECTOR_CALL_TIMEOUT_SECS), fut).await {
         Ok(v) => v,
         Err(_) => {
-            log::warn!("[GroupChat] Director 调用超时（{}s），按失败处理", DIRECTOR_CALL_TIMEOUT_SECS);
+            log::warn!(
+                "[GroupChat] Director 调用超时（{}s），按失败处理",
+                DIRECTOR_CALL_TIMEOUT_SECS
+            );
             None
         }
     }
@@ -100,7 +110,10 @@ fn format_models_catalog_db(conn: &rusqlite::Connection) -> String {
         for m in &info.models {
             let note = m.description.as_deref().unwrap_or("").trim();
             let note = if note.is_empty() { "无备注" } else { note };
-            lines.push(format!("- provider={} | 模型: {} | 备注: {}", info.provider_id, m.name, note));
+            lines.push(format!(
+                "- provider={} | 模型: {} | 备注: {}",
+                info.provider_id, m.name, note
+            ));
         }
     }
     lines.join("\n")
@@ -120,7 +133,10 @@ fn format_agents_catalog_db(conn: &rusqlite::Connection) -> String {
         .map(|a| {
             let desc = a.description.trim();
             let desc = if desc.is_empty() { "无描述" } else { desc };
-            format!("- agent_type={} | 显示名: {} | 描述: {}", a.agent_type, a.display_name, desc)
+            format!(
+                "- agent_type={} | 显示名: {} | 描述: {}",
+                a.agent_type, a.display_name, desc
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -237,12 +253,22 @@ fn create_auto_participants_db(
             break;
         }
         if api_cli_count + created.len() >= MAX_API_CLI_PARTICIPANTS {
-            rejected.push(format!("参与者总数已达上限（{}），无法继续新增", MAX_API_CLI_PARTICIPANTS));
+            rejected.push(format!(
+                "参与者总数已达上限（{}），无法继续新增",
+                MAX_API_CLI_PARTICIPANTS
+            ));
             break;
         }
         let id = d.id.trim();
-        if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-            rejected.push(format!("参与者 id '{}' 非法（仅允许字母/数字/下划线/连字符）", id));
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            rejected.push(format!(
+                "参与者 id '{}' 非法（仅允许字母/数字/下划线/连字符）",
+                id
+            ));
             continue;
         }
         if existing_ids.contains(id) {
@@ -252,21 +278,34 @@ fn create_auto_participants_db(
         if d.participant_type == "cli" {
             // 房间级开关：本房间禁止主持人自动补充 CLI 参与者时，拒绝一切 cli 草稿。
             if !allow_cli {
-                rejected.push(format!("本房间已关闭主持人自动补充 CLI 参与者，[@{}] 已跳过", id));
+                rejected.push(format!(
+                    "本房间已关闭主持人自动补充 CLI 参与者，[@{}] 已跳过",
+                    id
+                ));
                 continue;
             }
             // cli：白名单校验（已注册 agent 才允许）+ 同房间同 agent_type 去重。
             let agent_type = d.agent_type.trim();
             if agent_type.is_empty() {
-                rejected.push(format!("参与者 '{}' 缺少 agent_type（cli 类型必填），已跳过", id));
+                rejected.push(format!(
+                    "参与者 '{}' 缺少 agent_type（cli 类型必填），已跳过",
+                    id
+                ));
                 continue;
             }
-            let Ok(Some(_agent)) = crate::commands::agents::get_agent_inner(conn, agent_type) else {
-                rejected.push(format!("CLI Agent '{}' 未注册，已跳过（请从清单逐字复制 agent_type）", agent_type));
+            let Ok(Some(_agent)) = crate::commands::agents::get_agent_inner(conn, agent_type)
+            else {
+                rejected.push(format!(
+                    "CLI Agent '{}' 未注册，已跳过（请从清单逐字复制 agent_type）",
+                    agent_type
+                ));
                 continue;
             };
             if cli_types.contains(agent_type) {
-                rejected.push(format!("同一房间已存在 CLI Agent '{}'（同 agent_type 只允许 1 个），已跳过", agent_type));
+                rejected.push(format!(
+                    "同一房间已存在 CLI Agent '{}'（同 agent_type 只允许 1 个），已跳过",
+                    agent_type
+                ));
                 continue;
             }
             let agent_config = serde_json::json!({ "agent_type": agent_type }).to_string();
@@ -289,14 +328,18 @@ fn create_auto_participants_db(
             continue;
         }
         // api：provider 存在且有 key、model 命中白名单。
-        let Ok(Some(provider)) = crate::commands::api_provider::get_api_provider(conn, &d.provider) else {
+        let Ok(Some(provider)) = crate::commands::api_provider::get_api_provider(conn, &d.provider)
+        else {
             rejected.push(format!("提供商 '{}' 不存在或未配置，已跳过", d.provider));
             continue;
         };
         // 模型白名单：provider.models 为空时跳过校验（与 generate_image 的宽容语义一致），
         // 非空时模型必须命中清单，防止 Director 编造/截断模型名。
         if !provider.models.is_empty() && !provider.models.iter().any(|m| m == &d.model) {
-            rejected.push(format!("模型 '{}' 不在提供商 [@{}] 的模型清单中，已跳过（请从清单逐字复制）", d.model, d.provider));
+            rejected.push(format!(
+                "模型 '{}' 不在提供商 [@{}] 的模型清单中，已跳过（请从清单逐字复制）",
+                d.model, d.provider
+            ));
             continue;
         }
         let key_ok = crate::commands::api_provider::get_api_key(conn, &d.provider)
@@ -308,7 +351,8 @@ fn create_auto_participants_db(
             rejected.push(format!("提供商 [@{}] 未配置 API Key，已跳过", d.provider));
             continue;
         }
-        let agent_config = serde_json::json!({ "provider": d.provider, "model": d.model }).to_string();
+        let agent_config =
+            serde_json::json!({ "provider": d.provider, "model": d.model }).to_string();
         let row = ParticipantRow {
             id: id.to_string(),
             room_id: room_id.to_string(),
@@ -551,7 +595,9 @@ pub struct RoomRegistry {
 
 impl RoomRegistry {
     pub fn new() -> Self {
-        Self { rooms: std::sync::Mutex::new(HashMap::new()) }
+        Self {
+            rooms: std::sync::Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn get(&self, room_id: &str) -> Option<RoomHandle> {
@@ -570,12 +616,25 @@ impl RoomRegistry {
             .ok_or_else(|| AppError::NotFound(format!("房间不存在: {}", room_id)))?;
 
         let approval_log: Arc<Mutex<Vec<ApprovalRecord>>> = Arc::new(Mutex::new(Vec::new()));
-        let participant_failures: Arc<Mutex<HashMap<String, Vec<(i64, String)>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let participant_failures: Arc<Mutex<HashMap<String, Vec<(i64, String)>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let control = Control::new();
-        let handle = RoomHandle { cmd_tx, control: control.clone() };
+        let handle = RoomHandle {
+            cmd_tx,
+            control: control.clone(),
+        };
         // 协作式取消令牌：与房间 control.abort 共享，参与者工具循环在停止/暂停时迭代边界提前结束。
-        let built = build_participants(&conn, &pool, &room, app.clone(), approval_log.clone(), control.abort.clone(), None, None)?;
+        let built = build_participants(
+            &conn,
+            &pool,
+            &room,
+            app.clone(),
+            approval_log.clone(),
+            control.abort.clone(),
+            None,
+            None,
+        )?;
 
         // 应用重启后懒恢复：读取 DB 真实状态与轮次，供 run() 判断是否续跑未完成任务。
         let room_status = RoomStatus::from_str(&room.status);
@@ -585,7 +644,9 @@ impl RoomRegistry {
         // 房间产物目录（v3.4ay）：显式指定优先；空则先以 `<工作目录>/outputs/<房间标题>/` 兜底，
         // 待目标理解阶段由 resolve_and_persist_output_dir 按主题目录名确定、创建并落库。
         let output_dir = if room.output_dir.trim().is_empty() {
-            let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn).to_string_lossy().to_string();
+            let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn)
+                .to_string_lossy()
+                .to_string();
             let title = sanitize_room_title(&room.title);
             format!("{}\\outputs\\{}", cwd.trim_end_matches(['\\', '/']), title)
         } else {
@@ -768,9 +829,24 @@ fn build_participants(
     let director_row = rows
         .iter()
         .find(|r| r.participant_type == "director")
-        .or_else(|| rows.iter().find(|r| Some(r.id.as_str()) == director_id.as_deref()));
+        .or_else(|| {
+            rows.iter()
+                .find(|r| Some(r.id.as_str()) == director_id.as_deref())
+        });
     if let Some(row) = director_row {
-        if let Some(llm) = build_llm_client(conn, pool, &room.id, &row.agent_config, &app, &cwd, false, None, None, mcp.clone(), security_mode) {
+        if let Some(llm) = build_llm_client(
+            conn,
+            pool,
+            &room.id,
+            &row.agent_config,
+            &app,
+            &cwd,
+            false,
+            None,
+            None,
+            mcp.clone(),
+            security_mode,
+        ) {
             director = Some(Arc::new(Director::new(Arc::new(llm), row.id.clone())));
         }
     }
@@ -782,10 +858,29 @@ fn build_participants(
             "director" => {}
             "api" => {
                 let event_session_id = format!("groupchat:{}:{}", room.id, row.id);
-                if let Some(llm) = build_llm_client(conn, pool, &room.id, &row.agent_config, &app, &cwd, true, Some(event_session_id), Some(cancel.clone()), mcp.clone(), security_mode) {
+                if let Some(llm) = build_llm_client(
+                    conn,
+                    pool,
+                    &room.id,
+                    &row.agent_config,
+                    &app,
+                    &cwd,
+                    true,
+                    Some(event_session_id),
+                    Some(cancel.clone()),
+                    mcp.clone(),
+                    security_mode,
+                ) {
                     let llm = if shared_director.read().unwrap().clone().is_some() {
-                        llm.with_approval_handler(make_director_approval(shared_director.clone(), approval_log.clone(), room.topic.clone()))
-                            .with_continue_handler(make_director_continue(shared_director.clone(), room.topic.clone()))
+                        llm.with_approval_handler(make_director_approval(
+                            shared_director.clone(),
+                            approval_log.clone(),
+                            room.topic.clone(),
+                        ))
+                        .with_continue_handler(make_director_continue(
+                            shared_director.clone(),
+                            room.topic.clone(),
+                        ))
                     } else {
                         llm
                     };
@@ -863,26 +958,50 @@ fn build_llm_client(
     let api_key = crate::commands::api_provider::get_api_key(conn, provider_id).ok()??;
     let format = provider.api_format.parse::<ApiFormat>().unwrap_or_default();
 
-    let mut client = PilotDeskLlmClient::new(provider.api_endpoint.clone(), api_key.clone(), model, format.clone())
-        // 用量归因元数据（写 api_usage_log + `usage-recorded` 脏标记所需）：
-        // provider=provider 名；usage_key=房间级占位 scope；app_handle=房间 emitter/handle。
-        .with_usage_meta(provider_id.to_string(), Some(format!("groupchat:{}", room_id)), app.clone());
+    let mut client = PilotDeskLlmClient::new(
+        provider.api_endpoint.clone(),
+        api_key.clone(),
+        model.clone(),
+        format.clone(),
+    )
+    // 用量归因元数据（写 api_usage_log + `usage-recorded` 脏标记所需）：
+    // provider=provider id；usage_key=房间级占位 scope；app_handle=房间 emitter/handle。
+    .with_usage_meta(
+        provider_id.to_string(),
+        Some(format!("groupchat:{}", room_id)),
+        app.clone(),
+    );
     // 持久化权限规则：群聊与会话共用同一清单分类体系（高风险/风险/安全）
-    client = client.with_permission_rules(crate::commands::permission::load_rules(conn).unwrap_or_default());
+    client = client
+        .with_permission_rules(crate::commands::permission::load_rules(conn).unwrap_or_default());
     // 工作区目录（工作区内路径 = 安全路径）
     client = client.with_workspace(Some(cwd.to_string()));
     // 会话安全模式（本波次有效，不持久化）
     client = client.with_security_mode(security_mode);
     // 流式 chunk 空闲超时：全局 app_settings 可配置（与会话共用同一键）
-    client = client.with_stream_idle_secs(crate::commands::app_settings::load_stream_idle_secs(conn));
+    client =
+        client.with_stream_idle_secs(crate::commands::app_settings::load_stream_idle_secs(conn));
     if with_tools {
-        // 图像工具复用参与者 provider 的端点/密钥（Anthropic 格式不支持图像工具，置 None）。
+        // 图像生成/编辑工具复用参与者 provider 的端点/密钥（走 OpenAI 专有 /images 端点，
+        // Anthropic 格式置 None）；read_image 走 chat 多模态，两种协议通用，不受该限制。
+        let endpoint_key = (provider.api_endpoint.clone(), api_key.clone());
         let image = if matches!(format, ApiFormat::Anthropic) {
             None
         } else {
-            Some((provider.api_endpoint.clone(), api_key.clone()))
+            Some(endpoint_key.clone())
         };
-        let registry = super::adapter::tools::build_groupchat_tool_registry(conn, cwd, format, image, app, pool, room_id, mcp.as_deref());
+        let registry = super::adapter::tools::build_groupchat_tool_registry(
+            conn,
+            cwd,
+            &model,
+            format,
+            image,
+            Some(endpoint_key),
+            app,
+            pool,
+            room_id,
+            mcp.as_deref(),
+        );
         client = client.with_tools(registry, app.clone());
         if let Some(sid) = event_session_id {
             client = client.with_event_session_id(sid);
@@ -938,41 +1057,53 @@ fn make_director_approval(
     approval_log: Arc<Mutex<Vec<ApprovalRecord>>>,
     topic: String,
 ) -> ApprovalHandler {
-    Box::new(move |_call_id: &str, tool_name: &str, args: &str, risk: RiskLevel| {
-        let director = director_ref.read().unwrap().clone();
-        let approval_log = approval_log.clone();
-        let tool_name = tool_name.to_string();
-        let args = args.to_string();
-        let risk = risk.description().to_string();
-        let topic = topic.clone();
-        tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                let Some(director) = director else { return false }; // 无主持人 → 默认拒绝（保守）
-                let decision = match tokio::time::timeout(
-                    Duration::from_secs(DIRECTOR_CALL_TIMEOUT_SECS),
-                    director.authorize_tool(&topic, &tool_name, &args, &risk),
-                )
-                .await
-                {
-                    Ok(d) => d,
-                    Err(_) => return false, // 裁决超时 → 拒绝
-                };
-                let allow = decision.allow;
-                let reason = decision.reason;
-                if let Ok(mut log) = approval_log.lock() {
-                    log.push(ApprovalRecord { tool_name, risk, allow, reason });
-                }
-                allow
+    Box::new(
+        move |_call_id: &str, tool_name: &str, args: &str, risk: RiskLevel| {
+            let director = director_ref.read().unwrap().clone();
+            let approval_log = approval_log.clone();
+            let tool_name = tool_name.to_string();
+            let args = args.to_string();
+            let risk = risk.description().to_string();
+            let topic = topic.clone();
+            tokio::task::block_in_place(move || {
+                tokio::runtime::Handle::current().block_on(async move {
+                    let Some(director) = director else {
+                        return false;
+                    }; // 无主持人 → 默认拒绝（保守）
+                    let decision = match tokio::time::timeout(
+                        Duration::from_secs(DIRECTOR_CALL_TIMEOUT_SECS),
+                        director.authorize_tool(&topic, &tool_name, &args, &risk),
+                    )
+                    .await
+                    {
+                        Ok(d) => d,
+                        Err(_) => return false, // 裁决超时 → 拒绝
+                    };
+                    let allow = decision.allow;
+                    let reason = decision.reason;
+                    if let Ok(mut log) = approval_log.lock() {
+                        log.push(ApprovalRecord {
+                            tool_name,
+                            risk,
+                            allow,
+                            reason,
+                        });
+                    }
+                    allow
+                })
             })
-        })
-    })
+        },
+    )
 }
 
 /// 把 Director 包装成同步的 `ContinueHandler`（停滞/上限时裁决是否继续），
 /// 读取共享主持人引用；内部用 block_in_place + block_on 调用异步的
 /// `Director::decide_stall_continue`，并加确定性超时。
 /// 限制续命次数（最多 2 次），防止 Director 反复放行导致无限循环。
-fn make_director_continue(director_ref: Arc<RwLock<Option<Arc<Director>>>>, topic: String) -> ContinueHandler {
+fn make_director_continue(
+    director_ref: Arc<RwLock<Option<Arc<Director>>>>,
+    topic: String,
+) -> ContinueHandler {
     // Arc 包裹计数，Fn 闭包可多次 clone 使用（AtomicUsize 无 Copy，直接 move 会编译失败）。
     let max_continue = Arc::new(std::sync::atomic::AtomicUsize::new(2));
     Box::new(move |_current: usize, _max: usize| {
@@ -984,7 +1115,9 @@ fn make_director_continue(director_ref: Arc<RwLock<Option<Arc<Director>>>>, topi
         let max_continue = max_continue.clone();
         tokio::task::block_in_place(move || {
             tokio::runtime::Handle::current().block_on(async move {
-                let Some(director) = director else { return false };
+                let Some(director) = director else {
+                    return false;
+                };
                 let keep = match tokio::time::timeout(
                     Duration::from_secs(DIRECTOR_CALL_TIMEOUT_SECS),
                     director.decide_stall_continue(&topic, ""),
@@ -1032,7 +1165,10 @@ fn work_hint_from_tool_calls(tool_calls: &str) -> Option<String> {
     if lines.is_empty() {
         None
     } else {
-        Some(format!("已完成以下工作（工具调用记录）：\n{}", lines.join("\n")))
+        Some(format!(
+            "已完成以下工作（工具调用记录）：\n{}",
+            lines.join("\n")
+        ))
     }
 }
 
@@ -1066,27 +1202,7 @@ struct PriorResult {
 /// 1) 过滤 Windows 非法文件名字符；2) 剥离结尾点/空格（Windows 会剥离导致路径漂移）；
 /// 3) 长度截断（64 字符，避免路径超长）；4) Windows 保留设备名兜底（CON/PRN/AUX/NUL/COM1-9/LPT1-9）。
 fn sanitize_room_title(title: &str) -> String {
-    let cleaned: String = title
-        .chars()
-        .filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
-        .collect();
-    let trimmed = cleaned.trim().trim_end_matches(['.', ' ']);
-    let truncated: String = trimmed.chars().take(64).collect();
-    if truncated.is_empty() {
-        return "room".to_string();
-    }
-    const RESERVED: &[&str] = &[
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    ];
-    let upper = truncated.to_ascii_uppercase();
-    let base = upper.split('.').next().unwrap_or(&upper);
-    if RESERVED.contains(&base) {
-        format!("{}_room", truncated)
-    } else {
-        truncated
-    }
+    crate::utils::paths::sanitize_dir_name(title, "room")
 }
 
 /// 收集任务在讨论阶段被执行/推进的证据摘要（v3.4ao）：仅作主持人裁决的**依据输入**，
@@ -1097,8 +1213,12 @@ fn discussion_artifacts_summary(pool: &DbPool, room_id: &str, task: &TaskRow) ->
     if assignee.is_empty() {
         return String::new();
     }
-    let Ok(conn) = pool.get() else { return String::new() };
-    let Ok(rows) = store::list_messages(&conn, room_id, None, None) else { return String::new() };
+    let Ok(conn) = pool.get() else {
+        return String::new();
+    };
+    let Ok(rows) = store::list_messages(&conn, room_id, None, None) else {
+        return String::new();
+    };
     let mut paths: Vec<String> = Vec::new();
     for m in rows {
         if m.kind == "statement" && m.sender == assignee && !m.tool_calls.trim().is_empty() {
@@ -1158,7 +1278,11 @@ fn anchor_base_dir(anchor: &str, cwd: &str) -> Option<std::path::PathBuf> {
 /// 2) 锚点词形态：桌面/文档/下载/工作目录 等 + 子路径段（拼接后存在性校验）；
 /// 3) LLM 语义层结构（anchor+subpath，同样拼接 + 存在性校验）。
 /// 无法解析或存在性校验不通过的引用 → resolved=None，交由注入层显式降级。
-fn resolve_input_refs(texts: &[String], cwd: &str, llm_drafts: &[InputRefDraft]) -> Vec<ResolvedRef> {
+fn resolve_input_refs(
+    texts: &[String],
+    cwd: &str,
+    llm_drafts: &[InputRefDraft],
+) -> Vec<ResolvedRef> {
     let mut out: Vec<ResolvedRef> = Vec::new();
     let mut push = |raw: String, resolved: Option<String>| {
         let raw = raw.trim().to_string();
@@ -1177,13 +1301,19 @@ fn resolve_input_refs(texts: &[String], cwd: &str, llm_drafts: &[InputRefDraft])
     for text in texts {
         for cap in url_re.captures_iter(text) {
             if let Some(m) = cap.get(0) {
-                let v = m.as_str().trim_end_matches(['.', '，', '。', ';', '；', '、']).to_string();
+                let v = m
+                    .as_str()
+                    .trim_end_matches(['.', '，', '。', ';', '；', '、'])
+                    .to_string();
                 push(v.clone(), Some(v));
             }
         }
         for cap in abs_re.captures_iter(text) {
             if let Some(m) = cap.get(0) {
-                let v = m.as_str().trim_end_matches(['\\', '/', '.', '，', '。', ';', '；', '、']).to_string();
+                let v = m
+                    .as_str()
+                    .trim_end_matches(['\\', '/', '.', '，', '。', ';', '；', '、'])
+                    .to_string();
                 push(v.clone(), Some(v));
             }
         }
@@ -1196,7 +1326,11 @@ fn resolve_input_refs(texts: &[String], cwd: &str, llm_drafts: &[InputRefDraft])
             if let Some(m) = cap.get(0) {
                 let rel = m.as_str();
                 let joined = std::path::Path::new(cwd).join(rel);
-                let resolved = if joined.exists() { Some(joined.to_string_lossy().to_string()) } else { None };
+                let resolved = if joined.exists() {
+                    Some(joined.to_string_lossy().to_string())
+                } else {
+                    None
+                };
                 push(rel.to_string(), resolved);
             }
         }
@@ -1204,16 +1338,33 @@ fn resolve_input_refs(texts: &[String], cwd: &str, llm_drafts: &[InputRefDraft])
 
     // ── 2) 锚点词形态（启发式：锚点 + 子路径段，存在性校验；长锚点优先避免子串误匹配）──
     let anchor_keys = [
-        "桌面文件夹", "我的文档", "下载目录", "工作目录", "项目目录", "当前目录",
-        "上级目录", "桌面", "文档", "下载", "上一级",
+        "桌面文件夹",
+        "我的文档",
+        "下载目录",
+        "工作目录",
+        "项目目录",
+        "当前目录",
+        "上级目录",
+        "桌面",
+        "文档",
+        "下载",
+        "上一级",
     ];
     for text in texts {
         for key in anchor_keys {
             if let Some(pos) = text.find(key) {
-                let Some(base) = anchor_base_dir(key, cwd) else { continue };
+                let Some(base) = anchor_base_dir(key, cwd) else {
+                    continue;
+                };
                 let rest = &text[pos + key.len()..];
-                let rest = rest.trim_start_matches(['的', '下', '里', '中', '：', ':', ' ', '\u{3000}']);
-                let mut sub = rest.split(['，', '。', '；', ';', '、', '\n', '\r']).next().unwrap_or("").trim().to_string();
+                let rest =
+                    rest.trim_start_matches(['的', '下', '里', '中', '：', ':', ' ', '\u{3000}']);
+                let mut sub = rest
+                    .split(['，', '。', '；', ';', '、', '\n', '\r'])
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 sub = sub
                     .trim_end_matches("文件夹")
                     .trim_end_matches("目录")
@@ -1226,7 +1377,11 @@ fn resolve_input_refs(texts: &[String], cwd: &str, llm_drafts: &[InputRefDraft])
                 // 子路径可能含空格（如"2024 项目资料"），保守取首段
                 let first_seg = sub.split(' ').next().unwrap_or(&sub).to_string();
                 let joined = base.join(&first_seg);
-                let resolved = if joined.exists() { Some(joined.to_string_lossy().to_string()) } else { None };
+                let resolved = if joined.exists() {
+                    Some(joined.to_string_lossy().to_string())
+                } else {
+                    None
+                };
                 push(format!("{} {}", key, first_seg), resolved);
             }
         }
@@ -1234,12 +1389,18 @@ fn resolve_input_refs(texts: &[String], cwd: &str, llm_drafts: &[InputRefDraft])
 
     // ── 3) LLM 语义层结构（anchor+subpath，拼接 + 存在性校验）──
     for d in llm_drafts {
-        let Some(base) = anchor_base_dir(&d.anchor, cwd) else { continue };
+        let Some(base) = anchor_base_dir(&d.anchor, cwd) else {
+            continue;
+        };
         let mut joined = base;
         for seg in &d.subpath {
             joined = joined.join(seg);
         }
-        let resolved = if joined.exists() { Some(joined.to_string_lossy().to_string()) } else { None };
+        let resolved = if joined.exists() {
+            Some(joined.to_string_lossy().to_string())
+        } else {
+            None
+        };
         push(d.subpath.join("/"), resolved);
     }
 
@@ -1377,7 +1538,9 @@ impl RoomRuntime {
         let _ = self.app.emit("groupchat-event", &event);
     }
 
-    fn conn(&self) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, AppError> {
+    fn conn(
+        &self,
+    ) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, AppError> {
         Ok(self.pool.get()?)
     }
 
@@ -1392,7 +1555,11 @@ impl RoomRuntime {
             let servers = crate::commands::mcp::load_servers(&conn).unwrap_or_default();
             let assets = super::adapter::tools::build_room_mcp_assets(servers).await;
             if !assets.entries.is_empty() {
-                log::info!("[GroupChat] 房间 {} 装配 MCP 工具（{} 个服务器）", self.room_id, assets.entries.len());
+                log::info!(
+                    "[GroupChat] 房间 {} 装配 MCP 工具（{} 个服务器）",
+                    self.room_id,
+                    assets.entries.len()
+                );
                 self.mcp = Some(Arc::new(assets));
                 self.rebuild_participants().await;
             }
@@ -1405,7 +1572,15 @@ impl RoomRuntime {
 
         while let Some(cmd) = self.cmd_rx.recv().await {
             match cmd {
-                RoomCommand::Send { sender, content, recipients, reply_to, mention, attachments, security_mode } => {
+                RoomCommand::Send {
+                    sender,
+                    content,
+                    recipients,
+                    reply_to,
+                    mention,
+                    attachments,
+                    security_mode,
+                } => {
                     if self.control.abort.load(Ordering::SeqCst) {
                         // 手动终止后，用户的新消息视为"重启"意图：清除终止标记，让 handle_send
                         // 重新进入编排（handle_send 会恢复 running 状态并处理该指令）。
@@ -1414,7 +1589,15 @@ impl RoomRuntime {
                     // 会话安全模式：本波次有效，注入运行时（None 默认标准）
                     self.security_mode = security_mode;
                     self.control.wait_if_paused().await;
-                    self.handle_send(&sender, &content, &recipients, reply_to.as_deref(), mention.as_deref(), &attachments).await;
+                    self.handle_send(
+                        &sender,
+                        &content,
+                        &recipients,
+                        reply_to.as_deref(),
+                        mention.as_deref(),
+                        &attachments,
+                    )
+                    .await;
                 }
                 RoomCommand::SetDirector { director_id } => {
                     self.set_director(&director_id).await;
@@ -1443,14 +1626,22 @@ impl RoomRuntime {
                     }
                 }
                 RoomCommand::Abort => {
-                    self.persist_control_notice("已停止：正在完成当前执行中的任务（若有），之后不再调度新任务。").await;
+                    self.persist_control_notice(
+                        "已停止：正在完成当前执行中的任务（若有），之后不再调度新任务。",
+                    )
+                    .await;
                     self.set_status(RoomStatus::Aborted).await;
                 }
                 // 非等待状态下收到确认回复（历史确认块补交 / 房间已结束 / Actor 重启后未进入确认等待），
                 // 落库 confirmation_response 保证前端刷新后能恢复「已提交」态；
                 // v3.4m 恢复闭环：命中仍 pending 的确认任务时注入回复并立即重跑剩余任务（无需再发指令）。
-                RoomCommand::RespondConfirmation { request_id, responses } => {
-                    let rerun = self.persist_confirmation_response_only(&request_id, &responses).await;
+                RoomCommand::RespondConfirmation {
+                    request_id,
+                    responses,
+                } => {
+                    let rerun = self
+                        .persist_confirmation_response_only(&request_id, &responses)
+                        .await;
                     if rerun && !self.control.abort.load(Ordering::SeqCst) {
                         self.control.wait_if_paused().await;
                         loop {
@@ -1477,7 +1668,16 @@ impl RoomRuntime {
         let Ok(conn) = self.conn() else {
             return;
         };
-        let Ok(built) = build_participants(&conn, &self.pool, &self.room, self.app.clone(), self.approval_log.clone(), self.control.abort.clone(), self.mcp.clone(), self.security_mode) else {
+        let Ok(built) = build_participants(
+            &conn,
+            &self.pool,
+            &self.room,
+            self.app.clone(),
+            self.approval_log.clone(),
+            self.control.abort.clone(),
+            self.mcp.clone(),
+            self.security_mode,
+        ) else {
             return;
         };
         self.participants = built.participants;
@@ -1538,7 +1738,12 @@ impl RoomRuntime {
                 .last()
                 .map(|(_, r)| r.chars().take(120).collect::<String>())
                 .unwrap_or_default();
-            lines.push(format!("- [@{}]：失败 {} 次（最近：{}）", id, fails.len(), latest));
+            lines.push(format!(
+                "- [@{}]：失败 {} 次（最近：{}）",
+                id,
+                fails.len(),
+                latest
+            ));
         }
         lines.join("\n")
     }
@@ -1568,14 +1773,31 @@ impl RoomRuntime {
     /// 按需自动创建参与者（全自动组建名册，主持人提出后直接生效）：复用自由函数校验落库，
     /// 并对每个创建成功的参与者广播 participant_updated 事件。返回 (创建成功 id, 拒绝原因)。
     /// `max_new` 为本次单次补充上限（kickoff 初始批量=剩余空位，replan=场景上限）。
-    fn create_auto_participants(&self, drafts: &[NewParticipantDraft], max_new: usize) -> (Vec<String>, Vec<String>) {
+    fn create_auto_participants(
+        &self,
+        drafts: &[NewParticipantDraft],
+        max_new: usize,
+    ) -> (Vec<String>, Vec<String>) {
         let Ok(conn) = self.conn() else {
-            return (Vec::new(), vec!["数据库连接失败，无法自动补充参与者".to_string()]);
+            return (
+                Vec::new(),
+                vec!["数据库连接失败，无法自动补充参与者".to_string()],
+            );
         };
-        let (created, rejected) = create_auto_participants_db(&conn, &self.room_id, drafts, self.room.allow_auto_cli != 0, max_new);
+        let (created, rejected) = create_auto_participants_db(
+            &conn,
+            &self.room_id,
+            drafts,
+            self.room.allow_auto_cli != 0,
+            max_new,
+        );
         for c in &created {
             self.emit(GroupChatEvent::participant_updated(&self.room_id));
-            log::info!("[GroupChat] 主持人自动补充参与者: room={} id={}", self.room_id, c);
+            log::info!(
+                "[GroupChat] 主持人自动补充参与者: room={} id={}",
+                self.room_id,
+                c
+            );
         }
         (created, rejected)
     }
@@ -1588,7 +1810,12 @@ impl RoomRuntime {
         let prev = self.state.status;
         self.state.status = status;
         if prev != status {
-            log::info!("[GroupChat] room {} 状态迁移 {:?} -> {:?}", self.room_id, prev, status);
+            log::info!(
+                "[GroupChat] room {} 状态迁移 {:?} -> {:?}",
+                self.room_id,
+                prev,
+                status
+            );
         }
         if let Ok(conn) = self.conn() {
             let _ = store::update_room_status(&conn, &self.room_id, status.as_str());
@@ -1600,18 +1827,27 @@ impl RoomRuntime {
     /// 更新 room.director_id、重建运行时（Director 实例 + 参与者 + 发言顺序），并重排角色与任务。
     /// 新主持人构建失败时回滚并保留原主持人。
     async fn set_director(&mut self, director_id: &str) {
-        let target = self.conn().ok()
+        let target = self
+            .conn()
+            .ok()
             .and_then(|c| store::get_participant(&c, &self.room_id, director_id).ok())
             .flatten();
         let Some(target) = target else {
-            self.persist_control_notice(&format!("无法切换主持人：参与者 [@{}] 不存在", director_id)).await;
+            self.persist_control_notice(&format!(
+                "无法切换主持人：参与者 [@{}] 不存在",
+                director_id
+            ))
+            .await;
             return;
         };
         if target.participant_type == "director" {
             // 已是主持人，无需切换。
             return;
         }
-        let old_director = self.director_id.clone().unwrap_or_else(|| "director".to_string());
+        let old_director = self
+            .director_id
+            .clone()
+            .unwrap_or_else(|| "director".to_string());
 
         // 1) 交换结构身份：目标参与者 → director；原主持人 → api（沿用其模型配置作为普通参与者）。
         if let Ok(conn) = self.conn() {
@@ -1628,18 +1864,31 @@ impl RoomRuntime {
         if self.director.is_none() {
             if let Ok(conn) = self.conn() {
                 let _ = store::update_participant_type(&conn, &self.room_id, director_id, "api");
-                let _ = store::update_participant_type(&conn, &self.room_id, &old_director, "director");
+                let _ =
+                    store::update_participant_type(&conn, &self.room_id, &old_director, "director");
                 let _ = store::update_room_director(&conn, &self.room_id, &old_director);
             }
             self.director_id = Some(old_director);
             self.rebuild_participants().await;
-            self.persist_control_notice(&format!("主持人切换失败：新主持人 [@{}] 不可用，已恢复原主持人", director_id)).await;
+            self.persist_control_notice(&format!(
+                "主持人切换失败：新主持人 [@{}] 不可用，已恢复原主持人",
+                director_id
+            ))
+            .await;
             return;
         }
 
         // 4) 落可追溯提示 + 全量重排角色与任务。
-        self.persist_control_notice(&format!("主持人已切换为 [@{}]，正在重新编排角色与任务…", director_id)).await;
-        self.replan_after_roster_change(&format!("【调度】主持人已切换为 [@{}]，已重新编排", director_id)).await;
+        self.persist_control_notice(&format!(
+            "主持人已切换为 [@{}]，正在重新编排角色与任务…",
+            director_id
+        ))
+        .await;
+        self.replan_after_roster_change(&format!(
+            "【调度】主持人已切换为 [@{}]，已重新编排",
+            director_id
+        ))
+        .await;
     }
 
     async fn handle_send(
@@ -1655,7 +1904,8 @@ impl RoomRuntime {
         self.set_status(RoomStatus::Running).await;
 
         // 处理首条用户指令
-        self.process_user_directive(sender, content, recipients, reply_to, mention, attachments).await;
+        self.process_user_directive(sender, content, recipients, reply_to, mention, attachments)
+            .await;
 
         // 讨论 → 执行 主循环；在下一检查点检测到用户插队时，重新编排并重跑。
         loop {
@@ -1698,7 +1948,9 @@ impl RoomRuntime {
 
     /// 是否存在任何任务（终态或未终态）。用于判断重启后是否需要续跑/补结论。
     fn has_any_tasks(&self) -> bool {
-        let Ok(conn) = self.conn() else { return false; };
+        let Ok(conn) = self.conn() else {
+            return false;
+        };
         matches!(store::list_tasks(&conn, &self.room_id), Ok(t) if !t.is_empty())
     }
 
@@ -1739,7 +1991,9 @@ impl RoomRuntime {
             Ok(c) => c,
             Err(_) => return,
         };
-        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else { return; };
+        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else {
+            return;
+        };
         for mut t in tasks {
             if t.status == "running" {
                 t.status = "pending".into();
@@ -1799,7 +2053,16 @@ impl RoomRuntime {
         let director_sender = self.director_sender();
         let concl_reasoning = self.take_director_reasoning();
         let concl_msg = self
-            .persist_message(&director_sender, &[], "conclusion", None, &conclusion, &[], "", &concl_reasoning)
+            .persist_message(
+                &director_sender,
+                &[],
+                "conclusion",
+                None,
+                &conclusion,
+                &[],
+                "",
+                &concl_reasoning,
+            )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, concl_msg));
         self.emit(GroupChatEvent::finished(&self.room_id));
@@ -1817,7 +2080,9 @@ impl RoomRuntime {
         mention: Option<&str>,
         attachments: &[Attachment],
     ) {
-        let user_msg = self.persist_user_directive(sender, content, recipients, reply_to, mention, attachments).await;
+        let user_msg = self
+            .persist_user_directive(sender, content, recipients, reply_to, mention, attachments)
+            .await;
         self.after_user_directive(content, &user_msg).await;
     }
 
@@ -1835,7 +2100,18 @@ impl RoomRuntime {
     ) -> MessageRow {
         // 用户消息落库 + 事件（正文中 @显示名 归一化为 [@id]，保持 id 唯一引用；显示名仅前端展示）
         let normalized = self.normalize_user_mentions(content);
-        let user_msg = self.persist_message(sender, recipients, "directive", reply_to, &normalized, attachments, "", "").await;
+        let user_msg = self
+            .persist_message(
+                sender,
+                recipients,
+                "directive",
+                reply_to,
+                &normalized,
+                attachments,
+                "",
+                "",
+            )
+            .await;
         self.emit(GroupChatEvent::message(&self.room_id, user_msg.clone()));
 
         // 记录用户 @ 指定的参与者，供本轮下一发言者选择消费。
@@ -1849,8 +2125,12 @@ impl RoomRuntime {
     /// 把用户正文中的 `@显示名` 归一化为 `[@id]`（显示名长度降序替换，避免子串误替换）。
     /// 仅替换用户明确 @ 提及的显示名；id 唯一，保证 LLM 视图与前端展示的确定性映射。
     fn normalize_user_mentions(&self, content: &str) -> String {
-        let Ok(conn) = self.conn() else { return content.to_string(); };
-        let Ok(rows) = store::list_participants(&conn, &self.room_id) else { return content.to_string(); };
+        let Ok(conn) = self.conn() else {
+            return content.to_string();
+        };
+        let Ok(rows) = store::list_participants(&conn, &self.room_id) else {
+            return content.to_string();
+        };
         let mut pairs: Vec<(String, String)> = rows
             .iter()
             .filter(|p| !p.display_name.is_empty() && p.display_name != p.id)
@@ -1861,7 +2141,10 @@ impl RoomRuntime {
         for (name, id) in pairs {
             let needle = format!("@{}", name);
             if out.contains(&needle) {
-                out = out.split(&needle).collect::<Vec<_>>().join(&format!("[@{}]", id));
+                out = out
+                    .split(&needle)
+                    .collect::<Vec<_>>()
+                    .join(&format!("[@{}]", id));
             }
         }
         out
@@ -1884,16 +2167,22 @@ impl RoomRuntime {
         self.refresh_input_refs().await;
 
         let result = match disposition {
-            GoalDisposition::FirstRound => self.clarify_and_kickoff(content, &user_msg.content).await,
+            GoalDisposition::FirstRound => {
+                self.clarify_and_kickoff(content, &user_msg.content).await
+            }
             GoalDisposition::Changed(goal) => self.clarify_and_kickoff(&goal, &goal).await,
             GoalDisposition::Amended(supplement) => {
                 // 目标范围扩展：合并进目标锚点后对账重排（不归档旧任务）。
                 self.apply_goal_amend(&supplement).await;
                 self.replan(content).await
             }
-            GoalDisposition::TempTask { description, assignee } => {
+            GoalDisposition::TempTask {
+                description,
+                assignee,
+            } => {
                 // 临时性额外任务：直插执行，不触碰目标锚点与约束。
-                self.insert_temp_task(&description, assignee.as_deref()).await;
+                self.insert_temp_task(&description, assignee.as_deref())
+                    .await;
                 KickoffResult { added: 1 }
             }
             GoalDisposition::SwitchDirector(target) => {
@@ -1930,14 +2219,20 @@ impl RoomRuntime {
         let cwd = self
             .conn()
             .ok()
-            .map(|c| crate::utils::paths::resolve_workspace_path(None, "", &c).to_string_lossy().to_string())
+            .map(|c| {
+                crate::utils::paths::resolve_workspace_path(None, "", &c)
+                    .to_string_lossy()
+                    .to_string()
+            })
             .unwrap_or_default();
         // LLM 语义层：仅输出 anchor+subpath 结构（防幻觉），拼接与存在性校验交给 resolve_input_refs。
         let mut llm_drafts: Vec<InputRefDraft> = Vec::new();
         if let Some(director) = self.director.clone() {
             let combined = texts.join("\n");
             if !combined.trim().is_empty() {
-                if let Some(drafts) = call_director_retry(|| director.parse_input_refs(&combined)).await {
+                if let Some(drafts) =
+                    call_director_retry(|| director.parse_input_refs(&combined)).await
+                {
                     llm_drafts = drafts
                         .into_iter()
                         .map(|(anchor, subpath)| InputRefDraft { anchor, subpath })
@@ -1958,6 +2253,7 @@ impl RoomRuntime {
         if !self.output_dir.is_empty() {
             parts.push(format!(
                 "【产物目录】本房间所有参与者产出的文件必须统一写入：`{}`（绝对路径）。\
+                 该目录已由系统创建，写文件会自动补齐缺失的上级目录，无需（也不要用 mkdir）创建。\
                  任务描述要求产出物时请指明该目录；主持人裁决/总结引用产物时同样基于该目录。",
                 self.output_dir
             ));
@@ -1977,22 +2273,38 @@ impl RoomRuntime {
             Ok(c) => c,
             Err(_) => return self.output_dir.clone(),
         };
-        let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn).to_string_lossy().to_string();
+        let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn)
+            .to_string_lossy()
+            .to_string();
         // 目录名：主持人命名优先（简短贴切），否则按目标主题截断兜底；均去除换行等空白。
-        let source = if dir_name_hint.trim().is_empty() { goal } else { dir_name_hint };
+        let source = if dir_name_hint.trim().is_empty() {
+            goal
+        } else {
+            dir_name_hint
+        };
         let dir_name = sanitize_room_title(&source.replace(['\n', '\r', '\t'], ""));
 
         let resolved = if self.room.output_dir.trim().is_empty() {
-            let fallback = format!("{}\\outputs\\{}", cwd.trim_end_matches(['\\', '/']), dir_name);
+            let fallback = format!(
+                "{}\\outputs\\{}",
+                cwd.trim_end_matches(['\\', '/']),
+                dir_name
+            );
             let _ = fs::create_dir_all(&fallback);
             fallback
         } else {
             let p = self.room.output_dir.trim().to_string();
-            if Path::new(&p).is_absolute() && (Path::new(&p).exists() || fs::create_dir_all(&p).is_ok()) {
+            if Path::new(&p).is_absolute()
+                && (Path::new(&p).exists() || fs::create_dir_all(&p).is_ok())
+            {
                 p
             } else {
                 // 用户填写的路径不合法/无法创建：按未提供处理，回退默认产物目录。
-                let fallback = format!("{}\\outputs\\{}", cwd.trim_end_matches(['\\', '/']), dir_name);
+                let fallback = format!(
+                    "{}\\outputs\\{}",
+                    cwd.trim_end_matches(['\\', '/']),
+                    dir_name
+                );
                 let _ = fs::create_dir_all(&fallback);
                 fallback
             }
@@ -2011,7 +2323,11 @@ impl RoomRuntime {
     fn task_count(&self) -> usize {
         self.conn()
             .ok()
-            .map(|c| store::list_tasks(&c, &self.room_id).unwrap_or_default().len())
+            .map(|c| {
+                store::list_tasks(&c, &self.room_id)
+                    .unwrap_or_default()
+                    .len()
+            })
             .unwrap_or(0)
     }
 
@@ -2021,29 +2337,47 @@ impl RoomRuntime {
         if self.last_kickoff_added != 0 {
             return false;
         }
-        let Ok(conn) = self.conn() else { return false; };
-        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else { return false; };
-        tasks
-            .iter()
-            .all(|t| matches!(t.status.as_str(), "success" | "skipped" | "failed" | "aborted"))
+        let Ok(conn) = self.conn() else {
+            return false;
+        };
+        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else {
+            return false;
+        };
+        tasks.iter().all(|t| {
+            matches!(
+                t.status.as_str(),
+                "success" | "skipped" | "failed" | "aborted"
+            )
+        })
     }
 
     /// 任务终态即收敛的确定性兜底：存在任务且所有任务均处于终态。
     fn all_tasks_terminal(&self) -> bool {
-        let Ok(conn) = self.conn() else { return false; };
-        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else { return false; };
+        let Ok(conn) = self.conn() else {
+            return false;
+        };
+        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else {
+            return false;
+        };
         !tasks.is_empty()
-            && tasks
-                .iter()
-                .all(|t| matches!(t.status.as_str(), "success" | "skipped" | "failed" | "aborted"))
+            && tasks.iter().all(|t| {
+                matches!(
+                    t.status.as_str(),
+                    "success" | "skipped" | "failed" | "aborted"
+                )
+            })
     }
 
     /// 当前可执行层（就绪层）任务 id：前置任务全部 success 且自身未终态的任务。
     /// 与 execute_tasks 中波次计算共用同一依赖语义：`depends_on` 的绝对下标指向的前置全部 success。
     /// v3.4bp 分层执行的核心判据——讨论只聚焦就绪层，收敛后立即执行该层，再解锁后续层。
     fn ready_layer_ids(&self) -> Vec<String> {
-        let Ok(conn) = self.conn() else { return Vec::new() };
-        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else { return Vec::new() };
+        let Ok(conn) = self.conn() else {
+            return Vec::new();
+        };
+        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else {
+            return Vec::new();
+        };
         let statuses: Vec<&str> = tasks.iter().map(|t| t.status.as_str()).collect();
         let deps: Vec<Vec<usize>> = tasks
             .iter()
@@ -2098,7 +2432,11 @@ impl RoomRuntime {
             })
             .collect();
 
-        let g = match call_director_retry(|| director.classify_goal_intent(&self.room.topic, content, &self.room.goal_notes, &roster)).await {
+        let g = match call_director_retry(|| {
+            director.classify_goal_intent(&self.room.topic, content, &self.room.goal_notes, &roster)
+        })
+        .await
+        {
             Some(g) => g,
             None => return GoalDisposition::Refined,
         };
@@ -2106,7 +2444,11 @@ impl RoomRuntime {
         match g.intent.as_str() {
             "switch_director" => {
                 // 更换主持人：结构身份变更，交由 set_director 热替换。
-                let target = g.director.clone().map(|id| normalize_participant_ref(&id)).unwrap_or_default();
+                let target = g
+                    .director
+                    .clone()
+                    .map(|id| normalize_participant_ref(&id))
+                    .unwrap_or_default();
                 if target.is_empty() || !self.participants.contains_key(&target) {
                     return GoalDisposition::Refined;
                 }
@@ -2130,7 +2472,11 @@ impl RoomRuntime {
             }
             "temp_task" => {
                 // 临时性一次性额外任务：不更新目标，直接插入执行。
-                let desc = g.temp_task.as_ref().map(|t| t.description.trim().to_string()).unwrap_or_default();
+                let desc = g
+                    .temp_task
+                    .as_ref()
+                    .map(|t| t.description.trim().to_string())
+                    .unwrap_or_default();
                 if desc.is_empty() {
                     return GoalDisposition::Refined;
                 }
@@ -2199,14 +2545,19 @@ impl RoomRuntime {
         }
         self.emit(GroupChatEvent::task_updated(&self.room_id, task.clone()));
         let director_sender = self.director_sender();
-        let assignee_text = assignee.map(|a| format!("[@{}]", a)).unwrap_or_else(|| "待指派".into());
+        let assignee_text = assignee
+            .map(|a| format!("[@{}]", a))
+            .unwrap_or_else(|| "待指派".into());
         let msg = self
             .persist_message(
                 &director_sender,
                 &[],
                 "task_assignment",
                 None,
-                &format!("临时任务：T{}. {}（负责人：{}）", task.task_no, task.description, assignee_text),
+                &format!(
+                    "临时任务：T{}. {}（负责人：{}）",
+                    task.task_no, task.description, assignee_text
+                ),
                 &[],
                 "",
                 "",
@@ -2276,7 +2627,9 @@ impl RoomRuntime {
         loop {
             match self.cmd_rx.try_recv() {
                 Ok(cmd @ RoomCommand::Send { .. }) => return Some(cmd),
-                Ok(RoomCommand::SetDirector { director_id }) => self.set_director(&director_id).await,
+                Ok(RoomCommand::SetDirector { director_id }) => {
+                    self.set_director(&director_id).await
+                }
                 Ok(RoomCommand::SetOutputDir(output_dir)) => {
                     self.room.output_dir = output_dir.clone();
                     self.output_dir = output_dir;
@@ -2288,12 +2641,20 @@ impl RoomRuntime {
                 }
                 Ok(RoomCommand::Resume) => self.set_status(RoomStatus::Running).await,
                 Ok(RoomCommand::Abort) => {
-                    self.persist_control_notice("已停止：正在完成当前执行中的任务（若有），之后不再调度新任务。").await;
+                    self.persist_control_notice(
+                        "已停止：正在完成当前执行中的任务（若有），之后不再调度新任务。",
+                    )
+                    .await;
                     self.set_status(RoomStatus::Aborted).await;
                 }
-                Ok(RoomCommand::RespondConfirmation { request_id, responses }) => {
+                Ok(RoomCommand::RespondConfirmation {
+                    request_id,
+                    responses,
+                }) => {
                     // 波次间隙补交的确认回复（历史确认块）：落库记录，不打断当前执行。
-                    let _ = self.persist_confirmation_response_only(&request_id, &responses).await;
+                    let _ = self
+                        .persist_confirmation_response_only(&request_id, &responses)
+                        .await;
                 }
                 Err(_) => return None,
             }
@@ -2310,7 +2671,11 @@ impl RoomRuntime {
         let roster_text = roster
             .iter()
             .map(|(id, name, role)| {
-                let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                let role = if role.trim().is_empty() {
+                    "未分配"
+                } else {
+                    role.as_str()
+                };
                 format!("- [@{}]（显示名：{}）（当前角色：{}）", id, name, role)
             })
             .collect::<Vec<_>>()
@@ -2319,10 +2684,12 @@ impl RoomRuntime {
         // 阶段A1 目标整理：主持人理解并生成总目标 + 产物目录名；调用失败/超时降级为按用户原文编排（不阻塞）。
         let notes = self.combined_notes();
         let (goal, need_confirmation, questions, dir_name) = match self.director.clone() {
-            Some(d) => call_director_retry(|| d.clarify_goal(&self.room.topic, latest_llm, &notes, &roster_text))
-                .await
-                .map(|c| (c.goal, c.need_confirmation, c.questions, c.output_dir_name))
-                .unwrap_or((raw.to_string(), false, Vec::new(), String::new())),
+            Some(d) => call_director_retry(|| {
+                d.clarify_goal(&self.room.topic, latest_llm, &notes, &roster_text)
+            })
+            .await
+            .map(|c| (c.goal, c.need_confirmation, c.questions, c.output_dir_name))
+            .unwrap_or((raw.to_string(), false, Vec::new(), String::new())),
             None => (raw.to_string(), false, Vec::new(), String::new()),
         };
         // 主持人本次目标理解决策的思考链（供落库展示）。
@@ -2358,7 +2725,18 @@ impl RoomRuntime {
                     "【目标理解】我已理解你的目标，以下信息需要与你确认后再开始编排：\n目标：{}\n{}待确认问题：\n{}",
                     current_goal, digest_line, questions_text
                 );
-                let msg = self.persist_message(&director_sender, &[], "director_notice", None, &notice, &[], "", &reasoning).await;
+                let msg = self
+                    .persist_message(
+                        &director_sender,
+                        &[],
+                        "director_notice",
+                        None,
+                        &notice,
+                        &[],
+                        "",
+                        &reasoning,
+                    )
+                    .await;
                 self.memory.apply_message(&msg, &self.all_participant_ids());
                 self.emit(GroupChatEvent::message(&self.room_id, msg));
 
@@ -2387,11 +2765,23 @@ impl RoomRuntime {
                 };
                 let extra = serde_json::to_string(&conf).unwrap_or_else(|_| "{}".into());
                 let req_msg = self
-                    .persist_message_extra(&director_sender, &[], "confirmation_request", None, &conf.prompt, &[], "", "", &extra)
+                    .persist_message_extra(
+                        &director_sender,
+                        &[],
+                        "confirmation_request",
+                        None,
+                        &conf.prompt,
+                        &[],
+                        "",
+                        "",
+                        &extra,
+                    )
                     .await;
                 self.emit(GroupChatEvent::message(&self.room_id, req_msg));
 
-                let reply = self.await_confirmation_response(&request_id, &conf.items).await;
+                let reply = self
+                    .await_confirmation_response(&request_id, &conf.items)
+                    .await;
                 // 结构化/开放式回复统一取其内容；等待被中断则为 None。
                 let reply_content: Option<String> = match reply {
                     Some(ConfirmationReply::Structured { content, .. }) => Some(content),
@@ -2406,7 +2796,17 @@ impl RoomRuntime {
                 let resp_extra = serde_json::json!({ "responses": [] }).to_string();
                 let user_sender = self.user_id.clone();
                 let resp_msg = self
-                    .persist_message_extra(&user_sender, &[], "confirmation_response", Some(request_id.as_str()), &reply_content, &[], "", "", &resp_extra)
+                    .persist_message_extra(
+                        &user_sender,
+                        &[],
+                        "confirmation_response",
+                        Some(request_id.as_str()),
+                        &reply_content,
+                        &[],
+                        "",
+                        "",
+                        &resp_extra,
+                    )
                     .await;
                 self.emit(GroupChatEvent::message(&self.room_id, resp_msg.clone()));
                 let pids = self.all_participant_ids();
@@ -2415,16 +2815,27 @@ impl RoomRuntime {
                 let notes_ctx = self.combined_notes();
                 // 意图分派：用户可能并非逐条回答，而是给出新指令/改方向 → 重新进入目标理解。
                 let intent = match self.director.clone() {
-                    Some(d) => call_director_retry(|| d.classify_reply_intent(&questions_text, &reply_content))
-                        .await
-                        .unwrap_or_else(|| "confirm".to_string()),
+                    Some(d) => call_director_retry(|| {
+                        d.classify_reply_intent(&questions_text, &reply_content)
+                    })
+                    .await
+                    .unwrap_or_else(|| "confirm".to_string()),
                     None => "confirm".to_string(),
                 };
                 if intent == "directive" {
                     // 用户改方向/追加指令：以回复为最新输入重新理解目标（可能再次需要确认）。
                     let rc = match self.director.clone() {
-                        Some(d) => call_director_retry(|| d.clarify_goal(&self.room.topic, &reply_content, &notes_ctx, &roster_text))
-                            .await,
+                        Some(d) => {
+                            call_director_retry(|| {
+                                d.clarify_goal(
+                                    &self.room.topic,
+                                    &reply_content,
+                                    &notes_ctx,
+                                    &roster_text,
+                                )
+                            })
+                            .await
+                        }
                         None => None,
                     };
                     match rc {
@@ -2455,8 +2866,18 @@ impl RoomRuntime {
                     ))
                     .await;
                 let cr = match self.director.clone() {
-                    Some(d) => call_director_retry(|| d.clarify_reply(&current_goal, &reply_content, &notes_ctx, &roster_text, &evidence))
-                        .await,
+                    Some(d) => {
+                        call_director_retry(|| {
+                            d.clarify_reply(
+                                &current_goal,
+                                &reply_content,
+                                &notes_ctx,
+                                &roster_text,
+                                &evidence,
+                            )
+                        })
+                        .await
+                    }
                     None => None,
                 };
                 match cr {
@@ -2479,19 +2900,35 @@ impl RoomRuntime {
                     }
                     None => {
                         // Director 消化失败兜底：只摘录摘要并入目标，不无限打扰用户。
-                        current_goal = format!("{}\n\n【用户补充】\n{}", current_goal, summarize_for_goal(&reply_content));
+                        current_goal = format!(
+                            "{}\n\n【用户补充】\n{}",
+                            current_goal,
+                            summarize_for_goal(&reply_content)
+                        );
                         settled = true;
                     }
                 }
             }
             // 消化循环结束：落位整理后的总目标并进入编排。
             self.set_room_topic(&current_goal).await;
-            self.resolve_and_persist_output_dir(&current_goal, &current_dir_name).await;
+            self.resolve_and_persist_output_dir(&current_goal, &current_dir_name)
+                .await;
             self.kickoff_first(&current_goal).await
         } else {
             // 目标清晰：落【目标理解】notice 供用户可见可纠正，落位 topic 后直接编排。
             let notice = format!("【目标理解】我已理解你的目标：\n{}", goal);
-            let msg = self.persist_message(&director_sender, &[], "director_notice", None, &notice, &[], "", &clarify_reasoning).await;
+            let msg = self
+                .persist_message(
+                    &director_sender,
+                    &[],
+                    "director_notice",
+                    None,
+                    &notice,
+                    &[],
+                    "",
+                    &clarify_reasoning,
+                )
+                .await;
             self.memory.apply_message(&msg, &self.all_participant_ids());
             self.emit(GroupChatEvent::message(&self.room_id, msg));
 
@@ -2532,7 +2969,10 @@ impl RoomRuntime {
                 &self.pool,
                 &self.room_id,
                 &self.app,
-                &self.director_id.clone().unwrap_or_else(|| "director".to_string()),
+                &self
+                    .director_id
+                    .clone()
+                    .unwrap_or_else(|| "director".to_string()),
                 Some(self.control.abort.clone()),
                 self.mcp.clone(),
                 self.security_mode,
@@ -2557,7 +2997,12 @@ impl RoomRuntime {
             user_language: String::new(),
             output_dir: self.output_dir.clone(),
         };
-        match tokio::time::timeout(Duration::from_secs(SCOUT_TIMEOUT_SECS), executor.run_turn(view, None, None)).await {
+        match tokio::time::timeout(
+            Duration::from_secs(SCOUT_TIMEOUT_SECS),
+            executor.run_turn(view, None, None),
+        )
+        .await
+        {
             Ok(r) if r.error.is_none() && !r.content.trim().is_empty() => {
                 let text = r.content.trim().to_string();
                 if text.chars().count() > SCOUT_MAX_CHARS {
@@ -2568,7 +3013,10 @@ impl RoomRuntime {
             }
             Ok(_) => String::new(),
             Err(_) => {
-                log::warn!("[GroupChat] 主持人侦查超时（{}s），降级为无证据", SCOUT_TIMEOUT_SECS);
+                log::warn!(
+                    "[GroupChat] 主持人侦查超时（{}s），降级为无证据",
+                    SCOUT_TIMEOUT_SECS
+                );
                 String::new()
             }
         }
@@ -2611,32 +3059,76 @@ impl RoomRuntime {
         );
         let evidence = self.director_scout(&scout_mission).await;
         if !evidence.is_empty() {
-            notes.push_str(&format!("\n\n【主持人侦查简报】（编排取证，只读核验所得事实）\n{}", evidence));
+            notes.push_str(&format!(
+                "\n\n【主持人侦查简报】（编排取证，只读核验所得事实）\n{}",
+                evidence
+            ));
         }
         if let Some(director) = &self.director {
-            if let Some(plan) = call_director_retry(|| director.kickoff(&self.room.topic, goal, &notes, &roster, &roster_catalog, max_new_participants, &participant_failures)).await {
-                let KickoffPlan { tasks: drafts, roles, new_participants, missing_roles } = plan;
+            if let Some(plan) = call_director_retry(|| {
+                director.kickoff(
+                    &self.room.topic,
+                    goal,
+                    &notes,
+                    &roster,
+                    &roster_catalog,
+                    max_new_participants,
+                    &participant_failures,
+                )
+            })
+            .await
+            {
+                let KickoffPlan {
+                    tasks: drafts,
+                    roles,
+                    new_participants,
+                    missing_roles,
+                } = plan;
                 // v3.4as：Director 未覆盖角色的参与者由代码兜底补"未分配"，并落提示便于追溯。
                 if !missing_roles.is_empty() {
-                    let names = missing_roles.iter().map(|id| format!("[@{}]", id)).collect::<Vec<_>>().join("、");
-                    let notice = format!("编排提示：以下参与者未获得角色分配，已按\"未分配\"兜底：{}", names);
+                    let names = missing_roles
+                        .iter()
+                        .map(|id| format!("[@{}]", id))
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    let notice = format!(
+                        "编排提示：以下参与者未获得角色分配，已按\"未分配\"兜底：{}",
+                        names
+                    );
                     let director_sender = self.director_id.clone().unwrap_or_default();
-                    let msg = self.persist_message(&director_sender, &[], "director_notice", None, &notice, &[], "", "").await;
+                    let msg = self
+                        .persist_message(
+                            &director_sender,
+                            &[],
+                            "director_notice",
+                            None,
+                            &notice,
+                            &[],
+                            "",
+                            "",
+                        )
+                        .await;
                     self.memory.apply_message(&msg, &self.all_participant_ids());
                     self.emit(GroupChatEvent::message(&self.room_id, msg));
                 }
                 // 按需组建名册：主持人发现参与者不足时自动补充（先落库 + 重建运行时，
                 // 再应用任务/角色，确保 assignee/role 校验能命中新参与者）。
                 if !new_participants.is_empty() {
-                    let (created, rejected) = self.create_auto_participants(&new_participants, max_new_participants);
+                    let (created, rejected) =
+                        self.create_auto_participants(&new_participants, max_new_participants);
                     if !created.is_empty() {
                         self.rebuild_participants().await;
                         for c in &created {
                             let draft = new_participants.iter().find(|p| p.id == *c);
                             let role = draft.map(|p| p.system_role.clone()).unwrap_or_default();
                             let reason = draft.map(|p| p.reason.clone()).unwrap_or_default();
-                            let reason_part = if reason.is_empty() { String::new() } else { format!("（原因：{}）", reason) };
-                            roster_lines.push(format!("- [@{}]（角色：{}）{}", c, role, reason_part));
+                            let reason_part = if reason.is_empty() {
+                                String::new()
+                            } else {
+                                format!("（原因：{}）", reason)
+                            };
+                            roster_lines
+                                .push(format!("- [@{}]（角色：{}）{}", c, role, reason_part));
                         }
                     }
                     for r in &rejected {
@@ -2649,20 +3141,20 @@ impl RoomRuntime {
                         .assignee
                         .clone()
                         .map(|id| normalize_participant_ref(&id))
-                        .filter(|id| self.participants.contains_key(id) && !self.is_chronic_failer(id));
+                        .filter(|id| {
+                            self.participants.contains_key(id) && !self.is_chronic_failer(id)
+                        });
                     // Director 返回批内下标，偏移为全量任务表绝对下标（归档的旧任务仍占下标）。
-                    let depends_abs: Vec<usize> = d
-                        .depends_on
-                        .iter()
-                        .map(|p| p + existing_count)
-                        .collect();
+                    let depends_abs: Vec<usize> =
+                        d.depends_on.iter().map(|p| p + existing_count).collect();
                     let task = TaskRow {
                         id: uuid::Uuid::new_v4().to_string(),
                         room_id: self.room_id.clone(),
                         task_no: (existing_count + i + 1) as i64,
                         description: d.description.clone(),
                         assignee,
-                        depends_on: serde_json::to_string(&depends_abs).unwrap_or_else(|_| "[]".into()),
+                        depends_on: serde_json::to_string(&depends_abs)
+                            .unwrap_or_else(|_| "[]".into()),
                         status: "discussing".into(),
                         result_summary: None,
                         error: None,
@@ -2691,8 +3183,15 @@ impl RoomRuntime {
                     lines.push(String::new());
                     lines.push("任务指派：".to_string());
                     for t in &tasks {
-                        let assignee = t.assignee.clone().map(|a| format!("[@{}]", a)).unwrap_or_else(|| "待指派".to_string());
-                        lines.push(format!("- T{}. {}（负责人：{}）", t.task_no, t.description, assignee));
+                        let assignee = t
+                            .assignee
+                            .clone()
+                            .map(|a| format!("[@{}]", a))
+                            .unwrap_or_else(|| "待指派".to_string());
+                        lines.push(format!(
+                            "- T{}. {}（负责人：{}）",
+                            t.task_no, t.description, assignee
+                        ));
                     }
                 }
                 if !role_map.is_empty() {
@@ -2713,9 +3212,21 @@ impl RoomRuntime {
                     }
                 }
                 let schedule_text = lines.join("\n");
-                let director_sender = self.director_id.clone().unwrap_or_else(|| "director".to_string());
+                let director_sender = self
+                    .director_id
+                    .clone()
+                    .unwrap_or_else(|| "director".to_string());
                 let schedule_msg = self
-                    .persist_message(&director_sender, &[], "task_assignment", None, &schedule_text, &[], "", "")
+                    .persist_message(
+                        &director_sender,
+                        &[],
+                        "task_assignment",
+                        None,
+                        &schedule_text,
+                        &[],
+                        "",
+                        "",
+                    )
                     .await;
                 self.emit(GroupChatEvent::message(&self.room_id, schedule_msg));
             }
@@ -2778,11 +3289,27 @@ impl RoomRuntime {
         let roster_catalog = self.format_roster_catalog();
         let participant_failures = self.format_participant_failures();
         // 讨论中补充以 replan 上限为准（与剩余空位取小），注入提示词避免超量提议浪费轮次。
-        let max_new_participants = self.remaining_participant_slots().min(MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
+        let max_new_participants = self
+            .remaining_participant_slots()
+            .min(MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
         // B 层注入：用户输入物解析结果并入 Director 上下文（notes）。
         let notes = self.combined_notes();
         let plan = match &self.director {
-            Some(d) => call_director_retry(|| d.replan(&self.room.topic, latest, &notes, &existing, &roster, &roster_catalog, max_new_participants, &participant_failures)).await,
+            Some(d) => {
+                call_director_retry(|| {
+                    d.replan(
+                        &self.room.topic,
+                        latest,
+                        &notes,
+                        &existing,
+                        &roster,
+                        &roster_catalog,
+                        max_new_participants,
+                        &participant_failures,
+                    )
+                })
+                .await
+            }
             None => None,
         };
 
@@ -2795,14 +3322,19 @@ impl RoomRuntime {
         // 再应用对账操作/角色，确保 reassign/role 校验能命中新参与者）。
         let mut roster_lines: Vec<String> = Vec::new();
         if !plan.new_participants.is_empty() {
-            let (created, rejected) = self.create_auto_participants(&plan.new_participants, MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
+            let (created, rejected) = self
+                .create_auto_participants(&plan.new_participants, MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
             if !created.is_empty() {
                 self.rebuild_participants().await;
                 for c in &created {
                     let draft = plan.new_participants.iter().find(|p| p.id == *c);
                     let role = draft.map(|p| p.system_role.clone()).unwrap_or_default();
                     let reason = draft.map(|p| p.reason.clone()).unwrap_or_default();
-                    let reason_part = if reason.is_empty() { String::new() } else { format!("（原因：{}）", reason) };
+                    let reason_part = if reason.is_empty() {
+                        String::new()
+                    } else {
+                        format!("（原因：{}）", reason)
+                    };
                     roster_lines.push(format!("- [@{}]（角色：{}）{}", c, role, reason_part));
                 }
             }
@@ -2811,7 +3343,9 @@ impl RoomRuntime {
             }
         }
 
-        let app = self.apply_replan_operations(&existing, &plan.operations).await;
+        let app = self
+            .apply_replan_operations(&existing, &plan.operations)
+            .await;
 
         // 应用角色调整（仅 replan 明确要求时）：统一走白名单校验，协调类角色仅限 Director。
         let mut role_lines: Vec<String> = Vec::new();
@@ -2823,12 +3357,20 @@ impl RoomRuntime {
             role_lines.push(format!("- [@{}] → {}", pid, role));
         }
         for (pid, role) in &rejected_roles {
-            role_lines.push(format!("- [@{}] → {}（已拒绝：协调类角色仅限 Director 持有）", pid, role));
+            role_lines.push(format!(
+                "- [@{}] → {}（已拒绝：协调类角色仅限 Director 持有）",
+                pid, role
+            ));
         }
 
         // 对账调度可追溯消息（有变化时）
         let had_role_changes = !role_lines.is_empty();
-        if !app.added.is_empty() || app.removed != 0 || app.reassigned != 0 || had_role_changes || !roster_lines.is_empty() {
+        if !app.added.is_empty()
+            || app.removed != 0
+            || app.reassigned != 0
+            || had_role_changes
+            || !roster_lines.is_empty()
+        {
             let mut lines: Vec<String> = vec!["【调度】对账".to_string()];
             if !roster_lines.is_empty() {
                 lines.push(String::new());
@@ -2852,32 +3394,65 @@ impl RoomRuntime {
                 lines.push(String::new());
                 lines.push("新增任务：".to_string());
                 for t in &app.added {
-                    let assignee = t.assignee.clone().map(|a| format!("[@{}]", a)).unwrap_or_else(|| "待指派".to_string());
-                    lines.push(format!("- T{}. {}（负责人：{}）", t.task_no, t.description, assignee));
+                    let assignee = t
+                        .assignee
+                        .clone()
+                        .map(|a| format!("[@{}]", a))
+                        .unwrap_or_else(|| "待指派".to_string());
+                    lines.push(format!(
+                        "- T{}. {}（负责人：{}）",
+                        t.task_no, t.description, assignee
+                    ));
                 }
             }
-            let director_sender = self.director_id.clone().unwrap_or_else(|| "director".to_string());
+            let director_sender = self
+                .director_id
+                .clone()
+                .unwrap_or_else(|| "director".to_string());
             let msg = self
-                .persist_message(&director_sender, &[], "task_assignment", None, &lines.join("\n"), &[], "", "")
+                .persist_message(
+                    &director_sender,
+                    &[],
+                    "task_assignment",
+                    None,
+                    &lines.join("\n"),
+                    &[],
+                    "",
+                    "",
+                )
                 .await;
             self.emit(GroupChatEvent::message(&self.room_id, msg));
         }
 
         // 空变化自检：用户明确提出新指令但重排无任何任务调整时，落可追溯提示，
         // 避免「主持人无视插队」的静默（refine 类规范约束本身可能不引起任务变化，仅提示不阻断）。
-        if app.added.is_empty() && app.removed == 0 && app.reassigned == 0
+        if app.added.is_empty()
+            && app.removed == 0
+            && app.reassigned == 0
             && !had_role_changes
             && roster_lines.is_empty()
             && !latest.trim().is_empty()
             && latest != self.room.topic
         {
-            let director_sender = self.director_id.clone().unwrap_or_else(|| "director".to_string());
+            let director_sender = self
+                .director_id
+                .clone()
+                .unwrap_or_else(|| "director".to_string());
             let text = format!(
                 "用户最新指令未引起任务调整：\n{}\n（若该指令需要落实为具体任务，请再次明确指示）",
                 latest
             );
             let msg = self
-                .persist_message(&director_sender, &[], "director_notice", None, &text, &[], "", "")
+                .persist_message(
+                    &director_sender,
+                    &[],
+                    "director_notice",
+                    None,
+                    &text,
+                    &[],
+                    "",
+                    "",
+                )
                 .await;
             self.emit(GroupChatEvent::message(&self.room_id, msg));
         }
@@ -2888,7 +3463,9 @@ impl RoomRuntime {
             }
         }
 
-        KickoffResult { added: app.added.len() }
+        KickoffResult {
+            added: app.added.len(),
+        }
     }
 
     /// 应用 Director 重排操作（级联删减未执行任务、重派、新增）并落库/发事件。
@@ -2946,7 +3523,9 @@ impl RoomRuntime {
         // 2) 级联删减未执行任务（root 及其未执行后继）
         let mut removed: HashSet<usize> = HashSet::new();
         for root_id in &remove_roots {
-            let Some(&root_idx) = id_to_index.get(root_id) else { continue; };
+            let Some(&root_idx) = id_to_index.get(root_id) else {
+                continue;
+            };
             let mut stack = vec![root_idx];
             while let Some(idx) = stack.pop() {
                 if removed.contains(&idx) {
@@ -3067,7 +3646,8 @@ impl RoomRuntime {
     /// 名册变更（加入/移除参与者）后：重建运行时列表，并 Director 重排角色与任务。
     async fn handle_participant_changed(&mut self) {
         self.rebuild_participants().await;
-        self.replan_after_roster_change("【调度】参与者名册变更，已重新编排").await;
+        self.replan_after_roster_change("【调度】参与者名册变更，已重新编排")
+            .await;
     }
 
     /// 名册/主持人变化后的统一重排（调用方需先 rebuild_participants）：
@@ -3081,9 +3661,15 @@ impl RoomRuntime {
             return;
         }
 
-        let Some(director) = self.director.clone() else { return; };
-        let Ok(conn) = self.conn() else { return; };
-        let Ok(existing) = store::list_tasks(&conn, &self.room_id) else { return; };
+        let Some(director) = self.director.clone() else {
+            return;
+        };
+        let Ok(conn) = self.conn() else {
+            return;
+        };
+        let Ok(existing) = store::list_tasks(&conn, &self.room_id) else {
+            return;
+        };
 
         let names = self.participant_names();
         let roles = self.participant_roles();
@@ -3114,11 +3700,16 @@ impl RoomRuntime {
             role_lines.push(format!("- [@{}] → {}", pid, role));
         }
         for (pid, role) in &rejected_roles {
-            role_lines.push(format!("- [@{}] → {}（已拒绝：协调类角色仅限 Director 持有）", pid, role));
+            role_lines.push(format!(
+                "- [@{}] → {}（已拒绝：协调类角色仅限 Director 持有）",
+                pid, role
+            ));
         }
 
         // 应用任务重排
-        let app = self.apply_replan_operations(&existing, &plan.operations).await;
+        let app = self
+            .apply_replan_operations(&existing, &plan.operations)
+            .await;
 
         // 名册变更调度消息（可追溯）
         // V3.5c：每段前补空行分隔（「新增任务：」不再直接拼接在最后一行角色分配后）。
@@ -3140,13 +3731,29 @@ impl RoomRuntime {
             lines.push(String::new());
             lines.push("新增任务：".to_string());
             for t in &app.added {
-                let assignee = t.assignee.clone().map(|a| format!("[@{}]", a)).unwrap_or_else(|| "待指派".to_string());
-                lines.push(format!("- T{}. {}（负责人：{}）", t.task_no, t.description, assignee));
+                let assignee = t
+                    .assignee
+                    .clone()
+                    .map(|a| format!("[@{}]", a))
+                    .unwrap_or_else(|| "待指派".to_string());
+                lines.push(format!(
+                    "- T{}. {}（负责人：{}）",
+                    t.task_no, t.description, assignee
+                ));
             }
         }
         let director_sender = self.director_sender();
         let msg = self
-            .persist_message(&director_sender, &[], "task_assignment", None, &lines.join("\n"), &[], "", "")
+            .persist_message(
+                &director_sender,
+                &[],
+                "task_assignment",
+                None,
+                &lines.join("\n"),
+                &[],
+                "",
+                "",
+            )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, msg));
 
@@ -3183,7 +3790,8 @@ impl RoomRuntime {
             .cloned()
             .collect();
         if executors.is_empty() {
-            return "主持人失活，且房间内无可用 API 参与者执行恢复决策，讨论诚实收敛结束".to_string();
+            return "主持人失活，且房间内无可用 API 参与者执行恢复决策，讨论诚实收敛结束"
+                .to_string();
         }
 
         let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn)
@@ -3194,16 +3802,28 @@ impl RoomRuntime {
             .participant_roster()
             .into_iter()
             .map(|(id, name, role)| {
-                let role = if role.trim().is_empty() { "未分配" } else { role.as_str() };
+                let role = if role.trim().is_empty() {
+                    "未分配"
+                } else {
+                    role.as_str()
+                };
                 format!("- [@{}]（显示名：{}）（角色：{}）", id, name, role)
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let roster_text = if roster_text.is_empty() { "（暂无参与者）".to_string() } else { roster_text };
+        let roster_text = if roster_text.is_empty() {
+            "（暂无参与者）".to_string()
+        } else {
+            roster_text
+        };
+        self.ensure_task_assignees();
         let task_manifest = self.build_task_manifest();
         let catalog = self.format_roster_catalog();
         let failures_text = self.format_participant_failures();
-        let old_director_id = self.director_id.clone().unwrap_or_else(|| "director".to_string());
+        let old_director_id = self
+            .director_id
+            .clone()
+            .unwrap_or_else(|| "director".to_string());
 
         let mut reasons: Vec<String> = Vec::new();
         for (idx, exec) in executors.iter().take(DIRECTOR_RECOVER_LIMIT).enumerate() {
@@ -3238,7 +3858,9 @@ impl RoomRuntime {
             );
             // 单次恢复决策调用（与 Director 调用一致：确定性超时 + 同客户端重试；返回 Option 便于熔断计数）。
             let raw = call_director_retry(|| async {
-                llm.complete("", &[ChatMessage::user(&prompt)], None).await.ok()
+                llm.complete("", &[ChatMessage::user(&prompt)], None)
+                    .await
+                    .ok()
             })
             .await;
             let Some(raw) = raw else {
@@ -3251,7 +3873,11 @@ impl RoomRuntime {
                 reasons.push(format!("[@{}] 恢复决策输出非 JSON", exec.id));
                 continue;
             };
-            let Some(provider) = v["provider"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            let Some(provider) = v["provider"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
                 reasons.push(format!("[@{}] 未提供新主持人 provider", exec.id));
                 continue;
             };
@@ -3259,15 +3885,24 @@ impl RoomRuntime {
                 reasons.push(format!("[@{}] 未提供新主持人 model", exec.id));
                 continue;
             };
-            let Some(display_name) = v["display_name"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
+            let Some(display_name) = v["display_name"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
                 reasons.push(format!("[@{}] 未提供新主持人显示名", exec.id));
                 continue;
             };
             let system_role = v["system_role"].as_str().map(str::trim).unwrap_or("");
 
             // provider/key/模型白名单校验（与 create_auto_participants 的 api 校验同语义）。
-            let Ok(Some(provider_row)) = crate::commands::api_provider::get_api_provider(&conn, provider) else {
-                reasons.push(format!("[@{}] 提供商 '{}' 不存在或未配置", exec.id, provider));
+            let Ok(Some(provider_row)) =
+                crate::commands::api_provider::get_api_provider(&conn, provider)
+            else {
+                reasons.push(format!(
+                    "[@{}] 提供商 '{}' 不存在或未配置",
+                    exec.id, provider
+                ));
                 continue;
             };
             let key_ok = crate::commands::api_provider::get_api_key(&conn, provider)
@@ -3280,7 +3915,10 @@ impl RoomRuntime {
                 continue;
             }
             if !provider_row.models.is_empty() && !provider_row.models.iter().any(|m| m == model) {
-                reasons.push(format!("[@{}] 模型 '{}' 不在提供商 '{}' 的模型清单中", exec.id, model, provider));
+                reasons.push(format!(
+                    "[@{}] 模型 '{}' 不在提供商 '{}' 的模型清单中",
+                    exec.id, model, provider
+                ));
                 continue;
             }
 
@@ -3290,7 +3928,8 @@ impl RoomRuntime {
                 reasons.push(format!("[@{}] 新主持人 id '{}' 冲突", exec.id, new_id));
                 continue;
             }
-            let agent_config = serde_json::json!({ "provider": provider, "model": model }).to_string();
+            let agent_config =
+                serde_json::json!({ "provider": provider, "model": model }).to_string();
             let new_row = ParticipantRow {
                 id: new_id.clone(),
                 room_id: self.room_id.clone(),
@@ -3347,9 +3986,26 @@ impl RoomRuntime {
             self.control.wait_if_paused().await;
 
             // 下一检查点：检测用户插队，发现新指令则处理并中断讨论，交由上层重跑。
-            if let Some(RoomCommand::Send { sender, content, recipients, reply_to, mention, attachments, security_mode }) = self.drain_pending_commands().await {
+            if let Some(RoomCommand::Send {
+                sender,
+                content,
+                recipients,
+                reply_to,
+                mention,
+                attachments,
+                security_mode,
+            }) = self.drain_pending_commands().await
+            {
                 self.security_mode = security_mode;
-                self.process_user_directive(&sender, &content, &recipients, reply_to.as_deref(), mention.as_deref(), &attachments).await;
+                self.process_user_directive(
+                    &sender,
+                    &content,
+                    &recipients,
+                    reply_to.as_deref(),
+                    mention.as_deref(),
+                    &attachments,
+                )
+                .await;
                 return true;
             }
 
@@ -3365,6 +4021,7 @@ impl RoomRuntime {
             // 注入最近发言上下文，供 Director 判断任务是否已被实质推进（已推进则不再指派该任务）。
             // 注：主持人失活不再走「候选轮流接管/轮询」，恢复流程在审阅失败分支内一次性完成。
             let mention = self.pending_mention.take();
+            self.ensure_task_assignees();
             let task_manifest = self.build_task_manifest();
             // 预绑定临时值（闭包内自属临时会被 future 借用导致 E0515；提前绑定后闭包只引用局部）。
             let memory_summary = self.memory.summary();
@@ -3373,35 +4030,46 @@ impl RoomRuntime {
             let recent_speeches = self.format_recent_speeches(3);
             // 补人清单注入：主持人发现名册缺角色/立场时可提出补人提案（new_participants）。
             let catalog_text = self.format_roster_catalog();
-            let max_new_participants = self.remaining_participant_slots().min(MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
+            let max_new_participants = self
+                .remaining_participant_slots()
+                .min(MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
             // 名册三字段（id/显示名/角色）预绑定：选人必须感知参与者固定身份，避免主持人臆造角色。
             let roster = self.participant_roster();
             let decision = match mention.as_ref() {
-                Some(m) if self.floor_order.iter().any(|id| id == m) => {
-                    Some(SpeakerDecision { speaker: m.clone(), reason: "用户 @ 指定".into(), work_content: String::new(), new_participants: Vec::new() })
-                }
+                Some(m) if self.floor_order.iter().any(|id| id == m) => Some(SpeakerDecision {
+                    speaker: m.clone(),
+                    reason: "用户 @ 指定".into(),
+                    work_content: String::new(),
+                    new_participants: Vec::new(),
+                }),
                 _ => match &self.director {
-                    Some(d) => call_director_retry(|| d.next_speaker(
-                        &self.room.topic,
-                        &memory_summary,
-                        &roster,
-                        &task_manifest,
-                        &stances,
-                        mention.as_deref(),
-                        &self.last_user_directive,
-                        &notes,
-                        &failures_text,
-                        &recent_speeches,
-                        &catalog_text,
-                        max_new_participants,
-                    )).await,
+                    Some(d) => {
+                        call_director_retry(|| {
+                            d.next_speaker(
+                                &self.room.topic,
+                                &memory_summary,
+                                &roster,
+                                &task_manifest,
+                                &stances,
+                                mention.as_deref(),
+                                &self.last_user_directive,
+                                &notes,
+                                &failures_text,
+                                &recent_speeches,
+                                &catalog_text,
+                                max_new_participants,
+                            )
+                        })
+                        .await
+                    }
                     None => None,
                 },
             };
             // 主持人提出补人提案（名册缺角色/立场）→ 由系统创建专用参与者并重排，替代"让现有参与者临时扮演"。
             if let Some(dec) = &decision {
                 if !dec.new_participants.is_empty() {
-                    let (created, rejected) = self.create_auto_participants(&dec.new_participants, max_new_participants);
+                    let (created, rejected) =
+                        self.create_auto_participants(&dec.new_participants, max_new_participants);
                     let mut lines: Vec<String> = vec!["【调度】名册缺少必要角色/立场，已创建专用参与者（身份保持各自固定，不相互扮演）".to_string()];
                     for c in &created {
                         lines.push(format!("- 新增 [@{}]", c));
@@ -3411,12 +4079,27 @@ impl RoomRuntime {
                     }
                     let director_sender = self.director_sender();
                     let text = lines.join("\n");
-                    let msg = self.persist_message(&director_sender, &[], "director_notice", None, &text, &[], "", "").await;
+                    let msg = self
+                        .persist_message(
+                            &director_sender,
+                            &[],
+                            "director_notice",
+                            None,
+                            &text,
+                            &[],
+                            "",
+                            "",
+                        )
+                        .await;
                     self.emit(GroupChatEvent::message(&self.room_id, msg));
                     if !created.is_empty() {
                         // 名册变化：重建运行时并按新名册重排角色/任务，回到循环顶部重新选人。
                         self.rebuild_participants().await;
-                        self.replan_after_roster_change(&format!("【调度】已新增参与者 {}，重新编排角色与任务", created.join("、"))).await;
+                        self.replan_after_roster_change(&format!(
+                            "【调度】已新增参与者 {}，重新编排角色与任务",
+                            created.join("、")
+                        ))
+                        .await;
                         continue;
                     }
                 }
@@ -3426,7 +4109,9 @@ impl RoomRuntime {
             // 主席发言者选择决策落库（可追溯）。参与者一律以唯一 id 落库，
             // 显示名由前端渲染时统一映射为 @显示名。
             // 宽容归一化：模型可能回显带 [@] 括号的引用，先还原为裸 id 再落库与匹配。
-            let speaker_ref = decision.as_ref().map(|d| normalize_participant_ref(&d.speaker));
+            let speaker_ref = decision
+                .as_ref()
+                .map(|d| normalize_participant_ref(&d.speaker));
             // 本轮工作内容（v3.4ao）：主持人"派活"——讨论中派讨论议题、可执行派执行指令；
             // 未提供时回退原"围绕任务发言与推进"语义（build_speaker_task_context）。
             let work_content = decision
@@ -3445,7 +4130,18 @@ impl RoomRuntime {
                     Some(wc) => format!("{}\n\n本轮工作内容：{}", text, wc),
                     None => text,
                 };
-                let msg = self.persist_message(&director_sender, &[], "scheduling", None, &text, &[], "", &director_reasoning).await;
+                let msg = self
+                    .persist_message(
+                        &director_sender,
+                        &[],
+                        "scheduling",
+                        None,
+                        &text,
+                        &[],
+                        "",
+                        &director_reasoning,
+                    )
+                    .await;
                 // v3.4au：调度消息写入 GroupMemory（与 statement/用户消息一致）——调度承载本轮
                 // 工作内容与理由，不进 memory 则参与者上下文缺失"主持人指派"，只能靠 system prompt
                 // 的 task_context，导致参与者困惑"是否有主持人指派"（群聊协调上下文断裂）。
@@ -3458,7 +4154,11 @@ impl RoomRuntime {
             };
             self.state.next_round();
             let round = self.state.round;
-            self.emit(GroupChatEvent::floor_granted(&self.room_id, &speaker, round));
+            self.emit(GroupChatEvent::floor_granted(
+                &self.room_id,
+                &speaker,
+                round,
+            ));
 
             let Some(participant) = self.participants.get(&speaker).cloned() else {
                 continue;
@@ -3585,7 +4285,18 @@ impl RoomRuntime {
                 result.content.clone()
             };
 
-            let msg = self.persist_message(&speaker, &[], "statement", None, &speech, &[], &result.tool_calls, &result.reasoning_content).await;
+            let msg = self
+                .persist_message(
+                    &speaker,
+                    &[],
+                    "statement",
+                    None,
+                    &speech,
+                    &[],
+                    &result.tool_calls,
+                    &result.reasoning_content,
+                )
+                .await;
             self.emit(GroupChatEvent::message(&self.room_id, msg.clone()));
             self.memory.apply_message(&msg, &self.all_participant_ids());
 
@@ -3597,17 +4308,30 @@ impl RoomRuntime {
 
             // 立场快照：LLM 预处理归一化立场（态度 + ≤100 字陈述）；失败/超时或无 Director 时回退机械截断 + 文本分类。
             let (stance, attitude) = match &self.director {
-                Some(d) => match call_director_retry(|| d.extract_stance(&speaker, &speech)).await {
-                    Some(se) => (se.stance, se.attitude),
-                    None => (speech.chars().take(200).collect::<String>(), resolve_attitude(&speech)),
-                },
-                _ => (speech.chars().take(200).collect::<String>(), resolve_attitude(&speech)),
+                Some(d) => {
+                    match call_director_retry(|| d.extract_stance(&speaker, &speech)).await {
+                        Some(se) => (se.stance, se.attitude),
+                        None => (
+                            speech.chars().take(200).collect::<String>(),
+                            resolve_attitude(&speech),
+                        ),
+                    }
+                }
+                _ => (
+                    speech.chars().take(200).collect::<String>(),
+                    resolve_attitude(&speech),
+                ),
             };
             self.memory.update_stance(&speaker, &stance, attitude);
             if let Ok(conn) = self.conn() {
                 let _ = store::upsert_stance(&conn, &self.room_id, &speaker, &stance, attitude);
             }
-            self.emit(GroupChatEvent::stance_updated(&self.room_id, &speaker, &stance, attitude));
+            self.emit(GroupChatEvent::stance_updated(
+                &self.room_id,
+                &speaker,
+                &stance,
+                attitude,
+            ));
 
             // 语义收敛审查：Director 审阅进度、更新 L1 摘要，并判定 discuss/confirm/done。
             // 主持人 LLM 失败熔断：连续失败（已含同主持人重试耗尽）触发恢复流程——
@@ -3619,15 +4343,18 @@ impl RoomRuntime {
                     // 预绑定临时值（避免闭包内自属临时被 future 借用导致 E0515）。
                     let memory_summary = self.memory.summary();
                     let stances = self.memory.stances();
-                    call_director_retry(|| director.director_review(
-                        &self.room.topic,
-                        &memory_summary,
-                        &transcript,
-                        &self.room.goal_notes,
-                        &task_manifest,
-                        &stances,
-                        &self.last_user_directive,
-                    )).await
+                    call_director_retry(|| {
+                        director.director_review(
+                            &self.room.topic,
+                            &memory_summary,
+                            &transcript,
+                            &self.room.goal_notes,
+                            &task_manifest,
+                            &stances,
+                            &self.last_user_directive,
+                        )
+                    })
+                    .await
                 }
                 None => None,
             };
@@ -3643,7 +4370,18 @@ impl RoomRuntime {
                 if self.director_fallback.failures >= DIRECTOR_FAIL_THRESHOLD {
                     let notice = self.recover_director_via_api_agent().await;
                     let director_sender = self.director_sender();
-                    let msg = self.persist_message(&director_sender, &[], "director_notice", None, &notice, &[], "", "").await;
+                    let msg = self
+                        .persist_message(
+                            &director_sender,
+                            &[],
+                            "director_notice",
+                            None,
+                            &notice,
+                            &[],
+                            "",
+                            "",
+                        )
+                        .await;
                     self.emit(GroupChatEvent::message(&self.room_id, msg));
                     if self.director.is_some() {
                         // 新主持人已就位：清零失败计数，继续收敛。
@@ -3652,8 +4390,20 @@ impl RoomRuntime {
                         continue;
                     }
                     // 主持人无法恢复：没有主持人意味着所有调度逻辑被破坏，诚实收敛结束（不轮询）。
-                    let text = "主持人无法恢复，讨论已诚实收敛结束（无主持人即无调度，不采用轮询兜底）";
-                    let msg = self.persist_message(&director_sender, &[], "director_notice", None, text, &[], "", "").await;
+                    let text =
+                        "主持人无法恢复，讨论已诚实收敛结束（无主持人即无调度，不采用轮询兜底）";
+                    let msg = self
+                        .persist_message(
+                            &director_sender,
+                            &[],
+                            "director_notice",
+                            None,
+                            text,
+                            &[],
+                            "",
+                            "",
+                        )
+                        .await;
                     self.emit(GroupChatEvent::message(&self.room_id, msg));
                     return false;
                 }
@@ -3675,7 +4425,16 @@ impl RoomRuntime {
                 let director_sender = self.director_sender();
                 let review_reasoning = self.take_director_reasoning();
                 let summary_msg = self
-                    .persist_message(&director_sender, &[], "summary", None, &review.summary, &[], "", &review_reasoning)
+                    .persist_message(
+                        &director_sender,
+                        &[],
+                        "summary",
+                        None,
+                        &review.summary,
+                        &[],
+                        "",
+                        &review_reasoning,
+                    )
                     .await;
                 self.emit(GroupChatEvent::message(&self.room_id, summary_msg));
             }
@@ -3726,7 +4485,9 @@ impl RoomRuntime {
             Ok(c) => c,
             Err(_) => return,
         };
-        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else { return };
+        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else {
+            return;
+        };
         for t in tasks {
             let matched = task_nos.iter().any(|no| {
                 let no = no.trim().trim_start_matches(['T', 't']).trim();
@@ -3754,7 +4515,18 @@ impl RoomRuntime {
         tool_calls: &str,
         reasoning_content: &str,
     ) -> MessageRow {
-        self.persist_message_extra(sender, recipients, kind, reply_to, content, attachments, tool_calls, reasoning_content, "{}").await
+        self.persist_message_extra(
+            sender,
+            recipients,
+            kind,
+            reply_to,
+            content,
+            attachments,
+            tool_calls,
+            reasoning_content,
+            "{}",
+        )
+        .await
     }
 
     /// 落库消息，支持附加结构化数据（extra，如用户确认请求 JSON）与思考链（reasoning_content）。
@@ -3809,7 +4581,9 @@ impl RoomRuntime {
             // 宽容归一化：LLM 输出/上游解析可能带 [@id]/@id 前缀，直接作为 id 落库
             // 会匹配不到裸 id 行（UPDATE 影响行数为 0，落库静默失败）。兜底归一化保证落库生效。
             let pid = normalize_participant_ref(raw_pid);
-            let is_director = self.conn().ok()
+            let is_director = self
+                .conn()
+                .ok()
                 .and_then(|c| store::get_participant(&c, &self.room_id, &pid).ok())
                 .flatten()
                 .map(|p| p.participant_type == "director")
@@ -3831,19 +4605,33 @@ impl RoomRuntime {
 
     /// Director 发言者 id（消息落库时的 sender）。
     fn director_sender(&self) -> String {
-        self.director_id.clone().unwrap_or_else(|| "director".to_string())
+        self.director_id
+            .clone()
+            .unwrap_or_else(|| "director".to_string())
     }
 
     /// 取走主持人最近一次决策的思考链（供决策消息落库、前端无差异展示）。
     fn take_director_reasoning(&self) -> String {
-        self.director.as_ref().map(|d| d.take_last_reasoning()).unwrap_or_default()
+        self.director
+            .as_ref()
+            .map(|d| d.take_last_reasoning())
+            .unwrap_or_default()
     }
 
     /// 控制操作（暂停/停止等）的可追溯提示：说明"正在收尾"，避免用户误以为停止未生效。
     async fn persist_control_notice(&mut self, text: &str) {
         let director_sender = self.director_sender();
         let msg = self
-            .persist_message(&director_sender, &[], "director_notice", None, text, &[], "", "")
+            .persist_message(
+                &director_sender,
+                &[],
+                "director_notice",
+                None,
+                text,
+                &[],
+                "",
+                "",
+            )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, msg));
     }
@@ -3880,9 +4668,9 @@ impl RoomRuntime {
     }
 
     async fn execute_tasks(&mut self) -> bool {
-        const RETRY_MAX: usize = 2;         // 失败后额外重试次数
-        const REASSIGN_MAX: usize = 2;      // Director 重派次数上限
-        const BASE_BACKOFF_MS: u64 = 500;   // 重试指数退避基数
+        const RETRY_MAX: usize = 2; // 失败后额外重试次数
+        const REASSIGN_MAX: usize = 2; // Director 重派次数上限
+        const BASE_BACKOFF_MS: u64 = 500; // 重试指数退避基数
 
         let tasks = match self.conn() {
             Ok(c) => store::list_tasks(&c, &self.room_id).unwrap_or_default(),
@@ -3922,8 +4710,14 @@ impl RoomRuntime {
                 if let Ok(rows) = store::list_messages(&conn, &self.room_id, None, None) {
                     for m in rows {
                         if m.kind == "task_result" && !m.extra.is_empty() {
-                            let content = m.content.splitn(2, '：').nth(1).unwrap_or(&m.content).to_string();
-                            map.entry(m.extra.clone()).or_insert_with(|| (content, m.tool_calls.clone()));
+                            let content = m
+                                .content
+                                .splitn(2, '：')
+                                .nth(1)
+                                .unwrap_or(&m.content)
+                                .to_string();
+                            map.entry(m.extra.clone())
+                                .or_insert_with(|| (content, m.tool_calls.clone()));
                         }
                     }
                 }
@@ -3939,9 +4733,26 @@ impl RoomRuntime {
             self.control.wait_if_paused().await;
 
             // 下一检查点：检测用户插队，发现新指令则处理并中断执行，交由上层重跑。
-            if let Some(RoomCommand::Send { sender, content, recipients, reply_to, mention, attachments, security_mode }) = self.drain_pending_commands().await {
+            if let Some(RoomCommand::Send {
+                sender,
+                content,
+                recipients,
+                reply_to,
+                mention,
+                attachments,
+                security_mode,
+            }) = self.drain_pending_commands().await
+            {
                 self.security_mode = security_mode;
-                self.process_user_directive(&sender, &content, &recipients, reply_to.as_deref(), mention.as_deref(), &attachments).await;
+                self.process_user_directive(
+                    &sender,
+                    &content,
+                    &recipients,
+                    reply_to.as_deref(),
+                    mention.as_deref(),
+                    &attachments,
+                )
+                .await;
                 return true;
             }
 
@@ -3968,7 +4779,11 @@ impl RoomRuntime {
                     .clone()
                     .map(|id| normalize_participant_ref(&id))
                     .filter(|id| self.participants.contains_key(id))
-                    .or_else(|| self.executor_order.get(idx % self.executor_order.len().max(1)).cloned())
+                    .or_else(|| {
+                        self.executor_order
+                            .get(idx % self.executor_order.len().max(1))
+                            .cloned()
+                    })
                     .or_else(|| self.executor_order.first().cloned());
 
                 let mut task = tasks[idx].clone();
@@ -4012,7 +4827,8 @@ impl RoomRuntime {
                             return Some(p.clone());
                         }
                         let t = &tasks[d];
-                        let (content, tool_calls) = db_prior.get(&t.id).cloned().unwrap_or_default();
+                        let (content, tool_calls) =
+                            db_prior.get(&t.id).cloned().unwrap_or_default();
                         let artifacts = if tool_calls.trim().is_empty() {
                             Vec::new()
                         } else {
@@ -4076,14 +4892,18 @@ impl RoomRuntime {
             // 波次中途到达的用户指令：立即落库显示 + 等待提示，编排延迟到波次结束后执行。
             // 不做 abort/detach —— 波次任务整体完整跑完并落库，避免打断原子工作与重复执行。
             let mut staged_directive: Option<(String, MessageRow)> = None;
-            for ((idx, mut handle), mut progress_rx) in handles.into_iter().zip(progress_rxs.into_iter()) {
+            for ((idx, mut handle), mut progress_rx) in
+                handles.into_iter().zip(progress_rxs.into_iter())
+            {
                 // 执行波次汇聚期插队检查：任务执行中并发监听命令通道，用户消息立即落库显示（预输出），
                 // 编排留待波次结束后；暂停/停止/换主持人等控制命令同步即时生效，不依赖任务间隙。
                 // R1（V3.6 进展感知任务级停滞秒表）：不再按"固定总时长"秒杀——合法长任务（多次
                 // 工具迭代、总时长可远超固定上限）每轮"实质产出"都经 progress_rx 重置秒表；
                 // 仅当距上次实质产出超过 EXEC_TASK_TIMEOUT_SECS 仍无产出（任一步骤漏网真停滞）时，
                 // 才按"任务停滞超时"失败并 abort，防止任务永久 running 拖住同波次与后继依赖层。
-                let mut stall_sleep = Box::pin(tokio::time::sleep(Duration::from_secs(EXEC_TASK_TIMEOUT_SECS)));
+                let mut stall_sleep = Box::pin(tokio::time::sleep(Duration::from_secs(
+                    EXEC_TASK_TIMEOUT_SECS,
+                )));
                 let outcome = loop {
                     tokio::select! {
                         biased;
@@ -4196,7 +5016,8 @@ impl RoomRuntime {
                 // ask_user 的任务暂不落库 task_result，由确认请求消息承载交互；
                 // 协作式取消标 pending 的任务同样不落终态汇报（恢复重跑后再报）。
                 if !awaiting_user && task.status != "pending" {
-                    self.persist_task_message(&task, &outcome.tool_calls, &outcome.result_content).await;
+                    self.persist_task_message(&task, &outcome.tool_calls, &outcome.result_content)
+                        .await;
                 }
 
                 // 成功后写入本轮前置成果缓存（供后续波次/后继任务注入，含最新成果与工具链）。
@@ -4260,16 +5081,25 @@ impl RoomRuntime {
     /// 依赖环死锁检测：当剩余未终态任务恰好构成依赖环时，显式将其标 failed（不吞错误、防上层空转）。
     async fn fail_deadlocked_cycles(&mut self) {
         let Ok(conn) = self.conn() else { return };
-        let Ok(cur) = store::list_tasks(&conn, &self.room_id) else { return };
+        let Ok(cur) = store::list_tasks(&conn, &self.room_id) else {
+            return;
+        };
         let cur_deps: Vec<Vec<usize>> = cur
             .iter()
             .map(|t| serde_json::from_str::<Vec<usize>>(&t.depends_on).unwrap_or_default())
             .collect();
         let cur_done: Vec<bool> = cur
             .iter()
-            .map(|t| matches!(t.status.as_str(), "success" | "skipped" | "failed" | "aborted"))
+            .map(|t| {
+                matches!(
+                    t.status.as_str(),
+                    "success" | "skipped" | "failed" | "aborted"
+                )
+            })
             .collect();
-        let cyclic: HashSet<usize> = task::cycle_indices(&cur_deps, &cur_done).into_iter().collect();
+        let cyclic: HashSet<usize> = task::cycle_indices(&cur_deps, &cur_done)
+            .into_iter()
+            .collect();
         if cyclic.is_empty() {
             return;
         }
@@ -4285,7 +5115,8 @@ impl RoomRuntime {
             }
             let mut t = t.clone();
             t.status = "failed".into();
-            t.error = Some("任务依赖形成环（互相等待），无法就绪执行，已终止；请调整依赖后重试".into());
+            t.error =
+                Some("任务依赖形成环（互相等待），无法就绪执行，已终止；请调整依赖后重试".into());
             t.completed_at = Some(crate::utils::now());
             self.save_and_emit_task(&t);
             failed_nos.push(t.task_no);
@@ -4295,9 +5126,21 @@ impl RoomRuntime {
         }
         let nos: Vec<String> = failed_nos.iter().map(|n| format!("T{}", n)).collect();
         let director_sender = self.director_sender();
-        let text = format!("【调度】检测到任务依赖环，已终止相关任务（{}）：互相等待无法就绪，请调整依赖后重试。", nos.join("、"));
+        let text = format!(
+            "【调度】检测到任务依赖环，已终止相关任务（{}）：互相等待无法就绪，请调整依赖后重试。",
+            nos.join("、")
+        );
         let msg = self
-            .persist_message(&director_sender, &[], "director_notice", None, &text, &[], "", "")
+            .persist_message(
+                &director_sender,
+                &[],
+                "director_notice",
+                None,
+                &text,
+                &[],
+                "",
+                "",
+            )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, msg));
     }
@@ -4323,28 +5166,58 @@ impl RoomRuntime {
         self.emit(GroupChatEvent::message(&self.room_id, req_msg));
 
         // 2. 阻塞等待用户回复。
-        let Some(reply) = self.await_confirmation_response(&confirmation.request_id, &confirmation.items).await else {
+        let Some(reply) = self
+            .await_confirmation_response(&confirmation.request_id, &confirmation.items)
+            .await
+        else {
             return;
         };
 
         // 3. 结构化回复直接按确认处理；开放式消息由 Director 判断语义（confirm / directive）。
         match reply {
-            ConfirmationReply::Structured { content: reply_content, responses } => {
-                self.apply_confirmation_flow(&confirmation, &req_msg_id, &reply_content, &responses).await;
+            ConfirmationReply::Structured {
+                content: reply_content,
+                responses,
+            } => {
+                self.apply_confirmation_flow(
+                    &confirmation,
+                    &req_msg_id,
+                    &reply_content,
+                    &responses,
+                )
+                .await;
             }
-            ConfirmationReply::Open { sender, content, recipients, reply_to, mention, attachments } => {
+            ConfirmationReply::Open {
+                sender,
+                content,
+                recipients,
+                reply_to,
+                mention,
+                attachments,
+            } => {
                 let intent = match self.director.clone() {
-                    Some(d) => call_director_retry(|| d.classify_reply_intent(&confirmation.prompt, &content))
-                        .await
-                        .unwrap_or_else(|| "confirm".to_string()),
+                    Some(d) => call_director_retry(|| {
+                        d.classify_reply_intent(&confirmation.prompt, &content)
+                    })
+                    .await
+                    .unwrap_or_else(|| "confirm".to_string()),
                     None => "confirm".to_string(),
                 };
                 if intent == "directive" {
                     // 用户插入的新指令：按正常用户指令处理（落库 + 重新编排）。
-                    self.process_user_directive(&sender, &content, &recipients, reply_to.as_deref(), mention.as_deref(), &attachments).await;
+                    self.process_user_directive(
+                        &sender,
+                        &content,
+                        &recipients,
+                        reply_to.as_deref(),
+                        mention.as_deref(),
+                        &attachments,
+                    )
+                    .await;
                 } else {
                     // 确认回复：落库 + 注入 pending 任务重跑（开放式回复无结构化 responses）。
-                    self.apply_confirmation_flow(&confirmation, &req_msg_id, &content, &[]).await;
+                    self.apply_confirmation_flow(&confirmation, &req_msg_id, &content, &[])
+                        .await;
                 }
             }
         }
@@ -4353,11 +5226,27 @@ impl RoomRuntime {
     /// 确认回复的统一处理：落库 confirmation_response 消息（extra 携带结构化 responses 供前端恢复控件），
     /// 并注入原 pending 任务重跑。`confirmation_msg_id` 为 confirmation_request 消息 id
     /// （reply_to 契约：指向被回复消息 id，而非 requestId）。
-    async fn apply_confirmation_flow(&mut self, confirmation: &ConfirmationRequest, confirmation_msg_id: &str, reply_content: &str, responses: &[ConfirmationResponse]) {
+    async fn apply_confirmation_flow(
+        &mut self,
+        confirmation: &ConfirmationRequest,
+        confirmation_msg_id: &str,
+        reply_content: &str,
+        responses: &[ConfirmationResponse],
+    ) {
         let user_sender = self.user_id.clone();
         let extra = serde_json::json!({ "responses": responses }).to_string();
         let resp_msg = self
-            .persist_message_extra(&user_sender, &[], "confirmation_response", Some(confirmation_msg_id), reply_content, &[], "", "", &extra)
+            .persist_message_extra(
+                &user_sender,
+                &[],
+                "confirmation_response",
+                Some(confirmation_msg_id),
+                reply_content,
+                &[],
+                "",
+                "",
+                &extra,
+            )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, resp_msg.clone()));
 
@@ -4365,7 +5254,8 @@ impl RoomRuntime {
         // 讨论阶段发起（无关联任务）时：确认回复也必须先经主持人消费——并入最新指令并按
         // 用户输入链路编排（意图分类→合并/重排），避免回复被下一位发言者直接消费。
         if !confirmation.task_id.is_empty() {
-            self.apply_confirmation_reply(&confirmation.task_id, reply_content).await;
+            self.apply_confirmation_reply(&confirmation.task_id, reply_content)
+                .await;
             let pids = self.all_participant_ids();
             self.memory.apply_message(&resp_msg, &pids);
             // 重置收敛计数，避免确认后过早收敛。
@@ -4384,7 +5274,11 @@ impl RoomRuntime {
     /// v3.4m 恢复闭环：若对应确认请求仍关联 pending 任务（如重启后确认等待未恢复、
     /// 讨论中补交回复等），把回复合并进任务描述并恢复为 discussing（apply_confirmation_reply）。
     /// 返回 true 表示已注入回复（任务待重跑），调用方据此立即执行剩余任务，无需等待用户下一条指令。
-    async fn persist_confirmation_response_only(&mut self, request_id: &str, responses: &[ConfirmationResponse]) -> bool {
+    async fn persist_confirmation_response_only(
+        &mut self,
+        request_id: &str,
+        responses: &[ConfirmationResponse],
+    ) -> bool {
         let content = self.format_confirmation_reply(request_id, responses);
         let user_sender = self.user_id.clone();
         let extra = serde_json::json!({ "responses": responses }).to_string();
@@ -4399,20 +5293,36 @@ impl RoomRuntime {
                     .map(|m| m.id)
             });
         let resp_msg = self
-            .persist_message_extra(&user_sender, &[], "confirmation_response", req_msg_id.as_deref(), &content, &[], "", "", &extra)
+            .persist_message_extra(
+                &user_sender,
+                &[],
+                "confirmation_response",
+                req_msg_id.as_deref(),
+                &content,
+                &[],
+                "",
+                "",
+                &extra,
+            )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, resp_msg.clone()));
 
         // 定位确认请求（extra 内嵌 ConfirmationRequest，含 task_id），命中仍 pending 的任务则注入回复。
-        let Ok(conn) = self.conn() else { return false; };
-        let Ok(rows) = store::list_messages(&conn, &self.room_id, None, None) else { return false; };
+        let Ok(conn) = self.conn() else {
+            return false;
+        };
+        let Ok(rows) = store::list_messages(&conn, &self.room_id, None, None) else {
+            return false;
+        };
         let Some(m) = rows
             .iter()
             .find(|m| m.kind == "confirmation_request" && m.extra.contains(request_id))
         else {
             return false;
         };
-        let Ok(conf) = serde_json::from_str::<ConfirmationRequest>(&m.extra) else { return false; };
+        let Ok(conf) = serde_json::from_str::<ConfirmationRequest>(&m.extra) else {
+            return false;
+        };
         if conf.task_id.is_empty() {
             return false;
         }
@@ -4420,7 +5330,11 @@ impl RoomRuntime {
     }
 
     /// 把结构化确认回复格式化为可读文本：优先用对应确认请求中的 item label 映射，缺失时回退 item_id。
-    fn format_confirmation_reply(&self, request_id: &str, responses: &[ConfirmationResponse]) -> String {
+    fn format_confirmation_reply(
+        &self,
+        request_id: &str,
+        responses: &[ConfirmationResponse],
+    ) -> String {
         let labels: HashMap<String, String> = self
             .conn()
             .ok()
@@ -4454,16 +5368,24 @@ impl RoomRuntime {
     /// 等待用户对确认请求的回复；通道关闭/中止返回 `None`。
     /// `request_id` 用于校验回复关联的确认块（错配/历史块仅落库标记，不中断当前等待）。
     /// `items` 用于把 item_id 映射为可读的 label，供后续理解用户选择。
-    async fn await_confirmation_response(&mut self, request_id: &str, items: &[ConfirmationItem]) -> Option<ConfirmationReply> {
+    async fn await_confirmation_response(
+        &mut self,
+        request_id: &str,
+        items: &[ConfirmationItem],
+    ) -> Option<ConfirmationReply> {
         loop {
             if self.control.abort.load(Ordering::SeqCst) {
                 return None;
             }
             match self.cmd_rx.recv().await {
-                Some(RoomCommand::RespondConfirmation { request_id: rid, responses }) => {
+                Some(RoomCommand::RespondConfirmation {
+                    request_id: rid,
+                    responses,
+                }) => {
                     if rid != request_id {
                         // 用户回复的是历史/错配的确认块：仅落库标记已提交，继续等待当前确认。
-                        self.persist_confirmation_response_only(&rid, &responses).await;
+                        self.persist_confirmation_response_only(&rid, &responses)
+                            .await;
                         continue;
                     }
                     let content = responses
@@ -4481,7 +5403,15 @@ impl RoomRuntime {
                         .join("\n");
                     return Some(ConfirmationReply::Structured { content, responses });
                 }
-                Some(RoomCommand::Send { sender, content, recipients, reply_to, mention, attachments, security_mode }) => {
+                Some(RoomCommand::Send {
+                    sender,
+                    content,
+                    recipients,
+                    reply_to,
+                    mention,
+                    attachments,
+                    security_mode,
+                }) => {
                     // 确认等待期间的开放文本回复：同步更新本波次模式
                     self.security_mode = security_mode;
                     return Some(ConfirmationReply::Open {
@@ -4493,7 +5423,9 @@ impl RoomRuntime {
                         attachments,
                     });
                 }
-                Some(RoomCommand::SetDirector { director_id }) => self.set_director(&director_id).await,
+                Some(RoomCommand::SetDirector { director_id }) => {
+                    self.set_director(&director_id).await
+                }
                 Some(RoomCommand::SetOutputDir(output_dir)) => {
                     self.room.output_dir = output_dir.clone();
                     self.output_dir = output_dir;
@@ -4514,7 +5446,11 @@ impl RoomRuntime {
             if let Ok(Some(mut t)) = store::get_task(&conn, &self.room_id, task_id) {
                 // 仅当任务仍处于 pending（等待确认）时才注入并重跑；否则保持不变。
                 if t.status == "pending" {
-                    t.description = format!("{}\n\n【用户补充/确认信息】\n{}", t.description.trim_end(), reply);
+                    t.description = format!(
+                        "{}\n\n【用户补充/确认信息】\n{}",
+                        t.description.trim_end(),
+                        reply
+                    );
                     t.status = "discussing".into();
                     t.error = None;
                     t.started_at = None;
@@ -4579,8 +5515,21 @@ impl RoomRuntime {
         };
         let event_session_id = format!("groupchat:{}:director", room_id);
         // 群聊作用域技能禁用集：主持人亲自执行/侦查同样处于群聊注入面，须隐藏被禁技能目录。
-        let disabled_skills = crate::commands::app_settings::load_skill_scope_disabled(conn).groupchat;
-        let llm = build_llm_client(conn, pool, room_id, &row.agent_config, app, &cwd, true, Some(event_session_id), cancel, mcp, security_mode)?;
+        let disabled_skills =
+            crate::commands::app_settings::load_skill_scope_disabled(conn).groupchat;
+        let llm = build_llm_client(
+            conn,
+            pool,
+            room_id,
+            &row.agent_config,
+            app,
+            &cwd,
+            true,
+            Some(event_session_id),
+            cancel,
+            mcp,
+            security_mode,
+        )?;
         Some(Arc::new(LlmParticipant {
             id: director_id.to_string(),
             llm: Arc::new(llm),
@@ -4631,14 +5580,32 @@ impl RoomRuntime {
             task.status = "skipped".into();
             task.error = Some("前置任务失败或未完成".into());
             task.completed_at = Some(crate::utils::now());
-            return TaskOutcome { task, messages, should_abort, tool_calls: String::new(), result_content: String::new(), confirmation: None, confirmation_sender: None, roster_changed };
+            return TaskOutcome {
+                task,
+                messages,
+                should_abort,
+                tool_calls: String::new(),
+                result_content: String::new(),
+                confirmation: None,
+                confirmation_sender: None,
+                roster_changed,
+            };
         }
 
         let Some(mut current_assignee) = initial_assignee else {
             task.status = "skipped".into();
             task.error = Some("无可用执行者".into());
             task.completed_at = Some(crate::utils::now());
-            return TaskOutcome { task, messages, should_abort, tool_calls: String::new(), result_content: String::new(), confirmation: None, confirmation_sender: None, roster_changed };
+            return TaskOutcome {
+                task,
+                messages,
+                should_abort,
+                tool_calls: String::new(),
+                result_content: String::new(),
+                confirmation: None,
+                confirmation_sender: None,
+                roster_changed,
+            };
         };
 
         let mut retries = 0usize;
@@ -4707,7 +5674,8 @@ impl RoomRuntime {
             }
 
             // 失败判定：有错误，或既无内容又无工具调用链（工具已产生实质工作的空文本不判失败）。
-            let failed = result.error.is_some() || (result.content.is_empty() && result.tool_calls.is_empty());
+            let failed = result.error.is_some()
+                || (result.content.is_empty() && result.tool_calls.is_empty());
             if !failed {
                 task.status = "success".into();
                 if result.content.is_empty() {
@@ -4758,16 +5726,25 @@ impl RoomRuntime {
                         .and_then(|c| store::list_participants(&c, &room_id).ok())
                         .map(|rows| {
                             rows.iter()
-                                .filter(|r| r.participant_type == "api" || r.participant_type == "cli")
+                                .filter(|r| {
+                                    r.participant_type == "api" || r.participant_type == "cli"
+                                })
                                 .map(|r| (r.id.clone(), r.system_role.clone()))
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let roster_catalog = pool.get().ok().map(|c| format_roster_catalog_db(&c, allow_auto_cli != 0)).unwrap_or_default();
+                    let roster_catalog = pool
+                        .get()
+                        .ok()
+                        .map(|c| format_roster_catalog_db(&c, allow_auto_cli != 0))
+                        .unwrap_or_default();
                     let max_new = pool
                         .get()
                         .ok()
-                        .map(|c| remaining_participant_slots_db(&c, &room_id).min(MAX_AUTO_NEW_PARTICIPANTS_REPLAN))
+                        .map(|c| {
+                            remaining_participant_slots_db(&c, &room_id)
+                                .min(MAX_AUTO_NEW_PARTICIPANTS_REPLAN)
+                        })
                         .unwrap_or(0);
                     // 全局失败参与者（≥2 次）并入"不得再指派"名单，防止主持人跨任务反复指派同一人。
                     let mut all_failed = failed_executors.clone();
@@ -4778,17 +5755,19 @@ impl RoomRuntime {
                             }
                         }
                     }
-                    let decision = call_director_retry(|| director.handle_task_failure(
-                        &topic,
-                        &task.id,
-                        &task.description,
-                        &err,
-                        &roster,
-                        attempts,
-                        &all_failed,
-                        &roster_catalog,
-                        max_new,
-                    ))
+                    let decision = call_director_retry(|| {
+                        director.handle_task_failure(
+                            &topic,
+                            &task.id,
+                            &task.description,
+                            &err,
+                            &roster,
+                            attempts,
+                            &all_failed,
+                            &roster_catalog,
+                            max_new,
+                        )
+                    })
                     .await;
                     if let Some(d) = decision {
                         need_fallback = false; // 已获得裁决
@@ -4802,8 +5781,16 @@ impl RoomRuntime {
                             "add_participant" => "补充参与者接盘",
                             _ => d.action.as_str(),
                         };
-                        let assignee_desc = d.assignee.clone().map(|a| format!("[@{}]", a)).unwrap_or_else(|| "-".into());
-                        let reason = if d.reason.is_empty() { "未说明".to_string() } else { d.reason.clone() };
+                        let assignee_desc = d
+                            .assignee
+                            .clone()
+                            .map(|a| format!("[@{}]", a))
+                            .unwrap_or_else(|| "-".into());
+                        let reason = if d.reason.is_empty() {
+                            "未说明".to_string()
+                        } else {
+                            d.reason.clone()
+                        };
                         let text = format!(
                             "失败裁决：任务「{}」\n失败原因：{}\n处置：{}（目标：{}）\n理由：{}",
                             task.description, err, action_desc, assignee_desc, reason
@@ -4835,7 +5822,10 @@ impl RoomRuntime {
                                 if !failed_executors.contains(&rid) {
                                     failed_executors.push(rid.clone());
                                 }
-                                let _ = app.emit("groupchat-event", &GroupChatEvent::participant_updated(&room_id));
+                                let _ = app.emit(
+                                    "groupchat-event",
+                                    &GroupChatEvent::participant_updated(&room_id),
+                                );
                                 roster_changed = true;
                                 messages.push(PendingMessage {
                                     sender: director_sender.clone(),
@@ -4843,7 +5833,11 @@ impl RoomRuntime {
                                     content: format!(
                                         "已移除反复失败的参与者 [@{}]（原因：{}），释放席位",
                                         rid,
-                                        if d.reason.is_empty() { "反复失败" } else { d.reason.as_str() }
+                                        if d.reason.is_empty() {
+                                            "反复失败"
+                                        } else {
+                                            d.reason.as_str()
+                                        }
                                     ),
                                 });
                             }
@@ -4859,15 +5853,28 @@ impl RoomRuntime {
                                     consecutive_retries += 1;
                                     if consecutive_retries >= RETRY_FORCE_LIMIT {
                                         // 连续 retry 达阈值：由代码强制换人，不依赖 LLM 自觉。
-                                        if let Some(next) = Self::next_executor_fallback(&executor_order, &participants, &current_assignee) {
+                                        if let Some(next) = Self::next_executor_fallback(
+                                            &executor_order,
+                                            &participants,
+                                            &current_assignee,
+                                        ) {
                                             messages.push(PendingMessage {
                                                 sender: director_sender.clone(),
                                                 kind: "failure_decision".into(),
-                                                content: format!("连续重试仍失败，强制更换执行者 → [@{}]", next),
+                                                content: format!(
+                                                    "连续重试仍失败，强制更换执行者 → [@{}]",
+                                                    next
+                                                ),
                                             });
                                             current_assignee = next;
                                             task.assignee = Some(current_assignee.clone());
-                                            let _ = app.emit("groupchat-event", &GroupChatEvent::task_updated(&room_id, task.clone()));
+                                            let _ = app.emit(
+                                                "groupchat-event",
+                                                &GroupChatEvent::task_updated(
+                                                    &room_id,
+                                                    task.clone(),
+                                                ),
+                                            );
                                         }
                                         consecutive_retries = 0;
                                     }
@@ -4879,16 +5886,24 @@ impl RoomRuntime {
                                 }
                             }
                             "reassign" => {
-                                if let Some(new_id) = d.assignee.clone().map(|id| normalize_participant_ref(&id)).filter(|id| {
-                                    participants.contains_key(id)
-                                        && *id != current_assignee
-                                        && !failed_executors.contains(id)
-                                        && !is_chronic_failer_map(&participant_failures, id)
-                                }) {
+                                if let Some(new_id) = d
+                                    .assignee
+                                    .clone()
+                                    .map(|id| normalize_participant_ref(&id))
+                                    .filter(|id| {
+                                        participants.contains_key(id)
+                                            && *id != current_assignee
+                                            && !failed_executors.contains(id)
+                                            && !is_chronic_failer_map(&participant_failures, id)
+                                    })
+                                {
                                     current_assignee = new_id;
                                     task.assignee = Some(current_assignee.clone());
                                     // 实时推送 assignee 变更，前端 executingIds 据此点亮呼吸圆点。
-                                    let _ = app.emit("groupchat-event", &GroupChatEvent::task_updated(&room_id, task.clone()));
+                                    let _ = app.emit(
+                                        "groupchat-event",
+                                        &GroupChatEvent::task_updated(&room_id, task.clone()),
+                                    );
                                     reassigns += 1;
                                     retries = 0;
                                     consecutive_retries = 0;
@@ -4899,12 +5914,25 @@ impl RoomRuntime {
                             }
                             "self_execute" => {
                                 if let Some(conn) = pool.get().ok() {
-                                    if let Some(executor) = Self::build_director_executor(&conn, &pool, &room_id, &app, &director_sender, Some(control.abort.clone()), mcp.clone(), security_mode, &output_dir) {
+                                    if let Some(executor) = Self::build_director_executor(
+                                        &conn,
+                                        &pool,
+                                        &room_id,
+                                        &app,
+                                        &director_sender,
+                                        Some(control.abort.clone()),
+                                        mcp.clone(),
+                                        security_mode,
+                                        &output_dir,
+                                    ) {
                                         participants.insert(director_sender.clone(), executor);
                                         current_assignee = director_sender.clone();
                                         task.assignee = Some(current_assignee.clone());
                                         // 实时推送主持人接管，前端主持人头像呼吸点据此点亮。
-                                        let _ = app.emit("groupchat-event", &GroupChatEvent::task_updated(&room_id, task.clone()));
+                                        let _ = app.emit(
+                                            "groupchat-event",
+                                            &GroupChatEvent::task_updated(&room_id, task.clone()),
+                                        );
                                         reassigns += 1;
                                         retries = 0;
                                         consecutive_retries = 0;
@@ -4920,48 +5948,105 @@ impl RoomRuntime {
                                 // 使新参与者进入后续任务指派的候选）。
                                 if let Some(draft) = d.new_participant.clone() {
                                     if let Some(conn) = pool.get().ok() {
-                                        let (created, rejected) = create_auto_participants_db(&conn, &room_id, std::slice::from_ref(&draft), allow_auto_cli != 0, MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
+                                        let (created, rejected) = create_auto_participants_db(
+                                            &conn,
+                                            &room_id,
+                                            std::slice::from_ref(&draft),
+                                            allow_auto_cli != 0,
+                                            MAX_AUTO_NEW_PARTICIPANTS_REPLAN,
+                                        );
                                         if let Some(new_id) = created.first().cloned() {
-                                            let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn).to_string_lossy().to_string();
+                                            let cwd = crate::utils::paths::resolve_workspace_path(
+                                                None, "", &conn,
+                                            )
+                                            .to_string_lossy()
+                                            .to_string();
                                             let mut built_ok = false;
-                                            if let Some(row) = store::get_participant(&conn, &room_id, &new_id).ok().flatten() {
+                                            if let Some(row) =
+                                                store::get_participant(&conn, &room_id, &new_id)
+                                                    .ok()
+                                                    .flatten()
+                                            {
                                                 if row.participant_type == "cli" {
                                                     // cli 参与者：本地 CLI Agent 执行器（与 build_participants 一致，每参与者独立 AgentManager）。
-                                                    let agent_type = agent_type_from_config(&row.agent_config);
+                                                    let agent_type =
+                                                        agent_type_from_config(&row.agent_config);
                                                     let runner = Arc::new(PilotDeskCliRunner::new(
-                                                        Arc::new(AsyncMutex::new(AgentManager::new())),
+                                                        Arc::new(AsyncMutex::new(
+                                                            AgentManager::new(),
+                                                        )),
                                                         pool.clone(),
                                                         cwd.clone(),
                                                     ));
                                                     let p = CliParticipant {
                                                         id: new_id.clone(),
                                                         runner,
-                                                        config: CliConfig { command: agent_type, args_template: String::new(), resume_arg_template: String::new() },
-                                                        role_prompt: Arc::new(RwLock::new(row.system_role.clone())),
+                                                        config: CliConfig {
+                                                            command: agent_type,
+                                                            args_template: String::new(),
+                                                            resume_arg_template: String::new(),
+                                                        },
+                                                        role_prompt: Arc::new(RwLock::new(
+                                                            row.system_role.clone(),
+                                                        )),
                                                         director_id: director_sender.clone(),
                                                     };
-                                                    participants.insert(new_id.clone(), Arc::new(p));
+                                                    participants
+                                                        .insert(new_id.clone(), Arc::new(p));
                                                     built_ok = true;
                                                 } else {
                                                     // api 参与者：LLM 客户端 + 审批/续跑接线（与 build_participants 一致）。
                                                     // 群聊作用域技能禁用集与 build_participants 同源：动态补员同样隐藏被禁技能目录。
                                                     let disabled_skills = crate::commands::app_settings::load_skill_scope_disabled(&conn).groupchat;
-                                                    let event_session_id = format!("groupchat:{}:{}", room_id, new_id);
-                                                    if let Some(llm) = build_llm_client(&conn, &pool, &room_id, &row.agent_config, &app, &cwd, true, Some(event_session_id), Some(control.abort.clone()), mcp.clone(), security_mode) {
-                                                        let llm = if shared_director.read().unwrap().clone().is_some() {
-                                                            llm.with_approval_handler(make_director_approval(shared_director.clone(), approval_log.clone(), topic.clone()))
-                                                                .with_continue_handler(make_director_continue(shared_director.clone(), topic.clone()))
+                                                    let event_session_id =
+                                                        format!("groupchat:{}:{}", room_id, new_id);
+                                                    if let Some(llm) = build_llm_client(
+                                                        &conn,
+                                                        &pool,
+                                                        &room_id,
+                                                        &row.agent_config,
+                                                        &app,
+                                                        &cwd,
+                                                        true,
+                                                        Some(event_session_id),
+                                                        Some(control.abort.clone()),
+                                                        mcp.clone(),
+                                                        security_mode,
+                                                    ) {
+                                                        let llm = if shared_director
+                                                            .read()
+                                                            .unwrap()
+                                                            .clone()
+                                                            .is_some()
+                                                        {
+                                                            llm.with_approval_handler(
+                                                                make_director_approval(
+                                                                    shared_director.clone(),
+                                                                    approval_log.clone(),
+                                                                    topic.clone(),
+                                                                ),
+                                                            )
+                                                            .with_continue_handler(
+                                                                make_director_continue(
+                                                                    shared_director.clone(),
+                                                                    topic.clone(),
+                                                                ),
+                                                            )
                                                         } else {
                                                             llm
                                                         };
                                                         let p = LlmParticipant {
                                                             id: new_id.clone(),
                                                             llm: Arc::new(llm),
-                                                            role_prompt: Arc::new(RwLock::new(row.system_role.clone())),
+                                                            role_prompt: Arc::new(RwLock::new(
+                                                                row.system_role.clone(),
+                                                            )),
                                                             director_id: director_sender.clone(),
-                                                            disabled_skills: disabled_skills.clone(),
+                                                            disabled_skills: disabled_skills
+                                                                .clone(),
                                                         };
-                                                        participants.insert(new_id.clone(), Arc::new(p));
+                                                        participants
+                                                            .insert(new_id.clone(), Arc::new(p));
                                                         built_ok = true;
                                                     }
                                                 }
@@ -4972,15 +6057,28 @@ impl RoomRuntime {
                                                 }
                                                 current_assignee = new_id.clone();
                                                 task.assignee = Some(current_assignee.clone());
-                                                let _ = app.emit("groupchat-event", &GroupChatEvent::participant_updated(&room_id));
-                                                let _ = app.emit("groupchat-event", &GroupChatEvent::task_updated(&room_id, task.clone()));
+                                                let _ = app.emit(
+                                                    "groupchat-event",
+                                                    &GroupChatEvent::participant_updated(&room_id),
+                                                );
+                                                let _ = app.emit(
+                                                    "groupchat-event",
+                                                    &GroupChatEvent::task_updated(
+                                                        &room_id,
+                                                        task.clone(),
+                                                    ),
+                                                );
                                                 messages.push(PendingMessage {
                                                     sender: director_sender.clone(),
                                                     kind: "failure_decision".into(),
                                                     content: format!(
                                                         "已补充参与者 [@{}] 接盘该任务（原因：{}）",
                                                         new_id,
-                                                        if d.reason.is_empty() { "任务需要该能力" } else { d.reason.as_str() }
+                                                        if d.reason.is_empty() {
+                                                            "任务需要该能力"
+                                                        } else {
+                                                            d.reason.as_str()
+                                                        }
                                                     ),
                                                 });
                                                 reassigns += 1;
@@ -4990,7 +6088,8 @@ impl RoomRuntime {
                                                 continue;
                                             }
                                             // 构建失败：新参与者行已落库但无法运行 → 回滚该行，避免名册僵尸参与者。
-                                            let _ = store::delete_participant(&conn, &room_id, &new_id);
+                                            let _ =
+                                                store::delete_participant(&conn, &room_id, &new_id);
                                         }
                                         for r in &rejected {
                                             messages.push(PendingMessage {
@@ -5035,10 +6134,17 @@ impl RoomRuntime {
                         kind: "failure_decision".into(),
                         content: "主持人裁决不可用或未生效（缺失/超时/解析失败），自动切换到下一执行者重试".into(),
                     });
-                    if let Some(next) = Self::next_executor_fallback(&executor_order, &participants, &current_assignee) {
+                    if let Some(next) = Self::next_executor_fallback(
+                        &executor_order,
+                        &participants,
+                        &current_assignee,
+                    ) {
                         current_assignee = next;
                         task.assignee = Some(current_assignee.clone());
-                        let _ = app.emit("groupchat-event", &GroupChatEvent::task_updated(&room_id, task.clone()));
+                        let _ = app.emit(
+                            "groupchat-event",
+                            &GroupChatEvent::task_updated(&room_id, task.clone()),
+                        );
                         reassigns += 1;
                         retries = 0;
                         consecutive_retries = 0;
@@ -5056,7 +6162,16 @@ impl RoomRuntime {
         if confirmation.is_none() && task.status != "pending" {
             task.completed_at = Some(crate::utils::now());
         }
-        TaskOutcome { task, messages, should_abort, tool_calls: last_tool_calls, result_content, confirmation, confirmation_sender, roster_changed }
+        TaskOutcome {
+            task,
+            messages,
+            should_abort,
+            tool_calls: last_tool_calls,
+            result_content,
+            confirmation,
+            confirmation_sender,
+            roster_changed,
+        }
     }
 
     /// 执行单次任务尝试（关联函数，避免跨 await 借用 self 导致 future 非 Send）。
@@ -5097,7 +6212,11 @@ impl RoomRuntime {
                         .collect();
                     block.push_str(&format!("\n- 产物：\n{}", items.join("\n")));
                 }
-                let snippet = if p.snippet.trim().is_empty() { &p.result_summary } else { &p.snippet };
+                let snippet = if p.snippet.trim().is_empty() {
+                    &p.result_summary
+                } else {
+                    &p.snippet
+                };
                 if !snippet.trim().is_empty() {
                     block.push_str(&format!("\n- 成果片段：{}", snippet));
                 }
@@ -5119,7 +6238,10 @@ impl RoomRuntime {
             ));
         }
         if let Some(hint) = error_hint {
-            prompt.push_str(&format!("\n\n（上次执行失败原因：{}，请修正后重试。）", hint));
+            prompt.push_str(&format!(
+                "\n\n（上次执行失败原因：{}，请修正后重试。）",
+                hint
+            ));
         }
         let view = TurnView {
             topic: task_desc,
@@ -5167,12 +6289,32 @@ impl RoomRuntime {
         self.emit(GroupChatEvent::task_updated(&self.room_id, task.clone()));
     }
 
-    async fn persist_task_message(&mut self, task: &TaskRow, tool_calls: &str, result_content: &str) {
-        let sender = task.assignee.clone().unwrap_or_else(|| self.user_id.clone());
+    async fn persist_task_message(
+        &mut self,
+        task: &TaskRow,
+        tool_calls: &str,
+        result_content: &str,
+    ) {
+        let sender = task
+            .assignee
+            .clone()
+            .unwrap_or_else(|| self.user_id.clone());
         let task_result = report::to_task_result(task, result_content);
         // extra 写入 task.id（v3.4an：供跨轮/重启后按 task_id 精确反查任务成果全文与工具调用链，
         // 支撑后置任务的前置成果注入）。
-        let msg = self.persist_message_extra(&sender, &[], "task_result", None, &task_result, &[], tool_calls, "", &task.id).await;
+        let msg = self
+            .persist_message_extra(
+                &sender,
+                &[],
+                "task_result",
+                None,
+                &task_result,
+                &[],
+                tool_calls,
+                "",
+                &task.id,
+            )
+            .await;
         self.memory.apply_message(&msg, &self.all_participant_ids());
         self.emit(GroupChatEvent::message(&self.room_id, msg));
     }
@@ -5205,7 +6347,16 @@ impl RoomRuntime {
             ));
         }
         let msg = self
-            .persist_message(&director_sender, &[], "tool_decision", None, &text, &[], "", "")
+            .persist_message(
+                &director_sender,
+                &[],
+                "tool_decision",
+                None,
+                &text,
+                &[],
+                "",
+                "",
+            )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, msg));
     }
@@ -5229,6 +6380,53 @@ impl RoomRuntime {
     }
 
     /// 构建任务执行清单文本（编号、状态、描述、负责人、结果/错误），供 Director 选人/总结复用。
+    /// 给就绪层里"未指派"的任务补上负责人（按执行者顺序轮转），并落库 + 广播。
+    ///
+    /// 会话转换或手动新增的任务可能没有负责人（assignee=None）。这种任务在主持人眼里"无人认领"：
+    /// 既推不进讨论（没有发言者推进），又容易被重排判为冗余而**作废**、或被评审判为已完成而跳过。
+    /// 执行阶段本就有轮询兜底（execute_tasks），这里把兜底提前到讨论/评审之前并持久化，
+    /// 让主持人与参与者都能看到负责人，避免"未指派 → 跳过/作废"。
+    fn ensure_task_assignees(&mut self) {
+        if self.executor_order.is_empty() {
+            return;
+        }
+        let Ok(conn) = self.conn() else { return };
+        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else {
+            return;
+        };
+        let mut changed = 0usize;
+        for (i, t) in tasks.iter().enumerate() {
+            if t.status != "discussing" {
+                continue;
+            }
+            let has_assignee = t
+                .assignee
+                .as_deref()
+                .map(|a| !a.trim().is_empty())
+                .unwrap_or(false);
+            if has_assignee {
+                continue;
+            }
+            let mut nt = t.clone();
+            nt.assignee = self
+                .executor_order
+                .get(i % self.executor_order.len())
+                .cloned();
+            if let Ok(c) = self.conn() {
+                let _ = store::update_task(&c, &nt);
+            }
+            self.emit(GroupChatEvent::task_updated(&self.room_id, nt));
+            changed += 1;
+        }
+        if changed > 0 {
+            log::info!(
+                "[Room {}] 已为 {} 个未指派任务补齐负责人",
+                self.room_id,
+                changed
+            );
+        }
+    }
+
     fn build_task_manifest(&self) -> String {
         let pool = self.pool.clone();
         let room_id = self.room_id.clone();
@@ -5238,7 +6436,11 @@ impl RoomRuntime {
             .unwrap_or_default()
             .iter()
             .map(|t| {
-                let assignee = t.assignee.clone().map(|a| format!("[@{}]", a)).unwrap_or_else(|| "-".into());
+                let assignee = t
+                    .assignee
+                    .clone()
+                    .map(|a| format!("[@{}]", a))
+                    .unwrap_or_else(|| "-".into());
                 let detail = if t.status == "success" {
                     t.result_summary.clone().unwrap_or_default()
                 } else {
@@ -5256,7 +6458,11 @@ impl RoomRuntime {
                     t.status,
                     t.description,
                     assignee,
-                    if detail.is_empty() { String::new() } else { format!(" - {}", detail) },
+                    if detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" - {}", detail)
+                    },
                     evidence
                 )
             })
@@ -5268,15 +6474,25 @@ impl RoomRuntime {
     /// 特征词命中任一即视为讨论轮；执行轮（执行/修正/完成）正常指派执行。
     fn is_discussion_work(wc: &str) -> bool {
         const DISCUSSION_MARKS: &[&str] = &[
-            "发表意见", "方案", "讨论", "达成一致", "意见", "分工", "暂不执行",
+            "发表意见",
+            "方案",
+            "讨论",
+            "达成一致",
+            "意见",
+            "分工",
+            "暂不执行",
         ];
         DISCUSSION_MARKS.iter().any(|k| wc.contains(k))
     }
 
     /// 构建当前发言者被指派的任务上下文（讨论阶段注入 participant 视图，明确任务锚点）。
     fn build_speaker_task_context(&self, speaker: &str) -> String {
-        let Ok(conn) = self.conn() else { return String::new(); };
-        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else { return String::new(); };
+        let Ok(conn) = self.conn() else {
+            return String::new();
+        };
+        let Ok(tasks) = store::list_tasks(&conn, &self.room_id) else {
+            return String::new();
+        };
         let assigned: Vec<String> = tasks
             .iter()
             .filter(|t| {
@@ -5323,7 +6539,16 @@ impl RoomRuntime {
         self.memory.set_summary(&review.summary);
         let director_sender = self.director_sender();
         let summary_msg = self
-            .persist_message(&director_sender, &[], "summary", None, &review.summary, &[], "", "")
+            .persist_message(
+                &director_sender,
+                &[],
+                "summary",
+                None,
+                &review.summary,
+                &[],
+                "",
+                "",
+            )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, summary_msg));
     }
@@ -5339,12 +6564,15 @@ impl RoomRuntime {
             Some(d) => {
                 // 预绑定临时值（避免闭包内自属临时被 future 借用导致 E0515）。
                 let memory_summary = self.memory.summary();
-                call_director_retry(|| d.conclude(
-                    &self.room.topic,
-                    &memory_summary,
-                    &transcript,
-                    &task_manifest,
-                )).await
+                call_director_retry(|| {
+                    d.conclude(
+                        &self.room.topic,
+                        &memory_summary,
+                        &transcript,
+                        &task_manifest,
+                    )
+                })
+                .await
             }
             None => None,
         };
