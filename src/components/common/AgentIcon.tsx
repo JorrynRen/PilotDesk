@@ -98,6 +98,7 @@ export function AgentIcon({ icon, size = 14, className = '', fallback }: AgentIc
     return <span style={{ fontSize: size, lineHeight: 1 }}>{displayText}</span>;
   }
 
-  // 无图标
-  return null;
+  // 无图标（含空串）：交给调用方兜底。
+  // 未提供 fallback 时渲染 nothing，与旧行为一致；提供了就让"没有图标"也能有像样的占位。
+  return <>{fallback}</>;
 }

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Send, Square, Zap, Brain, GraduationCap, Cpu, ChevronUp, ClipboardList, ImagePlus, FileText, Paperclip, FolderOpen, X, Plus, MemoryStick } from 'lucide-react';
+import { Send, Square, Zap, Brain, GraduationCap, Cpu, ChevronUp, ClipboardList, ImagePlus, FileText, Paperclip, FolderOpen, X, Plus, MemoryStick, Bot } from 'lucide-react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -11,6 +11,7 @@ import { VoiceInputButton } from '../input/VoiceInputButton';
 import { ProjectMemoryDialog } from '../panels/ProjectMemoryDialog';
 import { SecurityModeSelector, type SecurityModeValue } from '../security/SecurityModeSelector';
 import { Select, type SelectGroup } from '../common/Select';
+import { AgentIcon } from '../common/AgentIcon';
 import { SessionUsageBar } from './SessionUsageBar';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -1058,7 +1059,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                       style={{ color: 'var(--text-primary)' }}
                     >
                       <FolderOpen size={12} />
-                      {cwdIsGlobal ? '使用全局工作空间（当前）' : '使用全局工作空间'}
+                      {cwdIsGlobal ? '使用全局工作空间（√）' : '使用全局工作空间'}
                     </button>
                   </div>
                 )}
@@ -1092,7 +1093,12 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   style={{ color: 'var(--text-tertiary)', height: 24, minWidth: 120, maxWidth: 'max-content', flex: '1 1 0' }}
                   title="当前会话的会话方式（CLI 会话另建会话才能换）"
                 >
-                  <Cpu size={12} style={{ flexShrink: 0 }} />
+                  {/* CLI Agent 用其自身图标；兜底用 Bot —— 不能用 Cpu（那是「技能」的图标） */}
+                  <AgentIcon
+                    icon={getTheme(session.agentType).icon}
+                    size={12}
+                    fallback={<Bot size={12} style={{ flexShrink: 0 }} />}
+                  />
                   <span className="truncate">{getDisplayName(session.agentType)}</span>
                 </span>
               ) : (

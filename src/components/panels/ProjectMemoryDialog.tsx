@@ -7,8 +7,10 @@
  * 常驻会白占一个窄面板（260px）顶部的 tab 位；而"看一眼 Agent 现在记住了什么"属于
  * 低频、看一眼就走的动作，弹窗更合适（入口在输入框工具栏）。
  *
- * 口径提示：记忆根由当前会话的 cwd 解析，**未选中会话时回退兜底记忆根**——
- * 这种情况必须在界面上写明，否则用户会把兜底记忆根误读成"当前项目记忆"。
+ * 口径提示：记忆根由当前会话的 cwd 解析。**"选了会话但 cwd 为空"与"没选会话"是两回事**：
+ * 前者是会话用了「全局工作空间」（前端就是写空串，见 InputBar 的 handlePickProjectDir），
+ * 此时展示的仍是兜底记忆根，但绝不能说成"未选中会话"—— 用户明明开着会话，
+ * 提示对不上现实就会被当成 bug。
  */
 
 import { useEffect, useState } from 'react';
@@ -30,6 +32,8 @@ export function ProjectMemoryDialog({ onClose }: ProjectMemoryDialogProps) {
 
   const sessionCwd = currentSession?.cwd || '';
   const sessionTitle = currentSession?.title || '';
+  /** 选了会话但 cwd 为空 = 该会话用的是「全局工作空间」，与"没选会话"必须区分 */
+  const hasSession = !!currentSession;
 
   useEffect(() => {
     let disposed = false;
@@ -80,7 +84,9 @@ export function ProjectMemoryDialog({ onClose }: ProjectMemoryDialogProps) {
           <span className="text-[11px] truncate min-w-0" style={{ color: 'var(--text-tertiary)' }}>
             {sessionCwd
               ? `当前工作区：${sessionTitle || sessionCwd}`
-              : '未选中会话'}
+              : hasSession
+                ? `当前会话：${sessionTitle || '未命名会话'}`
+                : '未选中会话'}
           </span>
           <div className="flex-1" />
           <button
@@ -101,7 +107,9 @@ export function ProjectMemoryDialog({ onClose }: ProjectMemoryDialogProps) {
             </span>
           ) : (
             <span className="text-[11px]" style={{ color: 'var(--status-warning, #f59e0b)' }}>
-              当前未选中会话，展示的是兜底记忆根（非某个项目的记忆）
+              {hasSession
+                ? '当前会话使用「全局工作空间」，展示的是兜底记忆根（非某个项目的记忆）'
+                : '当前未选中会话，展示的是兜底记忆根（非某个项目的记忆）'}
             </span>
           )}
         </div>

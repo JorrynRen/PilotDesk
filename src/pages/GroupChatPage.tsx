@@ -20,6 +20,7 @@ import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
 import { useImagePreviewStore } from '../stores/imagePreviewStore';
 import { MarkdownRenderer } from '../components/message/MarkdownRenderer';
+import { AgentIcon } from '../components/common/AgentIcon';
 import { collapseBlankLines, tightenListGaps } from '../components/message/markdownText';
 import { RoomUsageBar } from '../components/groupchat/RoomUsageBar';
 import { ConfirmationCard } from '../components/confirmation/ConfirmationCard';
@@ -258,15 +259,28 @@ function participantIcon(type: string): IconName {
   return 'agent';
 }
 
-function ParticipantAvatar({ icon, color, small }: { icon: IconName; color: string; small?: boolean }) {
-  const Icon = icon === 'user' ? User : icon === 'director' ? Sparkles : Bot;
+/** 从参与者的 agentConfig 取 CLI agentType；api/user/director 一律返回 undefined */
+function participantAgentType(p: GroupChatParticipant | undefined): string | undefined {
+  if (!p || p.participantType !== 'cli') return undefined;
+  const cfg = parseAgentConfig(p.agentConfig);
+  return cfg.agent_type || cfg.agentType || undefined;
+}
+
+function ParticipantAvatar({ icon, color, small, agentType }: { icon: IconName; color: string; small?: boolean; agentType?: string }) {
+  const { getTheme } = useAgentRegistry();
+  const FallbackIcon = icon === 'user' ? User : icon === 'director' ? Sparkles : Bot;
   const size = small ? 10 : 13;
+  // CLI 参与者优先显示该 Agent 自己的图标（与「会话模式」同一口径）；
+  // 兜底是 Bot 而不是泛化图标 —— 具体挑哪种是调用方的事，这里只保证"有自己的图标就不含糊"
+  const agentIcon = icon === 'agent' && agentType ? getTheme(agentType).icon : undefined;
   return (
     <div
-      className={`${small ? 'w-5 h-5' : 'w-7 h-7'} rounded-full shrink-0 flex items-center justify-center`}
+      className={`${small ? 'w-5 h-5' : 'w-7 h-7'} rounded-full shrink-0 flex items-center justify-center overflow-hidden`}
       style={{ backgroundColor: `${color}22`, color }}
     >
-      <Icon size={size} />
+      {agentIcon
+        ? <AgentIcon icon={agentIcon} size={small ? 12 : 16} fallback={<FallbackIcon size={size} />} />
+        : <FallbackIcon size={size} />}
     </div>
   );
 }
@@ -1010,7 +1024,7 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
           style={{ accentColor: 'var(--accent)' }}
           title="选中后可与其它消息一起沉淀为知识"
         />}
-        <ParticipantAvatar icon={participantIcon(participant?.participantType ?? 'agent')} color={color} />
+        <ParticipantAvatar icon={participantIcon(participant?.participantType ?? 'agent')} color={color} agentType={participantAgentType(participant)} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-0.5">
             <span className="text-[10px] font-medium truncate" style={{ color }}>{displayName}</span>
@@ -2911,7 +2925,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                     style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
                   >
                     <div className="relative">
-                      <ParticipantAvatar icon={participantIcon(p.participantType)} color={color} small />
+                      <ParticipantAvatar icon={participantIcon(p.participantType)} color={color} small agentType={participantAgentType(p)} />
                       {isSpeaking && (
                         <span
                           className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full"

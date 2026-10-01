@@ -3,7 +3,8 @@ use crate::agent::config::AgentConfig;
 use crate::agent::handler::ProcessHandler;
 use crate::utils::errors::AppError;
 use crate::utils::process::{
-    check_process_state, make_still_alive_error, summarize_stderr, TimeoutPolicy,
+    check_process_state, hidden_command, hidden_tokio_command, make_still_alive_error,
+    summarize_stderr, TimeoutPolicy,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -470,7 +471,7 @@ impl AgentManager {
         let exe = "sh";
 
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
-            let mut cmd = tokio::process::Command::new(exe);
+            let mut cmd = hidden_tokio_command(exe);
             #[cfg(target_os = "windows")]
             {
                 cmd.raw_arg(format!("/C {}", command));
@@ -594,9 +595,17 @@ impl AgentManager {
             )
             .await;
 
+        // 失败轮不再补发 agent-done：错误已由 agent-error 收尾（前端总线在该事件里
+        // finishRun(notifyEmpty=false) 落库已产出的正文，组件再写一条失败原因）。
+        // 若这里照旧补 done，前端会把它当成"正常结束"再收一次尾 —— 而那时流式态已被丢弃、
+        // 正文为空，于是又追一条"未收到模型有效响应"，用户看到的就是两条系统消息
+        // （一条真实失败原因 + 一条误导性的兜底提示）。
+        let mut failed = false;
+
         match result {
             Ok(exec_result) => {
                 if exec_result.exit_code != 0 {
+                    failed = true;
                     // 某些 CLI 工具（如 Codex、Claude）将错误写入 stdout（JSON 流）
                     // 而非 stderr，因此需合并两路输出查找错误详情
                     let combined_error = if exec_result.stderr.is_empty()
@@ -632,6 +641,7 @@ impl AgentManager {
                 }
             }
             Err(e) => {
+                failed = true;
                 let _ = app_for_result.emit(
                     "agent-error",
                     serde_json::json!({
@@ -640,6 +650,10 @@ impl AgentManager {
                     }),
                 );
             }
+        }
+
+        if failed {
+            return Ok(());
         }
 
         let _ = app_for_result.emit(
@@ -763,7 +777,7 @@ impl AgentManager {
             if let Some(pid) = processes.get(session_id).and_then(|p| p.pid) {
                 #[cfg(target_os = "windows")]
                 {
-                    let _ = std::process::Command::new("taskkill")
+                    let _ = hidden_command("taskkill")
                         .args(&["/PID", &pid.to_string(), "/F"])
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -771,7 +785,7 @@ impl AgentManager {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = std::process::Command::new("kill")
+                    let _ = hidden_command("kill")
                         .arg("-9")
                         .arg(pid.to_string())
                         .stdout(std::process::Stdio::null())
@@ -804,7 +818,7 @@ impl AgentManager {
             if let Some(pid) = processes.get(session_id).and_then(|p| p.pid) {
                 #[cfg(target_os = "windows")]
                 {
-                    let _ = std::process::Command::new("taskkill")
+                    let _ = hidden_command("taskkill")
                         .args(&["/PID", &pid.to_string(), "/F"])
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -812,7 +826,7 @@ impl AgentManager {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = std::process::Command::new("kill")
+                    let _ = hidden_command("kill")
                         .arg("-9")
                         .arg(pid.to_string())
                         .stdout(std::process::Stdio::null())
@@ -860,7 +874,7 @@ impl Drop for AgentManager {
                 if let Some(pid) = process.pid {
                     #[cfg(target_os = "windows")]
                     {
-                        let _ = std::process::Command::new("taskkill")
+                        let _ = hidden_command("taskkill")
                             .args(&["/PID", &pid.to_string(), "/F"])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
@@ -868,7 +882,7 @@ impl Drop for AgentManager {
                     }
                     #[cfg(not(target_os = "windows"))]
                     {
-                        let _ = std::process::Command::new("kill")
+                        let _ = hidden_command("kill")
                             .arg("-9")
                             .arg(pid.to_string())
                             .stdout(std::process::Stdio::null())
