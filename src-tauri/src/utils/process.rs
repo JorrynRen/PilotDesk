@@ -229,6 +229,49 @@ pub fn summarize_stderr(stderr_lines: &[String], max_chars: usize, tail_lines: u
     }
 }
 
+/// Windows `CREATE_NO_WINDOW`：不为新子进程分配控制台窗口。
+#[cfg(windows)]
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// 给 `std::process::Command` 关闭控制台窗口（非 Windows 平台空操作）。
+pub fn hide_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
+/// 给 `tokio::process::Command` 关闭控制台窗口（非 Windows 平台空操作）。
+pub fn hide_console_tokio(cmd: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
+/// 构造一个"不弹控制台窗口"的 `std::process::Command`（返回值可继续链式调用 args/current_dir）。
+pub fn hidden_command(program: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    hide_console(&mut cmd);
+    cmd
+}
+
+/// 构造一个"不弹控制台窗口"的 `tokio::process::Command`。
+pub fn hidden_tokio_command(program: &str) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
+    hide_console_tokio(&mut cmd);
+    cmd
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

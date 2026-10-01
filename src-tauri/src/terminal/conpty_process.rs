@@ -12,6 +12,8 @@ use std::mem;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::FromRawHandle;
 
+use crate::utils::process::hidden_command;
+
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::Console::{CreatePseudoConsole, HPCON};
@@ -379,7 +381,7 @@ impl ConptyProcess {
         }
     }
     pub fn kill(&self) {
-        let _ = std::process::Command::new("taskkill")
+        let _ = hidden_command("taskkill")
             .args(&["/PID", &self.pid.to_string(), "/F"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

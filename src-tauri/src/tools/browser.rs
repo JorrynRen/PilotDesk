@@ -26,6 +26,7 @@
 //!   喂扁平文本会把整页当成一个段落（详见 `html_to_markdown` 的说明）。
 
 use crate::tools::{RiskLevel, ToolHandler};
+use crate::utils::process::hidden_command;
 use async_trait::async_trait;
 use base64::Engine;
 use futures::{Sink, SinkExt, StreamExt};
@@ -48,15 +49,6 @@ const BROWSER_TIMEOUT_SECS: u64 = 45;
 const MAX_TEXT_OUTPUT: usize = 16_000;
 /// 快照内嵌的页面文本预览上限（字符）
 const SNAPSHOT_TEXT_PREVIEW: usize = 3_000;
-
-/// Windows 上给子进程加 CREATE_NO_WINDOW（避免拉起浏览器时弹黑框）；其他平台是空操作。
-#[cfg(windows)]
-fn no_console_window(cmd: &mut std::process::Command) {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(0x0800_0000);
-}
-#[cfg(not(windows))]
-fn no_console_window(_cmd: &mut std::process::Command) {}
 
 /// 浏览器自动化工具
 pub struct BrowserTool {
@@ -293,7 +285,7 @@ impl BrowserSession {
         std::fs::create_dir_all(&user_data_dir)
             .map_err(|e| format!("创建浏览器配置目录失败: {}", e))?;
 
-        let mut cmd = std::process::Command::new(&browser);
+        let mut cmd = hidden_command(&browser);
         cmd.args([
             "--headless",
             "--disable-gpu",
@@ -310,7 +302,6 @@ impl BrowserSession {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-        no_console_window(&mut cmd);
 
         let child = cmd.spawn().map_err(|e| format!("启动浏览器失败: {}", e))?;
 
@@ -1030,7 +1021,7 @@ pub(crate) fn find_browser() -> Option<String> {
     const WHICH: &str = "which";
 
     for name in NAMES {
-        if let Ok(out) = std::process::Command::new(WHICH)
+        if let Ok(out) = hidden_command(WHICH)
             .arg(name)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -1053,12 +1044,11 @@ pub(crate) fn run_browser(
     browser: &str,
     args: &[String],
 ) -> Result<(Vec<u8>, Vec<u8>, Option<i32>), String> {
-    let mut cmd = std::process::Command::new(browser);
+    let mut cmd = hidden_command(browser);
     cmd.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    no_console_window(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| format!("启动浏览器失败: {}", e))?;
 

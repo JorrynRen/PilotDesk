@@ -10,10 +10,11 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
 
 use crate::tools::{RiskLevel, ToolHandler, ToolTag};
+use crate::utils::process::{hidden_command, hidden_tokio_command};
 
 /// MCP 服务器配置（持久化在 app_settings 的 `mcp_servers` key 下）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +47,7 @@ pub struct McpClient {
 
 impl McpClient {
     pub async fn connect(config: &McpServerConfig) -> Result<Self, String> {
-        let mut cmd = Command::new(&config.command);
+        let mut cmd = hidden_tokio_command(&config.command);
         cmd.args(&config.args);
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
@@ -227,7 +228,7 @@ impl Drop for McpClient {
         // 进程树终止完毕后才返回，即"收尸到 quiescence"。
         #[cfg(windows)]
         if let Some(pid) = self.child.id() {
-            let _ = std::process::Command::new("taskkill")
+            let _ = hidden_command("taskkill")
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())

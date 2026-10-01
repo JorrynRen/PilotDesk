@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use tauri::Emitter;
 
 use crate::terminal::pty::{StdoutStream, TerminalProcess};
+use crate::utils::process::hidden_command;
 
 /// Single terminal session state
 pub struct TerminalSession {
@@ -54,7 +55,7 @@ impl TerminalManager {
 
         let cmdline = match shell_type {
             "powershell" | "pwsh" => {
-                if std::process::Command::new("pwsh")
+                if hidden_command("pwsh")
                     .arg("-Version")
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())

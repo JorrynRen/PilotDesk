@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use crate::utils::process::hidden_tokio_command;
+
 use super::PluginHost;
 
 /// Shell 执行结果
@@ -69,7 +71,7 @@ pub async fn plugin_shell_exec(
     log::info!("[Plugin/Shell] exec cmd='{}' cwd='{}'", command, work_dir);
 
     let result = tokio::time::timeout(Duration::from_millis(timeout_ms), async {
-        let mut cmd = tokio::process::Command::new(exe);
+        let mut cmd = hidden_tokio_command(exe);
         #[cfg(target_os = "windows")]
         {
             cmd.raw_arg(format!("/C {}", command));

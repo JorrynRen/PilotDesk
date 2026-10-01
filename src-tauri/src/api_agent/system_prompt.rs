@@ -8,6 +8,8 @@
 //!
 //! 技能完整内容通过 load_skill 工具按需加载（B4 实现）。
 
+use crate::utils::process::hidden_command;
+
 pub struct GitContext {
     pub branch: Option<String>,
     pub latest_commit: Option<String>,
@@ -32,7 +34,7 @@ impl GitContext {
 
     /// 从 cwd 执行 git 命令获取仓库上下文（失败时返回 None）
     pub fn from_cwd(cwd: &str) -> Option<Self> {
-        let branch = std::process::Command::new("git")
+        let branch = hidden_command("git")
             .args(["branch", "--show-current"])
             .current_dir(cwd)
             .output()
@@ -42,7 +44,7 @@ impl GitContext {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let latest_commit = std::process::Command::new("git")
+        let latest_commit = hidden_command("git")
             .args(["log", "-1", "--format=%h"])
             .current_dir(cwd)
             .output()
@@ -52,7 +54,7 @@ impl GitContext {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let has_uncommitted = std::process::Command::new("git")
+        let has_uncommitted = hidden_command("git")
             .args(["diff", "--stat"])
             .current_dir(cwd)
             .output()

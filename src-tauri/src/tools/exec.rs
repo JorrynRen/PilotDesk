@@ -15,8 +15,7 @@
 //! 自 `api_agent/exec.rs`（run_python）与 `lib.rs`（execute_command 内联逻辑）合并迁移
 //! （工具架构统一 v1.0，轮 4）。
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
+use crate::utils::process::{hidden_command, hidden_tokio_command};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -42,12 +41,10 @@ fn python_available() -> Result<bool, String> {
     if let Some(v) = *guard {
         return Ok(v);
     }
-    let mut cmd = std::process::Command::new("python");
+    let mut cmd = hidden_command("python");
     cmd.args(["--version"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
     *guard = Some(ok);
     Ok(ok)
@@ -128,7 +125,7 @@ async fn kill_tree(pid: u32, child: &mut tokio::process::Child) {
     let _ = pid;
     #[cfg(windows)]
     {
-        let _ = tokio::process::Command::new("taskkill")
+        let _ = hidden_tokio_command("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -212,7 +209,7 @@ async fn run_managed(
     cwd: &str,
     tmp_cleanup: Option<PathBuf>,
 ) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new(program);
+    let mut cmd = hidden_tokio_command(program);
     match invocation {
         Invocation::Args(args) => {
             cmd.args(args);
@@ -228,8 +225,6 @@ async fn run_managed(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true); // 未来被取消（如房间停止）时不残留主进程
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW，不弹出控制台窗口
 
     // 环境变量治理：子进程不继承敏感变量（scrubbed_env 已剔除含 KEY/SECRET/TOKEN/
     // PASSWORD/CREDENTIAL 键名项）。先 env_clear 再逐个重放过滤结果，确保无残留继承；

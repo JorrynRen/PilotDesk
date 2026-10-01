@@ -5,6 +5,8 @@
 
 use std::io;
 
+use crate::utils::process::hidden_tokio_command;
+
 /// 异步进程接口 — 基于 tokio::process::Command
 ///
 /// 提供 async 版本的进程生命周期管理和 IO 操作能力。
@@ -79,7 +81,7 @@ impl AsyncConsole for TokioConsole {
         tokio::sync::mpsc::Receiver<String>,
         tokio::sync::mpsc::Receiver<String>,
     )> {
-        let mut cmd = tokio::process::Command::new(command);
+        let mut cmd = hidden_tokio_command(command);
         cmd.args(args)
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
