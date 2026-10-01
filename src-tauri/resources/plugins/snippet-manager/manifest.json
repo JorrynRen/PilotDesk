@@ -1,0 +1,25 @@
+{
+  "id": "snippet-manager",
+  "name": "Snippet Manager",
+  "version": "1.0.0",
+  "description": "管理常用文本片段和提示词模板，支持保存、分类、搜索和快速插入到对话中",
+  "author": "PilotDesk Team",
+  "minAppVersion": "0.1.0",
+  "permissions": [
+    "ui:panel",
+    "ui:toast",
+    "storage:*"
+  ],
+  "entry": {
+    "main": "index.js"
+  },
+  "contributes": {
+    "panels": [
+      {
+        "id": "snippets",
+        "title": "Snippets",
+        "icon": "icon: favicon.png"
+      }
+    ]
+  }
+}

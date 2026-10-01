@@ -48,7 +48,9 @@
     "resources": [
       "resources/agents/*",
       "resources/icons/*",
-      "resources/assets/*"
+      "resources/assets/*",
+      "resources/plugins/**/*",
+      "resources/skills/**/*"
     ]
   },
   "plugins": {

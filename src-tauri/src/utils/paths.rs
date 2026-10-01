@@ -84,6 +84,11 @@ pub fn plugins_dir() -> PathBuf {
     app_root_dir().join("plugins")
 }
 
+/// 技能安装目录（API Agent 的固定技能根：`<配置根>/skills`，与 Agent 自定义 skills_dir 无关）
+pub fn skills_dir() -> PathBuf {
+    app_root_dir().join("skills")
+}
+
 /// 工作流模板目录（预留）
 pub fn templates_dir() -> PathBuf {
     app_root_dir().join("templates")

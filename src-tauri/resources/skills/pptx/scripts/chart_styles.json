@@ -1,0 +1,268 @@
+[
+  {
+    "chart_id": "modern_line",
+    "description": "现代简约折线图 - 适合展示趋势变化",
+    "chart_style": {
+      "structure": {
+        "chart_type": "line",
+        "variant": "standard",
+        "orientation": "vertical"
+      },
+      "data_encoding": {
+        "x": "category",
+        "y": "value",
+        "series": "type"
+      },
+      "layout": {
+        "legend_position": "bottom",
+        "title_position": "top"
+      },
+      "style": {
+        "background": "transparent",
+        "border": "none",
+        "shadow": false
+      },
+      "color": {
+        "palette": ["#3B82F6", "#10B981", "#F59E0B", "#EF4444"],
+        "highlight": "#8B5CF6"
+      },
+      "typography": {
+        "title": "bold 18pt",
+        "label": "11pt gray"
+      },
+      "axis": {
+        "grid": "light",
+        "axis_line": true
+      }
+    }
+  },
+  {
+    "chart_id": "elegant_pie",
+    "description": "优雅饼图 - 适合展示占比分布",
+    "chart_style": {
+      "structure": {
+        "chart_type": "pie",
+        "variant": "standard",
+        "orientation": "vertical"
+      },
+      "data_encoding": {
+        "x": "category",
+        "y": "value",
+        "series": "type"
+      },
+      "layout": {
+        "legend_position": "right",
+        "title_position": "top"
+      },
+      "style": {
+        "background": "transparent",
+        "border": "none",
+        "shadow": false
+      },
+      "color": {
+        "palette": [
+          "#6366F1",
+          "#8B5CF6",
+          "#EC4899",
+          "#F43F5E",
+          "#F97316",
+          "#FBBF24"
+        ],
+        "highlight": "#3B82F6"
+      },
+      "typography": {
+        "title": "bold 18pt",
+        "label": "11pt white"
+      },
+      "axis": {
+        "grid": "none",
+        "axis_line": false
+      }
+    }
+  },
+  {
+    "chart_id": "business_bar_horizontal",
+    "description": "商务横向柱状图 - 适合展示排名对比",
+    "chart_style": {
+      "structure": {
+        "chart_type": "bar",
+        "variant": "clustered",
+        "orientation": "horizontal"
+      },
+      "data_encoding": {
+        "x": "category",
+        "y": "value",
+        "series": "type"
+      },
+      "layout": {
+        "legend_position": "top",
+        "title_position": "top"
+      },
+      "style": {
+        "background": "transparent",
+        "border": "none",
+        "shadow": false
+      },
+      "color": {
+        "palette": ["#1E3A5F", "#2E5A8B", "#4A90C8", "#7BB8E8"],
+        "highlight": "#F59E0B"
+      },
+      "typography": {
+        "title": "bold 18pt",
+        "label": "11pt gray"
+      },
+      "axis": {
+        "grid": "light",
+        "axis_line": false
+      }
+    }
+  },
+  {
+    "chart_id": "vibrant_area",
+    "description": "活力面积图 - 适合展示累积趋势",
+    "chart_style": {
+      "structure": {
+        "chart_type": "area",
+        "variant": "stacked",
+        "orientation": "vertical"
+      },
+      "data_encoding": {
+        "x": "category",
+        "y": "value",
+        "series": "type"
+      },
+      "layout": {
+        "legend_position": "bottom",
+        "title_position": "top"
+      },
+      "style": {
+        "background": "transparent",
+        "border": "none",
+        "shadow": false
+      },
+      "color": {
+        "palette": ["#06B6D4", "#14B8A6", "#22C55E", "#84CC16"],
+        "highlight": "#F59E0B"
+      },
+      "typography": {
+        "title": "bold 18pt",
+        "label": "11pt gray"
+      },
+      "axis": {
+        "grid": "light",
+        "axis_line": false
+      }
+    }
+  },
+  {
+    "chart_id": "clean_scatter",
+    "description": "简洁散点图 - 适合展示相关性分布",
+    "chart_style": {
+      "structure": {
+        "chart_type": "scatter",
+        "variant": "standard",
+        "orientation": "vertical"
+      },
+      "data_encoding": {
+        "x": "category",
+        "y": "value",
+        "series": "type"
+      },
+      "layout": {
+        "legend_position": "top",
+        "title_position": "top"
+      },
+      "style": {
+        "background": "transparent",
+        "border": "none",
+        "shadow": false
+      },
+      "color": {
+        "palette": ["#3B82F6", "#EF4444", "#10B981", "#F59E0B"],
+        "highlight": "#8B5CF6"
+      },
+      "typography": {
+        "title": "bold 18pt",
+        "label": "11pt gray"
+      },
+      "axis": {
+        "grid": "light",
+        "axis_line": true
+      }
+    }
+  },
+  {
+    "chart_id": "stacked_bar",
+    "description": "堆叠柱状图 - 适合展示分类占比构成",
+    "chart_style": {
+      "structure": {
+        "chart_type": "bar",
+        "variant": "stacked",
+        "orientation": "vertical"
+      },
+      "data_encoding": {
+        "x": "category",
+        "y": "value",
+        "series": "type"
+      },
+      "layout": {
+        "legend_position": "top",
+        "title_position": "top"
+      },
+      "style": {
+        "background": "transparent",
+        "border": "none",
+        "shadow": false
+      },
+      "color": {
+        "palette": ["#2563EB", "#7C3AED", "#DB2777", "#EA580C", "#16A34A"],
+        "highlight": "#F59E0B"
+      },
+      "typography": {
+        "title": "bold 18pt",
+        "label": "11pt gray"
+      },
+      "axis": {
+        "grid": "light",
+        "axis_line": false
+      }
+    }
+  },
+  {
+    "chart_id": "radar_chart",
+    "description": "雷达图 - 适合展示多维度评估对比",
+    "chart_style": {
+      "structure": {
+        "chart_type": "radar",
+        "variant": "standard",
+        "orientation": "vertical"
+      },
+      "data_encoding": {
+        "x": "category",
+        "y": "value",
+        "series": "type"
+      },
+      "layout": {
+        "legend_position": "top",
+        "title_position": "top"
+      },
+      "style": {
+        "background": "transparent",
+        "border": "none",
+        "shadow": false
+      },
+      "color": {
+        "palette": ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6"],
+        "highlight": "#EC4899"
+      },
+      "typography": {
+        "title": "bold 18pt",
+        "label": "11pt gray"
+      },
+      "axis": {
+        "grid": "light",
+        "axis_line": true
+      }
+    }
+  }
+]

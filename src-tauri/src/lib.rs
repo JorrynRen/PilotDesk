@@ -117,6 +117,75 @@ pub struct ResourcePaths {
     pub user: std::path::PathBuf,
 }
 
+/// 递归复制目录（目标目录会按需创建）
+fn copy_dir_all(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// 内置插件 / 技能的首启播种：`<安装包>/resources/<sub>/<名字>` → `<用户目录>/<名字>`。
+///
+/// **只在目标不存在时复制**。理由是"播种"与"安装"是两件事：
+///   - 用户可能已经装过、改过、甚至**故意删掉**某个内置项；
+///   - 每次启动都覆盖不仅会冲掉用户的修改，还会让"卸载内置项"永远无法生效。
+/// 复制失败只记日志、不让启动失败 —— 少一个内置项不该导致整个应用起不来。
+fn seed_builtin_dir(builtin: &std::path::Path, sub: &str, dest_root: &std::path::Path) {
+    // 开发模式 / 未打包时没有内置资源目录，属正常情况
+    let src_root = builtin.join("resources").join(sub);
+    if !src_root.is_dir() {
+        return;
+    }
+    let entries = match std::fs::read_dir(&src_root) {
+        Ok(it) => it,
+        Err(e) => {
+            log::warn!("读取内置目录失败 {}: {}", src_root.display(), e);
+            return;
+        }
+    };
+    if let Err(e) = std::fs::create_dir_all(dest_root) {
+        log::warn!("创建用户目录失败 {}: {}", dest_root.display(), e);
+        return;
+    }
+
+    let mut copied = 0usize;
+    for entry in entries.flatten() {
+        let src = entry.path();
+        if !src.is_dir() {
+            continue;
+        }
+        let dest = dest_root.join(entry.file_name());
+        if dest.exists() {
+            continue;
+        }
+        match copy_dir_all(&src, &dest) {
+            Ok(()) => copied += 1,
+            Err(e) => log::warn!(
+                "播种内置项失败 {} → {}: {}",
+                src.display(),
+                dest.display(),
+                e
+            ),
+        }
+    }
+    if copied > 0 {
+        log::info!(
+            "已播种 {} 个内置{}到 {}",
+            copied,
+            if sub == "plugins" { "插件" } else { "技能" },
+            dest_root.display()
+        );
+    }
+}
+
 impl DbState {
     pub fn get_conn(
         &self,
@@ -2488,6 +2557,10 @@ pub fn run() {
                     let _ = std::fs::create_dir_all(&dir);
                 }
             }
+
+            // 首启播种内置插件 / 技能（安装包携带 → 用户目录；已存在的不覆盖）
+            seed_builtin_dir(&builtin, "plugins", &crate::utils::paths::plugins_dir());
+            seed_builtin_dir(&builtin, "skills", &crate::utils::paths::skills_dir());
 
             app.manage(ResourcePaths { builtin, user });
 

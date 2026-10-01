@@ -1,0 +1,1397 @@
+{
+  "version": 3,
+  "themes": [
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle"
+      ],
+      "theme_id": "1001",
+      "name": "杏桃玫压",
+      "palette": [
+        "#f9dbbd",
+        "#ffa5ab",
+        "#da627d",
+        "#a53860",
+        "#450920"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "Microsoft YaHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle"
+      ],
+      "theme_id": "1002",
+      "name": "薰衣草雾",
+      "palette": [
+        "#ffd6ff",
+        "#e7c6ff",
+        "#c8b6ff",
+        "#b8c0ff",
+        "#bbd0ff"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "KaiTi"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Education_Academia",
+        "Fashion_Lifestyle",
+        "Business_Corporate"
+      ],
+      "theme_id": "1003",
+      "name": "靛蓝秋色",
+      "palette": [
+        "#f4f1de",
+        "#e07a5f",
+        "#3d405b",
+        "#81b29a",
+        "#f2cc8f"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "NSimSun"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Nature_Sustainability"
+      ],
+      "theme_id": "1004",
+      "name": "青绿日光",
+      "palette": [
+        "#264653",
+        "#2a9d8f",
+        "#e9c46a",
+        "#f4a261",
+        "#e76f51"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "Microsoft YaHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle",
+        "Culture_History"
+      ],
+      "theme_id": "1005",
+      "name": "绯红缎带",
+      "palette": [
+        "#590d22",
+        "#c9184a",
+        "#ff4d6d",
+        "#ff8fa3",
+        "#ffccd5",
+        "#fff0f3"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "FangSong"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle",
+        "Empathy_NonProfit"
+      ],
+      "theme_id": "1006",
+      "name": "鼠尾藕粉光",
+      "palette": [
+        "#dcb8cc",
+        "#f08478",
+        "#647a73",
+        "#83cbba",
+        "#ccd9b4",
+        "#fcdbc5"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "Microsoft YaHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Culture_History",
+        "Fashion_Lifestyle"
+      ],
+      "theme_id": "1007",
+      "name": "陶土羊皮",
+      "palette": [
+        "#f6ebdb",
+        "#dbd0c3",
+        "#ac9799",
+        "#cf726f",
+        "#e99b84",
+        "#f9eeeb"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "NSimSun"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle",
+        "Empathy_NonProfit"
+      ],
+      "theme_id": "1008",
+      "name": "甜杏腮红",
+      "palette": [
+        "#fde7e7",
+        "#fcdade",
+        "#f9b1b6",
+        "#c2a3a4",
+        "#fbc8a6",
+        "#fdebd9"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "KaiTi"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle"
+      ],
+      "theme_id": "1009",
+      "name": "晶玫绽放",
+      "palette": [
+        "#f51c6a",
+        "#b7163e",
+        "#931b3a",
+        "#56203c",
+        "#813e63",
+        "#b5936b"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "Microsoft YaHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Nature_Sustainability",
+        "Empathy_NonProfit"
+      ],
+      "theme_id": "1010",
+      "name": "大地珊瑚青",
+      "palette": [
+        "#efcd9c",
+        "#eb9db5",
+        "#d47868",
+        "#4a5454",
+        "#74b0ab",
+        "#bdcaa1"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "FangSong"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Business_Corporate",
+        "Culture_History"
+      ],
+      "theme_id": "1011",
+      "name": "秋石木色",
+      "palette": [
+        "#ebd9cb",
+        "#e9cbb9",
+        "#d69989",
+        "#a3766d",
+        "#5b5c5c",
+        "#e8eae7"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "NSimSun"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Education_Academia",
+        "Nature_Sustainability"
+      ],
+      "theme_id": "1012",
+      "name": "鼠尾炭绿",
+      "palette": [
+        "#f2eadd",
+        "#d9ded1",
+        "#a2b7a8",
+        "#506e66",
+        "#373e3b",
+        "#fcd1a0"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "SimSun"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle",
+        "Empathy_NonProfit"
+      ],
+      "theme_id": "1013",
+      "name": "晴空珊瑚",
+      "palette": [
+        "#b6d2ed",
+        "#b3889e",
+        "#ea5757",
+        "#f8966c",
+        "#fcd3af",
+        "#fcd9dc"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "Microsoft YaHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle"
+      ],
+      "theme_id": "1014",
+      "name": "杏桃青绿假期",
+      "palette": [
+        "#fde8ad",
+        "#fcd29d",
+        "#f9ae84",
+        "#ee847b",
+        "#3d7d85",
+        "#7eb6b8"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "Microsoft YaHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Business_Corporate"
+      ],
+      "theme_id": "1015",
+      "name": "午夜藏金",
+      "palette": [
+        "#37596e",
+        "#2b4d6b",
+        "#1d3052",
+        "#1b1e3e",
+        "#e3c170",
+        "#fad493"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "SimHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle",
+        "Empathy_NonProfit"
+      ],
+      "theme_id": "1016",
+      "name": "盛夏繁花",
+      "palette": [
+        "#fbcdc7",
+        "#ebb2bc",
+        "#be6c7d",
+        "#d46c57",
+        "#fab774",
+        "#fddd8e"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "Microsoft YaHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Business_Corporate",
+        "Industry_Engineering"
+      ],
+      "theme_id": "1017",
+      "name": "钢蓝沙韵",
+      "palette": [
+        "#748b9f",
+        "#5d7894",
+        "#395575",
+        "#243348",
+        "#cca384",
+        "#edded8"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "NSimSun"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Fashion_Lifestyle",
+        "Education_Academia",
+        "Empathy_NonProfit"
+      ],
+      "theme_id": "1018",
+      "name": "腮红板岩流",
+      "palette": [
+        "#f9e5df",
+        "#eecbc4",
+        "#e8b2ab",
+        "#b36a64",
+        "#5b6775",
+        "#babecb"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "SimSun"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Health_BioTech",
+        "Fashion_Lifestyle"
+      ],
+      "theme_id": "1019",
+      "name": "柑橘草本拼盘",
+      "palette": [
+        "#fcd8ac",
+        "#fabb82",
+        "#f78b6a",
+        "#c64a38",
+        "#b2c3a6",
+        "#ced8b7"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "Microsoft YaHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Education_Academia",
+        "Fashion_Lifestyle",
+        "Empathy_NonProfit"
+      ],
+      "theme_id": "1020",
+      "name": "桃玫教室",
+      "palette": [
+        "#f5dada",
+        "#fac2ac",
+        "#f89b97",
+        "#b47183",
+        "#bfd3c7",
+        "#fde9bb"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "KaiTi"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Industry_Engineering"
+      ],
+      "theme_id": "1021",
+      "name": "秋色电蓝",
+      "palette": [
+        "#e1c59d",
+        "#cf8e4a",
+        "#80543e",
+        "#2c3562",
+        "#455f9e",
+        "#a9ab8e"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei",
+        "body_font": "SimHei"
+      }
+    },
+    {
+      "supported_scenes": [
+        "Nature_Sustainability"
+      ],
+      "theme_id": "1022",
+      "name": "赤陶纸本",
+      "palette": [
+        "#c8655e",
+        "#9c4b4f",
+        "#dea58b",
+        "#eeccb1",
+        "#f5e1d6",
+        "#f7f0eb"
+      ],
+      "typography": {
+        "display_font": "SimHei",
+        "body_font": "FangSong"
+      }
+    },
+    {
+      "theme_id": "1023",
+      "name": "深海权威",
+      "palette": [
+        "#1a1f2e",
+        "#2c3e6b",
+        "#f5f4f0",
+        "#c9a96e",
+        "#8a7560"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "SimSun, 宋体"
+      },
+      "supported_scenes": [
+        "Public_Government"
+      ]
+    },
+    {
+      "theme_id": "1024",
+      "name": "铸铁精工",
+      "palette": [
+        "#f7f5f2",
+        "#1c1c1c",
+        "#3d3d3d",
+        "#b5872a",
+        "#e8e4de"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Industry_Engineering"
+      ]
+    },
+    {
+      "theme_id": "1025",
+      "name": "远洋蓝图",
+      "palette": [
+        "#003049",
+        "#004e77",
+        "#e8f4f8",
+        "#fcbf49",
+        "#a8c5d6"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Business_Corporate",
+        "Public_Government",
+        "Industry_Engineering"
+      ]
+    },
+    {
+      "theme_id": "1026",
+      "name": "皮革会议室",
+      "palette": [
+        "#f9f6f1",
+        "#2b2118",
+        "#7a4f2d",
+        "#c89f72",
+        "#ddd0c0"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Business_Corporate",
+        "Fashion_Lifestyle"
+      ]
+    },
+    {
+      "theme_id": "1027",
+      "name": "战略推演",
+      "palette": [
+        "#f2f2f0",
+        "#14213d",
+        "#e63946",
+        "#457b9d",
+        "#a8b8c8"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Business_Corporate",
+        "Public_Government"
+      ]
+    },
+    {
+      "theme_id": "1028",
+      "name": "黑金峰会",
+      "palette": [
+        "#0d0d0d",
+        "#181818",
+        "#d4af37",
+        "#f0f0f0",
+        "#5a5a5a"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Business_Corporate",
+        "Public_Government"
+      ]
+    },
+    {
+      "theme_id": "1029",
+      "name": "深空算域",
+      "palette": [
+        "#0a0f1e",
+        "#0d2137",
+        "#00d4ff",
+        "#7b61ff",
+        "#e8eef4"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Technology_Innovation"
+      ]
+    },
+    {
+      "theme_id": "1030",
+      "name": "智控夜屏",
+      "palette": [
+        "#0f1117",
+        "#1a2332",
+        "#00ff87",
+        "#2a9d8f",
+        "#e9ecef"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Technology_Innovation"
+      ]
+    },
+    {
+      "theme_id": "1031",
+      "name": "暗夜紫晶",
+      "palette": [
+        "#06070d",
+        "#1a0533",
+        "#bf5af2",
+        "#ff9f0a",
+        "#e5e5ea"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Technology_Innovation"
+      ]
+    },
+    {
+      "theme_id": "1032",
+      "name": "晴空算力",
+      "palette": [
+        "#eef2ff",
+        "#1e1b4b",
+        "#6366f1",
+        "#06b6d4",
+        "#a5b4fc"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "SimSun, 宋体"
+      },
+      "supported_scenes": [
+        "Technology_Innovation",
+        "Business_Corporate"
+      ]
+    },
+    {
+      "theme_id": "1033",
+      "name": "仪表盘亮色",
+      "palette": [
+        "#f8fafc",
+        "#0f172a",
+        "#10b981",
+        "#f59e0b",
+        "#94a3b8"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "NSimSun, 新宋体"
+      },
+      "supported_scenes": [
+        "Technology_Innovation",
+        "Industry_Engineering"
+      ]
+    },
+    {
+      "theme_id": "1034",
+      "name": "无菌蓝光",
+      "palette": [
+        "#f0f9ff",
+        "#0369a1",
+        "#0ea5e9",
+        "#22c55e",
+        "#bae6fd"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Health_BioTech",
+        "Education_Academia"
+      ]
+    },
+    {
+      "theme_id": "1035",
+      "name": "基因螺旋",
+      "palette": [
+        "#f8fffe",
+        "#134e4a",
+        "#0d9488",
+        "#f97316",
+        "#99f6e4"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Health_BioTech"
+      ]
+    },
+    {
+      "theme_id": "1036",
+      "name": "心率蓝红",
+      "palette": [
+        "#fafafa",
+        "#1e3a5f",
+        "#3b82f6",
+        "#e11d48",
+        "#dbeafe"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Health_BioTech"
+      ]
+    },
+    {
+      "theme_id": "1037",
+      "name": "深海医学",
+      "palette": [
+        "#0b1437",
+        "#112d60",
+        "#00c2cb",
+        "#a8edea",
+        "#ffffff"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "SimSun, 宋体"
+      },
+      "supported_scenes": [
+        "Health_BioTech",
+        "Technology_Innovation"
+      ]
+    },
+    {
+      "theme_id": "1038",
+      "name": "细胞荧光",
+      "palette": [
+        "#fdf4ff",
+        "#4a1d6b",
+        "#a855f7",
+        "#34d399",
+        "#e9d5ff"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Health_BioTech"
+      ]
+    },
+    {
+      "theme_id": "1039",
+      "name": "康养绿洲",
+      "palette": [
+        "#f1f5f5",
+        "#1f4e46",
+        "#3aafa9",
+        "#f4a261",
+        "#c8e6e4"
+      ],
+      "typography": {
+        "display_font": "幼圆",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Nature_Sustainability",
+        "Fashion_Lifestyle"
+      ]
+    },
+    {
+      "theme_id": "1040",
+      "name": "华夏红旗",
+      "palette": [
+        "#f5f0e8",
+        "#8b1a1a",
+        "#c41e3a",
+        "#d4a017",
+        "#1a2744"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Public_Government",
+        "Culture_History"
+      ]
+    },
+    {
+      "theme_id": "1041",
+      "name": "政务蓝图",
+      "palette": [
+        "#eef3fb",
+        "#003580",
+        "#005bbb",
+        "#f0c040",
+        "#8fafd4"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Public_Government",
+        "Business_Corporate"
+      ]
+    },
+    {
+      "theme_id": "1042",
+      "name": "城市灰调",
+      "palette": [
+        "#f8f6f0",
+        "#2c3e50",
+        "#34495e",
+        "#e8c068",
+        "#b8c8d8"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "NSimSun, 新宋体"
+      },
+      "supported_scenes": [
+        "Public_Government",
+        "Business_Corporate"
+      ]
+    },
+    {
+      "theme_id": "1043",
+      "name": "绿色治理",
+      "palette": [
+        "#f0f4f8",
+        "#1a3a5c",
+        "#2e7d32",
+        "#fbc02d",
+        "#90a4ae"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "SimSun, 宋体"
+      },
+      "supported_scenes": [
+        "Nature_Sustainability"
+      ]
+    },
+    {
+      "theme_id": "1044",
+      "name": "峰会暗夜",
+      "palette": [
+        "#1c1c2e",
+        "#16213e",
+        "#0f3460",
+        "#e94560",
+        "#d4c5a9"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Public_Government",
+        "Business_Corporate"
+      ]
+    },
+    {
+      "theme_id": "1045",
+      "name": "钢铁熔炉",
+      "palette": [
+        "#1a1a1a",
+        "#2d2d2d",
+        "#ff6b00",
+        "#8a8a8a",
+        "#e8e8e8"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Industry_Engineering"
+      ]
+    },
+    {
+      "theme_id": "1046",
+      "name": "蓝图精密",
+      "palette": [
+        "#e8ecf0",
+        "#1c2833",
+        "#2e4057",
+        "#f0b429",
+        "#6b8ca8"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Industry_Engineering",
+        "Technology_Innovation"
+      ]
+    },
+    {
+      "theme_id": "1047",
+      "name": "重工警戒",
+      "palette": [
+        "#f5f5f0",
+        "#3c3c3c",
+        "#5c6b73",
+        "#c0392b",
+        "#aab8c0"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "NSimSun, 新宋体"
+      },
+      "supported_scenes": [
+        "Industry_Engineering"
+      ]
+    },
+    {
+      "theme_id": "1048",
+      "name": "智能工厂",
+      "palette": [
+        "#060a10",
+        "#0d1b2a",
+        "#00b4d8",
+        "#ff9500",
+        "#cad5e2"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Industry_Engineering"
+      ]
+    },
+    {
+      "theme_id": "1049",
+      "name": "基建砂岩",
+      "palette": [
+        "#f4f1ec",
+        "#3d2b1f",
+        "#8b6914",
+        "#c9a84c",
+        "#b0a090"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "SimSun, 宋体"
+      },
+      "supported_scenes": [
+        "Industry_Engineering",
+        "Nature_Sustainability"
+      ]
+    },
+    {
+      "theme_id": "1050",
+      "name": "工程环保",
+      "palette": [
+        "#f8f8f8",
+        "#212121",
+        "#37474f",
+        "#00897b",
+        "#b0bec5"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Nature_Sustainability"
+      ]
+    },
+    {
+      "theme_id": "1051",
+      "name": "炉边温暖",
+      "palette": [
+        "#fdf6ee",
+        "#5c3a1e",
+        "#e07b54",
+        "#f4c97a",
+        "#c8b8a2"
+      ],
+      "typography": {
+        "display_font": "幼圆",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Empathy_NonProfit",
+        "Culture_History"
+      ]
+    },
+    {
+      "theme_id": "1052",
+      "name": "关怀粉紫",
+      "palette": [
+        "#fef9f3",
+        "#4a2040",
+        "#c77daf",
+        "#f0a8c0",
+        "#e8d5de"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Empathy_NonProfit",
+        "Fashion_Lifestyle"
+      ]
+    },
+    {
+      "theme_id": "1053",
+      "name": "泥土乡情",
+      "palette": [
+        "#f5f0eb",
+        "#3d2c24",
+        "#8b5e52",
+        "#d4956a",
+        "#e8c9b0"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Nature_Sustainability",
+        "Culture_History"
+      ]
+    },
+    {
+      "theme_id": "1054",
+      "name": "蓝天童年",
+      "palette": [
+        "#eff6ff",
+        "#1e40af",
+        "#60a5fa",
+        "#fbbf24",
+        "#bfdbfe"
+      ],
+      "typography": {
+        "display_font": "幼圆",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Empathy_NonProfit"
+      ]
+    },
+    {
+      "theme_id": "1055",
+      "name": "深夜心语",
+      "palette": [
+        "#1a1a2e",
+        "#16213e",
+        "#7b8cde",
+        "#e2b4bd",
+        "#f0e6ef"
+      ],
+      "typography": {
+        "display_font": "KaiTi, 楷体",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Fashion_Lifestyle"
+      ]
+    },
+    {
+      "theme_id": "1056",
+      "name": "夜纸藏墨",
+      "palette": [
+        "#e8e0d5",
+        "#3b3229",
+        "#6b5a3e",
+        "#2d5a6b",
+        "#9e8c6f"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Culture_History"
+      ]
+    },
+    {
+      "theme_id": "1057",
+      "name": "水墨夜宴",
+      "palette": [
+        "#0e0c0a",
+        "#1f1710",
+        "#6d4c2e",
+        "#c8a060",
+        "#e8dcc8"
+      ],
+      "typography": {
+        "display_font": "KaiTi, 楷体",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Culture_History"
+      ]
+    },
+    {
+      "theme_id": "1058",
+      "name": "藏经阁",
+      "palette": [
+        "#f5f2ec",
+        "#2a1f14",
+        "#5c4a38",
+        "#2d5986",
+        "#c4b8a0"
+      ],
+      "typography": {
+        "display_font": "隶书",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Culture_History"
+      ]
+    },
+    {
+      "theme_id": "1059",
+      "name": "学院晨光",
+      "palette": [
+        "#f8f6f0",
+        "#1b3a5c",
+        "#2e6da4",
+        "#e07b39",
+        "#9db8cc"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "SimSun, 宋体"
+      },
+      "supported_scenes": [
+        "Education_Academia"
+      ]
+    },
+    {
+      "theme_id": "1060",
+      "name": "常青藤院",
+      "palette": [
+        "#f4f0e8",
+        "#2d4a2d",
+        "#4a7c59",
+        "#c17f3a",
+        "#b8c9b8"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Education_Academia"
+      ]
+    },
+    {
+      "theme_id": "1061",
+      "name": "学术简白",
+      "palette": [
+        "#ffffff",
+        "#212529",
+        "#495057",
+        "#0077b6",
+        "#ade8f4"
+      ],
+      "typography": {
+        "display_font": "SimSun, 宋体",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Education_Academia"
+      ]
+    },
+    {
+      "theme_id": "1062",
+      "name": "黑板课堂",
+      "palette": [
+        "#fef3c7",
+        "#78350f",
+        "#d97706",
+        "#1d4ed8",
+        "#fde68a"
+      ],
+      "typography": {
+        "display_font": "KaiTi, 楷体",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Education_Academia"
+      ]
+    },
+    {
+      "theme_id": "1063",
+      "name": "知识图谱",
+      "palette": [
+        "#f8faff",
+        "#0c1b4d",
+        "#5c7cfa",
+        "#20c997",
+        "#c5d8ff"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "NSimSun, 新宋体"
+      },
+      "supported_scenes": [
+        "Education_Academia",
+        "Technology_Innovation"
+      ]
+    },
+    {
+      "theme_id": "1064",
+      "name": "STEM 活力",
+      "palette": [
+        "#fdf0f5",
+        "#5c1a3a",
+        "#e84393",
+        "#7c5cfc",
+        "#ffc0e0"
+      ],
+      "typography": {
+        "display_font": "SimHei, 黑体",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Technology_Innovation",
+        "Empathy_NonProfit"
+      ]
+    },
+    {
+      "theme_id": "1065",
+      "name": "香奈儿月光",
+      "palette": [
+        "#f9f4ef",
+        "#0d0d0d",
+        "#d4a96a",
+        "#8c7b6e",
+        "#e8ddd3"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Fashion_Lifestyle"
+      ]
+    },
+    {
+      "theme_id": "1066",
+      "name": "莫兰迪尘烟",
+      "palette": [
+        "#e8e0dc",
+        "#7d6b65",
+        "#b5978a",
+        "#3d3530",
+        "#f2ede9"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Fashion_Lifestyle",
+        "Empathy_NonProfit"
+      ]
+    },
+    {
+      "theme_id": "1067",
+      "name": "暗金奢耀",
+      "palette": [
+        "#0c0c0c",
+        "#1a1a1a",
+        "#e5c97e",
+        "#f5f5f5",
+        "#6b6b6b"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "Microsoft YaHei, 微软雅黑"
+      },
+      "supported_scenes": [
+        "Business_Corporate"
+      ]
+    },
+    {
+      "theme_id": "1068",
+      "name": "罗马蜜桃",
+      "palette": [
+        "#fcf8f4",
+        "#2e1b14",
+        "#c4624a",
+        "#e8b87a",
+        "#f0d9c8"
+      ],
+      "typography": {
+        "display_font": "幼圆",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Fashion_Lifestyle"
+      ]
+    },
+    {
+      "theme_id": "1069",
+      "name": "薰衣草幻彩",
+      "palette": [
+        "#f4f0fc",
+        "#1e0a3c",
+        "#7c3aed",
+        "#f0abfc",
+        "#ddd6fe"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "幼圆"
+      },
+      "supported_scenes": [
+        "Fashion_Lifestyle",
+        "Health_BioTech"
+      ]
+    },
+    {
+      "theme_id": "1070",
+      "name": "侘寂木质",
+      "palette": [
+        "#f8f4ef",
+        "#1a1008",
+        "#6b5240",
+        "#a08060",
+        "#e0d4c4"
+      ],
+      "typography": {
+        "display_font": "KaiTi, 楷体",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Culture_History"
+      ]
+    },
+    {
+      "theme_id": "1071",
+      "name": "林间嫩芽",
+      "palette": [
+        "#f0f4ec",
+        "#2d4a22",
+        "#557a46",
+        "#c8b560",
+        "#a8c49a"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Nature_Sustainability"
+      ]
+    },
+    {
+      "theme_id": "1072",
+      "name": "原土田园",
+      "palette": [
+        "#f5efe6",
+        "#4a3728",
+        "#8b6f47",
+        "#5c7a5c",
+        "#d4b896"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "SimSun, 宋体"
+      },
+      "supported_scenes": [
+        "Nature_Sustainability",
+        "Culture_History"
+      ]
+    },
+    {
+      "theme_id": "1073",
+      "name": "海岸潮涌",
+      "palette": [
+        "#e8f1f2",
+        "#1b4f6a",
+        "#2a8080",
+        "#6aaa96",
+        "#e0c080"
+      ],
+      "typography": {
+        "display_font": "Microsoft YaHei, 微软雅黑",
+        "body_font": "FangSong, 仿宋"
+      },
+      "supported_scenes": [
+        "Nature_Sustainability",
+        "Health_BioTech"
+      ]
+    },
+    {
+      "theme_id": "1074",
+      "name": "丰收大地",
+      "palette": [
+        "#fdf9f3",
+        "#523a28",
+        "#a0522d",
+        "#d2691e",
+        "#f5deb3"
+      ],
+      "typography": {
+        "display_font": "华文中宋",
+        "body_font": "KaiTi, 楷体"
+      },
+      "supported_scenes": [
+        "Nature_Sustainability"
+      ]
+    }
+  ]
+}
