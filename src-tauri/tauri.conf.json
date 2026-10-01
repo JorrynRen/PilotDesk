@@ -51,7 +51,13 @@
       "resources/assets/*",
       "resources/plugins/**/*",
       "resources/skills/**/*"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
   },
   "plugins": {
     "updater": {
