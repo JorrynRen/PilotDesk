@@ -106,13 +106,23 @@ export const useCommandCenterStore = create<CommandCenterState>((set) => ({
   setOpen: (open) => set({ open, entryHint: false }),
 
   closeCenter: () => {
+    /**
+     * 显式关闭 = 用户已经知道这个面板存在，立刻标记「使用指引已看过」。
+     *
+     * 不标记就会被 App 的空状态自动打开逻辑立刻推回来：那段逻辑的条件是
+     * `!open && !guideSeen && 没有会话 && 加载完成`，而它是按 open 变化触发的 effect ——
+     * 关闭把 open 置 false，正好又满足了条件，下一帧面板原样弹回。
+     * 用户看到的就是"点关闭（X / 遮罩 / Esc / 顶栏按钮）没反应"。无会话的首次运行必现。
+     */
+    if (!loadFlag(GUIDE_STORAGE_KEY)) saveFlag(GUIDE_STORAGE_KEY);
+
     // 第一次显式关闭：用一次动画指引告诉用户入口在顶栏哪一格（之后不再出现）
     if (!loadFlag(ENTRY_HINT_STORAGE_KEY)) {
       saveFlag(ENTRY_HINT_STORAGE_KEY);
-      set({ open: false, entryHint: true });
+      set({ open: false, entryHint: true, guideSeen: true });
       return;
     }
-    set({ open: false, entryHint: false });
+    set({ open: false, entryHint: false, guideSeen: true });
   },
 
   dismissEntryHint: () => {
