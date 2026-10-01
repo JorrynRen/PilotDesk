@@ -33,7 +33,7 @@ impl UnixPtyProcess {
         rows: u16,
     ) -> Result<(Self, Box<dyn Read + Send>), String> {
         let pty_system = portable_pty::native_pty_system();
-        let mut pair = pty_system
+        let pair = pty_system
             .openpty(PtySize {
                 rows,
                 cols,
@@ -106,7 +106,9 @@ impl UnixPtyProcess {
     }
 
     /// 终止子进程
-    pub fn kill(&self) {
+    ///
+    /// portable-pty 的 `Child::kill` 需要 `&mut self`（内部要可变地操作子进程句柄）。
+    pub fn kill(&mut self) {
         let _ = self.child.kill();
     }
 }

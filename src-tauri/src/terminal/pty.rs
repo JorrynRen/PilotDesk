@@ -74,8 +74,8 @@ impl TerminalProcess {
         }
     }
 
-    /// 终止进程
-    pub fn kill(&self) {
+    /// 终止进程（Unix 分支需要 `&mut self`）
+    pub fn kill(&mut self) {
         match self {
             #[cfg(target_os = "windows")]
             Self::Windows(p) => p.kill(),

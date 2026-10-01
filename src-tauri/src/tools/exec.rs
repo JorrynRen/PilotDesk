@@ -86,6 +86,9 @@ async fn drain<R: tokio::io::AsyncRead + Unpin>(mut reader: R, shared: SharedBuf
 
 /// 进程 CPU 累计时间（kernel+user，100ns 单位）。失败（非 Windows/权限/进程已退）返回 None。
 fn process_cpu_100ns(pid: u32) -> Option<u64> {
+    // 非 Windows 平台无 OpenProcess/GetProcessTimes，pid 仅在 Windows 分支被使用。
+    #[cfg(not(windows))]
+    let _ = pid;
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
@@ -120,6 +123,9 @@ fn process_cpu_100ns(pid: u32) -> Option<u64> {
 /// 终止整棵进程树：Windows 用 taskkill /T /F（按父子关系递归杀孙进程，防后台残留
 /// 继续持有管道句柄）；随后 kill + wait 收尸。
 async fn kill_tree(pid: u32, child: &mut tokio::process::Child) {
+    // pid 仅用于 Windows 的 taskkill；非 Windows 直接 kill 子进程。
+    #[cfg(not(windows))]
+    let _ = pid;
     #[cfg(windows)]
     {
         let _ = tokio::process::Command::new("taskkill")

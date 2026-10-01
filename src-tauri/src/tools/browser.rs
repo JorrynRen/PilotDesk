@@ -32,7 +32,6 @@ use futures::{Sink, SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Read;
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Child;
@@ -49,6 +48,15 @@ const BROWSER_TIMEOUT_SECS: u64 = 45;
 const MAX_TEXT_OUTPUT: usize = 16_000;
 /// 快照内嵌的页面文本预览上限（字符）
 const SNAPSHOT_TEXT_PREVIEW: usize = 3_000;
+
+/// Windows 上给子进程加 CREATE_NO_WINDOW（避免拉起浏览器时弹黑框）；其他平台是空操作。
+#[cfg(windows)]
+fn no_console_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x0800_0000);
+}
+#[cfg(not(windows))]
+fn no_console_window(_cmd: &mut std::process::Command) {}
 
 /// 浏览器自动化工具
 pub struct BrowserTool {
@@ -285,26 +293,26 @@ impl BrowserSession {
         std::fs::create_dir_all(&user_data_dir)
             .map_err(|e| format!("创建浏览器配置目录失败: {}", e))?;
 
-        let child = std::process::Command::new(&browser)
-            .args([
-                "--headless",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-sync",
-                "--disable-blink-features=AutomationControlled",
-                &format!("--remote-debugging-port={}", port),
-                &format!("--user-data-dir={}", user_data_dir.display()),
-                "about:blank",
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn()
-            .map_err(|e| format!("启动浏览器失败: {}", e))?;
+        let mut cmd = std::process::Command::new(&browser);
+        cmd.args([
+            "--headless",
+            "--disable-gpu",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-sync",
+            "--disable-blink-features=AutomationControlled",
+            &format!("--remote-debugging-port={}", port),
+            &format!("--user-data-dir={}", user_data_dir.display()),
+            "about:blank",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+        no_console_window(&mut cmd);
+
+        let child = cmd.spawn().map_err(|e| format!("启动浏览器失败: {}", e))?;
 
         let page_ws = wait_for_page_ws(port).await?;
         let (stream, _resp) = tokio_tungstenite::connect_async(&page_ws)
@@ -1000,14 +1008,14 @@ pub(crate) fn run_browser(
     browser: &str,
     args: &[String],
 ) -> Result<(Vec<u8>, Vec<u8>, Option<i32>), String> {
-    let mut child = std::process::Command::new(browser)
-        .args(args)
+    let mut cmd = std::process::Command::new(browser);
+    cmd.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .spawn()
-        .map_err(|e| format!("启动浏览器失败: {}", e))?;
+        .stderr(std::process::Stdio::piped());
+    no_console_window(&mut cmd);
+
+    let mut child = cmd.spawn().map_err(|e| format!("启动浏览器失败: {}", e))?;
 
     // 将 stdout/stderr 移到读取线程，避免大输出（如 dump-dom）填满管道缓冲区导致子进程阻塞
     let stdout = child.stdout.take().expect("stdout 已 piped");

@@ -124,7 +124,7 @@ impl TerminalManager {
 
     /// Close terminal session
     pub fn close_session(&mut self, id: &str) -> Result<(), String> {
-        let session = self
+        let mut session = self
             .sessions
             .remove(id)
             .ok_or_else(|| format!("terminal session {} not found", id))?;
