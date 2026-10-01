@@ -6,13 +6,13 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { I18nProvider } from "./components/common/I18nProvider";
 import "./styles/globals.css";
 
-import { applyThemeToDocument, THEMES, type Theme } from "./hooks/useTheme";
+import { applyThemeToDocument, THEMES, DEFAULT_THEME, type Theme } from "./hooks/useTheme";
 
 // Apply theme synchronously before React renders to prevent flash
 (function applyThemeEarly() {
   try {
-    const cached = localStorage.getItem('pilotdesk-theme') || 'system';
-    const theme: Theme = THEMES.includes(cached as Theme) ? (cached as Theme) : 'system';
+    const cached = localStorage.getItem('pilotdesk-theme') || DEFAULT_THEME;
+    const theme: Theme = THEMES.includes(cached as Theme) ? (cached as Theme) : DEFAULT_THEME;
     applyThemeToDocument(theme, window.matchMedia('(prefers-color-scheme: dark)').matches);
   } catch { /* ignore */ }
 })();

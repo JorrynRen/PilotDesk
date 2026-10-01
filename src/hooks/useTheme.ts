@@ -7,6 +7,14 @@ export type Theme = 'light' | 'dark' | 'nightfall' | 'system';
 /** 可选主题白名单（读取持久化设置与切换时都要校验，避免脏值落到 data-theme 上） */
 export const THEMES: Theme[] = ['light', 'dark', 'nightfall', 'system'];
 
+/**
+ * 默认主题（用户从未设置过主题时生效）。
+ *
+ * 单一事实来源：main.tsx 首屏前应用与 useTheme 的初值都必须取这里，
+ * 否则两处各写一个兜底值会出现"首屏一个主题、挂载后跳成另一个"。
+ */
+export const DEFAULT_THEME: Theme = 'nightfall';
+
 /** 主题是否为深色族：所有"按深浅分叉"的地方都该走这里，而不是逐处写 `theme === 'dark'` */
 export function isDarkTheme(theme: Theme, systemPrefersDark = false): boolean {
   if (theme === 'nightfall' || theme === 'dark') return true;
@@ -33,16 +41,16 @@ export function applyThemeToDocument(theme: Theme, systemPrefersDark: boolean): 
  */
 export function useTheme() {
   /**
-   * 初值取 localStorage 缓存（与 main.tsx 首屏前应用的是同一份），而不是写死 'system'：
+   * 初值取 localStorage 缓存（与 main.tsx 首屏前应用的是同一份），读不到才落 DEFAULT_THEME：
    * useTheme 是"每个调用方各持一份状态"的 hook（设置页、关于页各一次），
-   * 若初值为 system，后挂载的实例会在读到数据库之前先按系统深浅刷一遍 DOM，
+   * 若初值写死成 DEFAULT_THEME，后挂载的实例会在读到数据库之前先把 DOM 刷成默认主题，
    * 出现"进设置页主题跳一下"的闪变。
    */
   const [theme, setThemeState] = useState<Theme>(() => {
     try {
       const cached = localStorage.getItem('pilotdesk-theme');
-      return cached && THEMES.includes(cached as Theme) ? (cached as Theme) : 'system';
-    } catch { return 'system'; }
+      return cached && THEMES.includes(cached as Theme) ? (cached as Theme) : DEFAULT_THEME;
+    } catch { return DEFAULT_THEME; }
   });
   const [loaded, setLoaded] = useState(false);
 

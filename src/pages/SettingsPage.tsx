@@ -257,8 +257,8 @@ function GeneralSettings() {
         </div>
       </SettingsSection>
 
-      {/* Workspace directory */}
-      <SettingsSection title="工作区目录">
+      {/* 全局工作空间 */}
+      <SettingsSection title="全局工作空间">
         <div className="flex items-center gap-2">
           <div
             className="flex-1 px-3 py-2 rounded-lg text-sm truncate"
@@ -272,7 +272,7 @@ function GeneralSettings() {
           </SettingsButton>
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          Agent 会话的默认工作目录。Agent 可在该目录下创建和修改工作产物文件。
+          Agent 会话的兜底工作目录（会话时可选择工作目录，用于储存工作时输入、输出文件）。
         </p>
       </SettingsSection>
 

@@ -317,14 +317,14 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
   return (
     <div>
       {loading && instances.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-32 gap-2" style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border)' }}>
-          <Activity size={20} style={{ color: 'var(--text-tertiary)', opacity: 0.5 }} />
-          <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>加载执行实例中...</span>
+        <div className="flex items-center justify-center h-32 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+          加载执行实例中...
         </div>
       ) : instances.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-32 gap-2" style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border)' }}>
-          <Activity size={20} style={{ color: 'var(--text-tertiary)', opacity: 0.5 }} />
-          <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无执行实例</span>
+        // 空态与「工作流定义」页保持同一形态：只有图标 + 文案，不套边框卡片
+        <div className="flex flex-col items-center justify-center h-48 gap-2">
+          <Activity size={32} style={{ opacity: 0.25, color: 'var(--text-tertiary)' }} />
+          <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无执行实例</div>
         </div>
       ) : (
         <div>
