@@ -9,6 +9,9 @@
 #     └── icon.png          # 插件图标（可选）
 #
 # 索引文件位置: server/market/plugins/plugins-index.json
+#
+# 生成逻辑已搬到 Node 脚本 server/scripts/generate-plugin-index.mjs（本地可跑、可调试），
+# 本 workflow 只负责在 CI 上调用它并提交产物。
 
 name: Generate Plugin Index
 
@@ -19,9 +22,10 @@ on:
     #
     # 不加过滤时**任何**推送都会触发，于是每次都会往 main 追一个 `[skip ci]` 的索引提交
     # （本地因此凭空落后一个提交，下次推之前还得先 rebase）。
-    # 生成脚本就写在本文件里（见下方 run 步骤），所以本文件自身的改动也要触发。
+    # 生成逻辑现在住在下方脚本里，所以脚本自身的改动要触发；本文件自身的改动也保留触发一次。
     paths:
       - 'server/market/plugins/**'
+      - 'server/scripts/generate-plugin-index.mjs'
       - '.github/workflows/generate-index.yml'
   workflow_dispatch:
 
@@ -38,88 +42,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # 版本不可变校验要读 HEAD 上的旧索引（git show HEAD:...），需要完整历史
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Generate plugins-index.json
-        run: |
-          # 生成索引文件头
-          echo '{"schemaVersion":"1.0","updatedAt":"'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'","plugins":[' > server/market/plugins/plugins-index.json
-
-          first=true
-          # 扫描 server/market/plugins/<plugin-id>/<version>/manifest.json
-          for manifest in server/market/plugins/*/*/manifest.json; do
-            [ ! -f "$manifest" ] && continue
-
-            plugin_dir=$(dirname "$manifest")
-            # 提取 plugin-id 和 version（从路径中获取，但 version 以 manifest.json 为准）
-            rel_path="${plugin_dir#server/market/plugins/}"
-            plugin_id=$(echo "$rel_path" | cut -d'/' -f1)
-            dir_version=$(echo "$rel_path" | cut -d'/' -f2)
-
-            # 读取 manifest.json 中的 version 字段
-            manifest_version=$(jq -r '.version // empty' "$manifest")
-            [ -z "$manifest_version" ] && manifest_version="$dir_version"
-
-            # 计算目录大小
-            size=$(du -sh "$plugin_dir" | cut -f1)
-
-            # 预校验 manifest 基本合法性（跳过恶意/损坏的插件）
-            manifest_id=$(jq -r '.id // empty' "$manifest")
-            manifest_name=$(jq -r '.name // empty' "$manifest")
-            manifest_ver=$(jq -r '.version // empty' "$manifest")
-            # 检查 id 是否包含路径分隔符
-            case "$manifest_id" in */*|*\\*) echo "跳过插件 $manifest_id: id 包含路径分隔符" >&2; continue ;; esac
-            # 检查 version 是否为 semver 格式
-            case "$manifest_ver" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "跳过插件 $manifest_id: 版本号非 semver 格式 ($manifest_ver)" >&2; continue ;; esac
-            # 检查 name 长度
-            name_len=${#manifest_name}
-            [ "$name_len" -gt 64 ] && echo "跳过插件 $manifest_id: name 超过 64 字符 ($name_len)" >&2 && continue
-            # 检查 entry.main 是否包含路径遍历
-            entry_main=$(jq -r '.entry.main // "index.js"' "$manifest")
-            case "$entry_main" in *..*) echo "跳过插件 $manifest_id: entry.main 包含路径遍历" >&2; continue ;; esac
-            # 计算入口文件 sha256（安装时的完整性锚点；缺失将被拒绝安装）
-            entry_sha256=$(sha256sum "$plugin_dir/$entry_main" 2>/dev/null | cut -d' ' -f1)
-            [ -z "$entry_sha256" ] && echo "跳过插件 $manifest_id: 无法计算入口文件 sha256 ($entry_main)" >&2 && continue
-
-            # 构建插件信息 JSON（仅存储浏览/搜索所需字段，完整清单安装时从 baseUrl 读取）
-            [ "$first" = true ] && first=false || echo ',' >> server/market/plugins/plugins-index.json
-
-                          # 检测图标文件（支持 .png 或 .ico）
-              icon_file=""
-              for ext in png ico; do
-                if [ -f "$plugin_dir/icon.$ext" ] || [ -f "$plugin_dir/favicon.$ext" ]; then
-                  icon_file="icon.$ext"
-                  [ -f "$plugin_dir/favicon.$ext" ] && icon_file="favicon.$ext"
-                  break
-                fi
-              done
-              # 无图标文件时留空（索引中 icon 字段为空字符串，前端自行处理）
-              [ -z "$icon_file" ] && icon_file=""
-              # 检测 README.md（可选）
-              readme_url=""
-              [ -f "$plugin_dir/README.md" ] && readme_url="https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path/README.md"
-
-              jq -n --arg id "$plugin_id"               --arg name "$(jq -r '.name // empty' "$manifest")"               --arg version "$manifest_version"               --arg description "$(jq -r '.description // empty' "$manifest")"               --arg author "$(jq -r '.author // empty' "$manifest")"               --arg minAppVersion "$(jq -r '.minAppVersion // empty' "$manifest")"               --arg path "plugins/$rel_path"               --arg baseUrl "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path"               --arg icon "$([ -n "$icon_file" ] && echo "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/$rel_path/$icon_file" || echo "")"               --arg size "$size"               --arg readme "$readme_url"               --arg sha256 "$entry_sha256"               '{
-                sha256: $sha256,
-                id: $id,
-                name: $name,
-                version: $version,
-                description: $description,
-                author: $author,
-                minAppVersion: $minAppVersion,
-                path: $path,
-                baseUrl: $baseUrl,
-                icon: $icon,
-                size: $size,
-                readme: $readme
-              }' >> server/market/plugins/plugins-index.json
-          done
-
-          # 关闭 JSON 数组
-          echo ']}' >> server/market/plugins/plugins-index.json
-
-          echo "Index generated: $(wc -c < server/market/plugins/plugins-index.json) bytes"
-          echo "Plugin count: $(jq '.plugins | length' server/market/plugins/plugins-index.json)"
+        run: node server/scripts/generate-plugin-index.mjs
 
       - name: Validate plugins-index.json
         run: |

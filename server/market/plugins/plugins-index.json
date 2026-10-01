@@ -8,10 +8,9 @@
   "author": "PilotDesk Team",
   "minAppVersion": "0.1.0",
   "path": "plugins/hello-world/1.0.0",
-  "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0",
-  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/favicon.png",
+  "icon": "favicon.png",
   "size": "28K",
-  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/hello-world/1.0.0/README.md"
+  "readme": "README.md"
 }
 ,
 {
@@ -23,10 +22,9 @@
   "author": "PilotDesk Team",
   "minAppVersion": "0.1.0",
   "path": "plugins/math-calc/1.0.0",
-  "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/math-calc/1.0.0",
   "icon": "",
   "size": "40K",
-  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/math-calc/1.0.0/README.md"
+  "readme": "README.md"
 }
 ,
 {
@@ -38,9 +36,8 @@
   "author": "PilotDesk Team",
   "minAppVersion": "0.1.0",
   "path": "plugins/snippet-manager/1.0.0",
-  "baseUrl": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0",
-  "icon": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/favicon.png",
+  "icon": "favicon.png",
   "size": "32K",
-  "readme": "https://raw.githubusercontent.com/JorrynRen/PilotDesk/main/server/market/plugins/snippet-manager/1.0.0/README.md"
+  "readme": "README.md"
 }
 ]}

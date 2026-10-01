@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "market:index": "node server/scripts/generate-workflow-index.mjs",
+    "market:index:plugins": "node server/scripts/generate-plugin-index.mjs",
     "market:dev": "node server/dev-server.mjs"
   },
   "dependencies": {

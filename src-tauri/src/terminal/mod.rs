@@ -196,6 +196,7 @@ pub struct TerminalSessionInfo {
 }
 
 /// Background read loop: read from ConPTY stdout and push to frontend
+#[cfg(target_os = "windows")]
 async fn terminal_read_loop(
     mut stdout: tokio::fs::File,
     session_id: &str,

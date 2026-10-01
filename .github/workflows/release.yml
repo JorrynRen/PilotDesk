@@ -27,6 +27,16 @@
 #   APPLE_ID                       你的 Apple ID（用于公证 notarization）
 #   APPLE_PASSWORD                 App 专用密码（appleid.apple.com 生成，非账号密码）
 #   APPLE_TEAM_ID                  10 位 Team ID（developer.apple.com 账号页可见）
+#     ⌁ 两个最常见的坑（配错时 macOS 构建会在 codesign 阶段只报一句
+#       `SecKeychainItemImport: One or more parameters passed to a function were not valid.`，
+#       信息量几乎为零）：
+#       1) 粘进去的不是 .p12 的 base64 —— 例如贴了 .pem/.cer 文本，或 base64 里带了换行
+#          （必须是**单行**）
+#       2) 密码与"导出 .p12 时设的密码"不一致（注意别与钥匙串登录密码混淆）；
+#          也有可能是 .p12 的加密算法不为 macOS `security import` 支持，
+#          此时用兼容算法重新导出：openssl pkcs12 -export -legacy -out cert.p12 -inkey k.pem -in c.pem
+#       preflight 会提前校验，且**证书不可用时只跳过 macOS 构建、不阻塞整条发布**
+#       （Windows/Linux 照常发出去）；证书配好后 macOS 会自动回到构建矩阵里，无需改代码。
 #     ⌁ 证书导出：钥匙串访问 → 我的证书 → 选中 Developer ID Application 证书
 #       → 右键导出 → 文件格式 .p12 → 设置密码 → 然后 base64 编码：
 #         macOS/Linux: base64 -i cert.p12 | pbcopy
@@ -64,8 +74,11 @@ jobs:
 
   # 发布前置守卫：把"配错了、但要等到用户端才发现"的问题挡在这里。
   preflight:
-    name: 发布前置守卫（updater 密钥 / tag 版本一致性）
+    name: 发布前置守卫（updater 密钥 / tag 版本一致性 / macOS 证书）
     runs-on: ubuntu-latest
+    outputs:
+      # 证书可用才构建 macOS；不可用则跳过该平台，避免拖垮整条发布
+      apple_ok: ${{ steps.applecert.outputs.apple_ok }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -109,9 +122,48 @@ jobs:
           fi
           echo "tag 与版本号一致：v$VERSION"
 
+      # macOS 证书是整条流水线里最容易配错、又最难排查的一环：配错时要等十几分钟把
+      # Rust 依赖树编完，才会在 codesign 阶段报一句
+      # `SecKeychainItemImport: One or more parameters passed to a function were not valid.`
+      # （信息量为零）。
+      #
+      # 这里不只提前校验，还把结果写进 `apple_ok` 输出，交给 release job 决定要不要构建 macOS：
+      #   证书可用       → 正常构建（签名 + 公证）
+      #   证书缺失/不可用 → **跳过 macOS，其余平台照常发布**（失败的是"少一个平台"，不是整条发布）
+      # 这样证书没配好时不会阻塞发版；将来证书配好了，macOS 会自动回到矩阵里，无需改动代码。
+      - id: applecert
+        name: 校验 macOS 代码签名证书（结果决定是否构建 macOS）
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          ok=false
+
+          if [ -z "$CERT" ]; then
+            echo "::warning::未配置 APPLE_CERTIFICATE —— 本次跳过 macOS 构建（Windows/Linux 不受影响）。"
+          elif ! printf '%s' "$CERT" | base64 -d > /tmp/cert.p12 2>/dev/null; then
+            echo "::warning::APPLE_CERTIFICATE 不是合法 base64（应当是 .p12 的**单行** base64，而不是 .pem/.cer 文本）—— 本次跳过 macOS 构建。"
+          elif ! openssl pkcs12 -in /tmp/cert.p12 -passin pass:"$PW" -nokeys -noout 2>/dev/null \
+            && ! openssl pkcs12 -legacy -in /tmp/cert.p12 -passin pass:"$PW" -nokeys -noout 2>/dev/null; then
+            # OpenSSL 3 读旧算法的 p12 需要 -legacy，所以两条都试；都失败才是真有问题。
+            echo "::warning::APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD 无法解析该 .p12 —— 要么密码不对，要么 .p12 用了 macOS security import 不支持的加密算法（可用 openssl pkcs12 -export -legacy 重新导出）—— 本次跳过 macOS 构建。"
+          else
+            ok=true
+            echo "证书可用：base64 解码成功，PKCS#12 与密码均校验通过。"
+          fi
+
+          echo "apple_ok=$ok" >> "$GITHUB_OUTPUT"
+          {
+            echo "### macOS 构建：$([ "$ok" = true ] && echo '将执行（证书可用）' || echo '已跳过（证书不可用）')"
+            echo ""
+            echo "证书的获取与导出步骤见本文件顶部【仅 macOS 需要】一节。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   release:
     name: 构建并发布 (${{ matrix.platform }})
     needs: [ci, preflight]
+    # 证书不可用时跳过 macOS 这一条，其余平台照常发布
+    if: matrix.platform != 'macos-latest' || needs.preflight.outputs.apple_ok == 'true'
     permissions:
       contents: write
     strategy:

@@ -22,12 +22,29 @@ pub const PLUGINS_INDEX_PATH: &str = "/server/market/plugins/plugins-index.json"
 #[allow(dead_code)]
 pub const PLUGINS_DIR_PATH: &str = "/server/market/plugins";
 
+/// 市场资源在仓库内的根路径。
+/// 索引里每个插件的 `path` 字段（如 `plugins/hello-world/1.0.0`）就是相对它的相对路径。
+pub const MARKET_ROOT: &str = "/server/market";
+
 /// 根据路径构建所有服务器源的完整 URL 列表
 pub fn build_urls(path: &str) -> Vec<String> {
     SERVER_SOURCES
         .iter()
         .map(|base| format!("{}{}", base.trim_end_matches('/'), path))
         .collect()
+}
+
+/// 把「某个服务器源 + 相对市场路径」拼成绝对 URL。
+///
+/// `relative_path` 相对 `server/market/`（例如 `plugins/hello-world/1.0.0`）。
+/// 两侧斜杠都做归一化，避免拼出双斜杠。
+pub fn build_market_url(source: &str, relative_path: &str) -> String {
+    format!(
+        "{}{}/{}",
+        source.trim_end_matches('/'),
+        MARKET_ROOT,
+        relative_path.trim_start_matches('/')
+    )
 }
 
 /// HTTP 超时配置
@@ -106,14 +123,17 @@ async fn fetch_url(url: &str) -> Result<String, String> {
     Err(format!("重试 {} 次后仍失败: {}", MAX_RETRIES, last_err))
 }
 
-/// 按源优先级依次尝试获取远程 JSON 资源
-pub(crate) async fn fetch_market_json(path: &str) -> Result<Value, String> {
+/// 按源优先级依次尝试获取远程 JSON 资源。
+///
+/// 返回 `(JSON, 实际命中的源)`；源即 `SERVER_SOURCES` 中的基地址，
+/// 调用方可用它配合`build_market_url`把相对路径解析成同一源下的绝对地址。
+pub(crate) async fn fetch_market_json_with_source(path: &str) -> Result<(Value, String), String> {
     let urls = build_urls(path);
     let mut last_err = String::new();
-    for url in &urls {
+    for (source, url) in SERVER_SOURCES.iter().zip(urls.iter()) {
         match fetch_url(url).await {
             Ok(body) => match serde_json::from_str::<Value>(&body) {
-                Ok(json) => return Ok(json),
+                Ok(json) => return Ok((json, (*source).to_string())),
                 Err(e) => {
                     last_err = format!("解析 JSON 失败 ({}): {}", url, e);
                 }
@@ -124,6 +144,13 @@ pub(crate) async fn fetch_market_json(path: &str) -> Result<Value, String> {
         }
     }
     Err(format!("所有服务器源均不可用: {}", last_err))
+}
+
+/// 按源优先级依次尝试获取远程 JSON 资源
+pub(crate) async fn fetch_market_json(path: &str) -> Result<Value, String> {
+    fetch_market_json_with_source(path)
+        .await
+        .map(|(json, _)| json)
 }
 
 /// [Tauri Command] 获取 Agent 市场配置

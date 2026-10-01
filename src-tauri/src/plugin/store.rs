@@ -16,7 +16,11 @@ const MAX_RETRIES: u32 = 3;
 const RETRY_DELAY_MS: u64 = 1000;
 
 /// 在线商店插件信息（精简版，仅存储浏览/搜索所需字段）
-/// 完整清单（permissions/entry/contributes）安装时从 baseUrl/manifest.json 读取
+///
+/// 索引里**只存相对路径**（`path` + 图标/README 的**文件名**），不出现任何绝对 URL；
+/// 绝对地址由 `fetch_plugin_index` 在运行时用「实际命中的源 + `path`」算出来再填回
+/// `base_url` / `icon` / `readme` —— 所以换镜像不需要重新生成索引。
+/// 完整清单（permissions/entry/contributes）安装时从 `<base_url>/manifest.json` 读取。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OnlinePluginInfo {
     pub id: String,
@@ -26,11 +30,19 @@ pub struct OnlinePluginInfo {
     pub author: String,
     #[serde(rename = "minAppVersion")]
     pub min_app_version: String,
+    /// **相对** `server/market/` 的插件目录，如 `plugins/hello-world/1.0.0`。唯一权威字段。
     pub path: String,
-    #[serde(rename = "baseUrl")]
+    /// 绝对地址，由归一化填入 —— 索引里**不存在**该字段，故必须 `default`。
+    /// 保留它是为了前端契约不变（前端用 `baseUrl` 展示与兜底）。
+    #[serde(default)]
     pub base_url: String,
+    /// 索引里是图标**文件名**（如 `favicon.png`），归一化后变成绝对地址。
+    #[serde(default)]
     pub icon: Option<String>,
     pub size: Option<String>,
+    /// 索引里是 README **文件名**（`README.md`），归一化后变成绝对地址。
+    #[serde(default)]
+    pub readme: Option<String>,
     /// 入口文件的 sha256（十六进制）。远程安装时的完整性锚点；
     /// 索引缺失该字段时安装会被拒绝，不做静默放行。
     #[serde(default)]
@@ -206,12 +218,25 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     Err(format!("重试 {} 次后仍失败: {}", MAX_RETRIES, last_err))
 }
 
+/// 把索引里的绝对文件地址重新挂到 `base_url` 下（只取文件名），
+/// 保证 icon / readme 与 baseUrl 来自同一个源，不会出现跨源混搭。
+fn rehost_file(url: Option<&str>, base_url: &str) -> Option<String> {
+    let file = url?.trim().rsplit('/').next().filter(|s| !s.is_empty())?;
+    Some(format!("{}/{}", base_url.trim_end_matches('/'), file))
+}
+
 #[tauri::command]
-/// 从所有服务器源尝试获取并解析插件索引（复用 market::fetch_market_json）
-async fn fetch_plugin_index(force: bool) -> Result<IndexFetchResult, String> {
-    let json =
-        crate::utils::market::fetch_market_json(crate::utils::market::PLUGINS_INDEX_PATH).await?;
-    let index: PluginIndex =
+/// 从所有服务器源尝试获取并解析插件索引。
+///
+/// 索引里的 `baseUrl` / `icon` / `readme` 是"兼容字段"（生成器写的是主源地址）。
+/// 这里一律丢弃它们的 host，改用「**实际命中的源** + 条目内相对 `path`」重算，
+/// 使前端拿到的绝对地址与本次索引来源、后续安装来源保持一致。
+async fn fetch_plugin_index(_force: bool) -> Result<IndexFetchResult, String> {
+    let (json, source) = crate::utils::market::fetch_market_json_with_source(
+        crate::utils::market::PLUGINS_INDEX_PATH,
+    )
+    .await?;
+    let mut index: PluginIndex =
         serde_json::from_value(json).map_err(|e| format!("解析索引失败: {}", e))?;
 
     if index.schema_version != INDEX_SCHEMA_VERSION {
@@ -221,13 +246,18 @@ async fn fetch_plugin_index(force: bool) -> Result<IndexFetchResult, String> {
         ));
     }
 
-    // source 由 market.rs 内部根据成功响应的 URL 判断
-    let source = if force { "raw" } else { "cdn" };
+    // 归一化：相对 `path` 才是唯一权威，绝对字段只是给老客户端兜底的兼容字段。
+    for plugin in &mut index.plugins {
+        let base_url = crate::utils::market::build_market_url(&source, &plugin.path);
+        plugin.base_url = base_url.clone();
+        plugin.icon = rehost_file(plugin.icon.as_deref(), &base_url);
+        plugin.readme = rehost_file(plugin.readme.as_deref(), &base_url);
+    }
 
     Ok(IndexFetchResult {
         plugins: index.plugins,
         updated_at: index.updated_at,
-        source: source.to_string(),
+        source,
     })
 }
 
@@ -240,7 +270,7 @@ pub async fn plugin_store_fetch_index(
 }
 
 /// 从在线商店安装插件（文件夹模式，异步）
-/// 从 raw.githubusercontent.com 逐个下载插件文件到本地插件目录
+/// 从当前可用镜像源逐个下载插件文件到本地插件目录（同插件所有文件同源）
 #[tauri::command]
 pub async fn plugin_store_install(
     host: tauri::State<'_, Mutex<PluginHost>>,
@@ -282,10 +312,8 @@ pub async fn plugin_store_install(
     }
     std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建插件目录失败: {}", e))?;
 
-    let base_url = online_plugin.base_url.clone();
-
     // ── 安装过程：任何步骤失败则回滚删除目录 ──
-    let install_result = install_plugin_files(&target_dir, &base_url, &online_plugin, &*host).await;
+    let install_result = install_plugin_from_sources(&target_dir, &online_plugin, &*host).await;
 
     match install_result {
         Ok(instance_id) => {
@@ -314,6 +342,42 @@ pub async fn plugin_store_install(
             Err(e)
         }
     }
+}
+
+/// 按源优先级逐个尝试安装：**同一个插件的所有文件必须来自同一个源**。
+///
+/// 先选定一个源，再一次性下载 manifest/入口/图标/README；只有该源整体失败时，
+/// 才清空目录、整体降级到下一个源重来 —— 避免出现"一半来自 CDN、一半来自 GitHub"
+/// 的跨源混搭状态。目录回滚由调用方负责。
+async fn install_plugin_from_sources(
+    target_dir: &std::path::Path,
+    online_plugin: &OnlinePluginInfo,
+    host: &Mutex<PluginHost>,
+) -> Result<String, String> {
+    let mut last_err = String::new();
+    for source in crate::utils::market::SERVER_SOURCES {
+        // base_url 由「源 + 相对 path」动态解析，与源固定绑定
+        let base_url = crate::utils::market::build_market_url(source, &online_plugin.path);
+
+        // 降级换源前清掉上一个源可能残留的半成品文件
+        if target_dir.exists() {
+            let _ = std::fs::remove_dir_all(target_dir);
+        }
+        std::fs::create_dir_all(target_dir).map_err(|e| format!("创建插件目录失败: {}", e))?;
+
+        match install_plugin_files(target_dir, &base_url, online_plugin, host).await {
+            Ok(id) => return Ok(id),
+            Err(e) => {
+                log::warn!(
+                    "[PluginInstall] 源 {} 安装失败，降级到下一个源: {}",
+                    source,
+                    e
+                );
+                last_err = e;
+            }
+        }
+    }
+    Err(format!("所有服务器源均安装失败: {}", last_err))
 }
 
 /// 执行插件文件下载和加载（内部函数，失败时由调用方回滚）
@@ -359,7 +423,7 @@ async fn install_plugin_files(
     let actual_sha = crate::api_agent::knowledge::sha256_hex(&entry_data);
     if !actual_sha.eq_ignore_ascii_case(expected_sha) {
         return Err(format!(
-            "插件 '{}' 入口文件完整性校验失败：期望 sha256={}，实际={}",
+            "插件 '{}' 入口文件完整性校验失败：期望 sha256={}，实际={}。请稍后重试；若持续失败，可能是市场缓存未刷新",
             online_plugin.id, expected_sha, actual_sha
         ));
     }
@@ -371,29 +435,34 @@ async fn install_plugin_files(
     std::fs::write(&entry_path, &entry_data).map_err(|e| format!("写入入口文件失败: {}", e))?;
 
     // 下载图标（如果存在，支持 .png / .ico）
-    if let Some(icon) = &online_plugin.icon {
-        if !icon.is_empty() {
-            match fetch_bytes(icon).await {
-                Ok(data) => {
-                    let icon_name = icon.rsplit('/').next().unwrap_or("icon.png");
-                    std::fs::write(target_dir.join(icon_name), &data)
-                        .map_err(|e| format!("写入图标文件失败: {}", e))?;
-                }
-                Err(_) => {
-                    // 尝试备选扩展名（.png → .ico）
-                    let alt_icon = if icon.ends_with(".png") {
-                        icon.replace(".png", ".ico")
-                    } else if icon.ends_with(".ico") {
-                        icon.replace(".ico", ".png")
-                    } else {
-                        String::new()
-                    };
-                    if !alt_icon.is_empty() {
-                        if let Ok(data) = fetch_bytes(&alt_icon).await {
-                            let icon_name = alt_icon.rsplit('/').next().unwrap_or("icon.png");
-                            std::fs::write(target_dir.join(icon_name), &data)
-                                .map_err(|e| format!("写入图标文件失败: {}", e))?;
-                        }
+    // 文件名取自索引，host 一律换成当前源的 base_url，保证与其它文件同源
+    if let Some(icon_name) = online_plugin
+        .icon
+        .as_deref()
+        .map(str::trim)
+        .and_then(|u| u.rsplit('/').next())
+        .filter(|s| !s.is_empty())
+    {
+        let icon_url = format!("{}/{}", base_url.trim_end_matches('/'), icon_name);
+        match fetch_bytes(&icon_url).await {
+            Ok(data) => {
+                std::fs::write(target_dir.join(icon_name), &data)
+                    .map_err(|e| format!("写入图标文件失败: {}", e))?;
+            }
+            Err(_) => {
+                // 尝试备选扩展名（.png → .ico）
+                let alt_name = if icon_name.ends_with(".png") {
+                    icon_name.replace(".png", ".ico")
+                } else if icon_name.ends_with(".ico") {
+                    icon_name.replace(".ico", ".png")
+                } else {
+                    String::new()
+                };
+                if !alt_name.is_empty() {
+                    let alt_url = format!("{}/{}", base_url.trim_end_matches('/'), alt_name);
+                    if let Ok(data) = fetch_bytes(&alt_url).await {
+                        std::fs::write(target_dir.join(&alt_name), &data)
+                            .map_err(|e| format!("写入图标文件失败: {}", e))?;
                     }
                 }
             }

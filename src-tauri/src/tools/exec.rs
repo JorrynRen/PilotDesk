@@ -199,6 +199,7 @@ fn tail_preview(stdout: &[u8], stderr: &[u8]) -> String {
 enum Invocation<'a> {
     Args(&'a [String]),
     /// 程序名之后原样追加的整段命令行（Windows 专用路径）。
+    #[cfg(windows)]
     RawTail(&'a str),
 }
 
@@ -216,13 +217,10 @@ async fn run_managed(
         Invocation::Args(args) => {
             cmd.args(args);
         }
+        // RawTail 仅由 Windows 分支的 cmd.exe 构造（非 Windows 走 Args），故与变体同步 cfg。
+        #[cfg(windows)]
         Invocation::RawTail(tail) => {
-            #[cfg(windows)]
             cmd.raw_arg(tail);
-            #[cfg(not(windows))]
-            {
-                cmd.args(["-c", tail]);
-            }
         }
     }
     cmd.current_dir(cwd)
@@ -465,6 +463,10 @@ pub async fn run_command(cwd: &str, command: &str) -> Result<String, String> {
 /// 语义等价：cmd 的 `md` 本身就能创建多级目录，去掉 `-p` 与 Unix 的 `mkdir -p` 行为一致。
 /// 只在 `mkdir/md` 处于**命令位置**（开头或紧随 `&&`/`&`/`|`/`;`/`(`）时才处理，
 /// 因此 `echo mkdir -p` 这类仅出现在参数里的文本不会被动到。
+///
+/// 仅 Windows：生产调用点在 `run_command` 的 `#[cfg(windows)]` 分支；引用它的单元测试
+/// 也在 `#[cfg(all(test, windows))]` 模块内，故三平台下 cfg 与调用点同时存在/消失。
+#[cfg(windows)]
 fn normalize_windows_command(command: &str) -> String {
     const SEPARATORS: &[&str] = &["&&", "||", "&", "|", ";", "("];
     let toks: Vec<&str> = command.split_whitespace().collect();
