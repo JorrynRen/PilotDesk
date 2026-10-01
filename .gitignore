@@ -155,6 +155,10 @@ pilotdesk.db-journal
 pilotdesk.db-wal
 pilotdesk.db-shm
 
+# Python 缓存（技能脚本目录里会出现 __pycache__/*.pyc，属于运行产物，不应入库）
+__pycache__/
+*.py[cod]
+
 # Project docs (not tracked)
 docs/
 target-check/

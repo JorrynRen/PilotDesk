@@ -1,0 +1,63 @@
+{
+	"description": "PPT 生成允许使用的字体白名单",
+	"note": "参考常用 PPTX 字体集整理，chinese 用于中文正文/标题，western 系列用于英文/数字/代码/装饰",
+	"fonts": {
+		"chinese": [
+			{
+				"name": "微软雅黑",
+				"alias": [
+					"Microsoft YaHei",
+					"Microsoft YaHei UI"
+				]
+			},
+			{
+				"name": "苹方",
+				"alias": [
+					"PingFang SC",
+					"PingFang"
+				]
+			},
+			{
+				"name": "宋体",
+				"alias": [
+					"SimSun",
+					"Songti SC"
+				]
+			},
+			{
+				"name": "黑体",
+				"alias": [
+					"SimHei",
+					"Heiti SC"
+				]
+			},
+			{
+				"name": "楷体",
+				"alias": [
+					"KaiTi",
+					"Kaiti SC"
+				]
+			},
+			{
+				"name": "仿宋",
+				"alias": [
+					"FangSong",
+					"Fangsong"
+				]
+			},
+			{
+				"name": "华文宋体",
+				"alias": [
+					"STSong",
+					"STSongti"
+				]
+			},
+			{
+				"name": "等线",
+				"alias": [
+					"DengXian"
+				]
+			}
+		]
+	}
+}
