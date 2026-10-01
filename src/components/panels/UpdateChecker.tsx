@@ -8,7 +8,7 @@ import { errorMessage } from '../../utils/errorMessage';
 // 版本号单一来源：由 vite.config.ts 从根 package.json 注入
 const APP_VERSION = import.meta.env.VITE_APP_VERSION as string;
 
-const RELEASES_URL = 'https://github.com/jorryn/pilotdesk/releases';
+const RELEASES_URL = 'https://github.com/JorrynRen/PilotDesk/releases';
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B';

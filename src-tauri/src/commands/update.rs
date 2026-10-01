@@ -66,7 +66,7 @@ pub async fn check_pilotdesk_update() -> Result<PilotdeskUpdateResponse, AppErro
     let current = env!("CARGO_PKG_VERSION").to_string();
 
     let latest = {
-        let url = "https://api.github.com/repos/jorryn/pilotdesk/releases/latest";
+        let url = "https://api.github.com/repos/JorrynRen/PilotDesk/releases/latest";
         let body = http_get_json(url).await?;
         let tag = body
             .get("tag_name")

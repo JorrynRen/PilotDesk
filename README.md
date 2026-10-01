@@ -3,7 +3,7 @@ PilotDesk 是一个 **Agent 统一桌面客户端**，将多个 AI Agent（Claud
 
 ## 发布流程
 
-正式发布渠道为 GitHub 仓库 [jorryn/pilotdesk](https://github.com/jorryn/pilotdesk)，通过 GitHub Releases 分发，并支持应用内自动更新。
+正式发布渠道为 GitHub 仓库 [JorrynRen/PilotDesk](https://github.com/JorrynRen/PilotDesk)，通过 GitHub Releases 分发，并支持应用内自动更新。
 
 ### 一、发版要改哪几处（版本号）
 
