@@ -77,8 +77,10 @@ jobs:
     name: 发布前置守卫（updater 密钥 / tag 版本一致性 / macOS 证书）
     runs-on: ubuntu-latest
     outputs:
-      # 证书可用才构建 macOS；不可用则跳过该平台，避免拖垮整条发布
+      # 证书可用性（供日志与摘要阅读）
       apple_ok: ${{ steps.applecert.outputs.apple_ok }}
+      # 实际的构建矩阵：证书不可用时其中不含 macOS
+      matrix: ${{ steps.buildmatrix.outputs.matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -159,26 +161,41 @@ jobs:
             echo "证书的获取与导出步骤见本文件顶部【仅 macOS 需要】一节。"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # 由证书校验结果决定构建矩阵：证书不可用就**把 macOS 从矩阵里删掉**，
+      # 而不是建一个注定失败的 job。
+      #
+      # ⚠️ 别改回"job 级 if + matrix"：GitHub 的上下文可用性表里，jobs.<id>.if 只认
+      #    github / needs / vars / inputs —— **没有 matrix**。一旦在那里写 matrix.platform，
+      #    整个 workflow 会被判定 `Invalid workflow file: Unrecognized named-value: 'matrix'`，
+      #    连 job 都建不出来（而且这种错误本地 YAML 解析查不出来，只有 GitHub 侧会报）。
+      - id: buildmatrix
+        name: 生成构建矩阵（证书不可用则不含 macOS）
+        env:
+          APPLE_OK: ${{ steps.applecert.outputs.apple_ok }}
+        run: |
+          # Windows 上 updater 只支持 NSIS 安装包，故显式只打 nsis（同时避免 msi 混淆 latest.json）
+          win='{"platform":"windows-latest","args":"--bundles nsis"}'
+          # macOS 上 updater 使用 .app.tar.gz，dmg 供用户手动下载
+          mac='{"platform":"macos-latest","args":"--bundles app,dmg"}'
+          # Linux 上 updater 使用 AppImage，deb 供用户手动下载
+          lin='{"platform":"ubuntu-22.04","args":"--bundles appimage,deb"}'
+
+          if [ "$APPLE_OK" = "true" ]; then
+            echo "matrix={\"include\":[${win},${mac},${lin}]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix={\"include\":[${win},${lin}]}" >> "$GITHUB_OUTPUT"
+            echo "::warning::证书不可用，本次构建矩阵不含 macOS。"
+          fi
+
   release:
     name: 构建并发布 (${{ matrix.platform }})
     needs: [ci, preflight]
-    # 证书不可用时跳过 macOS 这一条，其余平台照常发布
-    if: matrix.platform != 'macos-latest' || needs.preflight.outputs.apple_ok == 'true'
     permissions:
       contents: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: windows-latest
-            # Windows 上 updater 只支持 NSIS 安装包，故显式只打 nsis（同时避免 msi 混淆 latest.json）
-            args: '--bundles nsis'
-          - platform: macos-latest
-            # macOS 上 updater 使用 .app.tar.gz，dmg 供用户手动下载
-            args: '--bundles app,dmg'
-          - platform: ubuntu-22.04
-            # Linux 上 updater 使用 AppImage，deb 供用户手动下载
-            args: '--bundles appimage,deb'
+      # 矩阵由 preflight 输出：证书不可用时其中不含 macOS
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
