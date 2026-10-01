@@ -141,8 +141,10 @@ async fn fetch_bing_cn(query: &str, num: usize) -> Result<Vec<SearchResult>, Str
 
 /// 无头浏览器兜底：用本机 Edge/Chrome 渲染 Bing 结果页并解析。
 fn search_bing_cn_fallback(query: &str, num: usize) -> Result<Vec<SearchResult>, String> {
-    let browser = browser::find_browser()
-        .ok_or_else(|| "搜索失败：未检测到 Edge/Chrome 浏览器用于兜底".to_string())?;
+    let browser = browser::find_browser().ok_or_else(|| {
+        "搜索失败：未检测到可用的 Chromium 系浏览器（Edge/Chrome/Chromium/Brave）用于兜底"
+            .to_string()
+    })?;
 
     let args: Vec<String> = vec![
         "--headless".to_string(),
@@ -475,8 +477,10 @@ fn looks_binary(bytes: &[u8]) -> bool {
 
 /// 无头浏览器兜底：渲染页面并提取可读文本。
 fn fetch_web_text_browser(url: &str) -> Result<String, String> {
-    let browser = browser::find_browser()
-        .ok_or_else(|| "网页抓取失败：未检测到 Edge/Chrome 浏览器用于兜底".to_string())?;
+    let browser = browser::find_browser().ok_or_else(|| {
+        "网页抓取失败：未检测到可用的 Chromium 系浏览器（Edge/Chrome/Chromium/Brave）用于兜底"
+            .to_string()
+    })?;
 
     let args: Vec<String> = vec![
         "--headless".to_string(),

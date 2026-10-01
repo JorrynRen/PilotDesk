@@ -281,7 +281,7 @@ impl BrowserSession {
     /// 启动 Edge/Chrome（独立配置目录 + 随机调试端口），连接页面级 CDP WebSocket。
     async fn launch() -> Result<Self, String> {
         let browser = find_browser()
-            .ok_or_else(|| "未检测到 Microsoft Edge 或 Google Chrome 浏览器，无法执行浏览器自动化。请安装其中之一后重试。".to_string())?;
+            .ok_or_else(|| "未检测到可用的 Chromium 系浏览器（Edge / Chrome / Chromium / Brave），无法执行浏览器自动化。请安装其中之一后重试。".to_string())?;
         let port = pick_free_port()?;
         let user_data_dir = std::env::temp_dir().join(format!(
             "pilotdesk_browser_{}",
@@ -970,23 +970,68 @@ pub(crate) async fn fetch_rendered_html(url: &str, max_bytes: usize) -> Result<S
     Ok(html)
 }
 
-/// 定位本机可用的 Edge / Chrome 可执行文件
+/// 定位本机可用的 Chromium 系浏览器（Edge / Chrome / Chromium / Brave）
+///
+/// 三平台的安装位置差异很大，所以分平台给候选：Windows 是固定安装目录，
+/// macOS 都在 `/Applications/*.app/Contents/MacOS/` 下；Linux 各发行版太散
+/// （`/usr/bin`、`/snap/bin`、`/opt/...` 都有），不放绝对路径，统一交给 PATH。
 pub(crate) fn find_browser() -> Option<String> {
-    const CANDIDATES: &[&str] = &[
+    #[cfg(windows)]
+    const ABSOLUTE_CANDIDATES: &[&str] = &[
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     ];
-    for c in CANDIDATES {
+
+    #[cfg(target_os = "macos")]
+    const ABSOLUTE_CANDIDATES: &[&str] = &[
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    ];
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    const ABSOLUTE_CANDIDATES: &[&str] = &[];
+
+    for c in ABSOLUTE_CANDIDATES {
         if std::path::Path::new(c).is_file() {
             return Some(c.to_string());
         }
     }
-    // 回退：尝试在 PATH 中查找
-    for exe in ["msedge", "chrome"] {
-        if let Ok(out) = std::process::Command::new("where")
-            .arg(exe)
+
+    #[cfg(windows)]
+    const NAMES: &[&str] = &["msedge", "chrome"];
+
+    #[cfg(target_os = "macos")]
+    const NAMES: &[&str] = &[
+        "google-chrome",
+        "chromium",
+        "microsoft-edge",
+        "brave-browser",
+    ];
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    const NAMES: &[&str] = &[
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        "microsoft-edge",
+        "microsoft-edge-stable",
+        "brave-browser",
+    ];
+
+    // 回退：在 PATH 中查找。Windows 用 `where`，Unix 用 `which`，两者都是逐行输出路径。
+    #[cfg(windows)]
+    const WHICH: &str = "where";
+    #[cfg(not(windows))]
+    const WHICH: &str = "which";
+
+    for name in NAMES {
+        if let Ok(out) = std::process::Command::new(WHICH)
+            .arg(name)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .output()
