@@ -86,7 +86,13 @@ jobs:
           git add server/market/plugins/plugins-index.json
           if git diff --staged --quiet; then
             echo "No changes to plugins-index.json"
-          else
-            git commit -m "chore(plugin-market): auto-generate plugin index [skip ci]"
-            git push
+            exit 0
           fi
+          git commit -m "chore(plugin-market): auto-generate plugin index [skip ci]"
+          # 并发组只保证"同一时刻只有一个索引 workflow 在跑"，但排队启动的那一个
+          # checkout 拿到的是**触发提交**（github.sha）而非最新 main —— 若前一个工作流
+          # 刚推过自己的索引提交，这里直接 push 必然被拒（非快进），本文件就是这么失败过一次。
+          # 先变基到最新 main 再推；两个索引改的是不同文件，rebase 不会冲突。
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase "origin/${GITHUB_REF_NAME}"
+          git push

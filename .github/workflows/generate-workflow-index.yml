@@ -41,9 +41,12 @@ jobs:
       contents: write
 
     steps:
-      # 本索引只读模板文件本身，不需要 git 历史（插件索引才需要 fetch-depth: 0）
+      # 索引本身只读模板文件，但下面的"变基到最新 main"需要公共祖先 —— 浅克隆里
+      # 变基会因缺少 merge base 失败，所以这里同样要完整历史。
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -75,7 +78,11 @@ jobs:
           git add server/market/workflow/workflow-index.json
           if git diff --staged --quiet; then
             echo "No changes to workflow-index.json"
-          else
-            git commit -m "chore(workflow-market): auto-generate workflow index [skip ci]"
-            git push
+            exit 0
           fi
+          git commit -m "chore(workflow-market): auto-generate workflow index [skip ci]"
+          # 见 generate-plugin-index.yml：并发组只保证串行，排队启动的那一个 checkout
+          # 拿到的仍是触发提交而非最新 main，直接 push 会被判非快进。先变基再推。
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase "origin/${GITHUB_REF_NAME}"
+          git push
