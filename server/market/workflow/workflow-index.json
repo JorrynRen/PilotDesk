@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "updatedAt": "2026-09-30T05:28:03.062Z",
+  "updatedAt": "2026-10-01T15:34:46.671Z",
   "templates": [
     {
       "id": "写小说工作流（测试）",
@@ -14,7 +14,7 @@
       "stageCount": 6,
       "nodeCount": 7,
       "size": "7K",
-      "updatedAt": "2026-08-10T02:21:26.478Z"
+      "updatedAt": "2026-10-01T15:34:42.292Z"
     },
     {
       "id": "自动短篇小说写作工作流",
@@ -32,7 +32,7 @@
       "stageCount": 5,
       "nodeCount": 13,
       "size": "18K",
-      "updatedAt": "2026-08-10T02:21:26.450Z"
+      "updatedAt": "2026-10-01T15:34:42.292Z"
     }
   ]
 }
