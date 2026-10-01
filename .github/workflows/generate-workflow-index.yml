@@ -1,0 +1,81 @@
+# 工作流模板索引自动生成
+# 当 server/market/workflow/ 目录下的模板文件发生变更时，
+# 自动重新生成 workflow-index.json 索引文件并提交到仓库。
+#
+# 目录结构:
+#   server/market/workflow/<模板名>/
+#     ├── [主]xxx.json      # 主定义（name / version / stages 从这里读）
+#     └── [子]xxx.json      # 被主定义引用的子工作流（可选）
+#
+# 索引文件位置: server/market/workflow/workflow-index.json
+#
+# 生成逻辑在 Node 脚本 server/scripts/generate-workflow-index.mjs（本地可跑：npm run market:index）。
+# 本文件补齐的正是与 generate-plugin-index.yml 的对称性 —— 在此之前工作流索引只能靠人手动跑脚本，
+# 改了模板却忘了重算索引时，客户端会一直拿到过期清单，而且没有任何提示。
+
+name: Generate Workflow Index
+
+on:
+  push:
+    branches: [main]
+    # 只在"真的可能影响索引"的路径变动时才跑，理由同 generate-plugin-index.yml
+    # （不加过滤则每次推送都往 main 追一个 [skip ci] 提交，本地凭空落后一个提交）。
+    paths:
+      - 'server/market/workflow/**'
+      - 'server/scripts/generate-workflow-index.mjs'
+      - '.github/workflows/generate-workflow-index.yml'
+  workflow_dispatch:
+
+# 与 generate-plugin-index.yml 共用同一个并发组，原因见该文件。
+concurrency:
+  group: market-index
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  generate-index:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # 本索引只读模板文件本身，不需要 git 历史（插件索引才需要 fetch-depth: 0）
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate workflow-index.json
+        run: node server/scripts/generate-workflow-index.mjs
+
+      - name: Validate workflow-index.json
+        run: |
+          echo "Validating workflow-index.json..."
+          if [ ! -f server/market/workflow/workflow-index.json ]; then
+            echo "Error: workflow-index.json not generated"
+            exit 1
+          fi
+          # 验证 JSON 格式
+          if ! jq empty server/market/workflow/workflow-index.json 2>/dev/null; then
+            echo "Error: workflow-index.json is not valid JSON"
+            exit 1
+          fi
+          echo "Index file size: $(wc -c < server/market/workflow/workflow-index.json) bytes"
+          echo "Template count: $(jq '.templates | length' server/market/workflow/workflow-index.json)"
+
+      - name: Commit and push if changed
+        run: |
+          git config --local user.email "ren.jorryn@gmail.com"
+          git config --local user.name "jorryn"
+          git add server/market/workflow/workflow-index.json
+          if git diff --staged --quiet; then
+            echo "No changes to workflow-index.json"
+          else
+            git commit -m "chore(workflow-market): auto-generate workflow index [skip ci]"
+            git push
+          fi

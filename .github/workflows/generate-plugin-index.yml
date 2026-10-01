@@ -10,8 +10,12 @@
 #
 # 索引文件位置: server/market/plugins/plugins-index.json
 #
-# 生成逻辑已搬到 Node 脚本 server/scripts/generate-plugin-index.mjs（本地可跑、可调试），
-# 本 workflow 只负责在 CI 上调用它并提交产物。
+# 生成逻辑在 Node 脚本 server/scripts/generate-plugin-index.mjs（本地可跑、可调试），
+# 本 workflow 只负责在 CI 上调用它并提交产物 —— GitHub 规定 workflow 只能放在
+# .github/workflows/，所以脚本搬走之后这个文件仍然必须存在（否则没人触发）。
+#
+# 文件名与脚本名对齐（generate-plugin-index.mjs ↔ generate-plugin-index.yml）；
+# 工作流模板索引是它的姊妹文件 generate-workflow-index.yml。
 
 name: Generate Plugin Index
 
@@ -26,8 +30,15 @@ on:
     paths:
       - 'server/market/plugins/**'
       - 'server/scripts/generate-plugin-index.mjs'
-      - '.github/workflows/generate-index.yml'
+      - '.github/workflows/generate-plugin-index.yml'
   workflow_dispatch:
+
+# 与 generate-workflow-index.yml 共用同一个并发组：两者都会 `git push` 到 main，
+# 放任并发必然出现"A 推成功、B 非快进被拒"的伪失败（今天就是这么被卡的）。
+# 排队执行即可，不要取消在途运行 —— 取消会把该提交的半成品留在工作区外没人管。
+concurrency:
+  group: market-index
+  cancel-in-progress: false
 
 permissions:
   contents: write
