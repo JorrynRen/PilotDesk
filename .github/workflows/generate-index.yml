@@ -15,6 +15,14 @@ name: Generate Plugin Index
 on:
   push:
     branches: [main]
+    # 只在"真的可能影响索引"的路径变动时才跑。
+    #
+    # 不加过滤时**任何**推送都会触发，于是每次都会往 main 追一个 `[skip ci]` 的索引提交
+    # （本地因此凭空落后一个提交，下次推之前还得先 rebase）。
+    # 生成脚本就写在本文件里（见下方 run 步骤），所以本文件自身的改动也要触发。
+    paths:
+      - 'server/market/plugins/**'
+      - '.github/workflows/generate-index.yml'
   workflow_dispatch:
 
 permissions:
