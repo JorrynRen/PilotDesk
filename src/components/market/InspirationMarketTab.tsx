@@ -239,7 +239,9 @@ export function InspirationMarketTab() {
                 <button
                   key={item.id}
                   onClick={() => openDetail(item)}
-                  className="text-left rounded-lg p-3 transition-colors"
+                  /* pd-card-btn：覆盖全局 button 重置（它把按钮定成 inline-flex + row，
+                     卡片需要纵向堆叠 —— 这个必须用未分层的类，Tailwind 的 flex-col 盖不住） */
+                  className="pd-card-btn relative overflow-hidden rounded-lg p-3 transition-colors"
                   style={{
                     backgroundColor: 'var(--bg-secondary)',
                     border: `1px solid ${isImported ? 'var(--accent)' : 'var(--border)'}`,
@@ -247,17 +249,26 @@ export function InspirationMarketTab() {
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = isImported ? 'var(--accent)' : 'var(--border)'; }}
                 >
-                  <div className="flex items-center gap-2 min-w-0">
+                  {/* 「已导入」做成右上角角标：绝对定位、不进文字流，因此不会再与标题抢宽度或压到内容上。
+                      卡片 overflow-hidden + 圆角会把角标的右上角裁成与卡片一致的弧度。 */}
+                  {isImported && (
+                    <span
+                      className="absolute top-0 right-0 text-[9px] font-medium px-1.5 py-[3px]"
+                      style={{
+                        backgroundColor: 'var(--accent)',
+                        color: '#fff',
+                        borderBottomLeftRadius: 6,
+                      }}
+                    >
+                      已导入
+                    </span>
+                  )}
+                  {/* 标题行在有角标时右侧留出空位，避免长标题钻到角标底下 */}
+                  <div className="flex items-center gap-2 min-w-0" style={isImported ? { paddingRight: 46 } : undefined}>
                     <span style={{ fontSize: 18, lineHeight: 1 }}>{item.icon}</span>
                     <span className="text-xs font-medium truncate flex-1" style={{ color: 'var(--text-primary)' }}>
                       {item.title}
                     </span>
-                    {isImported && (
-                      <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded-full flex items-center gap-0.5"
-                        style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}>
-                        <Check size={9} /> 已导入
-                      </span>
-                    )}
                   </div>
                   <p className="text-[10px] mt-2 leading-relaxed line-clamp-3" style={{ color: 'var(--text-secondary)' }}>
                     {item.excerpt}

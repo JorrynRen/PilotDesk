@@ -259,6 +259,11 @@
    ═══════════════════════════════════════════════════
    All <button> elements get consistent hover/cursor/active feedback.
    Override with pd-btn-plain to remove default styles.
+
+   这是面向**小按钮**（图标钮、工具钮）的重置：一行内容、图标+文字紧挨。
+   注意它是"未分层"样式，级联优先级高于 @layer utilities 里的 Tailwind 工具类 ——
+   想把按钮当卡片用（纵向堆叠）时，用 flex-col 是盖不住的，
+   要么用下面同样未分层的 .pd-card-btn，要么写内联 style。
    =================================================== */
 button {
   cursor: pointer;
@@ -286,6 +291,18 @@ button:disabled {
 }
 button:disabled:hover {
   background-color: inherit !important;
+}
+
+/* 卡片式按钮：把 <button> 当**块级容器**用（标题 / 摘要 / 标签纵向堆叠）。
+   上面的重置把它定成了 inline-flex + row + gap 4，是给小按钮的；卡片要反过来。
+   单独成类而不是写内联 style，是因为"卡片"会反复出现，且这里必须未分层才能生效
+   （见上方重置的说明）。gap 归零：卡片内部各段的间距由各自的 margin 控制。 */
+.pd-card-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  text-align: left;
 }
 
 /* Remove default button styles for specific cases */
