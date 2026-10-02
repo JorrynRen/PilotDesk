@@ -58,11 +58,12 @@ const ROOM_STATUS_LABEL: Record<string, string> = {
   paused: '已暂停',
 };
 
-/** 归因维度展示名（key 与后端 UsageDimension.key 对应）。 */
+/** 归因维度展示名（key 与后端 UsageDimension.key 对应，顺序固定：会话 → 群聊 → 工作流 → 知识库）。 */
 const DIMENSION_LABEL: Record<string, string> = {
   session: '会话',
   groupchat: '群聊',
   workflow: '工作流',
+  knowledge: '知识库',
 };
 
 const MAX_ACTIVE_ROWS = 5;
@@ -294,12 +295,21 @@ export function CommandCenter() {
    * 主动重新打开使用引导（不落盘，仅本次面板存活期间有效）。
    *
    * 背景：引导"看过一次就不再出现"是刻意的（新用户不被反复打扰），但**没有回来的路**——
-   * 用户之后想再对照一遍步骤，只能靠清 localStorage。这里给头部加一个帮助入口，
+   * 用户之后想再对照一遍步骤，只能靠清 localStorage。现在引导收起后，
+   * 会在它原本的位置（待处理之前）留一行常驻入口，点开即还原完整内容。
    * 让"已看过"变成"默认收起、随时可展开"，而不是"永久消失"。
    */
   const [guideForcedOpen, setGuideForcedOpen] = useState(false);
   // 未配置时向导常驻（即使用户已点过「知道了」——配置是使用前提，不能因为关掉指引就找不到了）
   const showGuide = !guideSeen || !agentReady || guideForcedOpen;
+  /**
+   * 是否展示「完整引导」。
+   *
+   * 与 showGuide 的区别：未配置 Agent 时引导块常驻，但那时只留「使用向导」这一块；
+   * 首次（含刚打开时的自动展示）与用户主动展开时，才连同功能说明一起给全。
+   * 之前只有「首次」一条路径，所以主动展开时只能看到半截内容。
+   */
+  const guideShowFull = !guideSeen || guideForcedOpen;
 
   /** 收起引导：首次点「知道了」要落盘（下次不再自动弹），任何时候都要清掉主动展开的标记 */
   const dismissGuide = () => {
@@ -484,17 +494,6 @@ export function CommandCenter() {
           <LayoutDashboard size={13} style={{ color: 'var(--accent)' }} />
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>指挥中心</span>
           <div className="flex-1" />
-          {/* 引导收起后留一个"回来的路"：否则「看过一次」= 永久消失，想再对照步骤只能清 localStorage */}
-          {!showGuide && (
-            <button
-              onClick={() => setGuideForcedOpen(true)}
-              className="pd-btn p-1 rounded transition-colors"
-              style={{ color: 'var(--text-secondary)' }}
-              title="查看使用引导"
-            >
-              <HelpCircle size={12} />
-            </button>
-          )}
           <button
             onClick={() => void openCenter()}
             className="pd-btn p-1 rounded transition-colors"
@@ -516,8 +515,8 @@ export function CommandCenter() {
         <div className="flex-1 min-h-0 overflow-y-auto pd-scroll-stable">
           {/* 使用指引 + 使用向导（启动台职责）
               层级：指引块（主色底）→ 卡片 → 卡内「步骤 / 术语胶囊 + 说明」
-              未配置 Agent 时向导常驻，配置完成后整块随指引一起消失 */}
-          {showGuide && (
+              未配置 Agent 时向导常驻，配置完成后整块收起成一行常驻入口（见下方 else 分支） */}
+          {showGuide ? (
             <div className="px-4 py-3 space-y-2" style={{ backgroundColor: 'var(--accent-light)' }}>
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
@@ -610,9 +609,10 @@ export function CommandCenter() {
                 </div>
               </div>
 
-              {/* 功能说明：仅首次展示（点「知道了」后收进向导已覆盖的常驻部分）；
+              {/* 功能说明：首次展示，以及用户主动展开引导时一并展示
+                  （未配置 Agent 的常驻态只留「使用向导」，避免这一大片长期占屏）；
                   卡片边框与「使用向导」一致，三块读起来是并列单元 */}
-              {!guideSeen && GUIDE_GROUPS.map((group) => (
+              {guideShowFull && GUIDE_GROUPS.map((group) => (
                 <div
                   key={group.title}
                   className="rounded-lg px-2.5 py-2"
@@ -651,7 +651,7 @@ export function CommandCenter() {
                 </div>
               ))}
 
-              {!guideSeen && (
+              {guideShowFull && (
                 <div className="flex items-center justify-between">
                   <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                     三层记忆都会自动注入模型上下文（KV 记忆按需检索）。
@@ -662,6 +662,23 @@ export function CommandCenter() {
                 </div>
               )}
             </div>
+          ) : (
+            /* 引导收起后的常驻入口：留在它原本出现的位置（待处理之前），
+               否则「看过一次」等于永久消失，想再对照步骤只能清 localStorage */
+            <button
+              onClick={() => setGuideForcedOpen(true)}
+              className="w-full flex items-center gap-2 px-4 py-2 text-left transition-opacity hover:opacity-90"
+              style={{ backgroundColor: 'var(--accent-light)' }}
+              title="展开使用引导：配置 Agent 与各功能说明"
+            >
+              <HelpCircle size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
+              <span className="text-[11px] font-medium flex-1 truncate" style={{ color: 'var(--accent)' }}>
+                开始使用
+              </span>
+              <span className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
+                查看使用引导 ›
+              </span>
+            </button>
           )}
 
           {/* 待处理 */}
