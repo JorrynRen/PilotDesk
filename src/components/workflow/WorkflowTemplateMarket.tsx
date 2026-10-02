@@ -1238,16 +1238,54 @@ export const WorkflowTemplateMarket: React.FC<{
             </div>
             <div className="space-y-1">
               {[
-                // active 一律从"这项实际设置的筛选状态"派生，而不是另存一个标志位：
-                // 用户在右侧筛选器里手改条件时，高亮也会跟着对齐，不会出现"点了没亮 / 亮了其实没生效"。
-                { label: '⚡ 新手友好', active: difficultyFilter === '入门', onClick: () => { setDifficultyFilter('入门'); setShowFilters(true); } },
-                { label: '🔥 本周热门', active: sort === 'downloads', onClick: () => { setSort('downloads'); } },
-                { label: '🛡️ 官方精选', active: topTab === 'featured', onClick: () => { setTopTab('featured'); } },
-                { label: '📝 手动执行', active: triggerFilter === '手动', onClick: () => { setTriggerFilter('手动'); setShowFilters(true); } },
-                { label: '⏰ 定时任务', active: triggerFilter === '定时', onClick: () => { setTriggerFilter('定时'); setShowFilters(true); } },
+                /**
+                 * 二次点击 = 取消：这五项分属**四个互相独立的维度**（难度 / 排序 / 顶部页签 / 触发器），
+                 * 所以不做跨项互斥（点「手动执行」不该把「新手友好」灭掉），只做"点自己就回到本维度默认值"。
+                 * active 一律从该项实际设置的筛选状态派生，不另存标志位 —— 用户在右侧筛选器手改条件时
+                 * 高亮会跟着对齐，不会出现"点了没亮 / 亮了其实没生效"。
+                 */
+                {
+                  label: '⚡ 新手友好',
+                  active: difficultyFilter === '入门',
+                  onClick: () => {
+                    const on = difficultyFilter === '入门';
+                    setDifficultyFilter(on ? 'all' : '入门');
+                    // 只在"开启"时展开筛选面板；取消时弹面板纯属打扰
+                    if (!on) setShowFilters(true);
+                  },
+                },
+                {
+                  label: '🔥 本周热门',
+                  active: sort === 'downloads',
+                  onClick: () => setSort(sort === 'downloads' ? 'recommended' : 'downloads'),
+                },
+                {
+                  label: '🛡️ 官方精选',
+                  active: topTab === 'featured',
+                  onClick: () => setTopTab(topTab === 'featured' ? 'browse' : 'featured'),
+                },
+                {
+                  label: '📝 手动执行',
+                  active: triggerFilter === '手动',
+                  onClick: () => {
+                    const on = triggerFilter === '手动';
+                    setTriggerFilter(on ? 'all' : '手动');
+                    if (!on) setShowFilters(true);
+                  },
+                },
+                {
+                  label: '⏰ 定时任务',
+                  active: triggerFilter === '定时',
+                  onClick: () => {
+                    const on = triggerFilter === '定时';
+                    setTriggerFilter(on ? 'all' : '定时');
+                    if (!on) setShowFilters(true);
+                  },
+                },
               ].map(q => (
                 <button key={q.label} onClick={q.onClick}
                   className="pd-btn w-full text-left px-2 py-1 rounded text-[11px]"
+                  title={q.active ? '再次点击取消该项筛选' : undefined}
                   style={{
                     color: q.active ? 'var(--accent)' : 'var(--text-secondary)',
                     backgroundColor: q.active ? 'var(--accent-light)' : 'transparent',
