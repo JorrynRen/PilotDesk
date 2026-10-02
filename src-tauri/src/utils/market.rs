@@ -193,10 +193,5 @@ pub async fn inspiration_market_fetch(id: String) -> Result<Value, String> {
         .ok_or_else(|| format!("灵感市场中未找到：{}", id))?;
 
     // 索引里的 path 相对市场根（server/market），与插件安装用的是同一套拼法
-    fetch_market_json(&format!(
-        "{}/{}",
-        MARKET_ROOT,
-        rel.trim_start_matches('/')
-    ))
-    .await
+    fetch_market_json(&format!("{}/{}", MARKET_ROOT, rel.trim_start_matches('/'))).await
 }
