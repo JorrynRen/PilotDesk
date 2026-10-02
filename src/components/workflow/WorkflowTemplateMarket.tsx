@@ -914,7 +914,14 @@ function TemplateDetailDrawer({
 export const WorkflowTemplateMarket: React.FC<{
   onUseTemplate?: (tplId: string) => void;
 }> = ({ onUseTemplate }) => {
-  const [topTab, setTopTab] = useState<'featured' | 'browse' | 'favorites'>('featured');
+  /**
+   * 顶部页签：精选 / 浏览全部 / 我的收藏。
+   *
+   * 落地态取「浏览全部」而不是「精选」：topTab 也是**筛选条件**（精选会把列表过滤成
+   * verified 子集）。若默认就落在精选，"官方精选"这个条件一进页面就恒成立，筛选角标会
+   * 显示 1 而用户什么都没点，也没法取消。默认落在"不施加任何条件"的浏览全部，条件才可解释。
+   */
+  const [topTab, setTopTab] = useState<'featured' | 'browse' | 'favorites'>('browse');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useState<typeof SORT_OPTIONS[number]['key']>('recommended');
@@ -997,9 +1004,16 @@ export const WorkflowTemplateMarket: React.FC<{
   }, [templates, topTab, favorites, activeCategoryId, triggerFilter, difficultyFilter, searchQuery, sort]);
 
   // ── 渲染 ──
-  const categoryBadgeCount = (activeCategoryId !== 'all' ? 1 : 0)
+  /**
+   * 筛选角标：只统计**会限制结果集合**的条件 —— 分类、触发器、难度、顶部页签。
+   *
+   * 排序（sort）与显示方式（viewMode）不计入：它们改变顺序/排布，不改变"有几个模板"。
+   * 把它们计进去会让角标撒谎（角标 2 却一条没少）。
+   */
+  const activeFilterCount = (activeCategoryId !== 'all' ? 1 : 0)
     + (triggerFilter !== 'all' ? 1 : 0)
-    + (difficultyFilter !== 'all' ? 1 : 0);
+    + (difficultyFilter !== 'all' ? 1 : 0)
+    + (topTab !== 'browse' ? 1 : 0);
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -1100,17 +1114,17 @@ export const WorkflowTemplateMarket: React.FC<{
           <button onClick={() => setShowFilters(f => !f)}
             className="pd-btn px-2 py-0.5 rounded text-[11px] relative"
             style={{
-              backgroundColor: showFilters || categoryBadgeCount > 0 ? 'var(--accent-light)' : 'var(--bg-tertiary)',
-              color: showFilters || categoryBadgeCount > 0 ? 'var(--accent)' : 'var(--text-secondary)',
+              backgroundColor: showFilters || activeFilterCount > 0 ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+              color: showFilters || activeFilterCount > 0 ? 'var(--accent)' : 'var(--text-secondary)',
               display: 'inline-flex', alignItems: 'center', gap: 4,
               height: 28,
             }}>
             <Filter size={12} />
             筛选
-            {categoryBadgeCount > 0 && (
+            {activeFilterCount > 0 && (
               <span className="absolute -top-1 -right-1 text-[9px] w-4 h-4 rounded-full flex items-center justify-center"
                 style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>
-                {categoryBadgeCount}
+                {activeFilterCount}
               </span>
             )}
           </button>
@@ -1167,10 +1181,10 @@ export const WorkflowTemplateMarket: React.FC<{
             </div>
 
             {/* 清除全部筛选：与筛选按钮同一行 */}
-            {categoryBadgeCount > 0 && (
+            {activeFilterCount > 0 && (
               <div className="ml-auto shrink-0">
                 <button
-                  onClick={() => { setTriggerFilter('all'); setDifficultyFilter('all'); setActiveCategoryId('all'); setActiveSubCategoryId(null); }}
+                  onClick={() => { setTriggerFilter('all'); setDifficultyFilter('all'); setActiveCategoryId('all'); setActiveSubCategoryId(null); setTopTab('browse'); }}
                   className="pd-btn text-[11px] px-2 py-0.5 rounded"
                   style={{ color: 'var(--accent)', height: 22 }}>
                   清除全部筛选
@@ -1322,7 +1336,7 @@ export const WorkflowTemplateMarket: React.FC<{
                   {searchQuery ? `没有找到“${searchQuery}”相关模板` : '该分类下暂无模板'}
                 </div>
                 <button
-                  onClick={() => { setSearchQuery(''); setActiveCategoryId('all'); setTriggerFilter('all'); setDifficultyFilter('all'); }}
+                  onClick={() => { setSearchQuery(''); setActiveCategoryId('all'); setTriggerFilter('all'); setDifficultyFilter('all'); setTopTab('browse'); }}
                   className="pd-btn mt-2 px-3 py-1.5 rounded text-[11px]"
                   style={{ color: 'var(--accent)' }}>
                   重置筛选条件
