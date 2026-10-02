@@ -26,9 +26,11 @@ on:
       - '.github/workflows/generate-workflow-index.yml'
   workflow_dispatch:
 
-# 与 generate-plugin-index.yml 共用同一个并发组，原因见该文件。
+# 本 workflow 有独立并发组，理由见 generate-plugin-index.yml —— 简言之：三个索引
+# workflow 以前共用 market-index，而往同一个组里排新 run 会取消**排队中**的那一个，
+# 于是"一次推送同时改到两个以上市场目录"必然挤掉一条，那个索引停在旧内容上。
 concurrency:
-  group: market-index
+  group: market-index-workflow
   cancel-in-progress: false
 
 permissions:
@@ -81,15 +83,29 @@ jobs:
             exit 0
           fi
           git commit -m "chore(workflow-market): auto-generate workflow index [skip ci]"
-          # 见 generate-plugin-index.yml：并发组只保证串行，排队启动的那一个 checkout
-          # 拿到的仍是触发提交而非最新 main，直接 push 会被判非快进。先变基再推。
-          git fetch origin "${GITHUB_REF_NAME}"
-          # 变基冲突说明本次产物基于旧目录树（同一索引在 main 上已被更新），几乎总是
-          # "重跑了历史 run"：Re-run 会 checkout 那一次的旧提交，产物基于旧树推上去只会
-          # 让索引回退。不是代码问题，跳过并留一句人话（详见 generate-plugin-index.yml）。
-          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
-            git rebase --abort
-            echo "::warning::跳过本次推送：本次生成基于 $(git rev-parse --short HEAD) 的目录树，而 main 上 workflow-index.json 已被更新。最常见的原因是「Re-run 了历史 run」——产物基于旧树，推上去只会把索引回退；请改用 Run workflow 在最新 main 上重新生成。若确认不是重跑，请再检查该索引是否被手工改过。"
-            exit 0
-          fi
-          git push
+          # 记下"本次生成的提交"：重试时要用它把变基结果退回来重来
+          own_commit="$(git rev-parse HEAD)"
+
+          # 三条索引流水线各有独立并发组、可以并行，于是"两个 workflow 几乎同时推 main"
+          # 成为可能 —— 后推的那个会被判非快进。所以这里循环：fetch → 变基 → push，
+          # 只有 push 被拒才算并发竞争，退回自己的提交再来一轮（详见 generate-plugin-index.yml）。
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            # 变基冲突说明本次产物基于旧目录树（同一索引在 main 上已被更新），几乎总是
+            # "重跑了历史 run"：Re-run 会 checkout 那一次的旧提交，产物基于旧树推上去只会
+            # 让索引回退。不是代码问题，跳过并留一句人话。
+            if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+              git rebase --abort
+              echo "::warning::跳过本次推送：本次生成基于 $(git rev-parse --short HEAD) 的目录树，而 main 上 workflow-index.json 已被更新。最常见的原因是「Re-run 了历史 run」——产物基于旧树，推上去只会把索引回退；请改用 Run workflow 在最新 main 上重新生成。若确认不是重跑，请再检查该索引是否被手工改过。"
+              exit 0
+            fi
+            if git push; then
+              echo "已推送（第 ${attempt} 次尝试）"
+              exit 0
+            fi
+            echo "推送被并发抢先，退回本次提交后重试（第 ${attempt} 次）"
+            git reset --hard "${own_commit}"
+            sleep 3
+          done
+          echo "::error::连续 3 次推送均被拒；请到 Actions 手动 Run workflow 重试"
+          exit 1
