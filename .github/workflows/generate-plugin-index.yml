@@ -92,7 +92,15 @@ jobs:
           # 并发组只保证"同一时刻只有一个索引 workflow 在跑"，但排队启动的那一个
           # checkout 拿到的是**触发提交**（github.sha）而非最新 main —— 若前一个工作流
           # 刚推过自己的索引提交，这里直接 push 必然被拒（非快进），本文件就是这么失败过一次。
-          # 先变基到最新 main 再推；两个索引改的是不同文件，rebase 不会冲突。
+          # 先变基到最新 main 再推；两个索引改的是不同文件，正常竞争下 rebase 不会冲突。
           git fetch origin "${GITHUB_REF_NAME}"
-          git rebase "origin/${GITHUB_REF_NAME}"
+          # 变基冲突说明**本次产物是基于旧目录树算出来的**（同一个索引文件在 main 上已被更新），
+          # 根因几乎总是"重跑了历史 run"：GitHub 的 Re-run 会 checkout 那一次的旧提交，
+          # 等于把几天前的产物往今天的 main 上放 —— 必然冲突，而且就算推上去也只会让索引回退。
+          # 这不是代码问题，跳过并留一句人话，不要让它变成一条莫名其妙的红色流水线。
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            git rebase --abort
+            echo "::warning::跳过本次推送：本次生成基于 $(git rev-parse --short HEAD) 的目录树，而 main 上 plugins-index.json 已被更新。最常见的原因是「Re-run 了历史 run」——产物基于旧树，推上去只会把索引回退；请改用 Run workflow 在最新 main 上重新生成。若确认不是重跑，请再检查该索引是否被手工改过。"
+            exit 0
+          fi
           git push

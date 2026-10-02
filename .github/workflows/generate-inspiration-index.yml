@@ -87,5 +87,12 @@ jobs:
           # 见 generate-plugin-index.yml：并发组只保证串行，排队启动的那一个 checkout
           # 拿到的仍是触发提交而非最新 main，直接 push 会被判非快进。先变基再推。
           git fetch origin "${GITHUB_REF_NAME}"
-          git rebase "origin/${GITHUB_REF_NAME}"
+          # 变基冲突说明本次产物基于旧目录树（同一索引在 main 上已被更新），几乎总是
+          # "重跑了历史 run"：Re-run 会 checkout 那一次的旧提交，产物基于旧树推上去只会
+          # 让索引回退。不是代码问题，跳过并留一句人话（详见 generate-plugin-index.yml）。
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            git rebase --abort
+            echo "::warning::跳过本次推送：本次生成基于 $(git rev-parse --short HEAD) 的目录树，而 main 上 index.json 已被更新。最常见的原因是「Re-run 了历史 run」——产物基于旧树，推上去只会把索引回退；请改用 Run workflow 在最新 main 上重新生成。若确认不是重跑，请再检查该索引是否被手工改过。"
+            exit 0
+          fi
           git push
