@@ -106,7 +106,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
       content: message.content,
       sourceAgent: agentType,
     });
-    showToast('已添加到灵感市集', 'success');
+    showToast('已添加到灵感库', 'success');
   }, [message.content, agentType]);
 
   const handleStartEdit = useCallback(() => {

@@ -8,11 +8,17 @@ import { InspirationForm } from './InspirationForm';
 import { TagFilter } from './TagFilter';
 import { confirmDialog } from '../../stores/confirmStore';
 
-interface MarketPageProps {
+interface InspirationLibraryPageProps {
   onBack: () => void;
 }
 
-export function MarketPage({ onBack }: MarketPageProps) {
+/**
+ * 灵感库（独立路由 /inspirations）。
+ *
+ * 原名「灵感市集」：名字里的"市集"是空头承诺 —— 这里全是**本地**保存的灵感，
+ * 没有任何在线内容。在线灵感将由「资源市集 › 灵感」提供，两者是"我的"与"获取"的关系。
+ */
+export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) {
   const {
     inspirations,
     loading,
@@ -107,7 +113,7 @@ export function MarketPage({ onBack }: MarketPageProps) {
           <button onClick={onBack} className="pd-btn p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
             <ArrowLeft size={16} />
           </button>
-          <h2 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>灵感市集</h2>
+          <h2 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>灵感库</h2>
           <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
             {inspirations.length}
           </span>

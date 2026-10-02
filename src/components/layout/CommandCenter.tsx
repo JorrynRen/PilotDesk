@@ -205,7 +205,7 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
     title: '常用功能',
     items: [
       {
-        term: '灵感市集',
+        term: '灵感库',
         desc: '收藏灵感 / 提示词（可打标签）并一键发到会话或终端；入口在右栏「灵感」页签与本面板快捷入口',
       },
       {
@@ -400,7 +400,7 @@ export function CommandCenter() {
 
   /** 审批参数预览：单行截断（完整内容在 title 里） */
   const previewArgs = (raw: string) => (raw.length > 56 ? `${raw.slice(0, 56)}…` : raw);
-  const goMarket = () => { navigate('/market'); setOpen(false); };
+  const goInspirations = () => { navigate('/inspirations'); setOpen(false); };
 
   /** 向导第 ② 步：按已就绪的集成方式直接建一个会话并进入（API 优先，其次 CLI）。 */
   const startFirstSession = async () => {
@@ -480,7 +480,7 @@ export function CommandCenter() {
     { key: 'groupchat', label: '群聊', icon: <Users size={12} />, onClick: () => { setMode('groupchat'); setOpen(false); } },
     { key: 'workflow', label: '工作流', icon: <WorkflowIcon size={12} />, onClick: goWorkflow },
     { key: 'terminal', label: '终端', icon: <TerminalIcon size={12} />, onClick: goTerminal },
-    { key: 'market', label: '灵感市集', icon: <Sparkles size={12} />, onClick: goMarket },
+    { key: 'inspirations', label: '灵感库', icon: <Sparkles size={12} />, onClick: goInspirations },
     { key: 'settings', label: '设置', icon: <SettingsIcon size={12} />, onClick: goSettings },
   ];
 

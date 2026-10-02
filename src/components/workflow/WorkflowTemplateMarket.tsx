@@ -3,7 +3,7 @@
  *
  * 设计要点：
  * - 视觉风格完全沿用 PilotDesk 设计 Token（globals.css 的 --bg-* / --text-* / --border / --accent）
- * - 组件风格参考 OnlinePluginStore.tsx 和 Inspiration/MarketPage.tsx
+ * - 组件风格参考 OnlinePluginStore.tsx 和 inspiration/InspirationLibraryPage.tsx
  * - 数据源目前用 mockData（前端静态假数据），便于 UI 评审；后续接入后端只需要替换 fetch 逻辑
  * - 三个层级：
  *     顶部 Tab：精选 / 分类列表 / 我的收藏

@@ -1208,7 +1208,7 @@ function AboutSection() {
       {/* Description */}
       <p className="text-xs text-center leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
         Agent 统一桌面客户端。
-        集成多 Agent 管理、流式对话、灵感市集、API 直连等功能。
+        集成多 Agent 管理、流式对话、灵感库、API 直连等功能。
       </p>
 
       {/* Update Checker */}
