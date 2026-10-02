@@ -35,7 +35,6 @@ interface MarketInspiration {
   excerpt: string;
   /** 相对市场根的路径，如 inspirations/<id>.json */
   path: string;
-  updatedAt: string;
 }
 
 interface MarketIndex {

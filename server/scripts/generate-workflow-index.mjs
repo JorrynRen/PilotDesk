@@ -8,54 +8,36 @@
  *
  * 只读不写业务数据：本脚本不碰模板 JSON 内容，只提取浏览/搜索需要的元信息。
  *
+ * ⚠️ 索引里的模板条目**刻意不带"这条什么时候更新的"时间戳**（只有顶层一个 updatedAt）。
+ * 曾经用 `git log -1 --format=%cI -- <path>` 取"最后一次改动该目录的提交时间"，
+ * 但那个值在提交时刻必然算不对：索引必须与模板文件在**同一次提交**里，于是本地生成时
+ * 读到的是**上一个**提交的时间，CI 事后重算必然不同 → 每改一次模板就多一个纯时间戳提交。
+ * 这是结构性不可稳定，不是实现没写好。条目级"更新时间"该由 git 历史回答，
+ * 不要往派生物里塞；真要展示"更新于"，在 UI 侧按需查 git，或让作者在模板里自己写。
+ *
  * 用法：node server/scripts/generate-workflow-index.mjs
  */
 
-import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)); // <repo>/server/scripts
 const ROOT = path.resolve(HERE, '..'); // <repo>/server
-const REPO_ROOT = path.resolve(HERE, '..', '..'); // <repo>
 const WORKFLOW_DIR = path.join(ROOT, 'market', 'workflow');
 const OUT_FILE = path.join(WORKFLOW_DIR, 'workflow-index.json');
-
-/**
- * 条目的"最后更新时间"取 **git 最后一次提交该路径的时间**，而不是文件 mtime。
- *
- * 为什么不能用 mtime：CI 里 `actions/checkout` 会把所有文件的 mtime 刷成拉取时刻，
- * 于是每次跑出来每一项都变成"刚刚更新" —— 既是假数据（用户看到的时间永远是今天），
- * 又让生成结果每次都不同（`git diff` 恒非空 → 每次触发都追一个纯时间戳提交）。
- * git 时间对同一仓库状态是确定的，且语义正确。
- *
- * 取不到时（未提交的新文件 / 没有 git / 浅克隆）回落 mtime，不影响出结果。
- */
-function lastCommitIso(absPath) {
-  try {
-    const out = execFileSync('git', ['log', '-1', '--format=%cI', '--', absPath], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (out) return new Date(out).toISOString();
-  } catch {
-    /* 回落 mtime */
-  }
-  return null;
-}
 
 /**
  * 写入索引，并让顶层 `updatedAt` 只在**内容真的变了**时才更新。
  *
  * 直接用 `new Date()` 的问题：只要 workflow 被触发，生成结果就与已提交的不同，
- * `git diff` 恒非空 → 每次触发都追一个只含时间戳的 [skip ci] 提交，历史全是噪音，
+ * `git diff` 恒非空 → 每次触发都追一个只含时间戳的提交，历史全是噪音，
  * 真改动反而被淹没。改成"内容变了才盖新时间戳、否则原样沿用"后，产出对相同输入
  * 逐字节稳定，只有真改动才会产生提交。
  *
  * 语义也随之更准：它是"索引内容最后一次变化的时间"，而非"最后一次跑脚本的时间"。
- * 比较时排除 `updatedAt` 本身，其余字段（含各条目的更新时间）逐字比对。
+ * 比较时排除 `updatedAt` 本身，其余字段逐字比对 —— 条目里没有时间戳（理由见文件头），
+ * 所以"其余字段"全部是内容派生的、可复现的。
  */
 async function writeIndexStable(outFile, index) {
   let prev = null;
@@ -123,7 +105,6 @@ async function main() {
     for (const f of files) {
       bytes += (await fs.stat(path.join(absDir, f))).size;
     }
-    const st = await fs.stat(absDir);
 
     templates.push({
       id: dir,
@@ -138,8 +119,6 @@ async function main() {
       stageCount: Array.isArray(def.stages) ? def.stages.length : 0,
       nodeCount: countNodes(def),
       size: humanSize(bytes),
-      // 取 git 最后提交时间（CI 里 mtime 是拉取时刻，不可用），拿不到再回落 mtime
-      updatedAt: lastCommitIso(absDir) ?? st.mtime.toISOString(),
     });
   }
 
