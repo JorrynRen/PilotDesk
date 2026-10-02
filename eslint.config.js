@@ -6,7 +6,10 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // 构建产物一律不 lint：dist 是前端产物；src-tauri/target 是 Rust 产物，
+  // 其中的 tauri-codegen-assets/*.js 是二进制资源，ESLint 解析它们只会报"Unexpected character"。
+  // （两者都已进 .gitignore，但 ESLint 默认不读 .gitignore，必须在这里显式忽略。）
+  globalIgnores(['dist', 'src-tauri/target', 'src-tauri/gen']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
