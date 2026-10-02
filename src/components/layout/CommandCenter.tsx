@@ -240,6 +240,17 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
         term: '记忆 · KV',
         desc: '全局 KV 记忆（存本地数据库，无独立文件）：按 fact / preference / skill / event 分类，可标重要、可搜索；在「设置 → 记忆管理 → 全局 KV 记忆」维护，或由 Agent 用记忆工具自动沉淀',
       },
+      {
+        term: '知识库',
+        desc: (
+          <>
+            结构化知识沉淀：一个库 = 名称 / 描述 / 自定义专属字段，同一条目可属于多个库；内容来自投喂文件（含云文档）、
+            AI 生成、工作流产出「存为知识」与对话沉淀，先进「待确认」核对后才入库；在顶栏「知识库」模式管理与检索，
+            命中条目按需注入上下文，原文默认放在 <PathText>{'<全局工作区>\\Knowledge\\files\\'}</PathText>
+            （根目录可在「设置 → 知识库」更换）
+          </>
+        ),
+      },
     ],
   },
 ];
