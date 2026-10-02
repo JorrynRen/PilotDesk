@@ -29,6 +29,7 @@ import {
   BarChart3,
   Zap,
   History,
+  HelpCircle,
 } from 'lucide-react';
 import { useTerminal } from '../../TerminalManager';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -289,8 +290,22 @@ export function CommandCenter() {
   );
   const cliAgentName = registryAgents.find((a) => a.agentType === cliAgentType)?.displayName;
   const agentReady = Boolean(apiProvider) || Boolean(cliAgentType);
+  /**
+   * 主动重新打开使用引导（不落盘，仅本次面板存活期间有效）。
+   *
+   * 背景：引导"看过一次就不再出现"是刻意的（新用户不被反复打扰），但**没有回来的路**——
+   * 用户之后想再对照一遍步骤，只能靠清 localStorage。这里给头部加一个帮助入口，
+   * 让"已看过"变成"默认收起、随时可展开"，而不是"永久消失"。
+   */
+  const [guideForcedOpen, setGuideForcedOpen] = useState(false);
   // 未配置时向导常驻（即使用户已点过「知道了」——配置是使用前提，不能因为关掉指引就找不到了）
-  const showGuide = !guideSeen || !agentReady;
+  const showGuide = !guideSeen || !agentReady || guideForcedOpen;
+
+  /** 收起引导：首次点「知道了」要落盘（下次不再自动弹），任何时候都要清掉主动展开的标记 */
+  const dismissGuide = () => {
+    if (!guideSeen) markGuideSeen();
+    setGuideForcedOpen(false);
+  };
 
   // Esc 关闭（与确认弹窗一致）。监听器只在打开期间挂载，回调里才 setState。
   // 走 closeCenter：首次关闭时给出「入口在这里」指引，避免新用户关掉后找不到入口。
@@ -469,6 +484,17 @@ export function CommandCenter() {
           <LayoutDashboard size={13} style={{ color: 'var(--accent)' }} />
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>指挥中心</span>
           <div className="flex-1" />
+          {/* 引导收起后留一个"回来的路"：否则「看过一次」= 永久消失，想再对照步骤只能清 localStorage */}
+          {!showGuide && (
+            <button
+              onClick={() => setGuideForcedOpen(true)}
+              className="pd-btn p-1 rounded transition-colors"
+              style={{ color: 'var(--text-secondary)' }}
+              title="查看使用引导"
+            >
+              <HelpCircle size={12} />
+            </button>
+          )}
           <button
             onClick={() => void openCenter()}
             className="pd-btn p-1 rounded transition-colors"
@@ -497,13 +523,13 @@ export function CommandCenter() {
                 <span className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
                   开始使用（顶栏可切换工作模式，也可随时点顶栏图标打开本面板）
                 </span>
-                {!guideSeen && (
+                {(!guideSeen || guideForcedOpen) && (
                   <button
-                    onClick={markGuideSeen}
+                    onClick={dismissGuide}
                     className="pd-btn px-2 py-0.5 rounded text-[10px] shrink-0"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
-                    知道了
+                    {guideSeen ? '收起' : '知道了'}
                   </button>
                 )}
               </div>
