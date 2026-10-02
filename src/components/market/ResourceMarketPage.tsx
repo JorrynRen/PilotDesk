@@ -147,11 +147,8 @@ export function ResourceMarketPage() {
 
         {activeTab === 'workflow' && (
           <WorkflowTemplateMarket
-            onUseTemplate={(tplId) => {
-              // 模板市场当前仍是本地 mock：这里只给反馈并引导去工作流定义查看
-              showToast(`已安装模板 ${tplId}，可在"工作流定义"中查看`, 'success');
-              navigate('/workflow');
-            }}
+            // 安装结果（成功/失败）由市场组件自己 toast；父级只负责「装完去哪看」
+            onUseTemplate={() => navigate('/workflow')}
           />
         )}
 

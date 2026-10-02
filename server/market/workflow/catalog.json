@@ -1,0 +1,26 @@
+{
+  "featured": [
+    "自动短篇小说写作工作流"
+  ],
+  "写小说工作流（测试）": {
+    "category": "creative",
+    "tags": [
+      "测试",
+      "小说"
+    ],
+    "author": "PilotDesk 官方"
+  },
+  "自动短篇小说写作工作流": {
+    "category": "creative",
+    "tags": [
+      "小说",
+      "写作",
+      "自动化"
+    ],
+    "author": "PilotDesk 官方",
+    "minAppVersion": "0.1.0",
+    "requirements": [
+      "需要配置可用的 LLM 连接"
+    ]
+  }
+}

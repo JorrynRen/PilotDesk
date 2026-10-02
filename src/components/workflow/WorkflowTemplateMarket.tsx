@@ -1,497 +1,229 @@
 /**
- * WorkflowTemplateMarket — 工作流模板市场（在线市场）UI 原型
+ * WorkflowTemplateMarket — 工作流模板市场（在线市场）
+ *
+ * 数据全部来自远端索引 `server/market/workflow/workflow-index.json`
+ * （由 server/scripts/generate-workflow-index.mjs 生成；分类/标签/作者等人工字段在 catalog.json）。
+ * 页面只拉一次索引，**详情弹窗零请求** —— 浏览/筛选/详情要用的字段索引里已带全。
  *
  * 设计要点：
- * - 视觉风格完全沿用 PilotDesk 设计 Token（globals.css 的 --bg-* / --text-* / --border / --accent）
- * - 组件风格参考 OnlinePluginStore.tsx 和 inspiration/InspirationLibraryPage.tsx
- * - 数据源目前用 mockData（前端静态假数据），便于 UI 评审；后续接入后端只需要替换 fetch 逻辑
+ * - 视觉风格沿用 PilotDesk 设计 Token（globals.css 的 --bg-* / --text-* / --border / --accent）
  * - 三个层级：
- *     顶部 Tab：精选 / 分类列表 / 我的收藏
- *     左栏：分类树 + 过滤条件
+ *     顶部 Tab：精选 / 浏览全部 / 我的收藏（默认浏览全部）
+ *     左栏：分类列表（单层） + 计数
  *     主区：卡片网格（可切换 列表/网格 模式）
- * - 点击卡片：弹出居中的详情弹窗（与「插件 README」同一套观感），含安装/流程节点预览
+ * - 筛选只有三个维度：分类 / 触发方式 / 安装前置；排序：推荐（精选优先）/ 名称 / 节点数
+ * - 「已安装 / 可更新」来自本地安装记录（Rust 侧 app_settings 的 workflow_market_installs），
+ *   与索引里的版本号比对得出；安装动作本身也走 Rust 命令（下载 + 导入 + 写记录）
+ * - 收藏是纯本地偏好（localStorage），只用来支撑「我的收藏」Tab
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { invoke } from '@tauri-apps/api/core';
 import {
   Search, RefreshCw, Download, Grid3X3, List, SlidersHorizontal,
-  ChevronRight, Filter, X, Heart, FolderOpen, Sparkles, Clock, User,
-  Zap, TrendingUp, CheckCircle, Eye, LayoutGrid, PackageOpen,
+  Filter, X, Heart, FolderOpen, Sparkles, User, Eye,
+  Zap, CheckCircle, LayoutGrid,
 } from 'lucide-react';
-import { createPortal } from 'react-dom';
-import { headChars } from '../../utils/text';
+import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { Select } from '../common/Select';
+import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
 
 // ── 数据类型 ──
-type InstallStatus = 'not-installed' | 'installed' | 'update-available' | 'installing';
 
-interface WorkflowTemplateNodePreview {
-  id: string;
-  nodeType: string;   // 如 start / llm / http / condition / end
-  label: string;
-  column: number;     // 布局列，用于渲染流程图
-  row: number;
-}
-
+/** 远端索引条目（字段说明见 generate-workflow-index.mjs 文件头） */
 interface WorkflowTemplate {
+  /** 模板 id = 模板目录名（详见索引生成脚本，全局唯一且稳定） */
   id: string;
   name: string;
+  version: string;
   description: string;
+  /** 已 URL 编码的主文件路径（相对 server/market），安装命令用 */
+  path: string;
+  dir: string;
+  mainFile: string;
+  subFiles: string[];
+  stageCount: number;
+  nodeCount: number;
+  /** 触发方式原始值：manual / cron / event（'' = 未设置，展示与筛选都按手动处理） */
+  triggerType: string;
+  /** 节点类型列表（去重，保持首现顺序），详情里渲染成中文胶囊 */
+  nodeTypes: string[];
+  /** 精选：只有市场侧 feature 清单里的模板才带 */
+  featured?: boolean;
   category: string;
   tags: string[];
   author: string;
-  avatar?: string;
-  icon: string;                 // emoji 或图标
-  accentColor: string;          // 模板主色（用作卡片 header 渐变）
-  version: string;
   minAppVersion: string;
-  updatedAt: string;            // '2026-07-14'
-  downloads: number;
-  likes: number;
-  difficulty: '入门' | '中级' | '进阶';
-  estimateMinutes: number;      // 预估配置耗时
-  nodeCount: number;            // 节点数
-  triggerType: '手动' | '定时' | '事件';
-  installStatus: InstallStatus;
-  verified?: boolean;           // 官方 / 认证作者
-  /** 预览节点（绘制缩略流程图） */
-  previewNodes: WorkflowTemplateNodePreview[];
-  /** 步骤要点（详情展示） */
-  highlights: string[];
+  requirements: string[];
 }
 
-// ── Mock 数据 ──
-const CATEGORIES: Array<{ id: string; name: string; icon: string; count: number; sub?: Array<{ id: string; name: string; count: number }> }> = [
-  { id: 'all', name: '全部模板', icon: '📦', count: 128 },
-  { id: 'automation', name: '自动化办公', icon: '⚙️', count: 41, sub: [
-    { id: 'auto-email', name: '邮件与通知', count: 13 },
-    { id: 'auto-report', name: '报表生成', count: 11 },
-    { id: 'auto-file', name: '文件处理', count: 9 },
-    { id: 'auto-web', name: '网页采集', count: 8 },
-  ]},
-  { id: 'agent', name: 'Agent 协作', icon: '🤖', count: 32, sub: [
-    { id: 'agent-multi', name: '多 Agent 协作', count: 14 },
-    { id: 'agent-review', name: '审查与校对', count: 8 },
-    { id: 'agent-research', name: '研究与写作', count: 10 },
-  ]},
-  { id: 'data', name: '数据处理', icon: '📊', count: 27, sub: [
-    { id: 'data-etl', name: 'ETL 与清洗', count: 10 },
-    { id: 'data-analytics', name: '数据分析', count: 9 },
-    { id: 'data-visualize', name: '可视化报告', count: 8 },
-  ]},
-  { id: 'devops', name: '研发效能', icon: '🛠️', count: 16, sub: [
-    { id: 'devops-ci', name: 'CI/CD', count: 7 },
-    { id: 'devops-monitor', name: '监控告警', count: 9 },
-  ]},
-  { id: 'creative', name: '内容创作', icon: '🎨', count: 12 },
-];
+/** 本地安装记录（app_settings › workflow_market_installs 的 map 值） */
+interface InstalledRecord {
+  version: string;
+  mainId: string;
+  subIds: string[];
+  /** 安装时间（epoch 毫秒，Rust 侧 utils::now() 写入） */
+  installedAt: number;
+}
 
-const TRIGGER_OPTIONS: Array<{ key: 'all' | '手动' | '定时' | '事件'; label: string }> = [
+type InstallState = 'not-installed' | 'installed' | 'update-available';
+
+// ── 分类 / 触发方式 ──
+
+/**
+ * 分类元数据。生成器侧白名单只有 automation/agent/data/devops/creative，
+ * 非法值已归入 other，所以这里只需补 other 兜底，不必再容错别的值。
+ */
+const CATEGORY_META: Record<string, { name: string; icon: string; color: string }> = {
+  automation: { name: '自动化办公', icon: '⚙️', color: '#3B82F6' },
+  agent:      { name: 'Agent 协作', icon: '🤖', color: '#8B5CF6' },
+  data:       { name: '数据处理',   icon: '📊', color: '#10B981' },
+  devops:     { name: '研发效能',   icon: '🛠️', color: '#F59E0B' },
+  creative:   { name: '内容创作',   icon: '🎨', color: '#EC4899' },
+  other:      { name: '其他',       icon: '📦', color: '#6B7280' },
+};
+
+const categoryMeta = (id: string) => CATEGORY_META[id] || CATEGORY_META.other;
+
+/** 分类展示顺序（左栏列表按它排） */
+const CATEGORY_ORDER = ['automation', 'agent', 'data', 'devops', 'creative', 'other'];
+
+/** 触发方式中文映射：'' = 编辑器里未设置，按手动处理 */
+const TRIGGER_LABEL: Record<string, string> = { manual: '手动', cron: '定时', event: '事件' };
+const triggerLabel = (v: string) => TRIGGER_LABEL[v] || TRIGGER_LABEL.manual;
+/** 归一化后的触发值（筛选、比较都用它，保证 '' 与 manual 等价） */
+const normalizedTrigger = (v: string) => (TRIGGER_LABEL[v] ? v : 'manual');
+
+const TRIGGER_OPTIONS: Array<{ key: string; label: string }> = [
   { key: 'all', label: '全部' },
-  { key: '手动', label: '手动触发' },
-  { key: '定时', label: '定时运行' },
-  { key: '事件', label: '事件驱动' },
+  { key: 'manual', label: '手动触发' },
+  { key: 'cron', label: '定时运行' },
+  { key: 'event', label: '事件驱动' },
 ];
 
-const DIFFICULTY_OPTIONS: Array<{ key: 'all' | '入门' | '中级' | '进阶'; label: string; color: string }> = [
-  { key: 'all', label: '全部', color: 'var(--text-secondary)' },
-  { key: '入门', label: '入门', color: '#10B981' },
-  { key: '中级', label: '中级', color: '#F59E0B' },
-  { key: '进阶', label: '进阶', color: '#EF4444' },
+const REQUIREMENT_OPTIONS: Array<{ key: string; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'required', label: '有安装前置' },
+  { key: 'none', label: '无需前置' },
 ];
 
 const SORT_OPTIONS = [
   { key: 'recommended', label: '推荐排序' },
-  { key: 'downloads',   label: '下载量最高' },
-  { key: 'likes',       label: '收藏最多' },
-  { key: 'updated',     label: '最近更新' },
   { key: 'name',        label: '名称 A-Z' },
+  { key: 'nodes',       label: '节点数最多' },
 ] as const;
 
-/** 生成缩略流程图节点（mock） */
-function makePreview(template: string): WorkflowTemplateNodePreview[] {
-  switch (template) {
-    case 'digest': return [
-      { id: '1', nodeType: 'start', label: '每日 09:00', column: 0, row: 1 },
-      { id: '2', nodeType: 'http',  label: '聚合新闻源', column: 1, row: 0 },
-      { id: '3', nodeType: 'llm',   label: 'AI 摘要', column: 2, row: 0 },
-      { id: '4', nodeType: 'http',  label: '抓取代码仓库', column: 1, row: 2 },
-      { id: '5', nodeType: 'llm',   label: '生成周报', column: 2, row: 1 },
-      { id: '6', nodeType: 'email', label: '邮件发送', column: 3, row: 1 },
-      { id: '7', nodeType: 'end',   label: '完成', column: 4, row: 1 },
-    ];
-    case 'support': return [
-      { id: '1', nodeType: 'start', label: '工单事件', column: 0, row: 1 },
-      { id: '2', nodeType: 'llm',   label: '意图识别', column: 1, row: 1 },
-      { id: '3', nodeType: 'condition', label: '是否常见问题', column: 2, row: 1 },
-      { id: '4', nodeType: 'llm',   label: 'AI 自动回复', column: 3, row: 0 },
-      { id: '5', nodeType: 'human', label: '人工介入', column: 3, row: 2 },
-      { id: '6', nodeType: 'end',   label: '结束', column: 4, row: 1 },
-    ];
-    case 'data': return [
-      { id: '1', nodeType: 'start', label: '触发', column: 0, row: 1 },
-      { id: '2', nodeType: 'csv',   label: '读取 CSV', column: 1, row: 0 },
-      { id: '3', nodeType: 'db',    label: '查询 SQL', column: 1, row: 2 },
-      { id: '4', nodeType: 'code',  label: '清洗合并', column: 2, row: 1 },
-      { id: '5', nodeType: 'llm',   label: '异常标注', column: 3, row: 1 },
-      { id: '6', nodeType: 'excel', label: '输出报表', column: 4, row: 1 },
-      { id: '7', nodeType: 'end',   label: '完成', column: 5, row: 1 },
-    ];
-    case 'simple': return [
-      { id: '1', nodeType: 'start', label: '启动', column: 0, row: 0 },
-      { id: '2', nodeType: 'llm',   label: '处理', column: 1, row: 0 },
-      { id: '3', nodeType: 'end',   label: '结束', column: 2, row: 0 },
-    ];
-    case 'social': return [
-      { id: '1', nodeType: 'start', label: '定时', column: 0, row: 0 },
-      { id: '2', nodeType: 'llm',   label: '文案生成', column: 1, row: 0 },
-      { id: '3', nodeType: 'condition', label: '人工审核', column: 2, row: 0 },
-      { id: '4', nodeType: 'http',  label: '发布', column: 3, row: 0 },
-      { id: '5', nodeType: 'end',   label: '结束', column: 4, row: 0 },
-    ];
-    default: return [];
+// ── 收藏（localStorage） ──
+
+const FAVORITES_KEY = 'pilotdesk-workflow-market-favorites';
+
+/** 收藏是纯本地偏好：读不到不影响浏览，返回空集合即可 */
+function loadFavorites(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
   }
 }
 
-const MOCK_TEMPLATES: WorkflowTemplate[] = [
-  {
-    id: 'daily-digest',
-    name: '每日资讯与周报自动推送',
-    description: '每天早上 9 点自动聚合 RSS、代码仓库、团队协作文档，生成 AI 摘要并发送邮件给成员，每周一额外生成周度汇总报告。',
-    category: 'automation',
-    tags: ['邮件', '摘要', '周报', 'Cron'],
-    author: 'PilotDesk 官方',
-    icon: '📰',
-    accentColor: '#3B82F6',
-    version: '1.2.0',
-    minAppVersion: '0.4.0',
-    updatedAt: '2026-08-05',
-    downloads: 1284,
-    likes: 342,
-    difficulty: '入门',
-    estimateMinutes: 5,
-    nodeCount: 7,
-    triggerType: '定时',
-    installStatus: 'not-installed',
-    verified: true,
-    previewNodes: makePreview('digest'),
-    highlights: [
-      '内置 10+ 新闻源模板，开箱即用',
-      '支持自定义 LLM 提供商，可切换摘要模型',
-      '失败自动重试 + 告警',
-    ],
-  },
-  {
-    id: 'ticket-auto-reply',
-    name: '智能工单自动分类与回复',
-    description: '接入工单系统（飞书/钉钉/Zendesk），对新工单做意图识别和分类，常见问题由 AI 自动回复，复杂问题路由给人工坐席并附带上下文摘要。',
-    category: 'agent',
-    tags: ['工单', '客服', '分类'],
-    author: 'PilotDesk 官方',
-    icon: '🎟️',
-    accentColor: '#8B5CF6',
-    version: '2.0.1',
-    minAppVersion: '0.4.0',
-    updatedAt: '2026-08-01',
-    downloads: 938,
-    likes: 287,
-    difficulty: '中级',
-    estimateMinutes: 15,
-    nodeCount: 6,
-    triggerType: '事件',
-    installStatus: 'installed',
-    verified: true,
-    previewNodes: makePreview('support'),
-    highlights: [
-      '支持知识库 RAG 检索增强',
-      '人工介入节点配置 SLA 超时',
-      '自动同步回复结果到工单系统',
-    ],
-  },
-  {
-    id: 'csv-etl',
-    name: 'CSV/SQL 数据清洗与报表生成',
-    description: '从 CSV、Excel、MySQL/Postgres 读取数据，按自定义规则清洗合并，LLM 自动标注异常行，最后输出 Excel 报表并推送通知。',
-    category: 'data',
-    tags: ['ETL', '数据', 'Excel', 'SQL'],
-    author: '阿明数据',
-    icon: '📈',
-    accentColor: '#10B981',
-    version: '1.0.3',
-    minAppVersion: '0.3.5',
-    updatedAt: '2026-07-28',
-    downloads: 672,
-    likes: 198,
-    difficulty: '中级',
-    estimateMinutes: 10,
-    nodeCount: 7,
-    triggerType: '手动',
-    installStatus: 'update-available',
-    previewNodes: makePreview('data'),
-    highlights: [
-      '内置 20+ 清洗函数',
-      '支持中文列名的 SQL 脚本',
-      '异常行自动高亮与备注',
-    ],
-  },
-  {
-    id: 'social-post',
-    name: '多平台社媒内容批量发布',
-    description: '统一编辑一条内容，一键分发到微博、公众号、知乎、小红书；发布前走人工审核；发布后汇总互动数据。',
-    category: 'creative',
-    tags: ['社媒', '内容', '发布'],
-    author: '创意工作室',
-    icon: '📱',
-    accentColor: '#EC4899',
-    version: '0.9.2',
-    minAppVersion: '0.4.0',
-    updatedAt: '2026-07-20',
-    downloads: 428,
-    likes: 132,
-    difficulty: '入门',
-    estimateMinutes: 8,
-    nodeCount: 5,
-    triggerType: '手动',
-    installStatus: 'not-installed',
-    previewNodes: makePreview('social'),
-    highlights: [
-      '内置图片压缩与格式转换',
-      '支持按平台差异化改写文案',
-      '多账号统一管理',
-    ],
-  },
-  {
-    id: 'ci-quality',
-    name: 'PR 代码质量门禁',
-    description: '监听 GitHub / GitLab PR 事件，调用 SonarQube、lint、单元测试，并让 LLM 做代码审查评论；不达标自动打上标签并通知负责人。',
-    category: 'devops',
-    tags: ['CI', '代码审查', 'Git'],
-    author: 'Ops 团队',
-    icon: '🔍',
-    accentColor: '#F59E0B',
-    version: '1.5.0',
-    minAppVersion: '0.4.0',
-    updatedAt: '2026-07-30',
-    downloads: 512,
-    likes: 176,
-    difficulty: '进阶',
-    estimateMinutes: 20,
-    nodeCount: 6,
-    triggerType: '事件',
-    installStatus: 'not-installed',
-    previewNodes: makePreview('data'),
-    highlights: [
-      '支持 GitHub / GitLab / Gitea',
-      '审查结果按文件级别回写 PR 评论',
-      '门禁规则可自定义',
-    ],
-  },
-  {
-    id: 'invoice-ocr',
-    name: '发票 OCR 识别与录入',
-    description: '监控文件夹新增 PDF/图片，调用 OCR 识别发票关键信息，校验后写入 Excel 或财务系统，失败异常发送审核通知。',
-    category: 'automation',
-    tags: ['OCR', '财务', 'PDF'],
-    author: '财务自动化小组',
-    icon: '🧾',
-    accentColor: '#0EA5E9',
-    version: '1.1.0',
-    minAppVersion: '0.3.5',
-    updatedAt: '2026-07-15',
-    downloads: 398,
-    likes: 124,
-    difficulty: '中级',
-    estimateMinutes: 12,
-    nodeCount: 5,
-    triggerType: '事件',
-    installStatus: 'not-installed',
-    previewNodes: makePreview('simple'),
-    highlights: [
-      '支持增值税专票/普票',
-      '金额自动校验与异常告警',
-      '可导出多种格式',
-    ],
-  },
-  {
-    id: 'research-assistant',
-    name: '论文/研报 AI 研究助手',
-    description: '批量下载 ArXiv / 研报 PDF，使用多 Agent 分工：抽取要点、翻译、结构化笔记、生成 Markdown 表格并做对比分析。',
-    category: 'agent',
-    tags: ['研究', 'PDF', '多Agent'],
-    author: '研究员小川',
-    icon: '📚',
-    accentColor: '#6366F1',
-    version: '0.8.5',
-    minAppVersion: '0.4.0',
-    updatedAt: '2026-08-03',
-    downloads: 712,
-    likes: 256,
-    difficulty: '进阶',
-    estimateMinutes: 18,
-    nodeCount: 6,
-    triggerType: '手动',
-    installStatus: 'not-installed',
-    previewNodes: makePreview('support'),
-    highlights: [
-      '支持 ArXiv / SSRN 等多数据源',
-      '长文本分块 + 并行摘要',
-      '自动生成研究笔记和双向链接',
-    ],
-  },
-  {
-    id: 'monitor-heartbeat',
-    name: '服务心跳与告警面板',
-    description: '定时检查 HTTP/API/端口可用性，失败时自动升级告警（邮件 → IM → 电话），并生成历史可用性面板。',
-    category: 'devops',
-    tags: ['监控', '告警', '可用性'],
-    author: 'PilotDesk 官方',
-    icon: '📡',
-    accentColor: '#EF4444',
-    version: '1.0.0',
-    minAppVersion: '0.4.0',
-    updatedAt: '2026-08-08',
-    downloads: 356,
-    likes: 94,
-    difficulty: '入门',
-    estimateMinutes: 6,
-    nodeCount: 4,
-    triggerType: '定时',
-    installStatus: 'not-installed',
-    verified: true,
-    previewNodes: makePreview('simple'),
-    highlights: [
-      '支持 HTTPS / TCP / DNS 多种检查',
-      '告警升级时间线可配置',
-      '自动生成可用性周报',
-    ],
-  },
-];
+// ── 索引条目归一化 ──
 
-// ── 小工具 ──
-const formatK = (n: number): string => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-
-function relativeDay(dateStr: string): string {
-  const d = new Date(dateStr);
-  const diff = Math.floor((Date.now() - d.getTime()) / 86400000);
-  if (diff <= 0) return '今天';
-  if (diff === 1) return '昨天';
-  if (diff < 30) return `${diff} 天前`;
-  if (diff < 365) return `${Math.floor(diff / 30)} 个月前`;
-  return `${Math.floor(diff / 365)} 年前`;
+/**
+ * 远端 JSON → 组件模型。
+ *
+ * 索引是外部数据，字段缺失时给稳定默认值而不是让页面崩掉；连 id/mainFile 都没有的条目
+ * （装也装不了）直接丢弃。生成器已保证形状，这里的容错只是防御远端被改坏。
+ */
+function normalizeTemplate(raw: Record<string, unknown> | null | undefined): WorkflowTemplate | null {
+  if (!raw) return null;
+  const id = typeof raw.id === 'string' ? raw.id : '';
+  const mainFile = typeof raw.mainFile === 'string' ? raw.mainFile : '';
+  if (!id || !mainFile) return null;
+  const strArr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  return {
+    id,
+    name: typeof raw.name === 'string' && raw.name ? raw.name : id,
+    version: typeof raw.version === 'string' ? raw.version : '',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    path: typeof raw.path === 'string' ? raw.path : '',
+    dir: typeof raw.dir === 'string' ? raw.dir : id,
+    mainFile,
+    subFiles: strArr(raw.subFiles),
+    stageCount: typeof raw.stageCount === 'number' && Number.isFinite(raw.stageCount) ? raw.stageCount : 0,
+    nodeCount: typeof raw.nodeCount === 'number' && Number.isFinite(raw.nodeCount) ? raw.nodeCount : 0,
+    triggerType: typeof raw.triggerType === 'string' ? raw.triggerType : '',
+    nodeTypes: strArr(raw.nodeTypes),
+    ...(raw.featured === true ? { featured: true as const } : {}),
+    category: typeof raw.category === 'string' && raw.category ? raw.category : 'other',
+    tags: strArr(raw.tags),
+    author: typeof raw.author === 'string' ? raw.author : '',
+    minAppVersion: typeof raw.minAppVersion === 'string' ? raw.minAppVersion : '',
+    requirements: strArr(raw.requirements),
+  };
 }
 
-// ── 缩略流程图渲染 ──
-const NODE_COLORS: Record<string, string> = {
-  start: '#10B981', end: '#6B7280',
-  llm: '#8B5CF6', http: '#3B82F6', condition: '#F59E0B',
-  email: '#0EA5E9', human: '#EC4899', code: '#64748B',
-  csv: '#10B981', db: '#0891B2', excel: '#16A34A',
-};
+// ── 安装按钮（卡片 / 列表 / 详情三处共用） ──
 
-function WorkflowMiniPreview({ nodes, accent }: { nodes: WorkflowTemplateNodePreview[]; accent: string }) {
-  // 简单计算画布
-  const rows = Math.max(...nodes.map(n => n.row), 0) + 1;
-  const cols = Math.max(...nodes.map(n => n.column), 0) + 1;
-  const cellW = 52, cellH = 36;
-  const w = cols * cellW;
-  const h = rows * cellH;
-
-  // 画连接线：按 row 连到下一层（粗略 heuristic：同 row 的下一列直连，不同列折线）
-  const byCol = new Map<number, WorkflowTemplateNodePreview[]>();
-  nodes.forEach(n => {
-    const list = byCol.get(n.column) || [];
-    list.push(n);
-    byCol.set(n.column, list);
-  });
-
+function InstallButton({
+  state, installing, size = 'sm', onClick,
+}: {
+  state: InstallState;
+  installing: boolean;
+  size?: 'sm' | 'md';
+  onClick: (e: React.MouseEvent) => void;
+}) {
+  const pad = size === 'md' ? 'px-4 py-1.5 text-xs' : 'px-2 py-1 text-[10px]';
+  const gap = size === 'md' ? 6 : 3;
+  if (installing) {
+    return (
+      <button disabled className={`pd-btn ${pad} rounded`}
+        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+        安装中…
+      </button>
+    );
+  }
+  if (state === 'installed') {
+    return (
+      <span className="flex items-center gap-1" style={{ color: '#10B981', fontSize: size === 'md' ? 12 : 10 }}>
+        <CheckCircle size={size === 'md' ? 12 : 10} /> 已安装
+      </span>
+    );
+  }
+  const isUpdate = state === 'update-available';
   return (
-    <svg width="100%" viewBox={`0 -4 ${w} ${h + 8}`} style={{ maxHeight: 80 }}>
-      {/* 连线 */}
-      {Array.from(byCol.keys()).sort((a, b) => a - b).map(col => {
-        const left = byCol.get(col) || [];
-        const right = byCol.get(col + 1) || [];
-        return left.flatMap((ln, li) => right.slice(0, Math.max(1, Math.ceil(right.length / Math.max(left.length, 1)))).map(rn => {
-          const x1 = (ln.column + 1) * cellW - cellW / 2 - 14;
-          const y1 = ln.row * cellH + cellH / 2;
-          const x2 = rn.column * cellW + cellW / 2 - 14;
-          const y2 = rn.row * cellH + cellH / 2;
-          return (
-            <line key={`${ln.id}-${rn.id}-${li}`}
-              x1={x1} y1={y1} x2={x2} y2={y2}
-              stroke="var(--border)" strokeWidth="1.2" strokeDasharray="2 2" />
-          );
-        }));
-      })}
-      {/* 节点 */}
-      {nodes.map(n => (
-        <g key={n.id} transform={`translate(${n.column * cellW + 6}, ${n.row * cellH + 6})`}>
-          <rect
-            width={cellW - 12} height={cellH - 12} rx={5} ry={5}
-            fill={NODE_COLORS[n.nodeType] || accent}
-            opacity={0.18}
-            stroke={NODE_COLORS[n.nodeType] || accent}
-            strokeWidth="0.8"
-          />
-          <text
-            x={(cellW - 12) / 2} y={(cellH - 12) / 2 + 3}
-            textAnchor="middle"
-            fontSize="7"
-            fill="var(--text-secondary)"
-          >{headChars(n.label, 5)}</text>
-        </g>
-      ))}
-    </svg>
+    <button
+      onClick={onClick}
+      className={`pd-btn ${pad} rounded`}
+      style={{
+        backgroundColor: isUpdate ? '#F59E0B' : 'var(--accent)',
+        color: '#fff',
+        display: 'inline-flex', alignItems: 'center', gap,
+      }}
+    >
+      <Download size={size === 'md' ? 12 : 10} /> {isUpdate ? '更新' : '安装'}
+    </button>
   );
 }
 
 // ── 卡片：网格模式 ──
+
 function TemplateCardGrid({
-  t, onToggleLike, onInstall, onOpenDetail,
+  t, installState, installing, liked, onToggleFav, onInstall, onOpenDetail,
 }: {
   t: WorkflowTemplate;
-  onToggleLike: (id: string) => void;
-  onInstall: (id: string) => void;
+  installState: InstallState;
+  installing: boolean;
+  liked: boolean;
+  onToggleFav: (id: string) => void;
+  onInstall: (t: WorkflowTemplate) => void;
   onOpenDetail: (t: WorkflowTemplate) => void;
 }) {
-  const [liked, setLiked] = useState(false);
-
-  const actionBtn = () => {
-    switch (t.installStatus) {
-      case 'installed':
-        return (
-          <span className="flex items-center gap-1 text-[10px]" style={{ color: '#10B981' }}>
-            <CheckCircle size={10} /> 已安装
-          </span>
-        );
-      case 'update-available':
-        return (
-          <button
-            onClick={(e) => { e.stopPropagation(); onInstall(t.id); }}
-            className="pd-btn px-2 py-1 rounded text-[10px]"
-            style={{ backgroundColor: '#F59E0B', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 3 }}
-          >
-            <Download size={10} /> 更新
-          </button>
-        );
-      case 'installing':
-        return (
-          <button disabled className="pd-btn px-2 py-1 rounded text-[10px]"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-            安装中…
-          </button>
-        );
-      default:
-        return (
-          <button
-            onClick={(e) => { e.stopPropagation(); onInstall(t.id); }}
-            className="pd-btn px-2 py-1 rounded text-[10px]"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 3 }}
-          >
-            <Download size={10} /> 使用模板
-          </button>
-        );
-    }
-  };
+  const cat = categoryMeta(t.category);
 
   return (
     <div
@@ -513,46 +245,31 @@ function TemplateCardGrid({
         e.currentTarget.style.boxShadow = 'none';
       }}
     >
-      {/* 顶部彩色带 + 图标 + 收藏 */}
+      {/* 顶部：分类色带 + 分类图标 + 名称版本 + 收藏 */}
       <div className="relative px-3 pt-3 pb-2"
-        style={{
-          backgroundImage: `linear-gradient(135deg, ${t.accentColor}22, transparent 70%)`,
-        }}
+        style={{ backgroundImage: `linear-gradient(135deg, ${cat.color}22, transparent 70%)` }}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <div className="flex items-center justify-center shrink-0"
-              style={{ width: 28, height: 28, borderRadius: 6, backgroundColor: `${t.accentColor}18`, fontSize: 16 }}>
-              {t.icon}
+              style={{ width: 28, height: 28, borderRadius: 6, backgroundColor: `${cat.color}18`, fontSize: 16 }}>
+              {cat.icon}
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-1">
-                <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }} title={t.name}>{t.name}</span>
-                {t.verified && (
-                  <span title="官方模板" className="text-[9px] font-medium" style={{
-                    color: 'var(--accent)',
-                    padding: '0 5px',
-                    borderRadius: 999,
-                    backgroundColor: 'var(--accent-bg)',
-                    border: '0.5px solid var(--accent)',
-                    lineHeight: '16px',
-                  }}>官方</span>
-                )}
+              <div className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }} title={t.name}>
+                {t.name}
               </div>
-              <div className="flex items-center gap-2 mt-0.5">
+              <div className="flex items-center gap-1.5 mt-0.5">
                 <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>v{t.version}</span>
-                <span className="text-[9px]" style={{
-                  color: DIFFICULTY_OPTIONS.find(d => d.key === t.difficulty)?.color || 'var(--text-tertiary)',
-                  padding: '0 6px', borderRadius: 999,
-                  backgroundColor: `${DIFFICULTY_OPTIONS.find(d => d.key === t.difficulty)?.color || '#999'}18`,
-                }}>
-                  {t.difficulty}
+                <span className="text-[9px] px-1.5 rounded-full"
+                  style={{ color: cat.color, backgroundColor: `${cat.color}18` }}>
+                  {cat.name}
                 </span>
               </div>
             </div>
           </div>
           <button
-            onClick={(e) => { e.stopPropagation(); setLiked(l => !l); onToggleLike(t.id); }}
+            onClick={(e) => { e.stopPropagation(); onToggleFav(t.id); }}
             className="pd-btn p-1 rounded shrink-0"
             style={{ color: liked ? '#EF4444' : 'var(--text-tertiary)' }}
             title={liked ? '已收藏' : '收藏'}
@@ -562,24 +279,17 @@ function TemplateCardGrid({
         </div>
       </div>
 
-      {/* 缩略流程图 */}
-      <div className="px-3 pb-2" style={{ backgroundColor: 'transparent' }}>
-        <div className="rounded p-1.5" style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)' }}>
-          <WorkflowMiniPreview nodes={t.previewNodes} accent={t.accentColor} />
-        </div>
-      </div>
-
-      {/* 描述 */}
+      {/* 描述（两行） */}
       <div className="px-3 pb-2">
         <p className="text-[10px] line-clamp-2" style={{
           color: 'var(--text-secondary)',
           lineHeight: 1.5,
           minHeight: 30,
           margin: 0,
-        }}>{t.description}</p>
+        }}>{t.description || '暂无简介'}</p>
       </div>
 
-      {/* 标签 */}
+      {/* 标签（最多 3 个） */}
       <div className="px-3 pb-2 flex flex-wrap gap-1">
         {t.tags.slice(0, 3).map(tag => (
           <span key={tag} className="text-[9px] px-1.5 py-0.5 rounded"
@@ -589,125 +299,96 @@ function TemplateCardGrid({
         ))}
       </div>
 
-      {/* 底部操作行 */}
+      {/* 底部：触发方式 + 阶段/节点数 | 安装 */}
       <div className="flex items-center justify-between gap-2 px-3 py-2"
         style={{ borderTop: '1px solid var(--border)' }}
       >
         <div className="flex items-center gap-2.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-          <span className="flex items-center gap-0.5"><Download size={9} /> {formatK(t.downloads)}</span>
-          <span className="flex items-center gap-0.5"><TrendingUp size={9} /> {t.likes}</span>
-          <span className="flex items-center gap-0.5"><LayoutGrid size={9} /> {t.nodeCount}</span>
+          <span className="flex items-center gap-0.5"><Zap size={9} /> {triggerLabel(t.triggerType)}</span>
+          <span className="flex items-center gap-0.5">
+            <LayoutGrid size={9} /> {t.stageCount} 阶段 · {t.nodeCount} 节点
+          </span>
         </div>
-        {actionBtn()}
+        <InstallButton
+          state={installState}
+          installing={installing}
+          onClick={(e) => { e.stopPropagation(); onInstall(t); }}
+        />
       </div>
     </div>
   );
 }
 
 // ── 卡片：列表模式 ──
+
 function TemplateCardList({
-  t, onToggleLike, onInstall, onOpenDetail,
+  t, installState, installing, liked, onToggleFav, onInstall, onOpenDetail,
 }: {
   t: WorkflowTemplate;
-  onToggleLike: (id: string) => void;
-  onInstall: (id: string) => void;
+  installState: InstallState;
+  installing: boolean;
+  liked: boolean;
+  onToggleFav: (id: string) => void;
+  onInstall: (t: WorkflowTemplate) => void;
   onOpenDetail: (t: WorkflowTemplate) => void;
 }) {
-  const [liked, setLiked] = useState(false);
-
-  const installBtn = () => {
-    switch (t.installStatus) {
-      case 'installed':
-        return (<span className="flex items-center gap-1 text-[10px]" style={{ color: '#10B981' }}><CheckCircle size={10} /> 已安装</span>);
-      case 'update-available':
-        return (
-          <button onClick={(e) => { e.stopPropagation(); onInstall(t.id); }}
-            className="pd-btn px-2.5 py-1 rounded text-[11px]"
-            style={{ backgroundColor: '#F59E0B', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <Download size={11} /> 更新
-          </button>
-        );
-      default:
-        return (
-          <button onClick={(e) => { e.stopPropagation(); onInstall(t.id); }}
-            className="pd-btn px-2.5 py-1 rounded text-[11px]"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <Download size={11} /> 使用模板
-          </button>
-        );
-    }
-  };
+  const cat = categoryMeta(t.category);
 
   return (
     <div className="rounded-lg overflow-hidden"
-      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', cursor: 'pointer' }}
       onClick={() => onOpenDetail(t)}
       onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
       onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
     >
       <div className="flex items-center gap-3 px-3 py-2">
-        {/* 左侧图标 */}
+        {/* 分类图标 */}
         <div className="shrink-0 flex items-center justify-center rounded-lg"
-          style={{
-            width: 48, height: 48,
-            backgroundColor: `${t.accentColor}18`,
-            fontSize: 24,
-          }}>
-          {t.icon}
+          style={{ width: 48, height: 48, backgroundColor: `${cat.color}18`, fontSize: 24 }}>
+          {cat.icon}
         </div>
-        {/* 中：信息 */}
+
+        {/* 信息 */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{t.name}</span>
-            {t.verified && (
-              <span title="官方模板" className="text-[9px] font-medium" style={{
-                color: 'var(--accent)',
-                padding: '0 5px',
-                borderRadius: 999,
-                backgroundColor: 'var(--accent-bg)',
-                border: '0.5px solid var(--accent)',
-                lineHeight: '16px',
-              }}>官方</span>
-            )}
             <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>v{t.version}</span>
-            <span className="text-[10px]" style={{
-              color: DIFFICULTY_OPTIONS.find(d => d.key === t.difficulty)?.color,
-              padding: '0 6px', borderRadius: 999,
-              backgroundColor: `${DIFFICULTY_OPTIONS.find(d => d.key === t.difficulty)?.color}18`,
-            }}>{t.difficulty}</span>
+            <span className="text-[9px] px-1.5 rounded-full shrink-0"
+              style={{ color: cat.color, backgroundColor: `${cat.color}18` }}>
+              {cat.name}
+            </span>
           </div>
           <p className="text-[11px] truncate mt-0.5" style={{ color: 'var(--text-secondary)', margin: 0 }}>
-            {t.description}
+            {t.description || '暂无简介'}
           </p>
           <div className="flex items-center gap-3 mt-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-            <span className="flex items-center gap-0.5"><User size={9} /> {t.author}</span>
-            <span className="flex items-center gap-0.5"><Clock size={9} /> {relativeDay(t.updatedAt)}</span>
-            <span className="flex items-center gap-0.5"><Zap size={9} /> {t.triggerType}</span>
-            <span className="flex items-center gap-0.5"><LayoutGrid size={9} /> {t.nodeCount} 节点</span>
-            <span>约 {t.estimateMinutes} 分钟配置</span>
+            <span className="flex items-center gap-0.5"><User size={9} /> {t.author || '未署名'}</span>
+            <span className="flex items-center gap-0.5"><Zap size={9} /> {triggerLabel(t.triggerType)}</span>
+            <span className="flex items-center gap-0.5">
+              <LayoutGrid size={9} /> {t.stageCount} 阶段 · {t.nodeCount} 节点
+            </span>
+            {t.tags.slice(0, 3).map(tag => (
+              <span key={tag} className="px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                {tag}
+              </span>
+            ))}
           </div>
         </div>
-        {/* 右：缩略流程图 */}
-        <div className="shrink-0" style={{ width: 180 }}>
-          <div className="rounded p-1.5" style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-light)' }}>
-            <WorkflowMiniPreview nodes={t.previewNodes} accent={t.accentColor} />
-          </div>
-        </div>
-        {/* 右：操作 */}
-        <div className="shrink-0 flex flex-col items-end gap-1.5">
-          <div className="flex items-center gap-2">
-            <button onClick={(e) => { e.stopPropagation(); setLiked(l => !l); onToggleLike(t.id); }}
-              className="pd-btn p-1 rounded" style={{ color: liked ? '#EF4444' : 'var(--text-tertiary)' }}
-              title={liked ? '已收藏' : '收藏'}>
-              <Heart size={12} fill={liked ? '#EF4444' : 'none'} />
-            </button>
-            <button onClick={(e) => { e.stopPropagation(); onOpenDetail(t); }}
-              className="pd-btn p-1 rounded" style={{ color: 'var(--text-secondary)' }}
-              title="预览详情">
-              <Eye size={12} />
-            </button>
-          </div>
-          {installBtn()}
+
+        {/* 操作 */}
+        <div className="shrink-0 flex items-center gap-2">
+          <button onClick={(e) => { e.stopPropagation(); onToggleFav(t.id); }}
+            className="pd-btn p-1 rounded" style={{ color: liked ? '#EF4444' : 'var(--text-tertiary)' }}
+            title={liked ? '已收藏' : '收藏'}>
+            <Heart size={12} fill={liked ? '#EF4444' : 'none'} />
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); onOpenDetail(t); }}
+            className="pd-btn p-1 rounded" style={{ color: 'var(--text-secondary)' }}
+            title="查看详情">
+            <Eye size={12} />
+          </button>
+          <InstallButton state={installState} installing={installing} onClick={(e) => { e.stopPropagation(); onInstall(t); }} />
         </div>
       </div>
     </div>
@@ -715,38 +396,17 @@ function TemplateCardList({
 }
 
 // ── 详情弹窗（Portal 居中模态，与插件 README 弹窗同一套观感） ──
+
 function TemplateDetailDialog({
-  template, onClose, onInstall,
+  template, installState, installing, onClose, onInstall,
 }: {
   template: WorkflowTemplate;
+  installState: InstallState;
+  installing: boolean;
   onClose: () => void;
-  onInstall: (id: string) => void;
+  onInstall: (t: WorkflowTemplate) => void;
 }) {
-  const installBtn = () => {
-    switch (template.installStatus) {
-      case 'installed':
-        return (
-          <button disabled className="pd-btn px-4 py-1.5 rounded text-xs"
-            style={{ backgroundColor: '#10B981', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <CheckCircle size={12} /> 已安装
-          </button>
-        );
-      case 'update-available':
-        return (
-          <button onClick={() => onInstall(template.id)} className="pd-btn px-4 py-1.5 rounded text-xs"
-            style={{ backgroundColor: '#F59E0B', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <Download size={12} /> 更新到 v{template.version}
-          </button>
-        );
-      default:
-        return (
-          <button onClick={() => onInstall(template.id)} className="pd-btn px-4 py-1.5 rounded text-xs"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <Download size={12} /> 使用此模板
-          </button>
-        );
-    }
-  };
+  const cat = categoryMeta(template.category);
 
   return createPortal((
     <div
@@ -755,7 +415,7 @@ function TemplateDetailDialog({
       onClick={onClose}
     >
       <div
-        className="w-[720px] max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
+        className="w-[680px] max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
         style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', overflow: 'hidden' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -763,46 +423,31 @@ function TemplateDetailDialog({
         <div className="shrink-0 px-5 py-3 flex items-start justify-between gap-3"
           style={{
             borderBottom: '1px solid var(--border)',
-            backgroundImage: `linear-gradient(135deg, ${template.accentColor}22, transparent 70%)`,
+            backgroundImage: `linear-gradient(135deg, ${cat.color}22, transparent 70%)`,
           }}
         >
           <div className="flex items-start gap-3 min-w-0 flex-1">
             <div className="shrink-0 rounded-lg flex items-center justify-center"
-              style={{ width: 52, height: 52, backgroundColor: `${template.accentColor}22`, fontSize: 28 }}>
-              {template.icon}
+              style={{ width: 52, height: 52, backgroundColor: `${cat.color}22`, fontSize: 28 }}>
+              {cat.icon}
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <h3 className="text-base font-medium" style={{ color: 'var(--text-primary)' }}>{template.name}</h3>
-                {template.verified && (
-                  <span title="官方模板" className="text-[9px] font-medium" style={{
-                    color: 'var(--accent)',
-                    padding: '0 5px',
-                    borderRadius: 999,
-                    backgroundColor: 'var(--accent-bg)',
-                    border: '0.5px solid var(--accent)',
-                    lineHeight: '16px',
-                  }}>官方</span>
-                )}
-              </div>
+              <h3 className="text-base font-medium" style={{ color: 'var(--text-primary)' }}>{template.name}</h3>
               <div className="flex items-center gap-2 mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                 <span>v{template.version}</span>
                 <span>·</span>
-                <span className="flex items-center gap-1"><User size={10} /> {template.author}</span>
+                <span className="flex items-center gap-1"><User size={10} /> {template.author || '未署名'}</span>
                 <span>·</span>
-                <span className="flex items-center gap-1"><Clock size={10} /> 更新于 {relativeDay(template.updatedAt)}</span>
+                <span>{template.stageCount} 阶段 / {template.nodeCount} 节点</span>
               </div>
               <div className="flex items-center gap-2 mt-2 flex-wrap">
                 <span className="text-[10px] px-2 py-0.5 rounded-full"
-                  style={{
-                    color: DIFFICULTY_OPTIONS.find(d => d.key === template.difficulty)?.color,
-                    backgroundColor: `${DIFFICULTY_OPTIONS.find(d => d.key === template.difficulty)?.color}18`,
-                  }}>
-                  {template.difficulty}
+                  style={{ color: cat.color, backgroundColor: `${cat.color}18` }}>
+                  {cat.icon} {cat.name}
                 </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full"
+                <span className="text-[10px] px-2 py-0.5 rounded-full flex items-center gap-1"
                   style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-                  {template.triggerType}
+                  <Zap size={9} /> {triggerLabel(template.triggerType)}
                 </span>
                 {template.tags.map(tag => (
                   <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full"
@@ -819,80 +464,83 @@ function TemplateDetailDialog({
           </button>
         </div>
 
-        {/* Body */}
+        {/* Body：全部内容来自索引，打开弹窗不发任何请求 */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 pd-scroll-stable">
-          {/* 概览 Stats */}
-          <div className="grid grid-cols-4 gap-2">
-            {[
-              { label: '下载量', value: formatK(template.downloads), icon: <Download size={11} /> },
-              { label: '收藏数', value: template.likes, icon: <Heart size={11} /> },
-              { label: '节点数', value: template.nodeCount, icon: <LayoutGrid size={11} /> },
-              { label: '配置耗时', value: `≈ ${template.estimateMinutes} 分钟`, icon: <Clock size={11} /> },
-            ].map(it => (
-              <div key={it.label} className="rounded-lg px-3 py-2"
-                style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-                <div className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  {it.icon} {it.label}
-                </div>
-                <div className="text-sm mt-0.5" style={{ color: 'var(--text-primary)' }}>{it.value}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* 描述 */}
+          {/* 简介 */}
           <div>
             <h4 className="text-xs mb-2" style={{ color: 'var(--text-primary)' }}>模板简介</h4>
             <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-              {template.description}
+              {template.description || '作者未填写简介'}
             </p>
           </div>
 
-          {/* 亮点 */}
+          {/* 节点组成：nodeTypes 中文胶囊（原缩略流程图已删——索引里的类型清单足够判断模板用不用得上） */}
           <div>
-            <h4 className="text-xs mb-2" style={{ color: 'var(--text-primary)' }}>核心亮点</h4>
-            <ul className="space-y-1.5">
-              {template.highlights.map((h, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                  <CheckCircle size={12} style={{ color: '#10B981', marginTop: 1, flexShrink: 0 }} />
-                  {h}
-                </li>
-              ))}
-            </ul>
+            <h4 className="text-xs mb-2" style={{ color: 'var(--text-primary)' }}>节点组成</h4>
+            {template.nodeTypes.length === 0 ? (
+              <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>暂无</span>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {template.nodeTypes.map(type => {
+                  const meta = getNodeTypeMeta(type);
+                  return (
+                    <span key={type} className="text-[10px] px-2 py-0.5 rounded-full"
+                      style={{
+                        color: meta.color,
+                        backgroundColor: `${meta.color}14`,
+                        border: `1px solid ${meta.color}55`,
+                      }}>
+                      {meta.icon} {meta.label}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            {template.subFiles.length > 0 && (
+              <div className="text-[10px] mt-2" style={{ color: 'var(--text-tertiary)' }}>
+                包含 {template.subFiles.length} 个子工作流文件，安装时一并导入
+              </div>
+            )}
           </div>
 
-          {/* 流程图预览 */}
-          <div>
-            <h4 className="text-xs mb-2" style={{ color: 'var(--text-primary)' }}>流程预览</h4>
-            <div className="rounded-lg p-3 overflow-x-auto"
-              style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-              {/* WorkflowMiniPreview 自带根 <svg>：曾经外面又套了一层 <svg>，等于把同一份缩略图渲染两遍
-                  （外层那份还会被自己的 viewBox 拉伸变形），这里只保留真正的那一份 */}
-              <WorkflowMiniPreview nodes={template.previewNodes} accent={template.accentColor} />
-            </div>
-          </div>
-
-          {/* 版本要求 */}
+          {/* 安装要求 */}
           <div>
             <h4 className="text-xs mb-2" style={{ color: 'var(--text-primary)' }}>安装要求</h4>
             <div className="text-xs space-y-1" style={{ color: 'var(--text-secondary)' }}>
-              <div>最低 PilotDesk 版本：<span className="font-mono">{template.minAppVersion}+</span></div>
-              <div>兼容运行环境：Windows / macOS / Linux</div>
+              <div>
+                最低 PilotDesk 版本：
+                {template.minAppVersion
+                  ? <span className="font-mono">{template.minAppVersion}+</span>
+                  : <span style={{ color: 'var(--text-tertiary)' }}>无</span>}
+              </div>
+              {template.requirements.length === 0 ? (
+                <div>前置要求：<span style={{ color: 'var(--text-tertiary)' }}>无</span></div>
+              ) : (
+                <div>
+                  前置要求：
+                  <ul className="mt-1 space-y-1">
+                    {template.requirements.map((r, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <CheckCircle size={12} style={{ color: '#10B981', marginTop: 2, flexShrink: 0 }} />
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Footer Actions */}
-        <div className="shrink-0 px-5 py-3 flex items-center justify-between gap-2"
+        {/* Footer：只留安装动作（原「导入 JSON」占位按钮已删——安装走索引下载，不需要用户选文件） */}
+        <div className="shrink-0 px-5 py-3 flex items-center justify-end gap-2"
           style={{ borderTop: '1px solid var(--border)' }}>
-          <div className="flex items-center gap-2">
-            <button className="pd-btn px-3 py-1.5 rounded text-xs"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <PackageOpen size={12} /> 导入 JSON
-            </button>
-          </div>
-          <div className="flex items-center gap-2">
-            {installBtn()}
-          </div>
+          <InstallButton
+            state={installState}
+            installing={installing}
+            size="md"
+            onClick={() => onInstall(template)}
+          />
         </div>
       </div>
     </div>
@@ -900,50 +548,106 @@ function TemplateDetailDialog({
 }
 
 // ── 主组件 ──
+
 export const WorkflowTemplateMarket: React.FC<{
+  /** 安装成功后的出口：父级只负责导航（反馈由本组件自己 toast，避免重复提示） */
   onUseTemplate?: (tplId: string) => void;
 }> = ({ onUseTemplate }) => {
   /**
    * 顶部页签：精选 / 浏览全部 / 我的收藏。
    *
    * 落地态取「浏览全部」而不是「精选」：topTab 也是**筛选条件**（精选会把列表过滤成
-   * verified 子集）。若默认就落在精选，"官方精选"这个条件一进页面就恒成立，筛选角标会
-   * 显示 1 而用户什么都没点，也没法取消。默认落在"不施加任何条件"的浏览全部，条件才可解释。
+   * featured 子集）。若默认就落在精选，"精选"这个条件一进页面就恒成立，筛选角标会显示 1
+   * 而用户什么都没点，也没法取消。默认落在"不施加任何条件"的浏览全部，条件才可解释。
    */
   const [topTab, setTopTab] = useState<'featured' | 'browse' | 'favorites'>('browse');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useState<typeof SORT_OPTIONS[number]['key']>('recommended');
-  const [activeCategoryId, setActiveCategoryId] = useState<string>('all');
-  const [activeSubCategoryId, setActiveSubCategoryId] = useState<string | null>(null);
-  const [triggerFilter, setTriggerFilter] = useState<typeof TRIGGER_OPTIONS[number]['key']>('all');
-  const [difficultyFilter, setDifficultyFilter] = useState<typeof DIFFICULTY_OPTIONS[number]['key']>('all');
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const [templates, setTemplates] = useState<WorkflowTemplate[]>(MOCK_TEMPLATES);
+  const [activeCategory, setActiveCategory] = useState('all');
+  const [triggerFilter, setTriggerFilter] = useState('all');
+  const [requirementFilter, setRequirementFilter] = useState('all');
+  const [favorites, setFavorites] = useState<Set<string>>(loadFavorites);
+  const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
+  const [installs, setInstalls] = useState<Record<string, InstalledRecord>>({});
+  const [installingId, setInstallingId] = useState<string | null>(null);
   const [detailTpl, setDetailTpl] = useState<WorkflowTemplate | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // 模拟刷新
-  const handleRefresh = () => {
+  /** 拉取远端索引 + 本地安装记录（两条命令互不依赖，并行发） */
+  const loadAll = useCallback(async () => {
+    try {
+      const [index, records] = await Promise.all([
+        invoke<{ templates?: Array<Record<string, unknown>> }>('workflow_market_index'),
+        invoke<Record<string, InstalledRecord>>('workflow_market_installs'),
+      ]);
+      const list = Array.isArray(index?.templates)
+        ? index.templates.map(normalizeTemplate).filter((t): t is WorkflowTemplate => t !== null)
+        : [];
+      setTemplates(list);
+      setInstalls(records || {});
+      setLoadError(null);
+    } catch (e) {
+      setLoadError(errorMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // 不在 effect 体内同步调用：loadAll 会先 setLoading 之类的状态，属于"effect 体内同步 setState"
+    // （`react-hooks/set-state-in-effect` 判为级联渲染）。推到微任务 —— 同一个任务、早于绘制，行为一致。
+    void Promise.resolve().then(() => loadAll());
+  }, [loadAll]);
+
+  const handleRefresh = async () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 700);
+    await loadAll();
+    setRefreshing(false);
   };
 
   const toggleFav = (id: string) => {
     setFavorites(prev => {
       const s = new Set(prev);
       if (s.has(id)) s.delete(id); else s.add(id);
+      try { localStorage.setItem(FAVORITES_KEY, JSON.stringify([...s])); } catch { /* 本地偏好写不进去不影响浏览 */ }
       return s;
     });
   };
 
-  const installTpl = (id: string) => {
-    setTemplates(prev => prev.map(t => t.id === id ? { ...t, installStatus: 'installed' as InstallStatus } : t));
-    // 如果当前打开的是这个模板，同步更新抽屉
-    if (detailTpl?.id === id) setDetailTpl({ ...detailTpl, installStatus: 'installed' });
-    onUseTemplate?.(id);
+  /** 安装状态由「本地记录 + 索引版本」派生，不另存状态位 */
+  const installStateOf = (t: WorkflowTemplate): InstallState => {
+    const rec = installs[t.id];
+    if (!rec) return 'not-installed';
+    return rec.version !== t.version ? 'update-available' : 'installed';
   };
+
+  /**
+   * 安装模板：Rust 侧完成 下载→导入→写安装记录，这里只负责反馈与刷新状态。
+   *
+   * 安装成功会跳到「工作流定义」（父级的 onUseTemplate 只做导航），
+   * 提示文案由本组件负责，父级不再重复 toast。
+   */
+  const installTpl = async (t: WorkflowTemplate) => {
+    if (installingId) return; // 一次只装一个：下载+导入是重动作，避免并发写同一份定义
+    setInstallingId(t.id);
+    try {
+      await invoke('workflow_market_install', { id: t.id });
+      const records = await invoke<Record<string, InstalledRecord>>('workflow_market_installs');
+      setInstalls(records || {});
+      showToast(`已安装模板「${t.name}」，可在"工作流定义"中查看`, 'success');
+      onUseTemplate?.(t.id);
+    } catch (e) {
+      showToast(`安装失败：${errorMessage(e)}`, 'error');
+    } finally {
+      setInstallingId(null);
+    }
+  };
+
+  // ── 筛选 / 排序 ──
 
   const filtered = useMemo(() => {
     let list = templates.slice();
@@ -952,25 +656,24 @@ export const WorkflowTemplateMarket: React.FC<{
     if (topTab === 'favorites') {
       list = list.filter(t => favorites.has(t.id));
     } else if (topTab === 'featured') {
-      // 精选 = 官方 + 下载量高（前 4）
-      const verified = list.filter(t => t.verified || t.downloads > 500);
-      verified.sort((a, b) => b.downloads - a.downloads);
-      list = verified;
+      list = list.filter(t => t.featured === true);
     }
 
-    // 分类
-    if (activeCategoryId !== 'all') {
-      list = list.filter(t => t.category === activeCategoryId);
+    // 分类（单层）
+    if (activeCategory !== 'all') {
+      list = list.filter(t => t.category === activeCategory);
     }
-
     // 触发方式
     if (triggerFilter !== 'all') {
-      list = list.filter(t => t.triggerType === triggerFilter);
+      list = list.filter(t => normalizedTrigger(t.triggerType) === triggerFilter);
     }
-    // 难度
-    if (difficultyFilter !== 'all') {
-      list = list.filter(t => t.difficulty === difficultyFilter);
+    // 安装前置（有无 requirements）
+    if (requirementFilter === 'required') {
+      list = list.filter(t => t.requirements.length > 0);
+    } else if (requirementFilter === 'none') {
+      list = list.filter(t => t.requirements.length === 0);
     }
+
     // 搜索
     const q = searchQuery.trim().toLowerCase();
     if (q) {
@@ -979,40 +682,54 @@ export const WorkflowTemplateMarket: React.FC<{
         return h.includes(q);
       });
     }
+
     // 排序
+    const byName = (a: WorkflowTemplate, b: WorkflowTemplate) => a.name.localeCompare(b.name, 'zh-CN');
     switch (sort) {
-      case 'downloads': list.sort((a, b) => b.downloads - a.downloads); break;
-      case 'likes': list.sort((a, b) => b.likes - a.likes); break;
-      case 'updated': list.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)); break;
-      case 'name': list.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')); break;
+      case 'name': list.sort(byName); break;
+      case 'nodes': list.sort((a, b) => b.nodeCount - a.nodeCount || byName(a, b)); break;
       case 'recommended':
       default:
-        list.sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0) || b.downloads - a.downloads);
+        list.sort((a, b) => (b.featured ? 1 : 0) - (a.featured ? 1 : 0) || byName(a, b));
     }
     return list;
-  }, [templates, topTab, favorites, activeCategoryId, triggerFilter, difficultyFilter, searchQuery, sort]);
+  }, [templates, topTab, favorites, activeCategory, triggerFilter, requirementFilter, searchQuery, sort]);
 
-  // ── 渲染 ──
+  /** 左栏分类计数（只列有模板的分类，避免出现一排 0） */
+  const sidebarCategories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of templates) counts.set(t.category, (counts.get(t.category) || 0) + 1);
+    return CATEGORY_ORDER
+      .filter(id => (counts.get(id) || 0) > 0)
+      .map(id => ({ id, ...categoryMeta(id), count: counts.get(id) || 0 }));
+  }, [templates]);
+
   /**
-   * 筛选角标：只统计**会限制结果集合**的条件 —— 分类、触发器、难度、顶部页签。
-   *
-   * 排序（sort）与显示方式（viewMode）不计入：它们改变顺序/排布，不改变"有几个模板"。
-   * 把它们计进去会让角标撒谎（角标 2 却一条没少）。
+   * 筛选角标：只统计**会限制结果集合**的条件 —— 分类、触发方式、安装前置、顶部页签。
+   * 排序与显示方式不计入：它们改变顺序/排布，不改变"有几个模板"，计进去角标会撒谎。
    */
-  const activeFilterCount = (activeCategoryId !== 'all' ? 1 : 0)
+  const activeFilterCount = (activeCategory !== 'all' ? 1 : 0)
     + (triggerFilter !== 'all' ? 1 : 0)
-    + (difficultyFilter !== 'all' ? 1 : 0)
+    + (requirementFilter !== 'all' ? 1 : 0)
     + (topTab !== 'browse' ? 1 : 0);
+
+  const resetFilters = () => {
+    setActiveCategory('all');
+    setTriggerFilter('all');
+    setRequirementFilter('all');
+    setTopTab('browse');
+    setSearchQuery('');
+  };
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* ── 顶栏（一行紧凑布局）
-           左：精选Tab + 浏览全部Tab + 我的收藏Tab + 搜索框
+           左：精选/浏览全部/我的收藏 Tab + 搜索框
            右：排序 → 显示方式 → 筛选 → 刷新
          ─────────────────────────────────────────────────────── */}
       <div className="shrink-0 pl-0 pr-0 py-1.5 flex items-center gap-2"
         style={{ borderBottom: '1px solid var(--border)' }}>
-        {/* Tab 组：精选 / 浏览全部 / 我的收藏（原标题位置） */}
+        {/* Tab 组 */}
         <div className="flex items-center rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
           {[
             { key: 'featured', label: '精选', icon: <Sparkles size={11} /> },
@@ -1043,7 +760,7 @@ export const WorkflowTemplateMarket: React.FC<{
           ))}
         </div>
 
-        {/* 搜索框（Tab 之后） */}
+        {/* 搜索框 */}
         <div className="relative flex-1 min-w-0 max-w-md">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
           <input
@@ -1053,7 +770,7 @@ export const WorkflowTemplateMarket: React.FC<{
             placeholder="搜索模板名称 / 标签 / 作者 / 描述..."
             className="block w-full pl-8 pr-3 rounded-md text-[11px] outline-none"
             style={{
-              height: 28, /* 对齐同行 Select(size=sm) 与 Tab 组（原靠 py-1 撑到 24px，矮 4px） */
+              height: 28, /* 对齐同行 Select(size=sm) 与 Tab 组 */
               backgroundColor: 'var(--bg-tertiary)',
               color: 'var(--text-primary)',
               border: '1px solid var(--border)',
@@ -1063,7 +780,6 @@ export const WorkflowTemplateMarket: React.FC<{
 
         {/* 右侧工具组 */}
         <div className="ml-auto flex items-center gap-1.5 shrink-0">
-          {/* 排序（放在显示方式前面） */}
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>排序</span>
             <Select
@@ -1120,24 +836,27 @@ export const WorkflowTemplateMarket: React.FC<{
           <button onClick={handleRefresh}
             className="pd-btn p-1 rounded"
             style={{ color: 'var(--text-secondary)', width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-            title="刷新列表">
+            title="刷新模板索引">
             <RefreshCw size={13} className={refreshing ? 'pd-animate-spin' : ''} />
           </button>
         </div>
       </div>
 
-      {/* ── 筛选抽屉（可选展开）：标题+按钮+清除按钮全部同一行 ── */}
+      {/* ── 筛选抽屉（可选展开）：触发方式 / 安装前置 ── */}
       {showFilters && (
         <div className="shrink-0 pl-0 pr-0 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
           <div className="rounded-lg px-2.5 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5"
             style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-            {/* 触发方式：标题 + 按钮组 同一行 */}
+            {/* 触发方式 */}
             <div className="flex items-center gap-2 flex-wrap">
               <label className="text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>触发方式</label>
               <div className="flex flex-wrap gap-1.5">
                 {TRIGGER_OPTIONS.map(opt => (
                   <button key={opt.key}
-                    onClick={() => setTriggerFilter(opt.key)}
+                    onClick={() => {
+                      // 再点一次已选中的项 = 取消该项（回到"全部"），省掉一次"清除全部筛选"
+                      setTriggerFilter(triggerFilter === opt.key ? 'all' : opt.key);
+                    }}
                     className="pd-btn px-2.5 py-0.5 rounded text-[11px]"
                     style={{
                       backgroundColor: triggerFilter === opt.key ? 'var(--accent-light)' : 'var(--bg-tertiary)',
@@ -1150,18 +869,20 @@ export const WorkflowTemplateMarket: React.FC<{
               </div>
             </div>
 
-            {/* 难度等级：标题 + 按钮组 同一行 */}
+            {/* 安装前置 */}
             <div className="flex items-center gap-2 flex-wrap">
-              <label className="text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>难度等级</label>
+              <label className="text-[11px] shrink-0" style={{ color: 'var(--text-secondary)' }}>安装前置</label>
               <div className="flex flex-wrap gap-1.5">
-                {DIFFICULTY_OPTIONS.map(opt => (
+                {REQUIREMENT_OPTIONS.map(opt => (
                   <button key={opt.key}
-                    onClick={() => setDifficultyFilter(opt.key)}
+                    onClick={() => {
+                      setRequirementFilter(requirementFilter === opt.key ? 'all' : opt.key);
+                    }}
                     className="pd-btn px-2.5 py-0.5 rounded text-[11px]"
                     style={{
-                      backgroundColor: difficultyFilter === opt.key ? `${opt.color}18` : 'var(--bg-tertiary)',
-                      color: difficultyFilter === opt.key ? opt.color : 'var(--text-secondary)',
-                      border: `1px solid ${difficultyFilter === opt.key ? opt.color : 'var(--border)'}`,
+                      backgroundColor: requirementFilter === opt.key ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                      color: requirementFilter === opt.key ? 'var(--accent)' : 'var(--text-secondary)',
+                      border: `1px solid ${requirementFilter === opt.key ? 'var(--accent)' : 'var(--border)'}`,
                     }}>
                     {opt.label}
                   </button>
@@ -1169,11 +890,10 @@ export const WorkflowTemplateMarket: React.FC<{
               </div>
             </div>
 
-            {/* 清除全部筛选：与筛选按钮同一行 */}
             {activeFilterCount > 0 && (
               <div className="ml-auto shrink-0">
                 <button
-                  onClick={() => { setTriggerFilter('all'); setDifficultyFilter('all'); setActiveCategoryId('all'); setActiveSubCategoryId(null); setTopTab('browse'); }}
+                  onClick={resetFilters}
                   className="pd-btn text-[11px] px-2 py-0.5 rounded"
                   style={{ color: 'var(--accent)', height: 22 }}>
                   清除全部筛选
@@ -1186,153 +906,103 @@ export const WorkflowTemplateMarket: React.FC<{
 
       {/* ── 主体：左侧分类 + 右侧网格/列表 ── */}
       <div className="flex-1 flex min-h-0">
-        {/* 左：分类树 */}
+        {/* 左：分类列表（单层，带计数；只列有模板的分类） */}
         <div className="w-56 shrink-0 h-full overflow-y-auto pd-scroll-stable"
           style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
           <div className="px-3 py-3 space-y-0.5">
             <div className="text-[10px] mb-1.5 mt-2" style={{ color: 'var(--text-tertiary)' }}>
               <span className="flex items-center gap-1"><SlidersHorizontal size={10} /> 分类导航</span>
             </div>
-            {CATEGORIES.map(cat => {
-              const active = activeCategoryId === cat.id;
+
+            <button
+              onClick={() => setActiveCategory('all')}
+              className="pd-btn w-full px-2 py-1.5 rounded flex items-center justify-between gap-2 text-[11px]"
+              style={{
+                backgroundColor: activeCategory === 'all' ? 'var(--accent-light)' : 'transparent',
+                color: activeCategory === 'all' ? 'var(--accent)' : 'var(--text-secondary)',
+                fontWeight: activeCategory === 'all' ? 500 : 400,
+              }}>
+              <span className="flex items-center gap-1.5 min-w-0">
+                <span className="shrink-0">📦</span>
+                <span className="truncate">全部模板</span>
+              </span>
+              <span className="text-[9px] shrink-0"
+                style={{ color: activeCategory === 'all' ? 'var(--accent)' : 'var(--text-tertiary)' }}>
+                {templates.length}
+              </span>
+            </button>
+
+            {sidebarCategories.map(cat => {
+              const active = activeCategory === cat.id;
               return (
-                <div key={cat.id}>
-                  <button
-                    onClick={() => { setActiveCategoryId(cat.id); setActiveSubCategoryId(null); }}
-                    className="pd-btn w-full px-2 py-1.5 rounded flex items-center justify-between gap-2 text-[11px]"
-                    style={{
-                      backgroundColor: active ? 'var(--accent-light)' : 'transparent',
-                      color: active ? 'var(--accent)' : 'var(--text-secondary)',
-                      fontWeight: active ? 500 : 400,
-                    }}>
-                    <span className="flex items-center gap-1.5 min-w-0">
-                      <span className="shrink-0">{cat.icon}</span>
-                      <span className="truncate">{cat.name}</span>
-                    </span>
-                    <span className="text-[9px] shrink-0"
-                      style={{ color: active ? 'var(--accent)' : 'var(--text-tertiary)' }}>{cat.count}</span>
-                  </button>
-                  {cat.sub && active && (
-                    <div className="ml-6 mt-0.5 space-y-0.5">
-                      {cat.sub.map(sub => (
-                        <button key={sub.id}
-                          onClick={() => setActiveSubCategoryId(activeSubCategoryId === sub.id ? null : sub.id)}
-                          className="pd-btn w-full px-2 py-1 rounded flex items-center justify-between gap-2 text-[10px]"
-                          style={{
-                            color: activeSubCategoryId === sub.id ? 'var(--accent)' : 'var(--text-tertiary)',
-                            backgroundColor: activeSubCategoryId === sub.id ? 'var(--bg-tertiary)' : 'transparent',
-                          }}>
-                          <span className="flex items-center gap-1 truncate">
-                            <ChevronRight size={8} />{sub.name}
-                          </span>
-                          <span className="shrink-0">{sub.count}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <button
+                  key={cat.id}
+                  onClick={() => setActiveCategory(active ? 'all' : cat.id)}
+                  className="pd-btn w-full px-2 py-1.5 rounded flex items-center justify-between gap-2 text-[11px]"
+                  style={{
+                    backgroundColor: active ? 'var(--accent-light)' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                    fontWeight: active ? 500 : 400,
+                  }}>
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="shrink-0">{cat.icon}</span>
+                    <span className="truncate">{cat.name}</span>
+                  </span>
+                  <span className="text-[9px] shrink-0"
+                    style={{ color: active ? 'var(--accent)' : 'var(--text-tertiary)' }}>{cat.count}</span>
+                </button>
               );
             })}
-          </div>
-
-          <div className="px-3 py-2 mt-2" style={{ borderTop: '1px solid var(--border)' }}>
-            <div className="text-[10px] mb-2" style={{ color: 'var(--text-tertiary)' }}>
-              <span className="flex items-center gap-1"><Zap size={10} /> 快捷筛选</span>
-            </div>
-            <div className="space-y-1">
-              {[
-                /**
-                 * 二次点击 = 取消：这五项分属**四个互相独立的维度**（难度 / 排序 / 顶部页签 / 触发器），
-                 * 所以不做跨项互斥（点「手动执行」不该把「新手友好」灭掉），只做"点自己就回到本维度默认值"。
-                 * active 一律从该项实际设置的筛选状态派生，不另存标志位 —— 用户在右侧筛选器手改条件时
-                 * 高亮会跟着对齐，不会出现"点了没亮 / 亮了其实没生效"。
-                 */
-                {
-                  label: '⚡ 新手友好',
-                  active: difficultyFilter === '入门',
-                  onClick: () => {
-                    const on = difficultyFilter === '入门';
-                    setDifficultyFilter(on ? 'all' : '入门');
-                    // 只在"开启"时展开筛选面板；取消时弹面板纯属打扰
-                    if (!on) setShowFilters(true);
-                  },
-                },
-                {
-                  label: '🛡️ 官方精选',
-                  active: topTab === 'featured',
-                  onClick: () => setTopTab(topTab === 'featured' ? 'browse' : 'featured'),
-                },
-                {
-                  label: '📝 手动执行',
-                  active: triggerFilter === '手动',
-                  onClick: () => {
-                    const on = triggerFilter === '手动';
-                    setTriggerFilter(on ? 'all' : '手动');
-                    if (!on) setShowFilters(true);
-                  },
-                },
-                {
-                  label: '⏰ 定时任务',
-                  active: triggerFilter === '定时',
-                  onClick: () => {
-                    const on = triggerFilter === '定时';
-                    setTriggerFilter(on ? 'all' : '定时');
-                    if (!on) setShowFilters(true);
-                  },
-                },
-                // 原来是「🔥 本周热门」——它只改排序（sort），而右侧排序下拉已经覆盖了热门排序，
-                // 放在这里既重复又和角标口径冲突（排序不限制集合）。换成触发器维度的第三项，
-                // 与上面两项凑齐 手动 / 定时 / 事件，三个触发器项相邻排布。
-                {
-                  label: '🔔 事件驱动',
-                  active: triggerFilter === '事件',
-                  onClick: () => {
-                    const on = triggerFilter === '事件';
-                    setTriggerFilter(on ? 'all' : '事件');
-                    if (!on) setShowFilters(true);
-                  },
-                },
-              ].map(q => (
-                <button key={q.label} onClick={q.onClick}
-                  className="pd-btn w-full text-left px-2 py-1 rounded text-[11px]"
-                  title={q.active ? '再次点击取消该项筛选' : undefined}
-                  style={{
-                    color: q.active ? 'var(--accent)' : 'var(--text-secondary)',
-                    backgroundColor: q.active ? 'var(--accent-light)' : 'transparent',
-                    fontWeight: q.active ? 500 : 400,
-                  }}>
-                  {q.label}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
 
         {/* 右：结果区 */}
         <div className="flex-1 min-w-0 h-full flex flex-col">
-          {/* 结果条 */}
           <div className="shrink-0 px-4 py-2 flex items-center justify-between"
             style={{ borderBottom: '1px solid var(--border-light)' }}>
             <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
               共找到 <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{filtered.length}</span> 个模板
-              {activeCategoryId !== 'all' && (
+              {activeCategory !== 'all' && (
                 <> · 在分类 <span style={{ color: 'var(--accent)' }}>
-                  {CATEGORIES.find(c => c.id === activeCategoryId)?.name || activeCategoryId}
+                  {categoryMeta(activeCategory).name}
                 </span> 下</>
               )}
             </div>
           </div>
 
-          {/* 列表区 */}
-          <div className="flex-1 overflow-y-auto px-4 py-3">
-            {filtered.length === 0 ? (
+          <div className="flex-1 overflow-y-auto px-4 py-3 pd-scroll-stable">
+            {loading ? (
+              <div className="h-full flex flex-col items-center justify-center gap-2 py-12">
+                <RefreshCw size={18} className="pd-animate-spin" style={{ color: 'var(--text-tertiary)' }} />
+                <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>正在获取模板索引…</div>
+              </div>
+            ) : loadError ? (
+              <div className="h-full flex flex-col items-center justify-center gap-2 py-12">
+                <div style={{ fontSize: 40 }}>📡</div>
+                <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  模板索引获取失败：{loadError}
+                </div>
+                <button
+                  onClick={handleRefresh}
+                  className="pd-btn mt-2 px-3 py-1.5 rounded text-[11px]"
+                  style={{ color: 'var(--accent)' }}>
+                  重试
+                </button>
+              </div>
+            ) : filtered.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center gap-2 py-12">
                 <div style={{ fontSize: 40 }}>🗂️</div>
                 <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                  {searchQuery ? `没有找到“${searchQuery}”相关模板` : '该分类下暂无模板'}
+                  {searchQuery
+                    ? `没有找到“${searchQuery}”相关模板`
+                    : topTab === 'favorites'
+                      ? '还没有收藏任何模板，点卡片右上角的心形可收藏'
+                      : topTab === 'featured'
+                        ? '暂无精选模板'
+                        : '该分类下暂无模板'}
                 </div>
                 <button
-                  onClick={() => { setSearchQuery(''); setActiveCategoryId('all'); setTriggerFilter('all'); setDifficultyFilter('all'); setTopTab('browse'); }}
+                  onClick={resetFilters}
                   className="pd-btn mt-2 px-3 py-1.5 rounded text-[11px]"
                   style={{ color: 'var(--accent)' }}>
                   重置筛选条件
@@ -1345,7 +1015,10 @@ export const WorkflowTemplateMarket: React.FC<{
                   <TemplateCardGrid
                     key={t.id}
                     t={t}
-                    onToggleLike={toggleFav}
+                    installState={installStateOf(t)}
+                    installing={installingId === t.id}
+                    liked={favorites.has(t.id)}
+                    onToggleFav={toggleFav}
                     onInstall={installTpl}
                     onOpenDetail={setDetailTpl}
                   />
@@ -1357,7 +1030,10 @@ export const WorkflowTemplateMarket: React.FC<{
                   <TemplateCardList
                     key={t.id}
                     t={t}
-                    onToggleLike={toggleFav}
+                    installState={installStateOf(t)}
+                    installing={installingId === t.id}
+                    liked={favorites.has(t.id)}
+                    onToggleFav={toggleFav}
                     onInstall={installTpl}
                     onOpenDetail={setDetailTpl}
                   />
@@ -1371,6 +1047,8 @@ export const WorkflowTemplateMarket: React.FC<{
       {detailTpl && (
         <TemplateDetailDialog
           template={detailTpl}
+          installState={installStateOf(detailTpl)}
+          installing={installingId === detailTpl.id}
           onClose={() => setDetailTpl(null)}
           onInstall={installTpl}
         />

@@ -2543,6 +2543,9 @@ pub fn run() {
             utils::market::fetch_agents_config,
             utils::market::inspiration_market_index,
             utils::market::inspiration_market_fetch,
+            utils::market::workflow_market_index,
+            utils::market::workflow_market_installs,
+            utils::market::workflow_market_install,
         ])
         .setup(move |app| {
             // 初始化资源路径（应用根目录：Win %APPDATA%\PilotDesk / unix ~/.config/pilotdesk）

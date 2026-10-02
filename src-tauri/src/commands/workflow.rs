@@ -1749,10 +1749,20 @@ pub fn import_workflow_from_file(
     let conn = state
         .get_conn()
         .map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
+    import_workflow_from_file_with_conn(&conn, &file_path)
+}
 
+/// 导入主体（连接维度实现）。
+///
+/// 拆出来是为了让市场安装复用同一套 [主]/[子] 收集逻辑：安装要在**同一个连接里**连续完成
+/// "先删旧定义、再导入新的一份"（见 utils/market.rs 的 workflow_market_install）。
+pub(crate) fn import_workflow_from_file_with_conn(
+    conn: &rusqlite::Connection,
+    file_path: &str,
+) -> Result<workflow::WorkflowDefinition, String> {
     // 读取主文件
 
-    let main_json = std::fs::read_to_string(&file_path)
+    let main_json = std::fs::read_to_string(file_path)
         .map_err(|e| AppError::Io(format!("读取文件失败: {}", e)))?;
     let main_export: ExportWorkflowDefinition = serde_json::from_str(&main_json)
         .map_err(|e| AppError::Json(format!("JSON 解析失败: {}", e)))?;
@@ -1775,7 +1785,7 @@ pub fn import_workflow_from_file(
     } else {
         // 收集同目录下的 [子] 文件
 
-        let dir = std::path::Path::new(&file_path)
+        let dir = std::path::Path::new(file_path)
             .parent()
             .ok_or_else(|| AppError::InvalidInput("无法获取文件所在目录".to_string()))?;
         let mut subflow_files: std::collections::HashMap<String, String> =

@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "updatedAt": "2026-10-02T12:23:21.201Z",
+  "updatedAt": "2026-10-02T14:02:20.898Z",
   "templates": [
     {
       "id": "写小说工作流（测试）",
@@ -13,7 +13,24 @@
       "subFiles": [],
       "stageCount": 6,
       "nodeCount": 7,
-      "size": "7K"
+      "triggerType": "manual",
+      "nodeTypes": [
+        "start",
+        "agent",
+        "api",
+        "interact",
+        "plugin",
+        "subflow",
+        "end"
+      ],
+      "category": "creative",
+      "tags": [
+        "测试",
+        "小说"
+      ],
+      "author": "PilotDesk 官方",
+      "minAppVersion": "",
+      "requirements": []
     },
     {
       "id": "自动短篇小说写作工作流",
@@ -30,7 +47,25 @@
       ],
       "stageCount": 5,
       "nodeCount": 13,
-      "size": "18K"
+      "triggerType": "manual",
+      "nodeTypes": [
+        "start",
+        "agent",
+        "subflow",
+        "end"
+      ],
+      "featured": true,
+      "category": "creative",
+      "tags": [
+        "小说",
+        "写作",
+        "自动化"
+      ],
+      "author": "PilotDesk 官方",
+      "minAppVersion": "0.1.0",
+      "requirements": [
+        "需要配置可用的 LLM 连接"
+      ]
     }
   ]
 }
