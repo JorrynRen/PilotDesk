@@ -3,7 +3,7 @@
 # 自动重新生成 index.json 索引文件并提交到仓库。
 #
 # 目录结构:
-#   server/market/inspirations/<id>.json   # { id, title, icon, content }
+#   server/market/inspirations/<id>.json   # { id, title, icon, content, tags? }
 #
 # 索引文件位置: server/market/inspirations/index.json
 #

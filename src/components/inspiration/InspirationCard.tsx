@@ -2,6 +2,7 @@ import { Star, Send, Trash2 } from 'lucide-react';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { InspirationItem } from '../../stores/inspirationStore';
 import { elide } from '../../utils/text';
+import { TagChips } from './TagChips';
 
 interface InspirationCardProps {
   inspiration: InspirationItem;
@@ -71,20 +72,8 @@ export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession
         {elide(inspiration.content, 150, '...')}
       </p>
 
-      {/* Tags */}
-      {inspiration.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-3">
-          {inspiration.tags.map((tag) => (
-            <span
-              key={tag}
-              className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
-            >
-              #{tag}
-            </span>
-          ))}
-        </div>
-      )}
+      {/* Tags：与市场、会话侧栏共用 TagChips，避免三处各画一套 */}
+      <TagChips tags={inspiration.tags} className="mb-3" />
 
       {/* Footer */}
       <div className="flex items-center justify-between">

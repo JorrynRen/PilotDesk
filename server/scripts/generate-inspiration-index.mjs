@@ -6,9 +6,14 @@
  * 一条灵感一个文件（约定放在 `inspirations/<id>.json`），索引负责把清单固化下来 ——
  * 与插件市场的 `plugins-index.json`、模板市场的 `workflow-index.json` 同一个道理。
  *
- * 索引**只放浏览/搜索需要的元信息**（含正文摘要），正文全文留在源文件里按需拉取。
+ * 索引**只放浏览/搜索需要的元信息**（含正文摘要与标签），正文全文留在源文件里按需拉取。
  * 这样正文只有一份真相，且与另外两个市场同构；代价是搜索覆盖到摘要为止（摘要 200 字，
  * 基本涵盖提示词的场景说明部分），详情多一次请求。
+ *
+ * 源文件格式（`inspirations/<id>.json`）：
+ *   { id, title, icon, content, tags? }
+ * 其中 `tags` 可选，是字符串数组。它的问题只提示、不跳过整条 —— 标签是可选元数据，
+ * 为一个写错的标签把整条灵感拦在市场外，代价远大于收益（见 normalizeTags）。
  *
  * 身份约定：**`id` 以文件里的字段为准**，文件名只是物理位置。
  * 两者不一致只提示、不拦截 —— 若把它们绑死，"把文件名改通顺"就会变成破坏性操作
@@ -34,6 +39,10 @@ const OUT_FILE = path.join(INSPIRATIONS_DIR, 'index.json');
 const INDEX_BASENAME = 'index.json';
 /** 摘要长度：够覆盖提示词开头的场景说明，又不至于让索引跟着内容一起膨胀 */
 const EXCERPT_LEN = 200;
+/** 单条灵感最多保留几个标签：市场卡片就那么宽，再多也显示不下 */
+const MAX_TAGS = 8;
+/** 单个标签的长度上限：标签是"分类"，不是句子 */
+const MAX_TAG_LEN = 32;
 
 /**
  * 条目的"最后更新时间"取 **git 最后一次提交该文件的时间**，而不是文件 mtime。
@@ -90,6 +99,47 @@ async function writeIndexStable(outFile, index) {
 function excerptOf(content) {
   const flat = content.replace(/\s+/g, ' ').trim();
   return flat.length > EXCERPT_LEN ? flat.slice(0, EXCERPT_LEN) + '…' : flat;
+}
+
+/**
+ * 归一化标签：只留非空字符串，去首尾空白、超长截断、去重、限制条数。
+ *
+ * 与 id/title/content 的处理有个刻意的区别：**标签的问题只提示、不跳过整条**。
+ * 标签是可选元数据，为一个写错的标签把整条灵感拦在市场外，代价远大于收益。
+ * 被丢弃/裁剪的每一处都逐条报出来，不静默改数据。
+ */
+function normalizeTags(raw, file, warnings) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    warnings.push(`${file}（tags 不是数组，已忽略）`);
+    return [];
+  }
+  const out = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') {
+      warnings.push(`${file}（tags 里有非字符串项，已忽略）`);
+      continue;
+    }
+    let t = item.trim();
+    if (!t) {
+      warnings.push(`${file}（tags 里有空白项，已忽略）`);
+      continue;
+    }
+    if (t.length > MAX_TAG_LEN) {
+      warnings.push(`${file}（标签「${t}」超过 ${MAX_TAG_LEN} 字，已截断）`);
+      t = t.slice(0, MAX_TAG_LEN);
+    }
+    if (out.includes(t)) {
+      warnings.push(`${file}（标签「${t}」重复，已去重）`);
+      continue;
+    }
+    out.push(t);
+  }
+  if (out.length > MAX_TAGS) {
+    warnings.push(`${file}（标签 ${out.length} 个超过上限 ${MAX_TAGS}，只取前 ${MAX_TAGS} 个）`);
+    return out.slice(0, MAX_TAGS);
+  }
+  return out;
 }
 
 async function main() {
@@ -158,6 +208,8 @@ async function main() {
       id,
       title,
       icon: typeof item.icon === 'string' && item.icon ? item.icon : '💡',
+      // 可选：不写就是无标签（本地库、市场卡片、会话侧栏三处都能正确处理空数组）
+      tags: normalizeTags(item.tags, file, warnings),
       excerpt: excerptOf(content),
       // 已 URL 编码：文件名允许中文，让调用方各自编码迟早出错，这里一次编好
       path: `inspirations/${encodeURIComponent(file)}`,

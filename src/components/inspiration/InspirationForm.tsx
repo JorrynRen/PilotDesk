@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Plus } from 'lucide-react';
+import { X } from 'lucide-react';
 import type { InspirationItem } from '../../stores/inspirationStore';
+import { TagEditor } from './TagEditor';
 
 import { EMOJI_OPTIONS } from '../../constants';
 
@@ -31,7 +32,6 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
   const [title, setTitle] = useState(initialData?.title ?? '');
   const [content, setContent] = useState(initialData?.content ?? prefill ?? '');
   const [tags, setTags] = useState<string[]>(initialData?.tags ?? []);
-  const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -41,18 +41,6 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
       titleRef.current?.focus();
     }
   }, [initialData, prefill]);
-
-  const addTag = () => {
-    const t = tagInput.trim();
-    if (t && !tags.includes(t)) {
-      setTags([...tags, t]);
-      setTagInput('');
-    }
-  };
-
-  const removeTag = (tag: string) => {
-    setTags(tags.filter((t) => t !== tag));
-  };
 
   const handleSave = async () => {
     if (!title.trim()) return;
@@ -171,45 +159,9 @@ export function InspirationForm({ initialData, prefill, sourceAgent, onSave, onU
             />
           </div>
 
-          {/* Tags */}
+          {/* Tags：与侧栏内联表单共用 TagEditor */}
           <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              {tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs"
-                  style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-                >
-                  #{tag}
-                  <button onClick={() => removeTag(tag)}>
-                    <X size={10} />
-                  </button>
-                </span>
-              ))}
-              <div className="flex items-center gap-1">
-                <input
-                  type="text"
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      addTag();
-                    }
-                  }}
-                  placeholder="添加标签..."
-                  className="px-2 py-0.5 rounded-full text-xs outline-none w-20"
-                  style={{
-                    backgroundColor: 'var(--bg-tertiary)',
-                    color: 'var(--text-primary)',
-                    border: '1px solid var(--border)',
-                  }}
-                />
-                <button onClick={addTag} className="pd-btn p-0.5" style={{ color: 'var(--text-secondary)' }}>
-                  <Plus size={14} />
-                </button>
-              </div>
-            </div>
+            <TagEditor tags={tags} onChange={setTags} />
           </div>
         </div>
 

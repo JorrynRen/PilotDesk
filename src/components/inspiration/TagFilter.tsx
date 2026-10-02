@@ -1,42 +1,14 @@
-import { X } from 'lucide-react';
 import { useInspirationStore } from '../../stores/inspirationStore';
+import { TagFilterBar } from './TagFilterBar';
 
+/**
+ * TagFilter — 独立「灵感库」页的标签筛选条。
+ *
+ * 现在只是一层"接 store"的薄壳：独立页的筛选走 store 的 activeTag（它会触发后端按 tag 过滤），
+ * 渲染交给受控组件 TagFilterBar。会话侧栏要用同一套外观、但持有自己的筛选状态，
+ * 所以把受控部分抽出去，这里只负责接线。
+ */
 export function TagFilter() {
   const { tags, activeTag, setActiveTag } = useInspirationStore();
-
-  if (tags.length === 0 && !activeTag) return null;
-
-  return (
-    <div className="flex items-center gap-1.5 flex-wrap">
-      {activeTag && (
-        <button
-          onClick={() => setActiveTag(null)}
-          className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs"
-          style={{
-            backgroundColor: 'var(--accent)',
-            color: '#fff',
-          }}
-        >
-          {activeTag}
-          <X size={10} />
-        </button>
-      )}
-      {tags
-        .filter((t) => t !== activeTag)
-        .map((tag) => (
-          <button
-            key={tag}
-            onClick={() => setActiveTag(tag)}
-            className="px-2 py-0.5 rounded-full text-xs transition-colors"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            #{tag}
-          </button>
-        ))}
-    </div>
-  );
+  return <TagFilterBar tags={tags} activeTag={activeTag} onSelect={setActiveTag} />;
 }

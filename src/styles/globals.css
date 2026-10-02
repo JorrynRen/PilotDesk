@@ -994,6 +994,17 @@ body {
   scrollbar-gutter: stable;
 }
 
+/* 隐藏滚动条但保留滚动能力：标签筛选这类**单行横向滚动**的小控件用。
+   带一条 8px 的横向滚动条夹在工具栏里既难看又占高，而且这里的滚动是辅助操作
+   （鼠标滚轮 / 触控板横向手势都能滚），不需要常驻可见的指示。 */
+.pd-scroll-none {
+  scrollbar-width: none;
+}
+.pd-scroll-none::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* Focus */
 :focus-visible {
   outline: 1px solid var(--accent);

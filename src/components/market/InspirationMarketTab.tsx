@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Search, RefreshCw, X, Download, Check, Lightbulb, Sparkles, Loader2 } from 'lucide-react';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { TagChips } from '../inspiration/TagChips';
 
 /**
  * 灵感市场（「资源市集 › 灵感」tab）。
@@ -11,9 +12,12 @@ import { errorMessage } from '../../utils/errorMessage';
  * 所以这里唯一的动作就是「导入到我的灵感库」，导入后在「灵感库」（/inspirations）里正常编辑。
  *
  * 数据分两步取（与插件/模板市场同构）：
- *   1. 进 tab 拉 `inspiration_market_index` —— 只有标题/图标/摘要，体积恒定小；
+ *   1. 进 tab 拉 `inspiration_market_index` —— 只有标题/图标/标签/摘要，体积恒定小；
  *   2. 点开详情才按需拉 `inspiration_market_fetch` —— 正文只有一份，在源文件里。
  * 代价是搜索覆盖到摘要为止（摘要 200 字，基本涵盖提示词的场景说明部分）。
+ *
+ * 标签与本地「灵感库」对齐：卡片/详情都展示，导入时一并写进本地，因此
+ * 「从市场抄来的」和「自己建的」在库里长得一样，都能按标签筛。
  */
 
 /** 市场索引里的一条灵感（只有元信息，没有正文） */
@@ -21,6 +25,12 @@ interface MarketInspiration {
   id: string;
   title: string;
   icon: string;
+  /**
+   * 标签（可选）。
+   * 生成脚本一定会写这个字段，但 CDN 上可能还留着旧版索引 —— 所以按可选处理，
+   * 取用处统一 `?? []`，别让一条老数据把整个列表打崩。
+   */
+  tags?: string[];
   /** 正文摘要（生成脚本截取，200 字封顶） */
   excerpt: string;
   /** 相对市场根的路径，如 inspirations/<id>.json */
@@ -112,7 +122,13 @@ export function InspirationMarketTab() {
       it.title.toLowerCase().includes(q) || it.excerpt.toLowerCase().includes(q));
   }, [items, query]);
 
-  /** 导入 / 覆盖更新。已导入过则覆盖本地那条，避免同一灵感在库里堆成好几份 */
+  /**
+   * 导入 / 覆盖更新。已导入过则覆盖本地那条，避免同一灵感在库里堆成好几份。
+   *
+   * 覆盖时**不动标签**：那条的标签是用户自己的组织层（首次导入时市场标签已经写进去了，
+   * 之后用户可能又加了自己的）。"用市场内容覆盖"覆盖的是内容（图标/标题/正文），
+   * 顺手抹掉用户手工加的标签属于误伤。
+   */
   const handleImport = async (item: MarketInspiration, content: string) => {
     setBusyId(item.id);
     try {
@@ -121,13 +137,15 @@ export function InspirationMarketTab() {
         await invoke('update_inspiration', {
           payload: { id: localId, icon: item.icon, title: item.title, content },
         });
-        showToast('已用市场内容覆盖更新', 'success');
+        showToast('已用市场内容覆盖更新（本地标签保留）', 'success');
       } else {
         await invoke('create_inspiration', {
           payload: {
             icon: item.icon,
             title: item.title,
             content,
+            // 市场带的标签一并落地，导入后就能在灵感库/侧栏按标签筛
+            tags: item.tags ?? [],
             // 标记来源：灵感库里能一眼看出这条是抄来的，用户自建的是 manual
             sourceAgent: 'market',
             marketId: item.id,
@@ -245,6 +263,8 @@ export function InspirationMarketTab() {
                   <p className="text-[10px] mt-2 leading-relaxed line-clamp-3" style={{ color: 'var(--text-secondary)' }}>
                     {item.excerpt}
                   </p>
+                  {/* 标签：与灵感库卡片、会话侧栏共用 TagChips，最多 4 个（超出折叠 +N） */}
+                  <TagChips tags={item.tags ?? []} max={4} className="mt-2" />
                 </button>
               );
             })}
@@ -341,9 +361,13 @@ function InspirationDetailDialog({
           )}
 
           {!loading && !state?.error && (
-            <div className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
-              {content}
-            </div>
+            <>
+              {/* 详情里展示全部标签（卡片上为了排版折叠了） */}
+              <TagChips tags={item.tags ?? []} className="mb-3" />
+              <div className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                {content}
+              </div>
+            </>
           )}
         </div>
 

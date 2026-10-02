@@ -7,6 +7,9 @@ import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { useTerminal, injectToActiveTerminal } from '../../TerminalManager';
 import { showToast } from '../../utils/toast';
 import { confirmDialog } from '../../stores/confirmStore';
+import { TagChips } from '../inspiration/TagChips';
+import { TagEditor } from '../inspiration/TagEditor';
+import { TagFilterBar } from '../inspiration/TagFilterBar';
 
 import { EMOJI_OPTIONS } from '../../constants';
 
@@ -21,8 +24,10 @@ export function InspirationPanel() {
 
   const {
     inspirations,
+    tags,
     loading,
     fetchInspirations,
+    fetchTags,
     createInspiration,
     updateInspiration,
     deleteInspiration,
@@ -31,15 +36,24 @@ export function InspirationPanel() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  /**
+   * 标签筛选用**本地 state**，不复用 store 的 activeTag：
+   * 那个是独立「灵感库」页的筛选状态（会触发后端按 tag 过滤），共用会导致
+   * "在侧栏点了个标签，切到灵感库页发现筛选被改了"。侧栏只在自己这 300px 内过滤。
+   */
+  const [activeTag, setActiveTag] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingInspiration, setEditingInspiration] = useState<InspirationItem | null>(null);
   useEffect(() => {
     fetchInspirations();
-  }, [fetchInspirations]);
+    // 标签全集：侧栏的筛选条要用（只读，不碰 store 的 activeTag）
+    fetchTags();
+  }, [fetchInspirations, fetchTags]);
 
   // Filter inspirations locally
   const filteredInspirations = inspirations.filter((insp) => {
     if (favoriteOnly && !insp.isFavorite) return false;
+    if (activeTag && !insp.tags.includes(activeTag)) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return (
@@ -142,6 +156,9 @@ export function InspirationPanel() {
             新建
           </button>
         </div>
+        {/* 标签筛选：与独立页同一套外观（紧凑档 = 单行横向滚动，适配侧栏宽度） */}
+        <TagFilterBar tags={tags} activeTag={activeTag} onSelect={setActiveTag} compact />
+
         <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
           {filteredInspirations.length} 条灵感
         </div>
@@ -266,6 +283,8 @@ function InspirationRow({ inspiration, onToggleFavorite, onSendToSession, onDele
       <p className="text-[10px] leading-relaxed mb-1.5" style={{ color: 'var(--text-secondary)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
         {inspiration.content}
       </p>
+      {/* Tags：紧凑档 + 最多 4 个（侧栏窄，超出折叠成 +N） */}
+      <TagChips tags={inspiration.tags} compact max={4} className="mb-1.5" />
       {/* Send to session */}
       <button
         onClick={() => onSendToSession(inspiration.content)}
@@ -292,6 +311,8 @@ function InspirationInlineForm({ initialData, sourceAgent, onSave, onCancel }: I
   const [icon, setIcon] = useState(initialData?.icon || '💡');
   const [title, setTitle] = useState(initialData?.title || '');
   const [content, setContent] = useState(initialData?.content || '');
+  // 标签可编辑：此前只在保存时原样回传 initialData.tags，等于"看得见改不了"
+  const [tags, setTags] = useState<string[]>(initialData?.tags ?? []);
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -302,8 +323,11 @@ function InspirationInlineForm({ initialData, sourceAgent, onSave, onCancel }: I
         icon,
         title: title.trim(),
         content: content.trim(),
-        sourceAgent: sourceAgent || 'manual',
-        tags: initialData?.tags,
+        tags,
+        // 编辑时不动来源：来源是"这条从哪来"的记录（用户自建 manual / 从市场导入 market /
+        // 某个 Agent 生成的），不该被一次编辑动作改写成"当前会话的 Agent"。
+        // 传 undefined 时后端保留原值（update_inspiration 对 None 走 unwrap_or(existing)）。
+        sourceAgent: initialData ? undefined : (sourceAgent || 'manual'),
       });
     } finally {
       setSaving(false);
@@ -360,6 +384,11 @@ function InspirationInlineForm({ initialData, sourceAgent, onSave, onCancel }: I
           border: '1px solid var(--border)',
         }}
       />
+      {/* Tags */}
+      <div>
+        <span className="text-[10px] mb-1 block" style={{ color: 'var(--text-tertiary)' }}>标签:</span>
+        <TagEditor tags={tags} onChange={setTags} compact />
+      </div>
       {/* Actions */}
       <div className="flex items-center justify-end gap-1.5">
         <button
