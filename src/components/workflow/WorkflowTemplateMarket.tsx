@@ -1238,15 +1238,21 @@ export const WorkflowTemplateMarket: React.FC<{
             </div>
             <div className="space-y-1">
               {[
-                { label: '⚡ 新手友好', onClick: () => { setDifficultyFilter('入门'); setShowFilters(true); } },
-                { label: '🔥 本周热门', onClick: () => { setSort('downloads'); } },
-                { label: '🛡️ 官方精选', onClick: () => { setTopTab('featured'); } },
-                { label: '📝 手动执行', onClick: () => { setTriggerFilter('手动'); setShowFilters(true); } },
-                { label: '⏰ 定时任务', onClick: () => { setTriggerFilter('定时'); setShowFilters(true); } },
+                // active 一律从"这项实际设置的筛选状态"派生，而不是另存一个标志位：
+                // 用户在右侧筛选器里手改条件时，高亮也会跟着对齐，不会出现"点了没亮 / 亮了其实没生效"。
+                { label: '⚡ 新手友好', active: difficultyFilter === '入门', onClick: () => { setDifficultyFilter('入门'); setShowFilters(true); } },
+                { label: '🔥 本周热门', active: sort === 'downloads', onClick: () => { setSort('downloads'); } },
+                { label: '🛡️ 官方精选', active: topTab === 'featured', onClick: () => { setTopTab('featured'); } },
+                { label: '📝 手动执行', active: triggerFilter === '手动', onClick: () => { setTriggerFilter('手动'); setShowFilters(true); } },
+                { label: '⏰ 定时任务', active: triggerFilter === '定时', onClick: () => { setTriggerFilter('定时'); setShowFilters(true); } },
               ].map(q => (
                 <button key={q.label} onClick={q.onClick}
                   className="pd-btn w-full text-left px-2 py-1 rounded text-[11px]"
-                  style={{ color: 'var(--text-secondary)' }}>
+                  style={{
+                    color: q.active ? 'var(--accent)' : 'var(--text-secondary)',
+                    backgroundColor: q.active ? 'var(--accent-light)' : 'transparent',
+                    fontWeight: q.active ? 500 : 400,
+                  }}>
                   {q.label}
                 </button>
               ))}

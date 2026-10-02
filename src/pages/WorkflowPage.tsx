@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, Sparkles, ScrollText, Play, Loader2, Square } from 'lucide-react';
+import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, LayoutTemplate, ScrollText, Play, Loader2, Square } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -689,7 +689,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           onClick={() => setActiveTab('templates')}
           className={"pd-tab" + (activeTab === 'templates' ? " pd-tab-active" : "")}
         >
-          <Sparkles size={12} />
+          <LayoutTemplate size={12} />
           模板市场
         </button>
 
