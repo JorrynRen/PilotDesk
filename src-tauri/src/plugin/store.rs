@@ -34,7 +34,12 @@ pub struct OnlinePluginInfo {
     pub path: String,
     /// 绝对地址，由归一化填入 —— 索引里**不存在**该字段，故必须 `default`。
     /// 保留它是为了前端契约不变（前端用 `baseUrl` 展示与兜底）。
-    #[serde(default)]
+    ///
+    /// ⚠️ 必须显式 rename：本结构体没有 `rename_all`，字段名 `base_url` 会原样序列化成
+    /// `base_url`，而前端读的是 `baseUrl` —— 少了这行，前端拿到 `undefined`，
+    /// 传给 `read_plugin_readme` 的 `pluginId` 会被 JSON 序列化丢掉，
+    /// 后端就报 `missing required key pluginId`（"查看 README"必挂）。
+    #[serde(default, rename = "baseUrl")]
     pub base_url: String,
     /// 索引里是图标**文件名**（如 `favicon.png`），归一化后变成绝对地址。
     #[serde(default)]
