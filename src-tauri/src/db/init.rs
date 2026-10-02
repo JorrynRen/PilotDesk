@@ -9,7 +9,7 @@ use std::fs;
 /// 打开到比当前更新的库时明确报错，绝不 wipe。v1-v4 为预发布期整库重置，无独立旧库留存。
 /// 约定：每次修改 FINAL_SCHEMA_SQL 都必须把 SCHEMA_VERSION +1，
 /// 否则 user_version 相等的旧库走快速路径、不会补齐缺表/缺列。
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS inspirations (
             source_agent TEXT DEFAULT 'manual',
             is_favorite INTEGER DEFAULT 0,
             created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL);
+            updated_at INTEGER NOT NULL,
+            market_id TEXT);
 CREATE TABLE IF NOT EXISTS install_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp INTEGER NOT NULL,
@@ -434,6 +435,10 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
                AND prompt_tokens >= cache_read_tokens",
             [],
         )?;
+        // v7 → v8：灵感记来源。从「资源市集 › 灵感」导入的条目落 market_id（市场那条的稳定 id），
+        // 用来判断"这条是否已导入"、再导入时做覆盖更新。用户自己新建的灵感为 NULL。
+        // 没有它就只能靠标题比对，改个标题就认不出来，会反复导进重复条目。
+        ensure_column(conn, "inspirations", "market_id", "TEXT")?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
     Ok(())

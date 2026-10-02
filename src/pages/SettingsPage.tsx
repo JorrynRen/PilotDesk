@@ -1328,6 +1328,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         settingsOpen
         onOpenSettings={() => { /* 已在设置页，无需动作 */ }}
         onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenMarket={() => navigate('/market')}
       />
 
       {/* 主体：左侧分组侧边栏 + 右侧内容区 */}

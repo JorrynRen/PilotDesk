@@ -189,6 +189,7 @@ server.listen(PORT, HOST, () => {
   console.log(`\n  常用地址：`);
   console.log(`    工作流模板索引  ${base}/server/market/workflow/workflow-index.json`);
   console.log(`    插件索引        ${base}/server/market/plugins/plugins-index.json`);
+  console.log(`    灵感市场索引    ${base}/server/market/inspirations/index.json`);
   console.log(`    Agent 配置      ${base}/server/market/agents-config/agents-config.json`);
   console.log(`    资源树          ${base}/server/market\n`);
 });

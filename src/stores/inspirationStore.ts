@@ -12,6 +12,8 @@ export interface InspirationItem {
   tags: string[];
   createdAt: number;
   updatedAt: number;
+  /** 来自「资源市集 › 灵感」时记录市场那条的稳定 id；用户自建的条目为 null/undefined */
+  marketId?: string | null;
 }
 
 interface InspirationState {
@@ -31,6 +33,8 @@ interface InspirationState {
     content: string;
     sourceAgent?: string;
     tags?: string[];
+    /** 从资源市集导入时带上市场条目 id，用于标记来源与去重 */
+    marketId?: string;
   }) => Promise<InspirationItem | null>;
   updateInspiration: (data: {
     id: string;

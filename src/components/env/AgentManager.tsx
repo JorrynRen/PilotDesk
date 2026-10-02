@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen, Store as StoreIcon } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../../utils/toast';
@@ -31,14 +32,13 @@ import { CSS } from '@dnd-kit/utilities';
 // ──────────────────────────────────────────────
 
 export function AgentManager() {
+  const navigate = useNavigate();
   const { agents, loading, fetchAgents } = useAgentRegistry();
   const [editingType, setEditingType] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<AgentConfig> | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [addForm, setAddForm] = useState<Partial<AgentConfig>>({});
   const [saving, setSaving] = useState(false);
-  const [marketAgents, setMarketAgents] = useState<AgentConfig[]>([]);
-  const [marketLoading, setMarketLoading] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -131,133 +131,6 @@ export function AgentManager() {
       fetchAgents();
     } catch (err) {
       showToast(`添加失败: ${errorMessage(err)}`, 'error');
-    }
-    setSaving(false);
-  };
-
-  /** 从 Rust 后端获取 Agent 市场配置（服务器源/降级/重试由 market.rs 统一管理） */
-  const fetchMarket = async () => {
-    setMarketLoading(true);
-    try {
-      const data = await invoke<{ agents?: AgentConfig[] }>('fetch_agents_config');
-      setMarketAgents(data.agents || []);
-    } catch (err) {
-      showToast(`无法连接 Agent 市场，请检查网络连接 (${errorMessage(err)})`, 'warning');
-    }
-    setMarketLoading(false);
-  };
-
-  /** 比较两个版本号（支持 v1, v1.1, v1.1.1 格式），返回 true 表示 a > b */
-  const isNewerVersion = (a: string, b: string): boolean => {
-    const normalize = (v: string) => {
-      const parts = v.replace(/^v/i, '').split('.').map(Number);
-      // 补零对齐：v1 → [1,0,0], v1.1 → [1,1,0]
-      while (parts.length < 3) parts.push(0);
-      return parts;
-    };
-    const pa = normalize(a), pb = normalize(b);
-    for (let i = 0; i < 3; i++) {
-      if (pa[i] > pb[i]) return true;
-      if (pa[i] < pb[i]) return false;
-    }
-    return false; // equal
-  };
-
-  /** 从市场从市场更新（强制覆盖本地，不检查版本） */
-  const handleRestoreFromMarket = async (agent: AgentConfig) => {
-    setSaving(true);
-    try {
-      await invoke('update_agent', {
-        payload: {
-          agentType: agent.agentType,
-          displayName: agent.displayName,
-          description: agent.description,
-          cliCommand: agent.cliCommand,
-          npmPackage: agent.npmPackage,
-          pipPackage: agent.pipPackage,
-          installCmd: agent.installCmd,
-          uninstallCmd: agent.uninstallCmd,
-          updateCmd: agent.updateCmd,
-          versionCmd: agent.versionCmd,
-          latestVersionCmd: agent.latestVersionCmd,
-          runCmdTemplate: agent.runCmdTemplate,
-          outputParser: agent.outputParser,
-          outputFilterRegex: agent.outputFilterRegex,
-          versionPattern: agent.versionPattern,
-          sessionIdSource: agent.sessionIdSource,
-          sessionIdEventType: agent.sessionIdEventType,
-          sessionIdField: agent.sessionIdField,
-          resumeArgTemplate: agent.resumeArgTemplate,
-          skillsDir: agent.skillsDir,
-          skillEntryFile: agent.skillEntryFile,
-          skillDisplayMode: agent.skillDisplayMode,
-          color: agent.color,
-          icon: agent.icon,
-          sortOrder: agent.sortOrder,
-          isEnabled: agent.isEnabled,
-          version: agent.version,
-        },
-      });
-      showToast(`已恢复 ${agent.displayName} 初始配置 (v${agent.version})`, 'success');
-      fetchAgents();
-    } catch (err) {
-      showToast(`恢复失败: ${errorMessage(err)}`, 'error');
-    }
-    setSaving(false);
-  };
-
-  const handleInstallFromMarket = async (agent: AgentConfig) => {
-    setSaving(true);
-    try {
-      const local = agents.find(a => a.agentType === agent.agentType);
-      if (local) {
-        // 已存在 → 检查版本
-        if (!isNewerVersion(agent.version, local.version)) {
-          showToast(`${agent.displayName} 已是最新版本 (${local.version})`, 'info');
-          setSaving(false);
-          return;
-        }
-        // 更新
-        await invoke('update_agent', {
-          payload: {
-            agentType: agent.agentType,
-            displayName: agent.displayName,
-            description: agent.description,
-            cliCommand: agent.cliCommand,
-            npmPackage: agent.npmPackage,
-            pipPackage: agent.pipPackage,
-            installCmd: agent.installCmd,
-            uninstallCmd: agent.uninstallCmd,
-            updateCmd: agent.updateCmd,
-            versionCmd: agent.versionCmd,
-            latestVersionCmd: agent.latestVersionCmd,
-            runCmdTemplate: agent.runCmdTemplate,
-            outputParser: agent.outputParser,
-            outputFilterRegex: agent.outputFilterRegex,
-            versionPattern: agent.versionPattern,
-            sessionIdSource: agent.sessionIdSource,
-            sessionIdEventType: agent.sessionIdEventType,
-            sessionIdField: agent.sessionIdField,
-            resumeArgTemplate: agent.resumeArgTemplate,
-            skillsDir: agent.skillsDir,
-            skillEntryFile: agent.skillEntryFile,
-            skillDisplayMode: agent.skillDisplayMode,
-            color: agent.color,
-            icon: agent.icon,
-            sortOrder: agent.sortOrder,
-            isEnabled: agent.isEnabled,
-            version: agent.version,
-          },
-        });
-        showToast(`已更新 ${agent.displayName} (${local.version} → ${agent.version})`, 'success');
-      } else {
-        // 新安装
-        await invoke('add_agent', { payload: { ...agent, version: agent.version } });
-        showToast(`已安装 ${agent.displayName} (${agent.version})`, 'success');
-      }
-      fetchAgents();
-    } catch (err) {
-      showToast(`操作失败: ${errorMessage(err)}`, 'error');
     }
     setSaving(false);
   };
@@ -419,96 +292,23 @@ export function AgentManager() {
         </div>
       </SettingsSection>
 
-      {/* Agent 市场 */}
-      <SettingsSection
-        title="Agent 配置市场"
-        actions={
-          <>
-            <SettingsButton
-              variant="secondary"
-              icon={<Download size={11} />}
-              onClick={() => { fetchMarket(); }}
-              disabled={marketLoading}
-            >
-              {marketLoading ? '加载中...' : '刷新'}
-            </SettingsButton>
-            {marketAgents.length > 0 && (
-              <SettingsButton
-                variant="secondary"
-                icon={<X size={11} />}
-                onClick={() => setMarketAgents([])}
-              >
-                关闭
-              </SettingsButton>
-            )}
-          </>
-        }
-      >
-        <div className="space-y-2">
-          {marketAgents.length === 0 ? (
-            <div className="text-xs py-2" style={{ color: 'var(--text-secondary)' }}>
-              {marketLoading ? '加载中...' : '点击"刷新"浏览 Agent 市场'}
+      {/* Agent 配置市场已迁至「资源市集 › CLI Agent 配置」：设置页只保留本地 Registry 的增删改与排序 */}
+      <SettingsSection title="Agent 配置市场" description="在线浏览与拉取各 CLI Agent 的集成配置">
+        <SettingsCard>
+          <div className="flex items-center gap-3 w-full">
+            <StoreIcon size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+            <div className="min-w-0 flex-1">
+              <div className="text-xs" style={{ color: 'var(--text-primary)' }}>去资源市集获取 Agent 配置</div>
             </div>
-          ) : (
-            marketAgents.map((agent) => {
-              const local = agents.find(a => a.agentType === agent.agentType);
-              const isInstalled = !!local;
-              const hasUpdate = isInstalled && isNewerVersion(agent.version, local.version);
-              return (
-                <SettingsCard key={`market-${agent.agentType}`}>
-                  <div className="flex items-center gap-3 w-full">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                            {agent.displayName}
-                          </span>
-                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            v{agent.version}
-                          </span>
-                        </div>
-                        <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                          {agent.description}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {hasUpdate ? (
-                        <SettingsButton
-                          variant="primary"
-                          onClick={() => handleInstallFromMarket(agent)}
-                          disabled={saving}
-                        >
-                          更新 (v{local.version} → v{agent.version})
-                        </SettingsButton>
-                      ) : isInstalled ? (
-                        <SettingsButton
-                          variant="secondary"
-                          onClick={() => handleRestoreFromMarket(agent)}
-                          disabled={saving}
-                          title="用市场配置覆盖本地修改，恢复出厂配置"
-                        >
-                          从市场更新
-                        </SettingsButton>
-                      ) : (
-                        <SettingsButton
-                          variant="primary"
-                          onClick={() => handleInstallFromMarket(agent)}
-                          disabled={saving}
-                        >
-                          拉取并注册
-                        </SettingsButton>
-                      )}
-                    </div>
-                  </div>
-                </SettingsCard>
-              );
-            })
-          )}
-        </div>
+            <SettingsButton
+              variant="primary"
+              onClick={() => navigate('/market?tab=agents')}
+            >
+              前往资源市集
+            </SettingsButton>
+          </div>
+        </SettingsCard>
       </SettingsSection>
-
 
     </div>
   );

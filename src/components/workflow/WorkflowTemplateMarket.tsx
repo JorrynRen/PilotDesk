@@ -9,7 +9,7 @@
  *     顶部 Tab：精选 / 分类列表 / 我的收藏
  *     左栏：分类树 + 过滤条件
  *     主区：卡片网格（可切换 列表/网格 模式）
- * - 点击卡片：右侧展开详情抽屉（Preview），含安装/预览流程节点图
+ * - 点击卡片：弹出居中的详情弹窗（与「插件 README」同一套观感），含安装/流程节点预览
  */
 
 import React, { useState, useMemo } from 'react';
@@ -714,8 +714,8 @@ function TemplateCardList({
   );
 }
 
-// ── 详情抽屉（Portal 全屏覆盖） ──
-function TemplateDetailDrawer({
+// ── 详情弹窗（Portal 居中模态，与插件 README 弹窗同一套观感） ──
+function TemplateDetailDialog({
   template, onClose, onInstall,
 }: {
   template: WorkflowTemplate;
@@ -750,18 +750,13 @@ function TemplateDetailDrawer({
 
   return createPortal((
     <div
-      className="fixed inset-0 flex"
-      style={{ backgroundColor: 'rgba(0,0,0,0.35)', zIndex: 99999 }}
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
       onClick={onClose}
     >
-      <div className="flex-1" />
       <div
-        className="h-full flex flex-col"
-        style={{
-          width: 640,
-          backgroundColor: 'var(--bg-primary)',
-          boxShadow: 'var(--shadow-lg)',
-        }}
+        className="w-[720px] max-h-[80vh] rounded-xl shadow-2xl flex flex-col"
+        style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', overflow: 'hidden' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -870,15 +865,9 @@ function TemplateDetailDrawer({
             <h4 className="text-xs mb-2" style={{ color: 'var(--text-primary)' }}>流程预览</h4>
             <div className="rounded-lg p-3 overflow-x-auto"
               style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-              <svg width="100%" viewBox={`0 -4 600 120`} style={{ minHeight: 110 }}>
-                <WorkflowMiniPreview nodes={template.previewNodes.map(n => ({ ...n, column: n.column, row: n.row }))}
-                  accent={template.accentColor} />
-                {/* 这里实际渲染的是独立 SVG，WorkflowMiniPreview 内部自己生成根 svg，简化起见这里只放一个说明 */}
-              </svg>
-              {/* 注意：上方 svg 标签实际是为了占位不影响，MiniPreview 内部会再渲染一层 svg（嵌套无害） */}
-              <div className="mt-2">
-                <WorkflowMiniPreview nodes={template.previewNodes} accent={template.accentColor} />
-              </div>
+              {/* WorkflowMiniPreview 自带根 <svg>：曾经外面又套了一层 <svg>，等于把同一份缩略图渲染两遍
+                  （外层那份还会被自己的 viewBox 拉伸变形），这里只保留真正的那一份 */}
+              <WorkflowMiniPreview nodes={template.previewNodes} accent={template.accentColor} />
             </div>
           </div>
 
@@ -1380,7 +1369,7 @@ export const WorkflowTemplateMarket: React.FC<{
       </div>
 
       {detailTpl && (
-        <TemplateDetailDrawer
+        <TemplateDetailDialog
           template={detailTpl}
           onClose={() => setDetailTpl(null)}
           onInstall={installTpl}

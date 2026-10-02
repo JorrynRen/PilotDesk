@@ -1,0 +1,91 @@
+# 灵感市场索引自动生成
+# 当 server/market/inspirations/ 目录下的灵感文件发生变更时，
+# 自动重新生成 index.json 索引文件并提交到仓库。
+#
+# 目录结构:
+#   server/market/inspirations/<id>.json   # { id, title, icon, content }
+#
+# 索引文件位置: server/market/inspirations/index.json
+#
+# 注意：index.json 是**生成物**，不要在 PR 里手改它（会被下一次生成覆盖）。
+# 要加/改一条灵感，请新建或编辑对应的源文件。
+# 其中 `id` 以**文件里的字段为准**（它是客户端判断"是否已导入"的依据），
+# 文件名只是物理位置 —— 建议同名，不同名脚本会提示但不影响生成。
+#
+# 生成逻辑在 Node 脚本 server/scripts/generate-inspiration-index.mjs（本地可跑：npm run market:index:inspirations）。
+# 本文件与 generate-plugin-index.yml / generate-workflow-index.yml 对称 —— 缺了它，
+# 改了灵感却忘了重算索引时，客户端会一直拿到过期清单，而且没有任何提示。
+
+name: Generate Inspiration Index
+
+on:
+  push:
+    branches: [main]
+    # 只在"真的可能影响索引"的路径变动时才跑，理由同 generate-plugin-index.yml
+    # （不加过滤则每次推送都往 main 追一个 [skip ci] 提交，本地凭空落后一个提交）。
+    paths:
+      - 'server/market/inspirations/**'
+      - 'server/scripts/generate-inspiration-index.mjs'
+      - '.github/workflows/generate-inspiration-index.yml'
+  workflow_dispatch:
+
+# 与另外两个索引 workflow 共用同一个并发组：三个都会往 main 追提交，
+# 串行化避免互相判非快进（详见 generate-plugin-index.yml）。
+concurrency:
+  group: market-index
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  generate-index:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # 索引本身只读灵感文件，但下面的"变基到最新 main"需要公共祖先 —— 浅克隆里
+      # 变基会因缺少 merge base 失败，所以这里同样要完整历史。
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate index.json
+        run: node server/scripts/generate-inspiration-index.mjs
+
+      - name: Validate index.json
+        run: |
+          echo "Validating index.json..."
+          if [ ! -f server/market/inspirations/index.json ]; then
+            echo "Error: index.json not generated"
+            exit 1
+          fi
+          if ! jq empty server/market/inspirations/index.json 2>/dev/null; then
+            echo "Error: index.json is not valid JSON"
+            exit 1
+          fi
+          echo "Index file size: $(wc -c < server/market/inspirations/index.json) bytes"
+          echo "Inspiration count: $(jq '.inspirations | length' server/market/inspirations/index.json)"
+
+      - name: Commit and push if changed
+        run: |
+          git config --local user.email "ren.jorryn@gmail.com"
+          git config --local user.name "jorryn"
+          git add server/market/inspirations/index.json
+          if git diff --staged --quiet; then
+            echo "No changes to index.json"
+            exit 0
+          fi
+          git commit -m "chore(inspiration-market): auto-generate inspiration index [skip ci]"
+          # 见 generate-plugin-index.yml：并发组只保证串行，排队启动的那一个 checkout
+          # 拿到的仍是触发提交而非最新 main，直接 push 会被判非快进。先变基再推。
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase "origin/${GITHUB_REF_NAME}"
+          git push

@@ -81,6 +81,9 @@ pub struct Inspiration {
     pub tags: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 来自「资源市集 › 灵感」时记录市场那条的稳定 id（用户自建为 None）。
+    /// 客户端靠它判断"这条是否已导入过"，再导入时做覆盖更新而不是重复插入。
+    pub market_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

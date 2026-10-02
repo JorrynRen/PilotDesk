@@ -2541,6 +2541,8 @@ pub fn run() {
             terminal::commands::terminal_attach,
             terminal::commands::terminal_get_config,
             utils::market::fetch_agents_config,
+            utils::market::inspiration_market_index,
+            utils::market::inspiration_market_fetch,
         ])
         .setup(move |app| {
             // 初始化资源路径（应用根目录：Win %APPDATA%\PilotDesk / unix ~/.config/pilotdesk）

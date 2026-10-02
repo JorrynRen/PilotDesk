@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X, Search } from 'lucide-react';
+import { Trash2, Shield, ShieldOff, Copy, RefreshCw, Store, Package, X } from 'lucide-react';
 import { usePluginStore, pluginSupportsWorkflow } from '../../stores/pluginStore';
 import { PluginReadmeDialog } from './PluginReadmeDialog';
-import { OnlinePluginStore } from './OnlinePluginStore';
 import { pluginRegistry } from '../../plugin/PluginRegistry';
 import { confirmDialog } from '../../stores/confirmStore';
 import { PluginIcon as SharedPluginIcon } from './PluginIcon';
@@ -237,15 +237,11 @@ function PluginIcon({ plugin }: { plugin: PluginInstance }) {
 }
 
 export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerProps) {
+  const navigate = useNavigate();
   const { plugins, loading, error, discover, enable, disable, installZip, uninstall, sandboxInfo } = usePluginStore();
   const [showSandbox, setShowSandbox] = useState(false);
-  const [showStore, setShowStore] = useState(false);
   const [installStatus, setInstallStatus] = useState<string | null>(null);
-  const [storeSearchQuery, setStoreSearchQuery] = useState('');
-  const [storeLoading, setStoreLoading] = useState(false);
   const [readmePlugin, setReadmePlugin] = useState<PluginInstance | null>(null);
-
-  const [storeStats, setStoreStats] = useState<{ total: number; filtered: number } | null>(null);
 
   useEffect(() => {
     discover();
@@ -279,18 +275,6 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
     }
   }, [installZip, discover]);
 
-  const fetchStorePlugins = useCallback(async () => {
-    setStoreLoading(true);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('plugin_store_fetch_index', { forceRefresh: true });
-    } catch (e) {
-      console.error('Refresh store failed:', e);
-    } finally {
-      setStoreLoading(false);
-    }
-  }, []);
-
   const handleUninstall = useCallback(async (plugin: PluginInstance) => {
     // 卸载前二次确认（统一走全局确认弹窗）
     const ok = await confirmDialog({
@@ -314,14 +298,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
       <div className="pt-4 pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {showStore && <Store size={16} style={{ color: 'var(--accent)' }} />}
-            {/* 插件管理（非商店态）不再显示标题文字，仅保留沙箱徽标与右侧操作按钮 */}
-            {showStore && (
-              <h3 className="text-sm" style={{ color: 'var(--text-primary)' }}>
-                插件商店
-              </h3>
-            )}
-            {!showStore && (
+            {/* 标题文字省略，仅保留沙箱徽标与右侧操作按钮 */}
             <span
               className="text-[9px] px-1.5 py-0.5 rounded font-medium"
               style={{
@@ -335,37 +312,8 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
             >
               {sandboxInfo?.sandbox_enabled ? '沙箱' : '沙箱'}
             </span>
-            )}
           </div>
           <div className="flex items-center gap-1.5">
-            {showStore ? (
-              <>
-              {storeStats && (
-                <span style={{ fontSize: 'var(--fs-10)', color: 'var(--text-tertiary)', marginRight: 4 }}>
-                  共{storeStats.filtered !== storeStats.total
-                    ? `${storeStats.filtered}/${storeStats.total}`
-                    : storeStats.total}个
-                </span>
-              )}
-              <button
-                onClick={fetchStorePlugins}
-                disabled={storeLoading}
-                className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-              >
-                <RefreshCw size={11} className={storeLoading ? 'pd-animate-spin' : ''} />
-                刷新
-              </button>
-              <button
-                onClick={() => { setShowStore(false); setStoreStats(null); }}
-                className="pd-btn text-[10px] px-2 py-1 rounded"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-              >
-                <X size={11} />
-              </button>
-              </>
-            ) : (
-              <>
             <button
               onClick={handleInstallZip}
               className="pd-btn text-[10px] px-2 py-1 rounded transition-all"
@@ -374,20 +322,18 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
             >
               +安装
             </button>
+            {/* 在线插件商店已迁至「资源市集 › 插件」：这里只留跳转入口 */}
             <button
-              onClick={() => { setShowStore(!showStore); setShowSandbox(false); }}
+              onClick={() => navigate('/market?tab=plugins')}
               className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
-              style={{
-                backgroundColor: showStore ? 'var(--accent-light)' : 'var(--bg-tertiary)',
-                color: showStore ? 'var(--accent)' : 'var(--text-tertiary)',
-              }}
-              title={showStore ? '收起商店' : '在线插件商店'}
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              title="前往资源市集 › 插件"
             >
               <Store size={11} />
-              插件商店
+              资源市集
             </button>
             <button
-              onClick={() => { setShowSandbox(!showSandbox); setShowStore(false); }}
+              onClick={() => setShowSandbox(!showSandbox)}
               className="pd-btn text-[10px] px-2 py-1 rounded"
               style={{
                 backgroundColor: showSandbox ? 'var(--accent-light)' : 'var(--bg-tertiary)',
@@ -397,60 +343,14 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
             >
               沙箱
             </button>
-              </>
-            )}
           </div>
         </div>
         {/* 分隔线 */}
         <div className="my-3" style={{ height: '1px', backgroundColor: 'var(--border)' }} />
-        {showStore && (
-        <div className="relative mt-3">
-          <Search
-            size={13}
-            style={{
-              position: 'absolute',
-              left: 10,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              color: 'var(--text-tertiary)',
-              pointerEvents: 'none',
-            }}
-          />
-          <input
-            type="text"
-            placeholder="搜索插件名称、描述、作者..."
-            value={storeSearchQuery}
-            onChange={(e) => setStoreSearchQuery(e.target.value)}
-            className="search-input w-full"
-            style={{ paddingLeft: 32 }}
-          />
-          {storeSearchQuery && (
-            <button
-              onClick={() => setStoreSearchQuery('')}
-              className="pd-btn"
-              style={{
-                position: 'absolute',
-                right: 8,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                color: 'var(--text-tertiary)',
-                padding: 2,
-              }}
-            >
-              <X size={12} />
-            </button>
-          )}
-        </div>
-        )}
       </div>
 
       <div className="pb-4">
-      {showStore ? (
-        <OnlinePluginStore
-          searchQuery={storeSearchQuery}
-          onStatsChange={(total, filtered) => setStoreStats({ total, filtered })}
-        />
-      ) : showSandbox ? (
+      {showSandbox ? (
         <div><SandboxInfoPanel onClose={() => setShowSandbox(false)} /></div>
       ) : (
         <div>

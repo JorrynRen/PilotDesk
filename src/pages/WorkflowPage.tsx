@@ -16,7 +16,6 @@ import { WorkflowOutputCard } from '../components/workflow/WorkflowOutputCard';
 import { WorkflowNodeTimeline } from '../components/workflow/WorkflowNodeTimeline';
 import type { NodeExecRow } from '../components/workflow/WorkflowNodeTimeline';
 import { ExecutionStats } from '../components/workflow/ExecutionStats';
-import { WorkflowTemplateMarket } from '../components/workflow/WorkflowTemplateMarket';
 import { Select } from '../components/common/Select';
 import type { WorkflowDefinition, WorkflowInstance, ExecutionProgressPayload } from '../types/workflow';
 import type { JsonValue } from '../types/plugin';
@@ -141,7 +140,7 @@ function formatElapsed(startedAt?: number | null): string {
 export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const navigate = useNavigate();
   const { definitions, instances, schedules, pendingInputs, pendingApprovals, loading, error, loadDefinitions, loadInstances, loadSchedules, loadPendingInputs, loadPendingApprovals, createDefinition, updateDefinition, deleteDefinition, deleteExecutions, selectDefinition } = useWorkflowStore();
-  const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats' | 'templates'>('definitions');
+  const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats'>('definitions');
   const [showPropertyDialog, setShowPropertyDialog] = useState<'create' | 'edit' | null>(null);
   const [editingDef, setEditingDef] = useState<WorkflowDefinition | null>(null);
   /** 「查看结果」抽屉：直接给最近一次产出，省去跳实例页再翻记录 */
@@ -660,6 +659,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           titleText="工作流管理"
           onBack={() => navigate('/')}
           onOpenSettings={() => navigate('/settings')}
+          onOpenMarket={() => navigate('/market')}
         />
       )}
       {/* Tab navigation — 与设置页同一套UI */}
@@ -684,13 +684,6 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
         >
           <BarChart3 size={12} />
           统计
-        </button>
-        <button
-          onClick={() => setActiveTab('templates')}
-          className={"pd-tab" + (activeTab === 'templates' ? " pd-tab-active" : "")}
-        >
-          <LayoutTemplate size={12} />
-          模板市场
         </button>
 
         <div className="flex-1" />
@@ -722,6 +715,15 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
           >
             <Download size={14} /> 从文件导入
+          </button>
+          {/* 模板市场已迁至「资源市集 › 工作流模板」：这里只留跳转入口 */}
+          <button
+            onClick={() => navigate('/market?tab=workflow')}
+            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="前往资源市集 › 工作流模板"
+          >
+            <LayoutTemplate size={14} /> 模板市场
           </button>
         </div>
       </div>
@@ -1187,15 +1189,6 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
 
         {!loading && activeTab === 'stats' && (
           <ExecutionStats workflowId={undefined} />
-        )}
-
-        {activeTab === 'templates' && (
-          <WorkflowTemplateMarket
-            onUseTemplate={(tplId) => {
-              showToast(`已安装模板 ${tplId}，可在"工作流定义"中查看`, 'success');
-              setActiveTab('definitions');
-            }}
-          />
         )}
       </div>
 

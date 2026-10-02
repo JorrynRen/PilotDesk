@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe, Settings, Bell, LayoutDashboard, Library } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe, Settings, Bell, LayoutDashboard, Library, Store } from 'lucide-react';
 import type { ViewMode } from '../../TerminalManager';
 import { useCustomTabsStore } from '../../stores/customTabsStore';
 import { useNotificationStore, countUnread } from '../../stores/notificationStore';
@@ -40,6 +40,15 @@ interface TitleBarProps {
   onOpenKnowledge?: () => void;
   /** 知识库页传 true：thumb 定位到「知识库」段 */
   knowledgeOpen?: boolean;
+  /** 资源市集（独立路由 /market）：入口固定放在右侧图标区（与指挥中心/通知中心同排） */
+  onOpenMarket?: () => void;
+  /** 资源市集页传 true：图标高亮 */
+  marketOpen?: boolean;
+  /**
+   * 该路由不对应任何模式段（如资源市集）：组合菜单照常可点击跳转，但不显示任何段的选中态。
+   * 不传则按 mode/knowledgeOpen/settingsOpen 正常高亮。
+   */
+  noActiveSegment?: boolean;
 }
 
 /** 标题栏状态提示徽标组件 */
@@ -77,7 +86,7 @@ function StatusHintBadge({ hint }: { hint: StatusHint }) {
   );
 }
 
-export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen, onOpenKnowledge, knowledgeOpen }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen, onOpenKnowledge, knowledgeOpen, onOpenMarket, marketOpen, noActiveSegment }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const { t } = useI18n();
   const customTabs = useCustomTabsStore((s) => s.tabs);
@@ -169,15 +178,23 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       ? [{ key: 'settings', icon: <Settings size={11} />, label: t('titleBar.settings', '设置'), title: t('titleBar.settings.title', '设置页面') }]
       : []),
   ];
-  // 当前激活段的 key：知识库页固定为知识库段、设置页固定为设置段；custom 模式时按 activeCustomTabId 精确定位
-  const activeSegmentKey = knowledgeOpen
-    ? 'knowledge'
-    : settingsOpen
-      ? 'settings'
-      : (mode === 'custom'
-        ? (activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
-        : mode);
-  const modeIndex = mode ? segments.findIndex((s) => s.key === activeSegmentKey) : -1;
+  /**
+   * 当前激活段的 key。
+   *
+   * `noActiveSegment` = 该路由**不对应任何模式段**（如「资源市集」这类独立路由页）：
+   * 组合菜单仍可点击跳转，但不该有任何一段显示为选中 —— 否则 thumb 会落到
+   * `mode` 的残留值（通常是「会话」）上，像在说"你在会话模式"，是假的。
+   */
+  const activeSegmentKey = noActiveSegment
+    ? null
+    : knowledgeOpen
+      ? 'knowledge'
+      : settingsOpen
+        ? 'settings'
+        : (mode === 'custom'
+          ? (activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
+          : mode);
+  const modeIndex = mode && activeSegmentKey ? segments.findIndex((s) => s.key === activeSegmentKey) : -1;
 
   // 组合开关 thumb 像素定位：按钮宽度自适应（左右内边距），按实际段位置滑动
   const segRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -395,14 +412,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               }}
             >
               {segments.map((seg, index) => {
-                // 知识库/设置段：只有激活态区分，进入后其它段一律取消高亮（否则上一个按钮的文本仍保持白色）
-                const isActive = knowledgeOpen
-                  ? seg.key === 'knowledge'
-                  : settingsOpen
-                    ? seg.key === 'settings'
-                    : seg.tabId
-                      ? mode === 'custom' && activeCustomTabId === seg.tabId
-                      : mode === seg.key;
+                // 与 activeSegmentKey 单一来源比较：noActiveSegment 时它为 null，所有段一律不高亮
+                const isActive = activeSegmentKey !== null && seg.key === activeSegmentKey;
                 return (
                   <button
                     key={seg.key}
@@ -628,6 +639,28 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               title={rightPanelOpen ? t('titleBar.sidebar.close', '关闭侧边栏') : t('titleBar.sidebar.open', '打开侧边栏')}
             >
               <PanelIcon size={13} />
+            </button>
+          )}
+          {/* 资源市集：获取类入口（插件 / 工作流模板 / CLI Agent 配置 / 灵感）的聚合页，独立路由 /market */}
+          {onOpenMarket && (
+            <button
+              onClick={onOpenMarket}
+              className="relative flex items-center justify-center hover:opacity-80 transition-all shrink-0 ml-2"
+              style={{
+                width: 28,
+                height: 28,
+                alignSelf: 'center',
+                padding: 0,
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                color: marketOpen ? 'var(--accent)' : 'var(--text-secondary)',
+                background: marketOpen ? 'var(--border)' : 'transparent',
+              }}
+              title={marketOpen
+                ? t('titleBar.market.back', '资源市集：点击返回主界面')
+                : t('titleBar.market', '资源市集：插件 / 工作流模板 / CLI Agent 配置 / 灵感')}
+            >
+              <Store size={13} />
             </button>
           )}
           {/* 指挥中心：进行中 / 待处理 / 成本速览 / 快捷入口 的聚合入口（置于铃铛之前） */}

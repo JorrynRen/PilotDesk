@@ -173,7 +173,8 @@ export function WorkflowEditorPage() {
         titleText="工作流任务编辑器"
         statusHint={statusHint}
         onOpenSettings={() => navigate('/settings')}
-        onOpenKnowledge={() => navigate('/knowledge')} />
+        onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenMarket={() => navigate('/market')} />
         <div className="flex-1 flex items-center justify-center">
           <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>正在创建工作流...</span>
         </div>
@@ -193,7 +194,8 @@ export function WorkflowEditorPage() {
         titleText="工作流任务编辑器"
         statusHint={statusHint}
         onOpenSettings={() => navigate('/settings')}
-        onOpenKnowledge={() => navigate('/knowledge')} />
+        onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenMarket={() => navigate('/market')} />
         <div className="flex flex-col items-center justify-center flex-1 gap-3">
           <span className="text-xs" style={{ color: 'var(--status-danger)' }}>创建工作流失败: {error}</span>
           <button
@@ -221,6 +223,7 @@ export function WorkflowEditorPage() {
         statusHint={statusHint}
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenMarket={() => navigate('/market')}
       />
       <div className="flex-1 overflow-hidden">
         <WorkflowEditor

@@ -10,6 +10,8 @@ pub struct CreateInspirationPayload {
     pub content: String,
     pub source_agent: Option<String>,
     pub tags: Option<Vec<String>>,
+    /// 来自「资源市集 › 灵感」时带上市场那条的 id，用于标记来源与去重；用户自建不传。
+    pub market_id: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -41,6 +43,7 @@ fn row_to_inspiration(row: &rusqlite::Row<'_>) -> Result<Inspiration, rusqlite::
         tags,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
+        market_id: row.get("market_id")?,
     })
 }
 
@@ -51,7 +54,7 @@ pub fn list_inspirations(
     favorite_only: bool,
 ) -> Result<Vec<Inspiration>, AppError> {
     let mut sql = String::from(
-        "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at,          COALESCE(json_group_array(it.tag) FILTER (WHERE it.tag IS NOT NULL), '[]') as tags          FROM inspirations i          LEFT JOIN inspiration_tags it ON i.id = it.inspiration_id"
+        "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at, i.market_id,          COALESCE(json_group_array(it.tag) FILTER (WHERE it.tag IS NOT NULL), '[]') as tags          FROM inspirations i          LEFT JOIN inspiration_tags it ON i.id = it.inspiration_id"
     );
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut conditions: Vec<String> = Vec::new();
@@ -89,7 +92,7 @@ pub fn list_inspirations(
 /// Get a single inspiration by ID
 pub fn get_inspiration(conn: &Connection, id: String) -> Result<Inspiration, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at,          COALESCE(json_group_array(it.tag) FILTER (WHERE it.tag IS NOT NULL), '[]') as tags          FROM inspirations i          LEFT JOIN inspiration_tags it ON i.id = it.inspiration_id          WHERE i.id = ?1          GROUP BY i.id"
+        "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at, i.market_id,          COALESCE(json_group_array(it.tag) FILTER (WHERE it.tag IS NOT NULL), '[]') as tags          FROM inspirations i          LEFT JOIN inspiration_tags it ON i.id = it.inspiration_id          WHERE i.id = ?1          GROUP BY i.id"
     )?;
     let mut rows = stmt.query_map(params![id], row_to_inspiration)?;
     rows.next()
@@ -108,8 +111,8 @@ pub fn create_inspiration(
     let source_agent = payload.source_agent.unwrap_or_else(|| "manual".to_string());
 
     conn.execute(
-        "INSERT INTO inspirations (id, icon, title, content, source_agent, is_favorite, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)",
-        params![id, icon, payload.title, payload.content, source_agent, now],
+        "INSERT INTO inspirations (id, icon, title, content, source_agent, is_favorite, created_at, updated_at, market_id) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6, ?7)",
+        params![id, icon, payload.title, payload.content, source_agent, now, payload.market_id],
     )?;
 
     // Insert tags
@@ -195,7 +198,7 @@ pub fn search_inspirations(
 ) -> Result<Vec<Inspiration>, AppError> {
     let limit = limit.max(1).min(100);
     let sql = format!(
-        "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at, \
+        "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at, i.market_id, \
          COALESCE(json_group_array(it.tag) FILTER (WHERE it.tag IS NOT NULL), '[]') as tags \
          FROM inspirations i \
          JOIN inspirations_fts fts ON i.rowid = fts.rowid \

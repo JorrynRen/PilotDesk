@@ -14,6 +14,7 @@ import { TerminalPanel } from './components/TerminalPanel';
 import { CustomTabHost } from './components/custom/CustomTabHost';
 import { useCustomTabsStore } from './stores/customTabsStore';
 import { InspirationLibraryPage } from './components/inspiration/InspirationLibraryPage';
+import { ResourceMarketPage } from './components/market/ResourceMarketPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { WorkflowPage } from './pages/WorkflowPage';
 import { GroupChatPage } from './pages/GroupChatPage';
@@ -91,6 +92,7 @@ function MainLayout() {
           onModeChange={setMode}
           onOpenSettings={() => navigate('/settings')}
           onOpenKnowledge={() => navigate('/knowledge')}
+          onOpenMarket={() => navigate('/market')}
           onToggleRightPanel={rightPanelMode ? toggleRightPanel : undefined}
           rightPanelOpen={rightPanelMode ? rightPanelOpen : undefined}
         />
@@ -182,6 +184,8 @@ function App() {
     // 灵感库：本地保存的灵感/提示词（原「灵感市集」改名并让出 /market）
     if (path === '/inspirations') {
       document.title = `${base} - 灵感库`;
+    } else if (path === '/market') {
+      document.title = `${base} - 资源市集`;
     } else if (path === '/workflow/editor') {
       document.title = `${base} - 工作流编辑器`;
     } else if (path === '/workflow') {
@@ -266,6 +270,8 @@ function App() {
         <Route path="/" element={<MainLayout />} />
         {/* 灵感库：本地灵感/提示词（/market 已让给「资源市集」） */}
         <Route path="/inspirations" element={<InspirationLibraryPage onBack={() => window.history.back()} />} />
+        {/* 资源市集：插件 / 工作流模板 / CLI Agent 配置 / 灵感 的统一获取入口 */}
+        <Route path="/market" element={<ResourceMarketPage />} />
         {/* 工作流/群聊：不再独立全屏路由，挂载后切到对应模式并回到主布局（用户感知为开关滑动） */}
         <Route path="/workflow" element={<ModeRedirect mode="workflow" />} />
         <Route path="/groupchat" element={<ModeRedirect mode="groupchat" />} />

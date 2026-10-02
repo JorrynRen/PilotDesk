@@ -19,6 +19,7 @@ pub const SERVER_SOURCES: &[&str] = &[
 /// 在线商店路径
 pub const AGENTS_CONFIG_PATH: &str = "/server/market/agents-config/agents-config.json";
 pub const PLUGINS_INDEX_PATH: &str = "/server/market/plugins/plugins-index.json";
+pub const INSPIRATIONS_INDEX_PATH: &str = "/server/market/inspirations/index.json";
 #[allow(dead_code)]
 pub const PLUGINS_DIR_PATH: &str = "/server/market/plugins";
 
@@ -159,4 +160,43 @@ pub(crate) async fn fetch_market_json(path: &str) -> Result<Value, String> {
 #[tauri::command]
 pub async fn fetch_agents_config() -> Result<Value, String> {
     fetch_market_json(AGENTS_CONFIG_PATH).await
+}
+
+/// [Tauri Command] 获取灵感市场索引
+///
+/// 返回 index.json 的 JSON 内容（每条只有标题/图标/摘要等元信息，正文不在这里）。
+/// 索引由 `server/scripts/generate-inspiration-index.mjs` 生成，一条灵感一个文件 ——
+/// 与插件/模板市场同构：索引是清单，真数据在原文件里，正文只有一份。
+#[tauri::command]
+pub async fn inspiration_market_index() -> Result<Value, String> {
+    fetch_market_json(INSPIRATIONS_INDEX_PATH).await
+}
+
+/// [Tauri Command] 按 id 获取单条灵感的正文
+///
+/// 用于详情弹窗（列表只有摘要，点开才拉正文）。
+///
+/// 路径**只认索引里给出的 `path`**，不接受前端传任意路径：否则这个命令就成了
+/// "拿 CDN 当跳板读任意文件"的入口，而它本来只需要读市场内的灵感文件。
+#[tauri::command]
+pub async fn inspiration_market_fetch(id: String) -> Result<Value, String> {
+    let index = fetch_market_json(INSPIRATIONS_INDEX_PATH).await?;
+    let rel = index
+        .get("inspirations")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+        })
+        .and_then(|e| e.get("path"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("灵感市场中未找到：{}", id))?;
+
+    // 索引里的 path 相对市场根（server/market），与插件安装用的是同一套拼法
+    fetch_market_json(&format!(
+        "{}/{}",
+        MARKET_ROOT,
+        rel.trim_start_matches('/')
+    ))
+    .await
 }

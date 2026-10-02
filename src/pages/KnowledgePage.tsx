@@ -109,6 +109,7 @@ export function KnowledgePage() {
         knowledgeOpen
         onOpenKnowledge={() => { /* 已在知识库页，无需动作 */ }}
         onOpenSettings={() => navigate('/settings')}
+        onOpenMarket={() => navigate('/market')}
       />
 
       <div className="flex flex-1 overflow-hidden">
