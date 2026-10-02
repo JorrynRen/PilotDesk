@@ -19,7 +19,7 @@ on:
   push:
     branches: [main]
     # 只在"真的可能影响索引"的路径变动时才跑，理由同 generate-plugin-index.yml
-    # （不加过滤则每次推送都往 main 追一个 [skip ci] 提交，本地凭空落后一个提交）。
+    # （过滤是为了省 CI 时间：内容没变时脚本本就不会产生提交）。
     paths:
       - 'server/market/workflow/**'
       - 'server/scripts/generate-workflow-index.mjs'

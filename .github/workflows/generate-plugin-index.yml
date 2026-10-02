@@ -24,9 +24,9 @@ on:
     branches: [main]
     # 只在"真的可能影响索引"的路径变动时才跑。
     #
-    # 不加过滤时**任何**推送都会触发，于是每次都会往 main 追一个 `[skip ci]` 的索引提交
-    # （本地因此凭空落后一个提交，下次推之前还得先 rebase）。
-    # 生成逻辑现在住在下方脚本里，所以脚本自身的改动要触发；本文件自身的改动也保留触发一次。
+    # 过滤是为了省 CI 时间，不是为了压提交 —— 内容没变时脚本本就不会产生提交
+    # （顶层时间戳只在条目真的变化时才更新，见 generate-plugin-index.mjs 的 stableUpdatedAt）。
+    # 生成逻辑住在下方脚本里，所以脚本自身的改动要触发；本文件自身的改动也保留触发一次。
     paths:
       - 'server/market/plugins/**'
       - 'server/scripts/generate-plugin-index.mjs'

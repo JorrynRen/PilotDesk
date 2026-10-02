@@ -234,6 +234,30 @@ function checkVersionImmutability(entries) {
   process.exit(1);
 }
 
+/**
+ * 决定顶层 `updatedAt` 写什么：**内容没变就沿用上一版的时间戳**。
+ *
+ * 直接用 `new Date()` 的问题：只要索引被重新生成（哪怕插件一个字节都没改），
+ * 产出就与已提交的不同 —— `git diff` 恒非空，于是每次触发都往 main 追一个只含
+ * 时间戳的 [skip ci] 提交。历史被这种噪音填满，真改动反而看不出来。
+ *
+ * 改成"内容变了才盖新时间戳"后，生成结果对相同输入**逐字节稳定**，
+ * 只有真改动才会产生提交。
+ *
+ * 语义也随之更准：它变成"索引内容最后一次变化的时间"，而不是"最后一次跑脚本的时间"。
+ */
+async function stableUpdatedAt(outFile, entries, freshIso) {
+  try {
+    const prev = JSON.parse(await fs.readFile(outFile, 'utf8'));
+    if (JSON.stringify(prev?.plugins ?? null) === JSON.stringify(entries)) {
+      return prev.updatedAt;
+    }
+  } catch {
+    /* 首次生成 / 旧文件损坏：用新时间戳 */
+  }
+  return freshIso;
+}
+
 async function main() {
   const outFile = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_OUT;
 
@@ -270,7 +294,12 @@ async function main() {
 
   // 拼接格式与 bash 逐字节同构（含括号 / 换行位置）：
   //   头 + '\n' + 条目（条目间为 '\n,\n'）+ '\n' + ']}\n'
-  const updatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  // 时间戳只在插件清单真的变化时才更新，见 stableUpdatedAt
+  const updatedAt = await stableUpdatedAt(
+    outFile,
+    entries,
+    new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+  );
   const header = `{"schemaVersion":"1.0","updatedAt":"${updatedAt}","plugins":[`;
   const body = entries.map((e) => JSON.stringify(e, null, 2)).join('\n,\n');
   const content = entries.length === 0 ? `${header}\n]}\n` : `${header}\n${body}\n]}\n`;
