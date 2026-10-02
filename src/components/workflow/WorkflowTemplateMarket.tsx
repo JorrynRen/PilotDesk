@@ -1269,11 +1269,6 @@ export const WorkflowTemplateMarket: React.FC<{
                   },
                 },
                 {
-                  label: '🔥 本周热门',
-                  active: sort === 'downloads',
-                  onClick: () => setSort(sort === 'downloads' ? 'recommended' : 'downloads'),
-                },
-                {
                   label: '🛡️ 官方精选',
                   active: topTab === 'featured',
                   onClick: () => setTopTab(topTab === 'featured' ? 'browse' : 'featured'),
@@ -1293,6 +1288,18 @@ export const WorkflowTemplateMarket: React.FC<{
                   onClick: () => {
                     const on = triggerFilter === '定时';
                     setTriggerFilter(on ? 'all' : '定时');
+                    if (!on) setShowFilters(true);
+                  },
+                },
+                // 原来是「🔥 本周热门」——它只改排序（sort），而右侧排序下拉已经覆盖了热门排序，
+                // 放在这里既重复又和角标口径冲突（排序不限制集合）。换成触发器维度的第三项，
+                // 与上面两项凑齐 手动 / 定时 / 事件，三个触发器项相邻排布。
+                {
+                  label: '🔔 事件驱动',
+                  active: triggerFilter === '事件',
+                  onClick: () => {
+                    const on = triggerFilter === '事件';
+                    setTriggerFilter(on ? 'all' : '事件');
                     if (!on) setShowFilters(true);
                   },
                 },
