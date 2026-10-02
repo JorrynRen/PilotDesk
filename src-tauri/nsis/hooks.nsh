@@ -6,15 +6,15 @@
 ;
 ;   ${If} $DeleteAppDataCheckboxState = 1
 ;     SetShellVarContext current
-;     RmDir /r "$APPDATA\${BUNDLEID}"        ; %APPDATA%\com.pilotdesk.app
-;     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"   ; %LOCALAPPDATA%\com.pilotdesk.app
+;     RmDir /r "$APPDATA\${BUNDLEID}"        ; %APPDATA%\com.pilotdesk.desktop
+;     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"   ; %LOCALAPPDATA%\com.pilotdesk.desktop
 ;   ${EndIf}
 ;
 ; 而 PilotDesk 的用户数据放在**产品名**目录下（见 src/utils/paths.rs 的 app_root_dir）：
 ;
 ;   %APPDATA%\PilotDesk\   ← pilotdesk.db / MEMORY.db / .key / plugins / skills / resources / templates
 ;
-; 两者对不上，于是"勾选删除用户数据"实际删掉的是两个基本不存在的 com.pilotdesk.app 目录
+; 两者对不上，于是"勾选删除用户数据"实际删掉的是两个基本不存在的标识符目录
 ; （其中只有 WebView2 的 EBWebView），我们自己的数据一个字节都不会被清理。
 ;
 ; 这里在卸载收尾阶段补一刀，**严格跟随同一个复选框状态**（没勾就不动用户数据），

@@ -229,7 +229,7 @@ pub struct ImportResult {
 }
 
 /// 上传用户选择的图片作为 Agent 图标
-/// 将图片复制到用户资源目录的 icons/ 下（%APPDATA%/com.pilotdesk.app/resources/icons/），命名为 {agentType}_icon.{ext}
+/// 将图片复制到用户资源目录的 icons/ 下（%APPDATA%/PilotDesk/resources/icons/），命名为 {agentType}_icon.{ext}
 #[tauri::command]
 pub fn upload_agent_icon(
     agent_type: String,

@@ -1,7 +1,7 @@
 {
   "productName": "PilotDesk",
   "version": "0.1.0",
-  "identifier": "com.pilotdesk.app",
+  "identifier": "com.pilotdesk.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
