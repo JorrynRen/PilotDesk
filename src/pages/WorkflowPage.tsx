@@ -717,14 +717,6 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
             <Plus size={14} /> 新建工作流
           </button>
           <button
-            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)', cursor: 'not-allowed', opacity: 0.6 }}
-            title="即将推出"
-            disabled
-          >
-            从本地模板建立
-          </button>
-          <button
             onClick={handleImportWorkflow}
             className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
             style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
