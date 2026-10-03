@@ -5,7 +5,7 @@
       "cliCommand": "hermes",
       "color": "#8B5CF6",
       "createdAt": 1788623661,
-      "description": "轻量级通用 AI Agent",
+      "description": "轻量级通用 AI Agent， Nous Research 开源的自主 AI 智能体框架。",
       "displayName": "Hermes Agent",
       "icon": "file:hermes_icon.ico",
       "installCmd": "pip install hermes-agent",
