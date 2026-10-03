@@ -4,7 +4,7 @@
       "agentType": "hermes",
       "cliCommand": "hermes",
       "color": "#8B5CF6",
-      "createdAt": 1783998497,
+      "createdAt": 1788623661,
       "description": "轻量级通用 AI Agent",
       "displayName": "Hermes Agent",
       "icon": "file:hermes_icon.ico",
@@ -28,7 +28,7 @@
       "supportsSessionContinuity": true,
       "uninstallCmd": "pip uninstall hermes-agent -y",
       "updateCmd": "hermes update",
-      "updatedAt": 1783998497,
+      "updatedAt": 1790780043,
       "version": "1.0",
       "versionCmd": "hermes --version",
       "versionPattern": "v?(\\d+\\.\\d+\\.\\d+[\\w.-]*)"
