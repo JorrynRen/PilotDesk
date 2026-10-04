@@ -33,7 +33,7 @@ interface MarketInspiration {
   tags?: string[];
   /** 正文摘要（生成脚本截取，200 字封顶） */
   excerpt: string;
-  /** 相对市场根的路径，如 inspirations/<id>.json */
+  /** 相对市场根的路径，如 inspirations/<id>/<id>.json */
   path: string;
 }
 

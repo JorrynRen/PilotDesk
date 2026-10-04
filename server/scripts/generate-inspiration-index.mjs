@@ -3,14 +3,19 @@
  * 生成灵感市场索引 `server/market/inspirations/index.json`
  *
  * 为什么需要索引：静态托管没有目录列表，客户端没法"问服务器有哪些灵感"。
- * 一条灵感一个文件（约定放在 `inspirations/<id>.json`），索引负责把清单固化下来 ——
+ * 一条灵感一个**目录**（约定 `inspirations/<id>/<id>.json`），索引负责把清单固化下来 ——
  * 与插件市场的 `plugins-index.json`、模板市场的 `workflow-index.json` 同一个道理。
+ *
+ * 目录结构（与工作流模板、插件同构）的收益有两个：
+ *   ① 平台上「停用 / 恢复」可以整目录搬迁（三类内容的处理方式因此完全一致）；
+ *   ② 同目录留出了放附件的位置（图标、示例文件等），不必再挤进正文 JSON。
+ * 旧的扁平文件 `inspirations/<id>.json` **不再收录**，会明确报出来而不是静默忽略。
  *
  * 索引**只放浏览/搜索需要的元信息**（含正文摘要与标签），正文全文留在源文件里按需拉取。
  * 这样正文只有一份真相，且与另外两个市场同构；代价是搜索覆盖到摘要为止（摘要 200 字，
  * 基本涵盖提示词的场景说明部分），详情多一次请求。
  *
- * 源文件格式（`inspirations/<id>.json`）：
+ * 源文件格式（`inspirations/<id>/<id>.json`）：
  *   { id, title, icon, content, tags? }
  * 其中 `tags` 可选，是字符串数组。它的问题只提示、不跳过整条 —— 标签是可选元数据，
  * 为一个写错的标签把整条灵感拦在市场外，代价远大于收益（见 normalizeTags）。
@@ -22,10 +27,10 @@
  * 这是结构性不可稳定，不是实现没写好。条目级"更新时间"该由 git 历史回答，
  * 不要往派生物里塞；真要展示"更新于"，在 UI 侧按需查 git，或让作者在源文件里自己写。
  *
- * 身份约定：**`id` 以文件里的字段为准**，文件名只是物理位置。
- * 两者不一致只提示、不拦截 —— 若把它们绑死，"把文件名改通顺"就会变成破坏性操作
+ * 身份约定：**`id` 以文件里的字段为准**，目录名与文件名只是物理位置。
+ * 三者不一致只提示、不拦截 —— 若把它们绑死，"把目录改通顺"就会变成破坏性操作
  * （改名就得改 id，而改 id 会让已导入这条灵感的用户重复导入）。
- * 因为 id 与文件名解耦，**id 撞车成为可能**，所以这里必须查重。
+ * 因为 id 与物理位置解耦，**id 撞车成为可能**，所以这里必须查重。
  *
  * 只读不写业务数据：本脚本不修改任何灵感文件，只提取并校验。
  *
@@ -125,75 +130,106 @@ function normalizeTags(raw, file, warnings) {
 }
 
 async function main() {
-  let files;
+  let entries;
   try {
-    files = (await fs.readdir(INSPIRATIONS_DIR, { withFileTypes: true }))
-      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.json'))
-      .map((e) => e.name)
-      .filter((name) => name !== INDEX_BASENAME);
+    entries = await fs.readdir(INSPIRATIONS_DIR, { withFileTypes: true });
   } catch {
     console.error(`找不到灵感目录：${INSPIRATIONS_DIR}`);
     process.exit(1);
   }
 
+  const dirs = entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+    .map((e) => e.name)
+    .sort();
+  const stray = entries
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.json') && e.name !== INDEX_BASENAME)
+    .map((e) => e.name);
+
   const inspirations = [];
   const skipped = [];
   const warnings = [];
-  const seen = new Map(); // id -> 文件名，用于查重
+  const seen = new Map(); // id -> 物理位置，用于查重
 
-  for (const file of files) {
-    const absFile = path.join(INSPIRATIONS_DIR, file);
-    const idFromFile = file.replace(/\.json$/i, '');
+  // 旧布局（扁平文件）要明确报出来：否则最容易出现"文件还在、市场里却没有这条"
+  for (const name of stray) {
+    skipped.push(`${name}（旧的扁平布局已不再收录：请移到 ${name.replace(/\.json$/i, '')}/${name}）`);
+  }
+
+  for (const dir of dirs) {
+    const absDir = path.join(INSPIRATIONS_DIR, dir);
+    // 目录内允许放附件；正文只认一个 JSON：优先 `<目录名>.json`，否则取目录里唯一的那一个
+    const jsonNames = (await fs.readdir(absDir, { withFileTypes: true }))
+      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.json'))
+      .map((e) => e.name)
+      .sort();
+
+    let file = jsonNames.find((name) => name === `${dir}.json`);
+    if (!file) {
+      if (jsonNames.length === 0) {
+        skipped.push(`${dir}/（目录内没有 .json 正文）`);
+        continue;
+      }
+      if (jsonNames.length > 1) {
+        skipped.push(`${dir}/（目录内有 ${jsonNames.length} 个 .json：正文请放在 ${dir}.json）`);
+        continue;
+      }
+      [file] = jsonNames;
+      warnings.push(`${dir}/${file}（正文与目录不同名：建议改名为 ${dir}.json，不改也能正常工作）`);
+    }
+
+    const location = `${dir}/${file}`;
+    const absFile = path.join(absDir, file);
 
     let item;
     try {
       item = JSON.parse(await fs.readFile(absFile, 'utf8'));
     } catch (e) {
-      skipped.push(`${file}（不是合法 JSON：${e.message}）`);
+      skipped.push(`${location}（不是合法 JSON：${e.message}）`);
       continue;
     }
 
     // id 必须显式给出：它同时是去重键（客户端靠它判断"这条是否已导入过"）。
-    // 这里**不猜测、不回落**到文件名 —— 静默回落的代价是"忘了写 id"变成一个
+    // 这里**不猜测、不回落**到目录名 —— 静默回落的代价是"忘了写 id"变成一个
     // 看不出来的状态，而写错 id 则会以另一条灵感的名义混进市场。
     const id = typeof item.id === 'string' ? item.id.trim() : '';
     if (!id) {
-      skipped.push(`${file}（缺少 id 字段）`);
+      skipped.push(`${location}（缺少 id 字段）`);
       continue;
     }
 
     // id 全局唯一：客户端用它判断"是否已导入"，两条撞同一个 id 会互相覆盖
     if (seen.has(id)) {
-      skipped.push(`${file}（id「${id}」与 ${seen.get(id)} 重复：id 是去重键，不能撞车）`);
+      skipped.push(`${location}（id「${id}」与 ${seen.get(id)} 重复：id 是去重键，不能撞车）`);
       continue;
     }
 
     const title = typeof item.title === 'string' ? item.title.trim() : '';
     const content = typeof item.content === 'string' ? item.content : '';
     if (!title) {
-      skipped.push(`${file}（title 为空）`);
+      skipped.push(`${location}（title 为空）`);
       continue;
     }
     if (!content.trim()) {
-      skipped.push(`${file}（content 为空）`);
+      skipped.push(`${location}（content 为空）`);
       continue;
     }
 
-    // 提示只针对"真正收录进来"的条目：被跳过的文件再提示它的文件名没意义
-    if (id !== idFromFile) {
-      warnings.push(`${file}（声明的 id 是「${id}」：建议把文件改名为 ${id}.json，不改也能正常工作）`);
+    // 提示只针对"真正收录进来"的条目：被跳过的目录再提示它的名字没意义
+    if (id !== dir) {
+      warnings.push(`${location}（声明的 id 是「${id}」：建议把目录改名为 ${id}，不改也能正常工作）`);
     }
 
-    seen.set(id, file);
+    seen.set(id, location);
     inspirations.push({
       id,
       title,
       icon: typeof item.icon === 'string' && item.icon ? item.icon : '💡',
       // 可选：不写就是无标签（本地库、市场卡片、会话侧栏三处都能正确处理空数组）
-      tags: normalizeTags(item.tags, file, warnings),
+      tags: normalizeTags(item.tags, location, warnings),
       excerpt: excerptOf(content),
-      // 已 URL 编码：文件名允许中文，让调用方各自编码迟早出错，这里一次编好
-      path: `inspirations/${encodeURIComponent(file)}`,
+      // 两段分别 URL 编码：目录名与文件名都允许中文，让调用方各自编码迟早出错，这里一次编好
+      path: `inspirations/${encodeURIComponent(dir)}/${encodeURIComponent(file)}`,
     });
   }
 
@@ -206,7 +242,9 @@ async function main() {
   };
   await writeIndexStable(OUT_FILE, index);
 
-  console.log(`已生成 ${path.relative(ROOT, OUT_FILE)}：${inspirations.length} 条灵感`);
+  console.log(
+    `已生成 ${path.relative(ROOT, OUT_FILE)}：${inspirations.length} 条灵感（扫描 ${dirs.length} 个灵感目录）`,
+  );
   for (const it of inspirations) {
     console.log(`  · ${it.icon} ${it.title}（摘要 ${it.excerpt.length} 字）`);
   }

@@ -3,14 +3,16 @@
 # 自动重新生成 index.json 索引文件并提交到仓库。
 #
 # 目录结构:
-#   server/market/inspirations/<id>.json   # { id, title, icon, content, tags? }
+#   server/market/inspirations/<id>/<id>.json   # { id, title, icon, content, tags? }
+#   一条灵感一个目录（与工作流模板、插件同构）：平台侧停用/恢复可以整目录搬迁，
+#   目录内也留出了放附件的位置。旧的扁平文件 <id>.json 不再收录，生成器会明确报出来。
 #
 # 索引文件位置: server/market/inspirations/index.json
 #
 # 注意：index.json 是**生成物**，不要在 PR 里手改它（会被下一次生成覆盖）。
-# 要加/改一条灵感，请新建或编辑对应的源文件。
+# 要加/改一条灵感，请新建或编辑对应目录里的源文件。
 # 其中 `id` 以**文件里的字段为准**（它是客户端判断"是否已导入"的依据），
-# 文件名只是物理位置 —— 建议同名，不同名脚本会提示但不影响生成。
+# 目录名与文件名只是物理位置 —— 建议同名，不同名脚本会提示但不影响生成。
 #
 # 生成逻辑在 Node 脚本 server/scripts/generate-inspiration-index.mjs（本地可跑：npm run market:index:inspirations）。
 # 本文件与 generate-plugin-index.yml / generate-workflow-index.yml 对称 —— 缺了它，
