@@ -710,6 +710,25 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               </span>
             )}
           </button>
+          {/* 设置：原先在底部状态栏最左，现按位置习惯移回顶部功能按钮区 */}
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="flex items-center justify-center hover:opacity-80 transition-all shrink-0 ml-2"
+              style={{
+                width: 28,
+                height: 28,
+                alignSelf: 'center',
+                padding: 0,
+                borderRadius: 6,
+                color: 'var(--text-secondary)',
+                background: 'transparent',
+              }}
+              title={t('titleBar.settings', '设置')}
+            >
+              <Settings size={13} />
+            </button>
+          )}
           {/* 通知中心铃铛：固定 26×30 并自居中 —— 不靠父级 stretch 决定高度，
               这样在"有模式开关"（组高 30.5）与"只剩铃铛"（编辑器页）的路由下渲染完全一致。 */}
           <button

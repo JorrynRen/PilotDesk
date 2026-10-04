@@ -148,6 +148,22 @@ function App() {
     void useAccountStore.getState().refresh();
   }, []);
 
+  // 回到本窗口时刷新权益：升级页（独立窗口）里 0 元下单后，切回来就能看到解锁
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        unlisten = await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+          if (focused) void useAccountStore.getState().refresh();
+        });
+      } catch {
+        /* 非 Tauri 环境（纯浏览器调试）忽略 */
+      }
+    })();
+    return () => unlisten?.();
+  }, []);
+
   // 应用启动时自动发现并加载插件（确保工作流节点类型可用）
   useEffect(() => {
     (async () => {

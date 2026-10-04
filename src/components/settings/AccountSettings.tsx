@@ -5,17 +5,14 @@
  */
 import { Loader2, LogIn, LogOut } from 'lucide-react';
 
+import { PlanBadge } from '../common/PlanBadge';
 import { capabilityLabel, useAccountStore } from '../../stores/accountStore';
+import { expiryText } from '../../utils/planText';
 import { SettingsButton, SettingsCard, SettingsSection } from './index';
 
-/** ISO → 本地日期（非法值原样显示，不抛错） */
-function formatDate(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString('zh-CN');
-}
-
 export function AccountSettings() {
-  const { account, loaded, loggingIn, error, login, logout, cancelLogin } = useAccountStore();
+  const { account, loaded, loggingIn, error, login, logout, cancelLogin, openUpgrade } =
+    useAccountStore();
 
   return (
     <div className="space-y-6">
@@ -76,22 +73,34 @@ export function AccountSettings() {
       </SettingsSection>
 
       {account && (
-        <SettingsSection title="会员等级" description="等级决定哪些功能入口可用；到期后自动回到免费档。">
+        <SettingsSection
+          title="会员等级"
+          description="等级决定哪些功能入口可用；到期后自动回到免费档。"
+          actions={
+            <SettingsButton variant="primary" onClick={() => void openUpgrade()}>
+              升级 / 续费
+            </SettingsButton>
+          }
+        >
           <SettingsCard>
-            <div className="min-w-0">
-              <div className="text-xs" style={{ color: 'var(--text-primary)' }}>
-                {account.planName}
-                {account.expired && (
-                  <span className="ml-2 text-[11px]" style={{ color: '#F59E0B' }}>
-                    已过期
-                  </span>
-                )}
-              </div>
-              <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-                {account.expiresAt ? `到期时间：${formatDate(account.expiresAt)}` : '长期有效'}
-              </div>
+            <div className="min-w-0 flex items-center gap-2">
+              <PlanBadge
+                planKey={account.planKey}
+                planName={account.planName}
+                expired={account.expired}
+                stale={account.stale}
+              />
+              <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                {account.expiresAt ? `到期：${expiryText(account.expiresAt)}` : '长期有效'}
+              </span>
             </div>
           </SettingsCard>
+
+          {account.stale && (
+            <p className="mt-2 text-[11px]" style={{ color: '#F59E0B' }}>
+              离线：平台不可达，按上次已知权益显示（7 天宽限内）。
+            </p>
+          )}
 
           <div className="mt-2 px-3 py-2.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
             <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>

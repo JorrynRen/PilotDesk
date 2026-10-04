@@ -34,6 +34,8 @@ export interface AccountInfo {
   capabilities: string[];
   /** 是否已过期（此时平台按 free 返回） */
   expired: boolean;
+  /** 是否来自离线缓存（平台不可达、仍在 7 天宽限期内） */
+  stale: boolean;
 }
 
 interface AccountStoreState {
@@ -46,6 +48,8 @@ interface AccountStoreState {
   refresh: () => Promise<void>;
   login: () => Promise<void>;
   logout: () => Promise<void>;
+  /** 在应用内打开「升级会员」页（独立 Webview 窗口） */
+  openUpgrade: () => Promise<void>;
   /** 取消等待（只影响界面；真正的回调结果会被丢弃） */
   cancelLogin: () => void;
 }
@@ -102,6 +106,14 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
   cancelLogin: () => {
     loginGeneration += 1;
     set({ loggingIn: false });
+  },
+
+  openUpgrade: async () => {
+    try {
+      await invoke('account_open_upgrade');
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
   },
 }));
 

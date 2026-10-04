@@ -4,6 +4,7 @@ import { useEnvInfo, type AgentDetectStatus } from '../../hooks/useEnvInfo';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useI18n } from '../../hooks/useI18n';
 import type { AgentConfig } from '../../types';
+import { AccountStatusEntry } from './AccountStatusEntry';
 
 // 版本号单一来源：由 vite.config.ts 从根 package.json 注入（见该文件注释）
 const APP_VERSION = import.meta.env.VITE_APP_VERSION as string;
@@ -47,19 +48,10 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
       style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}
     >
       <div className="flex items-center gap-3">
-        {/* 最左端：设置按钮（原放在 TitleBar 右上角） */}
-        {onOpenSettings && (
-          <button
-            onClick={onOpenSettings}
-            className="pd-btn flex items-center gap-1 rounded transition-colors hover:opacity-80 p-0.5"
-            title={t('statusBar.settings', '设置')}
-            style={{ color: 'var(--text-secondary)', background: 'transparent' }}
-          >
-            <Settings size={12} />
-            <span>{t('statusBar.settings', '设置')}</span>
-          </button>
-        )}
-        {/* 分隔符（设置 vs Agent 状态区） */}
+        {/* 最左端：账号状态（未登录=登录入口；已登录=昵称+等级徽章，详情在弹层）。
+            设置按钮已移到顶部 TitleBar 的功能按钮区。 */}
+        <AccountStatusEntry />
+        {/* 分隔符（账号 vs Agent 状态区） */}
         <div className="w-px h-3" style={{ backgroundColor: 'var(--border)' }} />
         <span className="flex items-center gap-1">{t('statusBar.agentLabel', 'Agent')}:</span>
         {enabledAgents.length === 0 && (
