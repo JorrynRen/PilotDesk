@@ -11,7 +11,7 @@ import { expiryText } from '../../utils/planText';
 import { SettingsButton, SettingsCard, SettingsSection } from './index';
 
 export function AccountSettings() {
-  const { account, loaded, loggingIn, error, login, logout, cancelLogin, openUpgrade } =
+  const { account, loaded, loggingIn, error, login, logout, cancelLogin, openPlatform } =
     useAccountStore();
 
   return (
@@ -77,9 +77,17 @@ export function AccountSettings() {
           title="会员等级"
           description="等级决定哪些功能入口可用；到期后自动回到免费档。"
           actions={
-            <SettingsButton variant="primary" onClick={() => void openUpgrade()}>
-              升级 / 续费
-            </SettingsButton>
+            <div className="flex items-center gap-2">
+              <SettingsButton
+                onClick={() => void openPlatform('portal')}
+                title="在浏览器打开官网会员中心（改昵称 / 改密码 / 注销账户）"
+              >
+                修改账户信息
+              </SettingsButton>
+              <SettingsButton variant="primary" onClick={() => void openPlatform('upgrade')}>
+                升级 / 续费
+              </SettingsButton>
+            </div>
           }
         >
           <SettingsCard>

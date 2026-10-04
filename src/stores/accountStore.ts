@@ -11,6 +11,9 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
 
+/** 可打开的平台页面：升级会员 / 会员中心（账号设置） */
+export type PlatformPage = 'upgrade' | 'portal';
+
 /** 工作流导出：平台侧登记的能力键（app/src/services/entitlements/capabilities.ts） */
 export const CAP_WORKFLOW_EXPORT = 'workflow.export';
 
@@ -48,8 +51,11 @@ interface AccountStoreState {
   refresh: () => Promise<void>;
   login: () => Promise<void>;
   logout: () => Promise<void>;
-  /** 在应用内打开「升级会员」页（独立 Webview 窗口） */
-  openUpgrade: () => Promise<void>;
+  /**
+   * 打开平台页面（**系统浏览器**）：登录就是在浏览器里完成的，会话 Cookie 天然在浏览器里，
+   * 点开即用。不要改用应用内 WebView —— 那是另一套 Cookie jar，会要求重新登录。
+   */
+  openPlatform: (page: PlatformPage) => Promise<void>;
   /** 取消等待（只影响界面；真正的回调结果会被丢弃） */
   cancelLogin: () => void;
 }
@@ -108,9 +114,12 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
     set({ loggingIn: false });
   },
 
-  openUpgrade: async () => {
+  openPlatform: async (page) => {
     try {
-      await invoke('account_open_upgrade');
+      // 基址只在 Rust 一处维护，这里按页面拼路径
+      const base = await invoke<string>('account_platform_base');
+      const path = page === 'upgrade' ? '/account/upgrade/' : '/account/';
+      await openUrl(`${base.replace(/\/+$/, '')}${path}`);
     } catch (e) {
       set({ error: errorMessage(e) });
     }

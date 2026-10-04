@@ -15,7 +15,7 @@ import { expiryText } from '../../utils/planText';
 
 export function AccountStatusEntry() {
   const navigate = useNavigate();
-  const { account, loaded, loggingIn, login, logout, openUpgrade } = useAccountStore();
+  const { account, loaded, loggingIn, login, logout, openPlatform } = useAccountStore();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -120,7 +120,7 @@ export function AccountStatusEntry() {
             <button
               onClick={() => {
                 setOpen(false);
-                void openUpgrade();
+                void openPlatform('upgrade');
               }}
               className="pd-btn px-2 py-1 rounded text-[11px]"
               style={{ backgroundColor: 'var(--accent)', color: '#fff' }}

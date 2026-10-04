@@ -511,30 +511,13 @@ pub async fn account_status(
     }
 }
 
-/// 在应用内打开「升级会员」页。
+/// 平台基址，供前端拼「升级页 / 会员中心」等地址（基址只在 Rust 一处，避免前后端各写一份漂移）。
 ///
-/// 用**独立 Webview 窗口**而不是链接壳（iframe）：iframe 里平台页属于第三方上下文，
-/// 会话 Cookie（SameSite=Lax）发不出去，登录/下单都会打转；独立窗口的顶层就是平台域，
-/// Cookie 一方可用。窗口已存在则聚焦，不重复开。
+/// 这些页面**用系统浏览器打开**（与登录同一机制）：登录是在浏览器里完成的，会话 Cookie
+/// 自然就在浏览器里，点开即用；而应用内 WebView 是另一套 Cookie jar，打开会要求重新登录。
 #[tauri::command]
-pub async fn account_open_upgrade(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-    const LABEL: &str = "account-upgrade";
-
-    if let Some(win) = app.get_webview_window(LABEL) {
-        let _ = win.set_focus();
-        return Ok(());
-    }
-
-    let url = url::Url::parse(&format!("{}/account/upgrade/", platform::api_base()))
-        .map_err(|e| format!("升级页地址无效：{}", e))?;
-    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::External(url))
-        .title("升级会员")
-        .inner_size(1000.0, 760.0)
-        .min_inner_size(720.0, 560.0)
-        .build()
-        .map_err(|e| format!("打开升级页失败：{}", e))?;
-    Ok(())
+pub fn account_platform_base() -> String {
+    platform::api_base().to_string()
 }
 
 /// 退出登录：先尽力吊销服务端令牌，再清本地
