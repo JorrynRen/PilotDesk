@@ -710,7 +710,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               </span>
             )}
           </button>
-          {/* 设置：原先在底部状态栏最左，现按位置习惯移回顶部功能按钮区 */}
+          {/* 设置：原先在底部状态栏最左，现按位置习惯移回顶部功能按钮区。
+              样式与右侧其它图标按钮保持一致（28×28 / 1px 描边 / 圆角 8）。 */}
           {onOpenSettings && (
             <button
               onClick={onOpenSettings}
@@ -720,7 +721,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 height: 28,
                 alignSelf: 'center',
                 padding: 0,
-                borderRadius: 6,
+                border: '1px solid var(--border)',
+                borderRadius: 8,
                 color: 'var(--text-secondary)',
                 background: 'transparent',
               }}

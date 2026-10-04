@@ -42,6 +42,20 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
     return { status: 'detecting', label: '', dotColor: '#9CA3AF' };
   };
 
+  // 聚合展示所需的派生状态：逐个判定后汇总；版本号只进 tooltip，不常驻占位
+  const agentRows = enabledAgents.map((agent) => ({
+    displayName: agent.displayName || agent.agentType,
+    ...getAgentState(agent, envInfo?.agentVersions?.[agent.agentType] ?? null),
+  }));
+  const detecting = agentRows.some((r) => r.status === 'detecting');
+  const notReady = agentRows.filter((r) => r.status === 'error');
+  const agentTooltip = [
+    ...agentRows.map(
+      (r) => `${r.displayName}：${r.status === 'detecting' ? '检测中' : r.label || '就绪'}`,
+    ),
+    t('statusBar.viewEnv', '点击查看环境检测'),
+  ].join('　');
+
   return (
     <footer
       className="flex items-center justify-between px-4 h-8 text-[10px] shrink-0 select-none"
@@ -65,26 +79,32 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
             {t('statusBar.notIntegrated', '未安装或未集成配置')}
           </button>
         )}
-        {enabledAgents.map((agent) => {
-          const version = envInfo?.agentVersions?.[agent.agentType] ?? null;
-          const { status, label, dotColor } = getAgentState(agent, version);
-          const displayName = agent.displayName || agent.agentType;
-          return (
-            <button
-              key={agent.agentType}
-              onClick={() => {
-                (onOpenEnvSettings ?? onOpenSettings)?.();
-              }}
-              className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
-              title={status === 'detecting'
-                ? t('statusBar.refreshEnv', '点击刷新环境检测')
-                : t('statusBar.viewEnv', '点击查看环境检测')}
-            >
-              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: dotColor }} />
-              {displayName}:{status === 'detecting' ? <Loader2 size={10} className="animate-spin" style={{ color: '#9CA3AF' }} /> : label ? ` ${label}` : ''}
-            </button>
-          );
-        })}
+        {/* 聚合展示：不逐个列 Agent（多了会横向挤压，且版本号常驻价值低），
+            只在异常时用「N 个未安装」提示；名称与版本收进 hover，点击进环境检测。 */}
+        {agentRows.length > 0 && (
+          <button
+            onClick={() => {
+              (onOpenEnvSettings ?? onOpenSettings)?.();
+            }}
+            className="pd-btn flex items-center gap-1 transition-colors hover:opacity-80"
+            title={agentTooltip}
+            style={{ color: notReady.length > 0 ? '#F59E0B' : 'var(--text-tertiary)' }}
+          >
+            {detecting ? (
+              <Loader2 size={10} className="animate-spin" style={{ color: '#9CA3AF' }} />
+            ) : (
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ backgroundColor: notReady.length > 0 ? '#F59E0B' : '#22C55E' }}
+              />
+            )}
+            {detecting
+              ? t('statusBar.detecting', '检测中…')
+              : notReady.length > 0
+                ? t('statusBar.notReady', `${notReady.length} 个未安装`, { count: notReady.length })
+                : t('statusBar.agentsReady', '就绪')}
+          </button>
+        )}
       </div>
       <div className="flex items-center gap-2">
         <span style={{ color: 'var(--text-tertiary)' }}>PilotDesk v{APP_VERSION}</span>
