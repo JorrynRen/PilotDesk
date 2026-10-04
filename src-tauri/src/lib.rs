@@ -2280,6 +2280,8 @@ pub fn run() {
             terminal::console_bridge::ConsoleBridge::new(),
         ))
         .manage(AsyncMutex::new(terminal::TerminalManager::new()))
+        // 会员登录：一次只允许一个进行中的授权会话（begin 与 complete 之间）
+        .manage(commands::account::AccountLoginState::default())
         .invoke_handler(tauri::generate_handler![
             commands::env::detect_env,
             commands::env::clear_env_detect_cache,
@@ -2540,6 +2542,10 @@ pub fn run() {
             terminal::commands::terminal_list,
             terminal::commands::terminal_attach,
             terminal::commands::terminal_get_config,
+            commands::account::account_login_begin,
+            commands::account::account_login_complete,
+            commands::account::account_status,
+            commands::account::account_logout,
             utils::market::fetch_agents_config,
             utils::market::inspiration_market_index,
             utils::market::inspiration_market_fetch,
