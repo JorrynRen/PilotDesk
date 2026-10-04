@@ -67,7 +67,9 @@ export function AccountStatusEntry() {
         <span className="truncate" style={{ maxWidth: 110 }}>
           {account.nickname || account.email}
         </span>
+        {/* 收起态用角标，不抢状态栏视线；详情在弹层 */}
         <PlanBadge
+          compact
           planKey={account.planKey}
           planName={account.planName}
           expired={account.expired}

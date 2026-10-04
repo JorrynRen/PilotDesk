@@ -10,6 +10,11 @@ interface Props {
   planName: string;
   expired?: boolean;
   stale?: boolean;
+  /**
+   * 角标形态：状态栏收起态用 —— 只显示短标识（FREE/PRO/TEAM），字号更小、上标定位，
+   * 避免在 10px 高的状态栏里抢视线；展开弹层与设置页仍用完整徽章。
+   */
+  compact?: boolean;
 }
 
 interface BadgeStyle {
@@ -26,16 +31,42 @@ const PLAN_STYLES: Record<string, BadgeStyle> = {
 const FALLBACK_STYLE = PLAN_STYLES.free;
 const EXPIRED_STYLE: BadgeStyle = { bg: '#D97706', fg: '#FFFFFF', border: '#B45309' };
 
-export function PlanBadge({ planKey, planName, expired, stale }: Props) {
+/** 角标用的短标识（完整等级名在弹层 / 设置页展示） */
+const SHORT_LABEL: Record<string, string> = {
+  free: 'FREE',
+  pro: 'PRO',
+  team: 'TEAM',
+};
+
+export function PlanBadge({ planKey, planName, expired, stale, compact }: Props) {
   const style = expired ? EXPIRED_STYLE : (PLAN_STYLES[planKey] ?? FALLBACK_STYLE);
+  const suffix = `${expired ? ' · 已过期' : ''}${stale ? ' · 离线' : ''}`;
+
+  if (compact) {
+    return (
+      <span
+        className="relative rounded font-bold whitespace-nowrap leading-none"
+        style={{
+          top: -3,
+          padding: '1px 3px',
+          fontSize: 8,
+          backgroundColor: style.bg,
+          color: style.fg,
+        }}
+      >
+        {SHORT_LABEL[planKey] ?? planKey.toUpperCase()}
+        {suffix}
+      </span>
+    );
+  }
+
   return (
     <span
       className="px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap leading-4"
       style={{ backgroundColor: style.bg, color: style.fg, border: `1px solid ${style.border}` }}
     >
       {planName}
-      {expired ? ' · 已过期' : ''}
-      {stale ? ' · 离线' : ''}
+      {suffix}
     </span>
   );
 }
