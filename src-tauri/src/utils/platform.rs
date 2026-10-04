@@ -6,9 +6,10 @@
 
 use crate::utils::errors::AppError;
 
-/// 平台 API 基址的默认值（本地/自测）。
-/// 可用环境变量 `PILOTDESK_PLATFORM_API` 覆盖，打包时指向正式域名。
-pub const DEFAULT_API_BASE: &str = "http://127.0.0.1:8000";
+/// 平台 API 基址：**写死在代码里，不开放给用户配置** ——
+/// 可配置（环境变量 / 设置项）会让用户分流到不同后端，客服与数据统计都无从对齐。
+/// 换环境 = 改这一行 + 重新发版。
+pub const PLATFORM_API_BASE: &str = "http://127.0.0.1:8000";
 
 /// OAuth 客户端标识：必须在平台 `app/src/services/entitlements/clients.ts` 里登记过，
 /// 且回调地址要落在其白名单前缀内（回环地址）。
@@ -18,12 +19,8 @@ const CONNECT_TIMEOUT_SECS: u64 = 8;
 const READ_TIMEOUT_SECS: u64 = 15;
 
 /// 当前生效的平台基址（去掉结尾斜杠，便于拼接）
-pub fn api_base() -> String {
-    std::env::var("PILOTDESK_PLATFORM_API")
-        .ok()
-        .map(|v| v.trim().trim_end_matches('/').to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_API_BASE.to_string())
+pub fn api_base() -> &'static str {
+    PLATFORM_API_BASE
 }
 
 fn http_client() -> reqwest::Client {

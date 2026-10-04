@@ -21,6 +21,11 @@ use crate::utils::platform;
 
 /// 令牌整块密文存放的键
 const TOKENS_SETTING: &str = "account_tokens";
+/// 权益缓存（明文 JSON，无秘密）：平台不可达时按它放行
+const CACHE_SETTING: &str = "account_entitlements_cache";
+/// 离线宽限：平台不可达时，缓存在此天数内仍按「上次已知权益」放行。
+/// 本期的差异化授权是**体验分层不是安全边界**，所以离线宽限是可接受的。
+const OFFLINE_GRACE_DAYS: i64 = 7;
 /// 等待回环回调的超时（用户要在浏览器里登录 / 同意）
 const CALLBACK_TIMEOUT_SECS: u64 = 300;
 /// access 提前多少秒视为过期（避免边界上正好用到刚过期的令牌）
@@ -127,7 +132,7 @@ struct RevokeReq<'a> {
 
 // ── 回给前端的视图（**不含令牌**）────────────────────────────────
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountView {
     pub email: String,
@@ -141,6 +146,9 @@ pub struct AccountView {
     pub capabilities: Vec<String>,
     /// 是否已过期（平台按 free 返回，但仍告知原档位）
     pub expired: bool,
+    /// 是否来自离线缓存（平台不可达、仍在宽限期内）——前端给"离线"轻提示
+    #[serde(default)]
+    pub stale: bool,
 }
 
 #[derive(Serialize)]
@@ -326,6 +334,45 @@ async fn fetch_view(state: &crate::DbState, tokens: &StoredTokens) -> Result<Acc
         expires_at: ent.plan.expires_at,
         capabilities: ent.capabilities,
         expired: ent.expired,
+        stale: false,
+    })
+}
+
+// ── 离线缓存（宽限期内按上次已知权益放行）────────────────────────
+
+#[derive(Serialize, Deserialize)]
+struct CachedEntitlements {
+    view: AccountView,
+    /// 缓存时间（RFC3339）
+    cached_at: String,
+}
+
+fn save_cache(conn: &rusqlite::Connection, view: &AccountView) -> Result<(), AppError> {
+    let cached = CachedEntitlements {
+        view: AccountView {
+            stale: false,
+            ..view.clone()
+        },
+        cached_at: chrono::Utc::now().to_rfc3339(),
+    };
+    set_setting(conn, CACHE_SETTING, &serde_json::to_string(&cached)?)
+}
+
+/// 读缓存；仅在宽限期内有效（超期当作没有，避免拿很久以前的权益忽悠用户）
+fn load_cache_within_grace(conn: &rusqlite::Connection) -> Option<AccountView> {
+    let raw = get_setting(conn, CACHE_SETTING).ok().flatten()?;
+    if raw.is_empty() {
+        return None;
+    }
+    let cached: CachedEntitlements = serde_json::from_str(&raw).ok()?;
+    let at = chrono::DateTime::parse_from_rfc3339(&cached.cached_at).ok()?;
+    let age = chrono::Utc::now() - at.with_timezone(&chrono::Utc);
+    if age > chrono::Duration::days(OFFLINE_GRACE_DAYS) {
+        return None;
+    }
+    Some(AccountView {
+        stale: true,
+        ..cached.view
     })
 }
 
@@ -429,7 +476,7 @@ pub async fn account_login_complete(
         .map_err(String::from)
 }
 
-/// 当前登录状态与权益：未登录返回 `None`；网络失败按未登录处理（不打断使用）
+/// 当前登录状态与权益：未登录返回 `None`；**平台不可达时按离线缓存放行**（宽限期内）
 #[tauri::command]
 pub async fn account_status(
     state: tauri::State<'_, crate::DbState>,
@@ -444,12 +491,50 @@ pub async fn account_status(
         return Ok(None);
     };
     match fetch_view(state.inner(), &tokens).await {
-        Ok(view) => Ok(Some(view)),
+        Ok(view) => {
+            // 每次成功都刷新缓存，供离线宽限使用
+            if let Ok(conn) = state.get_conn() {
+                let _ = save_cache(&conn, &view);
+            }
+            Ok(Some(view))
+        }
+        // 平台不可达（离线 / 后端没起）：宽限期内按「上次已知权益」放行，避免断网即锁功能
+        Err(AppError::Network(msg)) => {
+            log::warn!("[Account] 平台不可达，尝试离线缓存：{}", msg);
+            Ok(state.get_conn().ok().and_then(|c| load_cache_within_grace(&c)))
+        }
+        // 鉴权类失败（refresh 已失效并清掉本地令牌）：按未登录处理，不用缓存糊弄
         Err(e) => {
             log::warn!("[Account] 拉取会员权益失败：{}", e);
             Ok(None)
         }
     }
+}
+
+/// 在应用内打开「升级会员」页。
+///
+/// 用**独立 Webview 窗口**而不是链接壳（iframe）：iframe 里平台页属于第三方上下文，
+/// 会话 Cookie（SameSite=Lax）发不出去，登录/下单都会打转；独立窗口的顶层就是平台域，
+/// Cookie 一方可用。窗口已存在则聚焦，不重复开。
+#[tauri::command]
+pub async fn account_open_upgrade(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    const LABEL: &str = "account-upgrade";
+
+    if let Some(win) = app.get_webview_window(LABEL) {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    let url = url::Url::parse(&format!("{}/account/upgrade/", platform::api_base()))
+        .map_err(|e| format!("升级页地址无效：{}", e))?;
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::External(url))
+        .title("升级会员")
+        .inner_size(1000.0, 760.0)
+        .min_inner_size(720.0, 560.0)
+        .build()
+        .map_err(|e| format!("打开升级页失败：{}", e))?;
+    Ok(())
 }
 
 /// 退出登录：先尽力吊销服务端令牌，再清本地

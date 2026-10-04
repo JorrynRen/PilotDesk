@@ -2546,6 +2546,7 @@ pub fn run() {
             commands::account::account_login_complete,
             commands::account::account_status,
             commands::account::account_logout,
+            commands::account::account_open_upgrade,
             utils::market::fetch_agents_config,
             utils::market::inspiration_market_index,
             utils::market::inspiration_market_fetch,
