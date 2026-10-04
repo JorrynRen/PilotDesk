@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { showToast, showLiveToastOnce } from '../utils/toast';
 import { confirmDialog } from '../stores/confirmStore';
+import { CAP_WORKFLOW_EXPORT, useCapability } from '../stores/accountStore';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -138,6 +139,8 @@ function formatElapsed(startedAt?: number | null): string {
 }
 
 export function WorkflowPage({ embedded }: WorkflowPageProps) {
+  // 工作流导出是平台的受限能力：未解锁（未登录 / 免费档）不显示入口
+  const canExportWorkflow = useCapability(CAP_WORKFLOW_EXPORT);
   const navigate = useNavigate();
   const { definitions, instances, schedules, pendingInputs, pendingApprovals, loading, error, loadDefinitions, loadInstances, loadSchedules, loadPendingInputs, loadPendingApprovals, createDefinition, updateDefinition, deleteDefinition, deleteExecutions, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats'>('definitions');
@@ -1042,6 +1045,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                           >
                             <Settings size={14} />
                           </button>
+                          {canExportWorkflow && (
                           <button
                             onClick={(e) => { handleExportSingle(e, def.id, def.name); }}
                             className="pd-btn p-1.5 rounded hover:opacity-80"
@@ -1050,6 +1054,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                           >
                             <Upload size={14} />
                           </button>
+                          )}
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDuplicate(def.id, def.name); }}
                             className="pd-btn p-1.5 rounded hover:opacity-80"

@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { CAP_WORKFLOW_EXPORT, useCapability } from '../../stores/accountStore';
 import { flushSync } from 'react-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { showToast, showLiveToast, showLiveToastOnce } from '../../utils/toast';
@@ -223,6 +224,8 @@ interface AwaitingInputPayload {
 }
 
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, onSaveResult, onImported }) => {
+  // 工作流导出是平台的受限能力：未解锁（未登录 / 免费档）不显示入口
+  const canExportWorkflow = useCapability(CAP_WORKFLOW_EXPORT);
   const { definitions, instances, updateDefinition, respondHumanInput, loadPendingInputs, pendingInputs, pendingApprovals, loadPendingApprovals, respondToolApproval } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
@@ -3395,6 +3398,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
               <path d="M7 2v7M4.5 6L7 8.5 9.5 6M2 11h10" />
             </svg>
           </button>
+          {canExportWorkflow && (
           <button
             onClick={handleExportWorkflow}
             className="flex items-center justify-center px-1.5 py-1 rounded text-[11px] transition-colors"
@@ -3405,6 +3409,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
               <path d="M7 9V2M4.5 5.5L7 3 9.5 5.5M2 11h10" />
             </svg>
           </button>
+          )}
           <button
             onClick={handleSaveClean}
             className="pd-btn px-3 py-1 text-[11px] rounded"

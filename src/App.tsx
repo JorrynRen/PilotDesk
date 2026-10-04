@@ -3,6 +3,7 @@ import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useSessionStore } from './stores/sessionStore';
+import { useAccountStore } from './stores/accountStore';
 import { useSkillStore } from './stores/skillStore';
 import { useAgentEvent } from './hooks/useAgentEvent';
 import { commandDispatcher } from './plugin/CommandDispatcher';
@@ -141,6 +142,11 @@ function MainLayout() {
 
 function App() {
   const location = useLocation();
+
+  // 启动时拉一次会员登录状态与已解锁能力（受限入口按它显隐；平台不可达则按未登录处理）
+  useEffect(() => {
+    void useAccountStore.getState().refresh();
+  }, []);
 
   // 应用启动时自动发现并加载插件（确保工作流节点类型可用）
   useEffect(() => {

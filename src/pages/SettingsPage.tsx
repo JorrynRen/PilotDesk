@@ -4,7 +4,7 @@ import {
   Settings, Key, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Package, Cpu,
+  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Package, Cpu, User,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -48,7 +48,7 @@ interface SettingsPageProps {
 //   关于 → 通用设置 · 环境检测 → Agent 集成配置
 //   语音识别 / 对话模式 / 权限规则 → API 集成配置
 type SettingsTab =
-  | 'general' | 'agents' | 'api' | 'mcp' | 'search'
+  | 'account' | 'general' | 'agents' | 'api' | 'mcp' | 'search'
   | 'tools' | 'skills' | 'plugins' | 'knowledge' | 'customtabs' | 'memory' | 'filehistory';
 
 // 设置项按类别分组，左侧侧边栏渲染（避免全部平铺顶部拥挤）
@@ -64,6 +64,7 @@ const SETTINGS_GROUPS: {
     titleKey: 'settings.group.app',
     titleZh: '应用',
     items: [
+      { id: 'account', icon: User, labelKey: 'settings.tab.account', labelZh: '账号' },
       { id: 'general', icon: Settings, labelKey: 'settings.tab.general', labelZh: '通用设置' },
     ],
   },
@@ -132,6 +133,7 @@ function SubTabs<T extends string>({
 
 
 import { SettingsSection, SettingsButton } from '../components/settings';
+import { AccountSettings } from '../components/settings/AccountSettings';
 import { confirmDialog } from '../stores/confirmStore';
 import { UsageStats } from '../components/settings/UsageStats';
 import { CustomTabsSettings } from '../components/settings/CustomTabsSettings';
@@ -1255,7 +1257,7 @@ function AboutSection() {
  * 白名单 = 全部一级 tab（都允许深链；漏配的代价是静默回落「通用设置」，很难排查）。
  */
 const CANONICAL_TABS: SettingsTab[] = [
-  'general', 'agents', 'api', 'mcp', 'search',
+  'account', 'general', 'agents', 'api', 'mcp', 'search',
   'tools', 'skills', 'plugins', 'knowledge', 'customtabs', 'memory', 'filehistory',
 ];
 
@@ -1424,6 +1426,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             {/* 插件管理：安装/卸载/启停/商店（全局低频运维，从会话右栏迁来）。
                 不设内部滚动与定高：内容自然展开，滚动交给设置页整页滚动条 */}
             {activeTab === 'plugins' && <PluginManager />}
+            {/* 账号：平台会员登录 + 等级 / 已解锁能力 */}
+            {activeTab === 'account' && <AccountSettings />}
             {/* 知识库：模型（整理/AI 生成）+ 文件根目录（换目录时可迁移原文）+ 云文档账号（投喂用） */}
             {activeTab === 'knowledge' && (
               <div className="space-y-6">
