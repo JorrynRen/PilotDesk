@@ -8,9 +8,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use tauri::State;
 
-use crate::api_agent::db::{
-    MemoryEntry, MemoryStore, MEMORY_IDLE_SECS, MEMORY_MAX_ENTRIES, MEMORY_MIN_ACCESS,
-};
+use crate::api_agent::db::{MemoryEntry, MemoryStore, MEMORY_IDLE_SECS, MEMORY_MIN_ACCESS};
 use crate::utils::errors::AppError;
 use crate::DbState;
 
@@ -288,9 +286,10 @@ pub struct MemoryPolicy {
 }
 
 impl MemoryPolicy {
-    fn current() -> Self {
+    /// 以当前生效的条数上限（读设置 `memory_max_entries`）构造策略。
+    fn from_limit(max_entries: usize) -> Self {
         Self {
-            max_entries: MEMORY_MAX_ENTRIES,
+            max_entries,
             idle_days: MEMORY_IDLE_SECS / 86_400,
             min_access: MEMORY_MIN_ACCESS,
         }
@@ -421,7 +420,7 @@ pub fn get_memory_stats() -> Result<MemoryStats, String> {
     let store = open_memory_store()?;
     let candidates = store.maintenance_candidates().len();
     Ok(MemoryStats {
-        // 与列表同一口径：只算会话记忆，知识库条目（不占 600 配额）不计入
+        // 与列表同一口径：只算会话记忆，知识库条目（不占上限）不计入
         total: store.quota_count(),
         pinned: store.pinned_count(),
         candidates,
@@ -431,8 +430,22 @@ pub fn get_memory_stats() -> Result<MemoryStats, String> {
             .iter()
             .map(MemoryEntryView::from)
             .collect(),
-        policy: MemoryPolicy::current(),
+        policy: MemoryPolicy::from_limit(store.memory_limit()),
     })
+}
+
+/// 读取当前生效的 KV 记忆条数上限（缺省 500，范围 100..=10000）。
+#[tauri::command]
+pub fn get_memory_max_entries() -> Result<usize, String> {
+    let store = open_memory_store()?;
+    Ok(store.memory_limit())
+}
+
+/// 保存 KV 记忆条数上限（clamp 到 100..=10000，写入设置后即时生效）。
+#[tauri::command]
+pub fn set_memory_max_entries(value: usize) -> Result<(), String> {
+    let store = open_memory_store()?;
+    store.set_memory_limit(value).map(|_| ())
 }
 
 #[cfg(test)]

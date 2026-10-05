@@ -2345,6 +2345,8 @@ pub fn run() {
             commands::memory::preview_memory_maintenance,
             commands::memory::run_memory_maintenance,
             commands::memory::get_memory_stats,
+            commands::memory::get_memory_max_entries,
+            commands::memory::set_memory_max_entries,
             commands::knowledge::kb_list_bases,
             commands::knowledge::kb_create_base,
             commands::knowledge::kb_update_base,

@@ -21,11 +21,11 @@ pub(crate) fn memory_db_path(db_dir: &str) -> String {
     )
 }
 
-/// **会话记忆**（计入 600 条配额、参与冷热维护）的判定条件，用于 COUNT 与维护候选筛选，
+/// **会话记忆**（计入条数上限、参与冷热维护）的判定条件，用于 COUNT 与维护候选筛选，
 /// 表名固定为 `key_memories`。取反就是知识库条目。
 ///
 /// 注意：这里的写法是"满足条件 = 计入配额"，与常量名里的 EXEMPT 是反的（历史命名遗留）。
-/// 知识条目（`category='knowledge'` 或存在 `kb_entry_links` 关联）**不占 600 条配额、也不按冷热清理**，
+/// 知识条目（`category='knowledge'` 或存在 `kb_entry_links` 关联）**不占条数上限、也不按冷热清理**，
 /// 生命周期由所属知识库决定（删库时按"是否仍被其它库关联"处理，见 knowledge::delete_base）。
 pub(crate) const QUOTA_EXEMPT_SQL: &str = "category <> 'knowledge' AND NOT EXISTS \
      (SELECT 1 FROM kb_entry_links l WHERE l.entry_key = key_memories.key)";
@@ -53,8 +53,37 @@ pub(crate) fn ensure_key_memories_table(conn: &Connection) -> Result<(), String>
     .map_err(|e| format!("创建记忆表失败: {}", e))
 }
 
-/// KV 记忆配额上限：总条数超过该值即驱逐“最冷且未 pin”的多余条目。
-pub const MEMORY_MAX_ENTRIES: usize = 600;
+/// KV 记忆条数上限：总条数超过该值即驱逐“最冷且未 pin”的多余条目。
+///
+/// 上限是**客户端自行调节的默认值 + 技术硬上限**（不再是档位配额）：
+/// 用户可在设置页调整，持久化于 MEMORY.db 的 `app_settings` 键 `memory_max_entries`。
+pub const MEMORY_MAX_ENTRIES_KEY: &str = "memory_max_entries";
+/// KV 记忆条数上限的默认值（用户未调整时生效）。
+pub const MEMORY_MAX_ENTRIES_DEFAULT: usize = 500;
+/// KV 记忆条数上限的可调下界。
+pub const MEMORY_MAX_ENTRIES_MIN: usize = 100;
+/// KV 记忆条数上限的技术硬上限（避免本地数据库无限膨胀）。
+pub const MEMORY_MAX_ENTRIES_HARD_MAX: usize = 10000;
+
+/// 把记忆条数上限夹取到 `[MEMORY_MAX_ENTRIES_MIN, MEMORY_MAX_ENTRIES_HARD_MAX]`。
+fn clamp_memory_max_entries(value: usize) -> usize {
+    value.clamp(MEMORY_MAX_ENTRIES_MIN, MEMORY_MAX_ENTRIES_HARD_MAX)
+}
+
+/// 读取当前生效的 KV 记忆条数上限：读 MEMORY.db 的 `app_settings`（缺省 500），
+/// 并 clamp 到 100..=10000。表不存在 / 值非法时回退默认值。
+fn load_memory_max_entries(conn: &Connection) -> usize {
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1",
+        params![MEMORY_MAX_ENTRIES_KEY],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|s| s.trim().parse::<usize>().ok())
+    .map(clamp_memory_max_entries)
+    .unwrap_or(MEMORY_MAX_ENTRIES_DEFAULT)
+}
+
 /// 冷记忆（僵尸）判定冷却期（秒）：超过该时长既未被检索也未被编辑的未 pin 条目可清理
 /// （活跃度取 max(last_accessed_at, updated_at)，见 maintenance_candidates）。
 pub const MEMORY_IDLE_SECS: u64 = 180 * 24 * 3600;
@@ -165,6 +194,16 @@ impl MemoryStore {
 
         // 建表（新库含维护列；旧库随后按列缺失逐个 ALTER 迁移）
         ensure_key_memories_table(&conn)?;
+
+        // 记忆子系统的设置表：MEMORY.db 独立于主库，KV 记忆条数上限等配置需落在本库才能被读取。
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL
+            );",
+        )
+        .map_err(|e| format!("创建记忆设置表失败: {}", e))?;
 
         // 知识库表与 FTS 索引：必须在这里一并建好 ——
         // QUOTA_EXEMPT_SQL 会查 kb_entry_links，条目增删的触发器也会写 kb_entry_fts，
@@ -277,7 +316,7 @@ impl MemoryStore {
         };
 
         // 写入后懒惰维护：超配额即驱逐（僵尸清理在 open 与维护命令处执行）
-        // 用 quota_count（排除知识库条目）：知识条目不占这 600 条
+        // 用 quota_count（排除知识库条目）：知识条目不占这上限
         if self.quota_count() > self.memory_limit() {
             self.prune();
         }
@@ -374,7 +413,7 @@ impl MemoryStore {
         };
 
         // 写入后懒惰维护：超配额即驱逐（僵尸清理在 open 与维护命令处执行）
-        // 用 quota_count（排除知识库条目）：知识条目不占这 600 条
+        // 用 quota_count（排除知识库条目）：知识条目不占这上限
         if self.quota_count() > self.memory_limit() {
             self.prune();
         }
@@ -789,7 +828,7 @@ impl MemoryStore {
         .unwrap_or(0) as usize
     }
 
-    /// 计入 600 条配额的条数（排除知识库条目，见 QUOTA_EXEMPT_SQL）。
+    /// 计入条数上限的条数（排除知识库条目，见 QUOTA_EXEMPT_SQL）。
     /// 配额判定与驱逐都必须用它 —— 否则批量导入知识会把会话记忆挤掉。
     pub fn quota_count(&self) -> usize {
         let conn = self.conn.lock().unwrap();
@@ -804,10 +843,23 @@ impl MemoryStore {
         .unwrap_or(0) as usize
     }
 
-    /// 当前生效的记忆条数上限：读会员配额 `memory.entries`；无缓存 / 未下发 → 兜底常量。
-    fn memory_limit(&self) -> usize {
+    /// 当前生效的记忆条数上限：读设置 `memory_max_entries`（缺省 500，clamp 100..=10000）。
+    pub fn memory_limit(&self) -> usize {
         let conn = self.conn.lock().unwrap();
-        crate::commands::account::quota_limit(&conn, "memory.entries", MEMORY_MAX_ENTRIES)
+        load_memory_max_entries(&conn)
+    }
+
+    /// 保存记忆条数上限（clamp 到 100..=10000 后写入 MEMORY.db 的设置表，即时生效）。
+    pub fn set_memory_limit(&self, value: usize) -> Result<usize, String> {
+        let conn = self.conn.lock().unwrap();
+        let clamped = clamp_memory_max_entries(value);
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3",
+            params![MEMORY_MAX_ENTRIES_KEY, clamped.to_string(), crate::utils::now()],
+        )
+        .map_err(|e| format!("保存记忆条数上限失败: {}", e))?;
+        Ok(clamped)
     }
 
     /// 全量列表（支持按分类与关键词过滤；关键词不增计访问次数），按更新时间倒序。
@@ -945,9 +997,9 @@ impl MemoryStore {
                 |r| r.get::<_, i64>(0),
             )
             .unwrap_or(0) as usize;
-        // 配额上限按会员等级生效（未登录 / 未下发回落兜底常量）；直接复用已持有的 conn 读取，
+        // 上限读设置 `memory_max_entries`（缺省 500）；直接复用已持有的 conn 读取，
         // 不能再调用 self.memory_limit()（同一把 Mutex 会自锁）。
-        let limit = crate::commands::account::quota_limit(&conn, "memory.entries", MEMORY_MAX_ENTRIES);
+        let limit = load_memory_max_entries(&conn);
         let overflow_n = total.saturating_sub(limit);
 
         let mut overflow: Vec<MemoryEntry> = Vec::new();

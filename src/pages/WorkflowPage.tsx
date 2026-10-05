@@ -6,7 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { showToast, showLiveToastOnce } from '../utils/toast';
 import { confirmDialog } from '../stores/confirmStore';
-import { CAP_WORKFLOW_EXPORT_BATCH, useCapability, useAccountStore } from '../stores/accountStore';
+import { useAccountStore } from '../stores/accountStore';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -160,8 +160,6 @@ function formatElapsed(startedAt?: number | null): string {
 }
 
 export function WorkflowPage({ embedded }: WorkflowPageProps) {
-  // 批量导出是平台的受限能力：未解锁（未登录 / 免费档）不显示入口；单个导出对所有用户开放
-  const canExportBatch = useCapability(CAP_WORKFLOW_EXPORT_BATCH);
   const navigate = useNavigate();
   const { definitions, instances, schedules, pendingInputs, pendingApprovals, loading, error, loadDefinitions, loadInstances, loadSchedules, loadPendingInputs, loadPendingApprovals, createDefinition, updateDefinition, deleteDefinition, deleteExecutions, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats'>('definitions');
@@ -179,7 +177,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const [nodeExecsError, setNodeExecsError] = useState<string | null>(null);
   /** 待审批（不含失效的）+ 待人工输入 = 待处理入口上的计数（与指挥中心同一口径） */
   const pendingCount = pendingApprovals.filter((a) => !a.stale).length + pendingInputs.length;
-  /** 批量导出弹窗：选中的工作流 id 集合 + 导出中标记（受限能力，见 canExportBatch） */
+  /** 批量导出弹窗：选中的工作流 id 集合 + 导出中标记 */
   const [showBatchExport, setShowBatchExport] = useState(false);
   const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
   const [batchExporting, setBatchExporting] = useState(false);
@@ -917,20 +915,18 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           >
             <Building2 size={14} /> 从组织导入
           </button>
-          {/* 批量导出是平台的受限能力：未解锁（未登录 / 免费档）不显示入口 */}
-          {canExportBatch && (
-            <button
-              onClick={() => {
-                setBatchSelectedIds(new Set());
-                setShowBatchExport(true);
-              }}
-              className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
-              style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-              title="勾选多个工作流一次性导出到指定目录"
-            >
-              <Upload size={14} /> 批量导出
-            </button>
-          )}
+          {/* 批量导出：对所有用户开放（本地能力不设限） */}
+          <button
+            onClick={() => {
+              setBatchSelectedIds(new Set());
+              setShowBatchExport(true);
+            }}
+            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="勾选多个工作流一次性导出到指定目录"
+          >
+            <Upload size={14} /> 批量导出
+          </button>
           {/* 模板市场已迁至「资源市集 › 工作流模板」：这里只留跳转入口 */}
           <button
             onClick={() => navigate('/market?tab=workflow')}

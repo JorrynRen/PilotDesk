@@ -834,10 +834,14 @@ pub async fn respond_plugin_execute(
         .map_err(|e| AppError::External(format!("响应失败: {}", e)).into())
 }
 
+/// 定时任务数量的**技术保护上限**：为避免过多定时任务影响本地稳定性而设，不是功能 / 档位限制。
+const MAX_SCHEDULES: usize = 1000;
+
 /// 创建定时调度
 ///
 /// Cron 表达式在此处**先校验再落库**：非法表达式若落库，调度器每次轮询都会判定"已到期"，
 /// 于是每分钟重复触发（旧实现正是如此）。首次执行时间按表达式真实计算，不再固定为 now+60。
+/// 数量只受 `MAX_SCHEDULES`（技术保护）约束，不再受会员档位配额限制。
 #[tauri::command]
 pub fn create_schedule(
     state: tauri::State<'_, crate::DbState>,
@@ -852,20 +856,17 @@ pub fn create_schedule(
     crate::workflow::scheduler::validate_cron(&cron_expression).map_err(AppError::InvalidInput)?;
     let next_run_at = crate::workflow::scheduler::next_run_after(&cron_expression, now())
         .ok_or_else(|| AppError::InvalidInput("无法计算下一次执行时间".to_string()))?;
-    // 会员配额：定时任务数量上限（未配置 / 未登录回落 free 兜底 5；-1 = 不限）。
+    // 技术保护上限：定时任务数量超过 MAX_SCHEDULES 就拒绝，避免过多定时任务拖垮本地稳定性。
     // 保存定义时会先删掉本工作流的旧调度再重建，所以这里按「总数」校验是幂等安全的。
-    let schedule_limit = crate::commands::account::quota_limit(&conn, "workflow.schedules", 5);
-    if schedule_limit != usize::MAX {
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM workflow_schedules", [], |r| r.get(0))
-            .unwrap_or(0);
-        if count as usize >= schedule_limit {
-            return Err(AppError::InvalidInput(format!(
-                "已达当前等级的定时任务上限（{} 个），升级后可创建更多",
-                schedule_limit
-            ))
-            .into());
-        }
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM workflow_schedules", [], |r| r.get(0))
+        .unwrap_or(0);
+    if count as usize >= MAX_SCHEDULES {
+        return Err(AppError::InvalidInput(format!(
+            "定时任务数量已达系统保护上限（{} 个）。这是为避免过多定时任务影响本地稳定性而设的保护，请先清理不再使用的定时任务。",
+            MAX_SCHEDULES
+        ))
+        .into());
     }
     let sched = crate::workflow::scheduler::WorkflowSchedule {
         id: crate::utils::new_id(),
@@ -2360,24 +2361,13 @@ pub fn get_workflow_max_concurrency(
             [],
             |row| row.get(0),
         )
-        .unwrap_or_else(|_| "5".to_string());
+        .unwrap_or_else(|_| "10".to_string());
     Ok(value.parse::<usize>().unwrap_or(10))
 }
 
-/// 按会员配额夹取设置值：结果为 `[1, min(hard_max, quota)]`。
-/// `quota == usize::MAX` 表示不限 → 只用 `hard_max`；`hard_max` 为产品硬上限。
-fn clamp_with_quota(value: i64, quota: usize, hard_max: i64) -> i64 {
-    let quota_max = if quota == usize::MAX {
-        hard_max
-    } else {
-        (quota as i64).min(hard_max)
-    };
-    let upper = quota_max.max(1);
-    value.clamp(1, upper)
-}
-
 /// 设置工作流最大并发数
-
+///
+/// 并发数是客户端自行调节的本地能力：默认 10，技术硬上限 30（避免过高明显占用本机资源）。
 #[tauri::command]
 pub fn set_workflow_max_concurrency(
     state: tauri::State<'_, crate::DbState>,
@@ -2386,9 +2376,8 @@ pub fn set_workflow_max_concurrency(
     let conn = state
         .get_conn()
         .map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
-    // 上限取 min(产品硬上限 20, 会员配额)；未登录 / 未下发回落 free 档兜底 10。
-    let quota = crate::commands::account::quota_limit(&conn, "workflow.concurrency", 10);
-    let clamped = clamp_with_quota(max_concurrency as i64, quota, 20);
+    // 固定范围 1..=30（技术硬上限），不再按会员档位配额夹取。
+    let clamped = (max_concurrency as i64).clamp(1, 30);
     conn.execute(
 
         "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('workflow_max_concurrency', ?1, ?2)",
@@ -2399,7 +2388,8 @@ pub fn set_workflow_max_concurrency(
 }
 
 /// 设置子工作流最大嵌套深度
-
+///
+/// 嵌套深度是客户端自行调节的本地能力：技术硬上限 10。
 #[tauri::command]
 pub fn set_workflow_max_subflow_depth(
     state: tauri::State<'_, crate::DbState>,
@@ -2408,9 +2398,8 @@ pub fn set_workflow_max_subflow_depth(
     let conn = state
         .get_conn()
         .map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
-    // 上限取 min(产品硬上限 10, 会员配额)；未登录 / 未下发回落 free 档兜底 3。
-    let quota = crate::commands::account::quota_limit(&conn, "workflow.subflowDepth", 3);
-    let clamped = clamp_with_quota(max_depth, quota, 10);
+    // 固定范围 1..=10（技术硬上限），不再按会员档位配额夹取。
+    let clamped = max_depth.clamp(1, 10);
     conn.execute(
         "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('workflow_max_subflow_depth', ?1, ?2)",
         rusqlite::params![clamped.to_string(), crate::utils::now()],
@@ -2987,25 +2976,6 @@ mod tests {
         let conn3 = test_conn();
         seed_instance(&conn3, "e-success", "d1", Some("success"));
         assert!(ensure_no_unfinished_executions(&conn3, "d1").is_ok());
-    }
-
-    /// 配额夹取：配额足够 → 用硬上限；配额更小 → 用配额；不限 → 用硬上限；值越界 → 被夹取。
-    #[test]
-    fn clamp_with_quota_respects_quota_and_hard_max() {
-        // 配额足够（>= 硬上限）→ 保持原值；超过硬上限 → 夹到硬上限
-        assert_eq!(clamp_with_quota(15, 20, 20), 15);
-        assert_eq!(clamp_with_quota(25, 20, 20), 20);
-        // 配额更小 → 夹到配额
-        assert_eq!(clamp_with_quota(15, 8, 20), 8);
-        // 不限（usize::MAX）→ 用硬上限
-        assert_eq!(clamp_with_quota(15, usize::MAX, 20), 15);
-        assert_eq!(clamp_with_quota(99, usize::MAX, 20), 20);
-        // 下限 1
-        assert_eq!(clamp_with_quota(0, 10, 20), 1);
-        assert_eq!(clamp_with_quota(-5, 10, 20), 1);
-        // 子流程深度：兜底配额 3，硬上限 10
-        assert_eq!(clamp_with_quota(5, 3, 10), 3);
-        assert_eq!(clamp_with_quota(5, 10, 10), 5);
     }
 
     // ── 组织共享工作流：打包 / 解包 / 子流引用回写 ─────────────────────

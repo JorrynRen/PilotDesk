@@ -12,7 +12,6 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { CAP_WORKFLOW_VERSION, useCapability } from '../../stores/accountStore';
 import { flushSync } from 'react-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { showToast, showLiveToast, showLiveToastOnce } from '../../utils/toast';
@@ -224,8 +223,6 @@ interface AwaitingInputPayload {
 }
 
 export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, onSaveResult, onImported }) => {
-  // 版本管理（备份/恢复）是平台的受限能力：未解锁（未登录 / 免费档）不显示入口
-  const canManageVersions = useCapability(CAP_WORKFLOW_VERSION);
   const { definitions, instances, updateDefinition, respondHumanInput, loadPendingInputs, pendingInputs, pendingApprovals, loadPendingApprovals, respondToolApproval } = useWorkflowStore();
   const def = definitions.find((d) => d.id === definitionId);
 
@@ -3415,8 +3412,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
           >
             保存
           </button>
-          {/* 备份/恢复 下拉分组：版本管理是受限能力，未解锁不显示入口 */}
-          {canManageVersions && (
+          {/* 备份/恢复 下拉分组：版本管理对所有用户开放（本地能力不设限） */}
           <div ref={backupDropdownRef} className="relative group">
             <button
               onClick={(e) => {
@@ -3467,7 +3463,6 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
               </button>
             </div>
           </div>
-          )}
         </div>
       </div>
 

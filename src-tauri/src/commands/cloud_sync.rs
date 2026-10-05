@@ -370,6 +370,11 @@ pub struct CloudSyncResult {
     pub pulled: usize,
     pub pushed: usize,
     pub conflicts: usize,
+    /// 打包失败（本轮未能上传）的对象数
+    pub failed: usize,
+    /// 失败对象与原因（供 UI 展示；如「体积超限」）
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -393,6 +398,10 @@ pub struct CloudSyncStatus {
     pub last_result: Option<String>,
     /// 本地已登记（被跟踪）的同步对象数
     pub object_count: i64,
+    /// 本地根工作流数（未被任何工作流作为子流引用）
+    pub root_count: i64,
+    /// 本地子工作流数（被其它工作流以 Subflow 节点引用，不单独同步，随主工作流一并上传）
+    pub subflow_count: i64,
     pub cursor: i64,
 }
 
@@ -536,13 +545,17 @@ fn list_push_candidates(conn: &Connection) -> Result<Vec<(String, i64)>, AppErro
 }
 
 /// 收集本地待推送对象 → push items（分批前）。
-fn build_push_items(conn: &Connection) -> Result<Vec<PushItem>, AppError> {
+///
+/// 返回 `(push items, 打包失败原因)`：打包失败（如超过平台体积上限、定义缺失）**不静默**——
+/// 除记日志外，原因汇总进第二个返回值，由调用方放进本轮结果让 UI 展示。
+fn build_push_items(conn: &Connection) -> Result<(Vec<PushItem>, Vec<String>), AppError> {
     let referenced = referenced_workflow_ids(conn)?;
     let mut items = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
     for (key, server_version) in list_push_candidates(conn)? {
-        let exists = crate::workflow::get_definition(conn, &key)
-            .map_err(|e| AppError::Db(format!("查询失败: {}", e)))?
-            .is_some();
+        let def = crate::workflow::get_definition(conn, &key)
+            .map_err(|e| AppError::Db(format!("查询失败: {}", e)))?;
+        let exists = def.is_some();
         match decide_push(exists, referenced.contains(&key)) {
             PushAction::Skip => {}
             PushAction::Delete => items.push(PushItem {
@@ -558,11 +571,19 @@ fn build_push_items(conn: &Connection) -> Result<Vec<PushItem>, AppError> {
                     deleted: None,
                     base_version: server_version,
                 }),
-                Err(e) => log::warn!("[CloudSync] 打包工作流失败，跳过推送 {}：{}", key, e),
+                Err(e) => {
+                    log::warn!("[CloudSync] 打包工作流失败，跳过推送 {}：{}", key, e);
+                    let label = def
+                        .as_ref()
+                        .map(|d| d.name.clone())
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| key.clone());
+                    failures.push(format!("{}：{}", label, e));
+                }
             },
         }
     }
-    Ok(items)
+    Ok((items, failures))
 }
 
 // ════════════════════════════════════════════════════════════
@@ -701,7 +722,7 @@ pub async fn run_sync_round(state: &crate::DbState) -> CloudSyncResult {
     }
 
     // ── push ──
-    let push_items = match state.get_conn() {
+    let (push_items, failures) = match state.get_conn() {
         Ok(conn) => match build_push_items(&conn) {
             Ok(v) => v,
             Err(e) => {
@@ -716,6 +737,9 @@ pub async fn run_sync_round(state: &crate::DbState) -> CloudSyncResult {
             return r;
         }
     };
+    // 打包失败的对象计入本轮结果（不静默）：UI 据此提示「N 个失败（原因）」
+    result.failed = failures.len();
+    result.failures = failures;
 
     for chunk in push_items.chunks(PUSH_MAX_ITEMS) {
         let body = PushBody {
@@ -727,7 +751,10 @@ pub async fn run_sync_round(state: &crate::DbState) -> CloudSyncResult {
         {
             Ok(v) => v,
             Err(e) => {
-                let r = CloudSyncResult::failure(format!("推送失败：{}", e));
+                // 保留本轮已收集的打包失败信息，避免被整轮错误覆盖而丢失
+                let mut r = CloudSyncResult::failure(format!("推送失败：{}", e));
+                r.failed = result.failed;
+                r.failures = result.failures.clone();
                 save_round_meta(state, &r);
                 return r;
             }
@@ -764,10 +791,20 @@ fn save_round_meta(state: &crate::DbState, result: &CloudSyncResult) {
     let _ = set_setting(&conn, SYNC_LAST_AT_KEY, &at);
     let text = match &result.error {
         Some(e) => format!("失败：{}", e),
-        None => format!(
-            "拉取 {} / 推送 {} / 冲突 {}",
-            result.pulled, result.pushed, result.conflicts
-        ),
+        None => {
+            let mut text = format!(
+                "拉取 {} / 推送 {} / 冲突 {}",
+                result.pulled, result.pushed, result.conflicts
+            );
+            // 打包失败（如体积超限）不静默：摘要里带上数量与首个原因
+            if result.failed > 0 {
+                text.push_str(&format!(" / 失败 {}", result.failed));
+                if let Some(first) = result.failures.first() {
+                    text.push_str(&format!("（{}）", first));
+                }
+            }
+            text
+        }
     };
     let _ = set_setting(&conn, SYNC_LAST_RESULT_KEY, &text);
     log::info!("[CloudSync] {}", text);
@@ -796,12 +833,24 @@ pub fn cloud_sync_status(
             |r| r.get(0),
         )
         .unwrap_or(0);
+    // 本地根 / 子工作流数（只读，供界面说明「子流随主工作流同步」）：
+    // 子流集合复用与同步决策同一判据 [`referenced_workflow_ids`]，保证口径一致。
+    let total_defs = crate::workflow::list_definitions(&conn)
+        .map(|v| v.len() as i64)
+        .unwrap_or(0);
+    let subflow_count = referenced_workflow_ids(&conn)
+        .map(|s| s.len() as i64)
+        .unwrap_or(0)
+        .min(total_defs);
+    let root_count = (total_defs - subflow_count).max(0);
     Ok(CloudSyncStatus {
         enabled: sync_enabled(&conn),
         capability_ok: has_capability(&conn, CAP_CLOUD_SYNC).unwrap_or(false),
         last_at: get_setting(&conn, SYNC_LAST_AT_KEY).ok().flatten(),
         last_result: get_setting(&conn, SYNC_LAST_RESULT_KEY).ok().flatten(),
         object_count,
+        root_count,
+        subflow_count,
         cursor: read_cursor(&conn),
     })
 }
@@ -842,10 +891,11 @@ pub async fn run_auto_sync_loop(state: crate::DbState) {
             match &r.error {
                 Some(e) => log::debug!("[CloudSync] 自动同步跳过：{}", e),
                 None => log::info!(
-                    "[CloudSync] 自动同步完成：拉取 {} / 推送 {} / 冲突 {}",
+                    "[CloudSync] 自动同步完成：拉取 {} / 推送 {} / 冲突 {} / 失败 {}",
                     r.pulled,
                     r.pushed,
-                    r.conflicts
+                    r.conflicts,
+                    r.failed
                 ),
             }
         }
@@ -962,5 +1012,48 @@ mod tests {
         // 故意不建 sync_state，也不建 workflow_definitions
         mark_workflow_dirty(&conn, "w1");
         // 不 panic 即通过
+    }
+
+    /// 体积超限的工作流：**不静默丢弃**——进不了 push 列表，但原因汇总到 `failures`（供 UI 展示）。
+    #[test]
+    fn oversized_workflow_reported_not_silently_dropped() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE workflow_definitions (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '1.0.0',
+                description TEXT NOT NULL DEFAULT '',
+                trigger TEXT NOT NULL DEFAULT '{\"triggerType\":\"manual\"}',
+                stages TEXT NOT NULL DEFAULT '[]', input_schema TEXT, output_schema TEXT, icon TEXT,
+                created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1);
+             CREATE TABLE sync_state (
+                kind TEXT NOT NULL, object_key TEXT NOT NULL,
+                server_version INTEGER NOT NULL DEFAULT 0,
+                local_updated_at INTEGER NOT NULL DEFAULT 0,
+                dirty INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (kind, object_key));",
+        )
+        .unwrap();
+        // 300K 字符描述 > 256K 上限 → 打包必失败
+        let big = "x".repeat(300 * 1024);
+        conn.execute(
+            "INSERT INTO workflow_definitions (id, name, description) VALUES ('w-big', '超大工作流', ?1)",
+            params![big],
+        )
+        .unwrap();
+
+        let (items, failures) = build_push_items(&conn).unwrap();
+        assert!(items.is_empty(), "打包失败的对象不应进入 push 列表");
+        assert_eq!(failures.len(), 1);
+        assert!(
+            failures[0].contains("超大工作流"),
+            "失败原因应含对象名：{:?}",
+            failures[0]
+        );
+        assert!(
+            failures[0].contains("体积过大"),
+            "失败原因应说明体积超限：{:?}",
+            failures[0]
+        );
     }
 }

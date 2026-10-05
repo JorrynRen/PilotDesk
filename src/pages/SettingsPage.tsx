@@ -37,7 +37,7 @@ import { McpSettings } from '../components/settings/McpSettings';
 import { SearchSettings } from '../components/settings/SearchSettings';
 import { FileHistorySettings } from '../components/settings/FileHistorySettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
-import { useAccountStore, useQuota } from '../stores/accountStore';
+import { useAccountStore } from '../stores/accountStore';
 import { sendApiRequest } from '../utils/apiClient';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 
@@ -163,15 +163,16 @@ function GeneralSettings() {
   const [workspace, setWorkspace] = useState('');
   const [maxConcurrency, setMaxConcurrency] = useState(10);
   const [maxSubflowDepth, setMaxSubflowDepth] = useState(3);
+  // KV 记忆条数上限：客户端自行调节的本地设置（默认 500，范围 100–10000，步进 100）
+  const [maxMemoryEntries, setMaxMemoryEntries] = useState(500);
   const [autoRunNotify, setAutoRunNotify] = useState(isAutoRunNotifyEnabled());
   const [streamIdleSecs, setStreamIdleSecs] = useState(90);
 
-  // 会员配额：未登录 / 未下发回落到 free 档兜底值；-1（不限）→ Infinity
-  const quotaConcurrency = useQuota('workflow.concurrency', 10);
-  const quotaSubflow = useQuota('workflow.subflowDepth', 3);
-  // 上限取 min(产品硬上限, 配额)；配额不限（Infinity）时即硬上限
-  const effectiveConcurrencyMax = Math.min(20, quotaConcurrency);
-  const effectiveSubflowMax = Math.min(10, quotaSubflow);
+  // 本地能力不设限：并发 / 子流程深度只受技术硬上限约束（不再是档位配额）
+  const CONCURRENCY_HARD_MAX = 30;
+  const SUBFLOW_HARD_MAX = 10;
+  const MEMORY_ENTRIES_MIN = 100;
+  const MEMORY_ENTRIES_MAX = 10000;
 
   // Load workspace from SQLite on mount
   useEffect(() => {
@@ -189,6 +190,10 @@ function GeneralSettings() {
         if (msd) setMaxSubflowDepth(parseInt(msd));
       } catch { /* ignore */ }
       try {
+        const mme = await invoke<number | null>('get_memory_max_entries');
+        if (mme) setMaxMemoryEntries(mme);
+      } catch { /* ignore */ }
+      try {
         const idle = await invoke<string | null>('get_app_setting', { key: 'api_stream_idle_secs' });
         if (idle && !Number.isNaN(parseInt(idle))) setStreamIdleSecs(parseInt(idle));
       } catch { /* ignore */ }
@@ -203,7 +208,7 @@ function GeneralSettings() {
   ];
 
   const handleMaxConcurrencyChange = async (value: number) => {
-    const clamped = Math.max(1, Math.min(effectiveConcurrencyMax, value));
+    const clamped = Math.max(1, Math.min(CONCURRENCY_HARD_MAX, value));
     setMaxConcurrency(clamped);
     try {
       await invoke('set_workflow_max_concurrency', { maxConcurrency: clamped });
@@ -211,10 +216,19 @@ function GeneralSettings() {
   };
 
   const handleMaxSubflowDepthChange = async (value: number) => {
-    const clamped = Math.max(1, Math.min(effectiveSubflowMax, value));
+    const clamped = Math.max(1, Math.min(SUBFLOW_HARD_MAX, value));
     setMaxSubflowDepth(clamped);
     try {
       await invoke('set_workflow_max_subflow_depth', { maxDepth: clamped });
+    } catch { /* ignore */ }
+  };
+
+  /** KV 记忆条数上限：夹取到 100–10000 后保存（立即生效，与并发数同一保存风格）。 */
+  const handleMaxMemoryEntriesChange = async (value: number) => {
+    const clamped = Math.max(MEMORY_ENTRIES_MIN, Math.min(MEMORY_ENTRIES_MAX, value));
+    setMaxMemoryEntries(clamped);
+    try {
+      await invoke('set_memory_max_entries', { value: clamped });
     } catch { /* ignore */ }
   };
 
@@ -318,7 +332,7 @@ function GeneralSettings() {
           <input
             type="range"
             min="1"
-            max={effectiveConcurrencyMax}
+            max={CONCURRENCY_HARD_MAX}
             value={maxConcurrency}
             onChange={(e) => handleMaxConcurrencyChange(parseInt(e.target.value))}
             className="flex-1"
@@ -334,18 +348,34 @@ function GeneralSettings() {
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           工作流执行时同一时刻最多并行运行的节点数。增加此值可加速并行节点较多的工作流，但会消耗更多系统资源。
         </p>
-        {maxConcurrency >= effectiveConcurrencyMax && effectiveConcurrencyMax < 20 && (
-          <p className="text-xs mt-1 flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
-            <span>已达当前等级的并发上限（{effectiveConcurrencyMax}），升级可提升</span>
-            <button
-              onClick={() => useAccountStore.getState().openPlatform('upgrade')}
-              className="underline hover:no-underline"
-              style={{ color: 'var(--accent)' }}
-            >
-              升级 / 续费
-            </button>
-          </p>
-        )}
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          上限 {CONCURRENCY_HARD_MAX}：过高会明显占用本机资源。
+        </p>
+      </SettingsSection>
+
+      {/* KV 记忆条数上限 */}
+      <SettingsSection title="KV 记忆条数上限">
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min={MEMORY_ENTRIES_MIN}
+            max={MEMORY_ENTRIES_MAX}
+            step={100}
+            value={maxMemoryEntries}
+            onChange={(e) => handleMaxMemoryEntriesChange(parseInt(e.target.value))}
+            className="flex-1"
+            style={{ accentColor: 'var(--accent)' }}
+          />
+          <span
+            className="px-2 py-1 rounded text-xs font-mono min-w-[42px] text-center"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          >
+            {maxMemoryEntries}
+          </span>
+        </div>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          上限越高占用本地数据库空间越多；达到上限后旧记忆会被清理。
+        </p>
       </SettingsSection>
 
       {/* Max Subflow Depth */}
@@ -354,7 +384,7 @@ function GeneralSettings() {
           <input
             type="range"
             min="1"
-            max={effectiveSubflowMax}
+            max={SUBFLOW_HARD_MAX}
             value={maxSubflowDepth}
             onChange={(e) => handleMaxSubflowDepthChange(parseInt(e.target.value))}
             className="flex-1"
@@ -370,18 +400,6 @@ function GeneralSettings() {
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           子工作流（Subflow 节点）允许的最大递归嵌套层数（1-10）。超过此限制将阻止执行以防止无限递归。
         </p>
-        {maxSubflowDepth >= effectiveSubflowMax && effectiveSubflowMax < 10 && (
-          <p className="text-xs mt-1 flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
-            <span>已达当前等级的子流程深度上限（{effectiveSubflowMax}），升级可提升</span>
-            <button
-              onClick={() => useAccountStore.getState().openPlatform('upgrade')}
-              className="underline hover:no-underline"
-              style={{ color: 'var(--accent)' }}
-            >
-              升级 / 续费
-            </button>
-          </p>
-        )}
       </SettingsSection>
 
       {/* 自动运行提醒 */}

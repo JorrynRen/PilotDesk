@@ -5,7 +5,9 @@ import { X, Settings, Plus, HelpCircle } from 'lucide-react';
 import type { WorkflowDefinition, TriggerConfig } from '../../types/workflow';
 import type { JsonValue } from '../../types/plugin';
 import { Select } from '../common/Select';
-import { useQuota } from '../../stores/accountStore';
+
+/** 定时任务数量的技术保护上限（与后端 `commands::workflow::MAX_SCHEDULES` 对齐） */
+const MAX_SCHEDULES = 1000;
 
 /** 入参字段规格（与 types/workflow.ts 的 inputSchema 一致；default 可能来自用户 JSON，形态未知） */
 type InputSchemaField = { type: string; description?: string; required?: boolean; default?: JsonValue };
@@ -79,9 +81,9 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
     return () => { cancelled = true; };
   }, []);
 
-  // 会员配额：定时任务数量上限（-1 = 不限 → Infinity）。在设置「定时触发」时提前告知已用/上限，
+  // 定时任务数量只受技术保护上限约束（不再按会员档位配额）。在设置「定时触发」时提前告知已用/上限，
   // 免得用户填完 Cron 保存时才被后端拒绝。
-  const scheduleLimit = useQuota('workflow.schedules', 5);
+  const scheduleLimit = MAX_SCHEDULES;
   const [scheduleCount, setScheduleCount] = useState<number | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -331,7 +333,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
                 </button>
               ))}
             </div>
-            {triggerType === 'cron' && scheduleLimit !== Number.POSITIVE_INFINITY && (
+            {triggerType === 'cron' && (
               <p
                 className="mt-1.5 text-[11px]"
                 style={{
@@ -342,7 +344,7 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
                 }}
               >
                 定时任务：已用 {scheduleCount ?? '—'} / 上限 {scheduleLimit}
-                {scheduleCount !== null && scheduleCount >= scheduleLimit ? '（已达上限，升级可提升）' : ''}
+                {scheduleCount !== null && scheduleCount >= scheduleLimit ? '（系统保护上限，请先清理不再使用的定时任务）' : ''}
               </p>
             )}
             {triggerType === 'event' && (

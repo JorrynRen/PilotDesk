@@ -20,7 +20,6 @@ import { useAgentStreamStore, appendReasoningStep, appendToolStartStep, appendTo
 import type { SessionStreamState } from '../../stores/agentStreamStore';
 import { useApprovalStore, selectApprovalItems, selectIterationLimitItems } from '../../stores/approvalStore';
 import type { IterationLimitItem } from '../../stores/approvalStore';
-import { CAP_GROUPCHAT_ROOM_PROMOTE, useCapability } from '../../stores/accountStore';
 import { formatResponsesToText } from '../confirmation/confirmationUtils';
 
 import type { ChatMode, Attachment, Session } from '../../types';
@@ -476,9 +475,6 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const navigate = useNavigate();
   const { setMode } = useTerminal();
-
-  // ── 会话 → 群聊：房间转工作流是平台的受限能力，未解锁（未登录 / 免费档）不显示入口 ──
-  const canPromoteRoom = useCapability(CAP_GROUPCHAT_ROOM_PROMOTE);
 
   // ── 会话 → 工作流：预览弹窗开关（仅当前会话可用）──
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
@@ -1091,18 +1087,16 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
                   <Workflow size={11} />
                   转为工作流
                 </button>
-                {/* 会话转房间是受限能力：与「转为工作流」同组但独立门控，未解锁时只隐藏这一项 */}
-                {canPromoteRoom && (
-                  <button
-                    className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
-                    style={{ color: 'var(--text-secondary)' }}
-                    onClick={() => setShowRoomModal(true)}
-                    title="把本会话的任务清单转为群聊房间，由多 Agent 协作执行"
-                  >
-                    <Users size={11} />
-                    转为群聊
-                  </button>
-                )}
+                {/* 会话转房间：对所有用户开放（本地能力不设限） */}
+                <button
+                  className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
+                  style={{ color: 'var(--text-secondary)' }}
+                  onClick={() => setShowRoomModal(true)}
+                  title="把本会话的任务清单转为群聊房间，由多 Agent 协作执行"
+                >
+                  <Users size={11} />
+                  转为群聊
+                </button>
               </>
             ) : null
           }

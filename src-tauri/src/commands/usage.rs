@@ -836,7 +836,7 @@ fn csv_field(s: &str) -> String {
 // 数值为**当天累计值**，服务端按 (ownerType, ownerId, day, model) **覆盖写**（幂等，重复上报无害）；
 // `day` 可省略（服务端取当天）。平台基址复用 `utils::platform` 里写死的常量，不新增可配置项。
 //
-// **只上报聚合数字**（模型名 / 调用次数 / token 数 / 金额）——绝不包含任何对话内容或提示词。
+// **只上报聚合数字**（模型名 / 调用次数 / token 数）——绝不包含任何对话内容或提示词。
 //
 // 本地口径（`api_usage_log`，四桶互斥）：
 //   inputTokens  = prompt_tokens（未命中输入）+ cache_read_tokens + cache_write_tokens
@@ -962,6 +962,14 @@ pub fn build_report(conn: &Connection) -> Result<(String, Vec<UsageItem>), AppEr
     Ok((report_day(chrono::Local::now()), items))
 }
 
+/// 上报守卫：聚合结果为空 → 不调用平台。
+///
+/// 平台对空 `items` 返回 400，且当天没有任何调用时本就没有可上报的内容；
+/// 手动上报与自动上报共用此判据，避免无谓的失败请求。
+fn should_skip_upload(items: &[UsageItem]) -> bool {
+    items.is_empty()
+}
+
 /// 是否开启「向组织上报用量」：缺省开启；显式写 `'0'` / `'false'` 视为关闭。
 pub fn usage_report_enabled(conn: &Connection) -> bool {
     match crate::commands::app_settings::get_setting(conn, USAGE_REPORT_ENABLED_KEY) {
@@ -1048,6 +1056,19 @@ pub async fn usage_report_now(
         build_report(&conn).map_err(String::from)?
     };
     let item_count = items.len();
+
+    // ⓪ 当天无用量：**不调用平台**（平台对空 items 返回 400），直接返回明确结果供前端提示。
+    // 「今天」= 本地时区当天 0 点起（见 `today_start_ts`，秒级时间戳，与 `created_at` 单位一致）。
+    if should_skip_upload(&items) {
+        return Ok(UsageReportResult {
+            day: day.clone(),
+            item_count: 0,
+            wrote: None,
+            owner_type: None,
+            error: None,
+        });
+    }
+
     let fail = |error: String| UsageReportResult {
         day: day.clone(),
         item_count,
@@ -1107,7 +1128,7 @@ async fn auto_report_once(state: &crate::DbState) -> Result<(), AppError> {
         }
         build_report(&conn)?
     };
-    if items.is_empty() {
+    if should_skip_upload(&items) {
         return Ok(());
     }
     let Some(token) = crate::commands::account::current_access_token(state).await? else {
@@ -1631,6 +1652,44 @@ mod tests {
         assert_eq!(items[0].input_tokens, 5);
         assert_eq!(items[0].output_tokens, 2);
         assert_eq!(items[0].cost_fen, 1);
+    }
+
+    /// 当天筛选：只有 `created_at >= 本地今天 0 点（秒级）` 的行进入上报；
+    /// 昨天 23:59:59 的行必须被排除（这条覆盖「筛选条件能正确命中给定 created_at 的行」）。
+    #[test]
+    fn build_report_picks_only_today_local_rows() {
+        let conn = mem_conn();
+        let start = today_start_ts();
+        insert(&conn, "s1", "p", "gpt-4o", 100, 10, 0, start - 1); // 昨天最后一秒 → 不含
+        insert(&conn, "s1", "p", "gpt-4o", 200, 20, 0, start); // 今天 0 点整 → 含
+        let (day, items) = build_report(&conn).unwrap();
+        assert_eq!(day, report_day(chrono::Local::now()));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].model, "gpt-4o");
+        assert_eq!(items[0].calls, 1);
+        assert_eq!(items[0].input_tokens, 200); // prompt + read + write
+        assert_eq!(items[0].output_tokens, 20);
+        assert_eq!(items[0].cost_fen, 0); // 本表无定价 → 恒 0
+    }
+
+    /// 当天无用量 → 守卫判定「跳过上报」（不调用平台，避免空 items 的 HTTP 400）。
+    #[test]
+    fn usage_report_skips_when_no_today_rows() {
+        let conn = mem_conn();
+        let start = today_start_ts();
+        insert(&conn, "s1", "p", "gpt-4o", 100, 10, 0, start - 1); // 仅昨天有数据
+        let (_day, items) = build_report(&conn).unwrap();
+        assert!(items.is_empty(), "昨天的用量不应落入当天上报");
+        assert!(should_skip_upload(&items), "空 items 必须跳过上报");
+        // 有数据时不得跳过（防止守卫误伤正常上报）
+        let one = [UsageItem {
+            model: "m".into(),
+            calls: 1,
+            input_tokens: 1,
+            output_tokens: 1,
+            cost_fen: 0,
+        }];
+        assert!(!should_skip_upload(&one));
     }
 
     /// `report_day` 按本地时区格式化为 `YYYY-MM-DD`。

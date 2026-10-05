@@ -5,7 +5,8 @@
  * 这里用**系统浏览器**打开 —— 密码只在平台页面输入，产品端拿不到明文；
  * 令牌由 Rust 侧加密保存，前端只拿到「账号 + 等级 + 已解锁能力」。
  *
- * 未登录 / 未订阅都等于 free 档：`capabilities` 为空，受限入口按此隐藏。
+ * 新收费策略：**本地能力不设限**（本地功能对所有登录 / 未登录状态一律开放），
+ * 仅**云端服务与内容**仍按能力门控（目前只有 `sync.cloud`）。
  */
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
@@ -14,24 +15,23 @@ import { open as openUrl } from '@tauri-apps/plugin-shell';
 /** 可打开的平台页面：升级会员 / 会员中心（账号设置）/ 组织页 */
 export type PlatformPage = 'upgrade' | 'portal' | 'organizations';
 
-/** 受限能力键（平台侧登记，产品端只消费）：批量导出 / 版本管理 / 报表导出 / 房间转工作流 / 知识库云投喂 / 群聊进阶 / 云同步 */
-export const CAP_WORKFLOW_EXPORT_BATCH = 'workflow.export.batch';
-export const CAP_WORKFLOW_VERSION = 'workflow.version';
-export const CAP_REPORT_EXPORT = 'report.export';
-export const CAP_GROUPCHAT_ROOM_PROMOTE = 'groupchat.room-promote';
-export const CAP_KNOWLEDGE_CLOUD = 'knowledge.cloud';
-export const CAP_GROUPCHAT_ADVANCED = 'groupchat.advanced';
+/** 云端能力键（平台侧登记，产品端只消费）：本地能力已全部开放，只剩云同步受门控 */
 export const CAP_CLOUD_SYNC = 'sync.cloud';
 
-/** 已知能力键的中文名；未知键回退显示键本身（键以平台为准，这里只做展示） */
+/**
+ * 已知云端能力键的中文名。
+ *
+ * **与平台登记表（`app/src/services/entitlements/capabilities.ts` 的 `label`）保持一致**——
+ * 平台是唯一来源，这里只做展示；新增能力键时两边都要补，否则会显示成裸 key。
+ * 未知键回退显示键本身。
+ */
 const CAPABILITY_LABELS: Record<string, string> = {
-  'workflow.export.batch': '工作流批量导出',
-  'workflow.version': '工作流版本管理与回滚',
-  'report.export': '高级报表导出',
-  'groupchat.room-promote': '房间转工作流 / 会话转房间',
-  'knowledge.cloud': '知识库云投喂',
-  'groupchat.advanced': '群聊进阶（人工干预子任务）',
-  'sync.cloud': '云同步（工作流跨设备）',
+  'sync.cloud': '云同步',
+  'team.audit': '团队操作审计',
+  'team.shared-space': '团队共享空间',
+  'team.usage-board': '团队用量看板',
+  'team.provider-credentials': '团队共享凭据',
+  'sso.login': '企业单点登录',
 };
 
 export function capabilityLabel(key: string): string {

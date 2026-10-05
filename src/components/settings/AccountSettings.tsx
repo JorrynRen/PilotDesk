@@ -48,6 +48,10 @@ interface CloudSyncResult {
   pulled: number;
   pushed: number;
   conflicts: number;
+  /** 打包失败（未能上传）的对象数 */
+  failed?: number;
+  /** 失败对象与原因（如体积超限） */
+  failures?: string[];
   error?: string;
 }
 
@@ -58,6 +62,10 @@ interface CloudSyncStatus {
   lastAt: string | null;
   lastResult: string | null;
   objectCount: number;
+  /** 本地根工作流数（未被任何工作流作为子流引用） */
+  rootCount: number;
+  /** 本地子工作流数（随主工作流一并同步，不单独同步） */
+  subflowCount: number;
   cursor: number;
 }
 
@@ -65,6 +73,16 @@ interface CloudSyncStatus {
 function roleLabel(role: string): string {
   const map: Record<string, string> = { owner: '所有者', admin: '管理员', member: '成员' };
   return map[role] ?? role;
+}
+
+/** 云同步结果摘要：有打包失败对象时带上数量与首个原因（不静默）。 */
+function cloudSyncSummary(r: CloudSyncResult): string {
+  const base = `拉取 ${r.pulled} / 推送 ${r.pushed} / 冲突 ${r.conflicts}`;
+  if (r.failed && r.failed > 0) {
+    const first = r.failures?.[0];
+    return `${base}；${r.failed} 个失败${first ? `（${first}）` : ''}`;
+  }
+  return base;
 }
 
 export function AccountSettings() {
@@ -125,6 +143,11 @@ export function AccountSettings() {
       // 未登录 / 已关闭 / 网络失败都不抛异常，错误在 result.error 文案里
       if (result.error) {
         showToast(result.error, 'error');
+        return;
+      }
+      // 当天无用量：后端不会调用平台（平台对空 items 返回 400），这里给出明确提示
+      if (result.itemCount === 0) {
+        showToast('今天暂无用量数据，无需上报', 'info');
         return;
       }
       const when = new Date().toLocaleString();
@@ -190,7 +213,10 @@ export function AccountSettings() {
       } else if (r.error) {
         showToast(r.error, 'error');
       } else {
-        showToast(`已开启云同步（拉取 ${r.pulled} / 推送 ${r.pushed} / 冲突 ${r.conflicts}）`, 'success');
+        showToast(
+          `已开启云同步（${cloudSyncSummary(r)}）`,
+          r.failed && r.failed > 0 ? 'warning' : 'success',
+        );
       }
       await refreshCloudStatus();
     } catch (e) {
@@ -209,7 +235,10 @@ export function AccountSettings() {
       if (r.error) {
         showToast(r.error, 'error');
       } else {
-        showToast(`同步完成：拉取 ${r.pulled} / 推送 ${r.pushed} / 冲突 ${r.conflicts}`, 'success');
+        showToast(
+          `同步完成：${cloudSyncSummary(r)}`,
+          r.failed && r.failed > 0 ? 'warning' : 'success',
+        );
       }
       await refreshCloudStatus();
     } catch (e) {
@@ -280,7 +309,7 @@ export function AccountSettings() {
       {/* 向组织上报用量：默认开启；仅上报聚合数字，不含任何对话内容或提示词 */}
       <SettingsSection
         title="向组织上报用量"
-        description="仅上报聚合数字（模型、调用次数、token 数、金额），不包含对话内容或提示词；同一组织内成员的上报汇总为团队用量看板。"
+        description="仅上报聚合数字（模型、调用次数、token 数），不包含对话内容或提示词；同一组织内成员的上报汇总为团队用量看板。"
       >
         <SettingsCard>
           <div className="flex items-center gap-3">
@@ -332,10 +361,10 @@ export function AccountSettings() {
         </div>
       </SettingsSection>
 
-      {/* 云同步：默认关闭；仅同步工作流，不含设置与密钥 */}
+      {/* 云同步：默认关闭；当前仅支持工作流，不含设置与密钥 */}
       <SettingsSection
         title="云同步"
-        description="同步工作流到你的账号，跨设备可用；不含设置与密钥，插件与灵感暂不支持。"
+        description="当前支持：工作流；插件与灵感暂不支持（后续版本）。同步不含设置与密钥，工作流跨设备可用。"
       >
         <SettingsCard>
           <div className="flex items-center gap-3">
@@ -371,6 +400,14 @@ export function AccountSettings() {
             </span>
           </div>
         </SettingsCard>
+
+        {/* 说明：子工作流不是独立同步对象，其内容随所属主工作流一并上传，避免对端重复导入 */}
+        <p className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          子工作流不单独同步，其内容随所属主工作流一并上传（避免重复导入）。
+          {cloudStatus && cloudStatus.subflowCount > 0
+            ? `本机现有 ${cloudStatus.rootCount} 个主工作流、${cloudStatus.subflowCount} 个子工作流。`
+            : ''}
+        </p>
 
         {!canCloudSync ? (
           <p className="mt-2 text-[11px]" style={{ color: '#F59E0B' }}>
@@ -465,7 +502,7 @@ export function AccountSettings() {
               </div>
             ) : (
               <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                暂无（免费档）。例如「工作流批量导出」为专业版功能。
+                暂无（免费档）。本地功能不设限；付费解锁的是云端服务，例如「云同步（工作流跨设备）」。
               </div>
             )}
           </div>

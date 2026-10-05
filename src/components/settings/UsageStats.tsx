@@ -4,7 +4,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { ChevronDown } from 'lucide-react';
 import { SettingsSection, SettingsButton } from '../settings';
-import { CAP_REPORT_EXPORT, useCapability } from '../../stores/accountStore';
 import { showToast } from '../../utils/toast';
 import {
   getUsageSummary,
@@ -186,8 +185,6 @@ const DIMENSION_HINT =
   '仅统计经宿主发起的 API 调用；CLI Agent（终端 / 插件 / claude、codex 等子进程）自行计费、不回流用量，故各维度合计可能小于全局总量。';
 
 export function UsageStats() {
-  // 报表导出是平台的受限能力：未解锁（未登录 / 免费档）不显示入口
-  const canExportReport = useCapability(CAP_REPORT_EXPORT);
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [attribution, setAttribution] = useState<UsageAttribution | null>(null);
   const [days, setDays] = useState(30);
@@ -231,7 +228,7 @@ export function UsageStats() {
     }
   };
 
-  /** 导出报表：选保存路径后由后端按当前时间窗口生成 CSV（受限能力，见 canExportReport） */
+  /** 导出报表：选保存路径后由后端按当前时间窗口生成 CSV（对所有用户开放） */
   const handleExportReport = async () => {
     try {
       const filePath = await saveDialog({
@@ -364,15 +361,13 @@ export function UsageStats() {
           {loading && (
             <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>刷新中…</span>
           )}
-          {canExportReport && (
-            <SettingsButton
-              onClick={() => void handleExportReport()}
-              variant="secondary"
-              title={days === 0 ? '导出全部用量的 CSV 报表' : `导出近 ${days} 天用量的 CSV 报表`}
-            >
-              导出报表
-            </SettingsButton>
-          )}
+          <SettingsButton
+            onClick={() => void handleExportReport()}
+            variant="secondary"
+            title={days === 0 ? '导出全部用量的 CSV 报表' : `导出近 ${days} 天用量的 CSV 报表`}
+          >
+            导出报表
+          </SettingsButton>
           <SettingsButton onClick={() => refresh(days)} variant="secondary" disabled={loading}>
             刷新
           </SettingsButton>
