@@ -19,6 +19,7 @@ import { useAgentRegistry } from '../hooks/useAgentRegistry';
 import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
 import { useImagePreviewStore } from '../stores/imagePreviewStore';
+import { CAP_GROUPCHAT_ADVANCED, CAP_GROUPCHAT_ROOM_PROMOTE, useCapability } from '../stores/accountStore';
 import { MarkdownRenderer } from '../components/message/MarkdownRenderer';
 import { AgentIcon } from '../components/common/AgentIcon';
 import { collapseBlankLines, tightenListGaps } from '../components/message/markdownText';
@@ -1442,6 +1443,10 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   } = useGroupChatStore();
 
   const navigate = useNavigate();
+  // 房间转工作流是平台的受限能力：未解锁（未登录 / 免费档）不显示入口；房间创建与讨论不受影响
+  const canPromoteRoom = useCapability(CAP_GROUPCHAT_ROOM_PROMOTE);
+  // 群聊进阶（任务人工干预）：未解锁时任务面板只读（不显示 新增 / 依赖 / 跳过）
+  const canAdvanced = useCapability(CAP_GROUPCHAT_ADVANCED);
   const { getTheme } = useAgentRegistry();
   const [input, setInput] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -2503,7 +2508,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               )}
             </>
           )}
-          {currentRoom && currentRoom.status === 'finished' && (
+          {currentRoom && currentRoom.status === 'finished' && canPromoteRoom && (
             <button
               onClick={handleExport}
               className="pd-btn pd-btn-sm"
@@ -3004,15 +3009,17 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               <ListTodo size={10} style={{ color: 'var(--accent)' }} />
               子任务
               <span className="flex-1" />
-              <button
-                onClick={() => setShowAddTask(true)}
-                className="px-1.5 rounded transition-colors hover:opacity-80 flex items-center gap-0.5"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-                title="手动追加一个子任务（只增不改）"
-              >
-                <Plus size={9} />
-                新增
-              </button>
+              {canAdvanced && (
+                <button
+                  onClick={() => setShowAddTask(true)}
+                  className="px-1.5 rounded transition-colors hover:opacity-80 flex items-center gap-0.5"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                  title="手动追加一个子任务（只增不改）"
+                >
+                  <Plus size={9} />
+                  新增
+                </button>
+              )}
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable" style={{ backgroundColor: 'var(--bg-primary)' }}>
               {tasks.length === 0 && (
@@ -3075,7 +3082,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                           ? `依赖 ${taskNosText(depTasksOf(t, tasks).map((d) => d.taskNo))}`
                           : ''}
                       </span>
-                      {(t.status === 'discussing' || t.status === 'pending') && (
+                      {canAdvanced && (t.status === 'discussing' || t.status === 'pending') && (
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             onClick={(e) => {

@@ -18,7 +18,7 @@
 //! 删工作流**定义**（`workflow/mod.rs`）都会删除对应 `api_usage_log` 行。
 //! 归档会话、删工作流**执行记录**均不清理：用量归因绑定的是定义本身，删实例不改变定义存在性。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
@@ -762,6 +762,371 @@ pub fn usage_attribution(
     })
 }
 
+/// 导出用量报表为 CSV（UTF-8 带 BOM，便于 Excel 正确识别中文表头）。
+///
+/// 内容：用量总量（调用次数 / 各桶 token / 缓存命中率）+ 按模型分组明细。
+/// days 口径同 `usage_summary`（None=默认 30 天，<=0=全量）。
+#[tauri::command]
+pub fn export_usage_report_csv(
+    state: tauri::State<'_, crate::DbState>,
+    days: Option<i64>,
+    file_path: String,
+) -> Result<(), String> {
+    let conn = state
+        .get_conn()
+        .map_err(|e| AppError::Lock(format!("数据库连接失败: {}", e)))?;
+    let summary =
+        usage_summary(&conn, days).map_err(|e| AppError::Db(format!("查询用量失败: {}", e)))?;
+
+    let mut out = String::new();
+    out.push('\u{feff}'); // BOM：Excel 打开才不会把中文表头显示成乱码
+
+    // 用量总量
+    out.push_str("用量总量\n");
+    out.push_str("调用次数,输入(未命中),输入(缓存读),输入(缓存写),输出,合计,缓存命中率(%)\n");
+    let t = &summary.totals;
+    out.push_str(&format!(
+        "{},{},{},{},{},{},{:.2}\n",
+        t.call_count,
+        t.prompt_tokens,
+        t.cache_read_tokens,
+        t.cache_write_tokens,
+        t.completion_tokens,
+        t.total_tokens,
+        t.cache_hit_rate
+    ));
+
+    // 按模型分组明细
+    out.push('\n');
+    out.push_str("按模型明细\n");
+    out.push_str("模型,调用次数,输入(未命中),输入(缓存读),输入(缓存写),输出,合计,缓存命中率(%)\n");
+    for g in &summary.by_model {
+        out.push_str(&csv_field(&g.name));
+        out.push_str(&format!(
+            ",{},{},{},{},{},{},{:.2}\n",
+            g.totals.call_count,
+            g.totals.prompt_tokens,
+            g.totals.cache_read_tokens,
+            g.totals.cache_write_tokens,
+            g.totals.completion_tokens,
+            g.totals.total_tokens,
+            g.totals.cache_hit_rate
+        ));
+    }
+
+    std::fs::write(&file_path, out).map_err(|e| AppError::Io(format!("写入文件失败: {}", e)))?;
+    Ok(())
+}
+
+/// CSV 字段转义：含逗号 / 引号 / 换行时用双引号包裹，并把内部引号翻倍。
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+// 本地用量聚合上报到平台（团队用量看板）
+// ════════════════════════════════════════════════════════════
+//
+// 平台契约（已上线）：POST {平台基址}/api/v1/usage/report，Bearer 鉴权，body
+//   { "day": "YYYY-MM-DD", "items": [{ model, calls, inputTokens, outputTokens, costFen }] }
+// 数值为**当天累计值**，服务端按 (ownerType, ownerId, day, model) **覆盖写**（幂等，重复上报无害）；
+// `day` 可省略（服务端取当天）。平台基址复用 `utils::platform` 里写死的常量，不新增可配置项。
+//
+// **只上报聚合数字**（模型名 / 调用次数 / token 数 / 金额）——绝不包含任何对话内容或提示词。
+//
+// 本地口径（`api_usage_log`，四桶互斥）：
+//   inputTokens  = prompt_tokens（未命中输入）+ cache_read_tokens + cache_write_tokens
+//   outputTokens = completion_tokens
+//   本表**没有金额列**（产品内无本地定价），故 costFen 恒为 0 —— 金额由平台侧按模型定价核算。
+
+/// 上报开关设置键（默认开启）。关闭后自动上报停止，手动上报也会被拒绝并给出提示。
+pub const USAGE_REPORT_ENABLED_KEY: &str = "usage_report_enabled";
+
+/// 自动上报间隔（秒）：每 30 分钟一次。
+const USAGE_REPORT_INTERVAL_SECS: u64 = 30 * 60;
+
+/// 平台单次上报的 items 上限（契约：最多 200 条）。
+const USAGE_REPORT_MAX_ITEMS: usize = 200;
+
+/// 一条本地原始用量行（尚未按模型聚合）；一条 `api_usage_log` 记录 → `calls = 1`。
+#[derive(Debug, Clone)]
+pub struct UsageRow {
+    pub model: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_fen: i64,
+}
+
+/// 上报条目：按 model 聚合后的当天累计值（字段名对齐平台契约，camelCase 序列化）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageItem {
+    pub model: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_fen: i64,
+}
+
+/// 把原始用量行按 **model** 分组求和（calls / inputTokens / outputTokens / costFen）。
+///
+/// - 各数值做**非负归一**（负值按 0 计，避免脏数据把累计值拉低）；
+/// - 模型名为空 → 归入「未知」；
+/// - 空输入返回空 Vec；
+/// - 结果按模型名升序，保证输出稳定、便于断言与比对。
+pub fn aggregate_usage(rows: &[UsageRow]) -> Vec<UsageItem> {
+    let mut acc: HashMap<String, UsageItem> = HashMap::new();
+    for r in rows {
+        let model = r.model.trim();
+        let model = if model.is_empty() { "未知" } else { model }.to_string();
+        let entry = acc.entry(model.clone()).or_insert_with(|| UsageItem {
+            model,
+            calls: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_fen: 0,
+        });
+        entry.calls += r.calls.max(0);
+        entry.input_tokens += r.input_tokens.max(0);
+        entry.output_tokens += r.output_tokens.max(0);
+        entry.cost_fen += r.cost_fen.max(0);
+    }
+    let mut items: Vec<UsageItem> = acc.into_values().collect();
+    items.sort_by(|a, b| a.model.cmp(&b.model));
+    items
+}
+
+/// 返回 `now` 所在**本地时区**的日期（`YYYY-MM-DD`），与平台 `day` 字段口径一致。
+pub fn report_day(now: chrono::DateTime<chrono::Local>) -> String {
+    now.format("%Y-%m-%d").to_string()
+}
+
+/// 本地时区「今天」0 点的时间戳（秒）。
+fn today_start_ts() -> i64 {
+    use chrono::TimeZone;
+    let now = chrono::Local::now();
+    now.date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|dt| chrono::Local.from_local_datetime(&dt).single())
+        .unwrap_or(now)
+        .timestamp()
+}
+
+/// 读取当天（本地 0 点起）的原始用量行。`api_usage_log` 无金额列 → `cost_fen` 恒 0。
+fn load_today_rows(conn: &Connection) -> Result<Vec<UsageRow>, AppError> {
+    let since = today_start_ts();
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(model, ''), COALESCE(prompt_tokens, 0), COALESCE(completion_tokens, 0),
+                COALESCE(cache_read_tokens, 0), COALESCE(cache_write_tokens, 0)
+         FROM api_usage_log WHERE created_at >= ?1",
+    )?;
+    let it = stmt.query_map(params![since], |r| {
+        let prompt: i64 = r.get(1)?;
+        let completion: i64 = r.get(2)?;
+        let read: i64 = r.get(3)?;
+        let write: i64 = r.get(4)?;
+        Ok(UsageRow {
+            model: r.get(0)?,
+            calls: 1,
+            input_tokens: prompt + read + write,
+            output_tokens: completion,
+            cost_fen: 0,
+        })
+    })?;
+    let mut rows = Vec::new();
+    for row in it {
+        rows.push(row?);
+    }
+    Ok(rows)
+}
+
+/// 组装本次将上报的 `(day, items)`（只读，不联网）。
+///
+/// items 超过契约上限 200 条时，按 token 体量降序保留前 200（超出部分本就无法一次上报），
+/// 之后再按模型名升序还原，保证展示稳定。
+pub fn build_report(conn: &Connection) -> Result<(String, Vec<UsageItem>), AppError> {
+    let rows = load_today_rows(conn)?;
+    let mut items = aggregate_usage(&rows);
+    if items.len() > USAGE_REPORT_MAX_ITEMS {
+        items.sort_by(|a, b| {
+            (b.input_tokens + b.output_tokens).cmp(&(a.input_tokens + a.output_tokens))
+        });
+        items.truncate(USAGE_REPORT_MAX_ITEMS);
+        items.sort_by(|a, b| a.model.cmp(&b.model));
+    }
+    Ok((report_day(chrono::Local::now()), items))
+}
+
+/// 是否开启「向组织上报用量」：缺省开启；显式写 `'0'` / `'false'` 视为关闭。
+pub fn usage_report_enabled(conn: &Connection) -> bool {
+    match crate::commands::app_settings::get_setting(conn, USAGE_REPORT_ENABLED_KEY) {
+        Ok(Some(v)) => {
+            let t = v.trim().to_ascii_lowercase();
+            !(t == "0" || t == "false")
+        }
+        _ => true,
+    }
+}
+
+/// 平台上报请求体
+#[derive(Serialize)]
+struct ReportBody<'a> {
+    day: &'a str,
+    items: &'a [UsageItem],
+}
+
+/// 平台上报响应（`{ written, ownerType, ownerId }`）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReportResp {
+    #[serde(default)]
+    written: i64,
+    #[serde(default)]
+    owner_type: Option<String>,
+}
+
+/// 实际 POST（命令与后台任务共用）。
+async fn post_report(
+    token: &str,
+    day: &str,
+    items: &[UsageItem],
+) -> Result<ReportResp, AppError> {
+    crate::utils::platform::post_json(
+        "/api/v1/usage/report",
+        &ReportBody { day, items },
+        Some(token),
+    )
+    .await
+}
+
+/// 预览结果：本次将上报的当天聚合数据（供 UI 展示与确认）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportPreview {
+    pub day: String,
+    pub items: Vec<UsageItem>,
+}
+
+/// 上报结果：失败不抛异常，错误放在 `error` 文案里（UI 直接展示）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReportResult {
+    pub day: String,
+    pub item_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrote: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// 预览：返回本次将上报的 `{ day, items }`（只读，不联网）。
+#[tauri::command]
+pub fn usage_report_preview(
+    state: tauri::State<'_, crate::DbState>,
+) -> Result<UsageReportPreview, String> {
+    let conn = state.get_conn().map_err(String::from)?;
+    let (day, items) = build_report(&conn).map_err(String::from)?;
+    Ok(UsageReportPreview { day, items })
+}
+
+/// 立即上报：读当天本地用量 → 按模型聚合 → 用**已登录令牌** POST 平台。
+///
+/// 未登录 / 已关闭 / 网络失败都**不抛异常给 UI**：返回 `error` 文案即可（离线可用性不受影响）。
+#[tauri::command]
+pub async fn usage_report_now(
+    state: tauri::State<'_, crate::DbState>,
+) -> Result<UsageReportResult, String> {
+    let (day, items) = {
+        let conn = state.get_conn().map_err(String::from)?;
+        build_report(&conn).map_err(String::from)?
+    };
+    let item_count = items.len();
+    let fail = |error: String| UsageReportResult {
+        day: day.clone(),
+        item_count,
+        wrote: None,
+        owner_type: None,
+        error: Some(error),
+    };
+
+    // ① 设置开关：关闭时明确提示（不静默）
+    {
+        let conn = state.get_conn().map_err(String::from)?;
+        if !usage_report_enabled(&conn) {
+            return Ok(fail("已关闭「向组织上报用量」，未上报".to_string()));
+        }
+    }
+
+    // ② 令牌：未登录平台 → 明确提示
+    let token = match crate::commands::account::current_access_token(state.inner()).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return Ok(fail("未登录平台，无法上报".to_string())),
+        Err(e) => return Ok(fail(format!("平台登录状态异常：{}", e))),
+    };
+
+    // ③ 上报：幂等覆盖写，失败只回文案
+    match post_report(&token, &day, &items).await {
+        Ok(resp) => Ok(UsageReportResult {
+            day,
+            item_count,
+            wrote: Some(resp.written > 0),
+            owner_type: resp.owner_type,
+            error: None,
+        }),
+        Err(e) => Ok(fail(e.to_string())),
+    }
+}
+
+/// 后台自动上报循环：启动后**先立即尝试一次**，之后每 30 分钟一次；失败静默（仅记日志），
+/// 绝不影响用户使用。
+///
+/// 受 [`USAGE_REPORT_ENABLED_KEY`] 控制；未登录平台或当天无用量时静默跳过。
+pub async fn run_auto_report_loop(state: crate::DbState) {
+    loop {
+        // 先立即上报一次（避免启动后要等满一个间隔才首次上报），再进入固定间隔循环。
+        if let Err(e) = auto_report_once(&state).await {
+            log::debug!("[UsageReport] 自动上报跳过：{}", e);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(USAGE_REPORT_INTERVAL_SECS)).await;
+    }
+}
+
+/// 单次自动上报：开关关闭 / 未登录 / 无数据 → 静默返回；其余失败仅记日志。
+async fn auto_report_once(state: &crate::DbState) -> Result<(), AppError> {
+    let (day, items) = {
+        let conn = state.get_conn()?;
+        if !usage_report_enabled(&conn) {
+            return Ok(());
+        }
+        build_report(&conn)?
+    };
+    if items.is_empty() {
+        return Ok(());
+    }
+    let Some(token) = crate::commands::account::current_access_token(state).await? else {
+        return Ok(()); // 未登录：静默
+    };
+    match post_report(&token, &day, &items).await {
+        Ok(resp) => {
+            log::info!(
+                "[UsageReport] 已上报当天用量：{} 个模型，服务端写入 {} 条（ownerType={:?}）",
+                items.len(),
+                resp.written,
+                resp.owner_type
+            );
+        }
+        Err(e) => log::warn!("[UsageReport] 上报失败（不影响使用）：{}", e),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1194,5 +1559,111 @@ mod tests {
         assert!(dim(&a, "workflow").groups.is_empty());
         assert_eq!(dim(&a, "workflow").totals.call_count, 0);
         assert!(dim(&a, "knowledge").groups.is_empty());
+    }
+
+    // ── 聚合上报单测 ──
+
+    /// 多模型分组：不同模型各成一条；同模型多行相加。
+    #[test]
+    fn aggregate_usage_groups_by_model_and_sums() {
+        let rows = vec![
+            UsageRow {
+                model: "gpt-4o".into(),
+                calls: 1,
+                input_tokens: 100,
+                output_tokens: 50,
+                cost_fen: 0,
+            },
+            UsageRow {
+                model: "gpt-4o".into(),
+                calls: 1,
+                input_tokens: 200,
+                output_tokens: 80,
+                cost_fen: 0,
+            },
+            UsageRow {
+                model: "claude-3-5".into(),
+                calls: 1,
+                input_tokens: 300,
+                output_tokens: 40,
+                cost_fen: 0,
+            },
+        ];
+        let items = aggregate_usage(&rows);
+        assert_eq!(items.len(), 2);
+        // 按模型名升序：claude-3-5 在前
+        assert_eq!(items[0].model, "claude-3-5");
+        assert_eq!(items[0].calls, 1);
+        assert_eq!(items[0].input_tokens, 300);
+        assert_eq!(items[0].output_tokens, 40);
+        // gpt-4o 两行相加
+        assert_eq!(items[1].model, "gpt-4o");
+        assert_eq!(items[1].calls, 2);
+        assert_eq!(items[1].input_tokens, 300);
+        assert_eq!(items[1].output_tokens, 130);
+    }
+
+    /// 空输入 → 空结果；负值非负归一；空模型名归入「未知」。
+    #[test]
+    fn aggregate_usage_empty_and_negative_normalized() {
+        assert!(aggregate_usage(&[]).is_empty());
+
+        let rows = vec![
+            UsageRow {
+                model: "".into(),
+                calls: -3,
+                input_tokens: -10,
+                output_tokens: -1,
+                cost_fen: -5,
+            },
+            UsageRow {
+                model: "  ".into(),
+                calls: 1,
+                input_tokens: 5,
+                output_tokens: 2,
+                cost_fen: 1,
+            },
+        ];
+        let items = aggregate_usage(&rows);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].model, "未知");
+        assert_eq!(items[0].calls, 1);
+        assert_eq!(items[0].input_tokens, 5);
+        assert_eq!(items[0].output_tokens, 2);
+        assert_eq!(items[0].cost_fen, 1);
+    }
+
+    /// `report_day` 按本地时区格式化为 `YYYY-MM-DD`。
+    #[test]
+    fn report_day_formats_local_date() {
+        use chrono::TimeZone;
+        let dt = chrono::Local
+            .with_ymd_and_hms(2026, 10, 5, 23, 59, 0)
+            .single()
+            .expect("构造本地时间失败");
+        assert_eq!(report_day(dt), "2026-10-05");
+
+        let dt2 = chrono::Local
+            .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+            .single()
+            .expect("构造本地时间失败");
+        assert_eq!(report_day(dt2), "2026-01-01");
+    }
+
+    /// 开关判据：缺省开启；只认 '0' / 'false' 为关闭。
+    #[test]
+    fn usage_report_enabled_default_and_off() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        assert!(usage_report_enabled(&conn), "缺省应开启");
+        crate::commands::app_settings::set_setting(&conn, USAGE_REPORT_ENABLED_KEY, "1").unwrap();
+        assert!(usage_report_enabled(&conn));
+        crate::commands::app_settings::set_setting(&conn, USAGE_REPORT_ENABLED_KEY, "0").unwrap();
+        assert!(!usage_report_enabled(&conn));
+        crate::commands::app_settings::set_setting(&conn, USAGE_REPORT_ENABLED_KEY, "FALSE").unwrap();
+        assert!(!usage_report_enabled(&conn));
     }
 }

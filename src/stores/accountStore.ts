@@ -11,15 +11,27 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
 
-/** 可打开的平台页面：升级会员 / 会员中心（账号设置） */
-export type PlatformPage = 'upgrade' | 'portal';
+/** 可打开的平台页面：升级会员 / 会员中心（账号设置）/ 组织页 */
+export type PlatformPage = 'upgrade' | 'portal' | 'organizations';
 
-/** 工作流导出：平台侧登记的能力键（app/src/services/entitlements/capabilities.ts） */
-export const CAP_WORKFLOW_EXPORT = 'workflow.export';
+/** 受限能力键（平台侧登记，产品端只消费）：批量导出 / 版本管理 / 报表导出 / 房间转工作流 / 知识库云投喂 / 群聊进阶 / 云同步 */
+export const CAP_WORKFLOW_EXPORT_BATCH = 'workflow.export.batch';
+export const CAP_WORKFLOW_VERSION = 'workflow.version';
+export const CAP_REPORT_EXPORT = 'report.export';
+export const CAP_GROUPCHAT_ROOM_PROMOTE = 'groupchat.room-promote';
+export const CAP_KNOWLEDGE_CLOUD = 'knowledge.cloud';
+export const CAP_GROUPCHAT_ADVANCED = 'groupchat.advanced';
+export const CAP_CLOUD_SYNC = 'sync.cloud';
 
 /** 已知能力键的中文名；未知键回退显示键本身（键以平台为准，这里只做展示） */
 const CAPABILITY_LABELS: Record<string, string> = {
-  'workflow.export': '工作流导出',
+  'workflow.export.batch': '工作流批量导出',
+  'workflow.version': '工作流版本管理与回滚',
+  'report.export': '高级报表导出',
+  'groupchat.room-promote': '房间转工作流 / 会话转房间',
+  'knowledge.cloud': '知识库云投喂',
+  'groupchat.advanced': '群聊进阶（人工干预子任务）',
+  'sync.cloud': '云同步（工作流跨设备）',
 };
 
 export function capabilityLabel(key: string): string {
@@ -35,6 +47,12 @@ export interface AccountInfo {
   expiresAt: string | null;
   /** 已解锁的受限能力键 */
   capabilities: string[];
+  /** 平台下发的配额（键为平台登记项；-1 = 不限；缺省键 = 未配置） */
+  quotas: Record<string, number>;
+  /** 权益来源：personal / organization / free */
+  source: string;
+  /** 来源组织（source === 'organization' 时非空） */
+  organization: { id: number; name: string; role: string } | null;
   /** 是否已过期（此时平台按 free 返回） */
   expired: boolean;
   /** 是否来自离线缓存（平台不可达、仍在 7 天宽限期内） */
@@ -118,7 +136,12 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
     try {
       // 基址只在 Rust 一处维护，这里按页面拼路径
       const base = await invoke<string>('account_platform_base');
-      const path = page === 'upgrade' ? '/account/upgrade/' : '/account/';
+      const path =
+        page === 'upgrade'
+          ? '/account/upgrade/'
+          : page === 'organizations'
+            ? '/account/organizations/'
+            : '/account/';
       await openUrl(`${base.replace(/\/+$/, '')}${path}`);
     } catch (e) {
       set({ error: errorMessage(e) });
@@ -135,6 +158,19 @@ export function hasCapability(account: AccountInfo | null, key: string): boolean
 export function useCapability(key: string): boolean {
   const account = useAccountStore((s) => s.account);
   return hasCapability(account, key);
+}
+
+/** 配额上限：未登录 / 未下发 → fallback；-1 = 不限（返回 Infinity） */
+export function quotaLimit(account: AccountInfo | null, key: string, fallback: number): number {
+  const v = account?.quotas?.[key];
+  if (v === undefined) return fallback;
+  return v < 0 ? Number.POSITIVE_INFINITY : v;
+}
+
+/** 组件里读取配额（账号变化会自动重渲染） */
+export function useQuota(key: string, fallback: number): number {
+  const account = useAccountStore((s) => s.account);
+  return quotaLimit(account, key, fallback);
 }
 
 function errorMessage(e: unknown): string {

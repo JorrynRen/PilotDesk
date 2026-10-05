@@ -9,6 +9,7 @@
 //! 令牌（access / refresh）与云文档账号同一套做法：整块 JSON 加密后存一个
 //! `app_settings` 键，**前端永远拿不到明文**；access 过期时用 refresh 自动续。
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use base64::Engine as _;
@@ -82,6 +83,14 @@ struct MeUser {
     nickname: String,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AccountOrganization {
+    id: i64,
+    name: String,
+    role: String,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EntitlementsResp {
@@ -90,6 +99,15 @@ struct EntitlementsResp {
     expired: bool,
     #[allow(dead_code)]
     expired_plan_key: Option<String>,
+    /// 平台下发的配额（键为平台登记项；-1 = 不限；缺省键 = 未配置）
+    #[serde(default)]
+    quotas: HashMap<String, i64>,
+    /// 权益来源：personal（个人订阅）/ organization（组织）/ free（免费档）
+    #[serde(default)]
+    source: Option<String>,
+    /// 来源组织（source = organization 时非空）
+    #[serde(default)]
+    organization: Option<AccountOrganization>,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +162,15 @@ pub struct AccountView {
     pub expires_at: Option<String>,
     /// 已解锁的受限能力键 —— 前端据此显示 / 隐藏入口
     pub capabilities: Vec<String>,
+    /// 平台下发的配额（键为平台登记项；-1 = 不限）
+    #[serde(default)]
+    pub quotas: HashMap<String, i64>,
+    /// 权益来源：personal（个人订阅）/ organization（组织）/ free（免费档）
+    #[serde(default)]
+    pub source: String,
+    /// 来源组织（source=organization 时非空）
+    #[serde(default)]
+    pub organization: Option<AccountOrganization>,
     /// 是否已过期（平台按 free 返回，但仍告知原档位）
     pub expired: bool,
     /// 是否来自离线缓存（平台不可达、仍在宽限期内）——前端给"离线"轻提示
@@ -321,6 +348,23 @@ async fn ensure_access(
     Ok(next.access_token)
 }
 
+/// 取当前可用的平台 access token（未登录返回 `None`；临近过期会自动刷新）。
+///
+/// 供产品内其它需要 Bearer 调用平台接口的功能复用（如用量上报）。
+/// 令牌只在 Rust 侧使用，**绝不**回传前端明文。
+pub(crate) async fn current_access_token(
+    state: &crate::DbState,
+) -> Result<Option<String>, AppError> {
+    let tokens = {
+        let conn = state.get_conn()?;
+        load_tokens(&conn)?
+    };
+    match tokens {
+        Some(t) => ensure_access(state, &t).await.map(Some),
+        None => Ok(None),
+    }
+}
+
 /// 拉账号资料 + 会员权益，组装成前端视图
 async fn fetch_view(state: &crate::DbState, tokens: &StoredTokens) -> Result<AccountView, AppError> {
     let access = ensure_access(state, tokens).await?;
@@ -333,6 +377,9 @@ async fn fetch_view(state: &crate::DbState, tokens: &StoredTokens) -> Result<Acc
         plan_name: ent.plan.name,
         expires_at: ent.plan.expires_at,
         capabilities: ent.capabilities,
+        quotas: ent.quotas,
+        source: ent.source.unwrap_or_else(|| "free".to_string()),
+        organization: ent.organization,
         expired: ent.expired,
         stale: false,
     })
@@ -374,6 +421,41 @@ fn load_cache_within_grace(conn: &rusqlite::Connection) -> Option<AccountView> {
         stale: true,
         ..cached.view
     })
+}
+
+/// 某受限能力是否已解锁（读权益离线缓存）：
+/// - 无缓存 / 缓存坏 → `None`（未知，调用方可交由服务端裁决，如云同步的 403）；
+/// - 有缓存 → `Some(true/false)`（按 `capabilities` 判定，与前端 `hasCapability` 同一份数据）。
+///
+/// 说明：能力只是「体验分层」，不构成安全边界（docs/membership-plan.md §1），真正的准入由服务端负责。
+pub fn has_capability(conn: &rusqlite::Connection, key: &str) -> Option<bool> {
+    let raw = match get_setting(conn, CACHE_SETTING) {
+        Ok(Some(v)) if !v.is_empty() => v,
+        _ => return None,
+    };
+    let cached: CachedEntitlements = match serde_json::from_str(&raw) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    Some(cached.view.capabilities.iter().any(|k| k == key))
+}
+
+/// 读某配额键的当前上限：无缓存 / 未下发 → `fallback`；下发 -1 → `usize::MAX`（不限）。
+/// 说明：本地配额只是「体验分层」，不构成安全边界（docs/membership-plan.md §1）。
+pub fn quota_limit(conn: &rusqlite::Connection, key: &str, fallback: usize) -> usize {
+    let raw = match get_setting(conn, CACHE_SETTING) {
+        Ok(Some(v)) if !v.is_empty() => v,
+        _ => return fallback,
+    };
+    let cached: CachedEntitlements = match serde_json::from_str(&raw) {
+        Ok(c) => c,
+        Err(_) => return fallback,
+    };
+    match cached.view.quotas.get(key) {
+        Some(&v) if v < 0 => usize::MAX,
+        Some(&v) => v as usize,
+        None => fallback,
+    }
 }
 
 // ── Tauri 命令 ─────────────────────────────────────────────────

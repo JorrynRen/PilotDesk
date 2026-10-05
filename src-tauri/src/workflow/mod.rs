@@ -375,6 +375,8 @@ pub fn create_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
             def.enabled,
         ],
     )?;
+    // 本地工作流有改动 → 云同步标脏（best-effort，表缺失/未启用时静默；见 cloud_sync）
+    crate::commands::cloud_sync::mark_workflow_dirty(conn, &def.id);
     Ok(())
 }
 
@@ -400,6 +402,8 @@ pub fn update_definition(conn: &Connection, def: &WorkflowDefinition) -> Result<
             def.id,
         ],
     )?;
+    // 本地工作流有改动 → 云同步标脏（best-effort）
+    crate::commands::cloud_sync::mark_workflow_dirty(conn, &def.id);
     Ok(())
 }
 
@@ -433,6 +437,8 @@ pub fn delete_definition(conn: &Connection, id: &str) -> Result<(), AppError> {
         "DELETE FROM workflow_definitions WHERE id = ?1",
         params![id],
     )?;
+    // 本地删除 → 云同步标脏（sync_state 行保留；pull 端删除后会把 dirty 复位，不产生回推）
+    crate::commands::cloud_sync::mark_workflow_dirty(conn, id);
     Ok(())
 }
 

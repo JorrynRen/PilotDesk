@@ -2406,6 +2406,12 @@ pub fn run() {
             get_usage_attribution,
             get_session_usage,
             get_room_usage,
+            commands::usage::export_usage_report_csv,
+            commands::usage::usage_report_preview,
+            commands::usage::usage_report_now,
+            commands::cloud_sync::cloud_sync_now,
+            commands::cloud_sync::cloud_sync_status,
+            commands::cloud_sync::cloud_sync_set_enabled,
             agent_send_message_with_config,
             agent_stop_generation,
             agent_running_sessions,
@@ -2480,6 +2486,7 @@ pub fn run() {
             commands::workflow::delete_schedule,
             commands::workflow::list_workflow_events,
             commands::workflow::export_workflow_to_file,
+            commands::workflow::export_workflows_to_file,
             commands::workflow::import_workflow_from_file,
             commands::workflow::get_workflow_stats,
             commands::workflow::get_execution_timeline,
@@ -2488,6 +2495,7 @@ pub fn run() {
             commands::workflow::get_top_errors,
             commands::workflow::get_workflow_max_concurrency,
             commands::workflow::set_workflow_max_concurrency,
+            commands::workflow::set_workflow_max_subflow_depth,
             commands::workflow::duplicate_workflow,
             commands::workflow::list_workflow_versions,
             commands::workflow::save_workflow_version,
@@ -2547,6 +2555,12 @@ pub fn run() {
             commands::account::account_status,
             commands::account::account_logout,
             commands::account::account_platform_base,
+            commands::org_share::org_list_mine,
+            commands::org_share::org_list_shared_workflows,
+            commands::org_share::org_share_workflow,
+            commands::org_share::org_import_workflow,
+            commands::org_credentials::org_list_credential_providers,
+            commands::org_credentials::org_apply_credential,
             utils::market::fetch_agents_config,
             utils::market::inspiration_market_index,
             utils::market::inspiration_market_fetch,
@@ -2601,6 +2615,19 @@ pub fn run() {
             let sched_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 scheduler.start(sched_executor, sched_handle).await;
+            });
+
+            // 启动本地用量自动上报后台任务（每 30 分钟一次，受设置开关控制，失败静默）
+            let report_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                commands::usage::run_auto_report_loop(DbState { pool: report_pool }).await;
+            });
+
+            // 启动云同步后台任务（每 10 分钟一次；仅「开关开启 + 已登录 + 有能力」时真正执行，
+            // 其余静默跳过，失败只记日志——不影响离线可用）
+            let sync_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                commands::cloud_sync::run_auto_sync_loop(DbState { pool: sync_pool }).await;
             });
 
             log::info!("PilotDesk initialized successfully.");

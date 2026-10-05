@@ -19,6 +19,7 @@ import { Cloud, Info, Loader2, Plus, Trash2 } from 'lucide-react';
 import { Select } from '../common/Select';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { CAP_KNOWLEDGE_CLOUD, useCapability } from '../../stores/accountStore';
 import {
   CLOUD_SOURCE_LABEL,
   cloudSourceLabel,
@@ -33,6 +34,8 @@ const CLOUD_SOURCES: CloudSourceId[] = ['yuque'];
 const YUQUE_TOKEN_URL = 'https://www.yuque.com/settings/tokens';
 
 export function KbCloudSourceSettings() {
+  // 云文档投喂是平台的受限能力：未解锁（未登录 / 免费档）不展示账号配置
+  const canCloud = useCapability(CAP_KNOWLEDGE_CLOUD);
   const [accounts, setAccounts] = useState<CloudAccount[] | null>(null);
   const [source, setSource] = useState<CloudSourceId>('yuque');
   const [label, setLabel] = useState('');
@@ -51,8 +54,9 @@ export function KbCloudSourceSettings() {
 
   // 推一个微任务再读：避免在 effect 体内同步 setState（会多一轮级联渲染）
   useEffect(() => {
+    if (!canCloud) return; // 未解锁时不必读取账号
     void Promise.resolve().then(() => refresh());
-  }, [refresh]);
+  }, [refresh, canCloud]);
 
   const handleAdd = async () => {
     if (!token.trim()) {
@@ -90,6 +94,22 @@ export function KbCloudSourceSettings() {
       setRemovingId('');
     }
   };
+
+  // 未解锁：用简短提示替代账号配置，避免用户看到无法使用的配置项
+  if (!canCloud) {
+    return (
+      <div
+        className="rounded-lg px-3 py-2.5 text-[11px] leading-relaxed"
+        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+      >
+        <div className="flex items-center gap-1.5 mb-1" style={{ color: 'var(--text-primary)' }}>
+          <Cloud size={12} />
+          <span className="text-xs font-medium">云文档账号</span>
+        </div>
+        云文档投喂为专业版功能：升级后可在「知识库 › 投喂 › 云文档」中配置账号并拉取文档。
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

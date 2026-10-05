@@ -5,6 +5,7 @@ import { X, Settings, Plus, HelpCircle } from 'lucide-react';
 import type { WorkflowDefinition, TriggerConfig } from '../../types/workflow';
 import type { JsonValue } from '../../types/plugin';
 import { Select } from '../common/Select';
+import { useQuota } from '../../stores/accountStore';
 
 /** 入参字段规格（与 types/workflow.ts 的 inputSchema 一致；default 可能来自用户 JSON，形态未知） */
 type InputSchemaField = { type: string; description?: string; required?: boolean; default?: JsonValue };
@@ -75,6 +76,18 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
         setEventsFailed(true);
         console.warn('[WorkflowPropertyDialog] 加载内置事件清单失败:', e);
       });
+    return () => { cancelled = true; };
+  }, []);
+
+  // 会员配额：定时任务数量上限（-1 = 不限 → Infinity）。在设置「定时触发」时提前告知已用/上限，
+  // 免得用户填完 Cron 保存时才被后端拒绝。
+  const scheduleLimit = useQuota('workflow.schedules', 5);
+  const [scheduleCount, setScheduleCount] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<unknown[]>('list_schedules')
+      .then((rows) => { if (!cancelled) setScheduleCount(rows.length); })
+      .catch(() => { /* 读取失败则不显示用量提示，不打断编辑 */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -318,6 +331,20 @@ export function WorkflowPropertyDialog({ mode, initial, onConfirm, onClose }: Pr
                 </button>
               ))}
             </div>
+            {triggerType === 'cron' && scheduleLimit !== Number.POSITIVE_INFINITY && (
+              <p
+                className="mt-1.5 text-[11px]"
+                style={{
+                  color:
+                    scheduleCount !== null && scheduleCount >= scheduleLimit
+                      ? 'var(--status-warning)'
+                      : 'var(--text-tertiary)',
+                }}
+              >
+                定时任务：已用 {scheduleCount ?? '—'} / 上限 {scheduleLimit}
+                {scheduleCount !== null && scheduleCount >= scheduleLimit ? '（已达上限，升级可提升）' : ''}
+              </p>
+            )}
             {triggerType === 'event' && (
               <div className="mt-2">
                 <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>

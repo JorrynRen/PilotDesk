@@ -48,6 +48,85 @@ async fn error_from(resp: reqwest::Response) -> AppError {
     })
 }
 
+/// 平台请求失败详情：`status` 为 HTTP 状态码（`0` 表示网络层或响应解析失败）。
+///
+/// 供需要**按状态码做友好映射**的调用方使用（如组织共享空间的 403 / 409）；
+/// 只关心错误文案的旧调用方继续用 [`get_json`] / [`post_json`]。
+#[derive(Debug)]
+pub struct PlatformError {
+    pub status: u16,
+    pub message: String,
+}
+
+impl std::fmt::Display for PlatformError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// 解析平台失败响应为带状态码的错误（结构同 [`error_from`]，但保留 status）
+async fn error_with_status(resp: reqwest::Response) -> PlatformError {
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    let message = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+        .unwrap_or_else(|| body.trim().to_string());
+    PlatformError {
+        status,
+        message: if message.is_empty() {
+            format!("平台返回 HTTP {}", status)
+        } else {
+            format!("平台返回 HTTP {}：{}", status, message)
+        },
+    }
+}
+
+/// GET 一个 JSON 接口（可选 Bearer）；失败时保留 HTTP 状态码。
+pub async fn get_json_with_status<T: serde::de::DeserializeOwned>(
+    path: &str,
+    token: Option<&str>,
+) -> Result<T, PlatformError> {
+    let mut req = http_client().get(format!("{}{}", api_base(), path));
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.map_err(|e| PlatformError {
+        status: 0,
+        message: format!("请求平台失败：{}", e),
+    })?;
+    if !resp.status().is_success() {
+        return Err(error_with_status(resp).await);
+    }
+    resp.json::<T>().await.map_err(|e| PlatformError {
+        status: 0,
+        message: format!("解析平台响应失败：{}", e),
+    })
+}
+
+/// POST 一个 JSON 接口（可选 Bearer）；失败时保留 HTTP 状态码。
+pub async fn post_json_with_status<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+    path: &str,
+    body: &B,
+    token: Option<&str>,
+) -> Result<T, PlatformError> {
+    let mut req = http_client().post(format!("{}{}", api_base(), path)).json(body);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.map_err(|e| PlatformError {
+        status: 0,
+        message: format!("请求平台失败：{}", e),
+    })?;
+    if !resp.status().is_success() {
+        return Err(error_with_status(resp).await);
+    }
+    resp.json::<T>().await.map_err(|e| PlatformError {
+        status: 0,
+        message: format!("解析平台响应失败：{}", e),
+    })
+}
+
 /// GET 一个 JSON 接口（可选 Bearer）
 pub async fn get_json<T: serde::de::DeserializeOwned>(
     path: &str,

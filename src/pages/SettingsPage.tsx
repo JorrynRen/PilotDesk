@@ -4,7 +4,7 @@ import {
   Settings, Key, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Package, Cpu, User,
+  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Package, Cpu, User, Building2,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -37,6 +37,7 @@ import { McpSettings } from '../components/settings/McpSettings';
 import { SearchSettings } from '../components/settings/SearchSettings';
 import { FileHistorySettings } from '../components/settings/FileHistorySettings';
 import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
+import { useAccountStore, useQuota } from '../stores/accountStore';
 import { sendApiRequest } from '../utils/apiClient';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 
@@ -148,6 +149,8 @@ import { KbModelSettings } from '../components/settings/KbModelSettings';
 import { KbRootSettings } from '../components/settings/KbRootSettings';
 import { KbCloudSourceSettings } from '../components/settings/KbCloudSourceSettings';
 import { Select } from '../components/common/Select';
+import { showToast } from '../utils/toast';
+import { errorMessage } from '../utils/errorMessage';
 import { isAutoRunNotifyEnabled, setAutoRunNotifyEnabled } from '../stores/notificationEvents';
 import { TitleBar, StatusBar } from '../components/layout';
 
@@ -162,6 +165,13 @@ function GeneralSettings() {
   const [maxSubflowDepth, setMaxSubflowDepth] = useState(3);
   const [autoRunNotify, setAutoRunNotify] = useState(isAutoRunNotifyEnabled());
   const [streamIdleSecs, setStreamIdleSecs] = useState(90);
+
+  // 会员配额：未登录 / 未下发回落到 free 档兜底值；-1（不限）→ Infinity
+  const quotaConcurrency = useQuota('workflow.concurrency', 10);
+  const quotaSubflow = useQuota('workflow.subflowDepth', 3);
+  // 上限取 min(产品硬上限, 配额)；配额不限（Infinity）时即硬上限
+  const effectiveConcurrencyMax = Math.min(20, quotaConcurrency);
+  const effectiveSubflowMax = Math.min(10, quotaSubflow);
 
   // Load workspace from SQLite on mount
   useEffect(() => {
@@ -193,7 +203,7 @@ function GeneralSettings() {
   ];
 
   const handleMaxConcurrencyChange = async (value: number) => {
-    const clamped = Math.max(1, Math.min(10, value));
+    const clamped = Math.max(1, Math.min(effectiveConcurrencyMax, value));
     setMaxConcurrency(clamped);
     try {
       await invoke('set_workflow_max_concurrency', { maxConcurrency: clamped });
@@ -201,10 +211,10 @@ function GeneralSettings() {
   };
 
   const handleMaxSubflowDepthChange = async (value: number) => {
-    const clamped = Math.max(1, Math.min(10, value));
+    const clamped = Math.max(1, Math.min(effectiveSubflowMax, value));
     setMaxSubflowDepth(clamped);
     try {
-      await invoke('set_app_setting', { key: 'workflow_max_subflow_depth', value: clamped.toString() });
+      await invoke('set_workflow_max_subflow_depth', { maxDepth: clamped });
     } catch { /* ignore */ }
   };
 
@@ -308,7 +318,7 @@ function GeneralSettings() {
           <input
             type="range"
             min="1"
-            max="20"
+            max={effectiveConcurrencyMax}
             value={maxConcurrency}
             onChange={(e) => handleMaxConcurrencyChange(parseInt(e.target.value))}
             className="flex-1"
@@ -324,6 +334,18 @@ function GeneralSettings() {
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           工作流执行时同一时刻最多并行运行的节点数。增加此值可加速并行节点较多的工作流，但会消耗更多系统资源。
         </p>
+        {maxConcurrency >= effectiveConcurrencyMax && effectiveConcurrencyMax < 20 && (
+          <p className="text-xs mt-1 flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
+            <span>已达当前等级的并发上限（{effectiveConcurrencyMax}），升级可提升</span>
+            <button
+              onClick={() => useAccountStore.getState().openPlatform('upgrade')}
+              className="underline hover:no-underline"
+              style={{ color: 'var(--accent)' }}
+            >
+              升级 / 续费
+            </button>
+          </p>
+        )}
       </SettingsSection>
 
       {/* Max Subflow Depth */}
@@ -332,7 +354,7 @@ function GeneralSettings() {
           <input
             type="range"
             min="1"
-            max="10"
+            max={effectiveSubflowMax}
             value={maxSubflowDepth}
             onChange={(e) => handleMaxSubflowDepthChange(parseInt(e.target.value))}
             className="flex-1"
@@ -348,6 +370,18 @@ function GeneralSettings() {
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
           子工作流（Subflow 节点）允许的最大递归嵌套层数（1-10）。超过此限制将阻止执行以防止无限递归。
         </p>
+        {maxSubflowDepth >= effectiveSubflowMax && effectiveSubflowMax < 10 && (
+          <p className="text-xs mt-1 flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
+            <span>已达当前等级的子流程深度上限（{effectiveSubflowMax}），升级可提升</span>
+            <button
+              onClick={() => useAccountStore.getState().openPlatform('upgrade')}
+              className="underline hover:no-underline"
+              style={{ color: 'var(--accent)' }}
+            >
+              升级 / 续费
+            </button>
+          </p>
+        )}
       </SettingsSection>
 
       {/* 自动运行提醒 */}
@@ -837,6 +871,34 @@ function SortableProviderCard({
 /** API 集成配置的子页签（对话模式 / 权限规则随本 tab 收拢，语音识别为模型级配置） */
 type ApiSubTab = 'providers' | 'usage' | 'voice' | 'mode' | 'permission';
 
+/** 组织共享空间：我所属组织（与 Rust `org_list_mine` 返回对齐，只保留在用成员） */
+interface OrgCredOrg {
+  id: number;
+  name: string;
+  role: string;
+  planKey: string;
+  planExpiresAt: string | null;
+  seats: number;
+  memberCount: number;
+  status: string;
+}
+
+/** 组织的共享凭据列表项（与 Rust `org_list_credential_providers` 返回对齐，掩码不含明文） */
+interface OrgCredential {
+  id: number;
+  provider: string;
+  label: string;
+  hint: string;
+  creatorLabel: string;
+  updatedAt: string;
+}
+
+/** 应用组织凭据的结果（与 Rust `org_apply_credential` 返回对齐） */
+interface ApplyOrgCredentialResult {
+  providerName: string;
+  created: boolean;
+}
+
 function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
   const { t } = useI18n();
   const { providers, loading, fetchProviders, saveProvider, deleteProvider, reorderProviders } = useApiProviderStore();
@@ -846,6 +908,16 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
   const [editingNotes, setEditingNotes] = useState('');
   const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map());
   const abortRef = useRef<Map<string, AbortController>>(new Map());
+  const account = useAccountStore((s) => s.account);
+  // 「从组织获取凭据」弹窗状态
+  const [showOrgCred, setShowOrgCred] = useState(false);
+  const [orgCredOrgs, setOrgCredOrgs] = useState<OrgCredOrg[] | null>(null);
+  const [orgCredOrgId, setOrgCredOrgId] = useState('');
+  const [orgCredItems, setOrgCredItems] = useState<OrgCredential[] | null>(null);
+  const [orgCredItemsLoading, setOrgCredItemsLoading] = useState(false);
+  const [orgCredSelected, setOrgCredSelected] = useState<OrgCredential | null>(null);
+  const [orgCredSubmitting, setOrgCredSubmitting] = useState(false);
+  const [orgCredError, setOrgCredError] = useState('');
   const [searchParams] = useSearchParams();
   const urlApiTab = searchParams.get('apiTab');
   // 子页签支持 URL 直达（如 /settings?tab=api&apiTab=usage，供指挥中心「查看完整用量」精准跳转）：
@@ -881,6 +953,85 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
     const reordered = arrayMove(ids, oldIndex, newIndex);
     await reorderProviders(reordered);
   }, [providers, reorderProviders]);
+
+  // ── 从组织获取共享凭据 ──────────────────────────────────────────
+
+  /** 加载某组织的共享凭据（掩码列表，不触发明文审计） */
+  const loadOrgCredentials = async (orgId: number) => {
+    setOrgCredItemsLoading(true);
+    setOrgCredError('');
+    setOrgCredItems(null);
+    setOrgCredSelected(null);
+    try {
+      const items = await invoke<OrgCredential[]>('org_list_credential_providers', { orgId });
+      setOrgCredItems(items);
+    } catch (err) {
+      setOrgCredError(errorMessage(err));
+    } finally {
+      setOrgCredItemsLoading(false);
+    }
+  };
+
+  /** 打开「从组织获取凭据」：未登录先提示；否则拉组织列表并打开弹窗 */
+  const handleOpenOrgCred = async () => {
+    if (!account) {
+      showToast('请先登录平台账号', 'warning');
+      return;
+    }
+    setShowOrgCred(true);
+    setOrgCredOrgs(null);
+    setOrgCredOrgId('');
+    setOrgCredItems(null);
+    setOrgCredSelected(null);
+    setOrgCredError('');
+    try {
+      const orgs = await invoke<OrgCredOrg[]>('org_list_mine');
+      setOrgCredOrgs(orgs);
+      if (orgs.length === 0) {
+        showToast('你还没有加入任何组织', 'warning');
+        return;
+      }
+      setOrgCredOrgId(String(orgs[0].id));
+      await loadOrgCredentials(orgs[0].id);
+    } catch (err) {
+      setOrgCredError(errorMessage(err));
+    }
+  };
+
+  /**
+   * 应用所选凭据：后端把明文写入本地 provider，前端不接触明文。
+   * 本地同名冲突时后端返回「请确认覆盖」，这里二次确认后带 overwrite 重试。
+   */
+  const handleApplyOrgCredential = async (overwrite: boolean) => {
+    if (!orgCredSelected || !orgCredOrgId) return;
+    setOrgCredSubmitting(true);
+    setOrgCredError('');
+    try {
+      const res = await invoke<ApplyOrgCredentialResult>('org_apply_credential', {
+        input: {
+          orgId: Number(orgCredOrgId),
+          provider: orgCredSelected.provider,
+          label: orgCredSelected.label,
+          overwrite,
+        },
+      });
+      showToast(`已从组织导入并应用「${res.providerName}」`, 'success');
+      setShowOrgCred(false);
+      await fetchProviders();
+    } catch (err) {
+      const msg = errorMessage(err);
+      // 本地已存在同名 provider：二次确认后带 overwrite 重试
+      if (!overwrite && msg.includes('请确认覆盖')) {
+        setOrgCredSubmitting(false);
+        const ok = await confirmDialog({ title: '确认覆盖', message: msg, confirmText: '覆盖' });
+        if (ok) await handleApplyOrgCredential(true);
+        return;
+      }
+      setOrgCredError(msg);
+    } finally {
+      setOrgCredSubmitting(false);
+    }
+  };
 
   // Add provider
   const handleAddProvider = async () => {
@@ -1113,17 +1264,31 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
             拖拽左侧手柄调整排序 · 配置完成后可在新建会话时选择 API 直连模式
           </p>
         </div>
-        <button
-          onClick={handleAddProvider}
-          className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs  transition-colors"
-          style={{
-            backgroundColor: 'var(--accent)',
-            color: '#fff',
-          }}
-        >
-          <Plus size={12} />
-          添加提供商
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void handleOpenOrgCred()}
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors"
+            style={{
+              border: '1px solid var(--border)',
+              background: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <Building2 size={12} />
+            从组织获取凭据
+          </button>
+          <button
+            onClick={handleAddProvider}
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs  transition-colors"
+            style={{
+              backgroundColor: 'var(--accent)',
+              color: '#fff',
+            }}
+          >
+            <Plus size={12} />
+            添加提供商
+          </button>
+        </div>
       </div>
 
       {/* Sortable provider list */}
@@ -1171,6 +1336,102 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
       <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
         API Key 保存在本地 SQLite 数据库，不会上传。排序结果自动保存。
       </p>
+
+      {/* 「从组织获取凭据」弹窗：选组织 → 加载共享凭据掩码列表 → 选中应用（明文由后端写入，前端不接触） */}
+      {showOrgCred && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { if (!orgCredSubmitting) setShowOrgCred(false); }}
+        >
+          <div
+            className="rounded-xl shadow-xl w-full mx-4 flex flex-col"
+            style={{ maxWidth: 480, maxHeight: '74vh', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 text-sm font-medium shrink-0" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>
+              从组织获取凭据
+            </div>
+            <div className="px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>选择组织</div>
+              {orgCredOrgs && orgCredOrgs.length > 0 ? (
+                <Select
+                  value={orgCredOrgId}
+                  onChange={(v) => { setOrgCredOrgId(v); void loadOrgCredentials(Number(v)); }}
+                  placeholder="请选择组织"
+                  options={orgCredOrgs.map((o) => ({ value: String(o.id), label: o.name }))}
+                  className="w-full"
+                  disabled={orgCredSubmitting}
+                />
+              ) : (
+                <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
+                  {orgCredOrgs === null ? '正在获取组织列表…' : '你还没有加入任何组织'}
+                </div>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-2">
+              {orgCredItemsLoading ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>正在加载组织凭据…</div>
+              ) : orgCredItems && orgCredItems.length === 0 ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>该组织暂无共享凭据</div>
+              ) : (
+                (orgCredItems ?? []).map((item) => (
+                  <label
+                    key={item.id}
+                    className="flex items-start gap-2 py-2 text-xs cursor-pointer"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    <input
+                      type="radio"
+                      name="org-credential"
+                      className="mt-0.5"
+                      checked={orgCredSelected?.id === item.id}
+                      onChange={() => setOrgCredSelected(item)}
+                      disabled={orgCredSubmitting}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate" title={`${item.provider} · ${item.label}`}>
+                        {item.provider} · {item.label}
+                      </span>
+                      <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                        {item.hint} · 上传者 {item.creatorLabel || '未知'}
+                      </span>
+                    </span>
+                  </label>
+                ))
+              )}
+              {orgCredError && (
+                <div className="text-xs px-2 py-1.5 rounded my-2" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
+                  {orgCredError}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={() => setShowOrgCred(false)}
+                disabled={orgCredSubmitting}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: orgCredSubmitting ? 'default' : 'pointer' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleApplyOrgCredential(false)}
+                disabled={orgCredSubmitting || !orgCredSelected}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity: orgCredSubmitting || !orgCredSelected ? 0.5 : 1,
+                  cursor: orgCredSubmitting || !orgCredSelected ? 'default' : 'pointer',
+                }}
+              >
+                {orgCredSubmitting ? '应用中…' : '应用'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
         </>
       )}
 

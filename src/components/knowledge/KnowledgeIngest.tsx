@@ -19,6 +19,7 @@ import { MetaEditor } from './KnowledgeFieldInputs';
 import { Select } from '../common/Select';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { CAP_KNOWLEDGE_CLOUD, useCapability } from '../../stores/accountStore';
 import {
   ORIGIN_LABEL,
   cloudSourceLabel,
@@ -89,6 +90,11 @@ export function KnowledgeIngest({
   onReject,
 }: KnowledgeIngestProps) {
   const [mode, setMode] = useState<Mode>('snippet');
+  // 云文档投喂是平台的受限能力：未解锁（未登录 / 免费档）不显示该方式；片段/文件/网址/AI 生成不受影响
+  const canCloud = useCapability(CAP_KNOWLEDGE_CLOUD);
+  // 能力在运行中失效（如退出登录 / 降级）时，把当前模式退回「片段」。
+  // 用「渲染期修正」（React adjust-during-render）而不是 effect：在 effect 里同步 setState 会多一轮级联渲染。
+  if (mode === 'cloud' && !canCloud) setMode('snippet');
   const [text, setText] = useState('');
   /** 片段标题（可留空 → 交给 AI 生成；不再用首行硬截断当标题） */
   const [title, setTitle] = useState('');
@@ -346,7 +352,7 @@ export function KnowledgeIngest({
         style={{ borderRight: '1px solid var(--border)' }}
       >
         <div className="flex items-center gap-1 p-0.5 rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
-          {(Object.keys(MODE_META) as Mode[]).map((m) => {
+          {(Object.keys(MODE_META) as Mode[]).filter((m) => canCloud || m !== 'cloud').map((m) => {
             const M = MODE_META[m];
             const active = mode === m;
             return (
@@ -530,7 +536,7 @@ export function KnowledgeIngest({
           </div>
         )}
 
-        {mode === 'cloud' && (
+        {mode === 'cloud' && canCloud && (
           <div className="flex-1 min-h-0 flex flex-col gap-2">
             {cloudAccounts === null ? (
               <div className="flex-1 flex flex-col items-center justify-center gap-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>

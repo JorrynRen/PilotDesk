@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, LayoutTemplate, ScrollText, Play, Loader2, Square } from 'lucide-react';
+import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, LayoutTemplate, ScrollText, Play, Loader2, Square, Share2, Building2 } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { showToast, showLiveToastOnce } from '../utils/toast';
 import { confirmDialog } from '../stores/confirmStore';
-import { CAP_WORKFLOW_EXPORT, useCapability } from '../stores/accountStore';
+import { CAP_WORKFLOW_EXPORT_BATCH, useCapability, useAccountStore } from '../stores/accountStore';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { createDefaultWorkflow } from '../workflow/WorkflowDefinition';
@@ -27,6 +27,27 @@ interface WorkflowPageProps {
   onBack?: () => void;
   /** 嵌入主布局模式：不渲染自身 TitleBar/StatusBar（由外层提供） */
   embedded?: boolean;
+}
+
+/** 组织共享空间：我所属组织（与 Rust `org_list_mine` 返回对齐） */
+interface MyOrg {
+  id: number;
+  name: string;
+  role: string;
+  planKey: string;
+  planExpiresAt: string | null;
+  seats: number;
+  memberCount: number;
+  status: string;
+}
+
+/** 组织的共享工作流列表项（与 Rust `org_list_shared_workflows` 返回对齐，不含 payload） */
+interface SharedWorkflow {
+  id: number;
+  name: string;
+  description: string;
+  creatorLabel: string;
+  updatedAt: string;
 }
 
 /** 将 Cron 表达式转换为用户友好描述 */
@@ -139,8 +160,8 @@ function formatElapsed(startedAt?: number | null): string {
 }
 
 export function WorkflowPage({ embedded }: WorkflowPageProps) {
-  // 工作流导出是平台的受限能力：未解锁（未登录 / 免费档）不显示入口
-  const canExportWorkflow = useCapability(CAP_WORKFLOW_EXPORT);
+  // 批量导出是平台的受限能力：未解锁（未登录 / 免费档）不显示入口；单个导出对所有用户开放
+  const canExportBatch = useCapability(CAP_WORKFLOW_EXPORT_BATCH);
   const navigate = useNavigate();
   const { definitions, instances, schedules, pendingInputs, pendingApprovals, loading, error, loadDefinitions, loadInstances, loadSchedules, loadPendingInputs, loadPendingApprovals, createDefinition, updateDefinition, deleteDefinition, deleteExecutions, selectDefinition } = useWorkflowStore();
   const [activeTab, setActiveTab] = useState<'definitions' | 'instances' | 'stats'>('definitions');
@@ -158,6 +179,31 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const [nodeExecsError, setNodeExecsError] = useState<string | null>(null);
   /** 待审批（不含失效的）+ 待人工输入 = 待处理入口上的计数（与指挥中心同一口径） */
   const pendingCount = pendingApprovals.filter((a) => !a.stale).length + pendingInputs.length;
+  /** 批量导出弹窗：选中的工作流 id 集合 + 导出中标记（受限能力，见 canExportBatch） */
+  const [showBatchExport, setShowBatchExport] = useState(false);
+  const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
+  const [batchExporting, setBatchExporting] = useState(false);
+
+  // ---- 组织共享空间（团队版）：共享到组织 / 从组织导入 ----
+  /** 平台账号（null = 未登录）：用于未登录时的前置提示 */
+  const account = useAccountStore((s) => s.account);
+  /** 「共享到组织」弹窗：目标工作流 + 组织列表 + 共享名称 */
+  const [shareTarget, setShareTarget] = useState<WorkflowDefinition | null>(null);
+  const [shareOrgs, setShareOrgs] = useState<MyOrg[] | null>(null);
+  const [shareOrgId, setShareOrgId] = useState('');
+  const [shareName, setShareName] = useState('');
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSubmitting, setShareSubmitting] = useState(false);
+  const [shareError, setShareError] = useState('');
+  /** 「从组织导入」弹窗：组织列表 + 该组织的共享工作流列表 */
+  const [showImportOrg, setShowImportOrg] = useState(false);
+  const [importOrgs, setImportOrgs] = useState<MyOrg[] | null>(null);
+  const [importOrgId, setImportOrgId] = useState('');
+  const [importItems, setImportItems] = useState<SharedWorkflow[] | null>(null);
+  const [importItemsLoading, setImportItemsLoading] = useState(false);
+  const [importItemId, setImportItemId] = useState<number | null>(null);
+  const [importSubmitting, setImportSubmitting] = useState(false);
+  const [importError, setImportError] = useState('');
   const DEF_PAGE_SIZE = 8;
   const [defPage, setDefPage] = useState(1);
 
@@ -377,6 +423,33 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     }
   };
 
+  /** 批量导出：弹窗里勾选若干工作流，选目录后逐个写入独立子目录，返回成功数量 */
+  const handleBatchExport = async () => {
+    if (batchSelectedIds.size === 0) {
+      showToast('请先勾选要导出的工作流', 'warning');
+      return;
+    }
+    const ids = Array.from(batchSelectedIds);
+    try {
+      const dirPath = await openDialog({
+        directory: true,
+        title: '选择批量导出目录',
+        defaultPath: '工作流批量导出',
+      });
+      if (!dirPath) return;
+      setBatchExporting(true);
+      const count = await invoke<number>('export_workflows_to_file', { ids, dirPath });
+      showToast(`成功导出 ${count} 个工作流`, 'success');
+      setShowBatchExport(false);
+      setBatchSelectedIds(new Set());
+    } catch (err) {
+      console.error('批量导出工作流失败:', err);
+      showToast(`批量导出失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setBatchExporting(false);
+    }
+  };
+
   const handleImportWorkflow = async () => {
     try {
       const filePaths = await openDialog({
@@ -407,6 +480,122 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const handleCreateAndEdit = () => {
     setEditingDef(null);
     setShowPropertyDialog('create');
+  };
+
+  // ── 组织共享空间（团队版）──────────────────────────────────────
+
+  /** 「共享到组织…」：未登录先提示；否则拉取组织列表并打开弹窗 */
+  const handleOpenShareDialog = async (e: React.MouseEvent, def: WorkflowDefinition) => {
+    e.stopPropagation();
+    if (!account) {
+      showToast('请先登录平台账号', 'warning');
+      return;
+    }
+    setShareTarget(def);
+    setShareName(def.name);
+    setShareOrgs(null);
+    setShareOrgId('');
+    setShareError('');
+    setShareLoading(true);
+    try {
+      const orgs = await invoke<MyOrg[]>('org_list_mine');
+      setShareOrgs(orgs);
+      if (orgs.length === 0) {
+        showToast('你还没有加入任何组织', 'warning');
+      } else {
+        setShareOrgId(String(orgs[0].id));
+      }
+    } catch (err) {
+      setShareError(errorMessage(err));
+      showToast(`获取组织列表失败：${errorMessage(err)}`, 'error');
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  /** 确认共享：调用后端生成导出 JSON 并 POST 到组织共享空间 */
+  const handleConfirmShare = async () => {
+    if (!shareTarget || !shareOrgId) return;
+    setShareSubmitting(true);
+    setShareError('');
+    try {
+      await invoke<SharedWorkflow>('org_share_workflow', {
+        input: {
+          workflowId: shareTarget.id,
+          orgId: Number(shareOrgId),
+          name: shareName.trim() || undefined,
+        },
+      });
+      const orgName = (shareOrgs ?? []).find((o) => String(o.id) === shareOrgId)?.name ?? '组织';
+      showToast(`已共享到「${orgName}」`, 'success');
+      setShareTarget(null);
+    } catch (err) {
+      setShareError(errorMessage(err));
+    } finally {
+      setShareSubmitting(false);
+    }
+  };
+
+  /** 加载某组织的共享工作流列表 */
+  const loadOrgSharedWorkflows = async (orgId: number) => {
+    setImportItemsLoading(true);
+    setImportError('');
+    setImportItems(null);
+    setImportItemId(null);
+    try {
+      const items = await invoke<SharedWorkflow[]>('org_list_shared_workflows', { orgId });
+      setImportItems(items);
+    } catch (err) {
+      setImportError(errorMessage(err));
+    } finally {
+      setImportItemsLoading(false);
+    }
+  };
+
+  /** 「从组织导入…」：未登录先提示；否则拉取组织列表并打开弹窗 */
+  const handleOpenImportOrgDialog = async () => {
+    if (!account) {
+      showToast('请先登录平台账号', 'warning');
+      return;
+    }
+    setShowImportOrg(true);
+    setImportOrgs(null);
+    setImportOrgId('');
+    setImportItems(null);
+    setImportItemId(null);
+    setImportError('');
+    try {
+      const orgs = await invoke<MyOrg[]>('org_list_mine');
+      setImportOrgs(orgs);
+      if (orgs.length === 0) {
+        showToast('你还没有加入任何组织', 'warning');
+      } else {
+        setImportOrgId(String(orgs[0].id));
+        await loadOrgSharedWorkflows(orgs[0].id);
+      }
+    } catch (err) {
+      setImportError(errorMessage(err));
+    }
+  };
+
+  /** 确认导入：取资源详情 → 后端新建本地工作流 → 刷新列表 */
+  const handleImportFromOrg = async () => {
+    if (!importOrgId || importItemId == null) return;
+    setImportSubmitting(true);
+    setImportError('');
+    try {
+      const res = await invoke<{ workflowId: string; name: string; subflowCount?: number }>('org_import_workflow', {
+        input: { orgId: Number(importOrgId), resourceId: importItemId },
+      });
+      const subflowSuffix = res.subflowCount ? `（含 ${res.subflowCount} 个子流程）` : '';
+      showToast(`已导入「${res.name}」${subflowSuffix}`, 'success');
+      setShowImportOrg(false);
+      await loadDefinitions();
+    } catch (err) {
+      setImportError(errorMessage(err));
+    } finally {
+      setImportSubmitting(false);
+    }
   };
 
   const handleEditProperties = (e: React.MouseEvent, def: WorkflowDefinition) => {
@@ -719,6 +908,29 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           >
             <Download size={14} /> 从文件导入
           </button>
+          {/* 从组织导入：走组织共享空间（团队版），与「共享到组织」配合使用 */}
+          <button
+            onClick={() => void handleOpenImportOrgDialog()}
+            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="从组织共享空间导入工作流"
+          >
+            <Building2 size={14} /> 从组织导入
+          </button>
+          {/* 批量导出是平台的受限能力：未解锁（未登录 / 免费档）不显示入口 */}
+          {canExportBatch && (
+            <button
+              onClick={() => {
+                setBatchSelectedIds(new Set());
+                setShowBatchExport(true);
+              }}
+              className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+              style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              title="勾选多个工作流一次性导出到指定目录"
+            >
+              <Upload size={14} /> 批量导出
+            </button>
+          )}
           {/* 模板市场已迁至「资源市集 › 工作流模板」：这里只留跳转入口 */}
           <button
             onClick={() => navigate('/market?tab=workflow')}
@@ -1045,7 +1257,6 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                           >
                             <Settings size={14} />
                           </button>
-                          {canExportWorkflow && (
                           <button
                             onClick={(e) => { handleExportSingle(e, def.id, def.name); }}
                             className="pd-btn p-1.5 rounded hover:opacity-80"
@@ -1054,7 +1265,14 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                           >
                             <Upload size={14} />
                           </button>
-                          )}
+                          <button
+                            onClick={(e) => { void handleOpenShareDialog(e, def); }}
+                            className="pd-btn p-1.5 rounded hover:opacity-80"
+                            style={{ color: 'var(--text-secondary)' }}
+                            title="共享到组织"
+                          >
+                            <Share2 size={14} />
+                          </button>
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDuplicate(def.id, def.name); }}
                             className="pd-btn p-1.5 rounded hover:opacity-80"
@@ -1219,6 +1437,270 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           }}
           onClose={() => setInputDialogDef(null)}
         />
+      )}
+
+      {/* 批量导出弹窗：列出全部工作流定义并勾选（受限能力入口） */}
+      {showBatchExport && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { if (!batchExporting) setShowBatchExport(false); }}
+        >
+          <div
+            className="rounded-xl shadow-xl w-full mx-4 flex flex-col"
+            style={{ maxWidth: 420, maxHeight: '70vh', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 text-sm font-medium shrink-0" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>
+              批量导出工作流
+            </div>
+            <div className="px-4 py-2 flex items-center gap-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+                <input
+                  type="checkbox"
+                  checked={definitions.length > 0 && batchSelectedIds.size === definitions.length}
+                  onChange={(e) => {
+                    setBatchSelectedIds(e.target.checked ? new Set(definitions.map((d) => d.id)) : new Set());
+                  }}
+                />
+                全选
+              </label>
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                已选 {batchSelectedIds.size} / {definitions.length}
+              </span>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-2">
+              {definitions.length === 0 ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>暂无工作流</div>
+              ) : (
+                definitions.map((d) => (
+                  <label
+                    key={d.id}
+                    className="flex items-center gap-2 py-1.5 text-xs cursor-pointer"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={batchSelectedIds.has(d.id)}
+                      onChange={(e) => {
+                        setBatchSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(d.id);
+                          else next.delete(d.id);
+                          return next;
+                        });
+                      }}
+                    />
+                    <span className="truncate" title={d.name}>{d.name}</span>
+                    <span className="ml-auto text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                      {d.stages?.length || 0} 阶段
+                    </span>
+                  </label>
+                ))
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={() => setShowBatchExport(false)}
+                disabled={batchExporting}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: batchExporting ? 'default' : 'pointer' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleBatchExport()}
+                disabled={batchExporting || batchSelectedIds.size === 0}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity: batchExporting || batchSelectedIds.size === 0 ? 0.5 : 1,
+                  cursor: batchExporting || batchSelectedIds.size === 0 ? 'default' : 'pointer',
+                }}
+              >
+                {batchExporting ? '导出中…' : `导出所选（${batchSelectedIds.size}）`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 「共享到组织」弹窗：选择组织 + 可选共享名称，走后端 org_share_workflow */}
+      {shareTarget && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { if (!shareSubmitting) setShareTarget(null); }}
+        >
+          <div
+            className="rounded-xl shadow-xl w-full mx-4 flex flex-col"
+            style={{ maxWidth: 440, maxHeight: '70vh', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 text-sm font-medium shrink-0" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>
+              共享到组织
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+              <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                工作流：<span style={{ color: 'var(--text-primary)' }}>{shareTarget.name}</span>
+              </div>
+              {shareLoading ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>正在获取组织列表…</div>
+              ) : shareOrgs && shareOrgs.length === 0 ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>你还没有加入任何组织</div>
+              ) : (
+                <>
+                  <div>
+                    <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>选择组织</div>
+                    <Select
+                      value={shareOrgId}
+                      onChange={setShareOrgId}
+                      placeholder="请选择组织"
+                      options={(shareOrgs ?? []).map((o) => ({ value: String(o.id), label: o.name }))}
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>共享名称（默认工作流名称）</div>
+                    <input
+                      value={shareName}
+                      onChange={(e) => setShareName(e.target.value)}
+                      className="w-full px-2 py-1.5 text-xs rounded"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                      placeholder={shareTarget.name}
+                    />
+                  </div>
+                </>
+              )}
+              {shareError && (
+                <div className="text-xs px-2 py-1.5 rounded" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
+                  {shareError}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={() => setShareTarget(null)}
+                disabled={shareSubmitting}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: shareSubmitting ? 'default' : 'pointer' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleConfirmShare()}
+                disabled={shareSubmitting || shareLoading || !shareOrgId}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity: shareSubmitting || shareLoading || !shareOrgId ? 0.5 : 1,
+                  cursor: shareSubmitting || shareLoading || !shareOrgId ? 'default' : 'pointer',
+                }}
+              >
+                {shareSubmitting ? '共享中…' : '确认共享'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 「从组织导入」弹窗：选组织 → 加载共享工作流列表 → 选中一条导入 */}
+      {showImportOrg && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { if (!importSubmitting) setShowImportOrg(false); }}
+        >
+          <div
+            className="rounded-xl shadow-xl w-full mx-4 flex flex-col"
+            style={{ maxWidth: 480, maxHeight: '74vh', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 text-sm font-medium shrink-0" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>
+              从组织导入工作流
+            </div>
+            <div className="px-4 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>选择组织</div>
+              {importOrgs && importOrgs.length > 0 ? (
+                <Select
+                  value={importOrgId}
+                  onChange={(v) => {
+                    setImportOrgId(v);
+                    void loadOrgSharedWorkflows(Number(v));
+                  }}
+                  placeholder="请选择组织"
+                  options={importOrgs.map((o) => ({ value: String(o.id), label: o.name }))}
+                  className="w-full"
+                  disabled={importSubmitting}
+                />
+              ) : (
+                <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
+                  {importOrgs === null ? '正在获取组织列表…' : '你还没有加入任何组织'}
+                </div>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-2">
+              {importItemsLoading ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>正在加载共享工作流…</div>
+              ) : importItems && importItems.length === 0 ? (
+                <div className="text-xs py-4 text-center" style={{ color: 'var(--text-tertiary)' }}>该组织暂无共享工作流</div>
+              ) : (
+                (importItems ?? []).map((item) => (
+                  <label
+                    key={item.id}
+                    className="flex items-start gap-2 py-2 text-xs cursor-pointer"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    <input
+                      type="radio"
+                      name="org-shared-workflow"
+                      className="mt-0.5"
+                      checked={importItemId === item.id}
+                      onChange={() => setImportItemId(item.id)}
+                      disabled={importSubmitting}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate" title={item.name}>{item.name}</span>
+                      <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                        {item.creatorLabel || '未知'} · {item.updatedAt ? new Date(item.updatedAt).toLocaleString() : ''}
+                      </span>
+                    </span>
+                  </label>
+                ))
+              )}
+              {importError && (
+                <div className="text-xs px-2 py-1.5 rounded my-2" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
+                  {importError}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={() => setShowImportOrg(false)}
+                disabled={importSubmitting}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: importSubmitting ? 'default' : 'pointer' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleImportFromOrg()}
+                disabled={importSubmitting || importItemId == null}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity: importSubmitting || importItemId == null ? 0.5 : 1,
+                  cursor: importSubmitting || importItemId == null ? 'default' : 'pointer',
+                }}
+              >
+                {importSubmitting ? '导入中…' : '导入'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 「查看结果」悬浮侧栏：带外边距、四角圆角，不再是满屏抽屉也不会盖住整页 */}

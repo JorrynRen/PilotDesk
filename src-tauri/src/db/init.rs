@@ -256,6 +256,22 @@ pub fn init_db() -> Result<DbPool, AppError> {
         CREATE INDEX IF NOT EXISTS idx_file_history_session ON file_history(session_id, created_at DESC);"
     )?;
 
+    // 云同步本地元数据（个人向跨设备同步，见 commands/cloud_sync.rs）：
+    // 每个被同步对象一行——server_version = 本地已知的「远端版本」（新建为 0），
+    // dirty = 本地有未推送改动。
+    // 作为「基础兜底表」在此创建（与 file_history 同处）：新表用 IF NOT EXISTS 每次启动即补齐，
+    // 老库无需 schema 版本迁移；只有「给旧表补列」才需要 SCHEMA_VERSION +1（见 migrate_schema）。
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS sync_state (
+            kind TEXT NOT NULL,
+            object_key TEXT NOT NULL,
+            server_version INTEGER NOT NULL DEFAULT 0,
+            local_updated_at INTEGER NOT NULL DEFAULT 0,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (kind, object_key)
+        );",
+    )?;
+
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
     let now = crate::utils::now();
 

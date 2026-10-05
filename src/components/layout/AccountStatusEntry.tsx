@@ -19,6 +19,9 @@ export function AccountStatusEntry() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // 组织来源：升级入口指到平台的组织页
+  const fromOrganization = account?.source === 'organization';
+
   // 点击外部 / Esc 收起弹层
   useEffect(() => {
     if (!open) return;
@@ -105,6 +108,11 @@ export function AccountStatusEntry() {
               到期时间：
               {account.expiresAt ? expiryText(account.expiresAt) : '长期有效'}
             </div>
+            {fromOrganization && account.organization && (
+              <div className="mt-1 truncate" style={{ color: 'var(--text-secondary)' }}>
+                来源：{account.organization.name}
+              </div>
+            )}
             <div className="mt-1" style={{ color: 'var(--text-secondary)' }}>
               已解锁：
               {account.capabilities.length > 0
@@ -122,12 +130,12 @@ export function AccountStatusEntry() {
             <button
               onClick={() => {
                 setOpen(false);
-                void openPlatform('upgrade');
+                void openPlatform(fromOrganization ? 'organizations' : 'upgrade');
               }}
               className="pd-btn px-2 py-1 rounded text-[11px]"
               style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
             >
-              升级 / 续费
+              {fromOrganization ? '组织与订阅' : '升级 / 续费'}
             </button>
             <button
               onClick={() => {

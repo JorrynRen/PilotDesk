@@ -278,7 +278,7 @@ impl MemoryStore {
 
         // 写入后懒惰维护：超配额即驱逐（僵尸清理在 open 与维护命令处执行）
         // 用 quota_count（排除知识库条目）：知识条目不占这 600 条
-        if self.quota_count() > MEMORY_MAX_ENTRIES {
+        if self.quota_count() > self.memory_limit() {
             self.prune();
         }
         entry
@@ -375,7 +375,7 @@ impl MemoryStore {
 
         // 写入后懒惰维护：超配额即驱逐（僵尸清理在 open 与维护命令处执行）
         // 用 quota_count（排除知识库条目）：知识条目不占这 600 条
-        if self.quota_count() > MEMORY_MAX_ENTRIES {
+        if self.quota_count() > self.memory_limit() {
             self.prune();
         }
         outcome
@@ -804,6 +804,12 @@ impl MemoryStore {
         .unwrap_or(0) as usize
     }
 
+    /// 当前生效的记忆条数上限：读会员配额 `memory.entries`；无缓存 / 未下发 → 兜底常量。
+    fn memory_limit(&self) -> usize {
+        let conn = self.conn.lock().unwrap();
+        crate::commands::account::quota_limit(&conn, "memory.entries", MEMORY_MAX_ENTRIES)
+    }
+
     /// 全量列表（支持按分类与关键词过滤；关键词不增计访问次数），按更新时间倒序。
     ///
     /// 关键词过滤的匹配面与检索路径（`select_memories`）一致：key / tags 子串，value 不参与匹配。
@@ -939,7 +945,10 @@ impl MemoryStore {
                 |r| r.get::<_, i64>(0),
             )
             .unwrap_or(0) as usize;
-        let overflow_n = total.saturating_sub(MEMORY_MAX_ENTRIES);
+        // 配额上限按会员等级生效（未登录 / 未下发回落兜底常量）；直接复用已持有的 conn 读取，
+        // 不能再调用 self.memory_limit()（同一把 Mutex 会自锁）。
+        let limit = crate::commands::account::quota_limit(&conn, "memory.entries", MEMORY_MAX_ENTRIES);
+        let overflow_n = total.saturating_sub(limit);
 
         let mut overflow: Vec<MemoryEntry> = Vec::new();
         if overflow_n > 0 {
