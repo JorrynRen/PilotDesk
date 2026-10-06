@@ -29,6 +29,8 @@ import { getNodeTypeMeta } from '../../workflow/WorkflowDefinition';
 import { Select } from '../common/Select';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { buildImportMemberMessage } from '../../utils/workflowImport';
+import type { ImportMemberOutcome } from '../../utils/workflowImport';
 
 // ── 数据类型 ──
 
@@ -635,10 +637,19 @@ export const WorkflowTemplateMarket: React.FC<{
     if (installingId) return; // 一次只装一个：下载+导入是重动作，避免并发写同一份定义
     setInstallingId(t.id);
     try {
-      await invoke('workflow_market_install', { id: t.id });
+      const installRes = await invoke<{ importMembers?: ImportMemberOutcome[] }>(
+        'workflow_market_install',
+        { id: t.id },
+      );
       const records = await invoke<Record<string, InstalledRecord>>('workflow_market_installs');
       setInstalls(records || {});
-      showToast(`已安装模板「${t.name}」，可在"工作流定义"中查看`, 'success');
+      // 安装即导入：逐成员给出「新建 / 覆盖 / 跳过」提示（用户对「未新建」有知情权）
+      const detail = buildImportMemberMessage(installRes?.importMembers);
+      const installedMsg = `已安装模板「${t.name}」，可在"工作流定义"中查看`;
+      showToast(
+        detail ? `${installedMsg}；${detail.message}` : installedMsg,
+        detail ? detail.type : 'success',
+      );
       onUseTemplate?.(t.id);
     } catch (e) {
       showToast(`安装失败：${errorMessage(e)}`, 'error');

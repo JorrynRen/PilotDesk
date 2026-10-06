@@ -277,13 +277,40 @@ pub fn workflow_market_installs(state: tauri::State<'_, crate::DbState>) -> Resu
     Ok(load_install_records(&conn))
 }
 
-/// 把模板目录的文件下载到 `tmp_dir`（**保持原文件名**）。
+/// 对相对路径**逐段**做 URL 编码：`workflows/名称.json` → `workflows/%E5%90%8D...json`。
 ///
-/// 文件名必须保留：老包靠 `[子]xxx(ref_N).json` 命名收集子工作流，新包靠 `manifest.json`
-/// 声明成员文件——改名都会让子工作流对不上号。新包的清单在索引里是独立的 `manifestFile`
-/// 字段（不计入 `subFiles` 的「子工作流」语义），这里单独下载：导入时要靠同目录的清单识别新包，
-/// 缺了它会退回老路径、丢掉子工作流。子文件的路径在 Rust 侧统一重编码 ——
-/// 目录名带中文与全角括号，不编码直接拼 URL 会得到非法请求。
+/// 目录名带中文与全角括号，不编码直接拼 URL 会得到非法请求；按 `/` 拆开后逐段编码，
+/// 保留分隔符本身。
+fn encode_rel_path(rel: &str) -> String {
+    rel.split('/')
+        .filter(|s| !s.is_empty())
+        .map(encode_path_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// 把远程文本按**相对包根的相对路径**落到临时目录（自动创建父目录，保持相对目录结构）。
+///
+/// 新布局里工作流文件都带 `workflows/` 前缀，导入端要靠 `manifest.json` 里的相对路径找回文件，
+/// 因此落盘时必须还原出 `workflows/` 子目录，而不能扁平化。
+fn write_template_file(
+    tmp_dir: &std::path::Path,
+    rel: &str,
+    text: String,
+) -> Result<(), String> {
+    let dest = tmp_dir.join(rel);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    std::fs::write(&dest, text).map_err(|e| format!("写入文件失败: {}", e))
+}
+
+/// 把模板目录的文件下载到 `tmp_dir`（**保持相对目录结构**）。
+///
+/// 文件名与相对路径必须保留：工作流包靠 `manifest.json` 声明成员文件的相对路径（如
+/// `workflows/名称.json`），改名或扁平化会让导入端对不上号。清单在索引里是独立的
+/// `manifestFile` 字段（不计入 `subFiles` 的「子工作流」语义），这里单独下载：导入时要靠
+/// 同目录/父目录的清单识别工作流包，缺了它会退回单文件路径、丢掉子工作流。
 async fn download_template_files(
     tmp_dir: &std::path::Path,
     main_rel: &str,
@@ -298,39 +325,36 @@ async fn download_template_files(
     // 主文件路径直接用索引里已编码好的 path（生成器侧一次编好，避免两处编码规则漂移）
     let main_text =
         fetch_market_text(&format!("{}{}", base, main_rel.trim_start_matches('/'))).await?;
-    std::fs::write(tmp_dir.join(main_file), main_text)
-        .map_err(|e| format!("写入主文件失败: {}", e))?;
+    write_template_file(tmp_dir, main_file, main_text)?;
 
-    // 新文件包的清单（老包无此字段 → None，行为不变）
+    // 工作流包清单（导入端靠包根的 manifest.json 识别工作流包）
     if let Some(manifest) = manifest_file {
         let rel = format!(
             "workflow/{}/{}",
             encode_path_segment(dir),
-            encode_path_segment(manifest)
+            encode_rel_path(manifest)
         );
         let text = fetch_market_text(&format!("{}{}", base, rel)).await?;
-        std::fs::write(tmp_dir.join(manifest), text)
-            .map_err(|e| format!("写入工作流清单失败: {}", e))?;
+        write_template_file(tmp_dir, manifest, text)?;
     }
 
+    // 子工作流：相对路径逐段编码，落盘保持相对目录结构（如 workflows/xxx.json）
     for sub in sub_files {
         let rel = format!(
             "workflow/{}/{}",
             encode_path_segment(dir),
-            encode_path_segment(sub)
+            encode_rel_path(sub)
         );
         let text = fetch_market_text(&format!("{}{}", base, rel)).await?;
-        std::fs::write(tmp_dir.join(sub), text)
-            .map_err(|e| format!("写入子工作流文件失败: {}", e))?;
+        write_template_file(tmp_dir, sub, text)?;
     }
     Ok(())
 }
 
 /// [Tauri Command] 安装工作流模板（下载 → 导入 → 记安装记录）
 ///
-/// 安装 = 按索引把模板目录里的主/子文件下载到临时目录，再交给
-/// `import_workflow_from_file_with_conn`（新包按 `manifest.json` 清单导入，老包收集同目录
-/// `[子]` 文件并重建子工作流引用）。
+/// 安装 = 按索引把模板目录里的清单/主/子文件下载到临时目录，再交给
+/// `import_workflow_from_file_with_conn`（按 `manifest.json` 清单导入）。
 /// 重复安装（更新）时先用本地记录删掉上一次的 主+子 定义，避免「工作流定义」里堆出同名副本。
 ///
 /// 路径只认索引给出的 dir/mainFile/subFiles，不接受前端传任意路径 ——
@@ -410,16 +434,19 @@ pub async fn workflow_market_install(
     }
 
     let main_path = tmp_dir.join(main_file);
-    let imported = match crate::commands::workflow::import_workflow_from_file_with_conn(
+    let outcome = match crate::commands::workflow::import_workflow_from_file_with_conn(
         &conn,
         &main_path.to_string_lossy(),
     ) {
-        Ok(outcome) => outcome.definition,
+        Ok(outcome) => outcome,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp_dir);
             return Err(e);
         }
     };
+    // 逐成员导入明细：返回给前端展示「新建 / 覆盖 / 跳过」提示（不写入安装记录）
+    let import_members = outcome.members;
+    let imported = outcome.definition;
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
     // 4. 记安装记录：子工作流 id 从导入后的主定义里提取（Subflow 节点的 definitionId 指向
@@ -448,5 +475,13 @@ pub async fn workflow_market_install(
         map.insert(id.clone(), record.clone());
     }
     save_install_records(&conn, &records)?;
-    Ok(record)
+    // 返回体 = 安装记录 + 逐成员导入明细（明细是派生提示信息，不落库）
+    let mut response = record;
+    if let Some(obj) = response.as_object_mut() {
+        obj.insert(
+            "importMembers".to_string(),
+            serde_json::to_value(&import_members).unwrap_or(Value::Null),
+        );
+    }
+    Ok(response)
 }

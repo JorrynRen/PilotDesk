@@ -73,8 +73,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "阶段 3",
@@ -107,8 +107,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "阶段 4",
@@ -138,8 +138,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "阶段 5",
@@ -169,8 +169,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "阶段 6",
@@ -200,8 +200,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "阶段 7",
@@ -233,8 +233,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     }
   ],
   "stageEdges": [
@@ -269,6 +269,5 @@
       "condition": null
     }
   ],
-  "enabled": true,
-  "refCode": null
+  "enabled": true
 }

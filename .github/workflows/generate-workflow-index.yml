@@ -2,11 +2,14 @@
 # 当 server/market/workflow/ 目录下的模板文件发生变更时，
 # 自动重新生成 workflow-index.json 索引文件并提交到仓库。
 #
-# 目录结构:
-#   server/market/workflow/<模板名>/
-#     ├── [主]xxx.json      # 主定义（name / version / stages 从这里读）
-#     └── [子]xxx.json      # 被主定义引用的子工作流（可选）
+# 目录结构（工作流包；目录名 = 包内工作流 UUID，与索引条目 id 一致）：
+#   server/market/workflow/<工作流 UUID>/
+#     ├── manifest.json     # 清单（唯一入口；mainId 命中主成员，name/version 从主文件读）
+#     └── workflows/
+#         ├── <主工作流名>.json   # 主定义（mainId 命中的那一个，name / version / stages 从这里读）
+#         └── <子工作流名>.json   # 其余成员（可选，文件名为原工作流名）
 #
+# 索引条目键 = 包内工作流 UUID（manifest.mainId），name 仅为展示名、可重复。
 # 索引文件位置: server/market/workflow/workflow-index.json
 #
 # 生成逻辑在 Node 脚本 server/scripts/generate-workflow-index.mjs（本地可跑：npm run market:index）。

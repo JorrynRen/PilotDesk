@@ -265,7 +265,7 @@ fn referencing_workflows(
 ///
 /// **注意**：内部 / 自动化删除路径（云同步远端删除传播、市场重装的旧定义清理）**不经过**
 /// 此守卫。批次 2 起那些路径已分派：云同步远端删除 → [`workflow::soft_delete_definition`]
-/// （同为软删除、进回收站）；市场重装覆盖 / 旧子流清理 → [`workflow::hard_delete_definition`]
+/// （同为软删除、进回收站）；市场重装覆盖 → [`workflow::hard_delete_definition`]
 /// （内部替换语义，真删、不进回收站）。若在此拦这些路径，同步 / 安装会被历史引用卡死。
 fn ensure_not_referenced(conn: &rusqlite::Connection, id: &str) -> Result<(), String> {
     let referrers = referencing_workflows(conn, id).map_err(String::from)?;
@@ -1080,14 +1080,6 @@ pub struct ExportWorkflowDefinition {
     #[serde(default)]
     pub stage_edges: Vec<ExportEdge>,
     pub enabled: bool,
-
-    /// 关联码（**仅老格式解析用**：子工作流有值，主工作流为 None）。
-    ///
-    /// 新格式（v2 共享 payload / 新文件包）不再输出该字段：引用一律由
-    /// `params.definitionId`（工作流稳定 ID）直接表达。保留 `Option` 只为继续读取
-    /// 老导出文件与历史 v1 共享 payload（见 [`ExportWorkflowDefinition::restore_subflow_params`]）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ref_code: Option<String>,
 }
 
 /// 导出阶段（过滤 id）
@@ -1132,12 +1124,12 @@ pub struct ExportEdge {
     pub condition: Option<String>,
 }
 
-// ── 组织共享工作流 payload（产品间协议，版本化） ──────────────────────
+// ── 组织共享工作流 payload（产品间协议） ──────────────────────
 
-/// 共享 payload 的格式标识（写入 `format` 字段；导入端据此区分新旧格式）。
+/// 共享 payload 的格式标识（写入 `format` 字段；导入端据此识别格式）。
 pub(crate) const SHARED_WORKFLOW_FORMAT: &str = "pilotdesk.shared.workflow";
 
-/// 共享 payload 当前版本（**v2**：统一 `workflows` 数组 + 工作流稳定 ID 引用）。
+/// 共享 payload 版本号（仅作标识写入，导入端不做分支兼容）。
 pub(crate) const SHARED_WORKFLOW_VERSION: u32 = 2;
 
 /// 共享 payload 字符数上限（与平台 `payload` 约束一致）。
@@ -1145,39 +1137,7 @@ pub(crate) const SHARED_WORKFLOW_VERSION: u32 = 2;
 /// 超过该上限时**拒绝共享并给出明确中文提示**，绝不静默截断（截断会产生失配的子流引用）。
 pub(crate) const SHARED_WORKFLOW_PAYLOAD_MAX_CHARS: usize = 256 * 1024;
 
-/// 共享工作流 payload **v1（历史格式，仅解析）** —— `main` + `subflows` 二元结构：
-///
-/// ```json
-/// {
-///   "format": "pilotdesk.shared.workflow",
-///   "version": 1,
-///   "main":     { ...主工作流导出 JSON（ExportWorkflowDefinition）... },
-///   "subflows": [ { ...子工作流导出 JSON（带 refCode）... }, ... ]
-/// }
-/// ```
-///
-/// 子流引用约定（v1 老约定）：
-/// - 导出侧：Subflow 节点 `params.definitionId` 被替换为 `params.refCode`，`refCode` 形如
-///   `ref_N`，与 `subflows[i].refCode` 一一对应，子流集合递归收集（含嵌套）。
-/// - 导入侧：按拓扑序新建子流后建立 `refCode → 新 definitionId` 映射，再回写主/子流的引用
-///   （见 [`ExportWorkflowDefinition::restore_subflow_params`]）。
-///
-/// **新格式为 [`SharedWorkflowPayload`]（v2，稳定 ID 引用）**，本结构只用于读取平台/本地
-/// 已存在的历史 v1 payload（见 [`parse_shared_workflow_payload`]）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SharedWorkflowBundle {
-    /// 固定为 [`SHARED_WORKFLOW_FORMAT`]；缺失即为旧格式。
-    pub format: String,
-    /// 格式版本（v1 = 1）。
-    pub version: u32,
-    /// 主工作流。
-    pub main: ExportWorkflowDefinition,
-    /// 全部子工作流（递归展开，含嵌套子流）。
-    pub subflows: Vec<ExportWorkflowDefinition>,
-}
-
-/// 共享工作流 payload **v2（当前格式）** 的单条成员。
+/// 共享工作流 payload 的单条成员。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedWorkflowEntry {
@@ -1189,7 +1149,7 @@ pub struct SharedWorkflowEntry {
     pub definition: ExportWorkflowDefinition,
 }
 
-/// 共享工作流 payload **v2（当前格式）** —— 统一 `workflows` 数组（含主工作流）：
+/// 共享工作流 payload —— 统一 `workflows` 数组（含主工作流）：
 ///
 /// ```json
 /// {
@@ -1201,14 +1161,13 @@ pub struct SharedWorkflowEntry {
 /// ```
 ///
 /// 引用关系完全由各 `definition` 里 Subflow 节点的 `params.definitionId`（稳定 ID）表达，
-/// 导入端据此直接就地更新 / 新建，**不再做 refCode 重映射**，因此同一份 payload 在不同实例上
-/// 得到相同的 ID。
+/// 导入端据此直接就地更新 / 新建，因此同一份 payload 在不同实例上得到相同的 ID。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharedWorkflowPayload {
     /// 固定为 [`SHARED_WORKFLOW_FORMAT`]。
     pub format: String,
-    /// 格式版本，当前为 [`SHARED_WORKFLOW_VERSION`]。
+    /// 格式版本（仅标识，见 [`SHARED_WORKFLOW_VERSION`]）。
     pub version: u32,
     /// 主工作流的稳定 ID（对应 `workflows` 中某条目的 `id`）。
     pub main_id: String,
@@ -1218,25 +1177,30 @@ pub struct SharedWorkflowPayload {
 
 // ── 工作流文件包（目录 / zip，产品间协议，版本化）──────────────────────
 
-/// 文件包清单文件名（放在包根目录）。
+/// 文件包清单文件名（放在包根目录，是工作流包的**唯一入口**）。
 pub(crate) const WORKFLOW_PACKAGE_MANIFEST_FILE: &str = "manifest.json";
+/// 包内工作流文件所在子目录（主/子工作流一视同仁平铺于此）。
+pub(crate) const WORKFLOWS_SUBDIR: &str = "workflows";
 /// 文件包格式标识（写入清单的 `format` 字段）。
 pub(crate) const WORKFLOW_PACKAGE_FORMAT: &str = "pilotdesk.workflow.package";
 /// 文件包当前版本。
 pub(crate) const WORKFLOW_PACKAGE_VERSION: u32 = 1;
 
-/// `manifest.json` 结构 —— 声明包内成员及其稳定 ID：
+/// `manifest.json` 结构 —— 声明包内成员及其稳定 ID，是工作流包的**唯一入口**：
 ///
 /// ```json
 /// {
 ///   "format": "pilotdesk.workflow.package",
 ///   "version": 1,
 ///   "mainId": "<主工作流稳定 ID>",
-///   "workflows": [ { "id": "<稳定 ID>", "name": "名称", "isMain": true, "file": "[主]名称.json" } ]
+///   "workflows": [ { "id": "<稳定 ID>", "name": "名称", "file": "workflows/名称.json" } ]
 /// }
 /// ```
 ///
-/// 引用关系完全由各成员 JSON 里的 `params.definitionId`（稳定 ID）表达，文件名**不参与**解析。
+/// - 入口只由 `mainId` 唯一表达（不再有 `isMain` 字段，避免两处说法不一致）：
+///   其语义收窄为「导入完成后默认打开哪一个」；
+/// - `file` 是**相对包根的相对路径**（如 `workflows/名称.json`）；
+/// - 引用关系完全由各成员 JSON 里的 `params.definitionId`（稳定 ID）表达，文件名**不参与**解析。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WorkflowPackageManifest {
@@ -1246,21 +1210,18 @@ struct WorkflowPackageManifest {
     workflows: Vec<WorkflowPackageEntry>,
 }
 
-/// 包内单个成员：稳定 ID + 显示名 + 相对文件名。
+/// 包内单个成员：稳定 ID + 显示名 + 相对包根的相对路径。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WorkflowPackageEntry {
     id: String,
     name: String,
-    /// 是否为主工作流（主工作流文件名仍保留 `[主]` 前缀，便于人类识别）。
-    #[serde(default)]
-    is_main: bool,
-    /// 包内相对文件名（纯文件名，不含路径）。
+    /// 相对包根的相对路径（如 `workflows/名称.json`）。
     file: String,
 }
 
 impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
-    /// 基础转换（不含子工作流处理，用于向后兼容的 export_workflow 命令）
+    /// 基础转换（不含子工作流处理；供 export_workflow 命令使用）
 
     fn from(def: workflow::WorkflowDefinition) -> Self {
         let stages = Self::convert_stages(&def.stages, &Default::default());
@@ -1279,7 +1240,6 @@ impl From<workflow::WorkflowDefinition> for ExportWorkflowDefinition {
             stages,
             stage_edges,
             enabled: def.enabled,
-            ref_code: None,
         }
     }
 }
@@ -1391,13 +1351,9 @@ impl ExportWorkflowDefinition {
     }
 
     /// 导入时重建完整 WorkflowDefinition（生成新 UUID）
-
-    /// ref_code_to_uuid: 关联码 -> 已写入数据库的子工作流新 UUID（用于替换 Subflow 节点的 refCode）
-
-    pub fn into_definition_with_subflows(
-        self,
-        ref_code_to_uuid: &std::collections::HashMap<String, String>,
-    ) -> workflow::WorkflowDefinition {
+    ///
+    /// Subflow 节点的引用直接由 `params.definitionId`（稳定 ID）表达，原样保留。
+    pub fn into_definition_with_subflows(self) -> workflow::WorkflowDefinition {
         let now_ts = crate::utils::now();
         let wf_id = crate::utils::new_id();
         let mut stages: Vec<workflow::Stage> = self
@@ -1408,20 +1364,13 @@ impl ExportWorkflowDefinition {
                     .nodes
                     .into_iter()
                     .map(|en| {
-                        // Subflow 节点：将 refCode 替换回 definitionId
-
-                        let params = if en.node_type == workflow::WorkflowNodeType::Subflow {
-                            Self::restore_subflow_params(&en.params, ref_code_to_uuid)
-                        } else {
-                            en.params
-                        };
                         workflow::WorkflowNode {
                             id: String::new(),
                             node_type: en.node_type,
                             label: en.label,
                             plugin_id: None,
                             command_id: None,
-                            params,
+                            params: en.params,
                             delay_ms: en.delay_ms,
                             timeout_ms: en.timeout_ms,
                             input_schema: None,
@@ -1604,10 +1553,9 @@ impl ExportWorkflowDefinition {
         }
     }
 
-    /// 向后兼容：不带子工作流映射的导入
-
+    /// 导入（不带子工作流映射，等价于 [`Self::into_definition_with_subflows`]）
     pub fn into_definition(self) -> workflow::WorkflowDefinition {
-        self.into_definition_with_subflows(&std::collections::HashMap::new())
+        self.into_definition_with_subflows()
     }
 
     /// 替换 mapping 中的节点 UUID 为短 ID（n1/n2）和阶段 UUID 为短 ID（s1/s2）
@@ -1653,30 +1601,6 @@ impl ExportWorkflowDefinition {
         }
 
         Some(result)
-    }
-
-    /// 恢复 Subflow 节点的 params：refCode -> definitionId
-
-    fn restore_subflow_params(
-        params: &Option<serde_json::Value>,
-        ref_code_to_uuid: &std::collections::HashMap<String, String>,
-    ) -> Option<serde_json::Value> {
-        params.as_ref().and_then(|p| p.as_object()).map(|obj| {
-            let mut new_obj = serde_json::Map::new();
-            for (k, v) in obj {
-                if k != "refCode" {
-                    new_obj.insert(k.clone(), v.clone());
-                }
-            }
-
-            if let Some(ref_code) = obj.get("refCode").and_then(|v| v.as_str()) {
-                if let Some(new_uuid) = ref_code_to_uuid.get(ref_code) {
-                    new_obj.insert("definitionId".to_string(), serde_json::json!(new_uuid));
-                }
-            }
-
-            serde_json::Value::Object(new_obj)
-        })
     }
 }
 
@@ -1762,20 +1686,22 @@ pub fn export_workflows_to_file(
 }
 
 /// 单个工作流的导出主体（供单个导出与批量导出共用）：
-/// 在 `<dir_path>/<工作流名>/` 下写出**新文件包**——
-/// `manifest.json`（清单）+ `[主]{名称}.json`（主工作流）+ `{名称}.json`（各子工作流，原名，
-/// 重名时依次加 `(2)`、`(3)` 序号；文件名不参与引用解析）。
+/// 在 `<dir_path>/<工作流名>/` 下写出**工作流包**——
+/// 包根 `manifest.json`（唯一入口）+ `workflows/` 子目录下的全部工作流（含主工作流，
+/// 一视同仁平铺），文件名=工作流原名（重名时依次加 `(2)`、`(3)` 序号；文件名不参与引用解析）。
 ///
 /// 引用一律由各 JSON 内的 `params.definitionId`（稳定 ID）表达，不再替换为 refCode。
+/// 清单里不再有 `isMain`，入口只由 `mainId` 表达（语义：导入后默认打开哪一个）。
 fn write_workflow_export(
     conn: &rusqlite::Connection,
     def: workflow::WorkflowDefinition,
     dir_path: &str,
 ) -> Result<(), String> {
     // 自动创建以工作流名称命名的子文件夹
-
     let workflow_dir = std::path::Path::new(dir_path).join(&def.name);
-    std::fs::create_dir_all(&workflow_dir)
+    // 全部工作流（含主工作流）都放在 workflows/ 子目录下，文件名不区分主/子
+    let workflows_dir = workflow_dir.join(WORKFLOWS_SUBDIR);
+    std::fs::create_dir_all(&workflows_dir)
         .map_err(|e| AppError::Io(format!("创建文件夹失败: {}", e)))?;
 
     // 递归收集子工作流（稳定 ID 引用，`definitionId` 原样保留）
@@ -1784,32 +1710,29 @@ fn write_workflow_export(
     let mut used_files: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut entries: Vec<WorkflowPackageEntry> = Vec::new();
 
-    // 主工作流：文件名保留 `[主]` 前缀，便于人类在文件管理器里识别
-    let main_file = format!("[主]{}.json", def.name);
-    used_files.insert(main_file.clone());
+    // 主工作流：与子工作流一视同仁，文件名=原名（无 `[主]` 前缀，重名仅加序号）
+    let main_file = unique_workflow_file_name(&def.name, &mut used_files);
     let main_export: ExportWorkflowDefinition = def.clone().into();
     entries.push(WorkflowPackageEntry {
         id: def.id.clone(),
         name: def.name.clone(),
-        is_main: true,
-        file: main_file.clone(),
+        file: format!("{}/{}", WORKFLOWS_SUBDIR, main_file),
     });
-    write_export_file(&workflow_dir, &main_file, &main_export)?;
+    write_export_file(&workflows_dir, &main_file, &main_export)?;
 
-    // 子工作流：原名（无 `[子]` 前缀），同名时仅文件名加序号
+    // 子工作流：同样放在 workflows/ 下，文件名=原名（重名时仅文件名加序号）
     for sub in subflows {
         let file_name = unique_workflow_file_name(&sub.name, &mut used_files);
         let sub_export: ExportWorkflowDefinition = sub.clone().into();
         entries.push(WorkflowPackageEntry {
             id: sub.id.clone(),
             name: sub.name.clone(),
-            is_main: false,
-            file: file_name.clone(),
+            file: format!("{}/{}", WORKFLOWS_SUBDIR, file_name),
         });
-        write_export_file(&workflow_dir, &file_name, &sub_export)?;
+        write_export_file(&workflows_dir, &file_name, &sub_export)?;
     }
 
-    // 清单：引用完全由各 JSON 内的 definitionId 表达，文件名不参与解析
+    // 清单：入口只由 mainId 表达；引用完全由各 JSON 内的 definitionId 表达，文件名不参与解析
     let manifest = WorkflowPackageManifest {
         format: WORKFLOW_PACKAGE_FORMAT.to_string(),
         version: WORKFLOW_PACKAGE_VERSION,
@@ -1903,7 +1826,7 @@ fn collect_subflow_definitions_recursive(
     Ok(())
 }
 
-/// 从文件导入工作流（支持新文件包 / 老 `[主]`+`[子]` 目录 / 单文件 JSON）。
+/// 从文件导入工作流（支持新文件包 / 单文件 JSON）。
 ///
 /// 返回结果含 `missingDependencies`：单文件导入时引用但本地不存在的子工作流描述，供 UI 提示
 /// （不阻断导入）。
@@ -1922,6 +1845,7 @@ pub fn import_workflow_from_file(
         subflow_count: outcome.subflow_count,
         missing_dependencies: outcome.missing_dependencies,
         skipped: outcome.skipped,
+        members: outcome.members,
     })
 }
 
@@ -1939,23 +1863,59 @@ pub struct ImportedWorkflowFile {
     pub missing_dependencies: Vec<String>,
     /// 因与本地内容相同而**跳过未写入**的成员数（导入幂等去重，供 UI 展示）。
     pub skipped: usize,
+    /// 逐成员的导入结果明细（供 UI 展示「未新建」的覆盖 / 跳过提示）。
+    pub members: Vec<ImportMemberOutcome>,
+}
+
+/// 单个成员的导入动作：用户有知情权——凡「未新建」（覆盖 / 跳过）都应可见。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportMemberAction {
+    /// 本地无同 ID → 新建。
+    Created,
+    /// 本地有同 ID 且内容不同 → 就地覆盖（覆盖前已把本地版本存为快照）。
+    Updated,
+    /// 本地有同 ID 且内容相同 → 跳过（不写、不建快照）。
+    Skipped,
+}
+
+/// 单个成员的导入结果明细。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportMemberOutcome {
+    /// 成员的稳定 ID。
+    pub id: String,
+    /// 成员名称（用于提示文案）。
+    pub name: String,
+    /// 导入动作（新建 / 覆盖 / 跳过）。
+    pub action: ImportMemberAction,
+    /// 导入后被多少个其它工作流引用（用于提示「被引用的子流被更新了」）；无引用为 0。
+    pub referencing_count: usize,
 }
 
 /// 导入主体（连接维度实现，文件系统入口）的返回结构。
+#[derive(Debug)]
 pub(crate) struct WorkflowFileImport {
     pub definition: workflow::WorkflowDefinition,
     pub subflow_count: usize,
     pub missing_dependencies: Vec<String>,
     pub skipped: usize,
+    pub members: Vec<ImportMemberOutcome>,
+}
+
+/// 共享 payload 导入结果（含逐成员明细），供组织共享导入与 UI 复用。
+pub(crate) struct SharedWorkflowImport {
+    pub definition: workflow::WorkflowDefinition,
+    pub subflow_count: usize,
+    pub members: Vec<ImportMemberOutcome>,
 }
 
 /// 导入主体（连接维度实现，文件系统入口）。
 ///
 /// 识别顺序：
-/// 1. **新文件包**：选中的是 `manifest.json`，或同目录存在 `manifest.json` → 按清单逐个以稳定 ID
-///    就地更新 / 新建（引用直接由 `definitionId` 解析）。
-/// 2. **老目录**：主文件里 Subflow 节点带 `refCode` → 扫描同目录 `[子]{name}(ref_N).json` 并重映射。
-/// 3. **单文件 JSON**：按内容导入；引用缺失不阻断，仅回报给 UI。
+/// 1. **工作流包**：选中的是 `manifest.json`，或该文件所在目录 / 其父目录存在 `manifest.json`
+///    （向上最多查两级）→ 按清单逐个以稳定 ID 就地更新 / 新建（引用直接由 `definitionId` 解析）。
+/// 2. **单文件 JSON**：按内容导入；引用缺失不阻断，仅回报给 UI。
 ///
 /// 拆出来是为了让市场安装复用同一套收集逻辑：安装要在**同一个连接里**连续完成
 /// "先删旧定义、再导入新的一份"（见 utils/market.rs 的 workflow_market_install）。
@@ -1965,62 +1925,93 @@ pub(crate) fn import_workflow_from_file_with_conn(
 ) -> Result<WorkflowFileImport, String> {
     let path = std::path::Path::new(file_path);
 
-    // 1. 新文件包：选中的就是清单，或同目录另有 manifest.json
-    let manifest_path = match path.file_name().and_then(|n| n.to_str()) {
-        Some(WORKFLOW_PACKAGE_MANIFEST_FILE) => Some(path.to_path_buf()),
-        _ => path
-            .parent()
-            .map(|d| d.join(WORKFLOW_PACKAGE_MANIFEST_FILE))
-            .filter(|p| p.is_file()),
-    };
-    if let Some(manifest_path) = manifest_path {
+    // 1. 工作流包：定位包根清单（选中清单本身 / 同目录 / 父目录，向上最多两级）
+    if let Some(manifest_path) = locate_package_manifest(path) {
         if let Some(outcome) = import_workflow_package(conn, &manifest_path)? {
             return Ok(outcome);
         }
     }
 
-    // 2/3. 老格式：读取选中文件
+    // 2. 单文件：按内容导入，引用按 definitionId 直接解析；
+    //    本地缺失的依赖不阻断，仅回报给 UI。
     let main_json = std::fs::read_to_string(file_path)
         .map_err(|e| AppError::Io(format!("读取文件失败: {}", e)))?;
     let main_export: ExportWorkflowDefinition = serde_json::from_str(&main_json)
         .map_err(|e| AppError::Json(format!("JSON 解析失败: {}", e)))?;
-
-    // 2. 老目录：主文件里的 Subflow 节点带 refCode → 扫描同目录 [子] 文件并重映射
-    if export_has_subflow_refs(&main_export) {
-        let subflow_defs = collect_subflow_defs_from_dir(file_path)?;
-        let (definition, subflow_count, skipped) = import_export_bundle_with_conn(
-            conn,
-            main_export,
-            subflow_defs,
-            None,
-            workflow::VERSION_ORIGIN_IMPORT,
-        )
-        .map_err(String::from)?;
-        return Ok(WorkflowFileImport {
-            definition,
-            subflow_count,
-            missing_dependencies: Vec::new(),
-            skipped,
-        });
-    }
-
-    // 3. 单文件（无 manifest、无容器）：按内容导入，引用按 definitionId 直接解析；
-    //    本地缺失的依赖不阻断，仅回报给 UI。
     let missing_dependencies = collect_missing_subflow_dependencies(conn, &main_export);
     let definition = main_export.into_definition();
     workflow::create_definition(conn, &definition)
         .map_err(|e| AppError::Db(format!("导入失败: {}", e)))?;
+    // 单文件导入按内容新建（无稳定 ID），动作恒为「新建」
+    let members = import_member_outcomes(
+        conn,
+        vec![(
+            definition.id.clone(),
+            definition.name.clone(),
+            ImportMemberAction::Created,
+        )],
+    )?;
     Ok(WorkflowFileImport {
         definition,
         subflow_count: 0,
         missing_dependencies,
         skipped: 0,
+        members,
     })
 }
 
-/// 按新文件包导入：解析 `manifest.json`，逐成员以**稳定 ID** 就地更新 / 新建。
+/// 定位工作流包的清单路径（`file_path` 为调用方选中的文件）。
 ///
-/// 返回 `Ok(None)` 表示这不是一个可识别的新包（清单缺失 / 格式不符），调用方回退老格式路径。
+/// 规则（向上最多两级）：
+/// 1. 选中的文件本身就是 `manifest.json` → 直接用；
+/// 2. 否则看该文件**所在目录**是否有 `manifest.json`（包内工作流通常在同一目录）；
+/// 3. 再看其**父目录**是否有 `manifest.json`（新布局：工作流在 `<包>/workflows/` 下，
+///    清单在上一级 `<包>/`）。
+///
+/// 返回 `None` 表示未找到包清单，调用方按单文件处理。
+fn locate_package_manifest(file_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if file_path.file_name().and_then(|n| n.to_str()) == Some(WORKFLOW_PACKAGE_MANIFEST_FILE) {
+        return Some(file_path.to_path_buf());
+    }
+    let mut dir = file_path.parent();
+    // 最多向上查两级：当前文件所在目录 + 其父目录
+    for _ in 0..2 {
+        let d = dir?;
+        let candidate = d.join(WORKFLOW_PACKAGE_MANIFEST_FILE);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// 解析包内成员的相对路径：必须是相对包根的**安全相对路径**。
+///
+/// 拒绝绝对路径、`..`、根前缀等一切可能越出包外的路径段（防目录穿越）。
+fn resolve_package_member(
+    root: &std::path::Path,
+    rel: &str,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::Component;
+    let rel_path = std::path::Path::new(rel);
+    let safe = !rel.is_empty()
+        && rel_path
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)));
+    if !safe {
+        return Err(AppError::InvalidInput(format!(
+            "工作流包成员路径非法（必须是包内相对路径，且不得为绝对路径或包含 `..`）: {}",
+            rel
+        ))
+        .into());
+    }
+    Ok(root.join(rel_path))
+}
+
+/// 按工作流包导入：解析 `manifest.json`，逐成员以**稳定 ID** 就地更新 / 新建。
+///
+/// 返回 `Ok(None)` 表示这不是一个可识别的工作流包（清单缺失 / 非本格式），调用方按单文件处理。
 fn import_workflow_package(
     conn: &rusqlite::Connection,
     manifest_path: &std::path::Path,
@@ -2032,7 +2023,7 @@ fn import_workflow_package(
         .map_err(|e| AppError::Io(format!("读取清单失败: {}", e)))?;
     let manifest: WorkflowPackageManifest = match serde_json::from_str(&raw) {
         Ok(m) => m,
-        // 不是新格式清单 → 交由老格式路径
+        // 不是本格式清单 → 交由调用方按单文件处理
         Err(_) => return Ok(None),
     };
     if manifest.format != WORKFLOW_PACKAGE_FORMAT {
@@ -2041,39 +2032,28 @@ fn import_workflow_package(
 
     let mut main_def: Option<workflow::WorkflowDefinition> = None;
     let mut subflow_count = 0usize;
-    let mut skipped = 0usize;
+    // 逐成员记录 (id, name, action)，待全部落库后再统计引用数
+    let mut raw_members: Vec<(String, String, ImportMemberAction)> = Vec::new();
     for entry in &manifest.workflows {
-        // 防目录穿越：成员名必须是不含路径分隔符的纯文件名
-        if std::path::Path::new(&entry.file)
-            .file_name()
-            .and_then(|n| n.to_str())
-            != Some(entry.file.as_str())
-        {
-            return Err(AppError::InvalidInput(format!(
-                "工作流包成员文件名非法: {}",
-                entry.file
-            ))
-            .into());
-        }
-        let member_path = dir.join(&entry.file);
+        // 防目录穿越：成员路径必须是包内安全相对路径（拒绝 `..` / 绝对路径）
+        let member_path = resolve_package_member(dir, &entry.file)?;
         let json = std::fs::read_to_string(&member_path)
             .map_err(|e| AppError::Io(format!("读取包内文件「{}」失败: {}", entry.file, e)))?;
         let export: ExportWorkflowDefinition = serde_json::from_str(&json)
             .map_err(|e| AppError::Json(format!("解析包内文件「{}」失败: {}", entry.file, e)))?;
-        // 新格式引用直接由 definitionId 表达，无需 refCode 重映射
-        let mut def = export.into_definition_with_subflows(&std::collections::HashMap::new());
+        // 引用直接由 definitionId 表达，原样保留
+        let mut def = export.into_definition_with_subflows();
         // 就地更新：本地已有同 ID → 复用该 id 覆盖（覆盖前先备份本地版本）；不存在 → 沿用该 id 新建；
         // 内容与本地相同 → 跳过（不写、不建快照）。
-        let applied = store_main_definition(
+        let action = store_main_definition(
             conn,
             &mut def,
             Some(&entry.id),
             workflow::VERSION_ORIGIN_IMPORT,
         )?;
-        if !applied {
-            skipped += 1;
-        }
-        if entry.is_main || entry.id == manifest.main_id {
+        raw_members.push((def.id.clone(), def.name.clone(), action));
+        // 入口只由 mainId 表达（不再有 isMain 字段）
+        if entry.id == manifest.main_id {
             main_def = Some(def);
         } else {
             subflow_count += 1;
@@ -2083,11 +2063,18 @@ fn import_workflow_package(
     let definition = main_def.ok_or_else(|| {
         AppError::Json("工作流包缺少主工作流（manifest.mainId 未匹配任何成员）".to_string())
     })?;
+    // skipped 由逐成员明细派生（不另设计数器，避免两份事实）
+    let skipped = raw_members
+        .iter()
+        .filter(|(_, _, action)| *action == ImportMemberAction::Skipped)
+        .count();
+    let members = import_member_outcomes(conn, raw_members)?;
     Ok(Some(WorkflowFileImport {
         definition,
         subflow_count,
         missing_dependencies: Vec::new(),
         skipped,
+        members,
     }))
 }
 
@@ -2130,166 +2117,21 @@ fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-/// 判断导出定义中的 Subflow 节点是否带有子工作流引用（`refCode`）。
-fn export_has_subflow_refs(def: &ExportWorkflowDefinition) -> bool {
-    def.stages.iter().any(|stage| {
-        stage.nodes.iter().any(|n| {
-            n.node_type == workflow::WorkflowNodeType::Subflow
-                && n.params.as_ref().and_then(|p| p.get("refCode")).is_some()
-        })
-    })
-}
-
-/// 计算某子工作流（`refCode`）的依赖深度：其直接/间接引用的子流深度最大值 + 1。
-///
-/// 供导入时拓扑排序使用——深度大的（依赖更多的）先导入，保证被引用者先建库拿到新 id。
-fn subflow_depth(
-    ref_code: &str,
-    defs: &std::collections::HashMap<String, ExportWorkflowDefinition>,
-    cache: &mut std::collections::HashMap<String, usize>,
-) -> usize {
-    if let Some(&d) = cache.get(ref_code) {
-        return d;
-    }
-
-    let def = match defs.get(ref_code) {
-        Some(d) => d,
-        None => {
-            cache.insert(ref_code.to_string(), 0);
-            return 0;
-        }
-    };
-    let max_child = def
-        .stages
-        .iter()
-        .flat_map(|s| s.nodes.iter())
-        .filter(|n| n.node_type == workflow::WorkflowNodeType::Subflow)
-        .filter_map(|n| n.params.as_ref()?.get("refCode")?.as_str().map(String::from))
-        .map(|rc| subflow_depth(&rc, defs, cache))
-        .max()
-        .unwrap_or(0);
-    let depth = max_child + 1;
-    cache.insert(ref_code.to_string(), depth);
-    depth
-}
-
-/// 收集主文件同目录下的 `[子]{name}(ref_N).json` 文件，返回 `refCode → 导出定义`。
-fn collect_subflow_defs_from_dir(
-    file_path: &str,
-) -> Result<std::collections::HashMap<String, ExportWorkflowDefinition>, String> {
-    let dir = std::path::Path::new(file_path)
-        .parent()
-        .ok_or_else(|| AppError::InvalidInput("无法获取文件所在目录".to_string()))?;
-    let mut subflow_files: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new(); // refCode -> 文件路径
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let file_name = entry.file_name().to_string_lossy().to_string();
-
-            // 文件名格式：[子]{name}(ref_N).json
-            if file_name.starts_with("[子]") && file_name.ends_with(".json") {
-                if let Some(rest) = file_name.strip_prefix("[子]") {
-                    if let Some(rest) = rest.strip_suffix(".json") {
-                        // rest = "{name}(ref_N)"
-                        if let Some(start) = rest.rfind("(ref_") {
-                            if rest.ends_with(")") {
-                                let ref_code = &rest[start + 1..rest.len() - 1]; // "ref_N"
-                                subflow_files.insert(
-                                    ref_code.to_string(),
-                                    entry.path().to_string_lossy().to_string(),
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 读取所有子工作流文件
-    let mut subflow_defs: std::collections::HashMap<String, ExportWorkflowDefinition> =
-        std::collections::HashMap::new();
-    for (ref_code, path) in &subflow_files {
-        let json = std::fs::read_to_string(path)
-            .map_err(|e| AppError::Io(format!("读取子工作流文件失败: {}", e)))?;
-        let def: ExportWorkflowDefinition = serde_json::from_str(&json)
-            .map_err(|e| AppError::Json(format!("解析子工作流文件失败: {}", e)))?;
-        subflow_defs.insert(ref_code.clone(), def);
-    }
-    Ok(subflow_defs)
-}
-
-/// 把「主 + 子工作流（已解析）」按拓扑序写入数据库，并**重建子流引用**。
-///
-/// 与文件系统解耦：调用方负责从文件目录（[`collect_subflow_defs_from_dir`]）或
-/// 共享 payload（[`parse_shared_workflow_payload`]）收集 `main` 与 `subflows`。这样
-/// 组织共享导入无需落临时目录即可复用同一套逻辑。
-///
-/// 子流引用回写规则：导出侧的 `refCode` → 本次新建子流的 `definitionId`（见
-/// [`ExportWorkflowDefinition::restore_subflow_params`]）。返回
-/// `(主工作流定义, 实际导入的子工作流数量, 因内容相同被跳过的主工作流数)`。
-fn import_export_bundle_with_conn(
-    conn: &rusqlite::Connection,
-    main_export: ExportWorkflowDefinition,
-    subflow_defs: std::collections::HashMap<String, ExportWorkflowDefinition>,
-    // 主工作流的落库 id：`None` = 普通导入（新建、生成新 UUID）；
-    // `Some(id)` = 就地导入（复用该 id，存在则更新——云同步 pull 覆盖同一 object_key 用）。
-    main_id_override: Option<&str>,
-    origin: &str,
-) -> Result<(workflow::WorkflowDefinition, usize, usize), AppError> {
-    // 无子工作流引用：直接导入主工作流
-    if !export_has_subflow_refs(&main_export) {
-        let mut def = main_export.into_definition();
-        let applied = store_main_definition(conn, &mut def, main_id_override, origin)?;
-        return Ok((def, 0, usize::from(!applied)));
-    }
-
-    // 按拓扑序导入：深度大的（依赖更多的）子工作流先导入
-    let mut depth_cache: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    let mut sorted_refs: Vec<String> = subflow_defs.keys().cloned().collect();
-    sorted_refs.sort_by(|a, b| {
-        let da = subflow_depth(a, &subflow_defs, &mut depth_cache);
-        let db = subflow_depth(b, &subflow_defs, &mut depth_cache);
-        db.cmp(&da) // 深度大的先导入
-    });
-
-    // 逐层写入子工作流，建立 refCode -> 新 UUID 映射
-    let mut ref_code_to_uuid: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    for ref_code in &sorted_refs {
-        let sub_export = subflow_defs
-            .get(ref_code)
-            .ok_or_else(|| AppError::NotFound(format!("子工作流 {} 未找到", ref_code)))?;
-        let def = sub_export
-            .clone()
-            .into_definition_with_subflows(&ref_code_to_uuid);
-        let new_id = def.id.clone();
-        workflow::create_definition(conn, &def)
-            .map_err(|e| AppError::Db(format!("导入子工作流 {} 失败: {}", ref_code, e)))?;
-        ref_code_to_uuid.insert(ref_code.clone(), new_id);
-    }
-
-    // 导入主工作流（回写 Subflow 引用的 definitionId）
-    let mut main_def = main_export.into_definition_with_subflows(&ref_code_to_uuid);
-    let applied = store_main_definition(conn, &mut main_def, main_id_override, origin)?;
-    Ok((main_def, sorted_refs.len(), usize::from(!applied)))
-}
-
 /// 主工作流落库：
 /// - `override_id` 为 `None` → 一律新建（普通导入，保持既有行为）；
 /// - 为 `Some(id)` → 改 id 后 upsert（存在则更新、不存在则新建）——云同步 pull 就地覆盖用，
 ///   目的是保持同一 object_key，而不是每轮同步都新建副本。
 ///
 /// **覆盖本地已有工作流内容前先打版本快照**（`origin` 区分来源：`import` / `cloud_sync`）；
-/// 若与本地内容规范化后完全相同 → 直接跳过（不写、不建快照）。返回是否真的写入（`false` = 跳过）。
+/// 若与本地内容规范化后完全相同 → 直接跳过（不写、不建快照）。
+///
+/// 返回本次落库动作（[`ImportMemberAction`]：新建 / 覆盖 / 跳过）。
 fn store_main_definition(
     conn: &rusqlite::Connection,
     def: &mut workflow::WorkflowDefinition,
     override_id: Option<&str>,
     origin: &str,
-) -> Result<bool, AppError> {
+) -> Result<ImportMemberAction, AppError> {
     match override_id {
         Some(id) => {
             def.id = id.to_string();
@@ -2299,7 +2141,7 @@ fn store_main_definition(
                 Some(existing) => {
                     // 无改动 → 跳过（本地已存在相同内容，不写、不建快照）
                     if definitions_content_equal(&existing, def) {
-                        return Ok(false);
+                        return Ok(ImportMemberAction::Skipped);
                     }
                     // 有改动 → 先备份本地版本，再接受覆盖
                     if let Err(e) = workflow::snapshot_before_overwrite(conn, id, origin) {
@@ -2307,21 +2149,42 @@ fn store_main_definition(
                     }
                     workflow::update_definition(conn, def)
                         .map_err(|e| AppError::Db(format!("更新工作流失败: {}", e)))?;
-                    Ok(true)
+                    Ok(ImportMemberAction::Updated)
                 }
                 None => {
                     workflow::create_definition(conn, def)
                         .map_err(|e| AppError::Db(format!("导入失败: {}", e)))?;
-                    Ok(true)
+                    Ok(ImportMemberAction::Created)
                 }
             }
         }
         None => {
             workflow::create_definition(conn, def)
                 .map_err(|e| AppError::Db(format!("导入失败: {}", e)))?;
-            Ok(true)
+            Ok(ImportMemberAction::Created)
         }
     }
+}
+
+/// 把逐成员的 `(id, name, action)` 汇总为带引用计数的明细。
+///
+/// 引用计数在**全部成员落库后**统计，才能反映导入后的最终引用关系
+/// （例如后落库的主流程引用先落库的子流）。
+fn import_member_outcomes(
+    conn: &rusqlite::Connection,
+    members: Vec<(String, String, ImportMemberAction)>,
+) -> Result<Vec<ImportMemberOutcome>, AppError> {
+    let mut out = Vec::with_capacity(members.len());
+    for (id, name, action) in members {
+        let referencing_count = referencing_workflows(conn, &id)?.len();
+        out.push(ImportMemberOutcome {
+            id,
+            name,
+            action,
+            referencing_count,
+        });
+    }
+    Ok(out)
 }
 
 /// 两个工作流定义的「内容」是否等价。
@@ -2338,7 +2201,7 @@ fn definitions_content_equal(
     workflow::normalized_content_hash(&va) == workflow::normalized_content_hash(&vb)
 }
 
-/// 打包「工作流共享 payload」（v2）：主工作流 + 其全部子工作流（递归、含嵌套），统一使用
+/// 打包「工作流共享 payload」：主工作流 + 其全部子工作流（递归、含嵌套），统一使用
 /// 带 `format` 字段的 [`SharedWorkflowPayload`]（**即使没有子流也带单元素 `workflows`**，
 /// 便于导入端走统一解析路径）。引用一律由 `params.definitionId`（稳定 ID）表达。
 /// 返回 `(主工作流名, payload JSON)`。
@@ -2389,68 +2252,45 @@ pub(crate) fn build_workflow_export_json(
     Ok((name, json))
 }
 
-/// 共享 payload 的解析结果。
-enum ParsedSharedPayload {
-    /// 当前格式 v2：统一 `workflows` 数组 + 稳定 ID 引用
-    V2(SharedWorkflowPayload),
-    /// v1：`main` + `subflows`，节点参数用 `refCode`（历史兼容）
-    V1(SharedWorkflowBundle),
-    /// 旧版：不带 `format` 字段的裸单工作流 JSON（更早的历史资源）
-    Legacy(ExportWorkflowDefinition),
-}
-
-/// 识别并解析共享 payload：
-/// - 带 `format` 且 `version >= 2` → v2（[`SharedWorkflowPayload`]，稳定 ID）；
-/// - 带 `format` 且 `version < 2` → v1 捆绑格式（[`SharedWorkflowBundle`]，refCode）；
-/// - 否则 → 裸单工作流 JSON（向后兼容更早的历史资源）。
-fn parse_shared_workflow_payload(payload: &str) -> Result<ParsedSharedPayload, AppError> {
+/// 解析共享 payload：校验 `format` 标识后按 [`SharedWorkflowPayload`] 反序列化。
+///
+/// 仅支持当前唯一格式；无法识别的 payload 返回明确中文错误（不静默降级）。
+fn parse_shared_workflow_payload(payload: &str) -> Result<SharedWorkflowPayload, AppError> {
     let value: serde_json::Value = serde_json::from_str(payload)
         .map_err(|e| AppError::Json(format!("JSON 解析失败: {}", e)))?;
-    if value.get("format").and_then(|v| v.as_str()) == Some(SHARED_WORKFLOW_FORMAT) {
-        let version = value.get("version").and_then(|v| v.as_u64()).unwrap_or(0);
-        if version >= SHARED_WORKFLOW_VERSION as u64 {
-            let payload: SharedWorkflowPayload = serde_json::from_value(value)
-                .map_err(|e| AppError::Json(format!("共享工作流解析失败: {}", e)))?;
-            Ok(ParsedSharedPayload::V2(payload))
-        } else {
-            let bundle: SharedWorkflowBundle = serde_json::from_value(value)
-                .map_err(|e| AppError::Json(format!("共享工作流解析失败: {}", e)))?;
-            Ok(ParsedSharedPayload::V1(bundle))
-        }
-    } else {
-        let single: ExportWorkflowDefinition = serde_json::from_value(value)
-            .map_err(|e| AppError::Json(format!("JSON 解析失败: {}", e)))?;
-        Ok(ParsedSharedPayload::Legacy(single))
+    if value.get("format").and_then(|v| v.as_str()) != Some(SHARED_WORKFLOW_FORMAT) {
+        return Err(AppError::InvalidInput(
+            "无法解析共享工作流：缺少 format 标识或格式不受支持".to_string(),
+        ));
     }
+    serde_json::from_value(value)
+        .map_err(|e| AppError::Json(format!("共享工作流解析失败: {}", e)))
 }
 
-/// 导入 v2 共享 payload：逐个工作流以**稳定 ID** 就地更新 / 新建（复用该 id，不新建副本）。
+/// 导入共享 payload：逐个工作流以**稳定 ID** 就地更新 / 新建（复用该 id，不新建副本）。
 ///
-/// 引用直接由各定义的 `params.definitionId` 表达，无需 refCode 重映射。
-/// 覆盖本地已有内容前先备份版本（origin = `import`）；内容相同则跳过。
+/// 引用直接由各定义的 `params.definitionId` 表达。覆盖本地已有内容前先备份版本
+/// （origin = `import`）；内容相同则跳过。
 ///
-/// 返回 `(主工作流定义, 实际导入的子工作流数量, 因内容相同被跳过的成员数)`。
-fn import_shared_payload_v2(
+/// 返回主工作流定义、子工作流数量、跳过数量与逐成员明细。
+fn import_shared_payload(
     conn: &rusqlite::Connection,
     payload: SharedWorkflowPayload,
-) -> Result<(workflow::WorkflowDefinition, usize, usize), AppError> {
+) -> Result<SharedWorkflowImport, AppError> {
     let main_id = payload.main_id.clone();
     let mut main_def: Option<workflow::WorkflowDefinition> = None;
     let mut subflow_count = 0usize;
-    let mut skipped = 0usize;
+    // 逐成员记录 (id, name, action)，待全部落库后再统计引用数
+    let mut raw_members: Vec<(String, String, ImportMemberAction)> = Vec::new();
     for entry in payload.workflows {
-        let mut def = entry
-            .definition
-            .into_definition_with_subflows(&std::collections::HashMap::new());
-        let applied = store_main_definition(
+        let mut def = entry.definition.into_definition_with_subflows();
+        let action = store_main_definition(
             conn,
             &mut def,
             Some(&entry.id),
             workflow::VERSION_ORIGIN_IMPORT,
         )?;
-        if !applied {
-            skipped += 1;
-        }
+        raw_members.push((def.id.clone(), def.name.clone(), action));
         if entry.id == main_id {
             main_def = Some(def);
         } else {
@@ -2460,73 +2300,43 @@ fn import_shared_payload_v2(
     let definition = main_def.ok_or_else(|| {
         AppError::Json("共享工作流缺少主工作流（mainId 未匹配任何成员）".to_string())
     })?;
-    Ok((definition, subflow_count, skipped))
+    let members = import_member_outcomes(conn, raw_members)?;
+    Ok(SharedWorkflowImport {
+        definition,
+        subflow_count,
+        members,
+    })
 }
 
-/// 从共享 payload 导入一份本地工作流（自动识别 v2 / v1 / 裸单格式；与
-/// [`build_workflow_export_json`] 成对，供组织共享空间导入复用）。
+/// 从共享 payload 导入一份本地工作流（与 [`build_workflow_export_json`] 成对，供组织共享空间导入复用）。
 ///
-/// - v2：按稳定 ID 逐个**就地更新 / 新建**（本地已存在同 ID 的 → 复用该 id 覆盖，不产生副本）；
-/// - v1：按拓扑序新建子流并做 `refCode → 新 id` 重映射（历史兼容）；
-/// - 裸单：等价于旧版 `import_workflow`，仅导入主工作流（更早的历史兼容）。
-///
+/// 按稳定 ID 逐个**就地更新 / 新建**（本地已存在同 ID 的 → 复用该 id 覆盖，不产生副本）。
 /// 覆盖本地已有内容前先备份版本（origin = `import`）；内容相同则跳过。
-/// 返回 `(主工作流, 实际导入的子工作流数量, 因内容相同被跳过的成员数)`。
+/// 返回结果含逐成员明细（供 UI 展示覆盖 / 跳过提示）。
 pub(crate) fn import_workflow_from_json_with_conn(
     conn: &rusqlite::Connection,
     json: &str,
-) -> Result<(workflow::WorkflowDefinition, usize, usize), AppError> {
-    match parse_shared_workflow_payload(json)? {
-        ParsedSharedPayload::V2(payload) => import_shared_payload_v2(conn, payload),
-        ParsedSharedPayload::V1(bundle) => {
-            let mut subflow_defs: std::collections::HashMap<String, ExportWorkflowDefinition> =
-                std::collections::HashMap::new();
-            for sub in bundle.subflows {
-                let ref_code = sub.ref_code.clone().ok_or_else(|| {
-                    AppError::Json("共享子工作流缺少 refCode，无法重建引用".to_string())
-                })?;
-                subflow_defs.insert(ref_code, sub);
-            }
-            import_export_bundle_with_conn(
-                conn,
-                bundle.main,
-                subflow_defs,
-                None,
-                workflow::VERSION_ORIGIN_IMPORT,
-            )
-        }
-        ParsedSharedPayload::Legacy(single) => {
-            let def = single.into_definition();
-            workflow::create_definition(conn, &def)
-                .map_err(|e| AppError::Db(format!("导入失败: {}", e)))?;
-            Ok((def, 0, 0))
-        }
-    }
+) -> Result<SharedWorkflowImport, AppError> {
+    let payload = parse_shared_workflow_payload(json)?;
+    import_shared_payload(conn, payload)
 }
 
 /// 取共享 payload 的**主工作流定义**（用于内容比对 / 云同步冲突留档）。
 ///
-/// v2 取 `mainId` 命中的成员；v1 取 `main`；裸单即其本身。
+/// 取 `mainId` 命中的成员。
 pub(crate) fn payload_main_definition(
     payload: &str,
 ) -> Result<workflow::WorkflowDefinition, AppError> {
-    match parse_shared_workflow_payload(payload)? {
-        ParsedSharedPayload::V2(p) => {
-            let main_id = p.main_id.clone();
-            let entry = p
-                .workflows
-                .into_iter()
-                .find(|e| e.id == main_id)
-                .ok_or_else(|| {
-                    AppError::Json("共享工作流缺少主工作流（mainId 未匹配任何成员）".to_string())
-                })?;
-            Ok(entry
-                .definition
-                .into_definition_with_subflows(&std::collections::HashMap::new()))
-        }
-        ParsedSharedPayload::V1(b) => Ok(b.main.into_definition()),
-        ParsedSharedPayload::Legacy(s) => Ok(s.into_definition()),
-    }
+    let p = parse_shared_workflow_payload(payload)?;
+    let main_id = p.main_id.clone();
+    let entry = p
+        .workflows
+        .into_iter()
+        .find(|e| e.id == main_id)
+        .ok_or_else(|| {
+            AppError::Json("共享工作流缺少主工作流（mainId 未匹配任何成员）".to_string())
+        })?;
+    Ok(entry.definition.into_definition_with_subflows())
 }
 
 /// 远端 payload 的主工作流内容是否与本地当前内容等价（云同步 pull 的「无改动 → 跳过」判据）。
@@ -2546,11 +2356,11 @@ pub(crate) fn payload_matches_local_definition(
 
 /// 就地把一份共享 payload 应用到指定 object_key 的工作流上——云同步 pull 用。
 ///
-/// - v2（稳定 ID）：按各成员稳定 ID 就地 upsert；主工作流归一到 `target_id`（object_key），
-///   不再每轮生成新子流 id，故**无需清理旧子流**（批次 2 会接管同步语义）；
-/// - v1：先清理该工作流**旧的、仅被它引用的子流**（递归去重），再按 refCode 重映射导入
-///   （主工作流复用 `target_id`）；
-/// - 裸单：等价于就地覆盖主工作流。
+/// 按各成员稳定 ID 就地 upsert；主工作流归一到 `target_id`（object_key），
+/// 不每轮生成新子流 id，故**无需清理旧子流**。
+///
+/// **注意**：本路径为后台同步，`store_main_definition` 返回的逐成员动作明细在此**被丢弃**，
+/// 不冒泡成 UI 弹窗（同步仅在冲突时已有提示）；解析 / 落库逻辑仍与导入共用，行为不变。
 ///
 /// 返回 `(主工作流定义, 实际导入的子工作流数量)`。
 pub(crate) fn apply_workflow_bundle_in_place(
@@ -2558,122 +2368,35 @@ pub(crate) fn apply_workflow_bundle_in_place(
     target_id: &str,
     json: &str,
 ) -> Result<(workflow::WorkflowDefinition, usize), AppError> {
-    match parse_shared_workflow_payload(json)? {
-        ParsedSharedPayload::V2(payload) => {
-            let original_main_id = payload.main_id.clone();
-            let mut main_def: Option<workflow::WorkflowDefinition> = None;
-            let mut subflow_count = 0usize;
-            for entry in payload.workflows {
-                let mut def = entry
-                    .definition
-                    .into_definition_with_subflows(&std::collections::HashMap::new());
-                if entry.id == original_main_id {
-                    // 主工作流归一到 object_key，保证跨设备 key 稳定
-                    store_main_definition(
-                        conn,
-                        &mut def,
-                        Some(target_id),
-                        workflow::VERSION_ORIGIN_CLOUD_SYNC,
-                    )?;
-                    main_def = Some(def);
-                } else {
-                    store_main_definition(
-                        conn,
-                        &mut def,
-                        Some(&entry.id),
-                        workflow::VERSION_ORIGIN_CLOUD_SYNC,
-                    )?;
-                    subflow_count += 1;
-                }
-            }
-            let definition = main_def.ok_or_else(|| {
-                AppError::Json("共享工作流缺少主工作流（mainId 未匹配任何成员）".to_string())
-            })?;
-            Ok((definition, subflow_count))
-        }
-        ParsedSharedPayload::V1(bundle) => {
-            cleanup_in_place_subflows(conn, target_id);
-            let mut subflow_defs: std::collections::HashMap<String, ExportWorkflowDefinition> =
-                std::collections::HashMap::new();
-            for sub in bundle.subflows {
-                let code = sub.ref_code.clone().ok_or_else(|| {
-                    AppError::Json("共享子工作流缺少 refCode，无法重建引用".to_string())
-                })?;
-                subflow_defs.insert(code, sub);
-            }
-            import_export_bundle_with_conn(
+    let payload = parse_shared_workflow_payload(json)?;
+    let original_main_id = payload.main_id.clone();
+    let mut main_def: Option<workflow::WorkflowDefinition> = None;
+    let mut subflow_count = 0usize;
+    for entry in payload.workflows {
+        let mut def = entry.definition.into_definition_with_subflows();
+        if entry.id == original_main_id {
+            // 主工作流归一到 object_key，保证跨设备 key 稳定
+            store_main_definition(
                 conn,
-                bundle.main,
-                subflow_defs,
+                &mut def,
                 Some(target_id),
                 workflow::VERSION_ORIGIN_CLOUD_SYNC,
-            )
-            .map(|(def, n, _skipped)| (def, n))
-        }
-        ParsedSharedPayload::Legacy(single) => import_export_bundle_with_conn(
-            conn,
-            single,
-            std::collections::HashMap::new(),
-            Some(target_id),
-            workflow::VERSION_ORIGIN_CLOUD_SYNC,
-        )
-        .map(|(def, n, _skipped)| (def, n)),
-    }
-}
-
-/// v1 就地覆盖前清理旧的、仅被目标工作流引用的子流（其内容会由本次 payload 重建）。
-///
-/// 同时被别的父级引用的子流保留，避免破坏那些父级的子流引用。
-fn cleanup_in_place_subflows(conn: &rusqlite::Connection, target_id: &str) {
-    let existing = match workflow::get_definition(conn, target_id) {
-        Ok(Some(d)) => d,
-        _ => return,
-    };
-    let mut visited = std::collections::HashSet::new();
-    let mut old_subflow_ids = Vec::new();
-    collect_referenced_subflow_ids(conn, &existing, &mut old_subflow_ids, &mut visited);
-    for sid in old_subflow_ids {
-        let parents =
-            crate::commands::cloud_sync::workflows_referencing(conn, &sid).unwrap_or_default();
-        let only_me = !parents.is_empty() && parents.iter().all(|p| p == target_id);
-        if only_me {
-            // 内部替换：真删旧子流、不进回收站（其内容由本次 payload 重建）
-            if let Err(e) = workflow::hard_delete_definition(conn, &sid) {
-                log::warn!("[CloudSync] 清理旧子流失败 {}：{}", sid, e);
-            }
+            )?;
+            main_def = Some(def);
+        } else {
+            store_main_definition(
+                conn,
+                &mut def,
+                Some(&entry.id),
+                workflow::VERSION_ORIGIN_CLOUD_SYNC,
+            )?;
+            subflow_count += 1;
         }
     }
-}
-
-/// 递归收集某工作流定义引用的全部子流 id（去重；引用缺失的定义忽略）。
-fn collect_referenced_subflow_ids(
-    conn: &rusqlite::Connection,
-    def: &workflow::WorkflowDefinition,
-    out: &mut Vec<String>,
-    visited: &mut std::collections::HashSet<String>,
-) {
-    for stage in &def.stages {
-        for node in &stage.nodes {
-            if node.node_type != workflow::WorkflowNodeType::Subflow {
-                continue;
-            }
-            let Some(sid) = node
-                .params
-                .as_ref()
-                .and_then(|p| p.get("definitionId"))
-                .and_then(|v| v.as_str())
-            else {
-                continue;
-            };
-            if !visited.insert(sid.to_string()) {
-                continue;
-            }
-            out.push(sid.to_string());
-            if let Ok(Some(sub)) = workflow::get_definition(conn, sid) {
-                collect_referenced_subflow_ids(conn, &sub, out, visited);
-            }
-        }
-    }
+    let definition = main_def.ok_or_else(|| {
+        AppError::Json("共享工作流缺少主工作流（mainId 未匹配任何成员）".to_string())
+    })?;
+    Ok((definition, subflow_count))
 }
 
 /// 获取所有注册的节点类型
@@ -3508,7 +3231,9 @@ mod tests {
 
         // 导入到干净库：id 保持不变，引用解析到同一子流 id
         let conn2 = test_conn();
-        let (imported, count, _skipped) = import_workflow_from_json_with_conn(&conn2, &payload).unwrap();
+        let outcome = import_workflow_from_json_with_conn(&conn2, &payload).unwrap();
+        let imported = outcome.definition;
+        let count = outcome.subflow_count;
         assert_eq!(count, 1);
         assert_eq!(imported.id, main_id, "主工作流 id 应保持不变");
         assert!(workflow::get_definition(&conn2, &sub_id).unwrap().is_some());
@@ -3540,8 +3265,9 @@ mod tests {
         d.name = "本地改名".to_string();
         workflow::update_definition(&conn, &d).unwrap();
 
-        let (imported, count, _skipped) = import_workflow_from_json_with_conn(&conn, &payload).unwrap();
-        assert_eq!(count, 1);
+        let outcome = import_workflow_from_json_with_conn(&conn, &payload).unwrap();
+        let imported = outcome.definition;
+        assert_eq!(outcome.subflow_count, 1);
         assert_eq!(imported.id, main_id);
         assert_eq!(
             workflow::list_definitions(&conn).unwrap().len(),
@@ -3571,140 +3297,12 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(value["version"], 2);
         assert_eq!(value["workflows"].as_array().unwrap().len(), 1);
-        let (_def, count, _skipped) = import_workflow_from_json_with_conn(&conn, &payload).unwrap();
-        assert_eq!(count, 0);
+        let outcome = import_workflow_from_json_with_conn(&conn, &payload).unwrap();
+        assert_eq!(outcome.subflow_count, 0);
     }
 
-    /// 格式识别：v2 / v1 / 裸单三种形状都能被正确区分。
-    #[test]
-    fn parse_shared_payload_recognizes_v2_v1_and_legacy() {
-        // 裸单：无 format 字段
-        let legacy = ExportWorkflowDefinition::from(make_share_def("d1", "旧格式", None));
-        match parse_shared_workflow_payload(&serde_json::to_string(&legacy).unwrap()).unwrap() {
-            ParsedSharedPayload::Legacy(d) => assert_eq!(d.name, "旧格式"),
-            _ => panic!("裸单工作流 JSON 应识别为裸单格式"),
-        }
-
-        // v1：带 format + version=1
-        let v1 = SharedWorkflowBundle {
-            format: SHARED_WORKFLOW_FORMAT.to_string(),
-            version: 1,
-            main: ExportWorkflowDefinition::from(make_share_def("d2", "v1主", None)),
-            subflows: vec![],
-        };
-        match parse_shared_workflow_payload(&serde_json::to_string(&v1).unwrap()).unwrap() {
-            ParsedSharedPayload::V1(b) => assert_eq!(b.main.name, "v1主"),
-            _ => panic!("version=1 应识别为 v1"),
-        }
-
-        // v2：带 format + version=2
-        let v2 = SharedWorkflowPayload {
-            format: SHARED_WORKFLOW_FORMAT.to_string(),
-            version: 2,
-            main_id: "d3".to_string(),
-            workflows: vec![SharedWorkflowEntry {
-                id: "d3".to_string(),
-                name: "v2主".to_string(),
-                definition: ExportWorkflowDefinition::from(make_share_def("d3", "v2主", None)),
-            }],
-        };
-        match parse_shared_workflow_payload(&serde_json::to_string(&v2).unwrap()).unwrap() {
-            ParsedSharedPayload::V2(p) => assert_eq!(p.main_id, "d3"),
-            _ => panic!("version=2 应识别为 v2"),
-        }
-    }
-
-    /// 老格式子流引用的「refCode → 新 id」纯函数回写（v1 导入路径使用）。
-    #[test]
-    fn restore_subflow_params_replaces_refcode() {
-        // 老格式导出侧留下的 params：只有 refCode（没有 definitionId）
-        let params = Some(json!({ "refCode": "ref_1", "foo": 1 }));
-
-        let mut ref_to_uuid = std::collections::HashMap::new();
-        ref_to_uuid.insert("ref_1".to_string(), "new-def-uuid".to_string());
-        let restored =
-            ExportWorkflowDefinition::restore_subflow_params(&params, &ref_to_uuid).unwrap();
-        assert_eq!(
-            restored.get("definitionId").and_then(|v| v.as_str()),
-            Some("new-def-uuid")
-        );
-        assert!(restored.get("refCode").is_none(), "refCode 应被移除");
-        assert_eq!(restored.get("foo").and_then(|v| v.as_i64()), Some(1));
-    }
-
-    /// 老格式 v1 payload（带 refCode）仍能导入并重建引用。
-    #[test]
-    fn legacy_v1_payload_imports_with_refcode_remap() {
-        let conn = test_conn();
-        let sub = build_v1_subflow_export("旧子流", "ref_1");
-        let main = build_v1_main_export("旧主流程", "ref_1");
-        let v1 = SharedWorkflowBundle {
-            format: SHARED_WORKFLOW_FORMAT.to_string(),
-            version: 1,
-            main,
-            subflows: vec![sub],
-        };
-        let payload = serde_json::to_string(&v1).unwrap();
-
-        let (imported, count, _skipped) = import_workflow_from_json_with_conn(&conn, &payload).unwrap();
-        assert_eq!(count, 1, "应随主流程导入 1 个子工作流");
-        let ref_id = imported
-            .stages
-            .iter()
-            .flat_map(|s| s.nodes.iter())
-            .find(|n| n.node_type == workflow::WorkflowNodeType::Subflow)
-            .and_then(|n| n.params.as_ref()?.get("definitionId")?.as_str())
-            .map(str::to_string)
-            .expect("v1 导入应把 refCode 回写为 definitionId");
-        assert!(
-            workflow::get_definition(&conn, &ref_id).unwrap().is_some(),
-            "回写后的 definitionId 必须指向已导入的子工作流"
-        );
-    }
-
-    /// 老目录 `[主]xxx.json` + `[子]xxx(ref_N).json` 仍能导入并重建引用。
-    #[test]
-    fn legacy_directory_import_restores_references() {
-        let conn = test_conn();
-        let root = temp_workflow_dir();
-        let pkg = root.join("老包");
-        std::fs::create_dir_all(&pkg).unwrap();
-
-        let main = build_v1_main_export("老主流程", "ref_1");
-        std::fs::write(
-            pkg.join("[主]老主流程.json"),
-            serde_json::to_string_pretty(&main).unwrap(),
-        )
-        .unwrap();
-        let sub = build_v1_subflow_export("老子流程", "ref_1");
-        std::fs::write(
-            pkg.join("[子]老子流程(ref_1).json"),
-            serde_json::to_string_pretty(&sub).unwrap(),
-        )
-        .unwrap();
-
-        let outcome = import_workflow_from_file_with_conn(
-            &conn,
-            pkg.join("[主]老主流程.json").to_str().unwrap(),
-        )
-        .unwrap();
-        assert_eq!(outcome.subflow_count, 1, "老目录应收集到 1 个子工作流");
-        assert!(outcome.missing_dependencies.is_empty());
-        let ref_id = outcome
-            .definition
-            .stages
-            .iter()
-            .flat_map(|s| s.nodes.iter())
-            .find(|n| n.node_type == workflow::WorkflowNodeType::Subflow)
-            .and_then(|n| n.params.as_ref()?.get("definitionId")?.as_str())
-            .map(str::to_string)
-            .expect("老目录导入应把 refCode 回写为 definitionId");
-        assert!(workflow::get_definition(&conn, &ref_id).unwrap().is_some());
-
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// 新文件包往返：导出目录结构正确，导入到干净库后 id 与引用均保持不变。
+    /// 工作流包往返：导出目录结构正确（manifest + workflows/ 平铺、无主/子前缀），
+    /// 导入到干净库后 mainId 与各工作流 id、引用均保持不变。
     #[test]
     fn new_package_export_import_roundtrip() {
         let conn = test_conn();
@@ -3718,26 +3316,42 @@ mod tests {
         let def = workflow::get_definition(&conn, &main_id).unwrap().unwrap();
         write_workflow_export(&conn, def, root.to_str().unwrap()).unwrap();
 
-        // 目录结构：manifest + [主] 主文件 + 子流原名文件
+        // 目录结构：包根 manifest.json + workflows/ 下主/子一视同仁（原名、无 [主]/[子] 前缀）
         let pkg = root.join("主流程");
         assert!(pkg.join("manifest.json").is_file(), "应写出 manifest.json");
-        assert!(pkg.join("[主]主流程.json").is_file());
         assert!(
-            pkg.join("子流程A.json").is_file(),
-            "新格式子工作流应为原名、无 [子] 前缀"
+            pkg.join("workflows").join("主流程.json").is_file(),
+            "主工作流应在 workflows/ 下、文件名为原名（无 [主] 前缀）"
+        );
+        assert!(
+            pkg.join("workflows").join("子流程A.json").is_file(),
+            "子工作流应在 workflows/ 下、文件名为原名（无 [子] 前缀）"
         );
         let manifest: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(pkg.join("manifest.json")).unwrap())
                 .unwrap();
         assert_eq!(manifest["format"], WORKFLOW_PACKAGE_FORMAT);
         assert_eq!(manifest["mainId"], main_id.as_str());
-        assert_eq!(manifest["workflows"].as_array().unwrap().len(), 2);
+        let members = manifest["workflows"].as_array().unwrap();
+        assert_eq!(members.len(), 2);
+        // file 一律是相对包根的相对路径；不再输出 isMain（入口只由 mainId 表达）
+        for m in members {
+            let file = m["file"].as_str().unwrap();
+            assert!(file.starts_with("workflows/"), "file 应为相对路径: {}", file);
+            assert!(m.get("isMain").is_none(), "不应再输出 isMain 字段");
+        }
+        let main_member = members
+            .iter()
+            .find(|m| m["id"] == main_id.as_str())
+            .expect("清单应含主工作流成员");
+        assert_eq!(main_member["file"], "workflows/主流程.json");
 
-        // 导入到干净库：id 保持不变、引用直接指向稳定子流 id
+        // 导入到干净库：id 保持不变、引用直接指向稳定子流 id（选中包内子文件即可，
+        // 导入端按「所在目录 / 父目录」向上找到包根 manifest.json）
         let conn2 = test_conn();
         let outcome = import_workflow_from_file_with_conn(
             &conn2,
-            pkg.join("[主]主流程.json").to_str().unwrap(),
+            pkg.join("workflows").join("主流程.json").to_str().unwrap(),
         )
         .unwrap();
         assert_eq!(outcome.definition.id, main_id, "主工作流 id 应保持不变");
@@ -3780,7 +3394,11 @@ mod tests {
 
         let outcome = import_workflow_from_file_with_conn(
             &conn,
-            root.join("主流程").join("[主]主流程.json").to_str().unwrap(),
+            root.join("主流程")
+                .join("workflows")
+                .join("主流程.json")
+                .to_str()
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(outcome.definition.id, main_id);
@@ -3799,6 +3417,286 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 包导入明细：首次全为「新建」；本地改名后重导 → 该成员「覆盖」、其余「跳过」；
+    /// 明细顺序与清单一致；被主流程引用的子流能拿到引用数；覆盖前留快照、跳过不建快照。
+    #[test]
+    fn package_import_member_actions_and_ordering() {
+        // 源库：子流A（被主流程引用）+ 主流程
+        let src = test_conn();
+        let sub_id = crate::utils::new_id();
+        workflow::create_definition(&src, &make_share_def(&sub_id, "子流程A", None)).unwrap();
+        let main_id = crate::utils::new_id();
+        workflow::create_definition(&src, &make_share_def(&main_id, "主流程", Some(&sub_id)))
+            .unwrap();
+        let root = temp_workflow_dir();
+        let def = workflow::get_definition(&src, &main_id).unwrap().unwrap();
+        write_workflow_export(&src, def, root.to_str().unwrap()).unwrap();
+        let entry_file = root.join("主流程").join("workflows").join("主流程.json");
+
+        // 1) 干净库首次导入 → 全部「新建」，顺序与清单一致（主流程在前）
+        let conn = test_conn();
+        let first =
+            import_workflow_from_file_with_conn(&conn, entry_file.to_str().unwrap()).unwrap();
+        assert_eq!(first.members.len(), 2);
+        assert_eq!(first.members[0].id, main_id);
+        assert_eq!(first.members[0].name, "主流程");
+        assert_eq!(first.members[0].action, ImportMemberAction::Created);
+        assert_eq!(first.members[0].referencing_count, 0, "主流程无引用方");
+        assert_eq!(first.members[1].id, sub_id);
+        assert_eq!(first.members[1].action, ImportMemberAction::Created);
+        assert_eq!(first.members[1].referencing_count, 1, "子流被主流程引用");
+        assert_eq!(first.skipped, 0);
+
+        // 2) 本地把子流改名 → 重导：子流「覆盖」、主流程「跳过」
+        let mut sub = workflow::get_definition(&conn, &sub_id).unwrap().unwrap();
+        sub.name = "本地改名的子流".to_string();
+        workflow::update_definition(&conn, &sub).unwrap();
+
+        let second =
+            import_workflow_from_file_with_conn(&conn, entry_file.to_str().unwrap()).unwrap();
+        let by_id = |id: &str| second.members.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(by_id(&sub_id).action, ImportMemberAction::Updated);
+        assert_eq!(by_id(&sub_id).name, "子流程A", "覆盖后名称为导入内容的名");
+        assert_eq!(by_id(&sub_id).referencing_count, 1);
+        assert_eq!(by_id(&main_id).action, ImportMemberAction::Skipped);
+        assert_eq!(second.skipped, 1);
+
+        // 保持既有语义：覆盖前备份本地版本（origin=import）；被跳过的成员不建快照
+        let sub_versions = workflow::list_workflow_versions(&conn, &sub_id).unwrap();
+        assert_eq!(sub_versions.len(), 1, "覆盖前应留 1 份本地版本快照");
+        assert_eq!(sub_versions[0].origin, workflow::VERSION_ORIGIN_IMPORT);
+        assert!(
+            workflow::list_workflow_versions(&conn, &main_id)
+                .unwrap()
+                .is_empty(),
+            "内容相同的成员跳过，不应建快照"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 同一工作流包再次导入（内容未变）→ 全部「跳过」，且不建任何版本快照。
+    #[test]
+    fn package_reimport_unchanged_all_skipped() {
+        let src = test_conn();
+        let sub_id = crate::utils::new_id();
+        workflow::create_definition(&src, &make_share_def(&sub_id, "子流程A", None)).unwrap();
+        let main_id = crate::utils::new_id();
+        workflow::create_definition(&src, &make_share_def(&main_id, "主流程", Some(&sub_id)))
+            .unwrap();
+        let root = temp_workflow_dir();
+        let def = workflow::get_definition(&src, &main_id).unwrap().unwrap();
+        write_workflow_export(&src, def, root.to_str().unwrap()).unwrap();
+        let entry_file = root.join("主流程").join("workflows").join("主流程.json");
+
+        let conn = test_conn();
+        let first =
+            import_workflow_from_file_with_conn(&conn, entry_file.to_str().unwrap()).unwrap();
+        assert!(
+            first
+                .members
+                .iter()
+                .all(|m| m.action == ImportMemberAction::Created),
+            "首次导入应全为「新建」: {:?}",
+            first.members
+        );
+
+        // 同一包、内容未变 → 全部「跳过」
+        let second =
+            import_workflow_from_file_with_conn(&conn, entry_file.to_str().unwrap()).unwrap();
+        assert_eq!(second.members.len(), 2);
+        assert!(
+            second
+                .members
+                .iter()
+                .all(|m| m.action == ImportMemberAction::Skipped),
+            "内容未变重导应全为「跳过」: {:?}",
+            second.members
+        );
+        assert_eq!(second.skipped, 2, "skipped 应由逐成员明细派生");
+        for id in [&main_id, &sub_id] {
+            assert!(
+                workflow::list_workflow_versions(&conn, id)
+                    .unwrap()
+                    .is_empty(),
+                "跳过不应建版本快照: {}",
+                id
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 改包内**主工作流**内容后重导 → 主流程「覆盖」、未变子流「跳过」；
+    /// 且覆盖前主工作流已产生一条 origin=import 的本地版本备份（子流跳过不建快照）。
+    #[test]
+    fn package_import_main_changed_updates_and_snapshots() {
+        let src = test_conn();
+        let sub_id = crate::utils::new_id();
+        workflow::create_definition(&src, &make_share_def(&sub_id, "子流程A", None)).unwrap();
+        let main_id = crate::utils::new_id();
+        workflow::create_definition(&src, &make_share_def(&main_id, "主流程", Some(&sub_id)))
+            .unwrap();
+        let root = temp_workflow_dir();
+        let def = workflow::get_definition(&src, &main_id).unwrap().unwrap();
+        write_workflow_export(&src, def, root.to_str().unwrap()).unwrap();
+        let main_file = root
+            .join("主流程")
+            .join("workflows")
+            .join("主流程.json");
+
+        let conn = test_conn();
+        import_workflow_from_file_with_conn(&conn, main_file.to_str().unwrap()).unwrap();
+
+        // 只改包内主工作流的名称 → 主流程内容变化、子流未变
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&main_file).unwrap()).unwrap();
+        v["name"] = serde_json::Value::String("主流程（新版）".to_string());
+        std::fs::write(&main_file, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+
+        let outcome =
+            import_workflow_from_file_with_conn(&conn, main_file.to_str().unwrap()).unwrap();
+        let main_m = outcome.members.iter().find(|m| m.id == main_id).unwrap();
+        assert_eq!(main_m.action, ImportMemberAction::Updated);
+        assert_eq!(main_m.name, "主流程（新版）", "覆盖后应取导入内容的名");
+        let sub_m = outcome.members.iter().find(|m| m.id == sub_id).unwrap();
+        assert_eq!(sub_m.action, ImportMemberAction::Skipped, "未变的子流应跳过");
+
+        // 覆盖前备份本地旧主流程（origin=import）；子流跳过不建快照
+        let vs = workflow::list_workflow_versions(&conn, &main_id).unwrap();
+        assert_eq!(vs.len(), 1, "主流程覆盖前应留 1 份本地版本快照");
+        assert_eq!(vs[0].origin, workflow::VERSION_ORIGIN_IMPORT);
+        let snap: workflow::WorkflowDefinition = serde_json::from_str(&vs[0].snapshot).unwrap();
+        assert_eq!(snap.name, "主流程", "快照应是被覆盖前的本地旧内容");
+        assert!(
+            workflow::list_workflow_versions(&conn, &sub_id)
+                .unwrap()
+                .is_empty(),
+            "跳过的子流不应建快照"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 目录里没有 `manifest.json` → 按单文件导入（不报错、无子流、动作「新建」）。
+    #[test]
+    fn import_single_file_without_manifest_is_not_a_package() {
+        let conn = test_conn();
+        let root = temp_workflow_dir();
+        let export = ExportWorkflowDefinition::from(make_share_def(
+            "aaaaaaaa-1111-1111-1111-111111111111",
+            "独立流程",
+            None,
+        ));
+        let file = root.join("独立流程.json");
+        std::fs::write(&file, serde_json::to_string_pretty(&export).unwrap()).unwrap();
+
+        let outcome = import_workflow_from_file_with_conn(&conn, file.to_str().unwrap()).unwrap();
+        assert_eq!(outcome.subflow_count, 0);
+        assert!(outcome.missing_dependencies.is_empty());
+        assert_eq!(outcome.members.len(), 1);
+        assert_eq!(outcome.members[0].action, ImportMemberAction::Created);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 包清单 `mainId` 未命中任何成员 → 明确中文错误（不静默降级）。
+    #[test]
+    fn package_import_errors_when_main_id_unmatched() {
+        let conn = test_conn();
+        let root = temp_workflow_dir();
+        let pkg = root.join("缺主流程的包");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let member_id = "88888888-8888-8888-8888-888888888888".to_string();
+        let export = ExportWorkflowDefinition::from(make_share_def(&member_id, "成员", None));
+        std::fs::write(
+            pkg.join("成员.json"),
+            serde_json::to_string_pretty(&export).unwrap(),
+        )
+        .unwrap();
+        let manifest = serde_json::json!({
+            "format": WORKFLOW_PACKAGE_FORMAT,
+            "version": 1,
+            "mainId": "99999999-9999-9999-9999-999999999999",
+            "workflows": [
+                { "id": member_id, "name": "成员", "file": "成员.json" },
+            ],
+        });
+        std::fs::write(
+            pkg.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let err = import_workflow_from_file_with_conn(
+            &conn,
+            pkg.join("manifest.json").to_str().unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("主工作流") && err.contains("mainId"),
+            "mainId 未命中应给出明确中文错误: {}",
+            err
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 共享 payload 导入返回逐成员明细：首次「新建」；本地改名后重导 → 该成员「覆盖」、其余「跳过」；
+    /// 被引用子流的引用数正确。
+    #[test]
+    fn shared_payload_import_member_outcomes() {
+        let src = test_conn();
+        let sub_id = crate::utils::new_id();
+        workflow::create_definition(&src, &make_share_def(&sub_id, "子流程A", None)).unwrap();
+        let main_id = crate::utils::new_id();
+        workflow::create_definition(&src, &make_share_def(&main_id, "主流程", Some(&sub_id)))
+            .unwrap();
+        let (_name, payload) = build_workflow_export_json(&src, &main_id).unwrap();
+
+        let conn = test_conn();
+        let first = import_workflow_from_json_with_conn(&conn, &payload).unwrap();
+        assert_eq!(first.members.len(), 2);
+        assert!(
+            first
+                .members
+                .iter()
+                .all(|m| m.action == ImportMemberAction::Created),
+            "干净库首次导入应全为「新建」: {:?}",
+            first.members
+        );
+        assert_eq!(
+            first.members.iter().find(|m| m.id == sub_id).unwrap().referencing_count,
+            1,
+            "子流被主流程引用"
+        );
+        assert!(
+            first.members.iter().all(|m| m.action != ImportMemberAction::Skipped),
+            "首次导入不应有「跳过」"
+        );
+
+        // 本地改名后重导 → 子流覆盖、主流程跳过
+        let mut d = workflow::get_definition(&conn, &sub_id).unwrap().unwrap();
+        d.name = "本地改名".to_string();
+        workflow::update_definition(&conn, &d).unwrap();
+
+        let second = import_workflow_from_json_with_conn(&conn, &payload).unwrap();
+        let skipped_count = second
+            .members
+            .iter()
+            .filter(|m| m.action == ImportMemberAction::Skipped)
+            .count();
+        assert_eq!(skipped_count, 1);
+        assert_eq!(
+            second.members.iter().find(|m| m.id == sub_id).unwrap().action,
+            ImportMemberAction::Updated
+        );
+        assert_eq!(
+            second.members.iter().find(|m| m.id == main_id).unwrap().action,
+            ImportMemberAction::Skipped
+        );
     }
 
     /// 单文件导入：引用的子工作流本地不存在时不阻断，回报「缺失依赖」。
@@ -3852,30 +3750,169 @@ mod tests {
         );
     }
 
-    /// 造一个老格式子工作流导出定义（带 refCode）。
-    fn build_v1_subflow_export(name: &str, ref_code: &str) -> ExportWorkflowDefinition {
-        let mut def = ExportWorkflowDefinition::from(make_share_def("old-sub", name, None));
-        def.ref_code = Some(ref_code.to_string());
-        def
+    /// 市场存量模板（已转换为工作流包布局）能被整包导入，且 mainId、各工作流 id 与引用正确。
+    #[test]
+    fn market_template_package_imports_with_stable_ids() {
+        // 定位仓库内转换后的模板目录（src-tauri/../server/market/workflow/...）
+        // 目录名已改为工作流 UUID，故按索引条目（name 命中）取其 dir，不写死目录名
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("仓库根目录");
+        let market_root = repo_root.join("server").join("market").join("workflow");
+        let index: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(market_root.join("workflow-index.json")).unwrap(),
+        )
+        .unwrap();
+        let entry = index["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"].as_str() == Some("自动短篇小说写作工作流"))
+            .expect("索引里应有「自动短篇小说写作工作流」模板");
+        let pkg = market_root.join(entry["dir"].as_str().unwrap());
+        assert!(
+            pkg.join("manifest.json").is_file(),
+            "模板应已转换为工作流包（含包根 manifest.json）"
+        );
+
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(pkg.join("manifest.json")).unwrap())
+                .unwrap();
+        let main_id = manifest["mainId"].as_str().unwrap().to_string();
+        // 成员 file 一律是相对包根的相对路径（workflows/xxx.json）
+        for m in manifest["workflows"].as_array().unwrap() {
+            let file = m["file"].as_str().unwrap();
+            assert!(file.starts_with("workflows/"), "file 应为相对路径: {}", file);
+            assert!(pkg.join(file).is_file(), "清单声明的成员文件应存在: {}", file);
+        }
+
+        let conn = test_conn();
+        // 直接选中包根清单导入整包
+        let outcome = import_workflow_from_file_with_conn(
+            &conn,
+            pkg.join("manifest.json").to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome.definition.id, main_id,
+            "主工作流 id 应与 manifest.mainId 一致"
+        );
+        assert_eq!(outcome.subflow_count, 3, "应导入 3 个子工作流");
+
+        // 主流程 3 个 Subflow 节点的 definitionId 均应指向已导入的子工作流
+        let ref_ids: Vec<String> = outcome
+            .definition
+            .stages
+            .iter()
+            .flat_map(|s| s.nodes.iter())
+            .filter(|n| n.node_type == workflow::WorkflowNodeType::Subflow)
+            .filter_map(|n| {
+                n.params
+                    .as_ref()?
+                    .get("definitionId")?
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .collect();
+        assert_eq!(ref_ids.len(), 3, "主流程应保留 3 个子流引用");
+        for id in &ref_ids {
+            assert!(
+                workflow::get_definition(&conn, id).unwrap().is_some(),
+                "子流引用 {} 应指向已导入的工作流",
+                id
+            );
+        }
     }
 
-    /// 造一个老格式主工作流导出定义：Subflow 节点参数为 `refCode`（而非 definitionId）。
-    fn build_v1_main_export(name: &str, ref_code: &str) -> ExportWorkflowDefinition {
-        let mut def = ExportWorkflowDefinition::from(make_share_def("old-main", name, None));
-        // 手工塞入一个用 refCode 引用的 Subflow 节点
-        for stage in &mut def.stages {
-            stage.nodes.push(ExportNode {
-                node_type: workflow::WorkflowNodeType::Subflow,
-                label: "子流程".to_string(),
-                params: Some(json!({ "refCode": ref_code })),
-                delay_ms: None,
-                timeout_ms: None,
-                input_mapping: None,
-                output_mapping: None,
-                position: None,
+    /// 工作流包识别：选中 `workflows/` 子目录下的成员文件时，靠**向上两级**找到包根
+    /// `manifest.json`，按整包导入（而不是当单文件导入）。
+    #[test]
+    fn package_import_finds_manifest_two_levels_up() {
+        let conn = test_conn();
+        let sub_id = "55555555-5555-5555-5555-555555555555".to_string();
+        let main_id = "66666666-6666-6666-6666-666666666666".to_string();
+
+        let root = temp_workflow_dir();
+        let pkg = root.join("某包");
+        let wf_dir = pkg.join("workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+
+        let main_export =
+            ExportWorkflowDefinition::from(make_share_def(&main_id, "主流程", Some(&sub_id)));
+        let sub_export = ExportWorkflowDefinition::from(make_share_def(&sub_id, "子流程A", None));
+        std::fs::write(
+            wf_dir.join("主流程.json"),
+            serde_json::to_string_pretty(&main_export).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            wf_dir.join("子流程A.json"),
+            serde_json::to_string_pretty(&sub_export).unwrap(),
+        )
+        .unwrap();
+        let manifest = serde_json::json!({
+            "format": WORKFLOW_PACKAGE_FORMAT,
+            "version": 1,
+            "mainId": main_id,
+            "workflows": [
+                { "id": main_id, "name": "主流程", "file": "workflows/主流程.json" },
+                { "id": sub_id, "name": "子流程A", "file": "workflows/子流程A.json" },
+            ],
+        });
+        std::fs::write(
+            pkg.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        // 选中 workflows/子流程A.json：所在目录无清单 → 父目录（包根）有 → 整包导入
+        let outcome = import_workflow_from_file_with_conn(
+            &conn,
+            wf_dir.join("子流程A.json").to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(outcome.definition.id, main_id, "应识别为整包并取 mainId 作主流程");
+        assert_eq!(outcome.subflow_count, 1);
+        assert!(workflow::get_definition(&conn, &sub_id).unwrap().is_some());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 工作流包安全：成员的 `file` 越界（`..` / 绝对路径）一律被拒绝。
+    #[test]
+    fn package_import_rejects_unsafe_member_path() {
+        for bad in ["../evil.json", "workflows/../../evil.json", "/abs/evil.json"] {
+            let conn = test_conn();
+            let root = temp_workflow_dir();
+            let pkg = root.join("坏包");
+            std::fs::create_dir_all(&pkg).unwrap();
+            let manifest = serde_json::json!({
+                "format": WORKFLOW_PACKAGE_FORMAT,
+                "version": 1,
+                "mainId": "77777777-7777-7777-7777-777777777777",
+                "workflows": [
+                    { "id": "77777777-7777-7777-7777-777777777777", "name": "坏包", "file": bad }
+                ],
             });
+            std::fs::write(
+                pkg.join("manifest.json"),
+                serde_json::to_string_pretty(&manifest).unwrap(),
+            )
+            .unwrap();
+
+            let result = import_workflow_from_file_with_conn(
+                &conn,
+                pkg.join("manifest.json").to_str().unwrap(),
+            );
+            let err = match result {
+                Ok(_) => panic!("越界路径应被拒绝: {}", bad),
+                Err(e) => e,
+            };
+            assert!(err.contains("非法"), "越界路径错误提示应含「非法」: {} ({})", err, bad);
+
+            std::fs::remove_dir_all(&root).ok();
         }
-        def
     }
 
     /// 临时目录（测试结束由调用方清理）。

@@ -1,5 +1,5 @@
 {
-  "name": "子工作流（3）",
+  "name": "子工作流（1）",
   "version": "1.0.0",
   "description": "",
   "trigger": {
@@ -38,8 +38,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "结束阶段",
@@ -71,8 +71,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     }
   ],
   "stageEdges": [
@@ -83,6 +83,5 @@
       "condition": null
     }
   ],
-  "enabled": true,
-  "refCode": "ref_3"
+  "enabled": true
 }

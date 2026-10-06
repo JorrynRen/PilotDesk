@@ -5,6 +5,8 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { showToast, showLiveToastOnce } from '../utils/toast';
+import { buildImportMemberMessage } from '../utils/workflowImport';
+import type { ImportMemberOutcome } from '../utils/workflowImport';
 import { confirmDialog } from '../stores/confirmStore';
 import { useAccountStore } from '../stores/accountStore';
 import { TitleBar, StatusBar } from '../components/layout';
@@ -496,13 +498,17 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
       if (!filePaths || (filePaths as string[]).length === 0) return;
       const paths = filePaths as string[];
       let successCount = 0;
+      // 汇总各文件的逐成员明细，导入完成后统一给出「新建 / 覆盖 / 跳过」提示
+      const allMembers: ImportMemberOutcome[] = [];
       for (const filePath of paths) {
         try {
-          const result = await invoke<{ id: string; missingDependencies?: string[] }>(
-            'import_workflow_from_file',
-            { filePath },
-          );
+          const result = await invoke<{
+            id: string;
+            members?: ImportMemberOutcome[];
+            missingDependencies?: string[];
+          }>('import_workflow_from_file', { filePath });
           successCount++;
+          if (result?.members?.length) allMembers.push(...result.members);
           // 单文件导入时引用的子工作流本地缺失：不阻断，但明确提示缺失依赖
           if (result?.missingDependencies?.length) {
             showToast(
@@ -515,7 +521,11 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           showToast(`导入工作流「${fileName}」失败: ${innerErr}`, 'error');
         }
       }
-      if (successCount > 0) {
+      // 明细提示：只要发生「未新建」（覆盖 / 跳过）就必须可见
+      const detail = buildImportMemberMessage(allMembers);
+      if (detail) {
+        showToast(detail.message, detail.type);
+      } else if (successCount > 0) {
         showToast(`成功导入 ${successCount} 个工作流`, 'success');
       }
       await loadDefinitions();
@@ -667,11 +677,22 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     setImportSubmitting(true);
     setImportError('');
     try {
-      const res = await invoke<{ workflowId: string; name: string; subflowCount?: number }>('org_import_workflow', {
+      const res = await invoke<{
+        workflowId: string;
+        name: string;
+        subflowCount?: number;
+        members?: ImportMemberOutcome[];
+      }>('org_import_workflow', {
         input: { orgId: Number(importOrgId), resourceId: importItemId },
       });
-      const subflowSuffix = res.subflowCount ? `（含 ${res.subflowCount} 个子流程）` : '';
-      showToast(`已导入「${res.name}」${subflowSuffix}`, 'success');
+      // 明细提示：新建 / 覆盖 / 跳过都要可见；无明细时回退到原有成功提示
+      const detail = buildImportMemberMessage(res.members);
+      if (detail) {
+        showToast(detail.message, detail.type);
+      } else {
+        const subflowSuffix = res.subflowCount ? `（含 ${res.subflowCount} 个子流程）` : '';
+        showToast(`已导入「${res.name}」${subflowSuffix}`, 'success');
+      }
       setShowImportOrg(false);
       await loadDefinitions();
     } catch (err) {

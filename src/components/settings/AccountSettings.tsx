@@ -59,6 +59,8 @@ interface CloudSyncResult {
   conflicts: number;
   /** 本轮冲突对象清单（本地改动已留档为本地版本，主对象已跟随远端） */
   conflictItems?: { id: string; name: string }[];
+  /** 本轮「被云端更新（覆盖本地）」的对象清单（本地无改动直接跟随远端；本地原内容已备份为本地版本） */
+  updatedItems?: { id: string; name: string }[];
   /** 打包失败（未能上传）的对象数 */
   failed?: number;
   /** 失败对象与原因（如体积超限） */
@@ -96,6 +98,10 @@ function cloudSyncSummary(r: CloudSyncResult): string {
   if (r.conflicts > 0) {
     // 冲突不自动选边：本地改动已留档为本地版本、主对象跟随远端；提示用户可在「版本」中查看并回滚
     text += `。检测到 ${r.conflicts} 个冲突：你的改动已保存为本地版本，可在工作流的「版本」中查看并回滚`;
+  }
+  if (r.updatedItems && r.updatedItems.length > 0) {
+    // 被云端更新（覆盖本地）：本地无改动、直接跟随远端；如实告知本地原内容已备份为本地版本
+    text += `；已跟随云端更新 ${r.updatedItems.length} 个工作流（本地原内容已备份为本地版本，可在「版本」中回滚）`;
   }
   return text;
 }

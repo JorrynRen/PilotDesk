@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::commands::account::current_access_token;
-use crate::commands::workflow::{build_workflow_export_json, import_workflow_from_json_with_conn};
+use crate::commands::workflow::{
+    build_workflow_export_json, import_workflow_from_json_with_conn, ImportMemberOutcome,
+};
 use crate::utils::platform;
 
 /// 我所属的组织（仅保留 active 成员 + 组织在用；字段与平台 `MyOrganizationView` 对齐）。
@@ -101,6 +103,8 @@ pub struct ImportedWorkflow {
     pub name: String,
     /// 本次导入携带的子工作流数量（0 表示无子流）
     pub subflow_count: usize,
+    /// 逐成员导入明细（供 UI 展示覆盖 / 跳过提示）
+    pub members: Vec<ImportMemberOutcome>,
 }
 
 // ── 平台响应结构 ────────────────────────────────────────────────
@@ -397,11 +401,12 @@ pub async fn org_import_workflow(
     let conn = state
         .get_conn()
         .map_err(|e| format!("数据库连接失败：{}", e))?;
-    let (def, subflow_count, _skipped) =
+    let outcome =
         import_workflow_from_json_with_conn(&conn, &resource.payload).map_err(String::from)?;
     Ok(ImportedWorkflow {
-        workflow_id: def.id,
-        name: def.name,
-        subflow_count,
+        workflow_id: outcome.definition.id,
+        name: outcome.definition.name,
+        subflow_count: outcome.subflow_count,
+        members: outcome.members,
     })
 }

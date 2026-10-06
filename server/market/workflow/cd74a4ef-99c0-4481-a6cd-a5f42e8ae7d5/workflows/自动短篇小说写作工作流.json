@@ -40,8 +40,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "故事策划",
@@ -176,8 +176,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "章节创作",
@@ -271,8 +271,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "合稿输出",
@@ -301,7 +301,7 @@
           "type": "subflow",
           "label": "子工作流",
           "params": {
-            "refCode": "ref_1"
+            "definitionId": "2e192cc3-a799-4c73-8302-02e7141a2c63"
           },
           "delayMs": null,
           "timeoutMs": null,
@@ -322,7 +322,7 @@
           "type": "subflow",
           "label": "子工作流",
           "params": {
-            "refCode": "ref_2"
+            "definitionId": "e0272601-ea54-4ea5-b623-062dae183783"
           },
           "delayMs": null,
           "timeoutMs": null,
@@ -343,7 +343,7 @@
           "type": "subflow",
           "label": "子工作流",
           "params": {
-            "refCode": "ref_3"
+            "definitionId": "f201ae57-5a3b-43da-8cbf-a3a881d8e5b7"
           },
           "delayMs": null,
           "timeoutMs": null,
@@ -369,8 +369,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     },
     {
       "name": "结束阶段",
@@ -402,8 +402,8 @@
         "customScript": null
       },
       "collapsed": false,
-      "offsetX": 0.0,
-      "offsetY": 0.0
+      "offsetX": 0,
+      "offsetY": 0
     }
   ],
   "stageEdges": [
@@ -432,6 +432,5 @@
       "condition": null
     }
   ],
-  "enabled": true,
-  "refCode": null
+  "enabled": true
 }

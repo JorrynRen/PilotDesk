@@ -16,6 +16,8 @@ import { flushSync } from 'react-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { showToast, showLiveToast, showLiveToastOnce } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { buildImportMemberMessage } from '../../utils/workflowImport';
+import type { ImportMemberOutcome } from '../../utils/workflowImport';
 import { confirmDialog } from '../../stores/confirmStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -725,16 +727,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
       const paths = filePaths as string[];
       let successCount = 0;
       let lastImportedId: string | null = null;
+      // 汇总各文件的逐成员明细，导入完成后统一给出「新建 / 覆盖 / 跳过」提示
+      const allMembers: ImportMemberOutcome[] = [];
       for (const filePath of paths) {
         try {
-          const result = await invoke<{ id: string; missingDependencies?: string[] }>(
-            'import_workflow_from_file',
-            { filePath },
-          );
+          const result = await invoke<{
+            id: string;
+            members?: ImportMemberOutcome[];
+            missingDependencies?: string[];
+          }>('import_workflow_from_file', { filePath });
           successCount++;
           if (result?.id) {
             lastImportedId = result.id;
           }
+          if (result?.members?.length) allMembers.push(...result.members);
           // 单文件导入时引用的子工作流本地缺失：不阻断，但明确提示缺失依赖
           if (result?.missingDependencies?.length) {
             showToast(
@@ -747,11 +753,15 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
           showToast(`导入工作流「${fileName}」失败: ${innerErr}`, 'error');
         }
       }
-      if (successCount > 0) {
+      // 明细提示：只要发生「未新建」（覆盖 / 跳过）就必须可见
+      const detail = buildImportMemberMessage(allMembers);
+      if (detail) {
+        showToast(detail.message, detail.type);
+      } else if (successCount > 0) {
         showToast(`成功导入 ${successCount} 个工作流`, 'success');
-        if (lastImportedId && onImported) {
-          onImported(lastImportedId);
-        }
+      }
+      if (lastImportedId && onImported) {
+        onImported(lastImportedId);
       }
     } catch (err: unknown) {
       console.error('导入工作流失败:', err);

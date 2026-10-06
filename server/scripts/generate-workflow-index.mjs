@@ -2,7 +2,7 @@
 /**
  * 生成工作流模板索引 `server/market/workflow/workflow-index.json`
  *
- * 为什么需要索引：模板目录是 `workflow/<模板名>/`，而静态托管**没有目录列表**，
+ * 为什么需要索引：模板目录是 `workflow/<工作流 UUID>/`（目录名 = 包内工作流 UUID），而静态托管**没有目录列表**，
  * 客户端没法"问服务器有哪些模板"。所以必须有一个索引文件把清单固化下来 ——
  * 这与插件市场的 `plugins-index.json` 是同一个道理（那个由 GitHub Actions 生成）。
  *
@@ -15,10 +15,10 @@
  *   来自同目录的 `catalog.json`。索引每次重算都会把这些合并进来，
  *   所以 **catalog.json 是唯一需要手工编辑的地方**，索引随时可以重生、不丢信息。
  *
- * catalog.json 结构（扁平 map，键 = 模板目录名；保留键 `featured` 除外）：
+ * catalog.json 结构（扁平 map，键 = 模板目录名 = 工作流 UUID；保留键 `featured` 除外）：
  * {
- *   "featured": ["自动短篇小说写作工作流"],   // 精选清单：市场默认 tab 按它排序展示
- *   "某模板目录名": {
+ *   "featured": ["cd74a4ef-99c0-4481-a6cd-a5f42e8ae7d5"],   // 精选清单：值 = 工作流 UUID（= 目录名），市场默认 tab 按它排序展示
+ *   "某工作流 UUID": {
  *     "category": "creative",               // 白名单 automation/agent/data/devops/creative，非法或缺失 → other
  *     "tags": ["小说", "写作"],              // 最多 8 个、每个最多 32 字，超限只截断+告警
  *     "author": "PilotDesk 官方",
@@ -55,21 +55,25 @@ const OUT_FILE = path.join(WORKFLOW_DIR, 'workflow-index.json');
 const CATALOG_FILE = path.join(WORKFLOW_DIR, 'catalog.json');
 
 /**
- * 老格式主定义文件的命名约定：`[主]xxx.json`（其余 `[子]xxx(ref_N).json` 是它引用的子工作流）。
+ * 工作流模板目录统一为**工作流包**格式：包根 `manifest.json` 是**唯一入口**，
+ * 主/子工作流一视同仁平铺在 `workflows/` 子目录下（文件名=工作流原名，重名加序号）。
+ * 主文件取 `manifest.json` 里 `mainId` 命中的成员（其语义仅为「导入后默认打开哪一个」），
+ * 其余成员即子工作流；引用一律由各 JSON 内的稳定 ID（Subflow 节点的 `params.definitionId`）
+ * 表达，文件名不参与解析。目录缺少 `manifest.json` 即视为不可装载，明确报出目录名、不产出错误索引。
  *
- * 新格式（文件包）不再靠文件名识别主文件与引用：主文件取 `manifest.json` 里 `isMain`
- * （或 `id === mainId`）的成员，`[主]` 前缀仅为**人类识别**而保留；引用一律由各 JSON 内的
- * 稳定 ID（Subflow 节点的 `params.definitionId`）表达，文件名不参与解析。
+ * 市场条目键 = **包内工作流 UUID**（`manifest.mainId`，即主定义在库内的稳定 ID）：
+ * 索引条目的 `id`、以及模板目录名都取它，保证 `id == 目录名` 自洽（也避开中文名 / 重名带来的
+ * 目录冲突）。`name` 只是工作流名称，**允许重复**，本脚本不做任何唯一性校验（同名不同 UUID
+ * 是两条不同条目）。文件路径与清单里的 `file` 仍用原名，用不到 UUID。
  */
-const MAIN_PREFIX = '[主]';
 
-/** 新文件包的清单文件名（放在模板目录根下；无此文件即按老格式处理） */
+/** 工作流包清单文件名（模板目录根下） */
 const MANIFEST_FILE = 'manifest.json';
 
 /** 新文件包的格式标识（`manifest.json` 的 `format` 字段） */
 const WORKFLOW_PACKAGE_FORMAT = 'pilotdesk.workflow.package';
 
-/** catalog 顶层保留键：精选清单（值 = 模板目录名数组） */
+/** catalog 顶层保留键：精选清单（值 = 工作流 UUID 数组，即模板目录名） */
 const FEATURED_KEY = 'featured';
 
 /** 分类白名单。非法值一律归入 other —— 前端筛选按这组枚举渲染，脏值会造出"幽灵分类" */
@@ -193,7 +197,7 @@ function normalizeRequirements(raw, label, warnings) {
 }
 
 /**
- * 读取 catalog.json：模板目录名 → 人工维护的展示元数据 + 精选清单。
+ * 读取 catalog.json：模板目录名（= 工作流 UUID）→ 人工维护的展示元数据 + 精选清单。
  *
  * - 文件缺失：只告警、返回空（新仓库还没建 catalog 也能生成索引）
  * - 文件存在但不是合法 JSON / 顶层不是对象：直接报错退出 —— 这是手工维护的文件，
@@ -217,7 +221,7 @@ async function readCatalog(warnings) {
     process.exit(1);
   }
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
-    console.error(`${rel} 的顶层必须是对象（键 = 模板目录名）`);
+    console.error(`${rel} 的顶层必须是对象（键 = 工作流 UUID，即模板目录名）`);
     process.exit(1);
   }
 
@@ -240,23 +244,62 @@ async function readCatalog(warnings) {
 }
 
 /**
- * 解析新文件包的 `manifest.json`（目录 / 包格式，见客户端 `commands/workflow.rs`）。
+ * 递归收集目录下所有 `.json` 文件的**相对路径**（相对 `absDir`，POSIX 风格）。
  *
- * 返回三态：
- * - `{ mainFile, subFiles }`：合法清单 —— 主文件取 `isMain`（其次 `id === mainId`）成员，
- *   `subFiles` = 其余成员文件。清单只声明**工作流成员**文件，故 subFiles 天然不含 `manifest.json`。
- * - `null`：不是本格式的清单（`format` 不符等）→ 调用方回退老格式（`[主]` 前缀）逻辑。
- * - `{ error }`：看起来是包但不可用（无主成员 / 声明文件缺失）→ 调用方跳过该目录并报出。
+ * 工作流包的工作流文件在 `workflows/` 子目录下，清单里的 `file` 是相对包根的相对路径
+ * （如 `workflows/名称.json`），故这里要按整棵树收集、以便与清单声明逐一比对。
+ * 以 `.` 开头的目录（如停用区 `.takedown`）跳过。
+ */
+async function collectJsonFiles(absDir) {
+  const out = [];
+  async function walk(dir, prefix) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        await walk(path.join(dir, e.name), rel);
+      } else if (e.name.toLowerCase().endsWith('.json')) {
+        out.push(rel);
+      }
+    }
+  }
+  await walk(absDir, '');
+  return out;
+}
+
+/** 对相对路径逐段编码（保留 `/` 分隔符）：`workflows/名称.json` → `workflows/%E5%90%8D...json`。 */
+function encodeRelPath(rel) {
+  return rel
+    .split('/')
+    .filter((s) => s.length > 0)
+    .map(encodeURIComponent)
+    .join('/');
+}
+
+/**
+ * 解析工作流包的 `manifest.json`（包格式，见客户端 `commands/workflow.rs`）。
+ *
+ * 返回两态：
+ * - `{ mainId, mainName, mainFile, subFiles }`：合法清单 —— 主文件取 `id === mainId` 的成员
+ *   （`mainId` 唯一表达入口），`mainId` 即市场条目键（工作流 UUID），`mainName` 是清单里的名称
+ *   （仅作 JSON 缺 name 时的显示兜底）；`subFiles` = 其余成员文件。清单只声明**工作流成员**文件，
+ *   故 subFiles 天然不含 `manifest.json`。
+ * - `{ error }`：清单不可用（非法 JSON / 非本格式 / 缺主成员 / 声明文件缺失）→ 调用方跳过该目录并报出目录名。
  */
 async function readWorkflowPackage(absDir, files) {
   let manifest;
   try {
     manifest = JSON.parse(await fs.readFile(path.join(absDir, MANIFEST_FILE), 'utf8'));
   } catch (e) {
-    return { error: `${MANIFEST_FILE} 存在但不是合法 JSON：${e.message}` };
+    return { error: `${MANIFEST_FILE} 不是合法 JSON：${e.message}` };
   }
-  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) return null;
-  if (manifest.format !== WORKFLOW_PACKAGE_FORMAT) return null;
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    return { error: `${MANIFEST_FILE} 的顶层必须是对象` };
+  }
+  if (manifest.format !== WORKFLOW_PACKAGE_FORMAT) {
+    return { error: `${MANIFEST_FILE} 的 format 不是 ${WORKFLOW_PACKAGE_FORMAT}` };
+  }
   if (!Array.isArray(manifest.workflows)) {
     return { error: `${MANIFEST_FILE} 的 workflows 不是数组` };
   }
@@ -267,18 +310,22 @@ async function readWorkflowPackage(absDir, files) {
     )
     .map((w) => ({
       id: typeof w.id === 'string' ? w.id : '',
+      name: typeof w.name === 'string' ? w.name : '',
       file: w.file.trim(),
-      isMain: w.isMain === true,
     }));
-  const main = members.find((w) => w.isMain) ?? members.find((w) => w.id === manifest.mainId);
+  // 入口只由 mainId 表达（不再有 isMain 字段）
+  const main = members.find((w) => w.id === manifest.mainId);
   if (!main) {
-    return { error: `${MANIFEST_FILE} 未声明主工作流（isMain / mainId 均无匹配成员）` };
+    return { error: `${MANIFEST_FILE} 未声明主工作流（mainId 未匹配任何成员）` };
   }
   const missing = members.map((w) => w.file).filter((f) => !files.includes(f));
   if (missing.length > 0) {
     return { error: `${MANIFEST_FILE} 声明的成员文件缺失：${missing.join('、')}` };
   }
   return {
+    // 市场条目键 = 主工作流 UUID（= main.id，二者按定义相等）
+    mainId: main.id,
+    mainName: main.name,
     mainFile: main.file,
     subFiles: members.map((w) => w.file).filter((f) => f !== main.file),
   };
@@ -304,33 +351,31 @@ async function main() {
 
   for (const dir of dirs) {
     const absDir = path.join(WORKFLOW_DIR, dir);
-    const files = (await fs.readdir(absDir)).filter((f) => f.toLowerCase().endsWith('.json'));
+    const files = await collectJsonFiles(absDir);
 
-    // 主文件 / 附带文件：有清单（新格式）按清单取，无清单（老格式）按 `[主]` 前缀取。
-    // 新格式下 subFiles 只含工作流成员文件、**不含 manifest.json**（清单由 manifestFile 字段单独给出）。
-    let mainFile;
-    let subFiles;
-    let manifestFile;
-    if (files.includes(MANIFEST_FILE)) {
-      const pkg = await readWorkflowPackage(absDir, files);
-      if (pkg?.error) {
-        skipped.push(`${dir}（${pkg.error}）`);
-        continue;
-      }
-      if (pkg) {
-        ({ mainFile, subFiles } = pkg);
-        manifestFile = MANIFEST_FILE;
-      }
-      // pkg 为 null（清单不是本格式）→ 落到下面的老格式逻辑
+    // 模板目录统一为工作流包：只按 manifest.json 取主文件 / 子文件。
+    // subFiles 只含工作流成员文件、**不含 manifest.json**（清单由 manifestFile 字段单独给出）。
+    if (!files.includes(MANIFEST_FILE)) {
+      // 缺清单就没法确定主文件与成员：**明确报出目录名**，不静默产出错误索引
+      skipped.push(`${dir}（缺少 ${MANIFEST_FILE}）`);
+      continue;
     }
-    if (!mainFile) {
-      mainFile = files.find((f) => f.startsWith(MAIN_PREFIX));
-      // 没有主定义就没法作为模板装载：**明确报出来**，不静默跳过
-      if (!mainFile) {
-        skipped.push(`${dir}（缺少以「${MAIN_PREFIX}」开头的主定义文件）`);
-        continue;
-      }
-      subFiles = files.filter((f) => f !== mainFile);
+    const pkg = await readWorkflowPackage(absDir, files);
+    if (pkg.error) {
+      skipped.push(`${dir}（${pkg.error}）`);
+      continue;
+    }
+    const { mainId, mainName, mainFile, subFiles } = pkg;
+    const manifestFile = MANIFEST_FILE;
+
+    // 目录名约定 = 工作流 UUID（= mainId），保证索引 `id == 目录名`。
+    // 不一致时只告警、仍按**实际目录名**拼 path（否则下载地址会指向不存在的目录），
+    // 提示作者把目录改名成该 UUID。
+    if (dir !== mainId) {
+      warnings.push(
+        `${dir}（目录名不是工作流 UUID（mainId=${mainId}）：索引 id 取 UUID，而文件路径按目录名拼，` +
+          '两者不一致会让人困惑，建议把目录改名为该 UUID）',
+      );
     }
 
     let def;
@@ -383,17 +428,19 @@ async function main() {
     const trigger = def?.trigger?.triggerType;
 
     templates.push({
-      id: dir,
-      name: typeof def.name === 'string' && def.name ? def.name : dir,
+      // 条目键 = 包内工作流 UUID（manifest.mainId）；目录名同 UUID，故 id == dir（自洽）
+      id: mainId,
+      name: typeof def.name === 'string' && def.name ? def.name : mainName || dir,
       version: typeof def.version === 'string' ? def.version : '',
       description: typeof def.description === 'string' ? def.description : '',
       // 已 URL 编码的路径：模板名带中文与括号，让调用方各自编码迟早出错，这里一次编好
-      path: `workflow/${encodeURIComponent(dir)}/${encodeURIComponent(mainFile)}`,
+      // （mainFile 是相对包根的相对路径，如 workflows/名称.json，逐段编码、保留 `/`）
+      path: `workflow/${encodeURIComponent(dir)}/${encodeRelPath(mainFile)}`,
       dir,
       mainFile,
       subFiles,
-      // 仅新格式带此字段：清单文件名（客户端据此把 manifest.json 一并下载）；老格式不带，保持条目形状不变
-      ...(manifestFile ? { manifestFile } : {}),
+      // 清单文件名（客户端据此把 manifest.json 一并下载）
+      manifestFile,
       stageCount: Array.isArray(def.stages) ? def.stages.length : 0,
       nodeCount: countNodes(def),
       // 触发方式取值 manual/cron/event（前端负责映射成中文）；缺失写空串，形状稳定

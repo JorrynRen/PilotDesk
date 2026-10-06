@@ -539,6 +539,17 @@ pub struct SyncConflict {
     pub name: String,
 }
 
+/// 一个「被云端更新（覆盖本地）」的对象：本地无改动、直接跟随远端；仅在 UI 提示用（id + 名称）。
+///
+/// 与 [`SyncConflict`] 区分：冲突 = 本地有改动（改动已留档为本地版本）；覆盖 = 本地无改动直接跟随远端
+/// （本地原内容同样在落库前被备份为本地版本，可回滚）。
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncUpdated {
+    pub id: String,
+    pub name: String,
+}
+
 /// 一轮同步结果（失败不抛异常，原因放 `error` 文案）。
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -549,6 +560,9 @@ pub struct CloudSyncResult {
     /// 本轮冲突对象清单（本地改动已留档为本地版本，主对象已跟随远端；供 UI 提示）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflict_items: Vec<SyncConflict>,
+    /// 本轮「被云端更新（覆盖本地）」的对象清单（本地无改动直接跟随远端；本地原内容已备份为本地版本）
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub updated_items: Vec<SyncUpdated>,
     /// 打包失败（本轮未能上传）的对象数
     pub failed: usize,
     /// 失败对象与原因（供 UI 展示；如「体积超限」）
@@ -664,12 +678,18 @@ struct ApplyOutcome {
     applied: bool,
     /// 判定为冲突时记录的对象（本地有真实改动 + 远端也变了）
     conflict: Option<SyncConflict>,
+    /// 本地无改动、直接跟随远端时记录的对象（被云端更新 / 覆盖本地）
+    updated: Option<SyncUpdated>,
 }
 
-/// 应用一批远端条目，返回 `(实际落地条数, 本轮冲突清单)`。
-fn apply_remote_items(conn: &Connection, items: &[RemoteItem]) -> (usize, Vec<SyncConflict>) {
+/// 应用一批远端条目，返回 `(实际落地条数, 本轮冲突清单, 本轮被云端更新清单)`。
+fn apply_remote_items(
+    conn: &Connection,
+    items: &[RemoteItem],
+) -> (usize, Vec<SyncConflict>, Vec<SyncUpdated>) {
     let mut applied = 0usize;
     let mut conflicts = Vec::new();
+    let mut updated = Vec::new();
     for item in items {
         match apply_one_remote_item(conn, item) {
             Ok(o) => {
@@ -679,11 +699,14 @@ fn apply_remote_items(conn: &Connection, items: &[RemoteItem]) -> (usize, Vec<Sy
                 if let Some(c) = o.conflict {
                     conflicts.push(c);
                 }
+                if let Some(u) = o.updated {
+                    updated.push(u);
+                }
             }
             Err(e) => log::warn!("[CloudSync] 应用远端对象失败 {}：{}", item.key, e),
         }
     }
-    (applied, conflicts)
+    (applied, conflicts, updated)
 }
 
 /// 应用单条远端条目。
@@ -744,6 +767,7 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
         return Ok(ApplyOutcome {
             applied: true,
             conflict: None,
+            updated: None,
         });
     }
 
@@ -776,13 +800,29 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
             } else {
                 None
             };
-            apply_workflow_bundle_in_place(conn, &item.key, payload)?;
+            let (applied_def, _subflow_count) =
+                apply_workflow_bundle_in_place(conn, &item.key, payload)?;
             // 应用后本地内容 = 远端内容 → 记录为已同步
             let h = local_content_hash(conn, &item.key)?;
             upsert_sync_state(conn, &item.key, item.version, false, h)?;
+            // 本地无改动、直接跟随远端 = 被云端更新（覆盖本地）；与冲突互斥，不重复计入
+            let updated_record = if conflict_record.is_none() {
+                let name = if applied_def.name.trim().is_empty() {
+                    item.key.clone()
+                } else {
+                    applied_def.name.clone()
+                };
+                Some(SyncUpdated {
+                    id: item.key.clone(),
+                    name,
+                })
+            } else {
+                None
+            };
             Ok(ApplyOutcome {
                 applied: true,
                 conflict: conflict_record,
+                updated: updated_record,
             })
         }
         // payload 缺失（协议异常）：只推进版本、保留原哈希，避免反复拉取（无法判定本地是否与远端一致）
@@ -792,6 +832,7 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
             Ok(ApplyOutcome {
                 applied: true,
                 conflict: None,
+                updated: None,
             })
         }
     }
@@ -1111,10 +1152,11 @@ pub async fn run_sync_round(state: &crate::DbState) -> CloudSyncResult {
     match fetch_all_objects(&token, cursor).await {
         Ok((watermark, items)) => {
             if let Ok(conn) = state.get_conn() {
-                let (applied, conflicts) = apply_remote_items(&conn, &items);
+                let (applied, conflicts, updated) = apply_remote_items(&conn, &items);
                 result.pulled = applied;
-                // 冲突计数统一在末尾由 `conflict_items` 派生，保证「冲突 N」与清单条数一致
+                // 冲突 / 被云端更新两类清单各自独立：冲突 = 本地有改动已留档；更新 = 本地无改动直接跟随
                 result.conflict_items.extend(conflicts);
+                result.updated_items.extend(updated);
                 let _ = write_cursor(&conn, watermark);
             }
         }
@@ -1240,6 +1282,13 @@ fn save_round_meta(state: &crate::DbState, result: &CloudSyncResult) {
                 text.push_str(&format!(
                     "；检测到 {} 个冲突：你的改动已保存为本地版本，可在工作流的「版本」中查看并回滚",
                     result.conflicts
+                ));
+            }
+            // 被云端更新（覆盖本地）不静默：明确提示「已跟随远端，本地原内容也已备份为本地版本」
+            if !result.updated_items.is_empty() {
+                text.push_str(&format!(
+                    "；已跟随云端更新 {} 个工作流（本地原内容已备份为本地版本，可在「版本」中回滚）",
+                    result.updated_items.len()
                 ));
             }
             text
@@ -1698,6 +1747,9 @@ mod tests {
         let outcome = apply_one_remote_item(&conn, &item).unwrap();
         assert!(outcome.applied, "内容不同 → 跟随远端");
         assert!(outcome.conflict.is_none(), "本地未改 → 非冲突");
+        let updated = outcome.updated.expect("本地未改 → 应计入「被云端更新」");
+        assert_eq!(updated.id, "w1");
+        assert_eq!(updated.name, "远端内容", "被云端更新记录应用远端内容的名");
 
         let vs = crate::workflow::list_workflow_versions(&conn, "w1").unwrap();
         assert_eq!(vs.len(), 1, "覆盖前应给本地旧内容建一个快照");
@@ -1740,6 +1792,10 @@ mod tests {
         let conflict = outcome.conflict.expect("应判定为冲突");
         assert_eq!(conflict.id, "w1");
         assert_eq!(conflict.name, "本地新改动", "冲突记录应带上本地名称");
+        assert!(
+            outcome.updated.is_none(),
+            "冲突对象不应同时计入「被云端更新」（二者不混淆）"
+        );
 
         // 本地改动被留档为一个本地版本（origin = cloud_sync）
         let vs = crate::workflow::list_workflow_versions(&conn, "w1").unwrap();
@@ -1792,6 +1848,55 @@ mod tests {
                 .name,
             "远端内容"
         );
+    }
+
+    /// 一批 pull：远端更新 + 本地无改动 → 计入「被云端更新」清单；
+    /// 远端更新 + 本地有改动 → 计入「冲突」清单。两类清单互斥、不混淆。
+    #[test]
+    fn pull_overwrite_and_conflict_lists_are_distinct() {
+        let conn = full_sync_conn();
+        // w1：本地未改 → 被云端更新；w2：本地有改动 → 冲突
+        crate::workflow::create_definition(&conn, &sync_def("w1", "本地内容A")).unwrap();
+        crate::workflow::create_definition(&conn, &sync_def("w2", "本地旧内容B")).unwrap();
+        mark_synced(&conn, "w1", 1);
+        mark_synced(&conn, "w2", 1);
+        crate::workflow::update_definition(&conn, &sync_def("w2", "本地改动B")).unwrap();
+        assert!(local_differs_from_synced(&conn, "w2").unwrap());
+
+        // 远端两份新内容（同一连接内造源工作流）
+        crate::workflow::create_definition(&conn, &sync_def("srcA", "远端内容A")).unwrap();
+        crate::workflow::create_definition(&conn, &sync_def("srcB", "远端内容B")).unwrap();
+        let (_n, payload_a) = build_workflow_export_json(&conn, "srcA").unwrap();
+        let (_n, payload_b) = build_workflow_export_json(&conn, "srcB").unwrap();
+
+        let items = vec![
+            RemoteItem {
+                key: "w1".to_string(),
+                version: 2,
+                deleted: false,
+                payload: Some(payload_a),
+                updated_at: None,
+            },
+            RemoteItem {
+                key: "w2".to_string(),
+                version: 2,
+                deleted: false,
+                payload: Some(payload_b),
+                updated_at: None,
+            },
+        ];
+        let (applied, conflicts, updated) = apply_remote_items(&conn, &items);
+        assert_eq!(applied, 2, "两条都应落地");
+
+        assert_eq!(updated.len(), 1, "本地未改的对象应计入「被云端更新」");
+        assert_eq!(updated[0].id, "w1");
+        assert_eq!(updated[0].name, "远端内容A");
+        assert_eq!(conflicts.len(), 1, "本地有改动的对象应计入「冲突」");
+        assert_eq!(conflicts[0].id, "w2");
+        assert_eq!(conflicts[0].name, "本地改动B");
+        // 两类清单不混淆
+        assert!(!updated.iter().any(|u| u.id == "w2"));
+        assert!(!conflicts.iter().any(|c| c.id == "w1"));
     }
 
     /// 删除候选收窄：仅回收站中的**已跟踪**条目推 deleted；从未同步（server_version=0）的回收站条目不推。

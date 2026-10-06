@@ -1,0 +1,12 @@
+{
+  "format": "pilotdesk.workflow.package",
+  "version": 1,
+  "mainId": "0a4820da-6b50-4b9c-936f-c05913d05394",
+  "workflows": [
+    {
+      "id": "0a4820da-6b50-4b9c-936f-c05913d05394",
+      "name": "写小说工作流（测试）",
+      "file": "workflows/写小说工作流（测试）.json"
+    }
+  ]
+}
