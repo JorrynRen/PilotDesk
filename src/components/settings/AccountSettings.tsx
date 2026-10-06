@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Cloud, Loader2, LogIn, LogOut, RefreshCw, UploadCloud } from 'lucide-react';
 
 import { PlanBadge } from '../common/PlanBadge';
+import { Select } from '../common/Select';
 import { CAP_CLOUD_SYNC, capabilityLabel, hasCapability, useAccountStore } from '../../stores/accountStore';
 import { expiryText } from '../../utils/planText';
 import { showToast } from '../../utils/toast';
@@ -16,8 +17,16 @@ import { SettingsButton, SettingsCard, SettingsSection } from './index';
 
 /** 「向组织上报用量」开关设置键（与后端 `commands/usage.rs::USAGE_REPORT_ENABLED_KEY` 一致） */
 const USAGE_REPORT_ENABLED_KEY = 'usage_report_enabled';
+/** 上报目标组织 id 设置键（空 = 自动取第一个在用组织；与后端 `usage.rs::REPORT_ORG_ID_KEY` 一致） */
+const REPORT_ORG_ID_KEY = 'report_org_id';
 /** 上次上报时间的本地设置键（明文、非敏感，仅用于界面提示） */
 const USAGE_REPORT_LAST_KEY = 'usage_report_last_at';
+/** 自动同步间隔设置键（分钟；与后端 `cloud_sync.rs::SYNC_INTERVAL_KEY` 一致） */
+const SYNC_INTERVAL_KEY = 'cloud_sync_interval_minutes';
+/** 自动同步间隔可配范围（分钟） */
+const SYNC_INTERVAL_MIN = 1;
+const SYNC_INTERVAL_MAX = 1440;
+const SYNC_INTERVAL_DEFAULT = 10;
 
 /** 单条上报条目（后端 `UsageItem`） */
 interface UsageItem {
@@ -48,6 +57,8 @@ interface CloudSyncResult {
   pulled: number;
   pushed: number;
   conflicts: number;
+  /** 本轮冲突对象清单（本地改动已留档为本地版本，主对象已跟随远端） */
+  conflictItems?: { id: string; name: string }[];
   /** 打包失败（未能上传）的对象数 */
   failed?: number;
   /** 失败对象与原因（如体积超限） */
@@ -75,14 +86,18 @@ function roleLabel(role: string): string {
   return map[role] ?? role;
 }
 
-/** 云同步结果摘要：有打包失败对象时带上数量与首个原因（不静默）。 */
+/** 云同步结果摘要：有打包失败 / 冲突对象时带上数量与说明（不静默）。 */
 function cloudSyncSummary(r: CloudSyncResult): string {
-  const base = `拉取 ${r.pulled} / 推送 ${r.pushed} / 冲突 ${r.conflicts}`;
+  let text = `拉取 ${r.pulled} / 推送 ${r.pushed} / 冲突 ${r.conflicts}`;
   if (r.failed && r.failed > 0) {
     const first = r.failures?.[0];
-    return `${base}；${r.failed} 个失败${first ? `（${first}）` : ''}`;
+    text += `；${r.failed} 个失败${first ? `（${first}）` : ''}`;
   }
-  return base;
+  if (r.conflicts > 0) {
+    // 冲突不自动选边：本地改动已留档为本地版本、主对象跟随远端；提示用户可在「版本」中查看并回滚
+    text += `。检测到 ${r.conflicts} 个冲突：你的改动已保存为本地版本，可在工作流的「版本」中查看并回滚`;
+  }
+  return text;
 }
 
 export function AccountSettings() {
@@ -130,6 +145,62 @@ export function AccountSettings() {
       showToast(next ? '已开启向组织上报用量' : '已关闭向组织上报用量', 'success');
     } catch (e) {
       setReportEnabled(!next); // 回滚
+      showToast(`保存失败: ${errorMessage(e)}`, 'error');
+    }
+  };
+
+  // ── 上报目标组织：列出「在用组织」，保存后用所选组织上报（空 = 自动取第一个）──
+  const [orgOptions, setOrgOptions] = useState<{ id: number; name: string }[] | null>(null);
+  const [reportOrgId, setReportOrgId] = useState('');
+  const [orgFallbackHint, setOrgFallbackHint] = useState('');
+
+  useEffect(() => {
+    if (!account) return; // 未登录不做组织选择（渲染处也用 account 兜底，避免展示过期选项）
+    let alive = true;
+    (async () => {
+      try {
+        const [orgs, savedRaw] = await Promise.all([
+          invoke<{ id: number; name: string }[]>('org_list_mine'),
+          invoke<string | null>('get_app_setting', { key: REPORT_ORG_ID_KEY }),
+        ]);
+        if (!alive) return;
+        setOrgOptions(orgs);
+        const saved = (savedRaw ?? '').trim();
+        if (saved && orgs.some((o) => String(o.id) === saved)) {
+          // 配置的组织仍在在用列表 → 沿用
+          setReportOrgId(saved);
+          setOrgFallbackHint('');
+        } else {
+          // 未配置 / 配置已失效（不再是成员或已解散）→ 回退第一个在用组织并提示
+          setReportOrgId('');
+          if (saved) {
+            const first = orgs[0];
+            setOrgFallbackHint(
+              `原选择的组织已失效，已回退到第一个在用组织${first ? `（${first.name}）` : ''}`,
+            );
+          } else {
+            setOrgFallbackHint('');
+          }
+        }
+      } catch {
+        /* 忽略：未登录 / 网络失败时不做组织选择，不影响其它设置 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [account]);
+
+  const changeReportOrg = async (value: string) => {
+    setReportOrgId(value);
+    setOrgFallbackHint('');
+    try {
+      await invoke('set_app_setting', { key: REPORT_ORG_ID_KEY, value });
+      showToast(
+        value ? '已更新上报目标组织，下次上报生效' : '已改为自动选择第一个在用组织',
+        'success',
+      );
+    } catch (e) {
       showToast(`保存失败: ${errorMessage(e)}`, 'error');
     }
   };
@@ -200,6 +271,42 @@ export function AccountSettings() {
       alive = false;
     };
   }, []);
+
+  // 自动同步间隔（分钟）：读/写主库设置 `cloud_sync_interval_minutes`（1–1440，后端每轮读取即时生效）
+  const [syncIntervalMin, setSyncIntervalMin] = useState(SYNC_INTERVAL_DEFAULT);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const raw = await invoke<string | null>('get_app_setting', { key: SYNC_INTERVAL_KEY });
+        if (!alive) return;
+        const n = raw ? parseInt(raw, 10) : NaN;
+        setSyncIntervalMin(
+          Number.isFinite(n)
+            ? Math.max(SYNC_INTERVAL_MIN, Math.min(SYNC_INTERVAL_MAX, n))
+            : SYNC_INTERVAL_DEFAULT,
+        );
+      } catch {
+        /* 忽略：读不到就用默认值展示 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const changeSyncInterval = async (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n)) return;
+    const clamped = Math.max(SYNC_INTERVAL_MIN, Math.min(SYNC_INTERVAL_MAX, n));
+    setSyncIntervalMin(clamped);
+    try {
+      await invoke('set_app_setting', { key: SYNC_INTERVAL_KEY, value: String(clamped) });
+    } catch (e) {
+      showToast(`保存失败: ${errorMessage(e)}`, 'error');
+    }
+  };
 
   const toggleCloudSync = async () => {
     const next = !cloudSyncEnabled;
@@ -339,6 +446,30 @@ export function AccountSettings() {
           </div>
         </SettingsCard>
 
+        {/* 上报目标组织：多组织时消除「取第一个」的顺序依赖；空 = 自动取第一个在用组织 */}
+        {account && orgOptions && orgOptions.length > 0 && (
+          <div className="mt-3">
+            <div className="text-[11px] mb-1" style={{ color: 'var(--text-secondary)' }}>
+              上报到的组织
+            </div>
+            <Select
+              value={reportOrgId}
+              onChange={(v) => void changeReportOrg(v)}
+              placeholder="自动（第一个在用组织）"
+              options={[
+                { value: '', label: '自动（第一个在用组织）' },
+                ...orgOptions.map((o) => ({ value: String(o.id), label: o.name })),
+              ]}
+              className="w-full"
+            />
+            {orgFallbackHint && (
+              <p className="mt-1 text-[11px]" style={{ color: '#F59E0B' }}>
+                {orgFallbackHint}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="mt-3 flex items-center gap-3">
           <SettingsButton
             variant="primary"
@@ -400,6 +531,32 @@ export function AccountSettings() {
             </span>
           </div>
         </SettingsCard>
+
+        {/* 自动同步间隔（分钟）：1–1440，后端每轮读取 → 保存后下一轮生效（无需重启） */}
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            自动同步间隔
+          </span>
+          <input
+            type="number"
+            min={SYNC_INTERVAL_MIN}
+            max={SYNC_INTERVAL_MAX}
+            value={syncIntervalMin}
+            disabled={!canCloudSync}
+            onChange={(e) => void changeSyncInterval(e.target.value)}
+            className="px-2 py-1 rounded-lg text-xs outline-none disabled:opacity-50"
+            style={{
+              width: 72,
+              backgroundColor: 'var(--bg-secondary)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border)',
+            }}
+            title="自动同步间隔（分钟），范围 1–1440"
+          />
+          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            分钟（1–1440，保存后下一轮生效）
+          </span>
+        </div>
 
         {/* 说明：子工作流不是独立同步对象，其内容随所属主工作流一并上传，避免对端重复导入 */}
         <p className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>

@@ -54,8 +54,20 @@ const WORKFLOW_DIR = path.join(ROOT, 'market', 'workflow');
 const OUT_FILE = path.join(WORKFLOW_DIR, 'workflow-index.json');
 const CATALOG_FILE = path.join(WORKFLOW_DIR, 'catalog.json');
 
-/** 主定义文件的命名约定：`[主]xxx.json`（其余 `[子]xxx.json` 是它引用的子工作流） */
+/**
+ * 老格式主定义文件的命名约定：`[主]xxx.json`（其余 `[子]xxx(ref_N).json` 是它引用的子工作流）。
+ *
+ * 新格式（文件包）不再靠文件名识别主文件与引用：主文件取 `manifest.json` 里 `isMain`
+ * （或 `id === mainId`）的成员，`[主]` 前缀仅为**人类识别**而保留；引用一律由各 JSON 内的
+ * 稳定 ID（Subflow 节点的 `params.definitionId`）表达，文件名不参与解析。
+ */
 const MAIN_PREFIX = '[主]';
+
+/** 新文件包的清单文件名（放在模板目录根下；无此文件即按老格式处理） */
+const MANIFEST_FILE = 'manifest.json';
+
+/** 新文件包的格式标识（`manifest.json` 的 `format` 字段） */
+const WORKFLOW_PACKAGE_FORMAT = 'pilotdesk.workflow.package';
 
 /** catalog 顶层保留键：精选清单（值 = 模板目录名数组） */
 const FEATURED_KEY = 'featured';
@@ -227,6 +239,51 @@ async function readCatalog(warnings) {
   return { entries, featured };
 }
 
+/**
+ * 解析新文件包的 `manifest.json`（目录 / 包格式，见客户端 `commands/workflow.rs`）。
+ *
+ * 返回三态：
+ * - `{ mainFile, subFiles }`：合法清单 —— 主文件取 `isMain`（其次 `id === mainId`）成员，
+ *   `subFiles` = 其余成员文件。清单只声明**工作流成员**文件，故 subFiles 天然不含 `manifest.json`。
+ * - `null`：不是本格式的清单（`format` 不符等）→ 调用方回退老格式（`[主]` 前缀）逻辑。
+ * - `{ error }`：看起来是包但不可用（无主成员 / 声明文件缺失）→ 调用方跳过该目录并报出。
+ */
+async function readWorkflowPackage(absDir, files) {
+  let manifest;
+  try {
+    manifest = JSON.parse(await fs.readFile(path.join(absDir, MANIFEST_FILE), 'utf8'));
+  } catch (e) {
+    return { error: `${MANIFEST_FILE} 存在但不是合法 JSON：${e.message}` };
+  }
+  if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) return null;
+  if (manifest.format !== WORKFLOW_PACKAGE_FORMAT) return null;
+  if (!Array.isArray(manifest.workflows)) {
+    return { error: `${MANIFEST_FILE} 的 workflows 不是数组` };
+  }
+
+  const members = manifest.workflows
+    .filter(
+      (w) => w !== null && typeof w === 'object' && typeof w.file === 'string' && w.file.trim(),
+    )
+    .map((w) => ({
+      id: typeof w.id === 'string' ? w.id : '',
+      file: w.file.trim(),
+      isMain: w.isMain === true,
+    }));
+  const main = members.find((w) => w.isMain) ?? members.find((w) => w.id === manifest.mainId);
+  if (!main) {
+    return { error: `${MANIFEST_FILE} 未声明主工作流（isMain / mainId 均无匹配成员）` };
+  }
+  const missing = members.map((w) => w.file).filter((f) => !files.includes(f));
+  if (missing.length > 0) {
+    return { error: `${MANIFEST_FILE} 声明的成员文件缺失：${missing.join('、')}` };
+  }
+  return {
+    mainFile: main.file,
+    subFiles: members.map((w) => w.file).filter((f) => f !== main.file),
+  };
+}
+
 async function main() {
   const warnings = [];
   const { entries: catalog, featured } = await readCatalog(warnings);
@@ -248,12 +305,32 @@ async function main() {
   for (const dir of dirs) {
     const absDir = path.join(WORKFLOW_DIR, dir);
     const files = (await fs.readdir(absDir)).filter((f) => f.toLowerCase().endsWith('.json'));
-    const mainFile = files.find((f) => f.startsWith(MAIN_PREFIX));
 
-    // 没有主定义就没法作为模板装载：**明确报出来**，不静默跳过
+    // 主文件 / 附带文件：有清单（新格式）按清单取，无清单（老格式）按 `[主]` 前缀取。
+    // 新格式下 subFiles 只含工作流成员文件、**不含 manifest.json**（清单由 manifestFile 字段单独给出）。
+    let mainFile;
+    let subFiles;
+    let manifestFile;
+    if (files.includes(MANIFEST_FILE)) {
+      const pkg = await readWorkflowPackage(absDir, files);
+      if (pkg?.error) {
+        skipped.push(`${dir}（${pkg.error}）`);
+        continue;
+      }
+      if (pkg) {
+        ({ mainFile, subFiles } = pkg);
+        manifestFile = MANIFEST_FILE;
+      }
+      // pkg 为 null（清单不是本格式）→ 落到下面的老格式逻辑
+    }
     if (!mainFile) {
-      skipped.push(`${dir}（缺少以「${MAIN_PREFIX}」开头的主定义文件）`);
-      continue;
+      mainFile = files.find((f) => f.startsWith(MAIN_PREFIX));
+      // 没有主定义就没法作为模板装载：**明确报出来**，不静默跳过
+      if (!mainFile) {
+        skipped.push(`${dir}（缺少以「${MAIN_PREFIX}」开头的主定义文件）`);
+        continue;
+      }
+      subFiles = files.filter((f) => f !== mainFile);
     }
 
     let def;
@@ -314,7 +391,9 @@ async function main() {
       path: `workflow/${encodeURIComponent(dir)}/${encodeURIComponent(mainFile)}`,
       dir,
       mainFile,
-      subFiles: files.filter((f) => f !== mainFile),
+      subFiles,
+      // 仅新格式带此字段：清单文件名（客户端据此把 manifest.json 一并下载）；老格式不带，保持条目形状不变
+      ...(manifestFile ? { manifestFile } : {}),
       stageCount: Array.isArray(def.stages) ? def.stages.length : 0,
       nodeCount: countNodes(def),
       // 触发方式取值 manual/cron/event（前端负责映射成中文）；缺失写空串，形状稳定

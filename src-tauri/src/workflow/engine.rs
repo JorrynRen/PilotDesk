@@ -941,6 +941,23 @@ impl WorkflowEngine {
 
                 match super::get_definition(conn, &subflow_def_id) {
                     Ok(Some(sub_def)) => {
+                        // 子流已进回收站：报明确错误（恢复或替换节点），不再递归探测其内部
+                        if matches!(super::is_definition_deleted(conn, &subflow_def_id), Ok(true)) {
+                            checks.push(ValidationCheck {
+                                check_type: "subflow_deleted".into(),
+                                severity: "error".into(),
+                                message: format!(
+                                    "子工作流「{}」已被删除，无法运行；请从回收站恢复或替换该节点",
+                                    sub_def.name
+                                ),
+                                details: Some(serde_json::json!({
+                                    "definitionId": &subflow_def_id,
+                                    "nodeId": &node.id,
+                                    "stageId": &stage.id,
+                                })),
+                            });
+                            continue;
+                        }
                         Self::check_subflow_chain_recursive(
                             &sub_def,
                             conn,
@@ -2743,12 +2760,10 @@ impl WorkflowEngine {
             .and_then(|v| v.as_str())
             .ok_or_else(|| AppError::InvalidInput("Subflow 节点缺少 definitionId 参数".into()))?;
 
-        // 加载子工作流定义
+        // 加载子工作流定义（已进回收站的子流给出明确中文错误，见 resolve_subflow_for_run）
 
         let conn = get_db_conn(emitter)?;
-        let subflow_def = super::get_definition(&conn, subflow_def_id)?.ok_or_else(|| {
-            AppError::InvalidInput(format!("子工作流定义不存在: {}", subflow_def_id))
-        })?;
+        let subflow_def = super::resolve_subflow_for_run(&conn, subflow_def_id)?;
 
         // 检查 maxDepth（默认 10）
 

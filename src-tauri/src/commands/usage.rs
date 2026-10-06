@@ -832,9 +832,13 @@ fn csv_field(s: &str) -> String {
 // ════════════════════════════════════════════════════════════
 //
 // 平台契约（已上线）：POST {平台基址}/api/v1/usage/report，Bearer 鉴权，body
-//   { "day": "YYYY-MM-DD", "items": [{ model, calls, inputTokens, outputTokens, costFen }] }
+//   { "day": "YYYY-MM-DD", "orgId": <可选，组织 id>, "items": [{ model, calls, inputTokens, outputTokens, costFen }] }
 // 数值为**当天累计值**，服务端按 (ownerType, ownerId, day, model) **覆盖写**（幂等，重复上报无害）；
 // `day` 可省略（服务端取当天）。平台基址复用 `utils::platform` 里写死的常量，不新增可配置项。
+//
+// **归属组织显式上报**：平台不再单靠「权益就高不就低」猜归属 —— 个人档与组织档同档时会被判成
+// 个人档，导致组织看板恒为 0。故产品端在上报前拉一次 `/organizations/mine`，取**第一个在用组织**
+// 的 id 放进 body（`orgId`）；平台侧会校验该调用者确实是这个组织的在用成员。无组织时不带该字段。
 //
 // **只上报聚合数字**（模型名 / 调用次数 / token 数）——绝不包含任何对话内容或提示词。
 //
@@ -845,6 +849,12 @@ fn csv_field(s: &str) -> String {
 
 /// 上报开关设置键（默认开启）。关闭后自动上报停止，手动上报也会被拒绝并给出提示。
 pub const USAGE_REPORT_ENABLED_KEY: &str = "usage_report_enabled";
+
+/// 上报目标组织设置键（值为主库 `app_settings` 里记录的**组织 id**）。
+///
+/// 缺省 / 空 = 取 `/organizations/mine` 里第一个在用组织（旧行为）；显式设置后按所选组织上报，
+/// 所选组织若已失效（非在用成员 / 已解散）→ 回退第一个在用组织。
+pub const REPORT_ORG_ID_KEY: &str = "report_org_id";
 
 /// 自动上报间隔（秒）：每 30 分钟一次。
 const USAGE_REPORT_INTERVAL_SECS: u64 = 30 * 60;
@@ -981,10 +991,86 @@ pub fn usage_report_enabled(conn: &Connection) -> bool {
     }
 }
 
+/// `/organizations/mine` 返回项：只取归属解析需要的字段。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MineOrgRow {
+    id: i64,
+    /// 席位状态（active / invited / removed）；只有 active 才算「在用」
+    #[serde(default)]
+    seat_status: String,
+    /// 组织状态（active / suspended / dissolved）；只有 active 才可用
+    #[serde(default)]
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct MineOrgsResp {
+    #[serde(default)]
+    organizations: Vec<MineOrgRow>,
+}
+
+/// 读主库设置里「上报目标组织 id」（缺省 / 空 / 非法 → `None` = 取第一个在用组织）。
+///
+/// 单独抽成同步函数：异步上报流程里**不能跨 await 持有主库连接**，故先在此读出配置值。
+pub fn configured_report_org(conn: &Connection) -> Option<i64> {
+    crate::commands::app_settings::get_setting(conn, REPORT_ORG_ID_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+}
+
+/// 选择本次上报的组织（**纯函数**，便于单测回退逻辑）：
+/// 配置了 `report_org_id` 且它仍在「在用组织」列表里 → 用它；否则回退第一个在用组织。
+/// 无任何在用组织 → `None`（上报不带 `orgId`）。
+fn pick_report_org(configured: Option<i64>, active_ids: &[i64]) -> Option<i64> {
+    match configured {
+        Some(id) if active_ids.contains(&id) => Some(id),
+        _ => active_ids.first().copied(),
+    }
+}
+
+/// 解析本次上报的目标组织 id：拉 `/organizations/mine` 取在用组织（`seatStatus === 'active'`
+/// 且 `status === 'active'`），再按 [`pick_report_org`] 选定（配置失效则回退第一个）。
+///
+/// 无组织 → `Ok(None)`，上报不带 `orgId`；接口失败 → `Err`，调用方据此**放弃本次上报**
+/// （不做无组织的降级上报，避免用量被静默记到个人维度）。
+async fn resolve_report_org_id(
+    configured: Option<i64>,
+    token: &str,
+) -> Result<Option<i64>, AppError> {
+    let resp: MineOrgsResp =
+        crate::utils::platform::get_json("/api/v1/organizations/mine", Some(token)).await?;
+    let active: Vec<i64> = resp
+        .organizations
+        .into_iter()
+        .filter(|o| o.seat_status == "active" && o.status == "active")
+        .map(|o| o.id)
+        .collect();
+    let chosen = pick_report_org(configured, &active);
+    if let Some(id) = configured {
+        if chosen != Some(id) {
+            // 配置的组织已失效（不再是成员 / 已解散）→ 回退；前端设置页也会给出提示
+            log::warn!(
+                "[UsageReport] 配置的上报组织 {} 已失效，回退到 {}",
+                id,
+                chosen
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "无组织".to_string())
+            );
+        }
+    }
+    Ok(chosen)
+}
+
 /// 平台上报请求体
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ReportBody<'a> {
     day: &'a str,
+    /// 归属组织 id；无组织时不序列化该字段
+    #[serde(skip_serializing_if = "Option::is_none")]
+    org_id: Option<i64>,
     items: &'a [UsageItem],
 }
 
@@ -1002,11 +1088,16 @@ struct ReportResp {
 async fn post_report(
     token: &str,
     day: &str,
+    org_id: Option<i64>,
     items: &[UsageItem],
 ) -> Result<ReportResp, AppError> {
     crate::utils::platform::post_json(
         "/api/v1/usage/report",
-        &ReportBody { day, items },
+        &ReportBody {
+            day,
+            org_id,
+            items,
+        },
         Some(token),
     )
     .await
@@ -1092,8 +1183,19 @@ pub async fn usage_report_now(
         Err(e) => return Ok(fail(format!("平台登录状态异常：{}", e))),
     };
 
-    // ③ 上报：幂等覆盖写，失败只回文案
-    match post_report(&token, &day, &items).await {
+    // ③ 归属组织：读主库设置里配置的组织（缺省=第一个在用组织）；配置失效则回退第一个。
+    //    先同步读出配置值（不跨 await 持有连接），再联网解析；失败则放弃本次上报。
+    let configured_org = {
+        let conn = state.get_conn().map_err(String::from)?;
+        configured_report_org(&conn)
+    };
+    let org_id = match resolve_report_org_id(configured_org, &token).await {
+        Ok(id) => id,
+        Err(e) => return Ok(fail(format!("获取组织信息失败，未上报：{}", e))),
+    };
+
+    // ④ 上报：幂等覆盖写，失败只回文案
+    match post_report(&token, &day, org_id, &items).await {
         Ok(resp) => Ok(UsageReportResult {
             day,
             item_count,
@@ -1121,12 +1223,13 @@ pub async fn run_auto_report_loop(state: crate::DbState) {
 
 /// 单次自动上报：开关关闭 / 未登录 / 无数据 → 静默返回；其余失败仅记日志。
 async fn auto_report_once(state: &crate::DbState) -> Result<(), AppError> {
-    let (day, items) = {
+    let (day, items, configured_org) = {
         let conn = state.get_conn()?;
         if !usage_report_enabled(&conn) {
             return Ok(());
         }
-        build_report(&conn)?
+        let (day, items) = build_report(&conn)?;
+        (day, items, configured_report_org(&conn))
     };
     if should_skip_upload(&items) {
         return Ok(());
@@ -1134,7 +1237,10 @@ async fn auto_report_once(state: &crate::DbState) -> Result<(), AppError> {
     let Some(token) = crate::commands::account::current_access_token(state).await? else {
         return Ok(()); // 未登录：静默
     };
-    match post_report(&token, &day, &items).await {
+    // 归属组织：读主库配置（缺省=第一个在用组织，配置失效回退第一个）；取组织失败则本轮跳过
+    // （下次重试，当天累计值覆盖写不丢数据）
+    let org_id = resolve_report_org_id(configured_org, &token).await?;
+    match post_report(&token, &day, org_id, &items).await {
         Ok(resp) => {
             log::info!(
                 "[UsageReport] 已上报当天用量：{} 个模型，服务端写入 {} 条（ownerType={:?}）",
@@ -1709,6 +1815,39 @@ mod tests {
         assert_eq!(report_day(dt2), "2026-01-01");
     }
 
+    /// 上报请求体：有组织时序列化 `orgId`（camelCase），无组织时**不带该字段**。
+    #[test]
+    fn report_body_serializes_org_id_only_when_present() {
+        let items = [UsageItem {
+            model: "gpt-4o".into(),
+            calls: 7,
+            input_tokens: 1200,
+            output_tokens: 800,
+            cost_fen: 0,
+        }];
+        let with_org = serde_json::to_value(ReportBody {
+            day: "2026-10-06",
+            org_id: Some(8),
+            items: &items,
+        })
+        .unwrap();
+        assert_eq!(with_org["orgId"], 8);
+        assert_eq!(with_org["day"], "2026-10-06");
+        assert_eq!(with_org["items"][0]["calls"], 7);
+        assert_eq!(with_org["items"][0]["inputTokens"], 1200);
+
+        let without_org = serde_json::to_value(ReportBody {
+            day: "2026-10-06",
+            org_id: None,
+            items: &items,
+        })
+        .unwrap();
+        assert!(
+            without_org.get("orgId").is_none(),
+            "无组织时不应出现 orgId 字段"
+        );
+    }
+
     /// 开关判据：缺省开启；只认 '0' / 'false' 为关闭。
     #[test]
     fn usage_report_enabled_default_and_off() {
@@ -1724,5 +1863,37 @@ mod tests {
         assert!(!usage_report_enabled(&conn));
         crate::commands::app_settings::set_setting(&conn, USAGE_REPORT_ENABLED_KEY, "FALSE").unwrap();
         assert!(!usage_report_enabled(&conn));
+    }
+
+    /// 组织选择：配置的组织仍在在用列表 → 用它；配置失效（不再是在用成员 / 已解散）→ 回退第一个；
+    /// 无配置 / 无组织 → 取第一个（无组织则 None）。
+    #[test]
+    fn report_org_selection_and_fallback() {
+        // 无配置：取第一个在用组织
+        assert_eq!(pick_report_org(None, &[10, 20]), Some(10));
+        // 配置命中：用配置的组织（即便不是第一个）
+        assert_eq!(pick_report_org(Some(20), &[10, 20]), Some(20));
+        // 配置失效（已不在在用列表）：回退第一个
+        assert_eq!(pick_report_org(Some(99), &[10, 20]), Some(10));
+        // 无任何在用组织：None
+        assert_eq!(pick_report_org(Some(99), &[]), None);
+        assert_eq!(pick_report_org(None, &[]), None);
+    }
+
+    /// 主库设置读取：缺省 / 空 / 非法 → None；写入数字 → 读回。
+    #[test]
+    fn configured_report_org_reads_setting() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        assert_eq!(configured_report_org(&conn), None, "缺省应为 None");
+        crate::commands::app_settings::set_setting(&conn, REPORT_ORG_ID_KEY, "").unwrap();
+        assert_eq!(configured_report_org(&conn), None, "空串应为 None");
+        crate::commands::app_settings::set_setting(&conn, REPORT_ORG_ID_KEY, "abc").unwrap();
+        assert_eq!(configured_report_org(&conn), None, "非法值应为 None");
+        crate::commands::app_settings::set_setting(&conn, REPORT_ORG_ID_KEY, "42").unwrap();
+        assert_eq!(configured_report_org(&conn), Some(42));
     }
 }

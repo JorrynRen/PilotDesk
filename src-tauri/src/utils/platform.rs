@@ -56,6 +56,9 @@ async fn error_from(resp: reqwest::Response) -> AppError {
 pub struct PlatformError {
     pub status: u16,
     pub message: String,
+    /// 平台失败响应体（成功解析为 JSON 时为 `Some`）：供需要读取结构化字段的调用方使用
+    /// （如 409 冲突响应里的 `existing` 摘要）。
+    pub body: Option<serde_json::Value>,
 }
 
 impl std::fmt::Display for PlatformError {
@@ -64,12 +67,13 @@ impl std::fmt::Display for PlatformError {
     }
 }
 
-/// 解析平台失败响应为带状态码的错误（结构同 [`error_from`]，但保留 status）
+/// 解析平台失败响应为带状态码的错误（结构同 [`error_from`]，但保留 status 与响应体）
 async fn error_with_status(resp: reqwest::Response) -> PlatformError {
     let status = resp.status().as_u16();
     let body = resp.text().await.unwrap_or_default();
-    let message = serde_json::from_str::<serde_json::Value>(&body)
-        .ok()
+    let parsed = serde_json::from_str::<serde_json::Value>(&body).ok();
+    let message = parsed
+        .as_ref()
         .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
         .unwrap_or_else(|| body.trim().to_string());
     PlatformError {
@@ -79,6 +83,7 @@ async fn error_with_status(resp: reqwest::Response) -> PlatformError {
         } else {
             format!("平台返回 HTTP {}：{}", status, message)
         },
+        body: parsed,
     }
 }
 
@@ -94,6 +99,7 @@ pub async fn get_json_with_status<T: serde::de::DeserializeOwned>(
     let resp = req.send().await.map_err(|e| PlatformError {
         status: 0,
         message: format!("请求平台失败：{}", e),
+        body: None,
     })?;
     if !resp.status().is_success() {
         return Err(error_with_status(resp).await);
@@ -101,6 +107,7 @@ pub async fn get_json_with_status<T: serde::de::DeserializeOwned>(
     resp.json::<T>().await.map_err(|e| PlatformError {
         status: 0,
         message: format!("解析平台响应失败：{}", e),
+        body: None,
     })
 }
 
@@ -117,6 +124,7 @@ pub async fn post_json_with_status<B: serde::Serialize, T: serde::de::Deserializ
     let resp = req.send().await.map_err(|e| PlatformError {
         status: 0,
         message: format!("请求平台失败：{}", e),
+        body: None,
     })?;
     if !resp.status().is_success() {
         return Err(error_with_status(resp).await);
@@ -124,6 +132,7 @@ pub async fn post_json_with_status<B: serde::Serialize, T: serde::de::Deserializ
     resp.json::<T>().await.map_err(|e| PlatformError {
         status: 0,
         message: format!("解析平台响应失败：{}", e),
+        body: None,
     })
 }
 

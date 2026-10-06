@@ -56,7 +56,8 @@ pub(crate) fn ensure_key_memories_table(conn: &Connection) -> Result<(), String>
 /// KV 记忆条数上限：总条数超过该值即驱逐“最冷且未 pin”的多余条目。
 ///
 /// 上限是**客户端自行调节的默认值 + 技术硬上限**（不再是档位配额）：
-/// 用户可在设置页调整，持久化于 MEMORY.db 的 `app_settings` 键 `memory_max_entries`。
+/// 用户可在设置页调整，持久化于**主库 `pilotdesk.db` 的 `app_settings`**（与其它设置一致）。
+/// MEMORY.db 只存记忆数据；上限由持有主库连接的调用方读出后**传入** [`MemoryStore`]。
 pub const MEMORY_MAX_ENTRIES_KEY: &str = "memory_max_entries";
 /// KV 记忆条数上限的默认值（用户未调整时生效）。
 pub const MEMORY_MAX_ENTRIES_DEFAULT: usize = 500;
@@ -66,13 +67,15 @@ pub const MEMORY_MAX_ENTRIES_MIN: usize = 100;
 pub const MEMORY_MAX_ENTRIES_HARD_MAX: usize = 10000;
 
 /// 把记忆条数上限夹取到 `[MEMORY_MAX_ENTRIES_MIN, MEMORY_MAX_ENTRIES_HARD_MAX]`。
-fn clamp_memory_max_entries(value: usize) -> usize {
+pub fn clamp_memory_max_entries(value: usize) -> usize {
     value.clamp(MEMORY_MAX_ENTRIES_MIN, MEMORY_MAX_ENTRIES_HARD_MAX)
 }
 
-/// 读取当前生效的 KV 记忆条数上限：读 MEMORY.db 的 `app_settings`（缺省 500），
-/// 并 clamp 到 100..=10000。表不存在 / 值非法时回退默认值。
-fn load_memory_max_entries(conn: &Connection) -> usize {
+/// 从**主库** `app_settings` 读取当前生效的 KV 记忆条数上限（缺省 500），并 clamp 到 100..=10000。
+///
+/// 注意：传入的必须是**主库连接**（`pilotdesk.db`）——上限已从 MEMORY.db 迁移到主库与其它设置同处。
+/// 表不存在 / 值非法时回退默认值。
+pub fn load_memory_max_entries(conn: &Connection) -> usize {
     conn.query_row(
         "SELECT value FROM app_settings WHERE key = ?1",
         params![MEMORY_MAX_ENTRIES_KEY],
@@ -176,14 +179,19 @@ pub struct UpdateOutcome {
 /// 表结构：key_memories (key, value, category, created_at, updated_at, access_count, last_accessed_at, pin, tags)
 pub struct MemoryStore {
     conn: Arc<Mutex<Connection>>,
+    /// KV 记忆条数上限：由**持有主库连接的调用方**读主库设置后传入，本库不再自行读设置。
+    /// 打开时做一次懒惰维护（[`MemoryStore::new`]）与写入后懒惰维护（[`MemoryStore::prune`]）都用它。
+    limit: usize,
 }
 
 impl MemoryStore {
     /// 打开或创建记忆库
     ///
     /// `db_dir` 为 PilotDesk 配置目录的路径（通常为 %APPDATA%/PilotDesk）。
+    /// `limit` 为 KV 记忆条数上限（由调用方从**主库**设置读出，通常经
+    /// [`load_memory_max_entries`]；本组件不再自行读设置，以免两库设置分裂）。
     /// 首次打开时自动建表。
-    pub fn new(db_dir: &str) -> Result<Self, String> {
+    pub fn new(db_dir: &str, limit: usize) -> Result<Self, String> {
         let db_path = memory_db_path(db_dir);
 
         let conn =
@@ -195,7 +203,8 @@ impl MemoryStore {
         // 建表（新库含维护列；旧库随后按列缺失逐个 ALTER 迁移）
         ensure_key_memories_table(&conn)?;
 
-        // 记忆子系统的设置表：MEMORY.db 独立于主库，KV 记忆条数上限等配置需落在本库才能被读取。
+        // 记忆子系统的设置表：保留建表以兼容旧库（历史上 KV 记忆上限曾存于此）。
+        // 上限现已迁移到主库（见 [`MEMORY_MAX_ENTRIES_KEY`]），本表仅作存量兼容。
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
@@ -222,6 +231,7 @@ impl MemoryStore {
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
+            limit: clamp_memory_max_entries(limit),
         };
 
         // 打开即做一次懒惰维护（僵尸清理 + 配额驱逐），保持库自愈
@@ -317,7 +327,7 @@ impl MemoryStore {
 
         // 写入后懒惰维护：超配额即驱逐（僵尸清理在 open 与维护命令处执行）
         // 用 quota_count（排除知识库条目）：知识条目不占这上限
-        if self.quota_count() > self.memory_limit() {
+        if self.quota_count() > self.limit {
             self.prune();
         }
         entry
@@ -414,7 +424,7 @@ impl MemoryStore {
 
         // 写入后懒惰维护：超配额即驱逐（僵尸清理在 open 与维护命令处执行）
         // 用 quota_count（排除知识库条目）：知识条目不占这上限
-        if self.quota_count() > self.memory_limit() {
+        if self.quota_count() > self.limit {
             self.prune();
         }
         outcome
@@ -843,23 +853,10 @@ impl MemoryStore {
         .unwrap_or(0) as usize
     }
 
-    /// 当前生效的记忆条数上限：读设置 `memory_max_entries`（缺省 500，clamp 100..=10000）。
+    /// 当前生效的记忆条数上限：即调用方构造本库时传入的值（缺省 500，clamp 100..=10000）。
+    /// 本库不自行读设置——上限的真身在**主库 `app_settings`**（见 [`load_memory_max_entries`]）。
     pub fn memory_limit(&self) -> usize {
-        let conn = self.conn.lock().unwrap();
-        load_memory_max_entries(&conn)
-    }
-
-    /// 保存记忆条数上限（clamp 到 100..=10000 后写入 MEMORY.db 的设置表，即时生效）。
-    pub fn set_memory_limit(&self, value: usize) -> Result<usize, String> {
-        let conn = self.conn.lock().unwrap();
-        let clamped = clamp_memory_max_entries(value);
-        conn.execute(
-            "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3",
-            params![MEMORY_MAX_ENTRIES_KEY, clamped.to_string(), crate::utils::now()],
-        )
-        .map_err(|e| format!("保存记忆条数上限失败: {}", e))?;
-        Ok(clamped)
+        self.limit
     }
 
     /// 全量列表（支持按分类与关键词过滤；关键词不增计访问次数），按更新时间倒序。
@@ -997,9 +994,9 @@ impl MemoryStore {
                 |r| r.get::<_, i64>(0),
             )
             .unwrap_or(0) as usize;
-        // 上限读设置 `memory_max_entries`（缺省 500）；直接复用已持有的 conn 读取，
-        // 不能再调用 self.memory_limit()（同一把 Mutex 会自锁）。
-        let limit = load_memory_max_entries(&conn);
+        // 上限由调用方构造本库时传入（来自主库设置 `memory_max_entries`，缺省 500）；
+        // 本库只持有该值，不再自行读设置，避免与主库设置分裂。
+        let limit = self.limit;
         let overflow_n = total.saturating_sub(limit);
 
         let mut overflow: Vec<MemoryEntry> = Vec::new();
@@ -1057,6 +1054,7 @@ impl Clone for MemoryStore {
     fn clone(&self) -> Self {
         Self {
             conn: self.conn.clone(),
+            limit: self.limit,
         }
     }
 }
@@ -1532,7 +1530,7 @@ mod tests {
 
         let dir = temp_db_dir();
         std::fs::create_dir_all(&dir).ok();
-        let store = MemoryStore::new(&dir).unwrap();
+        let store = MemoryStore::new(&dir, MEMORY_MAX_ENTRIES_DEFAULT).unwrap();
         (store, dir)
     }
 

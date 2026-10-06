@@ -4,11 +4,14 @@
 //! （`resolve_session_cwd` 与运行时一致）。只读/写入 `<记忆根>/MEMORY.md`，
 //! 供设置页项目记忆区与右侧面板轻量预览使用；模型注入读取该文件在 lib.rs 完成。
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 
-use crate::api_agent::db::{MemoryEntry, MemoryStore, MEMORY_IDLE_SECS, MEMORY_MIN_ACCESS};
+use crate::api_agent::db::{
+    clamp_memory_max_entries, load_memory_max_entries, MemoryEntry, MemoryStore,
+    MEMORY_IDLE_SECS, MEMORY_MAX_ENTRIES_KEY, MEMORY_MIN_ACCESS,
+};
 use crate::utils::errors::AppError;
 use crate::DbState;
 
@@ -236,10 +239,72 @@ pub fn user_preferences_template() -> Result<String, String> {
 // ── 全局 KV 记忆（MEMORY.db key_memories，与 save/search_memory 工具同库）──
 
 /// 打开全局 KV 记忆库（基于配置目录下的 MEMORY.db）。
-fn open_memory_store() -> Result<MemoryStore, AppError> {
+///
+/// `main_conn` 为**主库**连接：KV 记忆条数上限统一存主库 `app_settings`，
+/// 故这里先从主库读出上限再传入构造（MEMORY.db 不再自持设置）。
+fn open_memory_store(main_conn: &Connection) -> Result<MemoryStore, AppError> {
     let dir = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
         .ok_or_else(|| AppError::Config("无法获取配置目录".to_string()))?;
-    MemoryStore::new(&dir).map_err(AppError::Db)
+    let limit = load_memory_max_entries(main_conn);
+    MemoryStore::new(&dir, limit).map_err(AppError::Db)
+}
+
+/// 一次性迁移：把 KV 记忆上限从 **MEMORY.db 的旧键**搬到主库（幂等）。
+///
+/// 背景：历史上 `MemoryStore` 只持有 MEMORY.db，故该设置落在 MEMORY.db 的 `app_settings`；
+/// 现统一到主库与其它设置同处。迁移规则：
+/// - MEMORY.db 不存在 / 无旧键 → 不动；
+/// - 主库已有该键 → **不动主库值**（用户已在新位置改过，旧值不再权威），仅清理旧键；
+/// - 主库无该键、MEMORY.db 有 → 把旧值 clamp 后写入主库，并**删除旧键**。
+///
+/// 选择「迁移后清理旧键」：主库成为唯一权威来源，避免两处并存造成「读哪个」的歧义，
+/// 也让本函数天然幂等（再跑时旧键已不存在）。返回是否发生了值搬迁。
+pub fn migrate_memory_limit_to_main(main_conn: &Connection) -> Result<bool, AppError> {
+    let Some(dir) = crate::api_agent::system_prompt::get_pilotdesk_config_dir() else {
+        return Ok(false);
+    };
+    let old_path = crate::api_agent::db::memory_db_path(&dir);
+    if !std::path::Path::new(&old_path).exists() {
+        return Ok(false);
+    }
+    let old_conn =
+        Connection::open(&old_path).map_err(|e| AppError::Db(format!("打开记忆库失败: {}", e)))?;
+    // 旧键（表可能不存在 / 无该键 → 视为没有）
+    let old_value: Option<String> = old_conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            rusqlite::params![MEMORY_MAX_ENTRIES_KEY],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .unwrap_or(None);
+    let Some(old_value) = old_value else {
+        return Ok(false);
+    };
+
+    let main_has = crate::commands::app_settings::get_setting(main_conn, MEMORY_MAX_ENTRIES_KEY)
+        .ok()
+        .flatten()
+        .is_some();
+    let mut moved = false;
+    if !main_has {
+        if let Ok(v) = old_value.trim().parse::<usize>() {
+            let clamped = clamp_memory_max_entries(v);
+            crate::commands::app_settings::set_setting(
+                main_conn,
+                MEMORY_MAX_ENTRIES_KEY,
+                &clamped.to_string(),
+            )?;
+            moved = true;
+            log::info!("[Memory] 已把记忆上限 {} 从 MEMORY.db 迁移到主库", clamped);
+        }
+    }
+    // 清理旧键（无论是否搬迁：主库已是权威来源）
+    let _ = old_conn.execute(
+        "DELETE FROM app_settings WHERE key = ?1",
+        rusqlite::params![MEMORY_MAX_ENTRIES_KEY],
+    );
+    Ok(moved)
 }
 
 /// KV 条目视图（前端展示）。
@@ -310,10 +375,12 @@ pub struct MemoryStats {
 /// 全量列表（可选分类/关键词过滤）。
 #[tauri::command]
 pub fn list_memory_entries(
+    state: State<'_, DbState>,
     category: Option<String>,
     query: Option<String>,
 ) -> Result<Vec<MemoryEntryView>, String> {
-    let store = open_memory_store()?;
+    let conn = state.pool.get().map_err(AppError::from)?;
+    let store = open_memory_store(&conn)?;
     Ok(store
         .list_all(category.as_deref(), query.as_deref())
         .iter()
@@ -325,6 +392,7 @@ pub fn list_memory_entries(
 /// important=true 置 pin 保护，免自动清理；tags 为逗号分隔检索标签，可选）。
 #[tauri::command]
 pub fn save_memory_entry(
+    state: State<'_, DbState>,
     key: String,
     value: String,
     category: String,
@@ -353,7 +421,8 @@ pub fn save_memory_entry(
     if tags.chars().count() > 200 {
         return Err(AppError::InvalidInput("记忆 tags 不能超过 200 字符".to_string()).into());
     }
-    let store = open_memory_store()?;
+    let conn = state.pool.get().map_err(AppError::from)?;
+    let store = open_memory_store(&conn)?;
     Ok(MemoryEntryView::from(&store.upsert_memory(
         &key,
         &value,
@@ -366,15 +435,17 @@ pub fn save_memory_entry(
 /// 删除一条全局 KV 记忆；返回是否命中。
 /// 知识库条目会被拒绝（它们归「知识库」页管理），见 `MemoryStore::take_session_memory`。
 #[tauri::command]
-pub fn delete_memory_entry(key: String) -> Result<bool, String> {
-    let store = open_memory_store()?;
+pub fn delete_memory_entry(state: State<'_, DbState>, key: String) -> Result<bool, String> {
+    let conn = state.pool.get().map_err(AppError::from)?;
+    let store = open_memory_store(&conn)?;
     Ok(store.take_session_memory(key.trim())?.is_some())
 }
 
 /// 置/取消某条 KV 记忆的 pin（重要）标记。
 #[tauri::command]
-pub fn set_memory_pin(key: String, pin: bool) -> Result<(), String> {
-    let store = open_memory_store()?;
+pub fn set_memory_pin(state: State<'_, DbState>, key: String, pin: bool) -> Result<(), String> {
+    let conn = state.pool.get().map_err(AppError::from)?;
+    let store = open_memory_store(&conn)?;
     if store.set_pin(key.trim(), pin) {
         Ok(())
     } else {
@@ -384,8 +455,11 @@ pub fn set_memory_pin(key: String, pin: bool) -> Result<(), String> {
 
 /// 预览自动维护将清理的候选条目（不删除），供设置页二次确认。
 #[tauri::command]
-pub fn preview_memory_maintenance() -> Result<Vec<MemoryEntryView>, String> {
-    let store = open_memory_store()?;
+pub fn preview_memory_maintenance(
+    state: State<'_, DbState>,
+) -> Result<Vec<MemoryEntryView>, String> {
+    let conn = state.pool.get().map_err(AppError::from)?;
+    let store = open_memory_store(&conn)?;
     Ok(store
         .maintenance_candidates()
         .iter()
@@ -395,8 +469,9 @@ pub fn preview_memory_maintenance() -> Result<Vec<MemoryEntryView>, String> {
 
 /// 执行一次自动维护（僵尸清理 + 配额驱逐），返回被删除的 key 列表。
 #[tauri::command]
-pub fn run_memory_maintenance() -> Result<Vec<String>, String> {
-    let store = open_memory_store()?;
+pub fn run_memory_maintenance(state: State<'_, DbState>) -> Result<Vec<String>, String> {
+    let conn = state.pool.get().map_err(AppError::from)?;
+    let store = open_memory_store(&conn)?;
     let keys: Vec<String> = store
         .maintenance_candidates()
         .iter()
@@ -416,8 +491,9 @@ pub fn run_memory_maintenance() -> Result<Vec<String>, String> {
 
 /// 全局 KV 统计（总数/pin 数/注入 top-5/候选清理数 + 策略阈值）。
 #[tauri::command]
-pub fn get_memory_stats() -> Result<MemoryStats, String> {
-    let store = open_memory_store()?;
+pub fn get_memory_stats(state: State<'_, DbState>) -> Result<MemoryStats, String> {
+    let conn = state.pool.get().map_err(AppError::from)?;
+    let store = open_memory_store(&conn)?;
     let candidates = store.maintenance_candidates().len();
     Ok(MemoryStats {
         // 与列表同一口径：只算会话记忆，知识库条目（不占上限）不计入
@@ -434,18 +510,25 @@ pub fn get_memory_stats() -> Result<MemoryStats, String> {
     })
 }
 
-/// 读取当前生效的 KV 记忆条数上限（缺省 500，范围 100..=10000）。
+/// 读取当前生效的 KV 记忆条数上限（读**主库**设置；缺省 500，范围 100..=10000）。
 #[tauri::command]
-pub fn get_memory_max_entries() -> Result<usize, String> {
-    let store = open_memory_store()?;
-    Ok(store.memory_limit())
+pub fn get_memory_max_entries(state: State<'_, DbState>) -> Result<usize, String> {
+    let conn = state.pool.get().map_err(AppError::from)?;
+    Ok(load_memory_max_entries(&conn))
 }
 
-/// 保存 KV 记忆条数上限（clamp 到 100..=10000，写入设置后即时生效）。
+/// 保存 KV 记忆条数上限（clamp 到 100..=10000，写入**主库**设置后即时生效：
+/// 下一次经 [`open_memory_store`] 构造记忆库即读到新值）。
 #[tauri::command]
-pub fn set_memory_max_entries(value: usize) -> Result<(), String> {
-    let store = open_memory_store()?;
-    store.set_memory_limit(value).map(|_| ())
+pub fn set_memory_max_entries(state: State<'_, DbState>, value: usize) -> Result<(), String> {
+    let conn = state.pool.get().map_err(AppError::from)?;
+    let clamped = clamp_memory_max_entries(value);
+    crate::commands::app_settings::set_setting(
+        &conn,
+        MEMORY_MAX_ENTRIES_KEY,
+        &clamped.to_string(),
+    )
+    .map_err(String::from)
 }
 
 #[cfg(test)]

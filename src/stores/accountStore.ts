@@ -160,19 +160,6 @@ export function useCapability(key: string): boolean {
   return hasCapability(account, key);
 }
 
-/** 配额上限：未登录 / 未下发 → fallback；-1 = 不限（返回 Infinity） */
-export function quotaLimit(account: AccountInfo | null, key: string, fallback: number): number {
-  const v = account?.quotas?.[key];
-  if (v === undefined) return fallback;
-  return v < 0 ? Number.POSITIVE_INFINITY : v;
-}
-
-/** 组件里读取配额（账号变化会自动重渲染） */
-export function useQuota(key: string, fallback: number): number {
-  const account = useAccountStore((s) => s.account);
-  return quotaLimit(account, key, fallback);
-}
-
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

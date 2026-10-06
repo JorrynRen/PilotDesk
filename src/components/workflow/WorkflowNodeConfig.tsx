@@ -22,6 +22,7 @@ import { TemplateVariablesContext } from './templateVariables';
 import type { TemplateVariableGroup } from './templateVariables';
 import type { SecurityModeValue } from '../security/SecurityModeSelector';
 import { Select } from '../common/Select';
+import { showToast } from '../../utils/toast';
 
 /**
  * API Agent 节点的「工具授权」（`security_mode`，节点级）。
@@ -948,11 +949,39 @@ const SubflowSelector: React.FC<{
   onOpenSubflow?: (id: string) => void;
   onCreateNew: () => void;
   loadDefinitions?: () => Promise<void>;
-}> = ({ definitions, currentDefinitionId, value, onChange, onOpenSubflow: _onOpenSubflow, onCreateNew: _onCreateNew, loadDefinitions }) => {
+}> = ({ definitions, currentDefinitionId, value, onChange, onOpenSubflow, onCreateNew: _onCreateNew, loadDefinitions }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [invalidIds, setInvalidIds] = useState<Set<string>>(new Set());
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * 打开所选子工作流（切到该子流的 stages 视图）。
+   *
+   * 为什么**不**提供「另存为独立工作流」：子工作流本身就是一份完整、独立的 `WorkflowDefinition`，
+   * 「另存为独立」等价于给当前这份定义**复制一个副本**；而产品已内置「复制」功能
+   * （`workflowStore.duplicateDefinition`，见工作流列表），再单列一个入口只会造成语义重复与困惑。
+   * 因此这里只做「打开」，需要副本时用户走既有的「复制」。
+   */
+  const handleOpenSubflow = async () => {
+    if (!value) return;
+    // 命中当前列表 → 直接打开（列表来自 list_workflows，已滤除软删除项）
+    if (definitions.some((d) => d.id === value)) {
+      onOpenSubflow?.(value);
+      return;
+    }
+    // 不在列表：可能是被软删除（进了回收站），也可能是被彻底删除 / 从不存在
+    try {
+      const deleted = await invoke<{ id: string }[]>('list_deleted_workflows');
+      if (deleted.some((d) => d.id === value)) {
+        showToast('该子工作流已在回收站中，请先恢复', 'warning');
+        return;
+      }
+    } catch {
+      /* 回收站查询失败：按「不存在」提示，不阻断界面 */
+    }
+    showToast('该子工作流不存在或已被删除', 'warning');
+  };
 
   // 确保 definitions 已加载
   useEffect(() => {
@@ -1029,6 +1058,29 @@ const SubflowSelector: React.FC<{
           marginBottom: 4,
         }}
       />
+      {/* 「打开子工作流」入口：接通 SubflowSelector 的 onOpenSubflow（切到子流 stages 视图）。
+          仅在已选中子流、且搜索下拉未展开时显示（下拉是绝对定位浮层，展开时会遮住此处）。 */}
+      {value && !isOpen && (
+        <button
+          type="button"
+          onClick={() => void handleOpenSubflow()}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '2px 0',
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--accent)',
+            fontSize: 'var(--fs-11)',
+            cursor: 'pointer',
+            marginBottom: 4,
+          }}
+          title="切换到该子工作流的画布"
+        >
+          打开子工作流
+        </button>
+      )}
       {/* 下拉选项列表 */}
       {isOpen && (
         <div

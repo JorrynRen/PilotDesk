@@ -3,7 +3,8 @@
 //! 这是「组织共享空间」在产品端的入口。平台侧接口（全部 `requireAuth`，产品端用 Bearer）：
 //!   GET  /api/v1/organizations/mine                         我所属的组织
 //!   GET  /api/v1/organizations/:id/resources?kind=workflow   组织的共享工作流列表
-//!   POST /api/v1/organizations/:id/resources                 新建共享资源（同名 409 / 档位不含 403）
+//!   POST /api/v1/organizations/:id/resources                 新建 / 覆盖共享资源（按工作流稳定 ID upsert；
+//!                                                            内容有改动且未带 overwrite → 409 冲突）
 //!   GET  /api/v1/organizations/:id/resources/:resourceId     取单条（带 payload）
 //!
 //! 令牌复用 [`current_access_token`]（读 `account_tokens` + 自动续期）；未登录时返回明确中文提示。
@@ -38,9 +39,12 @@ pub struct SharedWorkflow {
     pub description: String,
     pub creator_label: String,
     pub updated_at: String,
+    /// 版本（覆盖次数）：新建为 1，每次覆盖 +1
+    pub revision: i64,
 }
 
 /// 共享入参：`workflowId` 优先，缺省时用 `workflowName` 定位；`name` 为共享到组织的名称。
+/// `overwrite`：同稳定 ID 内容有改动时是否确认覆盖（默认 false，先由平台返回 409 冲突）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareWorkflowInput {
@@ -51,6 +55,34 @@ pub struct ShareWorkflowInput {
     pub org_id: i64,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// 共享结果：新建 / 跳过 / 覆盖 / 冲突（供前端区分文案与是否弹确认）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareWorkflowOutcome {
+    /// "created"（新建）| "skipped"（内容无变化，已跳过）| "overwritten"（已覆盖）| "conflict"（需确认覆盖）
+    pub status: String,
+    /// 结果版本：新建为 1；覆盖 / 冲突时为当前云端版本
+    pub revision: i64,
+    /// 成功（新建 / 跳过 / 覆盖）时返回的共享项
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<SharedWorkflow>,
+    /// 冲突时返回的云端现有项摘要（供前端「是否覆盖？」确认）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing: Option<ShareConflictInfo>,
+}
+
+/// 409 冲突时云端现有项摘要
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareConflictInfo {
+    pub name: String,
+    pub updater_label: String,
+    pub revision: i64,
+    pub updated_at: String,
 }
 
 /// 从组织导入入参
@@ -110,6 +142,38 @@ struct ResourceResp {
     resource: ResourceRow,
 }
 
+/// POST upsert 响应：`{ resource, created, skipped, overwritten }`
+#[derive(Deserialize)]
+struct UpsertResourceResp {
+    resource: ResourceRow,
+    #[serde(default)]
+    created: bool,
+    #[serde(default)]
+    skipped: bool,
+    #[serde(default)]
+    overwritten: bool,
+}
+
+/// 409 冲突响应体：`{ error, existing }`
+#[derive(Deserialize)]
+struct ConflictResp {
+    #[serde(default)]
+    existing: Option<ConflictExisting>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConflictExisting {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    updater_label: String,
+    #[serde(default)]
+    revision: i64,
+    #[serde(default)]
+    updated_at: String,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ResourceRow {
@@ -125,6 +189,9 @@ struct ResourceRow {
     creator_label: String,
     #[serde(default)]
     updated_at: String,
+    /// 版本（覆盖次数）：新建为 1
+    #[serde(default)]
+    revision: i64,
 }
 
 // ── 公共辅助 ────────────────────────────────────────────────────
@@ -144,8 +211,8 @@ fn map_platform_error(err: platform::PlatformError) -> String {
     match err.status {
         // 403：组织档位不含 team.shared-space（free / pro 组织）
         403 => "当前组织档位不支持共享空间（需要团队版）".to_string(),
-        // 409：同一组织同 kind 下名称唯一
-        409 => "该组织已有同名共享工作流，请改名后重试".to_string(),
+        // 409：同稳定 ID 内容有改动、需确认覆盖（正常路径由 org_share_workflow 解析 existing 后处理）
+        409 => "共享内容与云端不一致，需确认后才能覆盖".to_string(),
         // 401：令牌失效 / 未登录
         401 => "请先登录平台账号".to_string(),
         // 其余（含 status=0 的网络 / 解析错误）直接透传（正文已带中文前缀）
@@ -160,6 +227,7 @@ fn to_shared_workflow(row: ResourceRow) -> SharedWorkflow {
         description: row.description,
         creator_label: row.creator_label,
         updated_at: row.updated_at,
+        revision: row.revision,
     }
 }
 
@@ -224,12 +292,16 @@ pub async fn org_list_shared_workflows(
 }
 
 /// 把本地工作流共享到组织：复用导出逻辑打包「主工作流 + 全部子工作流」（新版捆绑格式），
-/// 再 POST 到平台新建共享资源。
+/// 再 POST 到平台共享空间（按工作流稳定 ID upsert）。
+///
+/// 平台侧行为：不存在 → 新建；内容无改动 → 跳过；内容有改动且未带 `overwrite` → 409。
+/// 409 不再直接抛错，而是解析 `existing` 摘要返回结构化冲突结果，供前端弹确认后带
+/// `overwrite: true` 重发。
 #[tauri::command]
 pub async fn org_share_workflow(
     input: ShareWorkflowInput,
     state: State<'_, crate::DbState>,
-) -> Result<SharedWorkflow, String> {
+) -> Result<ShareWorkflowOutcome, String> {
     let token = require_token(state.inner()).await?;
 
     // 定位工作流 → 复用导出转换得到 JSON 字符串（同一个连接内完成）
@@ -254,12 +326,52 @@ pub async fn org_share_workflow(
         "kind": "workflow",
         "name": name,
         "payload": payload,
+        "overwrite": input.overwrite,
     });
     let path = format!("/api/v1/organizations/{}/resources", input.org_id);
-    let resp: ResourceResp = platform::post_json_with_status(&path, &body, Some(&token))
-        .await
-        .map_err(map_platform_error)?;
-    Ok(to_shared_workflow(resp.resource))
+    match platform::post_json_with_status::<_, UpsertResourceResp>(&path, &body, Some(&token)).await
+    {
+        Ok(resp) => {
+            let revision = resp.resource.revision.max(1);
+            let status = if resp.created {
+                "created"
+            } else if resp.skipped {
+                "skipped"
+            } else if resp.overwritten {
+                "overwritten"
+            } else {
+                "created"
+            };
+            Ok(ShareWorkflowOutcome {
+                status: status.to_string(),
+                revision,
+                resource: Some(to_shared_workflow(resp.resource)),
+                existing: None,
+            })
+        }
+        // 409：内容有改动、需确认覆盖 → 解析 existing 摘要，返回结构化冲突结果
+        Err(err) if err.status == 409 => {
+            let existing = err
+                .body
+                .as_ref()
+                .and_then(|b| serde_json::from_value::<ConflictResp>(b.clone()).ok())
+                .and_then(|c| c.existing)
+                .map(|e| ShareConflictInfo {
+                    name: e.name,
+                    updater_label: e.updater_label,
+                    revision: e.revision,
+                    updated_at: e.updated_at,
+                })
+                .ok_or_else(|| map_platform_error(err))?;
+            Ok(ShareWorkflowOutcome {
+                status: "conflict".to_string(),
+                revision: existing.revision,
+                resource: None,
+                existing: Some(existing),
+            })
+        }
+        Err(err) => Err(map_platform_error(err)),
+    }
 }
 
 /// 从组织导入共享工作流：取资源详情（带 payload）→ 复用导入逻辑新建本地工作流。
@@ -285,7 +397,7 @@ pub async fn org_import_workflow(
     let conn = state
         .get_conn()
         .map_err(|e| format!("数据库连接失败：{}", e))?;
-    let (def, subflow_count) =
+    let (def, subflow_count, _skipped) =
         import_workflow_from_json_with_conn(&conn, &resource.payload).map_err(String::from)?;
     Ok(ImportedWorkflow {
         workflow_id: def.id,

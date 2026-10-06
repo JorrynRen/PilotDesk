@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, LayoutTemplate, ScrollText, Play, Loader2, Square, Share2, Building2 } from 'lucide-react';
+import { Plus, Trash2, Clock, Upload, Download, Settings, GitBranch, Activity, BarChart3, FileText, Tag, Layers, Zap, Copy, AlertTriangle, Search, Filter, X, ArrowUpDown, Calendar, LayoutTemplate, ScrollText, Play, Loader2, Square, Share2, Building2, RotateCcw } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -48,6 +48,38 @@ interface SharedWorkflow {
   description: string;
   creatorLabel: string;
   updatedAt: string;
+  /** 版本（覆盖次数）：新建为 1 */
+  revision: number;
+}
+
+/** 共享结果（与 Rust `org_share_workflow` 返回对齐） */
+interface ShareWorkflowOutcome {
+  status: 'created' | 'skipped' | 'overwritten' | 'conflict';
+  revision: number;
+  resource?: SharedWorkflow;
+  /** 冲突时云端现有项摘要（供「是否覆盖？」确认） */
+  existing?: {
+    name: string;
+    updaterLabel: string;
+    revision: number;
+    updatedAt: string;
+  };
+}
+
+/** 回收站条目（与 Rust `list_deleted_workflows` 返回对齐） */
+interface DeletedWorkflowItem {
+  id: string;
+  name: string;
+  /** 删除时间（秒级 Unix 时间戳） */
+  deletedAt: number;
+  nodeCount: number;
+  subflowCount: number;
+}
+
+/** 恢复结果（与 Rust `restore_workflow` 返回对齐） */
+interface RestoredWorkflowResult {
+  id: string;
+  name: string;
 }
 
 /** 将 Cron 表达式转换为用户友好描述 */
@@ -181,6 +213,13 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   const [showBatchExport, setShowBatchExport] = useState(false);
   const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(new Set());
   const [batchExporting, setBatchExporting] = useState(false);
+
+  // ---- 回收站（软删除的工作流）----
+  const [showRecycleBin, setShowRecycleBin] = useState(false);
+  const [deletedWorkflows, setDeletedWorkflows] = useState<DeletedWorkflowItem[]>([]);
+  const [recycleLoading, setRecycleLoading] = useState(false);
+  /** 恢复 / 彻底删除 / 清空 进行中：禁用弹窗内按钮，避免重复提交 */
+  const [recycleBusy, setRecycleBusy] = useState(false);
 
   // ---- 组织共享空间（团队版）：共享到组织 / 从组织导入 ----
   /** 平台账号（null = 未登录）：用于未登录时的前置提示 */
@@ -459,8 +498,18 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
       let successCount = 0;
       for (const filePath of paths) {
         try {
-          await invoke('import_workflow_from_file', { filePath });
+          const result = await invoke<{ id: string; missingDependencies?: string[] }>(
+            'import_workflow_from_file',
+            { filePath },
+          );
           successCount++;
+          // 单文件导入时引用的子工作流本地缺失：不阻断，但明确提示缺失依赖
+          if (result?.missingDependencies?.length) {
+            showToast(
+              `导入成功，但引用了 ${result.missingDependencies.length} 个本地不存在的工作流：${result.missingDependencies.join('、')}`,
+              'warning',
+            );
+          }
         } catch (innerErr) {
           const fileName = filePath.split(/[/]/).pop();
           showToast(`导入工作流「${fileName}」失败: ${innerErr}`, 'error');
@@ -511,22 +560,58 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     }
   };
 
+  /**
+   * 执行一次共享请求并处理结果（overwrite=false 先试探；冲突确认后再 overwrite=true 重发）。
+   * 返回 'done'（已成功/跳过）或 'conflict'（用户取消了覆盖）。
+   */
+  const runShare = async (overwrite: boolean): Promise<'done' | 'conflict'> => {
+    if (!shareTarget || !shareOrgId) return 'done';
+    const orgName = (shareOrgs ?? []).find((o) => String(o.id) === shareOrgId)?.name ?? '组织';
+    const outcome = await invoke<ShareWorkflowOutcome>('org_share_workflow', {
+      input: {
+        workflowId: shareTarget.id,
+        orgId: Number(shareOrgId),
+        name: shareName.trim() || undefined,
+        overwrite,
+      },
+    });
+
+    // 冲突：提示「由谁上传、更新过几次」，确认后带 overwrite 重发
+    if (outcome.status === 'conflict') {
+      const info = outcome.existing;
+      const when = info?.updatedAt ? new Date(info.updatedAt).toLocaleString('zh-CN') : '未知时间';
+      const ok = await confirmDialog({
+        title: '覆盖共享项',
+        message: `该共享项由 ${info?.updaterLabel || '—'} 上传于 ${when}，已被更新过 ${
+          info?.revision ?? 0
+        } 次。是否覆盖？`,
+        confirmText: '覆盖',
+        cancelText: '取消',
+        danger: false,
+      });
+      if (!ok) return 'conflict';
+      return runShare(true);
+    }
+
+    // 成功：按新建 / 覆盖 / 跳过给对应文案
+    if (outcome.status === 'skipped') {
+      showToast('内容无变化，已跳过', 'info');
+    } else if (outcome.status === 'overwritten') {
+      showToast(`已更新「${orgName}」中的共享项（第 ${outcome.revision} 版）`, 'success');
+    } else {
+      showToast(`已共享到「${orgName}」（第 ${outcome.revision} 版）`, 'success');
+    }
+    setShareTarget(null);
+    return 'done';
+  };
+
   /** 确认共享：调用后端生成导出 JSON 并 POST 到组织共享空间 */
   const handleConfirmShare = async () => {
     if (!shareTarget || !shareOrgId) return;
     setShareSubmitting(true);
     setShareError('');
     try {
-      await invoke<SharedWorkflow>('org_share_workflow', {
-        input: {
-          workflowId: shareTarget.id,
-          orgId: Number(shareOrgId),
-          name: shareName.trim() || undefined,
-        },
-      });
-      const orgName = (shareOrgs ?? []).find((o) => String(o.id) === shareOrgId)?.name ?? '组织';
-      showToast(`已共享到「${orgName}」`, 'success');
-      setShareTarget(null);
+      await runShare(false);
     } catch (err) {
       setShareError(errorMessage(err));
     } finally {
@@ -696,26 +781,26 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   }, []);
 
   /**
-   * 删工作流定义（二次确认走全局确认弹窗；后端在有未结束执行时会拒绝并给出提示）。
+   * 删工作流定义（**软删除**：移入回收站）。
+   *
+   * 二次确认走全局确认弹窗；被其它工作流引用、或仍有未结束执行时，后端会拒绝并给出中文原因。
+   * 真正删除放在回收站的「彻底删除」里。
    */
   const handleDelete = async (id: string, name: string) => {
     const ok = await confirmDialog({
-      title: '确认删除',
-      message: `确定删除工作流「${name}」？此操作不可撤销，其已结束的执行记录、以及节点自动创建的内部会话与用量记录将一并删除。若仍有未结束的执行，需先停止后才能删除。`,
-      confirmText: '删除',
+      title: '移入回收站',
+      message: `确定删除工作流「${name}」？删除后将移入回收站，可在回收站中恢复或彻底删除。若该工作流仍被其它工作流引用、或仍有未结束的执行，需先处理后再删除。`,
+      confirmText: '移入回收站',
     });
     if (!ok) return;
-    try {
-      const res = await deleteDefinition(id);
-      showToast(
-        res.deleted > 0
-          ? `已删除工作流「${name}」，并清理 ${res.deleted} 条执行记录`
-          : `已删除工作流「${name}」`,
-        'success',
-      );
-    } catch (err) {
-      showToast(`删除失败: ${errorMessage(err)}`, 'error');
+    await deleteDefinition(id);
+    // store 在失败时吞掉异常只置 error，这里据其给出真实提示（如"被引用，无法删除"）
+    const storeErr = useWorkflowStore.getState().error;
+    if (storeErr) {
+      showToast(`删除失败: ${storeErr}`, 'error');
+      return;
     }
+    showToast(`已将工作流「${name}」移入回收站`, 'success');
   };
 
   const handleDuplicate = async (id: string, name: string) => {
@@ -723,6 +808,89 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
       await useWorkflowStore.getState().duplicateDefinition(id, name + ' (副本)');
     } catch (err) {
       console.error('复制失败:', err);
+    }
+  };
+
+  /** 拉取回收站列表（打开弹窗与操作后刷新共用） */
+  const refreshRecycleBin = async () => {
+    setRecycleLoading(true);
+    try {
+      const items = await invoke<DeletedWorkflowItem[]>('list_deleted_workflows');
+      setDeletedWorkflows(items || []);
+    } catch (err) {
+      showToast(`读取回收站失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setRecycleLoading(false);
+    }
+  };
+
+  const handleOpenRecycleBin = () => {
+    setShowRecycleBin(true);
+    void refreshRecycleBin();
+  };
+
+  /** 从回收站恢复：重名时后端会自动追加序号，按返回名提示 */
+  const handleRestoreWorkflow = async (id: string, name: string) => {
+    if (recycleBusy) return;
+    setRecycleBusy(true);
+    try {
+      const res = await invoke<RestoredWorkflowResult>('restore_workflow', { id });
+      // 恢复是用户的显式意图：该对象会被判为「本地有改动」，下次同步时同步回云端
+      const suffix = '，将在下次同步时同步到云端';
+      showToast(
+        res.name !== name
+          ? `已恢复工作流，因重名更名为「${res.name}」${suffix}`
+          : `已恢复工作流「${res.name}」${suffix}`,
+        'success',
+      );
+      await refreshRecycleBin();
+      await useWorkflowStore.getState().loadDefinitions();
+    } catch (err) {
+      showToast(`恢复失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setRecycleBusy(false);
+    }
+  };
+
+  /** 彻底删除回收站中的一项（危险确认） */
+  const handlePurgeWorkflow = async (id: string, name: string) => {
+    if (recycleBusy) return;
+    const ok = await confirmDialog({
+      title: '彻底删除',
+      message: `确定彻底删除工作流「${name}」？此操作不可撤销，其版本记录等数据将被永久清除，且无法再从回收站恢复。`,
+      confirmText: '彻底删除',
+    });
+    if (!ok) return;
+    setRecycleBusy(true);
+    try {
+      await invoke('purge_workflow', { id });
+      showToast(`已彻底删除工作流「${name}」`, 'success');
+      await refreshRecycleBin();
+    } catch (err) {
+      showToast(`彻底删除失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setRecycleBusy(false);
+    }
+  };
+
+  /** 清空回收站（危险确认，清空后无法恢复） */
+  const handleEmptyRecycleBin = async () => {
+    if (recycleBusy) return;
+    const ok = await confirmDialog({
+      title: '清空回收站',
+      message: `确定清空回收站？其中的 ${deletedWorkflows.length} 个工作流将被彻底删除，清空后无法恢复。`,
+      confirmText: '清空',
+    });
+    if (!ok) return;
+    setRecycleBusy(true);
+    try {
+      const res = await invoke<{ purged: number }>('empty_recycle_bin');
+      showToast(`已清空回收站，彻底删除 ${res.purged} 个工作流`, 'success');
+      await refreshRecycleBin();
+    } catch (err) {
+      showToast(`清空失败: ${errorMessage(err)}`, 'error');
+    } finally {
+      setRecycleBusy(false);
     }
   };
 
@@ -935,6 +1103,15 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
             title="前往资源市集 › 工作流模板"
           >
             <LayoutTemplate size={14} /> 模板市场
+          </button>
+          {/* 回收站：软删除的工作流入口（恢复 / 彻底删除 / 清空） */}
+          <button
+            onClick={handleOpenRecycleBin}
+            className="pd-btn px-3 py-1.5 text-xs rounded flex items-center gap-1.5 transition-colors"
+            style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            title="查看已删除（回收站）的工作流，可恢复或彻底删除"
+          >
+            <Trash2 size={14} /> 回收站
           </button>
         </div>
       </div>
@@ -1516,6 +1693,112 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                 }}
               >
                 {batchExporting ? '导出中…' : `导出所选（${batchSelectedIds.size}）`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 回收站弹窗：列出已软删除的工作流，可恢复 / 彻底删除 / 清空（清空后无法恢复） */}
+      {showRecycleBin && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { if (!recycleBusy) setShowRecycleBin(false); }}
+        >
+          <div
+            className="rounded-xl shadow-xl w-full mx-4 flex flex-col"
+            style={{ maxWidth: 520, maxHeight: '75vh', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 flex items-center gap-2 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+              <Trash2 size={14} style={{ color: 'var(--text-tertiary)' }} />
+              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>回收站</span>
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{deletedWorkflows.length} 项</span>
+              <span className="flex-1" />
+              <button
+                onClick={() => void handleEmptyRecycleBin()}
+                disabled={recycleBusy || deletedWorkflows.length === 0}
+                className="pd-btn px-2.5 py-1 text-[11px] rounded transition-colors"
+                style={{
+                  border: '1px solid var(--border)',
+                  color: '#EF4444',
+                  opacity: recycleBusy || deletedWorkflows.length === 0 ? 0.5 : 1,
+                  cursor: recycleBusy || deletedWorkflows.length === 0 ? 'default' : 'pointer',
+                }}
+                title="清空后无法恢复"
+              >
+                清空回收站
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-2">
+              {recycleLoading ? (
+                <div className="text-xs py-6 text-center" style={{ color: 'var(--text-tertiary)' }}>加载中…</div>
+              ) : deletedWorkflows.length === 0 ? (
+                <div className="text-xs py-10 text-center" style={{ color: 'var(--text-tertiary)' }}>回收站是空的</div>
+              ) : (
+                deletedWorkflows.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-center gap-2 py-2"
+                    style={{ borderBottom: '1px solid var(--border)' }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }} title={d.name}>
+                        {d.name}
+                      </div>
+                      <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        删除于 {new Date(d.deletedAt * 1000).toLocaleString()} · {d.nodeCount} 节点
+                        {d.subflowCount > 0 ? ` · ${d.subflowCount} 子流` : ''}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => void handleRestoreWorkflow(d.id, d.name)}
+                      disabled={recycleBusy}
+                      className="pd-btn px-2.5 py-1 text-[11px] rounded flex items-center gap-1 shrink-0 transition-colors"
+                      style={{
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-tertiary)',
+                        color: 'var(--text-secondary)',
+                        opacity: recycleBusy ? 0.5 : 1,
+                        cursor: recycleBusy ? 'default' : 'pointer',
+                      }}
+                      title="恢复到工作流列表"
+                    >
+                      <RotateCcw size={12} /> 恢复
+                    </button>
+                    <button
+                      onClick={() => void handlePurgeWorkflow(d.id, d.name)}
+                      disabled={recycleBusy}
+                      className="pd-btn px-2.5 py-1 text-[11px] rounded flex items-center gap-1 shrink-0 transition-colors"
+                      style={{
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-tertiary)',
+                        color: '#EF4444',
+                        opacity: recycleBusy ? 0.5 : 1,
+                        cursor: recycleBusy ? 'default' : 'pointer',
+                      }}
+                      title="彻底删除（不可恢复）"
+                    >
+                      <Trash2 size={12} /> 彻底删除
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="flex justify-end px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={() => setShowRecycleBin(false)}
+                disabled={recycleBusy}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-tertiary)',
+                  color: 'var(--text-secondary)',
+                  cursor: recycleBusy ? 'default' : 'pointer',
+                }}
+              >
+                关闭
               </button>
             </div>
           </div>

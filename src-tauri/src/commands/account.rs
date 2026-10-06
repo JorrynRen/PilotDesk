@@ -440,25 +440,6 @@ pub fn has_capability(conn: &rusqlite::Connection, key: &str) -> Option<bool> {
     Some(cached.view.capabilities.iter().any(|k| k == key))
 }
 
-/// 读某配额键的当前上限：无缓存 / 未下发 → `fallback`；下发 -1 → `usize::MAX`（不限）。
-/// 说明：本地配额只是「体验分层」，不构成安全边界（docs/membership-plan.md §1）。
-#[allow(dead_code)] // 本地能力门控已移除（新收费策略：仅云端服务与内容收费），保留供后续云端配额使用。
-pub fn quota_limit(conn: &rusqlite::Connection, key: &str, fallback: usize) -> usize {
-    let raw = match get_setting(conn, CACHE_SETTING) {
-        Ok(Some(v)) if !v.is_empty() => v,
-        _ => return fallback,
-    };
-    let cached: CachedEntitlements = match serde_json::from_str(&raw) {
-        Ok(c) => c,
-        Err(_) => return fallback,
-    };
-    match cached.view.quotas.get(key) {
-        Some(&v) if v < 0 => usize::MAX,
-        Some(&v) => v as usize,
-        None => fallback,
-    }
-}
-
 // ── Tauri 命令 ─────────────────────────────────────────────────
 
 /// ① 开始登录：起回环端口 + 生成 PKCE，返回平台授权页地址（由前端用系统浏览器打开）

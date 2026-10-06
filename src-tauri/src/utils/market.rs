@@ -279,13 +279,16 @@ pub fn workflow_market_installs(state: tauri::State<'_, crate::DbState>) -> Resu
 
 /// 把模板目录的文件下载到 `tmp_dir`（**保持原文件名**）。
 ///
-/// 文件名必须保留：`import_workflow_from_file` 靠 `[子]xxx(ref_N).json` 的命名收集子工作流
-/// 并恢复引用，改名会让子工作流对不上号。子文件的路径在 Rust 侧统一重编码 ——
+/// 文件名必须保留：老包靠 `[子]xxx(ref_N).json` 命名收集子工作流，新包靠 `manifest.json`
+/// 声明成员文件——改名都会让子工作流对不上号。新包的清单在索引里是独立的 `manifestFile`
+/// 字段（不计入 `subFiles` 的「子工作流」语义），这里单独下载：导入时要靠同目录的清单识别新包，
+/// 缺了它会退回老路径、丢掉子工作流。子文件的路径在 Rust 侧统一重编码 ——
 /// 目录名带中文与全角括号，不编码直接拼 URL 会得到非法请求。
 async fn download_template_files(
     tmp_dir: &std::path::Path,
     main_rel: &str,
     main_file: &str,
+    manifest_file: Option<&str>,
     dir: &str,
     sub_files: &[String],
 ) -> Result<(), String> {
@@ -297,6 +300,18 @@ async fn download_template_files(
         fetch_market_text(&format!("{}{}", base, main_rel.trim_start_matches('/'))).await?;
     std::fs::write(tmp_dir.join(main_file), main_text)
         .map_err(|e| format!("写入主文件失败: {}", e))?;
+
+    // 新文件包的清单（老包无此字段 → None，行为不变）
+    if let Some(manifest) = manifest_file {
+        let rel = format!(
+            "workflow/{}/{}",
+            encode_path_segment(dir),
+            encode_path_segment(manifest)
+        );
+        let text = fetch_market_text(&format!("{}{}", base, rel)).await?;
+        std::fs::write(tmp_dir.join(manifest), text)
+            .map_err(|e| format!("写入工作流清单失败: {}", e))?;
+    }
 
     for sub in sub_files {
         let rel = format!(
@@ -313,8 +328,9 @@ async fn download_template_files(
 
 /// [Tauri Command] 安装工作流模板（下载 → 导入 → 记安装记录）
 ///
-/// 安装 = 按索引把模板目录里的 [主]/[子] 文件下载到临时目录，再交给
-/// `import_workflow_from_file_with_conn`（它本来就会收集同目录的 [子] 文件、重建子工作流引用）。
+/// 安装 = 按索引把模板目录里的主/子文件下载到临时目录，再交给
+/// `import_workflow_from_file_with_conn`（新包按 `manifest.json` 清单导入，老包收集同目录
+/// `[子]` 文件并重建子工作流引用）。
 /// 重复安装（更新）时先用本地记录删掉上一次的 主+子 定义，避免「工作流定义」里堆出同名副本。
 ///
 /// 路径只认索引给出的 dir/mainFile/subFiles，不接受前端传任意路径 ——
@@ -358,11 +374,15 @@ pub async fn workflow_market_install(
                 .collect()
         })
         .unwrap_or_default();
+    // 新文件包的清单文件名（老索引无此字段 → None，行为不变）
+    let manifest_file = entry.get("manifestFile").and_then(|v| v.as_str());
 
     // 2. 下载到临时目录（失败要清理，避免在系统临时目录里留垃圾）
     let tmp_dir =
         std::env::temp_dir().join(format!("pilotdesk-market-wf-{}", crate::utils::new_id()));
-    if let Err(e) = download_template_files(&tmp_dir, main_rel, main_file, dir, &sub_files).await {
+    if let Err(e) =
+        download_template_files(&tmp_dir, main_rel, main_file, manifest_file, dir, &sub_files).await
+    {
         let _ = std::fs::remove_dir_all(&tmp_dir);
         return Err(e);
     }
@@ -381,8 +401,9 @@ pub async fn workflow_market_install(
             old_ids.extend(subs.iter().filter_map(|v| v.as_str().map(str::to_string)));
         }
         for old_id in old_ids {
+            // 内部替换：市场重装前真删上一次装的旧定义（不进回收站）；
             // 旧定义可能已被用户手动删掉/改过，删不到只记日志，不打断这次安装
-            if let Err(e) = crate::workflow::delete_definition(&conn, &old_id) {
+            if let Err(e) = crate::workflow::hard_delete_definition(&conn, &old_id) {
                 log::warn!("[Market] 清理旧定义失败 {}: {}", old_id, e);
             }
         }
@@ -393,7 +414,7 @@ pub async fn workflow_market_install(
         &conn,
         &main_path.to_string_lossy(),
     ) {
-        Ok(def) => def,
+        Ok(outcome) => outcome.definition,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp_dir);
             return Err(e);

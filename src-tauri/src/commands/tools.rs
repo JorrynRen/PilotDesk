@@ -73,6 +73,8 @@ pub fn build_tool_catalog(
     let resolve_provider: Option<
         Arc<dyn Fn(&str) -> Option<(String, String, String)> + Send + Sync>,
     > = Some(Arc::new(|_| None));
+    // 记忆上限统一存主库（`conn` 即主库连接）：读主库设置后传入，MEMORY.db 不再自持设置
+    let memory_limit = crate::api_agent::db::load_memory_max_entries(conn);
     let env = tools::ToolEnv {
         cwd: String::new(),
         api_format: ApiFormat::OpenAI,
@@ -86,7 +88,7 @@ pub fn build_tool_catalog(
         model: String::new(),
         skill_loader: Some(Arc::new(SkillLoader::new(None))),
         memory_store: crate::api_agent::system_prompt::get_pilotdesk_config_dir()
-            .and_then(|d| MemoryStore::new(&d).ok())
+            .and_then(|d| MemoryStore::new(&d, memory_limit).ok())
             .map(Arc::new),
         // 工具管理页要把 search_knowledge 也列出来，所以这里与 memory_store 同样按配置目录打开
         knowledge_store: crate::api_agent::system_prompt::get_pilotdesk_config_dir()

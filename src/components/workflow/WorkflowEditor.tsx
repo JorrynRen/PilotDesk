@@ -727,10 +727,20 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
       let lastImportedId: string | null = null;
       for (const filePath of paths) {
         try {
-          const result = await invoke<{ id: string }>('import_workflow_from_file', { filePath });
+          const result = await invoke<{ id: string; missingDependencies?: string[] }>(
+            'import_workflow_from_file',
+            { filePath },
+          );
           successCount++;
           if (result?.id) {
             lastImportedId = result.id;
+          }
+          // 单文件导入时引用的子工作流本地缺失：不阻断，但明确提示缺失依赖
+          if (result?.missingDependencies?.length) {
+            showToast(
+              `导入成功，但引用了 ${result.missingDependencies.length} 个本地不存在的工作流：${result.missingDependencies.join('、')}`,
+              'warning',
+            );
           }
         } catch (innerErr: unknown) {
           const fileName = filePath.split(/[/]/).pop();

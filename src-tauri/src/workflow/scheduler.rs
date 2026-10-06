@@ -151,10 +151,11 @@ impl WorkflowScheduler {
                                 continue;
                             }
                         };
-                        match super::get_definition(&conn, &wf_id) {
+                        // 用「活跃定义」读取：已软删除（回收站）的调度目标视为不存在，跳过本次执行
+                        match super::get_active_definition(&conn, &wf_id) {
                             Ok(Some(d)) => d,
                             Ok(None) => {
-                                log::warn!("调度的工作流不存在: {}", wf_id);
+                                log::warn!("调度的工作流不存在或已删除: {}", wf_id);
                                 continue;
                             }
                             Err(e) => {

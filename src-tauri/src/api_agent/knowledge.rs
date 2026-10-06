@@ -3415,7 +3415,11 @@ mod tests {
             .unwrap();
         }
 
-        let mem = super::super::db::MemoryStore::new(&dir).unwrap();
+        let mem = super::super::db::MemoryStore::new(
+            &dir,
+            super::super::db::MEMORY_MAX_ENTRIES_DEFAULT,
+        )
+        .unwrap();
         assert_eq!(mem.quota_count(), 0, "知识条目不占 600 条配额");
         assert_eq!(mem.count(), 1, "但总数里仍算它一条");
         assert!(

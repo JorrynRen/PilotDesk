@@ -157,11 +157,8 @@ export const useWorkflowStore = create<WorkflowStoreState>((set, get) => ({
   deleteDefinition: async (id: string) => {
     set({ loading: true, error: null });
     try {
-      // 同步删除定时调度
-      await get().syncSchedule(id, { triggerType: 'manual' });
-
-      // 后端连带清理该工作流**已结束**的执行记录（未结束的保留，
-      // 否则实例会从列表消失却仍在跑、且再也取消不掉）
+      // 删除为**软删除**（进回收站、可恢复）：**保留**其定时调度，恢复后自动继续生效；
+      // 调度器已跳过已删除定义，故不会误触发。仅「彻底删除（purge）」才由外键级联清理调度。
       const result = await invoke<DeleteExecutionsResult>('delete_workflow', { id });
       await get().loadDefinitions();
       await get().loadInstances();

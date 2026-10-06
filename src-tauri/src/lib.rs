@@ -1185,10 +1185,12 @@ async fn run_api_agent_body(
     let skill_loader = Arc::new(SkillLoader::new(skills_dir));
 
     // 3.5 初始化记忆库（SQLite: MEMORY.db）
+    // 记忆上限统一存主库（本轮的 `conn` 即主库连接）；读主库设置后传入，MEMORY.db 不再自持设置。
     let memory_store = {
         let config_dir = crate::api_agent::system_prompt::get_pilotdesk_config_dir()
             .ok_or_else(|| "无法获取配置目录".to_string())?;
-        MemoryStore::new(&config_dir)?
+        let limit = crate::api_agent::db::load_memory_max_entries(&conn);
+        MemoryStore::new(&config_dir, limit)?
     };
     let memory_store = Arc::new(memory_store);
 
@@ -2470,6 +2472,10 @@ pub fn run() {
             commands::workflow::get_workflow,
             commands::workflow::update_workflow,
             commands::workflow::delete_workflow,
+            commands::workflow::list_deleted_workflows,
+            commands::workflow::restore_workflow,
+            commands::workflow::purge_workflow,
+            commands::workflow::empty_recycle_bin,
             commands::workflow::save_workflow_dag,
             commands::workflow::start_workflow,
             commands::workflow::cancel_workflow,
@@ -2618,6 +2624,16 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 scheduler.start(sched_executor, sched_handle).await;
             });
+
+            // 一次性迁移：KV 记忆上限从 MEMORY.db 旧键搬到主库（幂等，仅首次真正搬迁）
+            match pool.get() {
+                Ok(conn) => {
+                    if let Err(e) = commands::memory::migrate_memory_limit_to_main(&conn) {
+                        log::warn!("[Memory] 记忆上限迁移检查失败（不影响使用）：{}", e);
+                    }
+                }
+                Err(e) => log::warn!("[Memory] 取主库连接失败，跳过记忆上限迁移：{}", e),
+            }
 
             // 启动本地用量自动上报后台任务（每 30 分钟一次，受设置开关控制，失败静默）
             let report_pool = pool.clone();

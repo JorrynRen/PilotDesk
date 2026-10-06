@@ -171,7 +171,8 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
             icon TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1);
+            enabled INTEGER NOT NULL DEFAULT 1
+        , deleted_at INTEGER);
 CREATE TABLE IF NOT EXISTS workflow_events (
     seq            INTEGER PRIMARY KEY AUTOINCREMENT,
     execution_id   TEXT NOT NULL,
@@ -195,6 +196,7 @@ CREATE TABLE IF NOT EXISTS workflow_versions (
             version INTEGER NOT NULL,
             snapshot TEXT NOT NULL,
             created_at INTEGER NOT NULL,
+            origin TEXT NOT NULL DEFAULT 'manual',
             UNIQUE(workflow_id, version));
 CREATE INDEX IF NOT EXISTS idx_api_usage_session ON api_usage_log (session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_install_logs_time ON install_logs(timestamp);
@@ -258,7 +260,11 @@ pub fn init_db() -> Result<DbPool, AppError> {
 
     // 云同步本地元数据（个人向跨设备同步，见 commands/cloud_sync.rs）：
     // 每个被同步对象一行——server_version = 本地已知的「远端版本」（新建为 0），
-    // dirty = 本地有未推送改动。
+    // dirty = 本地有未推送改动（快速提示，非唯一判据），
+    // last_synced_hash = 上次成功同步时本地内容的规范化哈希（判「本地是否真改过」的唯一可靠判据），
+    // tombstone = 是否墓碑（本地彻底删除后阻止该 key 被 pull 复活；1 = 是），
+    // tombstone_pushed = 墓碑对应的「删除意图」是否已送达云端（1 = 已送达，不再重复推送；
+    //   0 = 尚未送达，作为补送候选继续尝试）。三种状态组合见 commands/cloud_sync.rs 模块注释。
     // 作为「基础兜底表」在此创建（与 file_history 同处）：新表用 IF NOT EXISTS 每次启动即补齐，
     // 老库无需 schema 版本迁移；只有「给旧表补列」才需要 SCHEMA_VERSION +1（见 migrate_schema）。
     conn.execute_batch(
@@ -268,8 +274,21 @@ pub fn init_db() -> Result<DbPool, AppError> {
             server_version INTEGER NOT NULL DEFAULT 0,
             local_updated_at INTEGER NOT NULL DEFAULT 0,
             dirty INTEGER NOT NULL DEFAULT 0,
+            last_synced_hash TEXT,
+            tombstone INTEGER NOT NULL DEFAULT 0,
+            tombstone_pushed INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (kind, object_key)
         );",
+    )?;
+    // 老库补列：既有 sync_state 表（无 last_synced_hash / tombstone / tombstone_pushed）在此按既有
+    // ensure_column 做法幂等补齐——只加列、不改数据、不随 SCHEMA_VERSION 门控（同 workflow_definitions.deleted_at）。
+    ensure_column(&conn, "sync_state", "last_synced_hash", "TEXT")?;
+    ensure_column(&conn, "sync_state", "tombstone", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        &conn,
+        "sync_state",
+        "tombstone_pushed",
+        "INTEGER NOT NULL DEFAULT 0",
     )?;
 
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
@@ -409,6 +428,20 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
         )));
     }
     conn.execute_batch(FINAL_SCHEMA_SQL)?;
+    // 无条件补列（不随 SCHEMA_VERSION 门控）：终态脚本已含 workflow_definitions.deleted_at，
+    // 但既有 v8 库的 user_version 已等于当前版本、不会进入下面的增量分支——若把补列塞进
+    // `if current_version < SCHEMA_VERSION` 里就得为此升版本号。软删除列只加不改数据、
+    // ensure_column 幂等，故放在版本门控之外、每次启动安全执行，无需 +1 SCHEMA_VERSION。
+    ensure_column(conn, "workflow_definitions", "deleted_at", "INTEGER")?;
+    // 批次 3：版本快照来源（manual / cloud_sync / import）。与 deleted_at 同理：终态脚本已含该列，
+    // 但既有库 user_version 已等于当前版本、不会进入增量分支；该列只加不改数据、ensure_column 幂等，
+    // 故同样放在版本门控之外，无需 +1 SCHEMA_VERSION。
+    ensure_column(
+        conn,
+        "workflow_versions",
+        "origin",
+        "TEXT NOT NULL DEFAULT 'manual'",
+    )?;
     if current_version < SCHEMA_VERSION {
         // v4 → v5：api_usage_log 缓存读/写拆分。cache_read_tokens=缓存命中读取，
         // cache_write_tokens=缓存写入；cached_tokens 保留并恒等于两者之和（兼容既有汇总）。
@@ -736,6 +769,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(prompt, 400, "重复迁移不得二次回冲");
+    }
+
+    /// 既有 v8 库（workflow_definitions 尚无 deleted_at）经迁移补列：
+    /// 列被加上、历史行默认未删除、user_version 不变（此列不随版本号门控），重复迁移幂等。
+    #[test]
+    fn migrate_adds_workflow_deleted_at_without_version_bump() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE workflow_definitions (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1);
+             INSERT INTO workflow_definitions (id, name) VALUES ('d1', '旧工作流');",
+        )
+        .unwrap();
+        // 既有 v8 库：版本号已等于当前版本，不会进入增量分支
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .unwrap();
+
+        migrate_schema(&conn).unwrap();
+
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(workflow_definitions)")
+            .unwrap()
+            .query_map([], |r| r.get(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            columns.contains(&"deleted_at".to_string()),
+            "应补 deleted_at 列"
+        );
+        let (name, deleted): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT name, deleted_at FROM workflow_definitions WHERE id = 'd1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "旧工作流");
+        assert_eq!(deleted, None, "历史行默认未删除");
+        let ver: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, SCHEMA_VERSION, "补列不应改动 schema 版本号");
+        migrate_schema(&conn).unwrap(); // 再次执行保持幂等
     }
 
     /// 比当前更新的库（未来版本应用创建）拒绝打开，绝不 wipe。
