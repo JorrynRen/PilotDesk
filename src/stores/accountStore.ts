@@ -27,6 +27,7 @@ export const CAP_CLOUD_SYNC = 'sync.cloud';
  */
 const CAPABILITY_LABELS: Record<string, string> = {
   'sync.cloud': '云同步',
+  'team.members': '团队席位与成员治理',
   'team.audit': '团队操作审计',
   'team.shared-space': '团队共享空间',
   'team.usage-board': '团队用量看板',
