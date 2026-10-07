@@ -3,13 +3,14 @@
  *
  * 未登录 = 免费档：受限功能（如工作流批量导出）的入口会隐藏，这里给出登录入口。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Cloud, Loader2, LogIn, LogOut, RefreshCw, UploadCloud } from 'lucide-react';
+import { ChevronRight, Cloud, Loader2, LogIn, LogOut, UploadCloud } from 'lucide-react';
 
 import { PlanBadge } from '../common/PlanBadge';
 import { Select } from '../common/Select';
 import { CAP_CLOUD_SYNC, capabilityLabel, hasCapability, useAccountStore } from '../../stores/accountStore';
+import { useCloudSyncStore } from '../../stores/cloudSyncStore';
 import { expiryText } from '../../utils/planText';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -21,12 +22,6 @@ const USAGE_REPORT_ENABLED_KEY = 'usage_report_enabled';
 const REPORT_ORG_ID_KEY = 'report_org_id';
 /** 上次上报时间的本地设置键（明文、非敏感，仅用于界面提示） */
 const USAGE_REPORT_LAST_KEY = 'usage_report_last_at';
-/** 自动同步间隔设置键（分钟；与后端 `cloud_sync.rs::SYNC_INTERVAL_KEY` 一致） */
-const SYNC_INTERVAL_KEY = 'cloud_sync_interval_minutes';
-/** 自动同步间隔可配范围（分钟） */
-const SYNC_INTERVAL_MIN = 1;
-const SYNC_INTERVAL_MAX = 1440;
-const SYNC_INTERVAL_DEFAULT = 10;
 
 /** 单条上报条目（后端 `UsageItem`） */
 interface UsageItem {
@@ -52,63 +47,23 @@ interface UsageReportResult {
   error?: string;
 }
 
-/** 云同步一轮结果（后端 `CloudSyncResult`） */
-interface CloudSyncResult {
-  pulled: number;
-  pushed: number;
-  conflicts: number;
-  /** 本轮冲突对象清单（本地改动已留档为本地版本，主对象已跟随远端） */
-  conflictItems?: { id: string; name: string }[];
-  /** 本轮「被云端更新（覆盖本地）」的对象清单（本地无改动直接跟随远端；本地原内容已备份为本地版本） */
-  updatedItems?: { id: string; name: string }[];
-  /** 打包失败（未能上传）的对象数 */
-  failed?: number;
-  /** 失败对象与原因（如体积超限） */
-  failures?: string[];
-  error?: string;
-}
-
-/** 云同步状态（后端 `CloudSyncStatus`） */
-interface CloudSyncStatus {
-  enabled: boolean;
-  capabilityOk: boolean;
-  lastAt: string | null;
-  lastResult: string | null;
-  objectCount: number;
-  /** 本地根工作流数（未被任何工作流作为子流引用） */
-  rootCount: number;
-  /** 本地子工作流数（随主工作流一并同步，不单独同步） */
-  subflowCount: number;
-  cursor: number;
-}
-
 /** 组织内角色的中文名；未知角色回退原值 */
 function roleLabel(role: string): string {
   const map: Record<string, string> = { owner: '所有者', admin: '管理员', member: '成员' };
   return map[role] ?? role;
 }
 
-/** 云同步结果摘要：有打包失败 / 冲突对象时带上数量与说明（不静默）。 */
-function cloudSyncSummary(r: CloudSyncResult): string {
-  let text = `拉取 ${r.pulled} / 推送 ${r.pushed} / 冲突 ${r.conflicts}`;
-  if (r.failed && r.failed > 0) {
-    const first = r.failures?.[0];
-    text += `；${r.failed} 个失败${first ? `（${first}）` : ''}`;
-  }
-  if (r.conflicts > 0) {
-    // 冲突不自动选边：本地改动已留档为本地版本、主对象跟随远端；提示用户可在「版本」中查看并回滚
-    text += `。检测到 ${r.conflicts} 个冲突：你的改动已保存为本地版本，可在工作流的「版本」中查看并回滚`;
-  }
-  if (r.updatedItems && r.updatedItems.length > 0) {
-    // 被云端更新（覆盖本地）：本地无改动、直接跟随远端；如实告知本地原内容已备份为本地版本
-    text += `；已跟随云端更新 ${r.updatedItems.length} 个工作流（本地原内容已备份为本地版本，可在「版本」中回滚）`;
-  }
-  return text;
+/** 账号设置页 props */
+interface AccountSettingsProps {
+  /** 打开「我的云同步」一级 tab（由设置页传入；不传则不显示该入口） */
+  onOpenCloudSync?: () => void;
 }
 
-export function AccountSettings() {
+export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
   const { account, loaded, loggingIn, error, login, logout, cancelLogin, openPlatform } =
     useAccountStore();
+  // 云同步状态：只读缓存（账号 tab 不主动请求）；由「我的云同步」tab 拉取后写入
+  const cloudStatus = useCloudSyncStore((s) => s.status);
 
   // 组织来源：升级 / 续费与账户信息都指到平台的组织页
   const fromOrganization = account?.source === 'organization';
@@ -245,121 +200,16 @@ export function AccountSettings() {
     }
   };
 
-  // 云同步：开关（默认关闭）+ 立即同步 + 上次结果；仅专业版/团队版可用
+  // 云同步能力门控：仅专业版/团队版可用（账号 tab 只读此判据做入口文案，不请求状态）
   const canCloudSync = hasCapability(account, CAP_CLOUD_SYNC);
-  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
-  const [cloudSyncing, setCloudSyncing] = useState(false);
-  const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus | null>(null);
-
-  const refreshCloudStatus = useCallback(async () => {
-    try {
-      const s = await invoke<CloudSyncStatus>('cloud_sync_status');
-      setCloudStatus(s);
-      setCloudSyncEnabled(s.enabled);
-    } catch {
-      /* 忽略：读不到就保持默认关闭，不让设置页整体失败 */
-    }
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const s = await invoke<CloudSyncStatus>('cloud_sync_status');
-        if (!alive) return;
-        setCloudStatus(s);
-        setCloudSyncEnabled(s.enabled);
-      } catch {
-        /* 忽略：读不到就保持默认关闭，不让设置页整体失败 */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // 自动同步间隔（分钟）：读/写主库设置 `cloud_sync_interval_minutes`（1–1440，后端每轮读取即时生效）
-  const [syncIntervalMin, setSyncIntervalMin] = useState(SYNC_INTERVAL_DEFAULT);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const raw = await invoke<string | null>('get_app_setting', { key: SYNC_INTERVAL_KEY });
-        if (!alive) return;
-        const n = raw ? parseInt(raw, 10) : NaN;
-        setSyncIntervalMin(
-          Number.isFinite(n)
-            ? Math.max(SYNC_INTERVAL_MIN, Math.min(SYNC_INTERVAL_MAX, n))
-            : SYNC_INTERVAL_DEFAULT,
-        );
-      } catch {
-        /* 忽略：读不到就用默认值展示 */
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const changeSyncInterval = async (raw: string) => {
-    const n = parseInt(raw, 10);
-    if (Number.isNaN(n)) return;
-    const clamped = Math.max(SYNC_INTERVAL_MIN, Math.min(SYNC_INTERVAL_MAX, n));
-    setSyncIntervalMin(clamped);
-    try {
-      await invoke('set_app_setting', { key: SYNC_INTERVAL_KEY, value: String(clamped) });
-    } catch (e) {
-      showToast(`保存失败: ${errorMessage(e)}`, 'error');
-    }
-  };
-
-  const toggleCloudSync = async () => {
-    const next = !cloudSyncEnabled;
-    setCloudSyncEnabled(next);
-    setCloudSyncing(true);
-    try {
-      // 后端在开启时会立即触发一轮同步，结果随返回值给出
-      const r = await invoke<CloudSyncResult>('cloud_sync_set_enabled', { enabled: next });
-      if (!next) {
-        showToast('已关闭云同步', 'success');
-      } else if (r.error) {
-        showToast(r.error, 'error');
-      } else {
-        showToast(
-          `已开启云同步（${cloudSyncSummary(r)}）`,
-          r.failed && r.failed > 0 ? 'warning' : 'success',
-        );
-      }
-      await refreshCloudStatus();
-    } catch (e) {
-      setCloudSyncEnabled(!next); // 回滚
-      showToast(`保存失败: ${errorMessage(e)}`, 'error');
-    } finally {
-      setCloudSyncing(false);
-    }
-  };
-
-  const syncNow = async () => {
-    setCloudSyncing(true);
-    try {
-      const r = await invoke<CloudSyncResult>('cloud_sync_now');
-      // 未登录 / 非付费等级 / 网络失败都不抛异常，错误在 r.error 文案里
-      if (r.error) {
-        showToast(r.error, 'error');
-      } else {
-        showToast(
-          `同步完成：${cloudSyncSummary(r)}`,
-          r.failed && r.failed > 0 ? 'warning' : 'success',
-        );
-      }
-      await refreshCloudStatus();
-    } catch (e) {
-      showToast(`同步失败: ${errorMessage(e)}`, 'error');
-    } finally {
-      setCloudSyncing(false);
-    }
-  };
+  // 「云同步」入口文案：仅用能力（account）与缓存状态（cloudStatus），不发起任何请求
+  const cloudEntryText = !canCloudSync
+    ? '云同步：专业版功能，当前等级不含此能力'
+    : cloudStatus === null
+      ? '云同步：去查看与设置'
+      : cloudStatus.enabled
+        ? `云同步：已开启${cloudStatus.lastAt ? ` · 上次同步 ${cloudStatus.lastAt}` : ''}`
+        : '云同步：已关闭';
 
   return (
     <div className="space-y-6">
@@ -498,108 +348,20 @@ export function AccountSettings() {
         </div>
       </SettingsSection>
 
-      {/* 云同步：默认关闭；当前仅支持工作流，不含设置与密钥 */}
-      <SettingsSection
-        title="云同步"
-        description="当前支持：工作流；插件与灵感暂不支持（后续版本）。同步不含设置与密钥，工作流跨设备可用。"
-      >
-        <SettingsCard>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => void toggleCloudSync()}
-              disabled={!canCloudSync || cloudSyncing}
-              className="relative rounded-full transition-colors shrink-0 disabled:opacity-50"
-              style={{
-                width: 36,
-                height: 20,
-                backgroundColor: cloudSyncEnabled ? '#22c55e' : 'var(--bg-tertiary)',
-                border: '1px solid var(--border)',
-              }}
-              title={!canCloudSync ? '云同步为专业版功能' : cloudSyncEnabled ? '点击关闭' : '点击开启'}
-            >
-              <div
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
-                style={{ left: cloudSyncEnabled ? '18px' : '2px' }}
-              />
-            </button>
-            <span
-              className="text-xs"
-              style={{ color: cloudSyncEnabled ? '#22c55e' : 'var(--text-tertiary)' }}
-            >
-              {cloudSyncEnabled ? '已开启' : '已关闭'}
-            </span>
-            <span
-              className="text-[11px] flex items-center gap-1"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              <Cloud size={12} />
-              已跟踪 {cloudStatus?.objectCount ?? 0} 个对象
-            </span>
-          </div>
-        </SettingsCard>
-
-        {/* 自动同步间隔（分钟）：1–1440，后端每轮读取 → 保存后下一轮生效（无需重启） */}
-        <div className="mt-3 flex items-center gap-2">
-          <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-            自动同步间隔
+      {/* 云同步入口：切到「我的云同步」一级 tab；此处只读缓存状态，不主动请求（懒加载） */}
+      {onOpenCloudSync && (
+        <button
+          onClick={onOpenCloudSync}
+          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left"
+          style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+        >
+          <Cloud size={13} className="shrink-0" style={{ color: 'var(--text-secondary)' }} />
+          <span className="flex-1 text-xs" style={{ color: 'var(--text-primary)' }}>
+            {cloudEntryText}
           </span>
-          <input
-            type="number"
-            min={SYNC_INTERVAL_MIN}
-            max={SYNC_INTERVAL_MAX}
-            value={syncIntervalMin}
-            disabled={!canCloudSync}
-            onChange={(e) => void changeSyncInterval(e.target.value)}
-            className="px-2 py-1 rounded-lg text-xs outline-none disabled:opacity-50"
-            style={{
-              width: 72,
-              backgroundColor: 'var(--bg-secondary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
-            title="自动同步间隔（分钟），范围 1–1440"
-          />
-          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            分钟（1–1440，保存后下一轮生效）
-          </span>
-        </div>
-
-        {/* 说明：子工作流不是独立同步对象，其内容随所属主工作流一并上传，避免对端重复导入 */}
-        <p className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          子工作流不单独同步，其内容随所属主工作流一并上传（避免重复导入）。
-          {cloudStatus && cloudStatus.subflowCount > 0
-            ? `本机现有 ${cloudStatus.rootCount} 个主工作流、${cloudStatus.subflowCount} 个子工作流。`
-            : ''}
-        </p>
-
-        {!canCloudSync ? (
-          <p className="mt-2 text-[11px]" style={{ color: '#F59E0B' }}>
-            云同步为专业版功能，当前等级不含此能力
-          </p>
-        ) : (
-          <div className="mt-3 flex items-center gap-3">
-            <SettingsButton
-              variant="primary"
-              icon={
-                cloudSyncing ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : (
-                  <RefreshCw size={13} />
-                )
-              }
-              onClick={() => void syncNow()}
-              disabled={cloudSyncing || !cloudSyncEnabled}
-              title={cloudSyncEnabled ? '立即同步一轮' : '已关闭云同步'}
-            >
-              立即同步
-            </SettingsButton>
-            <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-              {cloudStatus?.lastAt ? `上次同步：${cloudStatus.lastAt}` : '尚未同步'}
-              {cloudStatus?.lastResult ? ` · ${cloudStatus.lastResult}` : ''}
-            </span>
-          </div>
-        )}
-      </SettingsSection>
+          <ChevronRight size={13} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
+        </button>
+      )}
 
       {account && (
         <SettingsSection

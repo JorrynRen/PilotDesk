@@ -66,6 +66,7 @@
   "settings.group.data": "Data",
 
   "settings.tab.general": "General",
+  "settings.tab.cloudsync": "Cloud Sync",
   "settings.tab.agents": "Agent Integration",
   "settings.tab.api": "API Integration",
   "settings.tab.mcp": "MCP Servers",
