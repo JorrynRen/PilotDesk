@@ -24,7 +24,7 @@ import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 
 /**
- * 自定义标签管理（设置页 tab 内容）。
+ * 门户标签管理（设置页 tab 内容）。
  * CRUD + @dnd-kit 拖动排序，数据持久化到 app_settings（复用现有 KV 表）。
  * 录入校验与 store 双层执行（以 store 为准），错误就地展示。
  */
@@ -205,7 +205,7 @@ function SortableTabRow({
 }
 
 /**
- * 自定义标签管理（设置页 tab 内容）。
+ * 门户标签管理（设置页 tab 内容）。
  * CRUD + 拖动排序，数据持久化到 app_settings（复用现有 KV 表）。
  */
 export function CustomTabsSettings() {
@@ -296,9 +296,9 @@ export function CustomTabsSettings() {
   return (
     <div>
       <div className="mb-4">
-        <h3 className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>自定义标签</h3>
+        <h3 className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>门户标签</h3>
         <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-          自定义标签会直接加入标题栏组合开关（工作流 / 会话 / 群聊 / 终端之后），点击即可快速切换访问常用页面。
+          门户标签会直接加入标题栏组合开关（工作流 / 会话 / 群聊 / 终端之后），点击即可快速切换访问常用页面。
           <br />
           支持三种地址：网络地址（http/https 网页）、本地 HTML 文件（任意文件完整路径，如 E:\doc\index.html，经 asset 协议加载）、本地目录（如 E:\doc，自动生成文件列表页，可进入子目录 / 打开文件）。
           <br />
@@ -312,7 +312,7 @@ export function CustomTabsSettings() {
         </p>
       </div>
 
-      {/* 顶栏平铺显示个数：设置组合开关里平铺几个自定义标签，其余收进「更多」下拉 */}
+      {/* 顶栏平铺显示个数：设置组合开关里平铺几个门户标签，其余收进「更多」下拉 */}
       <div
         className="mb-4 p-3 rounded-xl"
         style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
@@ -338,7 +338,7 @@ export function CustomTabsSettings() {
           style={{ accentColor: 'var(--accent)' }}
         />
         <p className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-          0 表示不在顶栏显示自定义标签（仍可从「更多」进入）；最多 3 个。
+          0 表示不在顶栏显示门户标签（仍可从「更多」进入）；最多 3 个。
         </p>
       </div>
 
@@ -404,7 +404,7 @@ export function CustomTabsSettings() {
       {tabs.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 py-12">
           <Globe size={26} style={{ color: 'var(--text-tertiary)' }} />
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>暂无自定义标签，在上方添加</p>
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>暂无门户标签，在上方添加</p>
         </div>
       ) : (
         <div className="flex flex-col gap-2">

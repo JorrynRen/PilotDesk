@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 
-/** 自定义标签页：label 显示名，url 为网络地址(http/https)或本地文件路径 */
+/** 门户标签页：label 显示名，url 为网络地址(http/https)或本地文件路径 */
 export interface CustomTab {
   id: string;
   label: string;
@@ -15,7 +15,7 @@ export interface CustomTab {
 }
 
 /**
- * 门户页的哨兵「标签 id」：门户不是真实自定义标签，仅用于表示「custom 模式下激活的是门户页」。
+ * 门户页的哨兵「标签 id」：门户本身不是一条门户标签，仅用于表示「custom 模式下激活的是门户页」。
  * 用哨兵值而非新增布尔字段，是为了复用现有 activeTabId 的单一激活语义
  * （顶栏高亮、内容区切换、打开/关闭逻辑都只读它）。
  */
@@ -27,7 +27,7 @@ const STORAGE_KEY = 'custom_tabs';
 const TITLEBAR_LIMIT_KEY = 'custom_tabs_titlebar_limit';
 
 /* ───────────────────────── 顶栏平铺显示个数 ───────────────────────── */
-/** 默认值：顶栏最多平铺 3 个自定义标签 */
+/** 默认值：顶栏最多平铺 3 个门户标签 */
 export const DEFAULT_TITLEBAR_LIMIT = 3;
 /** 可选范围下界（0 = 不在顶栏平铺，仅从「更多」进入） */
 export const TITLEBAR_LIMIT_MIN = 0;
@@ -54,7 +54,7 @@ export function normalizeTitleBarLimit(raw: unknown): number {
 export const CUSTOM_TAB_LABEL_MAX = 64;
 /** 地址长度上限 */
 export const CUSTOM_TAB_URL_MAX = 2048;
-/** 自定义标签数量上限 */
+/** 门户标签数量上限 */
 export const CUSTOM_TAB_MAX_COUNT = 50;
 /** 分组名长度上限 */
 export const CUSTOM_TAB_GROUP_MAX = 32;
@@ -138,7 +138,7 @@ function isLocalPath(u: string): boolean {
 }
 
 /**
- * 校验并规范化自定义标签输入。
+ * 校验并规范化门户标签输入。
  * @param existingTabs 现有标签（用于数量上限与去重）
  * @param ignoreId     编辑场景传自身 id（去重与数量校验时跳过自身）
  */
@@ -179,7 +179,7 @@ export function validateCustomTabInput(
 
   // 数量上限：仅新增时统计（编辑自身不新增）
   if (!ignoreId && existingTabs.length >= CUSTOM_TAB_MAX_COUNT) {
-    return { ok: false, error: `自定义标签数量已达上限（最多 ${CUSTOM_TAB_MAX_COUNT} 条）` };
+    return { ok: false, error: `门户标签数量已达上限（最多 ${CUSTOM_TAB_MAX_COUNT} 条）` };
   }
 
   // 去重：同一地址已存在则拒绝（编辑自身跳过）
@@ -192,7 +192,7 @@ export function validateCustomTabInput(
 interface CustomTabsState {
   tabs: CustomTab[];
   activeTabId: string | null;
-  /** 顶栏平铺显示的自定义标签个数（0–3），持久化在独立 KV key */
+  /** 顶栏平铺显示的门户标签个数（0–3），持久化在独立 KV key */
   titleBarLimit: number;
   loaded: boolean;
   load: () => Promise<void>;

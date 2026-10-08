@@ -11,7 +11,7 @@ import { Select, type SelectGroup } from '../common/Select';
 import { TabIcon } from '../common/TabIcon';
 
 /**
- * 顶栏自定义标签的平铺渲染数量由用户配置（设置 → 自定义标签「顶部显示个数」，0–3，默认 3）。
+ * 顶栏门户标签的平铺渲染数量由用户配置（设置 → 门户标签「顶部显示个数」，0–3，默认 3）。
  * 超出部分收进「更多」下拉，避免标签变多时顶栏分段控件被无限撑宽（P0：多了就崩）。
  * 取值从 `useCustomTabsStore.titleBarLimit` 读取，见下方组件内。
  */
@@ -100,7 +100,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   const customTabs = useCustomTabsStore((s) => s.tabs);
   const activeCustomTabId = useCustomTabsStore((s) => s.activeTabId);
   const setActiveCustomTab = useCustomTabsStore((s) => s.setActiveTab);
-  // 顶栏平铺显示个数（用户可配置，0–3）：0 时不渲染任何自定义标签段，但「更多」下拉仍保留
+  // 顶栏平铺显示个数（用户可配置，0–3）：0 时不渲染任何门户标签段，但「更多」下拉仍保留
   const titleBarLimit = useCustomTabsStore((s) => s.titleBarLimit);
   // 按 order 排序（防御性：store 已归一化，这里再排一次保证顶栏顺序稳定）
   const sortedCustomTabs = useMemo(
@@ -168,7 +168,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
     };
   }, []);
 
-  // 组合开关段：会话 / 群聊 / 工作流 / 知识库（独立路由，常驻）/ 终端 + 门户（固定）+ 自定义标签（前 N 个参与 thumb 滑动）+ 设置段（仅设置页）
+  // 组合开关段：会话 / 群聊 / 工作流 / 知识库（独立路由，常驻）/ 终端 + 门户（固定）+ 门户标签（前 N 个参与 thumb 滑动）+ 设置段（仅设置页）
   const segments: { key: string; icon: ReactNode; label: string; title: string; tabId?: string }[] = [
     { key: 'session', icon: <MessageSquare size={11} />, label: t('titleBar.session', '会话'), title: t('titleBar.session.title', '切换到会话模式') },
     { key: 'groupchat', icon: <Users size={11} />, label: t('titleBar.groupchat', '群聊'), title: t('titleBar.groupchat.title', '多 Agent 群聊') },
@@ -182,9 +182,9 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         : t('titleBar.knowledge.title', '知识库：片段 / 文件知识 / 图谱'),
     },
     { key: 'terminal', icon: <Terminal size={11} />, label: t('titleBar.terminal', '终端'), title: t('titleBar.terminal.title', '切换到终端模式') },
-    // 「门户」段：固定段（不受平铺个数影响），点击进入自定义标签门户页（按分组查看全部标签）
-    { key: 'portal', icon: <LayoutGrid size={11} />, label: t('titleBar.portal', '门户'), title: t('titleBar.portal.title', '门户：按分组查看全部自定义标签') },
-    // 只平铺前 N 个自定义标签（N 来自用户配置，可为 0）；其余收进「更多」下拉（避免顶栏被撑爆）
+    // 「门户」段：固定段（不受平铺个数影响），点击进入门户页（按分组查看全部标签）
+    { key: 'portal', icon: <LayoutGrid size={11} />, label: t('titleBar.portal', '门户'), title: t('titleBar.portal.title', '门户：按分组查看全部标签') },
+    // 只平铺前 N 个门户标签（N 来自用户配置，可为 0）；其余收进「更多」下拉（避免顶栏被撑爆）
     ...sortedCustomTabs.slice(0, titleBarLimit).map((t_) => ({
       key: `custom:${t_.id}`,
       tabId: t_.id,
@@ -196,16 +196,16 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       ? [{ key: 'settings', icon: <Settings size={11} />, label: t('titleBar.settings', '设置'), title: t('titleBar.settings.title', '设置页面') }]
       : []),
   ];
-  // 「更多」下拉：当自定义标签总数 > 配置的平铺个数时渲染（0 个平铺 + 有标签时同样成立），
-  // 列出全部自定义标签（本项只用单组）。总数 ≤ N 时不渲染，保持既有行为。
+  // 「更多」下拉：当门户标签总数 > 配置的平铺个数时渲染（0 个平铺 + 有标签时同样成立），
+  // 列出全部门户标签（本项只用单组）。总数 ≤ N 时不渲染，保持既有行为。
   const hasMoreCustomTabs = sortedCustomTabs.length > titleBarLimit;
   const customTabGroups: SelectGroup[] = hasMoreCustomTabs
     ? [{
-        label: t('titleBar.customTabs.group', '自定义标签'),
+        label: t('titleBar.customTabs.group', '门户标签'),
         options: sortedCustomTabs.map((t_) => ({ value: t_.id, label: t_.label })),
       }]
     : [];
-  // 点击「更多」中的某项：与顶栏段点击行为一致（切到该自定义标签）
+  // 点击「更多」中的某项：与顶栏段点击行为一致（切到该门户标签）
   const openCustomTab = useCallback((id: string) => {
     setActiveCustomTab(id);
     onModeChange?.('custom');
@@ -249,7 +249,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
 
   useEffect(() => {
     syncThumb();
-    // titleBarLimit 变化会改变自定义标签段的可见数量，进而移动当前段位置 → 需重算 thumb
+    // titleBarLimit 变化会改变门户标签段的可见数量，进而移动当前段位置 → 需重算 thumb
   }, [syncThumb, customTabs, titleBarLimit]);
 
   /**
@@ -257,7 +257,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
    * 那一刻 modeIndex 与 customTabs 都没变，上面那个 effect 不会重跑，thumb 便停在旧位置，
    * 看起来就是"按钮背景框错位"。
    *
-   * 所以直接盯容器的实际尺寸，凡是会引起重排的变化（切语言、字体加载完成、自定义标签改名）
+   * 所以直接盯容器的实际尺寸，凡是会引起重排的变化（切语言、字体加载完成、门户标签改名）
    * 都能自动跟上，而不用逐个去猜该把哪些值塞进依赖数组。
    */
   useEffect(() => {
@@ -417,10 +417,10 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
 
       {/* Right: 动态分段滑动开关
          *  ── 布局 ──────────────────────────────────────
-         * │[工作流] [会话] [群聊] [终端] [自定义标签...]│
+         * │[工作流] [会话] [群聊] [终端] [门户标签...]│
          * │  ←    紫色 thumb 在这里滑    →  │
          * └────────────────────────────┘
-         *  固定 4 模式 + 自定义标签（设置页「自定义标签」tab 管理）动态并入，参与 thumb 滑动。
+         *  固定 4 模式 + 门户标签（设置页「门户标签」tab 管理）动态并入，参与 thumb 滑动。
          *  外框、描边、圆角、内阴影完全统一，高度与两侧其它按钮严格对齐。
          *  兼容旧用法：未提供 mode/onModeChange 时回退到 工作流CTA+会话/终端切换。
          */}
@@ -661,7 +661,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             </div>
           )}
           </div>
-          {/* 「更多」下拉：自定义标签数量 > N 时出现，复用统一 Select（含分组），列出全部自定义标签。
+          {/* 「更多」下拉：门户标签数量 > N 时出现，复用统一 Select（含分组），列出全部门户标签。
               放在裁剪选区之外，极端窄屏下仍可见可点，作为被隐藏标签的兜底入口。
               与组合开关同显隐条件（工作流等带返回按钮的路由不显示）。 */}
           {hasMoreCustomTabs && !showBackButton && mode && onModeChange && (
@@ -670,11 +670,12 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               onChange={(id) => openCustomTab(id)}
               groups={customTabGroups}
               placeholder={t('titleBar.customTabs.more', '更多')}
-              size="xs"
+              // 与组合开关段同高（28）：xs=24 比相邻的模式段矮 4px，看起来"凸不出来又凹进去"
+              size="sm"
               className="shrink-0 ml-1"
               style={{ alignSelf: 'center' }}
               panelMinWidth={180}
-              title={t('titleBar.customTabs.more.title', '更多自定义标签')}
+              title={t('titleBar.customTabs.more.title', '更多门户标签')}
             />
           )}
           {/* 分组分隔符：功能导航 vs 布局操作（侧边栏折叠） — 设置按钮已移至 StatusBar 最左端 */}

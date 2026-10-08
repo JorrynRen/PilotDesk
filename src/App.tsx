@@ -61,7 +61,7 @@ function MainLayout() {
   const isGroupChat = viewMode === 'groupchat';
   const isCustom = viewMode === 'custom';
 
-  // 启动时加载自定义标签配置
+  // 启动时加载门户标签配置
   useEffect(() => {
     useCustomTabsStore.getState().load();
   }, []);
@@ -110,7 +110,7 @@ function MainLayout() {
               <WorkflowPage embedded />
             </div>
           )}
-          {/* 自定义标签模式：固定壳。CustomTabHost 常挂载（CSS 隐藏切换），
+          {/* 门户标签模式：固定壳。CustomTabHost 常挂载（CSS 隐藏切换），
               避免每次进出卸载导致已打开标签页的 iframe 状态丢失 */}
           <div className={isCustom ? 'flex-1 flex flex-col overflow-hidden' : 'hidden'}>
             <CustomTabHost />

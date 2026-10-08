@@ -94,7 +94,7 @@ const SETTINGS_GROUPS: {
       { id: 'skills', icon: Cpu, labelKey: 'settings.tab.skills', labelZh: '技能管理' },
       { id: 'plugins', icon: Package, labelKey: 'settings.tab.plugins', labelZh: '插件管理' },
       { id: 'knowledge', icon: Library, labelKey: 'settings.tab.knowledge', labelZh: '知识库' },
-      { id: 'customtabs', icon: Bookmark, labelKey: 'settings.tab.customtabs', labelZh: '自定义标签' },
+      { id: 'customtabs', icon: Bookmark, labelKey: 'settings.tab.customtabs', labelZh: '门户标签' },
     ],
   },
   {

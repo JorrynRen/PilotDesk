@@ -198,7 +198,7 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
       { term: '群聊', desc: '多 Agent 动态任务编排：主持人拆任务、按依赖并行推进，执行中可干预' },
       { term: '工作流', desc: '多 Agent 静态任务编排 + 能力拓展：可视化拖拽 + 可定时触发 + 可复用（群聊结论亦可导出成工作流供复用）' },
       { term: '终端', desc: '本地 Shell 直通，可手动跑 claude / codex 等 CLI Agent 和其他命令；切换模式不丢会话' },
-      { term: '自定义标签页', desc: '把常用网页或本地文件、目录挂成标签实现快捷直达（设置 → 自定义标签页），常驻不重载' },
+      { term: '门户标签页', desc: '把常用网页或本地文件、目录挂成标签实现快捷直达（设置 → 门户标签页），常驻不重载' },
     ],
   },
   {
