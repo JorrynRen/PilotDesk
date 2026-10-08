@@ -202,7 +202,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   const customTabGroups: SelectGroup[] = hasMoreCustomTabs
     ? [{
         label: t('titleBar.customTabs.group', '门户标签'),
-        options: sortedCustomTabs.map((t_) => ({ value: t_.id, label: t_.label })),
+        options: sortedCustomTabs.map((t_) => ({
+          value: t_.id,
+          label: t_.label,
+          icon: <TabIcon icon={t_.icon} size={12} className="shrink-0" />,
+        })),
       }]
     : [];
   // 点击「更多」中的某项：与顶栏段点击行为一致（切到该门户标签）

@@ -49,24 +49,23 @@ function subtitleOf(url: string): string {
  * - 标签被激活时才创建 iframe，此后切换仅 display 显隐、网页状态保留；iframe 常驻数量上限 8（LRU），
  *   超出即卸载最久未用者（标签按钮仍全留），再次点开时重新加载；
  * - 「门户」是 custom 模式下的首页（非真实标签，用哨兵 id 表示）：按分组渲染全部标签卡片网格，
- *   卡片点击即打开该标签并并入顶栏「已打开标签」行，另提供搜索 / 管理与「在浏览器打开」；
+ *   卡片点击即打开该标签（顶栏切到该标签、加载其 iframe），另提供搜索 / 管理与「在浏览器打开」；
  *   进入 custom 模式时**默认落在此页**（无有效激活标签即回落门户），不预加载任何标签的 iframe；
  * - 顶栏「＋」打开「标签管理」覆盖层（**门户态隐藏** —— 门户内容区已有「管理」按钮，
  *   两处并存只是同一功能的两个入口）：管理页以 absolute 覆盖叠加在主视图之上，
  *   主树（含全部 iframe）保持挂载，关闭覆盖层不会导致内容重新加载；
- * - 每个已打开标签右上角的关闭角标（悬停 / 聚焦该标签时显现，触屏常显）：关闭该标签 =
- *   卸载其 iframe 并从顶栏移除（配置保留）；若关闭后没有任何标签页实例，自动回退到会话路由。
- * 「已关闭」为运行时状态，离开自定义模式即复位——下次进入恢复全部标签为打开。
+ * - 每个标签右上角的关闭角标（悬停 / 聚焦该标签时显现，触屏常显）：**关闭 = 卸载其 iframe**
+ *   并把激活态回落门户页，但标签按钮**保留在顶栏** —— 关闭不是"让标签消失"，只是取消它的
+ *   激活 / 加载状态，再次点击即重新加载；配置始终保留（删除配置在「标签管理」里做）。
+ * - 离开 custom 模式会清空 LRU 窗口（卸载全部 iframe）：下次进门户是干净的默认页，不预加载任何标签。
  */
 export function CustomTabHost() {
   const { tabs, activeTabId, setActiveTab } = useCustomTabsStore();
-  const { viewMode, setMode } = useTerminal();
+  const { viewMode } = useTerminal();
 
   // 标签管理覆盖层（覆盖叠加在主视图上，不替换/卸载主树）
   const [showManage, setShowManage] = useState(false);
 
-  // 运行时「已关闭」标签集合（不影响持久化配置；离开自定义模式时复位）
-  const [closedIds, setClosedIds] = useState<string[]>([]);
   // 已挂载 iframe 的标签，**按最近使用排序（队首最新）**，并裁到 FRAME_LRU_MAX（LRU keep-alive）
   const [activatedIds, setActivatedIds] = useState<string[]>([]);
   // 门户页搜索关键词（按名称 / 地址过滤）
@@ -78,9 +77,6 @@ export function CustomTabHost() {
   // 用户手动关闭「可能无法内嵌」提示的标签（key）
   const [dismissedTip, setDismissedTip] = useState<Record<string, boolean>>({});
 
-  const closedSet = useMemo(() => new Set(closedIds), [closedIds]);
-  // 顶栏仅展示未关闭标签
-  const openTabs = useMemo(() => tabs.filter((t) => !closedSet.has(t.id)), [tabs, closedSet]);
   const active = useMemo(() => tabs.find((t) => t.id === activeTabId) || null, [tabs, activeTabId]);
 
   // 门户页激活态：custom 模式下用哨兵 id 表示「当前激活的是门户页」而非某个标签
@@ -94,13 +90,14 @@ export function CustomTabHost() {
   // 门户页分组（组顺序 = 组内最小 order；未分组恒排最后）
   const portalGroups = useMemo(() => groupCustomTabs(portalFiltered), [portalFiltered]);
 
-  // 离开自定义模式：复位运行时关闭状态，下次进入全部标签恢复为打开
+  // 离开自定义模式：清空 LRU 窗口（卸载全部标签 iframe）。
+  // 目的是让「下次打开门户」回到干净的默认页 —— 不预加载任何标签，只有用户点选后才加载。
   const prevViewRef = useRef(viewMode);
   useEffect(() => {
     const prev = prevViewRef.current;
     prevViewRef.current = viewMode;
     if (prev === 'custom' && viewMode !== 'custom') {
-      setClosedIds([]);
+      setActivatedIds([]);
     }
   }, [viewMode]);
 
@@ -126,17 +123,16 @@ export function CustomTabHost() {
   if (prevTabs !== tabs) {
     setPrevTabs(tabs);
     const valid = new Set(tabs.map((t) => t.id));
-    setClosedIds((prev) => prev.filter((id) => valid.has(id)));
     setActivatedIds((prev) => prev.filter((id) => valid.has(id)));
   }
 
-  // 当前激活标签（未关闭）首次出现时挂载其 iframe。同样用「渲染期修正」代替 effect。
+  // 当前激活标签首次出现（或被重新点开、地址变更）时挂载其 iframe。同样用「渲染期修正」代替 effect。
   // key 含 active.url：修改地址后也触发一次（幂等），iframe 以新地址重建（src 变化本身会触发加载）。
   const activeKey = active ? `${active.id}|${active.url}` : null;
   const [prevActiveKey, setPrevActiveKey] = useState<string | null>(null);
   if (activeKey !== prevActiveKey) {
     setPrevActiveKey(activeKey);
-    if (active && !closedSet.has(active.id)) {
+    if (active) {
       // LRU：移到队首（最近使用）并裁到上限；被裁掉的标签卸载 iframe，下次点开时重新加载
       setActivatedIds((prev) => [active.id, ...prev.filter((id) => id !== active.id)].slice(0, FRAME_LRU_MAX));
     }
@@ -155,40 +151,21 @@ export function CustomTabHost() {
   }, [activeUrl, dirByUrl]);
 
   /**
-   * 关闭指定标签（顶栏「已打开标签」行的关闭角标共用此逻辑）：
-   * 卸载其 iframe 并移出顶栏，但**保留配置**（下次进入仍可重新打开）。
-   *
-   * 与旧的「关闭当前标签」语义完全一致：关闭当前激活标签时跳到下一个打开标签；
-   * 若关闭后已无任何打开标签，回退会话路由。关闭非激活标签则不打断当前视图。
+   * 关闭指定标签（顶栏标签行的关闭角标共用此逻辑）：**卸载其 iframe**（移出 LRU 窗口）
+   * 并把激活态回落门户页；标签按钮**保留在顶栏**（关闭不是"让标签消失"，只是取消激活 / 加载），
+   * 再次点击即重新加载。配置始终保留 —— 删除配置在「标签管理」里做。
    */
   const closeTab = useCallback((closingId: string) => {
-    if (closedSet.has(closingId)) return;
-    const nextOpen = tabs.filter((t) => t.id !== closingId && !closedSet.has(t.id));
-    setClosedIds((prev) => (prev.includes(closingId) ? prev : [...prev, closingId]));
     setActivatedIds((prev) => prev.filter((id) => id !== closingId));
-    // 仅当关闭的是当前激活标签、或关闭后已无打开标签时，才需要重选激活项 / 回退会话路由
-    if (activeTabId === closingId || nextOpen.length === 0) {
-      if (nextOpen.length > 0) {
-        setActiveTab(nextOpen[0].id);
-      } else {
-        // 没有任何标签页实例：直接回退会话路由（关闭状态随后由离开 effect 复位）
-        setActiveTab(null);
-        setMode('session');
-      }
-    }
-  }, [tabs, closedSet, activeTabId, setActiveTab, setMode]);
+    if (activeTabId === closingId) setActiveTab(PORTAL_TAB_ID);
+  }, [activeTabId, setActiveTab]);
 
-  /**
-   * 打开标签（门户卡片点击共用）：
-   * - 并入顶栏「已打开标签」行并激活（激活态由 activeTabId 单一驱动）；
-   * - 若该标签此前被运行时关闭，先移出「已关闭」集合把它重新打开，否则会激活到一个不可见状态。
-   */
+  /** 打开标签（顶栏段 / 门户卡片点击共用）：激活即加载 —— iframe 由 activeKey 的修正逻辑挂载 */
   const openTab = useCallback((id: string) => {
-    setClosedIds((prev) => prev.filter((x) => x !== id));
     setActiveTab(id);
   }, [setActiveTab]);
 
-  // 在 LRU 窗口内、未关闭、src 就绪的标签 → 渲染为常驻 iframe（顺序即最近使用顺序）。
+  // 在 LRU 窗口内、src 就绪的标签 → 渲染为常驻 iframe（顺序即最近使用顺序）。
   // 网络地址无需目录判定；本地路径等 dirByUrl 结果返回后再挂载，避免 src 切换触发二次加载。
   const frames = useMemo(
     () =>
@@ -196,11 +173,9 @@ export function CustomTabHost() {
         .map((id) => tabs.find((t) => t.id === id))
         .filter(
           (t): t is CustomTab =>
-            !!t &&
-            !closedSet.has(t.id) &&
-            (/^https?:\/\//i.test(t.url) || dirByUrl[t.url] !== undefined)
+            !!t && (/^https?:\/\//i.test(t.url) || dirByUrl[t.url] !== undefined)
         ),
-    [tabs, activatedIds, closedSet, dirByUrl]
+    [tabs, activatedIds, dirByUrl]
   );
 
   // 加载超时：对每个已挂载 iframe 起 8 秒计时；到点仍未 onload 则标记超时（已 loaded 的跳过）。
@@ -273,7 +248,9 @@ export function CustomTabHost() {
             门户
           </button>
         </div>
-        {openTabs.map((t) => {
+        {/* 全部门户标签常驻此行（不做"关闭即消失"）：只有「激活态」随当前标签切换，
+            关闭只卸载 iframe 并回落门户页，标签按钮仍在此处，点一下即重新加载。 */}
+        {tabs.map((t) => {
           const isActive = t.id === activeTabId;
           return (
             <div key={t.id} className="pd-tab-chip relative shrink-0">
@@ -303,9 +280,6 @@ export function CustomTabHost() {
             </div>
           );
         })}
-        {openTabs.length === 0 && (
-          <span className="text-[11px] px-1" style={{ color: 'var(--text-tertiary)' }}>没有打开的标签</span>
-        )}
 
         <div className="flex-1" />
 
@@ -398,14 +372,15 @@ export function CustomTabHost() {
                     </h3>
                     <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))' }}>
                       {g.items.map((t) => {
-                        const opened = !closedSet.has(t.id);
+                        // 「已打开」= iframe 当前真的挂载着（LRU 窗口内）；关闭后会摘掉这个标记
+                        const opened = activatedIds.includes(t.id);
                         return (
                           <div
                             key={t.id}
                             className="group flex items-center gap-2.5 p-3 rounded-xl transition-colors"
                             style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
                           >
-                            {/* 卡片主体：点击即打开该标签（并入顶栏「已打开标签」行） */}
+                            {/* 卡片主体：点击即在顶栏切到该标签并加载其 iframe */}
                             <button
                               onClick={() => openTab(t.id)}
                               className="flex-1 min-w-0 flex items-center gap-2.5 text-left"
@@ -498,7 +473,7 @@ export function CustomTabHost() {
             </button>
           </div>
         )}
-        {openTabs.length > 0 && !active && !isPortal && (
+        {tabs.length > 0 && !active && !isPortal && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
             <Globe size={22} style={{ color: 'var(--text-tertiary)' }} />
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>在顶部选择标签页</p>

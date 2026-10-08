@@ -12,13 +12,15 @@
  * 换成 `<Select value={v} onChange={setV} options={[{ value: 'a', label: 'A' }]} />`。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 
 export interface SelectOption {
   value: string;
   label: string;
+  /** 选项前置图标（如门户标签图标）；只影响面板内的选项渲染，触发器仍只显示 label 文本 */
+  icon?: ReactNode;
   disabled?: boolean;
 }
 
@@ -179,7 +181,7 @@ export function Select({
       key={o.value}
       type="button"
       disabled={o.disabled}
-      className="w-full text-left truncate"
+      className="w-full flex items-center gap-1.5 text-left"
       style={{
         padding: grouped ? '6px 8px 6px 14px' : '6px 8px',
         fontSize: fs,
@@ -199,7 +201,8 @@ export function Select({
         setOpen(false);
       }}
     >
-      {o.label}
+      {o.icon}
+      <span className="truncate min-w-0">{o.label}</span>
     </button>
   );
 
