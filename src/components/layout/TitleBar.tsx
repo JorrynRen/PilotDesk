@@ -1,13 +1,14 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe, Settings, Bell, LayoutDashboard, Library, Store } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Settings, Bell, LayoutDashboard, Library, Store, LayoutGrid } from 'lucide-react';
 import type { ViewMode } from '../../TerminalManager';
-import { useCustomTabsStore } from '../../stores/customTabsStore';
+import { useCustomTabsStore, PORTAL_TAB_ID } from '../../stores/customTabsStore';
 import { useNotificationStore, countUnread } from '../../stores/notificationStore';
 import { useCommandCenterStore } from '../../stores/commandCenterStore';
 import { useI18n } from '../../hooks/useI18n';
 import { Select, type SelectGroup } from '../common/Select';
+import { TabIcon } from '../common/TabIcon';
 
 /**
  * 顶栏自定义标签的平铺渲染数量由用户配置（设置 → 自定义标签「顶部显示个数」，0–3，默认 3）。
@@ -167,7 +168,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
     };
   }, []);
 
-  // 组合开关段：会话 / 群聊 / 工作流 / 知识库（独立路由，常驻）/ 终端 + 自定义标签（前 N 个参与 thumb 滑动）+ 设置段（仅设置页）
+  // 组合开关段：会话 / 群聊 / 工作流 / 知识库（独立路由，常驻）/ 终端 + 门户（固定）+ 自定义标签（前 N 个参与 thumb 滑动）+ 设置段（仅设置页）
   const segments: { key: string; icon: ReactNode; label: string; title: string; tabId?: string }[] = [
     { key: 'session', icon: <MessageSquare size={11} />, label: t('titleBar.session', '会话'), title: t('titleBar.session.title', '切换到会话模式') },
     { key: 'groupchat', icon: <Users size={11} />, label: t('titleBar.groupchat', '群聊'), title: t('titleBar.groupchat.title', '多 Agent 群聊') },
@@ -181,11 +182,13 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         : t('titleBar.knowledge.title', '知识库：片段 / 文件知识 / 图谱'),
     },
     { key: 'terminal', icon: <Terminal size={11} />, label: t('titleBar.terminal', '终端'), title: t('titleBar.terminal.title', '切换到终端模式') },
+    // 「门户」段：固定段（不受平铺个数影响），点击进入自定义标签门户页（按分组查看全部标签）
+    { key: 'portal', icon: <LayoutGrid size={11} />, label: t('titleBar.portal', '门户'), title: t('titleBar.portal.title', '门户：按分组查看全部自定义标签') },
     // 只平铺前 N 个自定义标签（N 来自用户配置，可为 0）；其余收进「更多」下拉（避免顶栏被撑爆）
     ...sortedCustomTabs.slice(0, titleBarLimit).map((t_) => ({
       key: `custom:${t_.id}`,
       tabId: t_.id,
-      icon: <Globe size={11} />,
+      icon: <TabIcon icon={t_.icon} size={11} />,
       label: t_.label,
       title: t_.url,
     })),
@@ -221,7 +224,9 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       : settingsOpen
         ? 'settings'
         : (mode === 'custom'
-          ? (activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
+          ? (activeCustomTabId === PORTAL_TAB_ID
+            ? 'portal'
+            : activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
           : mode);
   const modeIndex = mode && activeSegmentKey ? segments.findIndex((s) => s.key === activeSegmentKey) : -1;
 
@@ -458,6 +463,12 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                       }
                       if (seg.key === 'settings') {
                         onOpenSettings?.();
+                        return;
+                      }
+                      if (seg.key === 'portal') {
+                        // 门户是 custom 模式下的特殊页：用哨兵 id 激活
+                        setActiveCustomTab(PORTAL_TAB_ID);
+                        onModeChange('custom');
                         return;
                       }
                       if (seg.tabId) {

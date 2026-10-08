@@ -8,7 +8,18 @@ export interface CustomTab {
   url: string;
   /** 排序序号（显式持久化到 app_settings，保证排序字段落库） */
   order: number;
+  /** 所属分组名（可选）：空 = 未分组；门户页按分组渲染卡片网格 */
+  group?: string;
+  /** 图标 key（可选）：取值限于 CUSTOM_TAB_ICONS；未设置 = 默认地球图标 */
+  icon?: string;
 }
+
+/**
+ * 门户页的哨兵「标签 id」：门户不是真实自定义标签，仅用于表示「custom 模式下激活的是门户页」。
+ * 用哨兵值而非新增布尔字段，是为了复用现有 activeTabId 的单一激活语义
+ * （顶栏高亮、内容区切换、打开/关闭逻辑都只读它）。
+ */
+export const PORTAL_TAB_ID = '__portal__';
 
 /** 存于 app_settings 的 key（复用现有 KV 表，不新增表/外部文件） */
 const STORAGE_KEY = 'custom_tabs';
@@ -45,6 +56,64 @@ export const CUSTOM_TAB_LABEL_MAX = 64;
 export const CUSTOM_TAB_URL_MAX = 2048;
 /** 自定义标签数量上限 */
 export const CUSTOM_TAB_MAX_COUNT = 50;
+/** 分组名长度上限 */
+export const CUSTOM_TAB_GROUP_MAX = 32;
+
+/**
+ * 可选图标集（有限集合）。
+ * 用有限集合而非任意字符串：图标渲染靠 key → 组件映射，任意字符串会渲染成空白，
+ * 且用户输入的 emoji / 图标名都无法保证存在，故收敛为一组预置图标。
+ */
+export const CUSTOM_TAB_ICONS = [
+  'globe', 'link', 'book', 'briefcase', 'code', 'chart', 'mail', 'calendar', 'file', 'star',
+] as const;
+export type CustomTabIcon = (typeof CUSTOM_TAB_ICONS)[number];
+
+/** 图标 key 容错：非法 / 缺失一律返回 undefined（渲染时回落默认地球图标） */
+export function normalizeTabIcon(raw: unknown): string | undefined {
+  return typeof raw === 'string' && (CUSTOM_TAB_ICONS as readonly string[]).includes(raw) ? raw : undefined;
+}
+
+/** 图标展示名（设置页下拉用；与 CUSTOM_TAB_ICONS 一一对应） */
+export const CUSTOM_TAB_ICON_LABELS: Record<CustomTabIcon, string> = {
+  globe: '地球', link: '链接', book: '文档', briefcase: '工作', code: '代码',
+  chart: '图表', mail: '邮件', calendar: '日历', file: '文件', star: '收藏',
+};
+
+/** 图标下拉选项：由图标集 + 展示名拼装，保证「可选值」与「渲染映射」同源 */
+export const TAB_ICON_OPTIONS: { value: string; label: string }[] =
+  CUSTOM_TAB_ICONS.map((v) => ({ value: v, label: CUSTOM_TAB_ICON_LABELS[v] }));
+
+/** 分组名规范化：非字符串 / trim 后为空 → undefined（视为未分组）；超长截断到上限 */
+export function normalizeTabGroup(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const g = raw.trim();
+  if (!g) return undefined;
+  return g.length > CUSTOM_TAB_GROUP_MAX ? g.slice(0, CUSTOM_TAB_GROUP_MAX) : g;
+}
+
+/**
+ * 门户页分组推导（纯函数，便于复用与测试）：
+ * - 组顺序 = 组内最小 order（按 order 升序扫描，首次出现的组即其最小 order 位置）；
+ * - 组内元素按 order 升序；
+ * - 未分组（group 为空）恒排最后，用 group=null 表示。
+ * 不新增排序字段：组顺序完全由现有 order 推导，避免两套顺序源相互冲突。
+ */
+export function groupCustomTabs(tabs: CustomTab[]): { group: string | null; items: CustomTab[] }[] {
+  const sorted = [...tabs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const map = new Map<string, CustomTab[]>();
+  const ungrouped: CustomTab[] = [];
+  for (const t of sorted) {
+    const g = normalizeTabGroup(t.group);
+    if (!g) { ungrouped.push(t); continue; }
+    const arr = map.get(g);
+    if (arr) arr.push(t); else map.set(g, [t]);
+  }
+  const groups: { group: string | null; items: CustomTab[] }[] =
+    [...map.entries()].map(([group, items]) => ({ group, items }));
+  if (ungrouped.length) groups.push({ group: null, items: ungrouped });
+  return groups;
+}
 
 /** Windows 盘符绝对路径：C:\... 或 C:/... */
 const WIN_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
@@ -127,8 +196,11 @@ interface CustomTabsState {
   titleBarLimit: number;
   loaded: boolean;
   load: () => Promise<void>;
-  addTab: (label: string, url: string) => Promise<CustomTabMutationResult>;
-  updateTab: (id: string, patch: Partial<Pick<CustomTab, 'label' | 'url'>>) => Promise<CustomTabMutationResult>;
+  addTab: (label: string, url: string, group?: string, icon?: string) => Promise<CustomTabMutationResult>;
+  updateTab: (
+    id: string,
+    patch: Partial<Pick<CustomTab, 'label' | 'url' | 'group' | 'icon'>>,
+  ) => Promise<CustomTabMutationResult>;
   removeTab: (id: string) => Promise<void>;
   reorderTabs: (from: number, to: number) => Promise<void>;
   setActiveTab: (id: string | null) => void;
@@ -188,6 +260,9 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
                 label: t.label,
                 url: t.url,
                 order: typeof t.order === 'number' ? t.order : -1,
+                // 分组 / 图标：旧数据（无这两字段）经规范化后为 undefined，即未分组 + 默认图标
+                group: normalizeTabGroup(t.group),
+                icon: normalizeTabIcon(t.icon),
               }))
           );
           set({ tabs });
@@ -207,12 +282,19 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
     set({ loaded: true });
   },
 
-  addTab: async (label, url) => {
+  addTab: async (label, url, group, icon) => {
     // store 为最终把关：设置页虽已即时校验，但此处仍再校验一次（以 store 为准）
     const checked = validateCustomTabInput(label, url, get().tabs, null);
     if (!checked.ok) return { ok: false as const, error: checked.error };
     const nextOrder = get().tabs.reduce((max, t) => Math.max(max, t.order), -1) + 1;
-    const tab: CustomTab = { id: generateId(), label: checked.label, url: checked.url, order: nextOrder };
+    const tab: CustomTab = {
+      id: generateId(),
+      label: checked.label,
+      url: checked.url,
+      order: nextOrder,
+      group: normalizeTabGroup(group),
+      icon: normalizeTabIcon(icon),
+    };
     const tabs = normalize([...get().tabs, tab]);
     set({ tabs });
     await persist(tabs);
@@ -230,8 +312,13 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
       id,
     );
     if (!checked.ok) return { ok: false as const, error: checked.error };
+    // 分组 / 图标：设置页始终传入完整字段（清空即空串），故用 ?? 兜底"未传"分支即可
+    const nextGroup = normalizeTabGroup(patch.group ?? current.group);
+    const nextIcon = normalizeTabIcon(patch.icon ?? current.icon);
     const tabs = get().tabs.map((t) =>
-      t.id === id ? { ...t, label: checked.label, url: checked.url } : t
+      t.id === id
+        ? { ...t, label: checked.label, url: checked.url, group: nextGroup, icon: nextIcon }
+        : t
     );
     set({ tabs });
     await persist(tabs);

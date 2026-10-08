@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { Globe, Plus, X, Settings2, ExternalLink, AlertTriangle } from 'lucide-react';
-import { useCustomTabsStore } from '../../stores/customTabsStore';
+import { Globe, Plus, X, Settings2, ExternalLink, AlertTriangle, Search, LayoutGrid } from 'lucide-react';
+import { useCustomTabsStore, groupCustomTabs, PORTAL_TAB_ID, type CustomTab } from '../../stores/customTabsStore';
 import { useTerminal } from '../../TerminalManager';
 import { CustomTabsSettings } from '../settings/CustomTabsSettings';
+import { TabIcon } from '../common/TabIcon';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 
 /** 目录索引协议地址：?path=<encodeURIComponent(绝对路径)>，由后端动态生成文件列表页 */
 const DIRINDEX_BASE = 'http://dirindex.localhost/';
+
+/**
+ * iframe 常驻上限（LRU）。
+ * 标签按钮全部保留，但只让**最近使用**的最多 8 个标签挂载 iframe；超出即卸载最久未用者
+ * （其 iframe 从 DOM 移除，网页状态释放），再次点开时重新加载 —— 用内存换标签数不设上限。
+ */
+const FRAME_LRU_MAX = 8;
 
 /**
  * iframe 加载超时阈值（毫秒）。
@@ -25,12 +33,23 @@ function resolveFrameSrc(url: string, isDir: boolean): string {
   return convertFileSrc(url);
 }
 
+/** 门户卡片副行文案：网络地址显示主机名，本地路径直接显示原路径（过长由 CSS 截断） */
+function subtitleOf(url: string): string {
+  if (/^https?:\/\//i.test(url)) {
+    try { return new URL(url).host; } catch { return url; }
+  }
+  return url;
+}
+
 /**
  * 自定义标签页壳：固定在 MainLayout 的 TitleBar 与 StatusBar 之间。
  *
  * 生命周期模型：
  * - CustomTabHost 常挂载（App 以 CSS 显隐），主视图切换不会卸载 iframe；
- * - 每个标签首次被激活时才创建 iframe，此后切换仅 display 显隐，网页状态保留；
+ * - 标签被激活时才创建 iframe，此后切换仅 display 显隐、网页状态保留；iframe 常驻数量上限 8（LRU），
+ *   超出即卸载最久未用者（标签按钮仍全留），再次点开时重新加载；
+ * - 「门户」是 custom 模式下的首页（非真实标签，用哨兵 id 表示）：按分组渲染全部标签卡片网格，
+ *   卡片点击即打开该标签并并入顶栏「已打开标签」行，另提供搜索 / 管理与「在浏览器打开」；
  * - 顶栏「＋」打开「标签管理」覆盖层：管理页以 absolute 覆盖叠加在主视图之上，
  *   主树（含全部 iframe）保持挂载，关闭覆盖层不会导致内容重新加载；
  * - 每个已打开标签右上角的关闭角标（悬停 / 聚焦该标签时显现，触屏常显）：关闭该标签 =
@@ -46,8 +65,10 @@ export function CustomTabHost() {
 
   // 运行时「已关闭」标签集合（不影响持久化配置；离开自定义模式时复位）
   const [closedIds, setClosedIds] = useState<string[]>([]);
-  // 已创建过 iframe 的标签（keep-alive：首次激活时挂载一次，之后常驻）
+  // 已挂载 iframe 的标签，**按最近使用排序（队首最新）**，并裁到 FRAME_LRU_MAX（LRU keep-alive）
   const [activatedIds, setActivatedIds] = useState<string[]>([]);
+  // 门户页搜索关键词（按名称 / 地址过滤）
+  const [query, setQuery] = useState('');
   // 本地路径目录判定结果缓存：url -> isDir（http 无需判定）
   const [dirByUrl, setDirByUrl] = useState<Record<string, boolean>>({});
   // iframe 加载状态：key = `${id}|${url}`；无记录=加载中，'loaded'=已 onload，'timeout'=超时未加载
@@ -59,6 +80,17 @@ export function CustomTabHost() {
   // 顶栏仅展示未关闭标签
   const openTabs = useMemo(() => tabs.filter((t) => !closedSet.has(t.id)), [tabs, closedSet]);
   const active = useMemo(() => tabs.find((t) => t.id === activeTabId) || null, [tabs, activeTabId]);
+
+  // 门户页激活态：custom 模式下用哨兵 id 表示「当前激活的是门户页」而非某个标签
+  const isPortal = activeTabId === PORTAL_TAB_ID;
+  // 门户页过滤结果（按名称 / 地址，忽略大小写）
+  const portalFiltered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return tabs;
+    return tabs.filter((t) => t.label.toLowerCase().includes(q) || t.url.toLowerCase().includes(q));
+  }, [tabs, query]);
+  // 门户页分组（组顺序 = 组内最小 order；未分组恒排最后）
+  const portalGroups = useMemo(() => groupCustomTabs(portalFiltered), [portalFiltered]);
 
   // 离开自定义模式：复位运行时关闭状态，下次进入全部标签恢复为打开
   const prevViewRef = useRef(viewMode);
@@ -89,7 +121,8 @@ export function CustomTabHost() {
   if (activeKey !== prevActiveKey) {
     setPrevActiveKey(activeKey);
     if (active && !closedSet.has(active.id)) {
-      setActivatedIds((prev) => (prev.includes(active.id) ? prev : [...prev, active.id]));
+      // LRU：移到队首（最近使用）并裁到上限；被裁掉的标签卸载 iframe，下次点开时重新加载
+      setActivatedIds((prev) => [active.id, ...prev.filter((id) => id !== active.id)].slice(0, FRAME_LRU_MAX));
     }
   }
 
@@ -129,16 +162,28 @@ export function CustomTabHost() {
     }
   }, [tabs, closedSet, activeTabId, setActiveTab, setMode]);
 
-  // 已激活且未关闭、src 就绪的标签 → 渲染为常驻 iframe。
+  /**
+   * 打开标签（门户卡片点击共用）：
+   * - 并入顶栏「已打开标签」行并激活（激活态由 activeTabId 单一驱动）；
+   * - 若该标签此前被运行时关闭，先移出「已关闭」集合把它重新打开，否则会激活到一个不可见状态。
+   */
+  const openTab = useCallback((id: string) => {
+    setClosedIds((prev) => prev.filter((x) => x !== id));
+    setActiveTab(id);
+  }, [setActiveTab]);
+
+  // 在 LRU 窗口内、未关闭、src 就绪的标签 → 渲染为常驻 iframe（顺序即最近使用顺序）。
   // 网络地址无需目录判定；本地路径等 dirByUrl 结果返回后再挂载，避免 src 切换触发二次加载。
   const frames = useMemo(
     () =>
-      tabs.filter(
-        (t) =>
-          activatedIds.includes(t.id) &&
-          !closedSet.has(t.id) &&
-          (/^https?:\/\//i.test(t.url) || dirByUrl[t.url] !== undefined)
-      ),
+      activatedIds
+        .map((id) => tabs.find((t) => t.id === id))
+        .filter(
+          (t): t is CustomTab =>
+            !!t &&
+            !closedSet.has(t.id) &&
+            (/^https?:\/\//i.test(t.url) || dirByUrl[t.url] !== undefined)
+        ),
     [tabs, activatedIds, closedSet, dirByUrl]
   );
 
@@ -197,6 +242,21 @@ export function CustomTabHost() {
         className="flex items-center gap-1 px-3 h-9 shrink-0 overflow-x-auto"
         style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
       >
+        {/* 门户：custom 模式下的首页（特殊页，非真实标签，故无关闭角标） */}
+        <div className="pd-tab-chip relative shrink-0">
+          <button
+            onClick={() => setActiveTab(PORTAL_TAB_ID)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors"
+            style={{
+              backgroundColor: isPortal ? 'var(--accent)' : 'transparent',
+              color: isPortal ? '#fff' : 'var(--text-secondary)',
+            }}
+            title="门户：按分组查看全部自定义标签"
+          >
+            <LayoutGrid size={11} />
+            门户
+          </button>
+        </div>
         {openTabs.map((t) => {
           const isActive = t.id === activeTabId;
           return (
@@ -210,7 +270,7 @@ export function CustomTabHost() {
                 }}
                 title={t.url}
               >
-                <Globe size={11} />
+                <TabIcon icon={t.icon} size={11} />
                 {t.label}
               </button>
               {/* 关闭角标：默认隐藏，悬停 / 聚焦该标签时显现（触屏常显）。
@@ -244,8 +304,8 @@ export function CustomTabHost() {
         </button>
       </div>
 
-      {/* iframe 区：keep-alive 常驻层，切换仅显隐 */}
-      <div className="flex-1 relative" style={{ backgroundColor: '#fff' }}>
+      {/* 内容区：门户页 / iframe keep-alive 常驻层（切换仅显隐） */}
+      <div className="flex-1 relative" style={{ backgroundColor: isPortal ? 'var(--bg-primary)' : '#fff' }}>
         {frames.map((t) => (
           <iframe
             key={t.id}
@@ -257,6 +317,122 @@ export function CustomTabHost() {
             onLoad={() => handleFrameLoad(`${t.id}|${t.url}`)}
           />
         ))}
+
+        {/* 门户页：按分组渲染全部自定义标签卡片网格（搜索 / 管理 / 空态 / 已打开标记 / 在浏览器打开） */}
+        {isPortal && (
+          <div className="absolute inset-0 overflow-y-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
+            <div className="max-w-[1080px] mx-auto px-6 py-5">
+              {/* 标题行 */}
+              <div className="flex items-center gap-2 mb-4">
+                <LayoutGrid size={16} style={{ color: 'var(--accent)' }} />
+                <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>门户</h2>
+                <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>共 {tabs.length} 个自定义标签</span>
+                <div className="flex-1" />
+                <button
+                  onClick={() => setShowManage(true)}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs transition-all active:scale-[.98]"
+                  style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+                  title="管理自定义标签"
+                >
+                  <Settings2 size={12} />
+                  管理
+                </button>
+              </div>
+
+              {/* 搜索框：按名称 / 地址过滤 */}
+              <div className="relative mb-4 max-w-[320px]">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-tertiary)' }} />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="按名称或地址搜索"
+                  className="w-full pl-8 pr-3 py-2 rounded-lg text-xs outline-none"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+                />
+              </div>
+
+              {tabs.length === 0 ? (
+                // 空态：一个标签都没有
+                <div className="flex flex-col items-center justify-center gap-3 py-16">
+                  <Globe size={24} style={{ color: 'var(--text-tertiary)' }} />
+                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>还没有自定义标签，去添加</p>
+                  <button
+                    onClick={() => setShowManage(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all active:scale-[.98]"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                  >
+                    <Plus size={13} />
+                    添加自定义标签
+                  </button>
+                </div>
+              ) : portalFiltered.length === 0 ? (
+                // 有标签但无匹配结果
+                <div className="flex flex-col items-center justify-center gap-2 py-16">
+                  <Search size={20} style={{ color: 'var(--text-tertiary)' }} />
+                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>没有匹配的标签</p>
+                </div>
+              ) : (
+                portalGroups.map((g) => (
+                  <section key={g.group ?? '__ungrouped__'} className="mb-5">
+                    <h3 className="text-[11px] font-medium mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                      {g.group ?? '未分组'}
+                    </h3>
+                    <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))' }}>
+                      {g.items.map((t) => {
+                        const opened = !closedSet.has(t.id);
+                        return (
+                          <div
+                            key={t.id}
+                            className="group flex items-center gap-2.5 p-3 rounded-xl transition-colors"
+                            style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+                          >
+                            {/* 卡片主体：点击即打开该标签（并入顶栏「已打开标签」行） */}
+                            <button
+                              onClick={() => openTab(t.id)}
+                              className="flex-1 min-w-0 flex items-center gap-2.5 text-left"
+                              title={t.url}
+                            >
+                              <span
+                                className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center"
+                                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
+                              >
+                                <TabIcon icon={t.icon} size={15} />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{t.label}</span>
+                                <span className="flex items-center gap-1.5 mt-0.5 min-w-0">
+                                  <span className="text-[10px] truncate" style={{ color: 'var(--text-tertiary)' }}>{subtitleOf(t.url)}</span>
+                                  {opened && (
+                                    <span
+                                      className="shrink-0 text-[9px] px-1 py-px rounded-full"
+                                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
+                                    >
+                                      已打开
+                                    </span>
+                                  )}
+                                </span>
+                              </span>
+                            </button>
+                            {/* 在浏览器打开：悬停卡片时才显现 */}
+                            <button
+                              onClick={() => void openInBrowser(t.url)}
+                              className="shrink-0 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                              style={{ color: 'var(--text-secondary)' }}
+                              title="在浏览器中打开"
+                            >
+                              <ExternalLink size={13} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
         {/* 白屏降级提示条：8 秒内未 onload（可能被 X-Frame-Options / CSP 拒绝内嵌）时就地给出出口。
             无法可靠探测拒绝（被拒 iframe 多数仍触发 onload），故用超时近似 + 手动"在浏览器打开"。 */}
         {showEmbedTip && active && (
@@ -289,7 +465,7 @@ export function CustomTabHost() {
             </button>
           </div>
         )}
-        {tabs.length === 0 && !active && !showManage && (
+        {tabs.length === 0 && !active && !isPortal && !showManage && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <Globe size={22} style={{ color: 'var(--text-tertiary)' }} />
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>暂无自定义标签</p>
@@ -303,7 +479,7 @@ export function CustomTabHost() {
             </button>
           </div>
         )}
-        {openTabs.length > 0 && !active && (
+        {openTabs.length > 0 && !active && !isPortal && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
             <Globe size={22} style={{ color: 'var(--text-tertiary)' }} />
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>在顶部选择标签页</p>
