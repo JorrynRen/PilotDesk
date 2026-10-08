@@ -458,6 +458,13 @@ function reducer(state: MainPanelState, action: Action): MainPanelState {
 
 // ── Component ──
 
+/** 会话默认页顶部的按时段问候：<12 上午 / <18 下午 / 其余晚上。 */
+function greetingByHour(hour: number): string {
+  if (hour < 12) return '上午好';
+  if (hour < 18) return '下午好';
+  return '晚上好';
+}
+
 export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   
   
@@ -1053,6 +1060,13 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   }, [messages, currentSessionId, currentGenState, streamingContent]);
 
   /**
+   * 会话默认页顶部的问候语（那一屏顶部只有输入区，先给一句人话当门面）。
+   *
+   * 不需要定时器：跨时段后任何一次重渲染都会重算，粒度到"小时"足够。
+   */
+  const greeting = greetingByHour(new Date().getHours());
+
+  /**
    * InputBar 的共用 props：聊天视图置于消息列表下方（bottom），
    * 会话默认页置于顶部、其下才是指挥中心内容（top），只有 placement 一处不同。
    */
@@ -1142,9 +1156,12 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         </>
       ) : (
         <>
-        {/* 会话默认页（未选中任何会话）：输入区置顶、其下常驻指挥中心内容。
-            原 MessageList 的"无会话空态"由此取代 —— 一进来就能看到"什么在等我在跑、能去哪"，
+        {/* 会话默认页（未选中任何会话）：问候语 → 输入区置顶 → 其下常驻指挥中心内容。
+            原 MessageList 的"无会话空态"由此取代 —— 一进来就能看到"什么在等我在跑"，
             发出第一条消息后 currentSession 落定，本页自动切回常规聊天视图（输入区回到底部）。 */}
+        <div className="shrink-0 px-4 pt-4 pb-1 text-lg font-medium" style={{ color: 'var(--text-primary)' }}>
+          {greeting}，欢迎回来！
+        </div>
         <InputBar {...inputBarProps} placement="top" />
         <CommandCenter variant="inline" />
         </>

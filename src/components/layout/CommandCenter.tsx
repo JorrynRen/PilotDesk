@@ -263,7 +263,8 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
 /**
  * 指挥中心的两种形态：
  * - `modal`（默认）：App 级挂载的居中弹层（工作流页「待处理」按钮触发）；
- * - `inline`：嵌在会话默认页（无选中会话时）的常驻内容，去掉遮罩/居中/关闭键，滚动交给外层布局。
+ * - `inline`：嵌在会话默认页（无选中会话时）的常驻内容，去掉遮罩/居中/标题行与关闭键，
+ *   滚动交给外层布局；
  * 两态共用同一份数据读取与区块渲染，只有外壳与开合门槛不同。
  */
 export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inline' }) {
@@ -494,20 +495,22 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
         }}
         onClick={inline ? undefined : (e) => e.stopPropagation()}
       >
-        {/* 头部（内嵌态保留：给出区块身份与刷新入口，只是没有"关闭"可言） */}
-        <div className="flex items-center gap-2 px-4 h-10 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-          <LayoutDashboard size={13} style={{ color: 'var(--accent)' }} />
-          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>指挥中心</span>
-          <div className="flex-1" />
-          <button
-            onClick={() => void refreshCenter()}
-            className="pd-btn p-1 rounded transition-colors"
-            style={{ color: 'var(--text-secondary)' }}
-            title="刷新"
-          >
-            {loadingUsage ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-          </button>
-          {!inline && (
+        {/* 头部：只有模态态需要（弹层的标题 + 刷新 + 关闭）。
+            内嵌在会话默认页时整行去掉 —— 那一屏顶部已有问候语，再加一条「指挥中心」标题
+            只是白占一行高度；刷新由挂载时自动拉一次承担，需要手动刷新时切走再回来即可。 */}
+        {!inline && (
+          <div className="flex items-center gap-2 px-4 h-10 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+            <LayoutDashboard size={13} style={{ color: 'var(--accent)' }} />
+            <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>指挥中心</span>
+            <div className="flex-1" />
+            <button
+              onClick={() => void refreshCenter()}
+              className="pd-btn p-1 rounded transition-colors"
+              style={{ color: 'var(--text-secondary)' }}
+              title="刷新"
+            >
+              {loadingUsage ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            </button>
             <button
               onClick={closeCenter}
               className="pd-btn p-1 rounded transition-colors"
@@ -516,8 +519,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             >
               <X size={12} />
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* 内容区：按**容器自身宽度**决定列数 —— 一列最小 320px，够宽就自动并成两列，
             且最多两列（`calc(50% - gap/2)` 保证两列恰好占满，不会出现第三列）。
