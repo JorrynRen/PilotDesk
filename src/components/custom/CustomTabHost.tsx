@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { Globe, Plus, X, Settings2 } from 'lucide-react';
+import { Globe, Plus, X, Settings2, ExternalLink, AlertTriangle } from 'lucide-react';
 import { useCustomTabsStore } from '../../stores/customTabsStore';
 import { useTerminal } from '../../TerminalManager';
 import { CustomTabsSettings } from '../settings/CustomTabsSettings';
+import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
 
 /** 目录索引协议地址：?path=<encodeURIComponent(绝对路径)>，由后端动态生成文件列表页 */
 const DIRINDEX_BASE = 'http://dirindex.localhost/';
+
+/**
+ * iframe 加载超时阈值（毫秒）。
+ * 无法可靠探测 X-Frame-Options / CSP 拒绝（多数浏览器下被拒的 iframe 仍会触发 onload），
+ * 故采用「超时提示 + 手动出口」：超过此时长仍未 onload，则该标签内容区顶部给出提示条。
+ */
+const LOAD_TIMEOUT_MS = 8000;
 
 /** 把标签 url 解析为 iframe src：
  *  网络地址(http/https)直接使用；本地目录走 dirindex 协议生成索引页；本地文件走 asset 协议 */
@@ -41,6 +50,10 @@ export function CustomTabHost() {
   const [activatedIds, setActivatedIds] = useState<string[]>([]);
   // 本地路径目录判定结果缓存：url -> isDir（http 无需判定）
   const [dirByUrl, setDirByUrl] = useState<Record<string, boolean>>({});
+  // iframe 加载状态：key = `${id}|${url}`；无记录=加载中，'loaded'=已 onload，'timeout'=超时未加载
+  const [frameLoadState, setFrameLoadState] = useState<Record<string, 'loaded' | 'timeout'>>({});
+  // 用户手动关闭「可能无法内嵌」提示的标签（key）
+  const [dismissedTip, setDismissedTip] = useState<Record<string, boolean>>({});
 
   const closedSet = useMemo(() => new Set(closedIds), [closedIds]);
   // 顶栏仅展示未关闭标签
@@ -111,12 +124,64 @@ export function CustomTabHost() {
 
   // 已激活且未关闭、src 就绪的标签 → 渲染为常驻 iframe。
   // 网络地址无需目录判定；本地路径等 dirByUrl 结果返回后再挂载，避免 src 切换触发二次加载。
-  const frames = tabs.filter(
-    (t) =>
-      activatedIds.includes(t.id) &&
-      !closedSet.has(t.id) &&
-      (/^https?:\/\//i.test(t.url) || dirByUrl[t.url] !== undefined)
+  const frames = useMemo(
+    () =>
+      tabs.filter(
+        (t) =>
+          activatedIds.includes(t.id) &&
+          !closedSet.has(t.id) &&
+          (/^https?:\/\//i.test(t.url) || dirByUrl[t.url] !== undefined)
+      ),
+    [tabs, activatedIds, closedSet, dirByUrl]
   );
+
+  // 加载超时：对每个已挂载 iframe 起 8 秒计时；到点仍未 onload 则标记超时（已 loaded 的跳过）。
+  // 帧集合变化（新增/关闭帧、地址变更）会重建计时器 —— 即"重新加载时重置计时"。
+  useEffect(() => {
+    const timers = frames.map((t) => {
+      const key = `${t.id}|${t.url}`;
+      return setTimeout(() => {
+        setFrameLoadState((m) => (m[key] === 'loaded' ? m : { ...m, [key]: 'timeout' }));
+      }, LOAD_TIMEOUT_MS);
+    });
+    return () => { timers.forEach(clearTimeout); };
+  }, [frames]);
+
+  // 切换标签时"重置提示"：清掉目标标签的提示关闭标记，使其若仍无法内嵌能重新给出提示。
+  // 用「渲染期修正」而非 effect，与上方其它派生状态一致（避免 set-state-in-effect 级联渲染）。
+  const [prevActiveKeyForTip, setPrevActiveKeyForTip] = useState<string | null>(null);
+  if (activeKey !== prevActiveKeyForTip) {
+    setPrevActiveKeyForTip(activeKey);
+    if (activeKey && dismissedTip[activeKey]) {
+      setDismissedTip((m) => {
+        const next = { ...m };
+        delete next[activeKey];
+        return next;
+      });
+    }
+  }
+
+  /** iframe onload：清除该标签的超时提示（正常内嵌） */
+  const handleFrameLoad = useCallback((key: string) => {
+    setFrameLoadState((m) => (m[key] === 'loaded' ? m : { ...m, [key]: 'loaded' }));
+  }, []);
+
+  /** 关闭「可能无法内嵌」提示条（仅本标签，本次会话） */
+  const dismissEmbedTip = useCallback((key: string) => {
+    setDismissedTip((m) => ({ ...m, [key]: true }));
+  }, []);
+
+  // 在浏览器打开：复用 open_path（http(s) 交系统默认浏览器；本地路径交系统默认程序）
+  const openInBrowser = useCallback(async (targetUrl: string) => {
+    try {
+      await invoke('open_path', { path: targetUrl });
+    } catch (e) {
+      showToast(`打开失败：${errorMessage(e)}`, 'error');
+    }
+  }, []);
+
+  // 提示条只在「当前激活标签超时未加载且用户未关闭提示」时显示
+  const showEmbedTip = !!activeKey && frameLoadState[activeKey] === 'timeout' && !dismissedTip[activeKey];
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden relative">
@@ -181,8 +246,41 @@ export function CustomTabHost() {
             style={{ display: t.id === activeTabId ? 'block' : 'none' }}
             title={t.label}
             allowFullScreen
+            onLoad={() => handleFrameLoad(`${t.id}|${t.url}`)}
           />
         ))}
+        {/* 白屏降级提示条：8 秒内未 onload（可能被 X-Frame-Options / CSP 拒绝内嵌）时就地给出出口。
+            无法可靠探测拒绝（被拒 iframe 多数仍触发 onload），故用超时近似 + 手动"在浏览器打开"。 */}
+        {showEmbedTip && active && (
+          <div
+            className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-3 py-2 text-[11px]"
+            style={{
+              backgroundColor: 'var(--status-warning-bg, #FEF3C7)',
+              borderBottom: '1px solid var(--border)',
+            }}
+          >
+            <AlertTriangle size={13} className="shrink-0" style={{ color: 'var(--status-warning, #F59E0B)' }} />
+            <span className="flex-1 leading-relaxed" style={{ color: 'var(--text-primary)' }}>
+              页面可能不允许被内嵌（X-Frame-Options / CSP）。你可以点这里在浏览器中打开。
+            </span>
+            <button
+              onClick={() => void openInBrowser(active.url)}
+              className="pd-btn shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[11px] transition-all active:scale-[.98]"
+              style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+            >
+              <ExternalLink size={12} />
+              在浏览器中打开
+            </button>
+            <button
+              onClick={() => activeKey && dismissEmbedTip(activeKey)}
+              className="pd-btn shrink-0 p-1 rounded transition-colors"
+              style={{ color: 'var(--text-secondary)' }}
+              title="关闭提示"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
         {tabs.length === 0 && !active && !showManage && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <Globe size={22} style={{ color: 'var(--text-tertiary)' }} />

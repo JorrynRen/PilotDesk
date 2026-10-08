@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Globe, Settings, Bell, LayoutDashboard, Library, Store } from 'lucide-react';
@@ -7,6 +7,13 @@ import { useCustomTabsStore } from '../../stores/customTabsStore';
 import { useNotificationStore, countUnread } from '../../stores/notificationStore';
 import { useCommandCenterStore } from '../../stores/commandCenterStore';
 import { useI18n } from '../../hooks/useI18n';
+import { Select, type SelectGroup } from '../common/Select';
+
+/**
+ * 顶栏自定义标签最多平铺渲染的数量。
+ * 超出部分收进「更多」下拉，避免标签变多时顶栏分段控件被无限撑宽（P0：多了就崩）。
+ */
+const TITLEBAR_CUSTOM_TAB_LIMIT = 3;
 
 export type StatusHintState = 'loading' | 'ready' | 'error' | 'saving' | 'saved' | 'save-error' | 'idle';
 
@@ -92,6 +99,11 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   const customTabs = useCustomTabsStore((s) => s.tabs);
   const activeCustomTabId = useCustomTabsStore((s) => s.activeTabId);
   const setActiveCustomTab = useCustomTabsStore((s) => s.setActiveTab);
+  // 按 order 排序（防御性：store 已归一化，这里再排一次保证顶栏顺序稳定）
+  const sortedCustomTabs = useMemo(
+    () => [...customTabs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    [customTabs],
+  );
   const [isMaximized, setIsMaximized] = useState(false);
   const [tauriReady, setTauriReady] = useState(true);
   // 通知中心：铃铛 + 未读徽标（跨全部模式常驻，见 NotificationCenter）
@@ -153,7 +165,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
     };
   }, []);
 
-  // 组合开关段：会话 / 群聊 / 工作流 / 知识库（独立路由，常驻）/ 终端 + 自定义标签（动态并入，参与 thumb 滑动）+ 设置段（仅设置页）
+  // 组合开关段：会话 / 群聊 / 工作流 / 知识库（独立路由，常驻）/ 终端 + 自定义标签（前 N 个参与 thumb 滑动）+ 设置段（仅设置页）
   const segments: { key: string; icon: ReactNode; label: string; title: string; tabId?: string }[] = [
     { key: 'session', icon: <MessageSquare size={11} />, label: t('titleBar.session', '会话'), title: t('titleBar.session.title', '切换到会话模式') },
     { key: 'groupchat', icon: <Users size={11} />, label: t('titleBar.groupchat', '群聊'), title: t('titleBar.groupchat.title', '多 Agent 群聊') },
@@ -167,7 +179,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         : t('titleBar.knowledge.title', '知识库：片段 / 文件知识 / 图谱'),
     },
     { key: 'terminal', icon: <Terminal size={11} />, label: t('titleBar.terminal', '终端'), title: t('titleBar.terminal.title', '切换到终端模式') },
-    ...customTabs.map((t_) => ({
+    // 只平铺前 N 个自定义标签；其余收进「更多」下拉（避免顶栏被撑爆）
+    ...sortedCustomTabs.slice(0, TITLEBAR_CUSTOM_TAB_LIMIT).map((t_) => ({
       key: `custom:${t_.id}`,
       tabId: t_.id,
       icon: <Globe size={11} />,
@@ -178,6 +191,19 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       ? [{ key: 'settings', icon: <Settings size={11} />, label: t('titleBar.settings', '设置'), title: t('titleBar.settings.title', '设置页面') }]
       : []),
   ];
+  // 「更多」下拉：仅当自定义标签数量 > N 时渲染，列出全部自定义标签（本项只用单组）
+  const hasMoreCustomTabs = sortedCustomTabs.length > TITLEBAR_CUSTOM_TAB_LIMIT;
+  const customTabGroups: SelectGroup[] = hasMoreCustomTabs
+    ? [{
+        label: t('titleBar.customTabs.group', '自定义标签'),
+        options: sortedCustomTabs.map((t_) => ({ value: t_.id, label: t_.label })),
+      }]
+    : [];
+  // 点击「更多」中的某项：与顶栏段点击行为一致（切到该自定义标签）
+  const openCustomTab = useCallback((id: string) => {
+    setActiveCustomTab(id);
+    onModeChange?.('custom');
+  }, [setActiveCustomTab, onModeChange]);
   /**
    * 当前激活段的 key。
    *
@@ -340,7 +366,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
 
   return (
     <header
-      className="flex items-center justify-between px-3 h-12 shrink-0 select-none"
+      className="flex items-center justify-between px-3 h-12 shrink-0 select-none overflow-hidden"
       style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
       onMouseDown={handleHeaderMouseDown}
       onMouseUp={handleHeaderMouseUp}
@@ -348,17 +374,17 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       onMouseLeave={handleHeaderMouseLeave}
     >
       {/* Left: logo + app name (always) + optional back button + title */}
-      <div className="flex items-center gap-2 h-full">
+      <div className="flex items-center gap-2 h-full min-w-0">
         {/* 项目 Logo（所有页面统一显示） */}
         <img
           src="/logo.png"
           alt=""
-          className="w-5 h-5 rounded pointer-events-none"
+          className="w-5 h-5 rounded pointer-events-none shrink-0"
           draggable={false}
           onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
         />
         {/* 项目名称（所有页面统一显示） */}
-        <span className="text-xs font-medium pointer-events-none">PilotDesk</span>
+        <span className="text-xs font-medium pointer-events-none shrink-0">PilotDesk</span>
 
         {/* 分隔符 + 返回按钮 + 页面标题（当 showBackButton=true 时显示） */}
         {showBackButton && (
@@ -372,7 +398,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             >
               <ArrowLeft size={16} />
             </button>
-            <span className="text-xs font-medium pointer-events-none" style={{ color: 'var(--text-primary)' }}>{titleText || t('titleBar.settings', '设置')}</span>
+            <span className="text-xs font-medium pointer-events-none truncate" style={{ color: 'var(--text-primary)' }}>{titleText || t('titleBar.settings', '设置')}</span>
             {statusHint && statusHint.state !== 'idle' && (
               <StatusHintBadge hint={statusHint} />
             )}
@@ -389,12 +415,15 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
          *  外框、描边、圆角、内阴影完全统一，高度与两侧其它按钮严格对齐。
          *  兼容旧用法：未提供 mode/onModeChange 时回退到 工作流CTA+会话/终端切换。
          */}
-      <div className="flex items-center h-full">
+      <div className="flex items-center h-full min-w-0">
         {/* ✦ 内层 stretch 包容器：组合开关 + 分隔符 + 折叠按钮 + 通知铃铛 的高度自动完全对齐，
             无需手动计算 border/padding 像素；外层 items-center 保证整组在 header 垂直居中。
             注：铃铛自带确定高度（见下），不参与自适应拉伸 —— 编辑器页等没有模式开关的路由，
             这一组只剩铃铛自己，若靠 stretch 撑高，同一颗钮子在不同路由就会不一样大。 */}
-        <div className="flex items-stretch">
+        <div className="flex items-stretch min-w-0">
+          {/* 分段控件选区：min-w-0 + overflow-hidden 作溢出兜底 ——
+              窗口极窄时才裁剪该区域，保证顶栏任何情况下都不横向溢出（右侧图标区不受影响）。 */}
+          <div className="flex items-stretch min-w-0 overflow-hidden">
           {!showBackButton && (mode && onModeChange) && (
             <div
               ref={modeGroupRef}
@@ -616,6 +645,23 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               )}
             </div>
           )}
+          </div>
+          {/* 「更多」下拉：自定义标签数量 > N 时出现，复用统一 Select（含分组），列出全部自定义标签。
+              放在裁剪选区之外，极端窄屏下仍可见可点，作为被隐藏标签的兜底入口。
+              与组合开关同显隐条件（工作流等带返回按钮的路由不显示）。 */}
+          {hasMoreCustomTabs && !showBackButton && mode && onModeChange && (
+            <Select
+              value=""
+              onChange={(id) => openCustomTab(id)}
+              groups={customTabGroups}
+              placeholder={t('titleBar.customTabs.more', '更多')}
+              size="xs"
+              className="shrink-0 ml-1"
+              style={{ alignSelf: 'center' }}
+              panelMinWidth={180}
+              title={t('titleBar.customTabs.more.title', '更多自定义标签')}
+            />
+          )}
           {/* 分组分隔符：功能导航 vs 布局操作（侧边栏折叠） — 设置按钮已移至 StatusBar 最左端 */}
           {onToggleRightPanel && (!showBackButton && ((mode && onModeChange) || onOpenWorkflow || onToggleTerminal)) && (
             <div className="w-px h-4 mx-1 shrink-0 self-center" style={{ backgroundColor: 'var(--border)' }} />
@@ -773,23 +819,23 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
 
         {/* Separator：应用动作区 与 窗口控制区 分道（窗口控制是无边框 32×满高，留白要够才不混成一排） */}
         <div
-          className="w-px h-4 mx-2"
+          className="w-px h-4 mx-2 shrink-0"
           style={{ backgroundColor: 'var(--border)' }}
         />
 
-        {/* Window controls */}
+        {/* Window controls：shrink-0 —— 窗口控制永不被分段控件挤压 */}
         {tauriReady && (
           <>
             <button
               onClick={handleMinimize}
-              className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
+              className="pd-btn w-8 h-full shrink-0 flex items-center justify-center transition-colors hover:bg-black/5"
               title={t('titleBar.window.minimize', '最小化')}
             >
               <Minus size={13} style={{ color: 'var(--text-secondary)' }} />
             </button>
             <button
               onClick={handleToggleMaximize}
-              className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-black/5"
+              className="pd-btn w-8 h-full shrink-0 flex items-center justify-center transition-colors hover:bg-black/5"
               title={isMaximized ? t('titleBar.window.restore', '还原') : t('titleBar.window.maximize', '最大化')}
             >
               {isMaximized ? (
@@ -800,7 +846,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
             </button>
             <button
               onClick={handleClose}
-              className="pd-btn w-8 h-full flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
+              className="pd-btn w-8 h-full shrink-0 flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
               title={t('titleBar.window.close', '关闭')}
             >
               <X size={13} style={{ color: 'var(--text-secondary)' }} />
