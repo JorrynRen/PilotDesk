@@ -2569,6 +2569,7 @@ pub fn run() {
             commands::org_share::org_import_workflow,
             commands::org_credentials::org_list_credential_providers,
             commands::org_credentials::org_apply_credential,
+            commands::org_credentials::org_report_credential,
             utils::market::fetch_agents_config,
             utils::market::inspiration_market_index,
             utils::market::inspiration_market_fetch,

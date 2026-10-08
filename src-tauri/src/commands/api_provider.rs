@@ -84,7 +84,7 @@ fn row_to_provider(row: &rusqlite::Row) -> rusqlite::Result<ApiProvider> {
 /// List all API providers, ordered by sort_order
 pub fn list_api_providers(conn: &rusqlite::Connection) -> Result<Vec<ApiProvider>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, api_endpoint, api_key_masked, api_key_set, models, sort_order, created_at, updated_at
+        "SELECT id, name, api_endpoint, api_key_masked, api_key_set, models, api_format, sort_order, created_at, updated_at
          FROM api_providers ORDER BY sort_order"
     )?;
     let providers = stmt
@@ -99,7 +99,7 @@ pub fn get_api_provider(
     id: &str,
 ) -> Result<Option<ApiProvider>, AppError> {
     conn.query_row(
-        "SELECT id, name, api_endpoint, api_key_masked, api_key_set, models, sort_order, created_at, updated_at
+        "SELECT id, name, api_endpoint, api_key_masked, api_key_set, models, api_format, sort_order, created_at, updated_at
          FROM api_providers WHERE id = ?",
         params![id],
         row_to_provider,
@@ -121,6 +121,32 @@ pub fn get_api_key(conn: &rusqlite::Connection, id: &str) -> Result<Option<Strin
             .map_err(|e| AppError::Config(format!("解密 API Key 失败: {}", e))),
         None => Ok(None),
     }
+}
+
+/// 读取单个 provider 的协议格式与模型条目（名称+备注），供**组织上报**等需要完整信息的调用方使用。
+///
+/// 列表接口为省流量省略了 `api_format` 与模型备注，这里直接查库，
+/// 保证上报内容（协议族 + 模型清单 + 备注）与本地配置完全一致。
+/// 返回 `(api_format, [(模型名, 备注), ...])`；`api_format` 为空时回落到 `openai`。
+pub fn get_provider_format_and_models(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<(String, Vec<(String, String)>), AppError> {
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT api_format, models FROM api_providers WHERE id = ?",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let (api_format, models_json) =
+        row.unwrap_or_else(|| ("openai".to_string(), "[]".to_string()));
+    let api_format = if api_format.trim().is_empty() {
+        "openai".to_string()
+    } else {
+        api_format
+    };
+    Ok((api_format, parse_model_entries(&models_json)))
 }
 
 /// Create or update an API provider

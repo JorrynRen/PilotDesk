@@ -4,7 +4,7 @@ import {
   Settings, Key, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Package, Cpu, User, Building2, Cloud,
+  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Package, Cpu, User, Building2, Cloud, Upload,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -917,6 +917,15 @@ interface OrgCredential {
 interface ApplyOrgCredentialResult {
   providerName: string;
   created: boolean;
+  /** 应用后本地 provider 的模型数量（供提示「密钥 + N 个模型」） */
+  modelsApplied: number;
+}
+
+/** 上报到组织的结果（与 Rust `org_report_credential` 返回对齐） */
+interface ReportOrgCredentialResult {
+  created: boolean;
+  providerName: string;
+  modelsCount: number;
 }
 
 function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
@@ -938,6 +947,13 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
   const [orgCredSelected, setOrgCredSelected] = useState<OrgCredential | null>(null);
   const [orgCredSubmitting, setOrgCredSubmitting] = useState(false);
   const [orgCredError, setOrgCredError] = useState('');
+  // 「上报到组织」弹窗状态
+  const [showOrgReport, setShowOrgReport] = useState(false);
+  const [orgReportOrgs, setOrgReportOrgs] = useState<OrgCredOrg[] | null>(null);
+  const [orgReportOrgId, setOrgReportOrgId] = useState('');
+  const [orgReportProviderId, setOrgReportProviderId] = useState('');
+  const [orgReportSubmitting, setOrgReportSubmitting] = useState(false);
+  const [orgReportError, setOrgReportError] = useState('');
   const [searchParams] = useSearchParams();
   const urlApiTab = searchParams.get('apiTab');
   // 子页签支持 URL 直达（如 /settings?tab=api&apiTab=usage，供指挥中心「查看完整用量」精准跳转）：
@@ -1035,7 +1051,10 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
           overwrite,
         },
       });
-      showToast(`已从组织导入并应用「${res.providerName}」`, 'success');
+      showToast(
+        `已应用组织凭据「${res.providerName}」（密钥 + ${res.modelsApplied} 个模型）`,
+        'success',
+      );
       setShowOrgCred(false);
       await fetchProviders();
     } catch (err) {
@@ -1050,6 +1069,73 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
       setOrgCredError(msg);
     } finally {
       setOrgCredSubmitting(false);
+    }
+  };
+
+  // ── 上报本地凭据到组织 ──────────────────────────────────────────
+
+  /** 打开「上报到组织」：未登录先提示；否则拉组织列表并打开弹窗 */
+  const handleOpenOrgReport = async () => {
+    if (!account) {
+      showToast('请先登录平台账号', 'warning');
+      return;
+    }
+    setShowOrgReport(true);
+    setOrgReportOrgs(null);
+    setOrgReportOrgId('');
+    setOrgReportProviderId('');
+    setOrgReportError('');
+    try {
+      const orgs = await invoke<OrgCredOrg[]>('org_list_mine');
+      setOrgReportOrgs(orgs);
+      if (orgs.length === 0) {
+        showToast('你还没有加入任何组织', 'warning');
+        return;
+      }
+      setOrgReportOrgId(String(orgs[0].id));
+    } catch (err) {
+      setOrgReportError(errorMessage(err));
+    }
+  };
+
+  /**
+   * 上报所选本地 Provider（密钥 + 模型清单 + 备注）到组织共享凭据。
+   * 明文只由后端处理，前端仅展示掩码；先弹确认再调用（含将覆盖内容的说明）。
+   */
+  const handleReportOrgCredential = async () => {
+    const p = providers.find((x) => x.id === orgReportProviderId);
+    if (!p || !orgReportOrgId) return;
+    const notesForProvider = modelNotes[p.id] ?? {};
+    const noteCount = Object.values(notesForProvider).filter((n) => n.trim()).length;
+    const ok = await confirmDialog({
+      title: '上报到组织',
+      message:
+        `将把以下内容上报到组织共享凭据：\n` +
+        `Provider：${p.name}\n` +
+        `密钥：${p.apiKeyMasked || '（未配置）'}\n` +
+        `模型清单：${p.models.length} 个（其中 ${noteCount} 条含备注）\n\n` +
+        `组织成员应用后将获得该密钥、模型清单与备注。`,
+      confirmText: '上报',
+    });
+    if (!ok) return;
+    setOrgReportSubmitting(true);
+    setOrgReportError('');
+    try {
+      const res = await invoke<ReportOrgCredentialResult>('org_report_credential', {
+        input: { orgId: Number(orgReportOrgId), providerName: p.name },
+      });
+      showToast(
+        res.created
+          ? `已上报到组织共享凭据（含 ${res.modelsCount} 个模型）`
+          : `已更新组织共享凭据（含 ${res.modelsCount} 个模型）`,
+        'success',
+      );
+      setShowOrgReport(false);
+    } catch (err) {
+      // 权限不足（非 owner/admin）等错误由后端返回中文文案，直接展示
+      setOrgReportError(errorMessage(err));
+    } finally {
+      setOrgReportSubmitting(false);
     }
   };
 
@@ -1298,6 +1384,18 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
             从组织获取凭据
           </button>
           <button
+            onClick={() => void handleOpenOrgReport()}
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors"
+            style={{
+              border: '1px solid var(--border)',
+              background: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <Upload size={12} />
+            上报到组织
+          </button>
+          <button
             onClick={handleAddProvider}
             className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs  transition-colors"
             style={{
@@ -1447,6 +1545,95 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
                 }}
               >
                 {orgCredSubmitting ? '应用中…' : '应用'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 「上报到组织」弹窗：选组织 + 选本地 Provider → 二次确认后上报（含模型清单与备注；明文只由后端处理） */}
+      {showOrgReport && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => { if (!orgReportSubmitting) setShowOrgReport(false); }}
+        >
+          <div
+            className="rounded-xl shadow-xl w-full mx-4 flex flex-col"
+            style={{ maxWidth: 480, maxHeight: '74vh', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 text-sm font-medium shrink-0" style={{ color: 'var(--text-primary)', borderBottom: '1px solid var(--border)' }}>
+              上报到组织
+            </div>
+            <div className="px-4 py-3 shrink-0 space-y-3" style={{ borderBottom: '1px solid var(--border)' }}>
+              <div>
+                <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>选择组织</div>
+                {orgReportOrgs && orgReportOrgs.length > 0 ? (
+                  <Select
+                    value={orgReportOrgId}
+                    onChange={setOrgReportOrgId}
+                    placeholder="请选择组织"
+                    options={orgReportOrgs.map((o) => ({ value: String(o.id), label: o.name }))}
+                    className="w-full"
+                    disabled={orgReportSubmitting}
+                  />
+                ) : (
+                  <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
+                    {orgReportOrgs === null ? '正在获取组织列表…' : '你还没有加入任何组织'}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-[11px] mb-1" style={{ color: 'var(--text-tertiary)' }}>选择要上报的本地 Provider</div>
+                {providers.length > 0 ? (
+                  <Select
+                    value={orgReportProviderId}
+                    onChange={setOrgReportProviderId}
+                    placeholder="请选择 Provider"
+                    options={providers.map((p) => ({
+                      value: p.id,
+                      label: `${p.name}（${p.models.length} 个模型${p.apiKeySet ? '' : ' · 未配置 Key'}）`,
+                    }))}
+                    className="w-full"
+                    disabled={orgReportSubmitting}
+                  />
+                ) : (
+                  <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
+                    暂无可上报的 Provider
+                  </div>
+                )}
+              </div>
+              <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                上报内容含密钥、模型清单与备注；组织成员应用后即可使用。仅组织 owner/admin 可上报。
+              </p>
+              {orgReportError && (
+                <div className="text-xs px-2 py-1.5 rounded" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
+                  {orgReportError}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+              <button
+                onClick={() => setShowOrgReport(false)}
+                disabled={orgReportSubmitting}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{ border: '1px solid var(--border)', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', cursor: orgReportSubmitting ? 'default' : 'pointer' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleReportOrgCredential()}
+                disabled={orgReportSubmitting || !orgReportProviderId || !orgReportOrgId}
+                className="pd-btn px-3 py-1.5 text-xs rounded transition-colors"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity: orgReportSubmitting || !orgReportProviderId || !orgReportOrgId ? 0.5 : 1,
+                  cursor: orgReportSubmitting || !orgReportProviderId || !orgReportOrgId ? 'default' : 'pointer',
+                }}
+              >
+                {orgReportSubmitting ? '上报中…' : '上报'}
               </button>
             </div>
           </div>
