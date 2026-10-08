@@ -1,9 +1,9 @@
 /**
- * CommandCenter — 全局指挥中心（顶栏按钮触发，App 级挂载一次）
+ * CommandCenter — 全局指挥中心
  *
- * 把「什么在跑、什么在等我、这段时间花了多少」聚到一处，并给出快捷入口与最近会话；
- * 会话/群聊/工作流/终端/设置页都能打开。首次打开额外显示一次性使用指引（启动台职责，
- * 不再单独做第二个入口）。
+ * 把「什么在跑、什么在等我、这段时间花了多少」聚到一处，并给出快捷入口与最近会话。
+ * 两种形态（见下方 variant）：会话默认页的无会话态内嵌常驻内容，以及工作流页「待处理」
+ * 按钮打开的居中模态；首次使用额外显示一次性使用指引（启动台职责，不再单独做第二个入口）。
  *
  * 数据全部来自现有 store/命令（不新增后端接口）：待处理取工作流的审批/待输入实时登记表，
  * 进行中取工作流实例与群聊房间，成本速览取近 7 天三维归因。
@@ -87,24 +87,37 @@ function fmtAgo(sec?: number): string {
 }
 
 /**
- * 区块：标题带（底色 + 主色图标 + 加粗标题 + 计数）与内容区分开，
- * 避免"标题与内容同色同字号"导致每块的起点看不出来（与右栏「子任务」等面板头同一范式）。
+ * 区块：**自包含卡片**（描边 + 圆角 + 标题带），在内容区的两列网格里各占一格。
+ *
+ * 与旧版（`borderTop` 通栏堆叠）的区别：改成卡片后各区块可并排 —— 内容少的区块（快捷入口、
+ * 最近会话等）一行放两个，整页更矮，会话默认页内嵌时不必滚动。宽内容区块（如「待处理」
+ * 里带按钮的待办卡）用 `span` 占满整行。
  */
 function Section({
   title,
   icon,
   count,
+  span,
   children,
 }: {
   title: string;
   icon: ReactNode;
   count?: number;
+  /** 占满整行（两列时） */
+  span?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div style={{ borderTop: '1px solid var(--border)' }}>
+    <div
+      className="rounded-lg overflow-hidden flex flex-col"
+      style={{
+        backgroundColor: 'var(--bg-primary)',
+        border: '1px solid var(--border)',
+        gridColumn: span ? '1 / -1' : undefined,
+      }}
+    >
       <div
-        className="flex items-center gap-1.5 px-4 py-[7px]"
+        className="flex items-center gap-1.5 px-3 py-[6px]"
         style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
       >
         <span className="shrink-0 flex items-center" style={{ color: 'var(--accent)' }}>{icon}</span>
@@ -115,7 +128,7 @@ function Section({
           </span>
         )}
       </div>
-      <div className="px-4 py-3">{children}</div>
+      <div className="px-3 py-2.5">{children}</div>
     </div>
   );
 }
@@ -258,7 +271,7 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
 
 /**
  * 指挥中心的两种形态：
- * - `modal`（默认）：App 级挂载，顶栏入口触发的居中弹层；
+ * - `modal`（默认）：App 级挂载的居中弹层（工作流页「待处理」按钮触发）；
  * - `inline`：嵌在会话默认页（无选中会话时）的常驻内容，去掉遮罩/居中/关闭键，滚动交给外层布局。
  * 两态共用同一份数据读取与区块渲染，只有外壳与开合门槛不同。
  */
@@ -540,15 +553,23 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
           )}
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto pd-scroll-stable">
+        {/* 内容区：两列网格（窄窗口自动回落单列）。区块做成卡片后内容少的可并排，
+            整个面板更矮，内嵌在会话默认页时通常不需要滚动。 */}
+        <div
+          className="flex-1 min-h-0 overflow-y-auto pd-scroll-stable p-3 grid gap-3 grid-cols-1 md:grid-cols-2"
+          style={{ alignItems: 'start', alignContent: 'start' }}
+        >
           {/* 使用指引 + 使用向导（启动台职责）
               层级：指引块（主色底）→ 卡片 → 卡内「步骤 / 术语胶囊 + 说明」
               未配置 Agent 时向导常驻，配置完成后整块收起成一行常驻入口（见下方 else 分支） */}
           {showGuide ? (
-            <div className="px-4 py-3 space-y-2" style={{ backgroundColor: 'var(--accent-light)' }}>
+            <div
+              className="rounded-lg px-3 py-2.5 space-y-2 md:col-span-2"
+              style={{ backgroundColor: 'var(--accent-light)', border: '1px solid var(--border)' }}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
-                  开始使用（顶栏可切换工作模式，也可随时点顶栏图标打开本面板）
+                  开始使用（顶栏可切换工作模式）
                 </span>
                 {(!guideSeen || guideForcedOpen) && (
                   <button
@@ -639,45 +660,49 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
 
               {/* 功能说明：首次展示，以及用户主动展开引导时一并展示
                   （未配置 Agent 的常驻态只留「使用向导」，避免这一大片长期占屏）；
-                  卡片边框与「使用向导」一致，三块读起来是并列单元 */}
-              {guideShowFull && GUIDE_GROUPS.map((group) => (
-                <div
-                  key={group.title}
-                  className="rounded-lg px-2.5 py-2"
-                  style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--accent)' }}
-                >
-                  {/* 组标题：主色竖条 + 标题 + 延伸细分隔线（与条目明显区分） */}
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    <span style={{ width: 2, height: 9, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
-                    <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
-                      {group.title}
-                    </span>
-                    <span className="flex-1" style={{ height: 1, backgroundColor: 'var(--border)' }} />
-                  </div>
-                  <ul className="space-y-1">
-                    {group.items.map((it) => (
-                      <li key={it.term} className="flex items-start gap-2">
-                        {/* 术语胶囊：定宽居中，短词长词都能对齐成一列 */}
-                        <span
-                          className="shrink-0 rounded text-[10px]"
-                          style={{
-                            minWidth: 64,
-                            textAlign: 'center',
-                            padding: '1px 4px',
-                            backgroundColor: 'var(--bg-tertiary)',
-                            color: 'var(--text-primary)',
-                          }}
-                        >
-                          {it.term}
+                  两个分组左右并排（窄窗口回落单列），半屏高度就能读完，避免默认页被顶出滚动条 */}
+              {guideShowFull && (
+                <div className="grid gap-2 grid-cols-1 md:grid-cols-2">
+                  {GUIDE_GROUPS.map((group) => (
+                    <div
+                      key={group.title}
+                      className="rounded-lg px-2.5 py-2"
+                      style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--accent)' }}
+                    >
+                      {/* 组标题：主色竖条 + 标题 + 延伸细分隔线（与条目明显区分） */}
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <span style={{ width: 2, height: 9, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
+                        <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
+                          {group.title}
                         </span>
-                        <span className="flex-1 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                          {it.desc}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                        <span className="flex-1" style={{ height: 1, backgroundColor: 'var(--border)' }} />
+                      </div>
+                      <ul className="space-y-1">
+                        {group.items.map((it) => (
+                          <li key={it.term} className="flex items-start gap-2">
+                            {/* 术语胶囊：定宽居中，短词长词都能对齐成一列 */}
+                            <span
+                              className="shrink-0 rounded text-[10px]"
+                              style={{
+                                minWidth: 64,
+                                textAlign: 'center',
+                                padding: '1px 4px',
+                                backgroundColor: 'var(--bg-tertiary)',
+                                color: 'var(--text-primary)',
+                              }}
+                            >
+                              {it.term}
+                            </span>
+                            <span className="flex-1 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                              {it.desc}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
 
               {guideShowFull && (
                 <div className="flex items-center justify-between">
@@ -695,8 +720,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                否则「看过一次」等于永久消失，想再对照步骤只能清 localStorage */
             <button
               onClick={() => setGuideForcedOpen(true)}
-              className="w-full flex items-center gap-2 px-4 py-2 text-left transition-opacity hover:opacity-90"
-              style={{ backgroundColor: 'var(--accent-light)' }}
+              className="md:col-span-2 w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-opacity hover:opacity-90"
+              style={{ backgroundColor: 'var(--accent-light)', border: '1px solid var(--border)' }}
               title="展开使用引导：配置 Agent 与各功能说明"
             >
               <HelpCircle size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
@@ -709,8 +734,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             </button>
           )}
 
-          {/* 待处理 */}
-          <Section title="待处理" icon={<ShieldAlert size={11} />} count={pendingCount}>
+          {/* 待处理（占满整行：待办卡内含审批按钮与参数预览，塞进半列会挤） */}
+          <Section title="待处理" icon={<ShieldAlert size={11} />} count={pendingCount} span>
             {pendingCount === 0 && staleApprovals.length === 0 && (
               <EmptyHint text="暂无待处理事项。" />
             )}

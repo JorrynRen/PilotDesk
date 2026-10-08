@@ -803,43 +803,6 @@ button:disabled:hover {
   animation: pd-spin 1s linear infinite;
 }
 
-/* 指挥中心「入口在这里」指引：图标外圈扩散脉冲（循环，直到指引被收起）。
-   用途单一：用户（尤其新用户）关掉自动打开的面板后，知道下次在哪点开。 */
-@keyframes pd-guide-ring {
-  0% {
-    transform: scale(0.9);
-    opacity: 0.8;
-  }
-  70% {
-    transform: scale(1.75);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1.75);
-    opacity: 0;
-  }
-}
-
-.pd-animate-guide-ring {
-  animation: pd-guide-ring 1.6s ease-out infinite;
-}
-
-/* 指引气泡的一次性入场（淡入 + 轻微下落） */
-@keyframes pd-guide-pop {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.pd-animate-guide-pop {
-  animation: pd-guide-pop 0.22s ease-out;
-}
-
 /* ═══════════════════════════════════════════════════
    知识图谱：星空背景（零 DOM 的星点）
    ═══════════════════════════════════════════════════ */

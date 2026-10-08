@@ -48,6 +48,8 @@ function subtitleOf(url: string): string {
  * - CustomTabHost 常挂载（App 以 CSS 显隐），主视图切换不会卸载 iframe；
  * - 标签被激活时才创建 iframe，此后切换仅 display 显隐、网页状态保留；iframe 常驻数量上限 8（LRU），
  *   超出即卸载最久未用者（标签按钮仍全留），再次点开时重新加载；
+ * - 顶栏标签有三态：激活（当前查看，主色高亮）/ 保活中（iframe 仍挂载但未查看，淡底 + 主色小圆点）/
+ *   未加载（从未打开或已关闭，透明底）—— 用样式把"保活"与"当前查看"分开；
  * - 「门户」是 custom 模式下的首页（非真实标签，用哨兵 id 表示）：按分组渲染全部标签卡片网格，
  *   卡片点击即打开该标签（顶栏切到该标签、加载其 iframe），另提供搜索 / 管理与「在浏览器打开」；
  *   进入 custom 模式时**默认落在此页**（无有效激活标签即回落门户），不预加载任何标签的 iframe；
@@ -248,23 +250,35 @@ export function CustomTabHost() {
             门户
           </button>
         </div>
-        {/* 全部门户标签常驻此行（不做"关闭即消失"）：只有「激活态」随当前标签切换，
+        {/* 全部门户标签常驻此行（不做"关闭即消失"），标签有三种状态：
+            - 激活态：当前正在查看 → 主色高亮；
+            - 保活中：iframe 仍挂载（LRU 窗口内）但不是当前查看的 → 未激活态 + 主色小圆点，
+              让"已加载、切换即时显示"与"未加载、点开才加载"能一眼区分；
+            - 未加载：从未打开 / 已关闭 → 透明底普通样式。
             关闭只卸载 iframe 并回落门户页，标签按钮仍在此处，点一下即重新加载。 */}
         {tabs.map((t) => {
           const isActive = t.id === activeTabId;
+          const keepAlive = !isActive && activatedIds.includes(t.id);
           return (
             <div key={t.id} className="pd-tab-chip relative shrink-0">
               <button
                 onClick={() => setActiveTab(t.id)}
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors"
                 style={{
-                  backgroundColor: isActive ? 'var(--accent)' : 'transparent',
-                  color: isActive ? '#fff' : 'var(--text-secondary)',
+                  backgroundColor: isActive ? 'var(--accent)' : keepAlive ? 'var(--bg-tertiary)' : 'transparent',
+                  color: isActive ? '#fff' : keepAlive ? 'var(--text-primary)' : 'var(--text-secondary)',
                 }}
-                title={t.url}
+                title={keepAlive ? `${t.url}（保活中：页面已加载，切换即时显示）` : t.url}
               >
                 <TabIcon icon={t.icon} size={11} />
                 {t.label}
+                {keepAlive && (
+                  <span
+                    aria-hidden
+                    className="shrink-0 rounded-full"
+                    style={{ width: 4, height: 4, backgroundColor: 'var(--accent)' }}
+                  />
+                )}
               </button>
               {/* 关闭角标：默认隐藏，悬停 / 聚焦该标签时显现（触屏常显）。
                   仅关闭本标签（stopPropagation 阻止冒泡到标签的切换点击）。 */}

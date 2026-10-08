@@ -1,11 +1,10 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Settings, Bell, LayoutDashboard, Library, Store, LayoutGrid } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Settings, Bell, Library, Store, LayoutGrid } from 'lucide-react';
 import type { ViewMode } from '../../TerminalManager';
 import { useCustomTabsStore, PORTAL_TAB_ID } from '../../stores/customTabsStore';
 import { useNotificationStore, countUnread } from '../../stores/notificationStore';
-import { useCommandCenterStore } from '../../stores/commandCenterStore';
 import { useI18n } from '../../hooks/useI18n';
 import { Select, type SelectGroup } from '../common/Select';
 import { TabIcon } from '../common/TabIcon';
@@ -114,33 +113,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   const notificationOpen = useNotificationStore((s) => s.open);
   const setNotificationOpen = useNotificationStore((s) => s.setOpen);
   const unreadCount = countUnread(notificationItems);
-  // 指挥中心入口：打开即刷新全部数据源（进行中/待处理/成本速览）
-  const centerOpen = useCommandCenterStore((s) => s.open);
-  const closeCenter = useCommandCenterStore((s) => s.closeCenter);
-  const openCenter = useCommandCenterStore((s) => s.openCenter);
-  // 「入口在这里」指引：首次关闭指挥中心后，图标脉冲 + 气泡告诉用户下次在哪打开
-  const entryHint = useCommandCenterStore((s) => s.entryHint);
-  const dismissEntryHint = useCommandCenterStore((s) => s.dismissEntryHint);
-  const centerBtnRef = useRef<HTMLButtonElement | null>(null);
-  /** 气泡位置（fixed 坐标）：气泡脱离顶栏渲染，避免被顶栏高度/邻近层裁掉或盖住 */
-  const [hintPos, setHintPos] = useState<{ top: number; right: number } | null>(null);
-
-  useEffect(() => {
-    // 气泡只在 entryHint 为真时渲染（见下方 `entryHint && hintPos` 守卫），
-    // 所以关闭时不必把位置清空 —— 那是一次 effect 体内的同步 setState，
-    // 会多一轮级联渲染，而对渲染结果没有任何影响。
-    if (!entryHint) return;
-    const el = centerBtnRef.current;
-    if (el) {
-      const r = el.getBoundingClientRect();
-      setHintPos({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) });
-    }
-    // 8 秒足够读完一句话；到点自动收起，不让指引变成常驻装饰
-    const timer = setTimeout(() => dismissEntryHint(), 8000);
-    return () => clearTimeout(timer);
-  }, [entryHint, dismissEntryHint]);
-  // 待处理徽标沿用通知中心的未决项（工具审批 / 工作流待人工输入），与铃铛口径一致
-  const pendingCount = notificationItems.filter((i) => i.pending).length;
 
   /**
    * 知识库「待确认」角标：全部库的待核实候选总数。
@@ -729,53 +701,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
               <Store size={13} />
             </button>
           )}
-          {/* 指挥中心：进行中 / 待处理 / 成本速览 / 快捷入口 的聚合入口（置于铃铛之前） */}
-          <button
-            ref={centerBtnRef}
-            onClick={() => { if (centerOpen) closeCenter(); else void openCenter(); }}
-            className="relative flex items-center justify-center hover:opacity-80 transition-all shrink-0 ml-2"
-            style={{
-              width: 28,
-              height: 28,
-              alignSelf: 'center',
-              padding: 0,
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              color: centerOpen || entryHint ? 'var(--accent)' : 'var(--text-secondary)',
-              background: centerOpen ? 'var(--border)' : 'transparent',
-              // 指引期间图标本身也亮起来（与脉冲外圈一起，视线一眼落到入口）
-              boxShadow: entryHint ? '0 0 0 1px var(--accent)' : undefined,
-            }}
-            title={pendingCount > 0
-              ? t('titleBar.commandCenter.pending', `指挥中心（${pendingCount} 项待处理）`, { count: pendingCount })
-              : t('titleBar.commandCenter', '指挥中心')}
-          >
-            {entryHint && (
-              <span
-                aria-hidden
-                className="pd-animate-guide-ring absolute inset-0 rounded-[6px]"
-                style={{ border: '2px solid var(--accent)', pointerEvents: 'none' }}
-              />
-            )}
-            <LayoutDashboard size={13} />
-            {pendingCount > 0 && (
-              <span
-                className="absolute flex items-center justify-center rounded-full text-[9px] font-medium"
-                style={{
-                  top: -3,
-                  right: -3,
-                  minWidth: 13,
-                  height: 13,
-                  padding: '0 3px',
-                  backgroundColor: '#F59E0B',
-                  color: '#fff',
-                  lineHeight: 1,
-                }}
-              >
-                {pendingCount > 99 ? '99+' : pendingCount}
-              </span>
-            )}
-          </button>
           {/* 设置：原先在底部状态栏最左，现按位置习惯移回顶部功能按钮区。
               样式与右侧其它图标按钮保持一致（28×28 / 1px 描边 / 圆角 8）。 */}
           {onOpenSettings && (
@@ -874,52 +799,6 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
           </>
         )}
       </div>
-
-      {/* 「入口在这里」指引气泡：首次关闭指挥中心后出现（fixed 定位脱离顶栏，避免被裁/被盖），
-          8 秒后或点「知道了」收起，用户再次打开面板也会立即收起 */}
-      {entryHint && hintPos && (
-        <div
-          className="pd-animate-guide-pop fixed z-[99] rounded-lg px-3 py-2"
-          style={{
-            top: hintPos.top,
-            right: hintPos.right,
-            width: 208,
-            backgroundColor: 'var(--bg-primary)',
-            border: '1px solid var(--accent)',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {/* 指向图标的小箭头 */}
-          <span
-            aria-hidden
-            className="absolute"
-            style={{
-              top: -5,
-              right: 14,
-              width: 8,
-              height: 8,
-              transform: 'rotate(45deg)',
-              backgroundColor: 'var(--bg-primary)',
-              borderLeft: '1px solid var(--accent)',
-              borderTop: '1px solid var(--accent)',
-            }}
-          />
-          <div className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
-            {t('titleBar.hint.title', '指挥中心的入口在这里')}
-          </div>
-          <div className="text-[10px] leading-relaxed mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-            {t('titleBar.hint.body', '下次要看「进行中 / 待处理 / 用量统计」，点这个图标就能再打开')}
-          </div>
-          <button
-            onClick={dismissEntryHint}
-            className="pd-btn mt-1.5 px-2 py-0.5 rounded text-[10px]"
-            style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
-          >
-            {t('titleBar.hint.ok', '知道了')}
-          </button>
-        </div>
-      )}
     </header>
   );
 }

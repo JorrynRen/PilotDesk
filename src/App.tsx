@@ -188,7 +188,7 @@ function App() {
 
   // 说明：原「空状态自动弹出指挥中心」的逻辑已移除。无选中会话时，
   // 会话默认页（MainPanel）现在内嵌了指挥中心内容（variant="inline"），
-  // 不需要再额外弹一个模态盖在它上面。顶栏入口仍可随时打开模态版。
+  // 不需要再额外弹一个模态盖在它上面。
 
   // Update window title based on current route
   useEffect(() => {
@@ -277,7 +277,7 @@ function App() {
       <ConfirmDialog />
       {/* 全局通知中心（顶栏铃铛触发；App 级挂载，所有模式/页面都能打开） */}
       <NotificationCenter />
-      {/* 全局指挥中心（顶栏入口触发：进行中 / 待处理 / 成本速览 / 快捷入口） */}
+      {/* 全局指挥中心模态（工作流页「待处理」触发；会话默认页另有一份内嵌内容） */}
       <CommandCenter />
       <Routes>
         <Route path="/" element={<MainLayout />} />
