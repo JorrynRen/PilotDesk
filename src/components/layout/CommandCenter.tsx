@@ -62,6 +62,14 @@ const DIMENSION_LABEL: Record<string, string> = {
 
 const MAX_ACTIVE_ROWS = 5;
 
+/**
+ * 待处理条目的底色：在**卡片底色**上叠一层琥珀提示色。
+ *
+ * 用 `color-mix` 而不是写死 rgba(245,158,11,.08)：三种主题的卡片底色各不相同，
+ * 半透明色直接铺上去只会"混出脏色"（浅色下发灰、深色下被冲淡），混到卡片底色里才稳定。
+ */
+const ATTENTION_BG = 'color-mix(in srgb, #F59E0B 10%, var(--bg-secondary))';
+
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}m`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
@@ -79,10 +87,14 @@ function fmtAgo(sec?: number): string {
 }
 
 /**
- * 区块：**自包含卡片**（描边 + 圆角 + 标题带），在内容区的网格里各占一格。
+ * 区块：**无描边的色块分组**（填充 `--bg-secondary` + 圆角 + 块内标题行）。
  *
- * 网格列数按容器宽度自适应（最多两列），相邻两个区块是否并排由格子数决定；
- * 目前各块都用 `span` 占满整行（内容都偏宽），需要并排时去掉 `span` 即可。
+ * 为什么不用描边卡片：卡片底色与页面底色同为 `--bg-primary`，这时唯一的视觉结构就是那圈 1px 线，
+ * 一屏几块叠起来"全是线条"。改成**靠底色分层**：页面（`--bg-primary`）上铺若干浅底色块，
+ * 块内条目再用 `--bg-primary` 反衬成"内嵌凹槽"，标题行去掉底色带与分隔线、只留图标 + 小标题，
+ * 这样整屏不再有装饰性线条（线只留给按钮/输入框这类真正的控件）。
+ *
+ * 网格列数按容器宽度自适应（最多两列）；区块是否并排由 `span` 决定。
  */
 function Section({
   title,
@@ -100,17 +112,14 @@ function Section({
 }) {
   return (
     <div
-      className="min-w-0 overflow-hidden rounded-lg flex flex-col"
+      className="min-w-0 overflow-hidden rounded-xl flex flex-col"
       style={{
-        backgroundColor: 'var(--bg-primary)',
-        border: '1px solid var(--border)',
+        backgroundColor: 'var(--bg-secondary)',
         gridColumn: span ? '1 / -1' : undefined,
       }}
     >
-      <div
-        className="flex items-center gap-1.5 px-3 py-[6px]"
-        style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}
-      >
+      {/* 标题行：不再有底色带与下边框，只是色块内的一个小标签 */}
+      <div className="flex items-center gap-1.5 px-3.5 pt-3 pb-2">
         <span className="shrink-0 flex items-center" style={{ color: 'var(--accent)' }}>{icon}</span>
         <span className="text-[11px] font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</span>
         {count !== undefined && count > 0 && (
@@ -119,7 +128,7 @@ function Section({
           </span>
         )}
       </div>
-      <div className="px-3 py-2.5">{children}</div>
+      <div className="px-3.5 pb-3.5">{children}</div>
     </div>
   );
 }
@@ -547,8 +556,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
               未配置 Agent 时向导常驻，配置完成后整块收起成一行常驻入口（见下方 else 分支） */}
           {showGuide ? (
             <div
-              className="col-span-full min-w-0 overflow-hidden rounded-lg px-3 py-2.5 space-y-2"
-              style={{ backgroundColor: 'var(--accent-light)', border: '1px solid var(--border)' }}
+              className="col-span-full min-w-0 overflow-hidden rounded-xl px-3.5 py-3 space-y-2"
+              style={{ backgroundColor: 'var(--accent-light)' }}
             >
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-medium" style={{ color: 'var(--accent)' }}>
@@ -568,14 +577,14 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
               {/* 使用向导：① 配置 Agent（前提）→ ② 开始首次会话 */}
               <div
                 className="rounded-lg px-2.5 py-2"
-                style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--accent)' }}
+                style={{ backgroundColor: 'var(--bg-primary)' }}
               >
                 <div className="flex items-center gap-1.5 mb-2">
                   <span style={{ width: 2, height: 9, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
                   <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
                     使用向导
                   </span>
-                  <span className="flex-1" style={{ height: 1, backgroundColor: 'var(--border)' }} />
+                  <div className="flex-1" />
                   {agentReady && <span className="text-[10px] shrink-0" style={{ color: '#10B981' }}>已就绪</span>}
                 </div>
 
@@ -653,15 +662,14 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                     <div
                       key={group.title}
                       className="rounded-lg px-2.5 py-2"
-                      style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--accent)' }}
+                      style={{ backgroundColor: 'var(--bg-primary)' }}
                     >
-                      {/* 组标题：主色竖条 + 标题 + 延伸细分隔线（与条目明显区分） */}
+                      {/* 组标题：主色竖条 + 标题（不再拖一条分隔线，避免整屏线条） */}
                       <div className="flex items-center gap-1.5 mb-1.5">
                         <span style={{ width: 2, height: 9, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
                         <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
                           {group.title}
                         </span>
-                        <span className="flex-1" style={{ height: 1, backgroundColor: 'var(--border)' }} />
                       </div>
                       <ul className="space-y-1">
                         {group.items.map((it) => (
@@ -706,8 +714,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                否则「看过一次」等于永久消失，想再对照步骤只能清 localStorage */
             <button
               onClick={() => setGuideForcedOpen(true)}
-              className="col-span-full min-w-0 w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-opacity hover:opacity-90"
-              style={{ backgroundColor: 'var(--accent-light)', border: '1px solid var(--border)' }}
+              className="col-span-full min-w-0 w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-left transition-opacity hover:opacity-90"
+              style={{ backgroundColor: 'var(--accent-light)' }}
               title="展开使用引导：配置 Agent 与各功能说明"
             >
               <HelpCircle size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
@@ -733,7 +741,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                   <div
                     key={a.callId}
                     className="px-2.5 py-2 rounded-lg"
-                    style={{ backgroundColor: 'rgba(245,158,11,0.08)', border: '1px solid var(--border)' }}
+                    style={{ backgroundColor: ATTENTION_BG }}
                   >
                     <div className="flex items-center gap-2">
                       <ShieldAlert size={12} className="shrink-0" style={{ color: '#F59E0B' }} />
@@ -786,7 +794,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                   <div
                     key={key}
                     className="px-2.5 py-2 rounded-lg"
-                    style={{ backgroundColor: 'rgba(245,158,11,0.08)', border: '1px solid var(--border)' }}
+                    style={{ backgroundColor: ATTENTION_BG }}
                   >
                     <div className="flex items-center gap-2">
                       <AlertTriangle size={12} className="shrink-0" style={{ color: '#F59E0B' }} />
@@ -831,7 +839,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 <div
                   key={a.callId}
                   className="flex items-center gap-2 px-2.5 py-2 rounded-lg"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+                  style={{ backgroundColor: 'var(--bg-primary)' }}
                 >
                   <ShieldAlert size={12} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
                   <div className="flex-1 min-w-0">
@@ -865,7 +873,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 <div
                   key={i.id}
                   className="flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
-                  style={{ backgroundColor: 'var(--bg-tertiary)' }}
+                  style={{ backgroundColor: 'var(--bg-primary)' }}
                   onClick={goWorkflow}
                   title="进入工作流页查看"
                 >
@@ -893,7 +901,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                   <div
                     key={r.id}
                     className="flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
-                    style={{ backgroundColor: 'var(--bg-tertiary)' }}
+                    style={{ backgroundColor: 'var(--bg-primary)' }}
                     onClick={() => goRoom(r.id)}
                     title="进入该群聊房间"
                   >
@@ -921,7 +929,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             ) : (
               <div className="space-y-1.5">
                 {dimensions.map((d) => (
-                  <div key={d.key} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                  <div key={d.key} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-primary)' }}>
                     <span className="text-[11px] flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>
                       {DIMENSION_LABEL[d.key] ?? d.key}
                     </span>
