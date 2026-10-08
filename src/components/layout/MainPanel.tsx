@@ -6,6 +6,7 @@ import { MessageList } from '../message/MessageList';
 import { SessionToWorkflowModal } from '../session/SessionToWorkflowModal';
 import { SessionToRoomModal } from '../session/SessionToRoomModal';
 import { InputBar } from './InputBar';
+import { CommandCenter } from './CommandCenter';
 import type { SecurityModeValue } from '../security/SecurityModeSelector';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useGroupChatStore } from '../../stores/groupChatStore';
@@ -1051,6 +1052,23 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     ];
   }, [messages, currentSessionId, currentGenState, streamingContent]);
 
+  /**
+   * InputBar 的共用 props：聊天视图置于消息列表下方（bottom），
+   * 会话默认页置于顶部、其下才是指挥中心内容（top），只有 placement 一处不同。
+   */
+  const inputBarProps = {
+    session: currentSession,
+    onSend: handleSend,
+    onEnsureSession: ensureSession,
+    onStop: handleStop,
+    isGenerating: !!currentGenState,
+    streamingStatus: currentGenState?.streamingStatus ?? '',
+    pendingInput: state.pendingInput,
+    onPendingConsumed: () => dispatch({ type: 'SET_PENDING_INPUT', content: null }),
+    securityMode,
+    onSecurityModeChange: setSecurityMode,
+  };
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden relative" style={style}>
       <div
@@ -1063,19 +1081,20 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         }}
       >
       <div className="flex-1 flex flex-col overflow-hidden">
-      {/* 「转为工作流 / 转为群聊」以 headerActions 插槽交给 MessageList：与搜索框同行显示，
-          不再单独占一行；会话标题也不再占这一行（标题在左侧列表里已有） */}
-      {isLoadingMessages ? (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="pilotdesk-spinner" />
-          <span className="ml-2 text-xs" style={{ color: 'var(--text-secondary)' }}>加载消息中...</span>
-        </div>
-      ) : (
-        <MessageList
-          messages={displayMessages}
-          session={currentSession}
-          headerActions={
-            currentSession ? (
+      {currentSession ? (
+        <>
+        {/* 「转为工作流 / 转为群聊」以 headerActions 插槽交给 MessageList：与搜索框同行显示，
+            不再单独占一行；会话标题也不再占这一行（标题在左侧列表里已有） */}
+        {isLoadingMessages ? (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="pilotdesk-spinner" />
+            <span className="ml-2 text-xs" style={{ color: 'var(--text-secondary)' }}>加载消息中...</span>
+          </div>
+        ) : (
+          <MessageList
+            messages={displayMessages}
+            session={currentSession}
+            headerActions={
               <>
                 {/* 与「整理为知识 / 多选 / 关闭会话」统一：**无边框**、同内边距与字号 */}
                 <button
@@ -1098,41 +1117,38 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
                   转为群聊
                 </button>
               </>
-            ) : null
-          }
-          onCloseSession={currentSession ? () => startNewSession() : undefined}
-          isGenerating={!!currentGenState}
-          streamingProgress={currentGenState?.streamingProgress ?? ''}
-          thinkingChain={currentThinkingChain}
-          confirmation={confirmation ? {
-            request: confirmation.request,
-            countdown: confirmationCountdown,
-            onSubmit: async (responses: GroupChatConfirmationResponseInput[]) => {
-              confirmationSubmittedRef.current = true;
-              const content = formatResponsesToText(confirmation.request.items, responses);
-              await respondToConfirmation(confirmation.sessionId, confirmation.callId, content);
-              // 提交后即移除确认块（会话模式不持久化）
-              setConfirmation(null);
-              setConfirmationCountdown(0);
-            },
-          } : null}
-          onEditMessage={handleEditMessage}
-          onResendMessage={handleResendMessage}
-        />
+            }
+            onCloseSession={() => startNewSession()}
+            isGenerating={!!currentGenState}
+            streamingProgress={currentGenState?.streamingProgress ?? ''}
+            thinkingChain={currentThinkingChain}
+            confirmation={confirmation ? {
+              request: confirmation.request,
+              countdown: confirmationCountdown,
+              onSubmit: async (responses: GroupChatConfirmationResponseInput[]) => {
+                confirmationSubmittedRef.current = true;
+                const content = formatResponsesToText(confirmation.request.items, responses);
+                await respondToConfirmation(confirmation.sessionId, confirmation.callId, content);
+                // 提交后即移除确认块（会话模式不持久化）
+                setConfirmation(null);
+                setConfirmationCountdown(0);
+              },
+            } : null}
+            onEditMessage={handleEditMessage}
+            onResendMessage={handleResendMessage}
+          />
+        )}
+        <InputBar {...inputBarProps} placement="bottom" />
+        </>
+      ) : (
+        <>
+        {/* 会话默认页（未选中任何会话）：输入区置顶、其下常驻指挥中心内容。
+            原 MessageList 的"无会话空态"由此取代 —— 一进来就能看到"什么在等我在跑、能去哪"，
+            发出第一条消息后 currentSession 落定，本页自动切回常规聊天视图（输入区回到底部）。 */}
+        <InputBar {...inputBarProps} placement="top" />
+        <CommandCenter variant="inline" />
+        </>
       )}
-
-      <InputBar
-        session={currentSession}
-        onSend={handleSend}
-        onEnsureSession={ensureSession}
-        onStop={handleStop}
-        isGenerating={!!currentGenState}
-        streamingStatus={currentGenState?.streamingStatus ?? ''}
-        pendingInput={state.pendingInput}
-        onPendingConsumed={() => dispatch({ type: 'SET_PENDING_INPUT', content: null })}
-        securityMode={securityMode}
-        onSecurityModeChange={setSecurityMode}
-      />
       </div>
       </div>
 

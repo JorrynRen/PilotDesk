@@ -22,7 +22,6 @@ import { GroupChatPage } from './pages/GroupChatPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { subscribeGroupChat, useGroupChatStore } from './stores/groupChatStore';
 import { subscribeNotifications } from './stores/notificationEvents';
-import { useCommandCenterStore } from './stores/commandCenterStore';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
 import { TerminalProvider } from './TerminalProvider';
 import { useTerminal } from './TerminalManager';
@@ -34,7 +33,8 @@ function MainLayout() {
   // 各模式各自的右侧面板开合状态（会话/终端用 RightPanel；群聊用其页内专属右侧面板；
   // 工作流/自定义无右栏，不显示折叠按钮）
   const [sidePanelOpen, setSidePanelOpen] = useState<{ session: boolean; terminal: boolean; groupchat: boolean }>({
-    session: true,
+    // 会话右栏默认收起（把横向空间还给对话本身），需要时用顶栏按钮展开
+    session: false,
     terminal: true,
     groupchat: true,
   });
@@ -186,18 +186,9 @@ function App() {
     subscribeNotifications();
   }, []);
 
-  // 空状态 + 首次使用：自动打开指挥中心（内含使用向导），让新用户一进来就知道能做什么。
-  // guideSeen 落地在 localStorage：用户看过一次后不再自动弹出。
-  const sessionsLen = useSessionStore((s) => s.sessions.length);
-  const archivedLen = useSessionStore((s) => s.archivedSessions.length);
-  const sessionsLoading = useSessionStore((s) => s.isLoadingSessions);
-  const ccOpen = useCommandCenterStore((s) => s.open);
-  const ccGuideSeen = useCommandCenterStore((s) => s.guideSeen);
-  useEffect(() => {
-    if (ccOpen || ccGuideSeen || sessionsLoading) return;
-    if (sessionsLen > 0 || archivedLen > 0) return;
-    void useCommandCenterStore.getState().openCenter();
-  }, [ccOpen, ccGuideSeen, sessionsLoading, sessionsLen, archivedLen]);
+  // 说明：原「空状态自动弹出指挥中心」的逻辑已移除。无选中会话时，
+  // 会话默认页（MainPanel）现在内嵌了指挥中心内容（variant="inline"），
+  // 不需要再额外弹一个模态盖在它上面。顶栏入口仍可随时打开模态版。
 
   // Update window title based on current route
   useEffect(() => {

@@ -51,6 +51,12 @@ interface InputBarProps {
   /** 会话安全模式（显示在「文件」按钮右侧；None 时不渲染） */
   securityMode?: SecurityModeValue;
   onSecurityModeChange?: (v: SecurityModeValue) => void;
+  /**
+   * 摆放位置：`bottom`（默认）= 常规聊天视图，输入区固定在消息列表下方；
+   * `top` = 会话默认页（无选中会话），输入区置于页面顶部、其下才是内容，
+   * 故改由**下边框**与下方内容分隔（常规态靠留白，不加边框）。
+   */
+  placement?: 'top' | 'bottom';
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
@@ -78,7 +84,7 @@ interface PendingAttachment {
   data?: string;
 }
 
-export function InputBar({ session, onSend, onEnsureSession, onStop, isGenerating, pendingInput, onPendingConsumed, securityMode, onSecurityModeChange }: InputBarProps) {
+export function InputBar({ session, onSend, onEnsureSession, onStop, isGenerating, pendingInput, onPendingConsumed, securityMode, onSecurityModeChange, placement = 'bottom' }: InputBarProps) {
   const [input, setInput] = useState('');
   const [mode, setMode] = useState<ChatMode>('native');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -700,7 +706,11 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
   }, [session, draftChoice]);
 
   return (
-    <div className="shrink-0" ref={inputBarRef}>
+    <div
+      className="shrink-0"
+      ref={inputBarRef}
+      style={placement === 'top' ? { borderBottom: '1px solid var(--border)' } : undefined}
+    >
       {/* 等待提示条 */}
       {isGenerating && (
         <div className="flex items-center gap-2 px-4 py-1.5" style={{ backgroundColor: 'var(--bg-tertiary)' }}>

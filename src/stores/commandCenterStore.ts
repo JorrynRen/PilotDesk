@@ -9,8 +9,9 @@
  * - 进行中：`workflowStore.instances` + `groupChatStore.rooms`（含 Actor 存活探测）；
  * - 成本速览：`get_usage_attribution`（近 7 天，三维合计）。
  *
- * 刷新动作放在 store 的 `openCenter()` 里而不是组件 effect —— 组件只读状态，
- * 避免「effect 内同步 setState」的级联渲染问题。
+ * 刷新动作放在 store 的 `refreshCenter()` 里而不是组件 effect 的同步 setState ——
+ * 组件只读状态，避免「effect 内同步 setState」的级联渲染问题。
+ * `openCenter()` = 置 `open: true` + `refreshCenter()`；会话默认页内嵌的实例只用后者。
  */
 import { create } from 'zustand';
 import { getUsageAttribution, type UsageAttribution } from '../types';
@@ -60,6 +61,13 @@ interface CommandCenterState {
   loadingUsage: boolean;
   /** 打开面板并刷新全部数据源（顺带收起入口指引） */
   openCenter: () => Promise<void>;
+  /**
+   * 刷新全部数据源但**不改 `open` 状态**。
+   *
+   * 会话默认页内嵌的那个指挥中心实例是常驻的，不能调 `openCenter()`（会把模态盖上来），
+   * 「刷新」按钮与内嵌实例的挂载刷新都走这里。
+   */
+  refreshCenter: () => Promise<void>;
   /** 纯关闭（跳转类操作用：用户已经找到下一步，不需要入口指引） */
   setOpen: (open: boolean) => void;
   /** 显式关闭（X / Esc / 遮罩 / 顶栏图标）：首次关闭时给出「入口在这里」动画指引 */
@@ -69,16 +77,13 @@ interface CommandCenterState {
   markGuideSeen: () => void;
 }
 
-export const useCommandCenterStore = create<CommandCenterState>((set) => ({
-  open: false,
-  guideSeen: loadFlag(GUIDE_STORAGE_KEY),
-  entryHint: false,
-  usage: null,
-  loadingUsage: false,
-
-  openCenter: async () => {
-    // 用户自己找到了入口：指引立刻收起，别再指着图标
-    set({ open: true, entryHint: false, loadingUsage: true });
+export const useCommandCenterStore = create<CommandCenterState>((set) => {
+  /**
+   * 刷新全部数据源（不改 `open`）。模态打开与内嵌实例共用同一份实现，
+   * 避免两处各维护一遍「刷新哪些列表」。
+   */
+  const refresh = async () => {
+    set({ loadingUsage: true });
     const wf = useWorkflowStore.getState();
     const gc = useGroupChatStore.getState();
     // 三处列表都静默刷新：面板自己展示 loading，不需要各 store 的全局 loading 态
@@ -101,41 +106,55 @@ export const useCommandCenterStore = create<CommandCenterState>((set) => ({
       // 成本速览是辅助信息：取不到就展示"暂无数据"，不打断面板
       set({ loadingUsage: false });
     }
-  },
+  };
 
-  setOpen: (open) => set({ open, entryHint: false }),
+  return {
+    open: false,
+    guideSeen: loadFlag(GUIDE_STORAGE_KEY),
+    entryHint: false,
+    usage: null,
+    loadingUsage: false,
 
-  closeCenter: () => {
-    /**
-     * 显式关闭 = 用户已经知道这个面板存在，立刻标记「使用指引已看过」。
-     *
-     * 不标记就会被 App 的空状态自动打开逻辑立刻推回来：那段逻辑的条件是
-     * `!open && !guideSeen && 没有会话 && 加载完成`，而它是按 open 变化触发的 effect ——
-     * 关闭把 open 置 false，正好又满足了条件，下一帧面板原样弹回。
-     * 用户看到的就是"点关闭（X / 遮罩 / Esc / 顶栏按钮）没反应"。无会话的首次运行必现。
-     */
-    if (!loadFlag(GUIDE_STORAGE_KEY)) saveFlag(GUIDE_STORAGE_KEY);
+    openCenter: async () => {
+      // 用户自己找到了入口：指引立刻收起，别再指着图标
+      set({ open: true, entryHint: false });
+      await refresh();
+    },
 
-    // 第一次显式关闭：用一次动画指引告诉用户入口在顶栏哪一格（之后不再出现）
-    if (!loadFlag(ENTRY_HINT_STORAGE_KEY)) {
-      saveFlag(ENTRY_HINT_STORAGE_KEY);
-      set({ open: false, entryHint: true, guideSeen: true });
-      return;
-    }
-    set({ open: false, entryHint: false, guideSeen: true });
-  },
+    refreshCenter: refresh,
 
-  dismissEntryHint: () => {
-    // 兜底落一次盘：气泡被手动关掉时也算"见过的指引"，避免下次又冒出来
-    if (!loadFlag(ENTRY_HINT_STORAGE_KEY)) saveFlag(ENTRY_HINT_STORAGE_KEY);
-    set({ entryHint: false });
-  },
+    setOpen: (open) => set({ open, entryHint: false }),
 
-  markGuideSeen: () => {
-    saveFlag(GUIDE_STORAGE_KEY);
-    set({ guideSeen: true });
-  },
-}));
+    closeCenter: () => {
+      /**
+       * 显式关闭 = 用户已经知道这个面板存在，立刻标记「使用指引已看过」。
+       *
+       * 不标记的话，会话默认页（内嵌指挥中心）里那块「开始使用」引导会一直以展开态常驻，
+       * 用户每回默认页都被它顶掉半屏。标记后它收成一行常驻入口，想再看点开即可。
+       */
+      if (!loadFlag(GUIDE_STORAGE_KEY)) saveFlag(GUIDE_STORAGE_KEY);
+
+      // 第一次显式关闭：用一次动画指引告诉用户入口在顶栏哪一格（之后不再出现）
+      if (!loadFlag(ENTRY_HINT_STORAGE_KEY)) {
+        saveFlag(ENTRY_HINT_STORAGE_KEY);
+        set({ open: false, entryHint: true, guideSeen: true });
+        return;
+      }
+      set({ open: false, entryHint: false, guideSeen: true });
+    },
+
+    dismissEntryHint: () => {
+      // 兜底落一次盘：气泡被手动关掉时也算"见过的指引"，避免下次又冒出来
+      if (!loadFlag(ENTRY_HINT_STORAGE_KEY)) saveFlag(ENTRY_HINT_STORAGE_KEY);
+      set({ entryHint: false });
+    },
+
+    markGuideSeen: () => {
+      saveFlag(GUIDE_STORAGE_KEY);
+      set({ guideSeen: true });
+    },
+  };
+});
 
 /** 成本速览的统计窗口文案（与 `openCenter` 的取值保持一致）。 */
 export const COMMAND_CENTER_USAGE_DAYS = USAGE_DAYS;

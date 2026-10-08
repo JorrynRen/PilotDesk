@@ -7,7 +7,8 @@
  *
  * 数据全部来自现有 store/命令（不新增后端接口）：待处理取工作流的审批/待输入实时登记表，
  * 进行中取工作流实例与群聊房间，成本速览取近 7 天三维归因。
- * 刷新统一由 `commandCenterStore.openCenter()` 触发，本组件只读状态（不在 effect 里 setState）。
+ * 刷新统一由 `commandCenterStore.refreshCenter()` 触发（模态态另由 `openCenter()` 打开时一并调用），
+ * 本组件只读状态（不在 effect 里同步 setState）。
  */
 import { useNavigate } from 'react-router-dom';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -255,11 +256,18 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
   },
 ];
 
-export function CommandCenter() {
+/**
+ * 指挥中心的两种形态：
+ * - `modal`（默认）：App 级挂载，顶栏入口触发的居中弹层；
+ * - `inline`：嵌在会话默认页（无选中会话时）的常驻内容，去掉遮罩/居中/关闭键，滚动交给外层布局。
+ * 两态共用同一份数据读取与区块渲染，只有外壳与开合门槛不同。
+ */
+export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inline' }) {
+  const inline = variant === 'inline';
   const open = useCommandCenterStore((s) => s.open);
   const setOpen = useCommandCenterStore((s) => s.setOpen);
   const closeCenter = useCommandCenterStore((s) => s.closeCenter);
-  const openCenter = useCommandCenterStore((s) => s.openCenter);
+  const refreshCenter = useCommandCenterStore((s) => s.refreshCenter);
   const guideSeen = useCommandCenterStore((s) => s.guideSeen);
   const markGuideSeen = useCommandCenterStore((s) => s.markGuideSeen);
   const usage = useCommandCenterStore((s) => s.usage);
@@ -330,16 +338,23 @@ export function CommandCenter() {
 
   // Esc 关闭（与确认弹窗一致）。监听器只在打开期间挂载，回调里才 setState。
   // 走 closeCenter：首次关闭时给出「入口在这里」指引，避免新用户关掉后找不到入口。
+  // 内嵌态不参与 Esc：它不是弹层，按 Esc 没有"关掉"的语义。
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') closeCenter();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, closeCenter]);
+  }, [open, inline, closeCenter]);
 
-  if (!open) return null;
+  // 内嵌态挂载即拉一次数据（模态态由 openCenter 负责）。
+  // 刷新落到 store，不碰组件 state，故不触发「effect 内 setState」的级联渲染问题。
+  useEffect(() => {
+    if (inline) void refreshCenter();
+  }, [inline, refreshCenter]);
+
+  if (!open && !inline) return null;
 
   // ── 跳转：先切模式/页面，再关面板 ──
   const goSession = (sessionId?: string) => {
@@ -486,41 +501,43 @@ export function CommandCenter() {
 
   return (
     <div
-      className="fixed inset-0 z-[95] flex items-center justify-center p-6"
-      style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}
-      onClick={closeCenter}
+      className={inline ? 'flex-1 min-h-0 flex overflow-hidden' : 'fixed inset-0 z-[95] flex items-center justify-center p-6'}
+      style={inline ? undefined : { backgroundColor: 'rgba(0,0,0,0.45)' }}
+      onClick={inline ? undefined : closeCenter}
     >
       <div
-        className="rounded-xl w-full max-w-[760px] flex flex-col overflow-hidden"
-        style={{
+        className={inline ? 'flex-1 min-h-0 flex flex-col overflow-hidden' : 'rounded-xl w-full max-w-[760px] flex flex-col overflow-hidden'}
+        style={inline ? undefined : {
           backgroundColor: 'var(--bg-primary)',
           border: '1px solid var(--border)',
           maxHeight: '84vh',
           boxShadow: '0 12px 40px rgba(0,0,0,0.35)',
         }}
-        onClick={(e) => e.stopPropagation()}
+        onClick={inline ? undefined : (e) => e.stopPropagation()}
       >
-        {/* 头部 */}
+        {/* 头部（内嵌态保留：给出区块身份与刷新入口，只是没有"关闭"可言） */}
         <div className="flex items-center gap-2 px-4 h-10 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
           <LayoutDashboard size={13} style={{ color: 'var(--accent)' }} />
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>指挥中心</span>
           <div className="flex-1" />
           <button
-            onClick={() => void openCenter()}
+            onClick={() => void refreshCenter()}
             className="pd-btn p-1 rounded transition-colors"
             style={{ color: 'var(--text-secondary)' }}
             title="刷新"
           >
             {loadingUsage ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
           </button>
-          <button
-            onClick={closeCenter}
-            className="pd-btn p-1 rounded transition-colors"
-            style={{ color: 'var(--text-secondary)' }}
-            title="关闭"
-          >
-            <X size={12} />
-          </button>
+          {!inline && (
+            <button
+              onClick={closeCenter}
+              className="pd-btn p-1 rounded transition-colors"
+              style={{ color: 'var(--text-secondary)' }}
+              title="关闭"
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto pd-scroll-stable">
