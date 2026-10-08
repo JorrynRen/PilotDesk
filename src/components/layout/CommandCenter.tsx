@@ -1,7 +1,7 @@
 /**
  * CommandCenter — 全局指挥中心
  *
- * 把「什么在跑、什么在等我、这段时间花了多少」聚到一处，并给出快捷入口与最近会话。
+ * 把「什么在跑、什么在等我、这段时间花了多少」聚到一处，并给出最近会话。
  * 两种形态（见下方 variant）：会话默认页的无会话态内嵌常驻内容，以及工作流页「待处理」
  * 按钮打开的居中模态；首次使用额外显示一次性使用指引（启动台职责，不再单独做第二个入口）。
  *
@@ -21,14 +21,10 @@ import {
   MessageSquare,
   Users,
   Workflow as WorkflowIcon,
-  Terminal as TerminalIcon,
-  Sparkles,
-  Settings as SettingsIcon,
   Loader2,
   ArrowRight,
   Activity,
   BarChart3,
-  Zap,
   History,
   HelpCircle,
 } from 'lucide-react';
@@ -89,8 +85,8 @@ function fmtAgo(sec?: number): string {
 /**
  * 区块：**自包含卡片**（描边 + 圆角 + 标题带），在内容区的两列网格里各占一格。
  *
- * 与旧版（`borderTop` 通栏堆叠）的区别：改成卡片后各区块可并排 —— 内容少的区块（快捷入口、
- * 最近会话等）一行放两个，整页更矮，会话默认页内嵌时不必滚动。宽内容区块（如「待处理」
+ * 与旧版（`borderTop` 通栏堆叠）的区别：改成卡片后各区块可并排 —— 内容少的区块（最近会话、
+ * 成本速览）一行放两个，整页更矮，会话默认页内嵌时不必滚动。宽内容区块（如「待处理」「进行中」
  * 里带按钮的待办卡）用 `span` 占满整行。
  */
 function Section({
@@ -220,7 +216,7 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
     items: [
       {
         term: '灵感库',
-        desc: '收藏灵感 / 提示词（可打标签）并一键发到会话或终端；入口在右栏「灵感」页签与本面板快捷入口',
+        desc: '收藏灵感 / 提示词（可打标签）并一键发到会话或终端；入口在右栏「灵感」页签',
       },
       {
         term: '插件',
@@ -381,8 +377,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
     setOpen(false);
   };
   const goWorkflow = () => { setMode('workflow'); setOpen(false); };
-  const goTerminal = () => { setMode('terminal'); setOpen(false); };
-  const goSettings = () => { navigate('/settings'); setOpen(false); };
   // 向导的「去配置」：API 提供商列表 / CLI Agent 集成配置 / 环境检测与安装
   const goApiConfig = () => { navigate('/settings?tab=api'); setOpen(false); };
   const goAgentConfig = () => { navigate('/settings?tab=agents'); setOpen(false); };
@@ -428,7 +422,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
 
   /** 审批参数预览：单行截断（完整内容在 title 里） */
   const previewArgs = (raw: string) => (raw.length > 56 ? `${raw.slice(0, 56)}…` : raw);
-  const goInspirations = () => { navigate('/inspirations'); setOpen(false); };
 
   /** 向导第 ② 步：按已就绪的集成方式直接建一个会话并进入（API 优先，其次 CLI）。 */
   const startFirstSession = async () => {
@@ -449,7 +442,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
       setMode('session');
       setOpen(false);
     } catch {
-      // 创建失败不打断面板：用户可改用「会话」快捷入口手动新建
+      // 创建失败不打断面板：用户也可直接在会话默认页顶部的输入框开始
     } finally {
       setStarting(false);
     }
@@ -502,15 +495,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const usageRate = usageTotals.prompt + usageTotals.read + usageTotals.write > 0
     ? (usageTotals.read / (usageTotals.prompt + usageTotals.read + usageTotals.write)) * 100
     : 0;
-
-  const quickEntries: { key: string; label: string; icon: ReactNode; onClick: () => void }[] = [
-    { key: 'session', label: '会话', icon: <MessageSquare size={12} />, onClick: () => goSession() },
-    { key: 'groupchat', label: '群聊', icon: <Users size={12} />, onClick: () => { setMode('groupchat'); setOpen(false); } },
-    { key: 'workflow', label: '工作流', icon: <WorkflowIcon size={12} />, onClick: goWorkflow },
-    { key: 'terminal', label: '终端', icon: <TerminalIcon size={12} />, onClick: goTerminal },
-    { key: 'inspirations', label: '灵感库', icon: <Sparkles size={12} />, onClick: goInspirations },
-    { key: 'settings', label: '设置', icon: <SettingsIcon size={12} />, onClick: goSettings },
-  ];
 
   return (
     <div
@@ -879,8 +863,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             </div>
           </Section>
 
-          {/* 进行中 */}
-          <Section title="进行中" icon={<Activity size={11} />} count={activeInstances.length + activeRooms.length}>
+          {/* 进行中（占满整行：执行/房间行内含状态与来源，半列会挤） */}
+          <Section title="进行中" icon={<Activity size={11} />} count={activeInstances.length + activeRooms.length} span>
             {activeInstances.length === 0 && activeRooms.length === 0 && (
               <EmptyHint text="暂无进行中的工作流执行或群聊房间。" />
             )}
@@ -938,21 +922,31 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             </div>
           </Section>
 
-          {/* 快捷入口 */}
-          <Section title="快捷入口" icon={<Zap size={11} />}>
-            <div className="flex flex-wrap gap-1.5">
-              {quickEntries.map((q) => (
-                <button
-                  key={q.key}
-                  onClick={q.onClick}
-                  className="pd-btn flex items-center gap-1 px-2 py-1 rounded text-[11px]"
-                  style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
-                >
-                  {q.icon}
-                  {q.label}
-                </button>
-              ))}
-            </div>
+          {/* 最近会话（与成本速览同行：会话在左、用量在右） */}
+          <Section title="最近会话" icon={<History size={11} />}>
+            {recentSessions.length === 0 ? (
+              <EmptyHint text="暂无会话。" />
+            ) : (
+              <div className="space-y-1">
+                {recentSessions.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
+                    style={{ backgroundColor: 'var(--bg-tertiary)' }}
+                    onClick={() => goSession(s.id)}
+                    title={s.title || s.id}
+                  >
+                    <MessageSquare size={11} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
+                    <span className="text-[11px] flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>
+                      {s.title || '未命名会话'}
+                    </span>
+                    <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                      {fmtAgo(s.updatedAt)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </Section>
 
           {/* 成本速览 */}
@@ -985,33 +979,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 <div className="text-[10px] px-2.5" style={{ color: 'var(--text-tertiary)' }}>
                   仅统计经宿主发起的 API 调用；CLI Agent（终端/插件）自行计费，不计入。
                 </div>
-              </div>
-            )}
-          </Section>
-
-          {/* 最近会话 */}
-          <Section title="最近会话" icon={<History size={11} />}>
-            {recentSessions.length === 0 ? (
-              <EmptyHint text="暂无会话，可从上方「会话」入口新建。" />
-            ) : (
-              <div className="space-y-1">
-                {recentSessions.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
-                    style={{ backgroundColor: 'var(--bg-tertiary)' }}
-                    onClick={() => goSession(s.id)}
-                    title={s.title || s.id}
-                  >
-                    <MessageSquare size={11} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
-                    <span className="text-[11px] flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>
-                      {s.title || '未命名会话'}
-                    </span>
-                    <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                      {fmtAgo(s.updatedAt)}
-                    </span>
-                  </div>
-                ))}
               </div>
             )}
           </Section>
