@@ -10,10 +10,10 @@ import { useI18n } from '../../hooks/useI18n';
 import { Select, type SelectGroup } from '../common/Select';
 
 /**
- * 顶栏自定义标签最多平铺渲染的数量。
+ * 顶栏自定义标签的平铺渲染数量由用户配置（设置 → 自定义标签「顶部显示个数」，0–3，默认 3）。
  * 超出部分收进「更多」下拉，避免标签变多时顶栏分段控件被无限撑宽（P0：多了就崩）。
+ * 取值从 `useCustomTabsStore.titleBarLimit` 读取，见下方组件内。
  */
-const TITLEBAR_CUSTOM_TAB_LIMIT = 3;
 
 export type StatusHintState = 'loading' | 'ready' | 'error' | 'saving' | 'saved' | 'save-error' | 'idle';
 
@@ -99,6 +99,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   const customTabs = useCustomTabsStore((s) => s.tabs);
   const activeCustomTabId = useCustomTabsStore((s) => s.activeTabId);
   const setActiveCustomTab = useCustomTabsStore((s) => s.setActiveTab);
+  // 顶栏平铺显示个数（用户可配置，0–3）：0 时不渲染任何自定义标签段，但「更多」下拉仍保留
+  const titleBarLimit = useCustomTabsStore((s) => s.titleBarLimit);
   // 按 order 排序（防御性：store 已归一化，这里再排一次保证顶栏顺序稳定）
   const sortedCustomTabs = useMemo(
     () => [...customTabs].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
@@ -179,8 +181,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         : t('titleBar.knowledge.title', '知识库：片段 / 文件知识 / 图谱'),
     },
     { key: 'terminal', icon: <Terminal size={11} />, label: t('titleBar.terminal', '终端'), title: t('titleBar.terminal.title', '切换到终端模式') },
-    // 只平铺前 N 个自定义标签；其余收进「更多」下拉（避免顶栏被撑爆）
-    ...sortedCustomTabs.slice(0, TITLEBAR_CUSTOM_TAB_LIMIT).map((t_) => ({
+    // 只平铺前 N 个自定义标签（N 来自用户配置，可为 0）；其余收进「更多」下拉（避免顶栏被撑爆）
+    ...sortedCustomTabs.slice(0, titleBarLimit).map((t_) => ({
       key: `custom:${t_.id}`,
       tabId: t_.id,
       icon: <Globe size={11} />,
@@ -191,8 +193,9 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
       ? [{ key: 'settings', icon: <Settings size={11} />, label: t('titleBar.settings', '设置'), title: t('titleBar.settings.title', '设置页面') }]
       : []),
   ];
-  // 「更多」下拉：仅当自定义标签数量 > N 时渲染，列出全部自定义标签（本项只用单组）
-  const hasMoreCustomTabs = sortedCustomTabs.length > TITLEBAR_CUSTOM_TAB_LIMIT;
+  // 「更多」下拉：当自定义标签总数 > 配置的平铺个数时渲染（0 个平铺 + 有标签时同样成立），
+  // 列出全部自定义标签（本项只用单组）。总数 ≤ N 时不渲染，保持既有行为。
+  const hasMoreCustomTabs = sortedCustomTabs.length > titleBarLimit;
   const customTabGroups: SelectGroup[] = hasMoreCustomTabs
     ? [{
         label: t('titleBar.customTabs.group', '自定义标签'),
@@ -241,7 +244,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
 
   useEffect(() => {
     syncThumb();
-  }, [syncThumb, customTabs]);
+    // titleBarLimit 变化会改变自定义标签段的可见数量，进而移动当前段位置 → 需重算 thumb
+  }, [syncThumb, customTabs, titleBarLimit]);
 
   /**
    * 段宽会随文案变化 —— 最典型的是**切换语言**（「会话」↔「Sessions」宽度差近一倍）。

@@ -33,8 +33,8 @@ function resolveFrameSrc(url: string, isDir: boolean): string {
  * - 每个标签首次被激活时才创建 iframe，此后切换仅 display 显隐，网页状态保留；
  * - 顶栏「＋」打开「标签管理」覆盖层：管理页以 absolute 覆盖叠加在主视图之上，
  *   主树（含全部 iframe）保持挂载，关闭覆盖层不会导致内容重新加载；
- * - 「＋」右侧关闭按钮：关闭当前激活标签 = 卸载其 iframe 并从顶栏移除（配置保留）；
- *   若关闭后没有任何标签页实例，自动回退到会话路由。
+ * - 每个已打开标签右上角的关闭角标（悬停 / 聚焦该标签时显现，触屏常显）：关闭该标签 =
+ *   卸载其 iframe 并从顶栏移除（配置保留）；若关闭后没有任何标签页实例，自动回退到会话路由。
  * 「已关闭」为运行时状态，离开自定义模式即复位——下次进入恢复全部标签为打开。
  */
 export function CustomTabHost() {
@@ -105,22 +105,29 @@ export function CustomTabHost() {
     return () => { cancelled = true; };
   }, [activeUrl, dirByUrl]);
 
-  const closeActive = useCallback(() => {
-    if (!active) return;
-    const closingId = active.id;
-    // 关闭后剩余打开标签数：当前激活必在 openTabs 内
-    const remaining = openTabs.length - 1;
+  /**
+   * 关闭指定标签（顶栏「已打开标签」行的关闭角标共用此逻辑）：
+   * 卸载其 iframe 并移出顶栏，但**保留配置**（下次进入仍可重新打开）。
+   *
+   * 与旧的「关闭当前标签」语义完全一致：关闭当前激活标签时跳到下一个打开标签；
+   * 若关闭后已无任何打开标签，回退会话路由。关闭非激活标签则不打断当前视图。
+   */
+  const closeTab = useCallback((closingId: string) => {
+    if (closedSet.has(closingId)) return;
+    const nextOpen = tabs.filter((t) => t.id !== closingId && !closedSet.has(t.id));
     setClosedIds((prev) => (prev.includes(closingId) ? prev : [...prev, closingId]));
     setActivatedIds((prev) => prev.filter((id) => id !== closingId));
-    if (remaining > 0) {
-      const nextOpen = tabs.filter((t) => t.id !== closingId && !closedSet.has(t.id));
-      setActiveTab(nextOpen[0]?.id ?? null);
-    } else {
-      // 没有任何标签页实例：直接回退会话路由（关闭状态随后由离开 effect 复位）
-      setActiveTab(null);
-      setMode('session');
+    // 仅当关闭的是当前激活标签、或关闭后已无打开标签时，才需要重选激活项 / 回退会话路由
+    if (activeTabId === closingId || nextOpen.length === 0) {
+      if (nextOpen.length > 0) {
+        setActiveTab(nextOpen[0].id);
+      } else {
+        // 没有任何标签页实例：直接回退会话路由（关闭状态随后由离开 effect 复位）
+        setActiveTab(null);
+        setMode('session');
+      }
     }
-  }, [active, tabs, openTabs, closedSet, setActiveTab, setMode]);
+  }, [tabs, closedSet, activeTabId, setActiveTab, setMode]);
 
   // 已激活且未关闭、src 就绪的标签 → 渲染为常驻 iframe。
   // 网络地址无需目录判定；本地路径等 dirByUrl 结果返回后再挂载，避免 src 切换触发二次加载。
@@ -193,19 +200,31 @@ export function CustomTabHost() {
         {openTabs.map((t) => {
           const isActive = t.id === activeTabId;
           return (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs shrink-0 transition-colors"
-              style={{
-                backgroundColor: isActive ? 'var(--accent)' : 'transparent',
-                color: isActive ? '#fff' : 'var(--text-secondary)',
-              }}
-              title={t.url}
-            >
-              <Globe size={11} />
-              {t.label}
-            </button>
+            <div key={t.id} className="pd-tab-chip relative shrink-0">
+              <button
+                onClick={() => setActiveTab(t.id)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors"
+                style={{
+                  backgroundColor: isActive ? 'var(--accent)' : 'transparent',
+                  color: isActive ? '#fff' : 'var(--text-secondary)',
+                }}
+                title={t.url}
+              >
+                <Globe size={11} />
+                {t.label}
+              </button>
+              {/* 关闭角标：默认隐藏，悬停 / 聚焦该标签时显现（触屏常显）。
+                  仅关闭本标签（stopPropagation 阻止冒泡到标签的切换点击）。 */}
+              <button
+                type="button"
+                aria-label={`关闭标签 ${t.label}`}
+                title="关闭标签"
+                onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
+                className="pd-tab-chip-x"
+              >
+                <X size={9} />
+              </button>
+            </div>
           );
         })}
         {openTabs.length === 0 && (
@@ -222,17 +241,6 @@ export function CustomTabHost() {
           title="管理自定义标签"
         >
           <Plus size={14} />
-        </button>
-
-        {/* 关闭按钮（「＋」右侧）：关闭当前激活标签，仅卸载 iframe，配置保留 */}
-        <button
-          onClick={closeActive}
-          disabled={!active}
-          className="flex items-center px-1.5 py-1 rounded-md text-xs shrink-0 transition-colors disabled:opacity-30"
-          style={{ color: 'var(--text-secondary)' }}
-          title={active ? `关闭「${active.label}」（仅卸载，可重新打开）` : '没有可关闭的标签'}
-        >
-          <X size={13} />
         </button>
       </div>
 

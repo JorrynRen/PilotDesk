@@ -12,6 +12,28 @@ export interface CustomTab {
 
 /** 存于 app_settings 的 key（复用现有 KV 表，不新增表/外部文件） */
 const STORAGE_KEY = 'custom_tabs';
+/** 顶栏「平铺显示个数」的独立 KV key（与标签列表分开存，互不影响） */
+const TITLEBAR_LIMIT_KEY = 'custom_tabs_titlebar_limit';
+
+/* ───────────────────────── 顶栏平铺显示个数 ───────────────────────── */
+/** 默认值：顶栏最多平铺 3 个自定义标签 */
+export const DEFAULT_TITLEBAR_LIMIT = 3;
+/** 可选范围下界（0 = 不在顶栏平铺，仅从「更多」进入） */
+export const TITLEBAR_LIMIT_MIN = 0;
+/** 可选范围上界（最多 3 个） */
+export const TITLEBAR_LIMIT_MAX = 3;
+
+/**
+ * 顶栏平铺显示个数容错：非数字 / 非整数 / 越界 → 一律回落默认值 3。
+ * 用于加载持久化值时的兜底，避免脏数据（手工改 KV、旧版本写入）把顶栏撑坏。
+ */
+export function normalizeTitleBarLimit(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return DEFAULT_TITLEBAR_LIMIT;
+  const i = Math.trunc(n);
+  if (i < TITLEBAR_LIMIT_MIN || i > TITLEBAR_LIMIT_MAX) return DEFAULT_TITLEBAR_LIMIT;
+  return i;
+}
 
 /* ───────────────────────── 录入约束（单一事实来源） ─────────────────────────
  * 设置页提交与 store 写入**双层**都调用 validateCustomTabInput，以 store 为准：
@@ -101,6 +123,8 @@ export function validateCustomTabInput(
 interface CustomTabsState {
   tabs: CustomTab[];
   activeTabId: string | null;
+  /** 顶栏平铺显示的自定义标签个数（0–3），持久化在独立 KV key */
+  titleBarLimit: number;
   loaded: boolean;
   load: () => Promise<void>;
   addTab: (label: string, url: string) => Promise<CustomTabMutationResult>;
@@ -108,6 +132,8 @@ interface CustomTabsState {
   removeTab: (id: string) => Promise<void>;
   reorderTabs: (from: number, to: number) => Promise<void>;
   setActiveTab: (id: string | null) => void;
+  /** 设置顶栏平铺显示个数（自动夹取到 0–3 并落库） */
+  setTitleBarLimit: (limit: number) => Promise<void>;
 }
 
 function generateId(): string {
@@ -125,6 +151,15 @@ async function persist(tabs: CustomTab[]): Promise<void> {
   }
 }
 
+/** 持久化顶栏平铺显示个数（独立 KV key，纯数字字符串） */
+async function persistTitleBarLimit(limit: number): Promise<void> {
+  try {
+    await invoke('set_app_setting', { key: TITLEBAR_LIMIT_KEY, value: String(limit) });
+  } catch (e) {
+    console.warn('[CustomTabs] 保存顶栏显示个数失败:', e);
+  }
+}
+
 /** 依据 order 排序并重写为连续序号 0..n-1 */
 function normalize(tabs: CustomTab[]): CustomTab[] {
   return tabs
@@ -136,6 +171,7 @@ function normalize(tabs: CustomTab[]): CustomTab[] {
 export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  titleBarLimit: DEFAULT_TITLEBAR_LIMIT,
   loaded: false,
 
   load: async () => {
@@ -154,12 +190,19 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
                 order: typeof t.order === 'number' ? t.order : -1,
               }))
           );
-          set({ tabs, loaded: true });
-          return;
+          set({ tabs });
         }
       }
     } catch (e) {
       console.warn('[CustomTabs] 读取失败:', e);
+    }
+    // 顶栏显示个数：独立 KV 读取，读不到 / 脏数据一律回落默认 3
+    try {
+      const rawLimit = await invoke<string | null>('get_app_setting', { key: TITLEBAR_LIMIT_KEY });
+      set({ titleBarLimit: normalizeTitleBarLimit(rawLimit) });
+    } catch (e) {
+      console.warn('[CustomTabs] 读取顶栏显示个数失败:', e);
+      set({ titleBarLimit: DEFAULT_TITLEBAR_LIMIT });
     }
     set({ loaded: true });
   },
@@ -215,4 +258,11 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
   },
 
   setActiveTab: (id) => set({ activeTabId: id }),
+
+  setTitleBarLimit: async (limit) => {
+    // 防御非法入参：夹取到 0–3 后落库（UI 只会给合法值，这里兜底）
+    const clamped = Math.min(TITLEBAR_LIMIT_MAX, Math.max(TITLEBAR_LIMIT_MIN, Math.trunc(limit)));
+    set({ titleBarLimit: clamped });
+    await persistTitleBarLimit(clamped);
+  },
 }));

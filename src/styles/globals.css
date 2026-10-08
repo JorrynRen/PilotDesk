@@ -669,6 +669,47 @@ button:disabled:hover {
   background-color: var(--status-danger);
 }
 
+/* ═══════════════════════════════════════════════════
+   已打开标签行 — 标签 chip 的关闭角标
+   ═══════════════════════════════════════════════════
+   角标默认隐藏，鼠标悬停 / 键盘聚焦该标签时才显现（:focus-within 同时覆盖
+   "Tab 到标签本身"与"Tab 到角标"两种情况）；触屏等无 hover 设备上常显。
+   隐藏时 pointer-events:none —— 避免点到"看不见的角标"而误关标签。 */
+.pd-tab-chip-x {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background-color: var(--bg-primary);
+  color: var(--text-secondary);
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+}
+.pd-tab-chip:hover .pd-tab-chip-x,
+.pd-tab-chip:focus-within .pd-tab-chip-x {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pd-tab-chip-x:hover {
+  background-color: var(--status-danger);
+  color: #fff;
+}
+@media (hover: none) {
+  .pd-tab-chip-x {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 /* 输入区右下的唯一主操作（发送 / 停止）：28px 圆形 */
 .pd-composer-send {
   flex-shrink: 0;

@@ -17,7 +17,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useCustomTabsStore, validateCustomTabInput, type CustomTab } from '../../stores/customTabsStore';
+import { useCustomTabsStore, validateCustomTabInput, TITLEBAR_LIMIT_MIN, TITLEBAR_LIMIT_MAX, type CustomTab } from '../../stores/customTabsStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 
@@ -158,7 +158,14 @@ function SortableTabRow({
  * CRUD + 拖动排序，数据持久化到 app_settings（复用现有 KV 表）。
  */
 export function CustomTabsSettings() {
-  const { tabs, addTab, updateTab, removeTab, reorderTabs } = useCustomTabsStore();
+  const { tabs, addTab, updateTab, removeTab, reorderTabs, titleBarLimit, setTitleBarLimit } = useCustomTabsStore();
+
+  // 顶栏平铺显示个数（0–3）：拖动 / 键盘调整时只更新本地态，松手（或失焦）后才落库，
+  // 避免拖动过程中每次 onChange 都写库。
+  const [limitDraft, setLimitDraft] = useState(titleBarLimit);
+  const commitLimit = useCallback(() => {
+    if (limitDraft !== titleBarLimit) void setTitleBarLimit(limitDraft);
+  }, [limitDraft, titleBarLimit, setTitleBarLimit]);
 
   // 新增表单
   const [label, setLabel] = useState('');
@@ -242,6 +249,36 @@ export function CustomTabsSettings() {
           提示：部分站点通过 X-Frame-Options / CSP 禁止被内嵌，此类页面可能无法在标签中显示。
           <br />
           按住左侧手柄可拖动排序，顺序会持久化保存。
+        </p>
+      </div>
+
+      {/* 顶栏平铺显示个数：设置组合开关里平铺几个自定义标签，其余收进「更多」下拉 */}
+      <div
+        className="mb-4 p-3 rounded-xl"
+        style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <label htmlFor="custom-tabs-titlebar-limit" className="text-xs" style={{ color: 'var(--text-primary)' }}>
+            顶部显示个数
+          </label>
+          <span className="text-xs font-medium tabular-nums" style={{ color: 'var(--accent)' }}>{limitDraft}</span>
+        </div>
+        <input
+          id="custom-tabs-titlebar-limit"
+          type="range"
+          min={TITLEBAR_LIMIT_MIN}
+          max={TITLEBAR_LIMIT_MAX}
+          step={1}
+          value={limitDraft}
+          onChange={(e) => setLimitDraft(Number(e.target.value))}
+          onMouseUp={commitLimit}
+          onTouchEnd={commitLimit}
+          onBlur={commitLimit}
+          className="w-full mt-2"
+          style={{ accentColor: 'var(--accent)' }}
+        />
+        <p className="mt-1.5 text-[11px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+          0 表示不在顶栏显示自定义标签（仍可从「更多」进入）；最多 3 个。
         </p>
       </div>
 
