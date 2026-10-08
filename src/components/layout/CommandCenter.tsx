@@ -1,7 +1,7 @@
 /**
  * CommandCenter — 全局指挥中心
  *
- * 把「什么在跑、什么在等我、这段时间花了多少」聚到一处，并给出最近会话。
+ * 把「什么在跑、什么在等我、这段时间花了多少」聚到一处。
  * 两种形态（见下方 variant）：会话默认页的无会话态内嵌常驻内容，以及工作流页「待处理」
  * 按钮打开的居中模态；首次使用额外显示一次性使用指引（启动台职责，不再单独做第二个入口）。
  *
@@ -18,14 +18,12 @@ import {
   RefreshCw,
   ShieldAlert,
   AlertTriangle,
-  MessageSquare,
   Users,
   Workflow as WorkflowIcon,
   Loader2,
   ArrowRight,
   Activity,
   BarChart3,
-  History,
   HelpCircle,
 } from 'lucide-react';
 import { useTerminal } from '../../TerminalManager';
@@ -38,7 +36,6 @@ import { useCommandCenterStore, COMMAND_CENTER_USAGE_DAYS } from '../../stores/c
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { useEnvInfo } from '../../hooks/useEnvInfo';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
-import { isWorkflowSession } from '../../utils/sessionType';
 
 /** 进行中状态（工作流实例 / 群聊房间）：终态不进「进行中」。 */
 const ACTIVE_INSTANCE_STATUS = ['pending', 'running', 'paused'];
@@ -64,7 +61,6 @@ const DIMENSION_LABEL: Record<string, string> = {
 };
 
 const MAX_ACTIVE_ROWS = 5;
-const MAX_RECENT_SESSIONS = 5;
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}m`;
@@ -83,11 +79,10 @@ function fmtAgo(sec?: number): string {
 }
 
 /**
- * 区块：**自包含卡片**（描边 + 圆角 + 标题带），在内容区的两列网格里各占一格。
+ * 区块：**自包含卡片**（描边 + 圆角 + 标题带），在内容区的网格里各占一格。
  *
- * 与旧版（`borderTop` 通栏堆叠）的区别：改成卡片后各区块可并排 —— 内容少的区块（最近会话、
- * 成本速览）一行放两个，整页更矮，会话默认页内嵌时不必滚动。宽内容区块（如「待处理」「进行中」
- * 里带按钮的待办卡）用 `span` 占满整行。
+ * 网格列数按容器宽度自适应（最多两列），相邻两个区块是否并排由格子数决定；
+ * 目前各块都用 `span` 占满整行（内容都偏宽），需要并排时去掉 `span` 即可。
  */
 function Section({
   title,
@@ -285,7 +280,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const { setMode } = useTerminal();
   const navigate = useNavigate();
 
-  const sessions = useSessionStore((s) => s.sessions);
   const instances = useWorkflowStore((s) => s.instances);
   const pendingInputs = useWorkflowStore((s) => s.pendingInputs);
   const pendingApprovals = useWorkflowStore((s) => s.pendingApprovals);
@@ -366,11 +360,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   if (!open && !inline) return null;
 
   // ── 跳转：先切模式/页面，再关面板 ──
-  const goSession = (sessionId?: string) => {
-    if (sessionId) void useSessionStore.getState().selectSession(sessionId);
-    setMode('session');
-    setOpen(false);
-  };
   const goRoom = (roomId: string) => {
     void useGroupChatStore.getState().selectRoom(roomId);
     setMode('groupchat');
@@ -473,13 +462,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   // ── 进行中 ──
   const activeInstances = instances.filter((i) => ACTIVE_INSTANCE_STATUS.includes(i.status));
   const activeRooms = rooms.filter((r) => ACTIVE_ROOM_STATUS.includes(r.status));
-
-  // ── 最近会话（排除工作流节点自动创建的内部会话）──
-  const recentSessions = sessions
-    .filter((s) => !isWorkflowSession(s.origin))
-    .slice()
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-    .slice(0, MAX_RECENT_SESSIONS);
 
   const dimensions = usage?.dimensions ?? [];
   const usageTotals = dimensions.reduce(
@@ -929,35 +911,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             </div>
           </Section>
 
-          {/* 最近会话（与成本速览同行：会话在左、用量在右） */}
-          <Section title="最近会话" icon={<History size={11} />}>
-            {recentSessions.length === 0 ? (
-              <EmptyHint text="暂无会话。" />
-            ) : (
-              <div className="space-y-1">
-                {recentSessions.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
-                    style={{ backgroundColor: 'var(--bg-tertiary)' }}
-                    onClick={() => goSession(s.id)}
-                    title={s.title || s.id}
-                  >
-                    <MessageSquare size={11} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
-                    <span className="text-[11px] flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>
-                      {s.title || '未命名会话'}
-                    </span>
-                    <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                      {fmtAgo(s.updatedAt)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Section>
-
-          {/* 成本速览 */}
-          <Section title={`成本速览（近 ${COMMAND_CENTER_USAGE_DAYS} 天）`} icon={<BarChart3 size={11} />}>
+          {/* 成本速览（占满整行：它是本页最后一块，半列右侧会空出一块） */}
+          <Section title={`成本速览（近 ${COMMAND_CENTER_USAGE_DAYS} 天）`} icon={<BarChart3 size={11} />} span>
             {dimensions.length === 0 ? (
               <EmptyHint text={loadingUsage ? '加载中…' : '暂无用量数据。'} />
             ) : (
