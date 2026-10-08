@@ -541,11 +541,18 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             且最多两列（`calc(50% - gap/2)` 保证两列恰好占满，不会出现第三列）。
             用容器宽度而不是窗口宽度：内嵌在会话默认页时容器比窗口窄得多，
             按窗口断点会硬塞两列，半列放不下区块内容就会看起来互相压叠。
-            行高一律由内容撑开（`alignContent/alignItems: start`），没有固定定位。 */}
+
+            `gridAutoRows: max-content` 是必须的，不是美化：本容器高度被 flex 定死，内容总是高于它，
+            容器内**没有剩余空间**；而 `auto` 行的基准尺寸取「项目的最小贡献」，卡片带 `overflow:hidden`
+            时该值为 0（只剩 1px 上下边框）→ 行轨道被压成 2px，卡片溢出自己的行、被后来的行压住
+            （即"板块重叠"）。`max-content` 让行的基准尺寸直接取内容高，不再依赖有无剩余空间；
+            超出容器的部分交给 `overflow-y-auto` 滚动。 */}
         <div
           className="flex-1 min-h-0 overflow-y-auto pd-scroll-stable p-3 grid gap-3"
           style={{
-            gridTemplateColumns: 'repeat(auto-fit, minmax(max(320px, calc(50% - 6px)), 1fr))',
+            // min(…, 100%) 兜底：容器窄到不足 320px 时列宽跟着收，别让卡片横向溢出被裁掉
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(max(320px, calc(50% - 6px)), 100%), 1fr))',
+            gridAutoRows: 'max-content',
             alignContent: 'start',
             alignItems: 'start',
           }}
