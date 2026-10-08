@@ -574,23 +574,22 @@ function SortableProviderCard({
   return (
     <div
       ref={setNodeRef}
-      style={style}
+      style={{
+        ...style,
+        // 与设置页其它配置卡片（MCP / 插件管理等）统一：rounded-lg + 1px 描边 + bg-secondary；
+        // 卡片底色必须留在 bg-secondary——卡片内的输入控件用的是 bg-tertiary，改底色会糊在一起
+        border: isEditing ? '1px solid var(--accent)' : '1px solid var(--border)',
+        backgroundColor: 'var(--bg-secondary)',
+      }}
       className="rounded-lg overflow-hidden"
       data-provider-id={p.id}
     >
-      <div
-        className="flex"
-        style={{
-          border: isEditing ? '1px solid var(--accent)' : '1px solid var(--border)',
-          backgroundColor: 'var(--bg-secondary)',
-          borderRadius: '0.5rem',
-        }}
-      >
+      <div className="flex">
         {/* Card content */}
         <div className="flex-1 min-w-0">
           {/* Card header */}
           <div
-            className="flex items-center justify-between px-3 py-2"
+            className="flex items-center justify-between px-3 py-2.5"
             style={{ borderBottom: '1px solid var(--border)' }}
           >
             <div className="flex items-center gap-2">
@@ -721,7 +720,7 @@ function SortableProviderCard({
           )}
 
           {/* Card body */}
-          <div className="px-3 py-2 space-y-2">
+          <div className="px-3 py-2.5 space-y-2">
             {/* API Endpoint */}
             <div>
               <label className="text-[10px] " style={{ color: 'var(--text-tertiary)' }}>
@@ -928,6 +927,15 @@ interface ReportOrgCredentialResult {
   modelsCount: number;
 }
 
+/**
+ * 当前用户是否为该组织的 owner/admin（可上报共享凭据）。
+ * 后端上报接口仅 owner/admin 可用，前端据此门控入口；role 来自 `org_list_mine`。
+ */
+function isOrgOwnerOrAdmin(org: OrgCredOrg): boolean {
+  const role = (org.role ?? '').trim().toLowerCase();
+  return role === 'owner' || role === 'admin';
+}
+
 function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
   const { t } = useI18n();
   const { providers, loading, fetchProviders, saveProvider, deleteProvider, reorderProviders } = useApiProviderStore();
@@ -938,6 +946,10 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
   const [testResults, setTestResults] = useState<Map<string, TestResult>>(new Map());
   const abortRef = useRef<Map<string, AbortController>>(new Map());
   const account = useAccountStore((s) => s.account);
+  // 我所属组织：预取一次，用于「上报到组织」入口的角色门控（仅 owner/admin 可见）
+  const [myOrgs, setMyOrgs] = useState<OrgCredOrg[] | null>(null);
+  // 至少在一个组织里是 owner/admin 才显示上报入口（未登录 → false）；失败按无权限处理（fail-closed）
+  const canReportToOrg = Boolean(account) && (myOrgs ?? []).some(isOrgOwnerOrAdmin);
   // 「从组织获取凭据」弹窗状态
   const [showOrgCred, setShowOrgCred] = useState(false);
   const [orgCredOrgs, setOrgCredOrgs] = useState<OrgCredOrg[] | null>(null);
@@ -970,6 +982,17 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
       .catch(() => {});
     // store 的 action 引用恒定（zustand 只创建一次），补进依赖后本 effect 仍等价于「挂载时跑一次」
   }, [fetchProviders]);
+
+  // 预取「我所属组织」用于上报入口的角色门控：登录后拉取，登录态变化时重拉。
+  // 未登录直接返回（不在此同步 setState）；拉取失败按无权限处理（fail-closed）。
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+    invoke<OrgCredOrg[]>('org_list_mine')
+      .then((orgs) => { if (!cancelled) setMyOrgs(orgs); })
+      .catch(() => { if (!cancelled) setMyOrgs([]); });
+    return () => { cancelled = true; };
+  }, [account]);
 
   // DnD sensors — use pointer sensor for drag, keyboard for accessibility
   const sensors = useSensors(
@@ -1087,12 +1110,15 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
     setOrgReportError('');
     try {
       const orgs = await invoke<OrgCredOrg[]>('org_list_mine');
-      setOrgReportOrgs(orgs);
-      if (orgs.length === 0) {
-        showToast('你还没有加入任何组织', 'warning');
+      // 只保留当前用户为 owner/admin 的组织，与入口门控一致（后端仍会二次校验并兜底 403）
+      const reportable = orgs.filter(isOrgOwnerOrAdmin);
+      setOrgReportOrgs(reportable);
+      if (reportable.length === 0) {
+        showToast('仅组织所有者 / 管理员可上报共享凭据', 'warning');
+        setShowOrgReport(false);
         return;
       }
-      setOrgReportOrgId(String(orgs[0].id));
+      setOrgReportOrgId(String(reportable[0].id));
     } catch (err) {
       setOrgReportError(errorMessage(err));
     }
@@ -1114,7 +1140,8 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
         `Provider：${p.name}\n` +
         `密钥：${p.apiKeyMasked || '（未配置）'}\n` +
         `模型清单：${p.models.length} 个（其中 ${noteCount} 条含备注）\n\n` +
-        `组织成员应用后将获得该密钥、模型清单与备注。`,
+        `组织成员应用后将获得该密钥、模型清单与备注。\n` +
+        `密钥在平台侧加密存储，其他成员无法看到明文；成员在客户端应用后仅在本机使用。`,
       confirmText: '上报',
     });
     if (!ok) return;
@@ -1360,9 +1387,10 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
 
       {apiTab === 'providers' && (
         <>
-      {/* Header with add button */}
-      <div className="flex items-center justify-between">
-        <div>
+      {/* Header：说明占一行（flex-1 min-w-0）+ 按钮组不被挤压（shrink-0）；
+          窄宽度下按钮组整体换行到下一行，每个按钮内部不换行（whitespace-nowrap） */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex-1 min-w-0">
           <h3 className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
             提供商配置
           </h3>
@@ -1370,10 +1398,10 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
             拖拽左侧手柄调整排序 · 配置完成后可在新建会话时选择 API 直连模式
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2 flex-wrap shrink-0">
           <button
             onClick={() => void handleOpenOrgCred()}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors"
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors whitespace-nowrap"
             style={{
               border: '1px solid var(--border)',
               background: 'var(--bg-tertiary)',
@@ -1383,21 +1411,24 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
             <Building2 size={12} />
             从组织获取凭据
           </button>
-          <button
-            onClick={() => void handleOpenOrgReport()}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors"
-            style={{
-              border: '1px solid var(--border)',
-              background: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            <Upload size={12} />
-            上报到组织
-          </button>
+          {/* 「上报到组织」入口按组织角色门控：仅 owner/admin 可见（后端仍会对非管理员返回 403 兜底） */}
+          {canReportToOrg && (
+            <button
+              onClick={() => void handleOpenOrgReport()}
+              className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors whitespace-nowrap"
+              style={{
+                border: '1px solid var(--border)',
+                background: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <Upload size={12} />
+              上报到组织
+            </button>
+          )}
           <button
             onClick={handleAddProvider}
-            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs  transition-colors"
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors whitespace-nowrap"
             style={{
               backgroundColor: 'var(--accent)',
               color: '#fff',
@@ -1486,6 +1517,9 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
                   {orgCredOrgs === null ? '正在获取组织列表…' : '你还没有加入任何组织'}
                 </div>
               )}
+              <p className="text-[10px] mt-2 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                密钥在平台侧加密存储，其他成员无法看到明文；应用到客户端后仅在本机使用。
+              </p>
             </div>
             <div className="flex-1 overflow-y-auto px-4 py-2">
               {orgCredItemsLoading ? (
@@ -1580,7 +1614,7 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
                   />
                 ) : (
                   <div className="text-xs py-2 text-center" style={{ color: 'var(--text-tertiary)' }}>
-                    {orgReportOrgs === null ? '正在获取组织列表…' : '你还没有加入任何组织'}
+                    {orgReportOrgs === null ? '正在获取组织列表…' : '你所在的组织中暂无可上报的组织（需为所有者 / 管理员）'}
                   </div>
                 )}
               </div>
@@ -1605,7 +1639,8 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
                 )}
               </div>
               <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-                上报内容含密钥、模型清单与备注；组织成员应用后即可使用。仅组织 owner/admin 可上报。
+                上报内容含密钥、模型清单与备注；仅组织 owner/admin 可上报。
+                密钥在平台侧加密存储，其他成员无法看到明文；成员在客户端应用后仅在本机使用。
               </p>
               {orgReportError && (
                 <div className="text-xs px-2 py-1.5 rounded" style={{ backgroundColor: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>
