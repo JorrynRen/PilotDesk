@@ -109,7 +109,7 @@ function Section({
 }) {
   return (
     <div
-      className="rounded-lg overflow-hidden flex flex-col"
+      className="min-w-0 overflow-hidden rounded-lg flex flex-col"
       style={{
         backgroundColor: 'var(--bg-primary)',
         border: '1px solid var(--border)',
@@ -171,7 +171,7 @@ function WizardRow({
         {ready ? '已就绪' : '未配置'}
       </span>
       <span className="shrink-0 text-[11px]" style={{ color: 'var(--text-primary)' }}>{label}</span>
-      <span className="flex-1 truncate text-[10px]" style={{ color: 'var(--text-tertiary)' }} title={hint}>
+      <span className="flex-1 min-w-0 truncate text-[10px]" style={{ color: 'var(--text-tertiary)' }} title={hint}>
         {hint}
       </span>
       <span className="shrink-0 flex items-center gap-1.5">
@@ -553,18 +553,25 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
           )}
         </div>
 
-        {/* 内容区：两列网格（窄窗口自动回落单列）。区块做成卡片后内容少的可并排，
-            整个面板更矮，内嵌在会话默认页时通常不需要滚动。 */}
+        {/* 内容区：按**容器自身宽度**决定列数 —— 一列最小 320px，够宽就自动并成两列，
+            且最多两列（`calc(50% - gap/2)` 保证两列恰好占满，不会出现第三列）。
+            用容器宽度而不是窗口宽度：内嵌在会话默认页时容器比窗口窄得多，
+            按窗口断点会硬塞两列，半列放不下区块内容就会看起来互相压叠。
+            行高一律由内容撑开（`alignContent/alignItems: start`），没有固定定位。 */}
         <div
-          className="flex-1 min-h-0 overflow-y-auto pd-scroll-stable p-3 grid gap-3 grid-cols-1 md:grid-cols-2"
-          style={{ alignItems: 'start', alignContent: 'start' }}
+          className="flex-1 min-h-0 overflow-y-auto pd-scroll-stable p-3 grid gap-3"
+          style={{
+            gridTemplateColumns: 'repeat(auto-fit, minmax(max(320px, calc(50% - 6px)), 1fr))',
+            alignContent: 'start',
+            alignItems: 'start',
+          }}
         >
           {/* 使用指引 + 使用向导（启动台职责）
               层级：指引块（主色底）→ 卡片 → 卡内「步骤 / 术语胶囊 + 说明」
               未配置 Agent 时向导常驻，配置完成后整块收起成一行常驻入口（见下方 else 分支） */}
           {showGuide ? (
             <div
-              className="rounded-lg px-3 py-2.5 space-y-2 md:col-span-2"
+              className="col-span-full min-w-0 overflow-hidden rounded-lg px-3 py-2.5 space-y-2"
               style={{ backgroundColor: 'var(--accent-light)', border: '1px solid var(--border)' }}
             >
               <div className="flex items-center justify-between">
@@ -660,9 +667,12 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
 
               {/* 功能说明：首次展示，以及用户主动展开引导时一并展示
                   （未配置 Agent 的常驻态只留「使用向导」，避免这一大片长期占屏）；
-                  两个分组左右并排（窄窗口回落单列），半屏高度就能读完，避免默认页被顶出滚动条 */}
+                  左栏（五种工作模式）条目更短，按 2:3 分栏给它更窄的一列，右栏拿到更多行宽 */}
               {guideShowFull && (
-                <div className="grid gap-2 grid-cols-1 md:grid-cols-2">
+                <div
+                  className="grid gap-2"
+                  style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)' }}
+                >
                   {GUIDE_GROUPS.map((group) => (
                     <div
                       key={group.title}
@@ -720,7 +730,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                否则「看过一次」等于永久消失，想再对照步骤只能清 localStorage */
             <button
               onClick={() => setGuideForcedOpen(true)}
-              className="md:col-span-2 w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-opacity hover:opacity-90"
+              className="col-span-full min-w-0 w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-opacity hover:opacity-90"
               style={{ backgroundColor: 'var(--accent-light)', border: '1px solid var(--border)' }}
               title="展开使用引导：配置 Agent 与各功能说明"
             >
@@ -928,40 +938,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             </div>
           </Section>
 
-          {/* 成本速览 */}
-          <Section title={`成本速览（近 ${COMMAND_CENTER_USAGE_DAYS} 天）`} icon={<BarChart3 size={11} />}>
-            {dimensions.length === 0 ? (
-              <EmptyHint text={loadingUsage ? '加载中…' : '暂无用量数据。'} />
-            ) : (
-              <div className="space-y-1.5">
-                {dimensions.map((d) => (
-                  <div key={d.key} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-                    <span className="text-[11px] flex-1" style={{ color: 'var(--text-primary)' }}>
-                      {DIMENSION_LABEL[d.key] ?? d.key}
-                    </span>
-                    <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                      {fmtTokens(d.totals.totalTokens)} token
-                    </span>
-                    <span className="text-[10px] w-14 text-right" style={{ color: 'var(--text-tertiary)' }}>
-                      命中 {d.totals.cacheHitRate.toFixed(1)}%
-                    </span>
-                  </div>
-                ))}
-                <div className="flex items-center justify-between px-2.5 pt-1">
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    合计 {fmtTokens(usageTotals.total)} token · 命中 {usageRate.toFixed(1)}%
-                  </span>
-                  <button onClick={goUsageStats} className="text-[10px]" style={{ color: 'var(--accent)' }}>
-                    查看完整用量 ›
-                  </button>
-                </div>
-                <div className="text-[10px] px-2.5" style={{ color: 'var(--text-tertiary)' }}>
-                  仅统计经宿主发起的 API 调用；CLI Agent（终端/插件）自行计费，不计入。
-                </div>
-              </div>
-            )}
-          </Section>
-
           {/* 快捷入口 */}
           <Section title="快捷入口" icon={<Zap size={11} />}>
             <div className="flex flex-wrap gap-1.5">
@@ -979,6 +955,40 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             </div>
           </Section>
 
+          {/* 成本速览 */}
+          <Section title={`成本速览（近 ${COMMAND_CENTER_USAGE_DAYS} 天）`} icon={<BarChart3 size={11} />}>
+            {dimensions.length === 0 ? (
+              <EmptyHint text={loadingUsage ? '加载中…' : '暂无用量数据。'} />
+            ) : (
+              <div className="space-y-1.5">
+                {dimensions.map((d) => (
+                  <div key={d.key} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                    <span className="text-[11px] flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>
+                      {DIMENSION_LABEL[d.key] ?? d.key}
+                    </span>
+                    <span className="text-[10px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
+                      {fmtTokens(d.totals.totalTokens)} token
+                    </span>
+                    <span className="text-[10px] shrink-0 w-14 text-right" style={{ color: 'var(--text-tertiary)' }}>
+                      命中 {d.totals.cacheHitRate.toFixed(1)}%
+                    </span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between gap-2 px-2.5 pt-1">
+                  <span className="text-[10px] min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                    合计 {fmtTokens(usageTotals.total)} token · 命中 {usageRate.toFixed(1)}%
+                  </span>
+                  <button onClick={goUsageStats} className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
+                    查看完整用量 ›
+                  </button>
+                </div>
+                <div className="text-[10px] px-2.5" style={{ color: 'var(--text-tertiary)' }}>
+                  仅统计经宿主发起的 API 调用；CLI Agent（终端/插件）自行计费，不计入。
+                </div>
+              </div>
+            )}
+          </Section>
+
           {/* 最近会话 */}
           <Section title="最近会话" icon={<History size={11} />}>
             {recentSessions.length === 0 ? (
@@ -994,7 +1004,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                     title={s.title || s.id}
                   >
                     <MessageSquare size={11} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
-                    <span className="text-[11px] flex-1 truncate" style={{ color: 'var(--text-primary)' }}>
+                    <span className="text-[11px] flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>
                       {s.title || '未命名会话'}
                     </span>
                     <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
