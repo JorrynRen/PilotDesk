@@ -324,6 +324,78 @@
   --shadow-lg: 0 14px 32px rgba(0, 0, 0, 0.52);
 }
 
+/* ═══════════════════════════════════════════════════
+   薄荷 Mint — 第 6 个主题模式（浅色系 · 多色系 · 内嵌）
+   ═══════════════════════════════════════════════════
+   方向与 dark / nightfall / celadon 相反：那几套是"深底 + 浅面板"（面板**浮起**），
+   这套是"**亮板面 + 逐级加深的内嵌层**"——板面最亮，往里每一层都比外面深一格，
+   于是各块看起来是**嵌进**板面的（靠色阶分层，不靠阴影）。
+   色相也是多色的，但全部压在近白/低彩度，只让强调色一笔出彩：
+     · 板面    = 青白（最亮，桌板）
+     · 内容区  = 天青（冷蓝，比板面深一格）
+     · 左右栏  = 薄荷（冷绿，比板面深一格半，与内容区靠色相区分）
+     · 卡片    = 内容区再深一档（--bg-raised = secondary）
+     · 控件    = 再深一档（--bg-field = tertiary）
+     · 强调色  = 紫罗兰（活泼的那一笔；刻意避开全部状态色）
+   ⚠️ 三档仍要逐级拉开；--bg-side / --bg-content 不能与三档同值（面板内元素在复用三档）。
+   =================================================== */
+[data-theme="mint"] {
+  color-scheme: light;
+
+  /* ── Background ──
+     浅色下主档保持近白（弹窗 / 浮层底要用它），"内嵌"由壳层三块 + 卡片/控件逐级加深实现。 */
+  --bg-primary: #FAFCFE;   /* 近白：弹窗底、面板里"最亮"档 */
+  --bg-secondary: #DDE9F2; /* 卡片：内嵌一档（比内容区更深，偏蓝） */
+  --bg-tertiary: #CDDFEA;  /* 控件 / 分组正文：内嵌两档 */
+  --bg-panel: #FFFFFF;
+  --bg-hover: rgba(23, 49, 61, 0.05);
+  --bg-overlay: rgba(16, 32, 40, 0.4);
+
+  /* 壳层映射：板面最亮，三块依次嵌进去 */
+  --bg-canvas: #FCFEFD;   /* 桌板：青白，最亮 */
+  --bg-content: #EDF5FA;  /* 内容区：天青，内嵌一档 */
+  --bg-side: #E0EEE9;     /* 左右栏：薄荷，内嵌一档半（与内容区靠色相区分） */
+
+  /* ── Text ──（深青墨色系，压在冷白上不发灰） */
+  --text-primary: #17313D;
+  --text-secondary: #4A6673;
+  --text-tertiary: #67828F;
+  --text-inverse: #FFFFFF;
+
+  /* ── Border ── */
+  --border: #BFD5E1;
+  --border-light: #D7E5EE;
+
+  /* ── Accent ──（活泼的一笔：紫罗兰，与四个状态色都不同族） */
+  --accent: #7C5CFA;
+  --accent-hover: #6D4AEF;
+  --accent-light: rgba(124, 92, 250, 0.14);
+
+  /* ── Agent Tags ── */
+  --api-tag: #00B8A9;
+
+  /* ── Mode Colors ── */
+  --mode-native: var(--text-secondary);
+  --mode-fast: #10B981;
+  --mode-think: var(--accent);
+  --mode-expert: #F472B6;
+
+  /* ── Status ──（浅色族用实底浅色，同 :root 的取法） */
+  --status-success: #10B981;
+  --status-danger: #F43F5E;
+  --status-warning: #F59E0B;
+  --status-info: #0EA5E9;
+  --status-success-bg: #D9F7EC;
+  --status-danger-bg: #FFE4E9;
+  --status-warning-bg: #FEF3C7;
+  --status-info-bg: #E0F2FE;
+
+  /* ── Shadows ──（内嵌方向，阴影只留给真正浮起的弹层，故压得很轻） */
+  --shadow-sm: 0 1px 2px rgba(20, 45, 60, 0.06);
+  --shadow-md: 0 4px 8px rgba(20, 45, 60, 0.08);
+  --shadow-lg: 0 12px 26px rgba(20, 45, 60, 0.12);
+}
+
 /* Dark mode button overlay uses lighter overlay。
    用 data-theme-kind（深色族标记）而非具体主题名：以后再加深色主题不必回来改这些选择器。 */
 [data-theme-kind="dark"] button:hover {

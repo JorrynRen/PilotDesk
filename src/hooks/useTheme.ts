@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useThemeStore } from '../stores/themeStore';
 
-export type Theme = 'light' | 'dark' | 'nightfall' | 'celadon' | 'system';
+export type Theme = 'light' | 'dark' | 'nightfall' | 'celadon' | 'mint' | 'system';
 
 /** 可选主题白名单（读取持久化设置与切换时都要校验，避免脏值落到 data-theme 上） */
-export const THEMES: Theme[] = ['light', 'dark', 'nightfall', 'celadon', 'system'];
+export const THEMES: Theme[] = ['light', 'dark', 'nightfall', 'celadon', 'mint', 'system'];
 
 /**
  * 默认主题（用户从未设置过主题时生效）。
