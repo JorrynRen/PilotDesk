@@ -5,6 +5,7 @@
    ═══════════════════════════════════════════════════
    Usage guidelines:
      --bg-*       : Background colors (primary/secondary/tertiary/panel)
+     --bg-canvas  : 壳层"底"（三栏之间的缝 + 窗口四周），--bg-side / --bg-content 为浮在其上的左右栏与内容区
      --text-*     : Text colors (primary/secondary/tertiary)
      --border     : Border color
      --accent     : Primary accent (interactive elements, links)
@@ -23,6 +24,15 @@
   --bg-panel: #FFFFFF;
   --bg-hover: rgba(0, 0, 0, 0.04);
   --bg-overlay: rgba(0, 0, 0, 0.5);
+
+  /* ── 壳层（三栏工作区）──
+     三栏不再靠 1px 线切分，而是"一片底 + 三块圆角面板浮在上面"：
+     canvas = 面板之间的缝与窗口四周（连成一片），side = 左/右栏，content = 中间内容区（最亮，像一张纸）。
+     ⚠️ 三个 bg 档在浅色与深色里的明暗顺序是**相反**的（浅色 primary 最亮，深色 primary 最暗），
+     所以这里按主题各映射一次；三栏组件只引用下面这三个语义变量，不要直接绑 bg-primary 等。 */
+  --bg-canvas: var(--bg-tertiary);
+  --bg-side: var(--bg-secondary);
+  --bg-content: var(--bg-primary);
 
   /* ── Text ── */
   --text-primary: #1F2937;
@@ -106,6 +116,11 @@
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-overlay: rgba(0, 0, 0, 0.6);
 
+  /* 壳层映射：深色下 primary 是最暗的，故"底"用 primary、"内容区"用 tertiary（见 :root 的说明） */
+  --bg-canvas: var(--bg-primary);
+  --bg-side: var(--bg-secondary);
+  --bg-content: var(--bg-tertiary);
+
   /* ── Text ── */
   --text-primary: #E5E7EB;
   --text-secondary: #9CA3AF;
@@ -164,6 +179,11 @@
   --bg-panel: #0E1524;
   --bg-hover: rgba(255, 255, 255, 0.05);
   --bg-overlay: rgba(4, 8, 18, 0.62);
+
+  /* 壳层映射：同 dark —— primary 最暗作"底"、tertiary 最亮作"内容区" */
+  --bg-canvas: var(--bg-primary);
+  --bg-side: var(--bg-secondary);
+  --bg-content: var(--bg-tertiary);
 
   /* ── Text ── */
   --text-primary: #E7ECF7;
@@ -946,12 +966,10 @@ body {
   font-family: var(--font-sans);
   overflow: hidden;
   box-sizing: border-box;
-  border: 1px solid rgba(128, 128, 128, 0.25);
 }
 
-[data-theme-kind="dark"] #root {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
+/* 注：原先这里有一圈 1px 内框线（浅色 rgba(128,128,128,.25) / 深色 rgba(255,255,255,.08)）。
+   壳层改成"一片底 + 圆角面板"后，这圈线会把整窗重新框住，与"四周连成一片"直接冲突，故移除。 */
 
 /* Window content */
 .pilotdesk-window-shell {
@@ -970,6 +988,9 @@ body {
   flex-direction: column;
   overflow: hidden;
   flex: 1;
+  /* 只铺在壳层（MainLayout）：顶栏/状态栏/三栏之间的缝共用的那一片"底"。
+     独立路由页（设置 / 知识库 / 市集…）不经过这里，仍用 #root 的底色，不受影响。 */
+  background-color: var(--bg-canvas);
 }
 
 /* Selection */

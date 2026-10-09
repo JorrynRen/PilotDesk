@@ -352,7 +352,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   return (
     <header
       className="flex items-center justify-between px-3 h-12 shrink-0 select-none overflow-hidden"
-      style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+      // 壳层风格：顶栏不再自成一条"带子"——去掉底色与下边框，直接画在壳层那片底上（见 App.tsx 工作区）
+      style={{ color: 'var(--text-primary)' }}
       onMouseDown={handleHeaderMouseDown}
       onMouseUp={handleHeaderMouseUp}
       onMouseMove={handleHeaderMouseMove}

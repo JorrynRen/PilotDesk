@@ -132,8 +132,11 @@ export function RightPanel({ isOpen, mode }: RightPanelProps) {
 
   return (
     <aside
-      className="w-[260px] flex flex-col shrink-0"
-      style={{ borderLeft: '1px solid var(--border)', backgroundColor: 'var(--bg-primary)' }}
+      className="w-[260px] flex flex-col shrink-0 rounded-xl"
+      // 壳层风格：去掉 border-left，靠"底色 + 圆角 + 相邻面板之间的 8px 缝"区分。
+      // 这里**不加 overflow-hidden**：面板里挂着插件面板/灵感库等，可能出现绝对定位的下拉，
+      // 裁切会把它们切掉；面板内各层底色基本透明，圆角处不会露出色块。
+      style={{ backgroundColor: 'var(--bg-side)' }}
     >
       {/* Header */}
       <div className="flex items-center px-3 h-9 gap-0.5" style={{ borderBottom: '1px solid var(--border)' }}>

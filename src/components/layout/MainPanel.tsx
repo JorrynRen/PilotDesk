@@ -1084,7 +1084,11 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden relative" style={style}>
+    <div
+      className="flex-1 flex flex-col overflow-hidden relative rounded-xl"
+      // 壳层风格：内容区是最亮的那块面板（浮在 --bg-canvas 上），不画左右分隔线
+      style={{ backgroundColor: 'var(--bg-content)', ...style }}
+    >
       <div
         style={{
           height: '100%',

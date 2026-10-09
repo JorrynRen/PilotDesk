@@ -59,7 +59,8 @@ export function StatusBar({ onOpenSettings, onOpenEnvSettings }: StatusBarProps)
   return (
     <footer
       className="flex items-center justify-between px-4 h-8 text-[10px] shrink-0 select-none"
-      style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)' }}
+      // 壳层风格：状态栏同顶栏——去掉底色与上边框，并入壳层那片底
+      style={{ color: 'var(--text-secondary)' }}
     >
       <div className="flex items-center gap-3">
         {/* 最左端：账号状态（未登录=登录入口；已登录=昵称+等级徽章，详情在弹层）。

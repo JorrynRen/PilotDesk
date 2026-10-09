@@ -493,8 +493,9 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
 
   return (
     <aside
-      className="w-[260px] shrink-0 flex flex-col overflow-hidden"
-      style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)', ...style }}
+      className="w-[260px] shrink-0 flex flex-col overflow-hidden rounded-xl"
+      // 壳层风格：面板靠"底色 + 圆角 + 与相邻面板之间的 8px 缝"区分，不再画 border-right（见 App.tsx 工作区）
+      style={{ backgroundColor: 'var(--bg-side)', ...style }}
     >
       {/* Header */}
       <div className="flex items-center px-3 h-9" style={{ borderBottom: '1px solid var(--border)' }}>

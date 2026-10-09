@@ -97,28 +97,31 @@ function MainLayout() {
           onToggleRightPanel={rightPanelMode ? toggleRightPanel : undefined}
           rightPanelOpen={rightPanelMode ? rightPanelOpen : undefined}
         />
-        <div className="flex-1 flex overflow-hidden relative">
+        {/* 工作区：这一层的底色就是壳层的"底"（--bg-canvas，见 globals.css），
+            靠 8px 内边距 + 8px 间隙把各面板分开——面板自己圆角、自己不画左右分隔线，
+            于是"面板之间的缝"与"窗口四周的边距"连成同一片底。顶栏/状态栏在它上下，直接画在这片底上。 */}
+        <div className="flex-1 flex overflow-hidden relative p-2 gap-2">
           {/* 群聊模式：全宽嵌入（页面内含专属右侧「讨论/文件历史」面板，由折叠按钮控制） */}
           {isGroupChat && (
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 flex flex-col overflow-hidden rounded-xl" style={{ backgroundColor: 'var(--bg-content)' }}>
               <GroupChatPage rightPanelOpen={sidePanelOpen.groupchat} />
             </div>
           )}
           {/* 工作流模式：嵌入主布局（复用工作流管理页，去除自身 TitleBar/StatusBar），全宽 */}
           {isWorkflow && (
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 flex flex-col overflow-hidden rounded-xl" style={{ backgroundColor: 'var(--bg-content)' }}>
               <WorkflowPage embedded />
             </div>
           )}
           {/* 门户标签模式：固定壳。CustomTabHost 常挂载（CSS 隐藏切换），
               避免每次进出卸载导致已打开标签页的 iframe 状态丢失 */}
-          <div className={isCustom ? 'flex-1 flex flex-col overflow-hidden' : 'hidden'}>
+          <div className={`flex-1 flex flex-col overflow-hidden rounded-xl ${isCustom ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
             <CustomTabHost />
           </div>
           {/* 终端模式：中间终端 + 右侧面板（保留原始布局：会话列表隐藏）。
               TerminalPanel 必须常挂载——xterm 会话 DOM/内容由组件实例持有，
               卸载即丢失；非终端模式仅用 display:none 隐藏，切回时内容原样保留。 */}
-          <div className={isTerminal ? 'flex-1 flex flex-col overflow-hidden' : 'hidden'}>
+          <div className={`flex-1 flex flex-col overflow-hidden rounded-xl ${isTerminal ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
             <TerminalPanel />
           </div>
           {isTerminal && <RightPanel isOpen={rightPanelOpen} mode="terminal" />}
