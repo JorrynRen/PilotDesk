@@ -198,6 +198,8 @@ function TrendColumns({
   max,
   height,
   mode,
+  selectedKey,
+  onSelect,
   titleOf,
   gapTitle,
 }: {
@@ -206,10 +208,22 @@ function TrendColumns({
   max?: number;
   height: number;
   mode: 'stack' | 'gauge';
+  /** 当前选中的列（两张图共用同一份选中态）；未选中为 null */
+  selectedKey: string | null;
+  onSelect: (key: string) => void;
   titleOf: (b: TrendBucket) => string;
   /** 被折叠空档的说明（该列没有数据） */
   gapTitle: (gapCount: number) => string;
 }) {
+  /**
+   * 选中列的取色：选中那列正常，其余压暗 —— 一屏几十列时，只靠描边看不出来是哪一列。
+   * 顺带把鼠标指针改成手型，暗示可点。
+   */
+  const pickStyle = (key: string) => ({
+    opacity: selectedKey !== null && selectedKey !== key ? 0.4 : 1,
+    cursor: 'pointer' as const,
+  });
+
   return (
     <div className="flex items-stretch gap-px" style={{ height }}>
       {items.map((it) => {
@@ -219,8 +233,9 @@ function TrendColumns({
             <div
               key={it.key}
               className="shrink-0 flex items-center justify-center"
-              style={{ width: 14 }}
+              style={{ width: 14, ...pickStyle(it.key) }}
               title={gapTitle(it.gap)}
+              onClick={() => onSelect(it.key)}
             >
               <span style={{ width: 1, height: '38%', borderLeft: '1px dashed var(--border)' }} />
             </div>
@@ -231,9 +246,25 @@ function TrendColumns({
 
         if (mode === 'gauge') {
           // 该桶没有用量：整列留白 —— 若画一个空底轨，会被读成"命中率 0%"
-          if (b.input <= 0) return <div key={b.key} className="flex-1 min-w-0" title={titleOf(b)} />;
+          if (b.input <= 0) {
+            return (
+              <div
+                key={b.key}
+                className="flex-1 min-w-0"
+                style={pickStyle(b.key)}
+                title={titleOf(b)}
+                onClick={() => onSelect(b.key)}
+              />
+            );
+          }
           return (
-            <div key={b.key} className="flex-1 min-w-0" title={titleOf(b)}>
+            <div
+              key={b.key}
+              className="flex-1 min-w-0"
+              style={pickStyle(b.key)}
+              title={titleOf(b)}
+              onClick={() => onSelect(b.key)}
+            >
               <div
                 className="flex h-full flex-col justify-end overflow-hidden"
                 style={{ borderRadius: 2, backgroundColor: 'var(--bg-tertiary)' }}
@@ -250,7 +281,13 @@ function TrendColumns({
           { g: b.read, c: SEG_READ },
         ];
         return (
-          <div key={b.key} className="flex-1 min-w-0 flex flex-col justify-end" title={titleOf(b)}>
+          <div
+            key={b.key}
+            className="flex-1 min-w-0 flex flex-col justify-end"
+            style={pickStyle(b.key)}
+            title={titleOf(b)}
+            onClick={() => onSelect(b.key)}
+          >
             <div className="flex flex-col overflow-hidden" style={{ height: `${pct}%`, borderRadius: '2px 2px 0 0' }}>
               {segs.map((s, i) => (
                 <div key={i} style={{ flexGrow: s.g, backgroundColor: s.c }} />
@@ -412,6 +449,11 @@ export function UsageStats() {
   const [attribution, setAttribution] = useState<UsageAttribution | null>(null);
   const [days, setDays] = useState(30);
   const [tab, setTab] = useState<TabKey>('provider');
+  /**
+   * 趋势图选中的列（桶 key）。两张图共用这一份 —— 它们本来就是同一日期轴，
+   * 选中一列即同时定位两图，读数条也就能一次给出该时段的完整明细。
+   */
+  const [trendSelKey, setTrendSelKey] = useState<string | null>(null);
   /** 归因下钻维度；'summary' = 默认只显示三维度聚合总览。 */
   const [dimension, setDimension] = useState<'summary' | DimensionKey>('summary');
   const [dimMenuOpen, setDimMenuOpen] = useState(false);
@@ -588,6 +630,10 @@ export function UsageStats() {
       : `${b.key}${bucketScope}：无用量`;
   /** 折叠后的列（长空档只占一列）；两张图共用同一份，涨落才对得上 */
   const trendItems = collapseGaps(trendBuckets);
+  /** 选中的那一列（可能落在被折叠的空档上）；区间切换后旧 key 可能已不存在 → 退回"未选中" */
+  const trendSelItem = trendItems.find((it) => it.key === trendSelKey) ?? null;
+  /** 点同一列＝取消选中 */
+  const toggleTrendSel = (key: string) => setTrendSelKey((prev) => (prev === key ? null : key));
   const gapUnit = trendGranularity === 'day' ? '天' : trendGranularity === 'week' ? '周' : '个月';
   const gapTitle = (n: number) => `此处 ${n} ${gapUnit}无用量`;
   /** 横轴两端：给时间轴一个落点（中间的具体日期靠悬停看） */
@@ -771,7 +817,7 @@ export function UsageStats() {
           {trendItems.length > 0 && (
             <Block
               title="趋势"
-              hint={`${granularityLabel}（跨度 ${trendSpanDays} 天）；长段无用量压成一截虚线，悬停看具体日期`}
+              hint={`${granularityLabel}（跨度 ${trendSpanDays} 天）；点柱子看该时段明细，长段无用量压成一截虚线`}
             >
               {/* 两张图各自成卡：标题、坐标轴、图例都收在自己的卡里 ——
                   原来两图只有一行小字区分，读者不知道哪根柱属于哪张图 */}
@@ -787,6 +833,8 @@ export function UsageStats() {
                   max={trendPeak}
                   height={96}
                   mode="stack"
+                  selectedKey={trendSelItem?.key ?? null}
+                  onSelect={toggleTrendSel}
                   titleOf={inputTitle}
                   gapTitle={gapTitle}
                 />
@@ -822,6 +870,8 @@ export function UsageStats() {
                   max={100}
                   height={56}
                   mode="gauge"
+                  selectedKey={trendSelItem?.key ?? null}
+                  onSelect={toggleTrendSel}
                   titleOf={rateTitle}
                   gapTitle={gapTitle}
                 />
@@ -841,6 +891,32 @@ export function UsageStats() {
                   </span>
                   <span>空白 = 该时段无用量</span>
                 </div>
+              </div>
+
+              {/* 读数条：位置固定在块底部（不随选中变化跳动），两张图共用 ——
+                  两图是同一日期轴，选中一列即可同时给出该时段的全部口径。 */}
+              <div
+                className="rounded-lg px-3 py-2 mt-2.5 text-[11px] flex items-center flex-wrap gap-x-3 gap-y-1"
+                // minHeight：提示语与明细长度不同，固定一个下限避免选中时整块高度跳动
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', minHeight: 34 }}
+              >
+                {!trendSelItem ? (
+                  <span style={{ color: 'var(--text-tertiary)' }}>点选上图中任意柱子，这里显示该时段的明细（再点一次取消）</span>
+                ) : !trendSelItem.bucket ? (
+                  <span>{trendSelItem.key} 起连续 {trendSelItem.gap} {gapUnit} 无用量</span>
+                ) : (
+                  <>
+                    <span className="font-medium" style={{ color: 'var(--text-primary)' }}>
+                      {trendSelItem.bucket.key}{bucketScope}
+                    </span>
+                    <span>输入 {fmt(trendSelItem.bucket.input)}</span>
+                    <span style={{ color: 'var(--text-tertiary)' }}>
+                      缓存命中 {fmt(trendSelItem.bucket.read)} · 未命中 {fmt(trendSelItem.bucket.prompt)} · 写入 {fmt(trendSelItem.bucket.write)}
+                    </span>
+                    <span>缓存命中率 {fmtRate(trendSelItem.bucket.hitRate)}</span>
+                    {trendSelItem.bucket.days > 1 && <span style={{ color: 'var(--text-tertiary)' }}>{trendSelItem.bucket.days} 天合计</span>}
+                  </>
+                )}
               </div>
             </Block>
           )}
