@@ -664,30 +664,29 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                       className="rounded-lg px-2.5 py-2"
                       style={{ backgroundColor: 'var(--bg-primary)' }}
                     >
-                      {/* 组标题：主色竖条 + 标题（不再拖一条分隔线，避免整屏线条） */}
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <span style={{ width: 2, height: 9, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
+                      {/* 组标题：主色竖条 + 标题（不再拖一条分隔线，避免整屏线条）。
+                          下间距刻意大于条目之间的段间距（12px vs 6px + 行高半距）：
+                          两者接近时，标题读起来会像"又一条内容"，分不出这组从哪开始。 */}
+                      <div className="flex items-center gap-1.5 mb-3">
+                        <span style={{ width: 2, height: 10, borderRadius: 1, backgroundColor: 'var(--accent)' }} />
                         <span className="text-[10px] font-semibold shrink-0" style={{ color: 'var(--text-primary)' }}>
                           {group.title}
                         </span>
                       </div>
-                      <ul className="space-y-1">
+                      {/* 条目 = 术语列 + 说明：术语用**加粗文字**而不是灰底胶囊 ——
+                          12 个灰块本身就是噪声，且胶囊容易读成可点的按钮；
+                          定宽成列后左边缘对齐，扫读靠的是列对齐 + 字重差，不靠底色。
+                          术语与说明同字号同行高（只差字重），首行基线才对得齐。 */}
+                      <ul className="space-y-1.5">
                         {group.items.map((it) => (
-                          <li key={it.term} className="flex items-start gap-2">
-                            {/* 术语胶囊：定宽居中，短词长词都能对齐成一列 */}
+                          <li key={it.term} className="flex items-start gap-2.5">
                             <span
-                              className="shrink-0 rounded text-[10px]"
-                              style={{
-                                minWidth: 64,
-                                textAlign: 'center',
-                                padding: '1px 4px',
-                                backgroundColor: 'var(--bg-tertiary)',
-                                color: 'var(--text-primary)',
-                              }}
+                              className="shrink-0 text-[11px] font-semibold leading-relaxed"
+                              style={{ minWidth: 60, color: 'var(--text-primary)' }}
                             >
                               {it.term}
                             </span>
-                            <span className="flex-1 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                            <span className="flex-1 min-w-0 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
                               {it.desc}
                             </span>
                           </li>

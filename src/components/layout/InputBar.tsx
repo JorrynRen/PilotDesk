@@ -53,8 +53,8 @@ interface InputBarProps {
   onSecurityModeChange?: (v: SecurityModeValue) => void;
   /**
    * 摆放位置：`bottom`（默认）= 常规聊天视图，输入区固定在消息列表下方；
-   * `top` = 会话默认页（无选中会话），输入区置于页面顶部、其下才是内容，
-   * 故改由**下边框**与下方内容分隔（常规态靠留白，不加边框）。
+   * `top` = 会话默认页（无选中会话），输入区置于页面顶部、其下才是指挥中心内容。
+   * `top` 只把下方留白加大一档，**不画通栏分割线** —— 那种横线会把消息窗口切成上下两半。
    */
   placement?: 'top' | 'bottom';
 }
@@ -705,12 +705,25 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     return null;
   }, [session, draftChoice]);
 
+  /**
+   * 输入区容器的内边距。
+   *
+   * - 默认页（`placement="top"`）：下方紧接着是指挥中心的色块内容，多留一点空当即可。
+   *   **这里刻意不画贯穿横线** —— 一条通栏分割线会把消息窗口视觉上切成上下两半，
+   *   而输入框本身已是带边框的容器，靠留白分隔更安静。
+   * - 常规聊天视图：与消息列表之间只留 12px 安全距离（原先靠一条 border-top 分隔，已去掉）。
+   *   底部留白与用量行**配成一组**：API 会话下方紧跟用量行（自带 4px 上内边距），
+   *   这里只留 4px → 视觉间隙 8px，读作输入区的页脚；CLI 会话没有用量行，留回 12px，
+   *   避免输入框紧贴状态栏。
+   */
+  const inputAreaClass = placement === 'top'
+    ? 'px-4 pt-3 pb-5'
+    : session && session.agentType === 'api'
+      ? 'px-4 pt-3 pb-1'
+      : 'px-4 pt-3 pb-3';
+
   return (
-    <div
-      className="shrink-0"
-      ref={inputBarRef}
-      style={placement === 'top' ? { borderBottom: '1px solid var(--border)' } : undefined}
-    >
+    <div className="shrink-0" ref={inputBarRef}>
       {/* 等待提示条 */}
       {isGenerating && (
         <div className="flex items-center gap-2 px-4 py-1.5" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
@@ -727,11 +740,8 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
 
       {/* Input area：容器化输入区（书写边界、聚焦态、拖拽态都挂在容器上，见 .pd-composer）。
           工具栏已并入本容器、与发送键同一行（文本域独占首行，工具组与发送键共享次行）。
-          与消息列表之间只留 12px 安全距离（原先靠一条 border-top 分隔，已去掉）。
-          底部留白与用量行**配成一组**：API 会话下方紧跟用量行（自带 4px 上内边距），
-          这里只留 4px → 视觉间隙 8px，读作输入区的页脚；CLI 会话没有用量行，留回 12px，
-          避免输入框紧贴状态栏。 */}
-      <div className={session && session.agentType === 'api' ? 'px-4 pt-3 pb-1' : 'px-4 pt-3 pb-3'}>
+          内边距的取法见上方 `inputAreaClass` 的注释。 */}
+      <div className={inputAreaClass}>
         <div
           className="pd-composer"
           data-dragging={dragActive}
