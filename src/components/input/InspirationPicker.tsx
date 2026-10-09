@@ -6,9 +6,14 @@ import { headChars } from '../../utils/text';
 interface InspirationPickerProps {
   onSelect: (content: string) => void;
   onClose: () => void;
+  /**
+   * 弹出方向：默认向上（输入区在窗口底部时正好）。
+   * 会话默认页把输入区搬到了顶部，向上展开会被窗口上边缘截断，那里传 `false` 改为向下展开。
+   */
+  dropUp?: boolean;
 }
 
-export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps) {
+export function InspirationPicker({ onSelect, onClose, dropUp = true }: InspirationPickerProps) {
   // Only read inspirations, never mutate the global store from this component
   const inspirations = useInspirationStore((s) => s.inspirations);
   const loading = useInspirationStore((s) => s.loading);
@@ -92,7 +97,7 @@ export function InspirationPicker({ onSelect, onClose }: InspirationPickerProps)
   return (
     <div
       ref={containerRef}
-      className="absolute bottom-full left-0 mb-2 w-80 rounded-xl shadow-xl overflow-hidden z-50"
+      className={`absolute left-0 ${dropUp ? 'bottom-full mb-2' : 'top-full mt-2'} w-80 rounded-xl shadow-xl overflow-hidden z-50`}
       style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
       onKeyDown={handleKeyDown}
     >

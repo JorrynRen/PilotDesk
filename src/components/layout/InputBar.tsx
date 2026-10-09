@@ -722,6 +722,17 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
       ? 'px-4 pt-3 pb-1'
       : 'px-4 pt-3 pb-3';
 
+  /**
+   * 弹出层的展开方向。
+   *
+   * 这排按钮（会话方式 / 附件 / 工作目录 / 灵感 / 技能 / 安全模式）的弹出层原本一律向上展开
+   * （`bottom-full`）—— 常规聊天视图里输入区贴着窗口底部，向上展开正合适。
+   * 但默认页把输入区搬到了**顶部**（`placement="top"`），再向上展开就会被窗口上边缘截断，
+   * 所以顶部布局一律改为向下。
+   */
+  const dropUp = placement !== 'top';
+  const menuPos = dropUp ? 'bottom-full mb-1' : 'top-full mt-1';
+
   return (
     <div className="shrink-0" ref={inputBarRef}>
       {/* 等待提示条 */}
@@ -833,6 +844,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 setShowInspirationPicker(false);
               }}
               onClose={() => setShowInspirationPicker(false)}
+              dropUp={dropUp}
             />
           )}
           {showSkillPicker && (
@@ -858,6 +870,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 setShowSkillPicker(false);
               }}
               onClose={() => setShowSkillPicker(false)}
+              dropUp={dropUp}
             />
           )}
           </div>
@@ -907,7 +920,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 </button>
                 {showModeDropdown && (
                   <div
-                    className="absolute left-0 bottom-full mb-1 py-1 rounded-lg shadow-lg z-50"
+                    className={`absolute left-0 ${menuPos} py-1 rounded-lg shadow-lg z-50`}
                     style={{
                       backgroundColor: 'var(--bg-panel)',
                       border: '1px solid var(--border)',
@@ -986,7 +999,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 </button>
                 {showAttachMenu && (
                   <div
-                    className="absolute bottom-full left-0 mb-1 py-1 rounded-lg z-20"
+                    className={`absolute left-0 ${menuPos} py-1 rounded-lg z-20`}
                     style={{
                       backgroundColor: 'var(--bg-secondary)',
                       border: '1px solid var(--border)',
@@ -1016,7 +1029,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
 
               {/* 会话安全模式选择器（显示在附件按钮右侧） */}
               {securityMode && onSecurityModeChange && (
-                <SecurityModeSelector value={securityMode} onChange={onSecurityModeChange} />
+                <SecurityModeSelector value={securityMode} onChange={onSecurityModeChange} dropUp={dropUp} />
               )}
 
               {/* 工作目录：已有会话 → 切换该会话目录；无会话 → 选定"快捷开始"的草稿目录（必选）。
@@ -1057,7 +1070,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                 </button>
                 {showCwdMenu && (
                   <div
-                    className="absolute bottom-full left-0 mb-1 py-1 rounded-lg z-20"
+                    className={`absolute left-0 ${menuPos} py-1 rounded-lg z-20`}
                     style={{
                       backgroundColor: 'var(--bg-secondary)',
                       border: '1px solid var(--border)',

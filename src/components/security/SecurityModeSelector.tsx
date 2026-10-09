@@ -15,9 +15,15 @@ export type SecurityModeValue = 'strict' | 'standard' | 'relaxed' | 'unrestricte
 export function SecurityModeSelector({
   value,
   onChange,
+  dropUp = true,
 }: {
   value: SecurityModeValue;
   onChange: (v: SecurityModeValue) => void;
+  /**
+   * 弹出方向：默认向上（输入区在窗口底部时正好）。
+   * 会话默认页把输入区搬到了顶部，向上展开会被窗口上边缘截断，那里传 `false` 改为向下展开。
+   */
+  dropUp?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -65,11 +71,11 @@ export function SecurityModeSelector({
         </svg>
       </button>
 
-      {/* 下拉（向上、左对齐展开）：模式名称 + 行为说明。
+      {/* 下拉（默认向上、左对齐展开；会话默认页输入区在顶部时向下）：模式名称 + 行为说明。
           宽度取够一行放下最长说明（"风险/未知命令与路径、中高风险工具需确认"），说明不再折行 */}
       {open && (
         <div
-          className="absolute left-0 bottom-full mb-1 rounded-lg shadow-lg py-1 z-50"
+          className={`absolute left-0 ${dropUp ? 'bottom-full mb-1' : 'top-full mt-1'} rounded-lg shadow-lg py-1 z-50`}
           style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border)', minWidth: 276 }}
         >
           {SECURITY_MODES.map((m) => {

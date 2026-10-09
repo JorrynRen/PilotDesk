@@ -140,6 +140,44 @@ function bucketize(trend: UsageDay[], g: TrendGranularity): TrendBucket[] {
   return out;
 }
 
+/**
+ * 连续多少个空桶才折叠成一截「空档」标记。
+ *
+ * 完全不折叠：用得稀疏的人会看到大片空白，图变成几根孤立的柱；
+ * 全部折叠：连"隔了两天"也标成断档，反而失真。取 4 折中 ——
+ * 1–3 个空桶本来就是小空白，如实留白；更长的空档压成一截虚线，横轴既不断裂也不会全是空白。
+ */
+const GAP_COLLAPSE_MIN = 4;
+
+/** 趋势图的一列：真实数据桶，或被折叠的连续空桶。 */
+interface TrendItem {
+  key: string;
+  bucket: TrendBucket | null;
+  /** `bucket` 为 null 时，被折叠掉的空桶个数 */
+  gap: number;
+}
+
+function collapseGaps(buckets: TrendBucket[]): TrendItem[] {
+  const out: TrendItem[] = [];
+  let run: TrendBucket[] = [];
+  const flush = () => {
+    if (run.length === 0) return;
+    if (run.length >= GAP_COLLAPSE_MIN) out.push({ key: run[0].key, bucket: null, gap: run.length });
+    else run.forEach((b) => out.push({ key: b.key, bucket: b, gap: 0 }));
+    run = [];
+  };
+  for (const b of buckets) {
+    if (b.days === 0) {
+      run.push(b);
+      continue;
+    }
+    flush();
+    out.push({ key: b.key, bucket: b, gap: 0 });
+  }
+  flush();
+  return out;
+}
+
 /** 输入构成三桶的柱色：同一主色的深浅阶梯，含义由图例给（不引入新色相）。 */
 const SEG_READ = 'var(--accent)';
 const SEG_PROMPT = 'color-mix(in srgb, var(--accent) 18%, var(--bg-tertiary))';
@@ -153,22 +191,39 @@ const SEG_WRITE = 'color-mix(in srgb, var(--accent) 50%, var(--bg-tertiary))';
  * 否则单色一列（命中率，纵轴固定 0–100）。
  */
 function TrendColumns({
-  buckets,
+  items,
   max,
   height,
   stacked,
   titleOf,
+  gapTitle,
 }: {
-  buckets: TrendBucket[];
+  items: TrendItem[];
   /** 纵轴上限：输入构成用窗口内峰值；命中率固定 100 */
   max: number;
   height: number;
   stacked?: boolean;
   titleOf: (b: TrendBucket) => string;
+  /** 被折叠空档的说明（该列没有数据） */
+  gapTitle: (gapCount: number) => string;
 }) {
   return (
     <div className="flex items-stretch gap-px" style={{ height }}>
-      {buckets.map((b) => {
+      {items.map((it) => {
+        // 折叠后的长空档：一截虚线段 —— 表明"这里没数据"，又不像是有数据的柱
+        if (!it.bucket) {
+          return (
+            <div
+              key={it.key}
+              className="shrink-0 flex items-center justify-center"
+              style={{ width: 14 }}
+              title={gapTitle(it.gap)}
+            >
+              <span style={{ width: 1, height: '38%', borderLeft: '1px dashed var(--border)' }} />
+            </div>
+          );
+        }
+        const b = it.bucket;
         const value = stacked ? b.input : b.hitRate;
         const h = max > 0 ? Math.min(100, (value / max) * 100) : 0;
         // 单色时的 flexGrow 取 1：柱高已由外层 height 决定，段内比例无所谓
@@ -513,6 +568,13 @@ export function UsageStats() {
     + `${b.days > 1 ? `，${b.days} 天合计` : ''}）`;
   const rateTitle = (b: TrendBucket) =>
     `${b.key}${bucketScope}：缓存命中率 ${fmtRate(b.hitRate)}${b.days > 1 ? `（${b.days} 天合计后重算）` : ''}`;
+  /** 折叠后的列（长空档只占一列）；两张图共用同一份，涨落才对得上 */
+  const trendItems = collapseGaps(trendBuckets);
+  const gapUnit = trendGranularity === 'day' ? '天' : trendGranularity === 'week' ? '周' : '个月';
+  const gapTitle = (n: number) => `此处 ${n} ${gapUnit}无用量`;
+  /** 横轴两端：给时间轴一个落点（中间的具体日期靠悬停看） */
+  const trendAxisFrom = trendBuckets.length > 0 ? trendBuckets[0].key : '';
+  const trendAxisTo = trendBuckets.length > 0 ? trendBuckets[trendBuckets.length - 1].key : '';
 
   return (
     <SettingsSection
@@ -688,46 +750,66 @@ export function UsageStats() {
             )}
           </Block>
 
-          {trendBuckets.length > 0 && (
+          {trendItems.length > 0 && (
             <Block
               title="趋势"
-              hint={`上图每日输入构成、下图缓存命中率；${granularityLabel}（跨度 ${trendSpanDays} 天）`}
+              hint={`${granularityLabel}（跨度 ${trendSpanDays} 天）；长段无用量压成一截虚线，悬停看具体日期`}
             >
-              {/* 输入构成：柱高按窗口内峰值归一（纵轴不是 0–100%，故把峰值标出来） */}
-              <div className="flex items-center justify-between text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>
-                <span>每日输入 Token（柱高按窗口内峰值归一）</span>
-                <span>峰值 {fmt(trendPeak)}</span>
-              </div>
-              <TrendColumns buckets={trendBuckets} max={trendPeak} height={96} stacked titleOf={inputTitle} />
-
-              {/* 缓存命中率：纵轴固定 0–100% */}
-              <div className="flex items-center justify-between text-[10px] mt-3 mb-1" style={{ color: 'var(--text-tertiary)' }}>
-                <span>每日缓存命中率（0–100%）</span>
-                <span>窗口内 {fmtRate(t?.cacheHitRate ?? 0)}</span>
-              </div>
-              <TrendColumns buckets={trendBuckets} max={100} height={56} titleOf={rateTitle} />
-
-              {/* 横轴两端：给时间轴一个落点（中间刻度靠悬停看具体日期） */}
-              <div className="flex items-center justify-between text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
-                <span>{trendBuckets[0].key}</span>
-                <span>{trendBuckets[trendBuckets.length - 1].key}</span>
-              </div>
-
-              {/* 上图三桶的图例（同一主色的深浅阶梯，颜色本身不带语义，含义靠这里给） */}
-              <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-2">
-                {[
-                  { label: '缓存命中读取', color: SEG_READ },
-                  { label: '未命中输入', color: SEG_PROMPT },
-                  { label: '缓存写入', color: SEG_WRITE },
-                ].map((s) => (
-                  <span key={s.label} className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: s.color }} />
-                    {s.label}
+              {/* 两张图各自成卡：标题、坐标轴、图例都收在自己的卡里 ——
+                  原来两图只有一行小字区分，读者不知道哪根柱属于哪张图 */}
+              <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                <div className="flex items-baseline justify-between gap-2 mb-2">
+                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>用量趋势</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    每日输入 Token 构成 · 柱高按峰值归一（峰值 {fmt(trendPeak)}）
                   </span>
-                ))}
-                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  输入 = 三桶之和（不含输出）
-                </span>
+                </div>
+                <TrendColumns
+                  items={trendItems}
+                  max={trendPeak}
+                  height={96}
+                  stacked
+                  titleOf={inputTitle}
+                  gapTitle={gapTitle}
+                />
+                <div className="flex items-center justify-between text-[10px] mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                  <span>{trendAxisFrom}</span>
+                  <span>{trendAxisTo}</span>
+                </div>
+                {/* 图例：同一主色的深浅阶梯，颜色本身不带语义，含义靠这里给 */}
+                <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-2">
+                  {[
+                    { label: '缓存命中读取', color: SEG_READ },
+                    { label: '未命中输入', color: SEG_PROMPT },
+                    { label: '缓存写入', color: SEG_WRITE },
+                  ].map((s) => (
+                    <span key={s.label} className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: s.color }} />
+                      {s.label}
+                    </span>
+                  ))}
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>输入 = 三桶之和（不含输出）</span>
+                </div>
+              </div>
+
+              <div className="rounded-lg px-3 py-2.5 mt-2.5" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                <div className="flex items-baseline justify-between gap-2 mb-2">
+                  <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>缓存命中趋势</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    每日缓存命中率（0–100%） · 窗口内 {fmtRate(t?.cacheHitRate ?? 0)}
+                  </span>
+                </div>
+                <TrendColumns
+                  items={trendItems}
+                  max={100}
+                  height={56}
+                  titleOf={rateTitle}
+                  gapTitle={gapTitle}
+                />
+                <div className="flex items-center justify-between text-[10px] mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                  <span>{trendAxisFrom}</span>
+                  <span>{trendAxisTo}</span>
+                </div>
               </div>
             </Block>
           )}
