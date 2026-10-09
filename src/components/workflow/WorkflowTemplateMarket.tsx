@@ -737,9 +737,10 @@ export const WorkflowTemplateMarket: React.FC<{
       {/* ── 顶栏（一行紧凑布局）
            左：精选/浏览全部/我的收藏 Tab + 搜索框
            右：排序 → 显示方式 → 筛选 → 刷新
-         ─────────────────────────────────────────────────────── */}
-      <div className="shrink-0 pl-0 pr-0 py-1.5 flex items-center gap-2"
-        style={{ borderBottom: '1px solid var(--border)' }}>
+           ───────────────────────────────────────────────────────
+           这里**不画下边框**：搜索框就在这一行里，下方直接是内容（分类栏 + 结果区），
+           再补一条横线只是把搜索行与内容割开，属于冗余线条 —— 分隔交给留白与面板圆角。 */}
+      <div className="shrink-0 pl-0 pr-0 py-1.5 flex items-center gap-2">
         {/* Tab 组 */}
         <div className="flex items-center rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
           {[
