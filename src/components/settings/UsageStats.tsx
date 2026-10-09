@@ -184,25 +184,38 @@ const SEG_PROMPT = 'color-mix(in srgb, var(--accent) 18%, var(--bg-tertiary))';
 const SEG_WRITE = 'color-mix(in srgb, var(--accent) 50%, var(--bg-tertiary))';
 
 /**
- * 时间轴柱状图：每桶一列，柱高 = 值 / 上限。用 flex 列 + 百分比高度画，不引图表库 ——
+ * 命中率 → 颜色（热力带的取值）：0% 为最浅一档，100% 为纯主色。
+ *
+ * 起点刻意**不是**"全透明"：0% 命中（有调用、一次没命中）与"这段时间完全没有用量"
+ * 必须能区分开 —— 后者根本不画色块（见 `TrendColumns` 的 heat 分支）。
+ */
+function heatColor(rate: number): string {
+  const pct = Math.max(0, Math.min(100, rate));
+  return `color-mix(in srgb, var(--accent) ${12 + pct * 0.88}%, var(--bg-tertiary))`;
+}
+
+/**
+ * 时间轴图：每桶一列。用 flex 列 + 百分比高度/宽度画，不引图表库 ——
  * 只有几十根柱，库带来的体积与窄面板自适应成本都不划算。
  *
- * `stacked` 时按三桶堆叠（`flexGrow` 直接给出桶间比例，不必自己算百分比）；
- * 否则单色一列（命中率，纵轴固定 0–100）。
+ * 两种编码方式（**同一页里不能混用**，否则读者分不清柱高到底代表什么）：
+ * - `stack`：柱高 = 值 / 上限，柱内按三桶堆叠（`flexGrow` 直接给比例，不必自己算百分比）——用于「用量」；
+ * - `heat`：柱**等高**，颜色深浅 = 比率（见 `heatColor`）——用于「命中率」这种 0–100% 的比率：
+ *   高度只有几十像素时，比率之间的差很难看出来，颜色深浅反而好读，也不再和上图的柱高语义打架。
  */
 function TrendColumns({
   items,
   max,
   height,
-  stacked,
+  mode,
   titleOf,
   gapTitle,
 }: {
   items: TrendItem[];
-  /** 纵轴上限：输入构成用窗口内峰值；命中率固定 100 */
-  max: number;
+  /** 纵轴上限（仅 `stack` 用）：输入构成取窗口内峰值 */
+  max?: number;
   height: number;
-  stacked?: boolean;
+  mode: 'stack' | 'heat';
   titleOf: (b: TrendBucket) => string;
   /** 被折叠空档的说明（该列没有数据） */
   gapTitle: (gapCount: number) => string;
@@ -224,16 +237,24 @@ function TrendColumns({
           );
         }
         const b = it.bucket;
-        const value = stacked ? b.input : b.hitRate;
-        const h = max > 0 ? Math.min(100, (value / max) * 100) : 0;
-        // 单色时的 flexGrow 取 1：柱高已由外层 height 决定，段内比例无所谓
-        const segs = stacked
-          ? [
-              { g: b.write, c: SEG_WRITE },
-              { g: b.prompt, c: SEG_PROMPT },
-              { g: b.read, c: SEG_READ },
-            ]
-          : [{ g: 1, c: SEG_READ }];
+
+        if (mode === 'heat') {
+          // 该桶没有任何用量：留白。这是它与"命中率 0%"的区别 —— 后者会画出最浅那一档颜色
+          return (
+            <div key={b.key} className="flex-1 min-w-0" title={titleOf(b)}>
+              {b.input > 0 && (
+                <div style={{ height: '100%', borderRadius: 2, backgroundColor: heatColor(b.hitRate) }} />
+              )}
+            </div>
+          );
+        }
+
+        const h = max && max > 0 ? Math.min(100, (b.input / max) * 100) : 0;
+        const segs = [
+          { g: b.write, c: SEG_WRITE },
+          { g: b.prompt, c: SEG_PROMPT },
+          { g: b.read, c: SEG_READ },
+        ];
         return (
           <div key={b.key} className="flex-1 min-w-0 flex flex-col justify-end" title={titleOf(b)}>
             <div className="flex flex-col overflow-hidden" style={{ height: `${h}%`, borderRadius: '2px 2px 0 0' }}>
@@ -567,7 +588,10 @@ export function UsageStats() {
     `${b.key}${bucketScope}：输入 ${fmt(b.input)}（缓存命中 ${fmt(b.read)} / 未命中 ${fmt(b.prompt)} / 缓存写 ${fmt(b.write)}`
     + `${b.days > 1 ? `，${b.days} 天合计` : ''}）`;
   const rateTitle = (b: TrendBucket) =>
-    `${b.key}${bucketScope}：缓存命中率 ${fmtRate(b.hitRate)}${b.days > 1 ? `（${b.days} 天合计后重算）` : ''}`;
+    b.input > 0
+      ? `${b.key}${bucketScope}：缓存命中率 ${fmtRate(b.hitRate)}${b.days > 1 ? `（${b.days} 天合计后重算）` : ''}`
+      // 没有用量时不能报"命中率 0%"——那会被读成"命中了但一次没中"
+      : `${b.key}${bucketScope}：无用量`;
   /** 折叠后的列（长空档只占一列）；两张图共用同一份，涨落才对得上 */
   const trendItems = collapseGaps(trendBuckets);
   const gapUnit = trendGranularity === 'day' ? '天' : trendGranularity === 'week' ? '周' : '个月';
@@ -768,7 +792,7 @@ export function UsageStats() {
                   items={trendItems}
                   max={trendPeak}
                   height={96}
-                  stacked
+                  mode="stack"
                   titleOf={inputTitle}
                   gapTitle={gapTitle}
                 />
@@ -796,19 +820,35 @@ export function UsageStats() {
                 <div className="flex items-baseline justify-between gap-2 mb-2">
                   <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>缓存命中趋势</span>
                   <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    每日缓存命中率（0–100%） · 窗口内 {fmtRate(t?.cacheHitRate ?? 0)}
+                    每日缓存命中率 · 柱等高，颜色越深命中越高 · 窗口内 {fmtRate(t?.cacheHitRate ?? 0)}
                   </span>
                 </div>
                 <TrendColumns
                   items={trendItems}
-                  max={100}
                   height={56}
+                  mode="heat"
                   titleOf={rateTitle}
                   gapTitle={gapTitle}
                 />
                 <div className="flex items-center justify-between text-[10px] mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
                   <span>{trendAxisFrom}</span>
                   <span>{trendAxisTo}</span>
+                </div>
+                {/* 颜色刻度：热力带必须给刻度，否则"深浅"没有参照；空白单独说明，别和 0% 混起来 */}
+                <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  <span>命中率</span>
+                  <span>0%</span>
+                  <span
+                    className="shrink-0"
+                    style={{
+                      width: 96,
+                      height: 8,
+                      borderRadius: 2,
+                      background: `linear-gradient(90deg, ${heatColor(0)}, ${heatColor(100)})`,
+                    }}
+                  />
+                  <span>100%</span>
+                  <span className="ml-2">空白 = 该时段无用量</span>
                 </div>
               </div>
             </Block>
