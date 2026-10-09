@@ -1493,7 +1493,7 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
         改 tab 文案 / 内边距时这个数要跟着改；「投喂」上挂了待确认徽标时 tab 行会更长，
         此时不再严格对齐（徽标宽度随数字位数变化，对齐不了）。
       */}
-      <div className="w-[256px] shrink-0 overflow-y-auto p-3 space-y-3" style={{ borderRight: '1px solid var(--border)' }}>
+      <div className="w-[256px] shrink-0 overflow-y-auto p-3 space-y-3" style={{ backgroundColor: 'var(--bg-side)' }}>
         <div>
           <BlockTitle icon={Layers} text="分块展开" right={`${expandedCount} / ${expandTargets.length} 个文件`} />
           <div className="grid grid-cols-2 gap-1.5">

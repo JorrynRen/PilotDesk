@@ -165,7 +165,7 @@ export function WorkflowEditorPage() {
   // 加载中
   if (creating) {
     return (
-      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-content)' }}>
+      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
         <TitleBar
         showBackButton={false}
         mode={viewMode}
@@ -175,9 +175,13 @@ export function WorkflowEditorPage() {
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
         onOpenMarket={() => navigate('/market')} />
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
         <div className="flex-1 flex items-center justify-center">
           <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>正在创建工作流...</span>
         </div>
+        </div>
+      </div>
         <StatusBar onOpenSettings={() => navigate('/settings')} onOpenEnvSettings={() => navigate('/settings?tab=environment')} />
       </div>
     );
@@ -186,7 +190,7 @@ export function WorkflowEditorPage() {
   // 创建失败
   if (error) {
     return (
-      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-content)' }}>
+      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
         <TitleBar
         showBackButton={false}
         mode={viewMode}
@@ -196,6 +200,8 @@ export function WorkflowEditorPage() {
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
         onOpenMarket={() => navigate('/market')} />
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
         <div className="flex flex-col items-center justify-center flex-1 gap-3">
           <span className="text-xs" style={{ color: 'var(--status-danger)' }}>创建工作流失败: {error}</span>
           <button
@@ -206,6 +212,8 @@ export function WorkflowEditorPage() {
             返回工作流列表
           </button>
         </div>
+        </div>
+      </div>
         <StatusBar onOpenSettings={() => navigate('/settings')} onOpenEnvSettings={() => navigate('/settings?tab=environment')} />
       </div>
     );
@@ -214,7 +222,7 @@ export function WorkflowEditorPage() {
   if (!readyId) return null;
 
   return (
-    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-content)' }}>
+    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
       <TitleBar
         showBackButton={false}
         mode={viewMode}
@@ -225,6 +233,8 @@ export function WorkflowEditorPage() {
         onOpenKnowledge={() => navigate('/knowledge')}
         onOpenMarket={() => navigate('/market')}
       />
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
       <div className="flex-1 overflow-hidden">
         <WorkflowEditor
           definitionId={readyId}
@@ -240,6 +250,8 @@ export function WorkflowEditorPage() {
             setReadyId(newId);
           }}
         />
+      </div>
+        </div>
       </div>
       <StatusBar
         onOpenSettings={() => navigate('/settings')}

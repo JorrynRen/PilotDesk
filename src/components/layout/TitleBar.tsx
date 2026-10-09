@@ -769,35 +769,38 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
           style={{ backgroundColor: 'var(--border)' }}
         />
 
-        {/* Window controls：shrink-0 —— 窗口控制永不被分段控件挤压 */}
+        {/* Window controls：32×32 **正方形** + 8px 圆角 + 彼此 4px 间距。
+            原先做的是 32×满高（48px）的竖长条、hover 时整条铺灰 —— 在 48px 高的顶栏里显得又长又重。
+            图标改用 currentColor（颜色挂在按钮上）：原先图标写死 `text-secondary`，导致"关闭"的
+            `hover:text-white` 只变了底色、图标仍是灰的，hover 状态看起来是坏的。
+            shrink-0：窗口控制永不被分段控件挤压。 */}
         {tauriReady && (
-          <>
+          <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={handleMinimize}
-              className="pd-btn w-8 h-full shrink-0 flex items-center justify-center transition-colors hover:bg-black/5"
+              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-black/5"
+              style={{ color: 'var(--text-secondary)' }}
               title={t('titleBar.window.minimize', '最小化')}
             >
-              <Minus size={13} style={{ color: 'var(--text-secondary)' }} />
+              <Minus size={13} />
             </button>
             <button
               onClick={handleToggleMaximize}
-              className="pd-btn w-8 h-full shrink-0 flex items-center justify-center transition-colors hover:bg-black/5"
+              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-black/5"
+              style={{ color: 'var(--text-secondary)' }}
               title={isMaximized ? t('titleBar.window.restore', '还原') : t('titleBar.window.maximize', '最大化')}
             >
-              {isMaximized ? (
-                <Copy size={11} style={{ color: 'var(--text-secondary)' }} />
-              ) : (
-                <Square size={11} style={{ color: 'var(--text-secondary)' }} />
-              )}
+              {isMaximized ? <Copy size={11} /> : <Square size={11} />}
             </button>
             <button
               onClick={handleClose}
-              className="pd-btn w-8 h-full shrink-0 flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
+              className="pd-btn w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-red-500 hover:text-white"
+              style={{ color: 'var(--text-secondary)' }}
               title={t('titleBar.window.close', '关闭')}
             >
-              <X size={13} style={{ color: 'var(--text-secondary)' }} />
+              <X size={13} />
             </button>
-          </>
+          </div>
         )}
       </div>
     </header>

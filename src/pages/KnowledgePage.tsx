@@ -100,7 +100,7 @@ export function KnowledgePage() {
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
       <TitleBar
         mode={viewMode}
         onModeChange={handleModeChange}
@@ -111,6 +111,8 @@ export function KnowledgePage() {
         onOpenSettings={() => navigate('/settings')}
         onOpenMarket={() => navigate('/market')}
       />
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
 
       <div className="flex flex-1 overflow-hidden">
         {/* 左：知识库列表 */}
@@ -348,6 +350,9 @@ export function KnowledgePage() {
             </div>
           </main>
         )}
+      </div>
+
+        </div>
       </div>
 
       {/* 全局状态栏：独立路由也要保留（与会话/工作流等模式一致），否则底部少一条、页面像被截断 */}

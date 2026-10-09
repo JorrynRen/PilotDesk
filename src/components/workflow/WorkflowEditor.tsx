@@ -3228,7 +3228,7 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
 
   // ── JSX ──
   return (
-    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-content)' }}>
       {/* CSS动画注入 */}
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

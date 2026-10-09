@@ -83,7 +83,7 @@ export function ResourceMarketPage() {
   const mine = MINE[activeTab];
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
       <TitleBar
         mode={viewMode}
         onModeChange={handleModeChange}
@@ -93,6 +93,8 @@ export function ResourceMarketPage() {
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
       />
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
 
       {/* 页面标题 + tab 切换 + 「我的在哪」出口
           结构与「工作流定义」页的 tab 行保持一致：容器 pt-1，行高由 pd-tab（36px）决定，
@@ -155,6 +157,9 @@ export function ResourceMarketPage() {
         {activeTab === 'agents' && <AgentConfigMarket />}
 
         {activeTab === 'inspiration' && <InspirationMarketTab />}
+      </div>
+
+        </div>
       </div>
 
       <StatusBar

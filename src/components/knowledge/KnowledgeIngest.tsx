@@ -343,7 +343,7 @@ export function KnowledgeIngest({
       <div
         ref={panelRef}
         className="w-[400px] shrink-0 flex flex-col overflow-hidden p-4 gap-3"
-        style={{ borderRight: '1px solid var(--border)' }}
+        style={{ backgroundColor: 'var(--bg-side)' }}
       >
         <div className="flex items-center gap-1 p-0.5 rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
           {(Object.keys(MODE_META) as Mode[]).map((m) => {

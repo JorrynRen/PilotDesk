@@ -1822,7 +1822,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   }, [setMode, navigate]);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
       {/* TitleBar：组合开关注入「设置」段（thumb 定位到设置），点击其它模式段跳回主布局 */}
       <TitleBar
         mode={viewMode}
@@ -1835,6 +1835,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         onOpenKnowledge={() => navigate('/knowledge')}
         onOpenMarket={() => navigate('/market')}
       />
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
 
       {/* 主体：左侧分组侧边栏 + 右侧内容区 */}
       <div className="flex flex-1 overflow-hidden">
@@ -1969,6 +1971,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             )}
             {activeTab === 'filehistory' && <FileHistorySettings />}
           </div>
+        </div>
+      </div>
+
         </div>
       </div>
 

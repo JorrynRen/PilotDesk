@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -285,44 +285,19 @@ function App() {
       <CommandCenter />
       <Routes>
         <Route path="/" element={<MainLayout />} />
-        {/* 以下独立路由页统一套 RouteShell：与主壳层同款"一片底 + 圆角面板"，页面自身收进面板内 */}
         {/* 灵感库：本地灵感/提示词（/market 已让给「资源市集」） */}
-        <Route path="/inspirations" element={<RouteShell><InspirationLibraryPage onBack={() => window.history.back()} /></RouteShell>} />
+        <Route path="/inspirations" element={<InspirationLibraryPage onBack={() => window.history.back()} />} />
         {/* 资源市集：插件 / 工作流模板 / CLI Agent 配置 / 灵感 的统一获取入口 */}
-        <Route path="/market" element={<RouteShell><ResourceMarketPage /></RouteShell>} />
+        <Route path="/market" element={<ResourceMarketPage />} />
         {/* 工作流/群聊：不再独立全屏路由，挂载后切到对应模式并回到主布局（用户感知为开关滑动） */}
         <Route path="/workflow" element={<ModeRedirect mode="workflow" />} />
         <Route path="/groupchat" element={<ModeRedirect mode="groupchat" />} />
-        <Route path="/workflow/editor" element={<RouteShell><WorkflowEditorPage /></RouteShell>} />
-        <Route path="/settings" element={<RouteShell><SettingsPage onBack={() => window.history.back()} /></RouteShell>} />
+        <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
+        <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
         {/* 知识库：独立路由（顶部组合菜单的「知识库」段进入） */}
-        <Route path="/knowledge" element={<RouteShell><KnowledgePage /></RouteShell>} />
+        <Route path="/knowledge" element={<KnowledgePage />} />
       </Routes>
     </TerminalProvider>
-  );
-}
-
-/**
- * 独立路由页（设置 / 知识库 / 市集 / 灵感库 / 工作流编辑器）的外壳。
- *
- * 与主壳层同款"一片底 + 一块圆角面板"：外层铺 --bg-canvas 并留左右/下 8px，
- * 页面自身（含它自己的 TitleBar）收进 --bg-content 的圆角面板里。
- * 这些页面不在 MainLayout 内、拿不到主壳层的容器，故在此补一层以保持观感一致。
- * 上边不留白：页面自己的 TitleBar 就是面板的第一行（与主壳层"顶栏不再单独占一条带"一致）。
- *
- * 必须有 `overflow-hidden`：页面根节点自己会刷一层与面板同色的底，不裁的话那层方形底会把
- * 面板四角的圆角盖掉（看起来像没改）。裁切的代价只落在最外侧 8px 那一圈 ——
- * 页面内的弹层多为 fixed（不受祖先裁切影响），绝对定位的下拉也基本用不到那 8px。
- */
-function RouteShell({ children }: { children: ReactNode }) {
-  return (
-    <div className="h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      <div className="h-full px-2 pb-2">
-        <div className="h-full rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
-          {children}
-        </div>
-      </div>
-    </div>
   );
 }
 

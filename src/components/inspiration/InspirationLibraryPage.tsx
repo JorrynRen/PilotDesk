@@ -106,7 +106,9 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
       {/* Header */}
       <div className="shrink-0 px-4 py-3 flex items-center justify-between gap-3" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex items-center gap-3">
@@ -210,6 +212,8 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
           }}
         />
       )}
+        </div>
+      </div>
     </div>
   );
 }
