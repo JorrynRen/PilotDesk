@@ -937,7 +937,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
               <EmptyHint text={loadingUsage ? '加载中…' : '暂无用量数据。'} />
             ) : (
               <div className="space-y-1.5">
-                {/* 维度行 = 标签 + 份额条 + 用量 + 调用次数 + 命中率。
+                {/* 维度行 = 标签 + 份额条 + 用量 + 调用次数 + 缓存命中率。
+                    （末列写全称「缓存命中」：这一屏没有别的"命中"概念，写「命中」读者无从判断是什么指标。）
                     条的唯一语义是**占全部 token 的份额**：分母取四个维度之和（= 下方「合计」），
                     所以四条加起来正好 100% —— 既能直接读出"会话占了六成"，四条的宽度也可直接互比。
                     （早先按"最大维度"归一，满格含义与总量条不一致，且总有一根满格条容易被读成"全是它"。）
@@ -964,8 +965,8 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                       <span className="text-[10px] shrink-0 w-10 text-right" style={{ color: 'var(--text-tertiary)' }} title={`${d.totals.callCount} 次调用`}>
                         {d.totals.callCount} 次
                       </span>
-                      <span className="text-[10px] shrink-0 w-14 text-right" style={{ color: 'var(--text-tertiary)' }}>
-                        命中 {d.totals.cacheHitRate.toFixed(1)}%
+                      <span className="text-[10px] shrink-0 w-[74px] text-right" style={{ color: 'var(--text-tertiary)' }}>
+                        缓存命中 {d.totals.cacheHitRate.toFixed(1)}%
                       </span>
                     </div>
                   );
@@ -973,7 +974,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
 
                 <div className="flex items-center justify-between gap-2 px-2.5 pt-1">
                   <span className="text-[10px] min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }}>
-                    合计 {fmtTokens(usageTotals.total)} token · 命中 {usageHitRate.toFixed(1)}%
+                    合计 {fmtTokens(usageTotals.total)} token · 缓存命中 {usageHitRate.toFixed(1)}%
                   </span>
                   <button onClick={goUsageStats} className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
                     查看完整用量 ›
