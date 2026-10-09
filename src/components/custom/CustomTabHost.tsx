@@ -312,7 +312,7 @@ export function CustomTabHost() {
       </div>
 
       {/* 内容区：门户页 / iframe keep-alive 常驻层（切换仅显隐） */}
-      <div className="flex-1 relative" style={{ backgroundColor: isPortal ? 'var(--bg-primary)' : '#fff' }}>
+      <div className="flex-1 relative" style={{ backgroundColor: isPortal ? 'var(--bg-content)' : '#fff' }}>
         {frames.map((t) => (
           <iframe
             key={t.id}
@@ -327,7 +327,7 @@ export function CustomTabHost() {
 
         {/* 门户页：按分组渲染全部门户标签卡片网格（搜索 / 管理 / 空态 / 已打开标记 / 在浏览器打开） */}
         {isPortal && (
-          <div className="absolute inset-0 overflow-y-auto" style={{ backgroundColor: 'var(--bg-primary)' }}>
+          <div className="absolute inset-0 overflow-y-auto" style={{ backgroundColor: 'var(--bg-content)' }}>
             <div className="max-w-[1080px] mx-auto px-6 py-5">
               {/* 标题行 */}
               <div className="flex items-center gap-2 mb-4">
@@ -497,7 +497,7 @@ export function CustomTabHost() {
 
       {/* 标签管理覆盖层：叠加在主视图之上，主树（iframe）保持挂载 */}
       {showManage && (
-        <div className="absolute inset-0 z-30 flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
+        <div className="absolute inset-0 z-30 flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
           <div className="flex items-center gap-2 px-3 h-9 shrink-0" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
             <button
               onClick={() => setShowManage(false)}

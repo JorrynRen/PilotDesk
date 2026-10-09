@@ -1031,7 +1031,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
   }, [runningByDef.size]);
 
   return (
-    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="flex flex-col h-full" style={{ backgroundColor: embedded ? 'var(--bg-content)' : 'var(--bg-primary)' }}>
       {!embedded && (
         <TitleBar
           showBackButton={true}
@@ -1041,8 +1041,10 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           onOpenMarket={() => navigate('/market')}
         />
       )}
-      {/* Tab navigation — 与设置页同一套UI */}
-      <div className="shrink-0 px-4 pt-1 flex items-center gap-0.5 overflow-x-clip" style={{ borderBottom: '1px solid var(--border)' }}>
+      {/* Tab navigation — 与设置页同一套UI。
+          pt-3（原 pt-1）：嵌入主布局时本页最上面就是这行，而壳层已不再给工作区加上内边距，
+          上边距太小时标签会贴着应用顶栏（非嵌入模式下方还压着自身 TitleBar，多这点也无妨）。 */}
+      <div className="shrink-0 px-4 pt-3 flex items-center gap-0.5 overflow-x-clip" style={{ borderBottom: '1px solid var(--border)' }}>
         <button
           onClick={() => setActiveTab('definitions')}
           className={"pd-tab" + (activeTab === 'definitions' ? " pd-tab-active" : "")}

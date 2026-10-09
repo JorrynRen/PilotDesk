@@ -2367,11 +2367,13 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   }
 
   return (
-    <div className="flex-1 flex overflow-hidden">
+    // 壳层风格：本页自带左/中/右三栏，故本层就是"底"（透明，露出壳层的 canvas），
+    // 三栏各自圆角、彼此留 8px 缝；上下的缝由壳层统一不给（与其它模式一致）。
+    <div className="flex-1 flex overflow-hidden gap-2">
       {/* ── 左：房间列表（宽度与会话页左侧会话列表 w-[260px] 保持一致） ── */}
       <aside
-        className="w-[260px] shrink-0 flex flex-col overflow-hidden"
-        style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+        className="w-[260px] shrink-0 flex flex-col overflow-hidden rounded-lg"
+        style={{ backgroundColor: 'var(--bg-side)' }}
       >
         <div className="flex items-center px-3 h-10" style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>群聊房间</span>
@@ -2443,7 +2445,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       </aside>
 
       {/* ── 中：消息流 ── */}
-      <main className="flex-1 flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <main className="flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
         <div className="flex items-center gap-2 px-4 h-10 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
             {currentRoom?.title || '选择或创建一个群聊房间'}
@@ -2773,8 +2775,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       {/* ── 右：讨论（参与者 + 立场 + 任务） / 文件历史（tab 切换）；显隐由外层折叠按钮控制 ── */}
       {rightPanelOpen && (
         <aside
-          className="w-[240px] shrink-0 flex flex-col overflow-hidden"
-          style={{ borderLeft: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+          className="w-[240px] shrink-0 flex flex-col overflow-hidden rounded-lg"
+          style={{ backgroundColor: 'var(--bg-side)' }}
         >
         {/* Tab 切换栏：讨论 / 文件历史（h-10 与消息窗口顶部栏、左栏列表头部等高） */}
         <div

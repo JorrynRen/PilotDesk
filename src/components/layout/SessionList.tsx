@@ -493,7 +493,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
 
   return (
     <aside
-      className="w-[260px] shrink-0 flex flex-col overflow-hidden rounded-xl"
+      className="w-[260px] shrink-0 flex flex-col overflow-hidden rounded-lg"
       // 壳层风格：面板靠"底色 + 圆角 + 与相邻面板之间的 8px 缝"区分，不再画 border-right（见 App.tsx 工作区）
       style={{ backgroundColor: 'var(--bg-side)', ...style }}
     >

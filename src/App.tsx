@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -97,31 +97,32 @@ function MainLayout() {
           onToggleRightPanel={rightPanelMode ? toggleRightPanel : undefined}
           rightPanelOpen={rightPanelMode ? rightPanelOpen : undefined}
         />
-        {/* 工作区：这一层的底色就是壳层的"底"（--bg-canvas，见 globals.css），
-            靠 8px 内边距 + 8px 间隙把各面板分开——面板自己圆角、自己不画左右分隔线，
-            于是"面板之间的缝"与"窗口四周的边距"连成同一片底。顶栏/状态栏在它上下，直接画在这片底上。 */}
-        <div className="flex-1 flex overflow-hidden relative p-2 gap-2">
-          {/* 群聊模式：全宽嵌入（页面内含专属右侧「讨论/文件历史」面板，由折叠按钮控制） */}
+        {/* 工作区：这一层的底色就是壳层的"底"（--bg-canvas，见 globals.css）。
+            只留左右各 8px 与面板之间 8px —— **上下不加内边距**：顶栏/状态栏自身高度已经足够，
+            再留 8px 只会把三栏压矮，且上边那条缝会被读成"又一条横带"。 */}
+        <div className="flex-1 flex overflow-hidden relative px-2 gap-2">
+          {/* 群聊模式：本页自带左/中/右三栏，所以这一层**不当面板**——留透明露出壳层的"底"，
+              由页面内部的三栏各自圆角成面板（与其它模式观感一致）。 */}
           {isGroupChat && (
-            <div className="flex-1 flex flex-col overflow-hidden rounded-xl" style={{ backgroundColor: 'var(--bg-content)' }}>
+            <div className="flex-1 flex flex-col overflow-hidden">
               <GroupChatPage rightPanelOpen={sidePanelOpen.groupchat} />
             </div>
           )}
           {/* 工作流模式：嵌入主布局（复用工作流管理页，去除自身 TitleBar/StatusBar），全宽 */}
           {isWorkflow && (
-            <div className="flex-1 flex flex-col overflow-hidden rounded-xl" style={{ backgroundColor: 'var(--bg-content)' }}>
+            <div className="flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
               <WorkflowPage embedded />
             </div>
           )}
           {/* 门户标签模式：固定壳。CustomTabHost 常挂载（CSS 隐藏切换），
               避免每次进出卸载导致已打开标签页的 iframe 状态丢失 */}
-          <div className={`flex-1 flex flex-col overflow-hidden rounded-xl ${isCustom ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
+          <div className={`flex-1 flex flex-col overflow-hidden rounded-lg ${isCustom ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
             <CustomTabHost />
           </div>
           {/* 终端模式：中间终端 + 右侧面板（保留原始布局：会话列表隐藏）。
               TerminalPanel 必须常挂载——xterm 会话 DOM/内容由组件实例持有，
               卸载即丢失；非终端模式仅用 display:none 隐藏，切回时内容原样保留。 */}
-          <div className={`flex-1 flex flex-col overflow-hidden rounded-xl ${isTerminal ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
+          <div className={`flex-1 flex flex-col overflow-hidden rounded-lg ${isTerminal ? '' : 'hidden'}`} style={{ backgroundColor: 'var(--bg-content)' }}>
             <TerminalPanel />
           </div>
           {isTerminal && <RightPanel isOpen={rightPanelOpen} mode="terminal" />}
@@ -284,19 +285,41 @@ function App() {
       <CommandCenter />
       <Routes>
         <Route path="/" element={<MainLayout />} />
+        {/* 以下独立路由页统一套 RouteShell：与主壳层同款"一片底 + 圆角面板"，页面自身收进面板内 */}
         {/* 灵感库：本地灵感/提示词（/market 已让给「资源市集」） */}
-        <Route path="/inspirations" element={<InspirationLibraryPage onBack={() => window.history.back()} />} />
+        <Route path="/inspirations" element={<RouteShell><InspirationLibraryPage onBack={() => window.history.back()} /></RouteShell>} />
         {/* 资源市集：插件 / 工作流模板 / CLI Agent 配置 / 灵感 的统一获取入口 */}
-        <Route path="/market" element={<ResourceMarketPage />} />
+        <Route path="/market" element={<RouteShell><ResourceMarketPage /></RouteShell>} />
         {/* 工作流/群聊：不再独立全屏路由，挂载后切到对应模式并回到主布局（用户感知为开关滑动） */}
         <Route path="/workflow" element={<ModeRedirect mode="workflow" />} />
         <Route path="/groupchat" element={<ModeRedirect mode="groupchat" />} />
-        <Route path="/workflow/editor" element={<WorkflowEditorPage />} />
-        <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
+        <Route path="/workflow/editor" element={<RouteShell><WorkflowEditorPage /></RouteShell>} />
+        <Route path="/settings" element={<RouteShell><SettingsPage onBack={() => window.history.back()} /></RouteShell>} />
         {/* 知识库：独立路由（顶部组合菜单的「知识库」段进入） */}
-        <Route path="/knowledge" element={<KnowledgePage />} />
+        <Route path="/knowledge" element={<RouteShell><KnowledgePage /></RouteShell>} />
       </Routes>
     </TerminalProvider>
+  );
+}
+
+/**
+ * 独立路由页（设置 / 知识库 / 市集 / 灵感库 / 工作流编辑器）的外壳。
+ *
+ * 与主壳层同款"一片底 + 一块圆角面板"：外层铺 --bg-canvas 并留左右/下 8px，
+ * 页面自身（含它自己的 TitleBar）收进 --bg-content 的圆角面板里。
+ * 这些页面不在 MainLayout 内、拿不到主壳层的容器，故在此补一层以保持观感一致。
+ * 不加 overflow-hidden：页面里可能有绝对定位的下拉/浮层，裁切会把它们切掉。
+ * 上边不留白：页面自己的 TitleBar 就是面板的第一行（与主壳层"顶栏不再单独占一条带"一致）。
+ */
+function RouteShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
+      <div className="h-full px-2 pb-2">
+        <div className="h-full rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
+          {children}
+        </div>
+      </div>
+    </div>
   );
 }
 
