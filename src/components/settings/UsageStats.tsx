@@ -11,6 +11,7 @@ import {
   type UsageSummary,
   type UsageAttribution,
   type UsageGroup,
+  type UsageDay,
 } from '../../types';
 import { errorMessage } from '../../utils/errorMessage';
 
@@ -36,6 +37,158 @@ function Bar({ value }: { value: number }) {
           background: 'var(--accent, #6366F1)',
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * 命中率口径说明（放在命中率数字下方）。
+ *
+ * 页头 description 已经讲过「四桶互斥 / 缓存写只有 Anthropic 上报故恒为 0 / 命中率公式」，
+ * 这里只补它**没讲**、而恰好是与模型商后台对不上时最需要的两点：
+ * ① 缓存读、分母三桶都取自模型商上报值（不是估算），但**比率本身是本机算的**，展示公式可能与厂商不同；
+ * ② 口径只覆盖经本应用发起的调用 —— 终端里直接跑 CLI 的用量根本不入库，厂商后台却会算进去。
+ */
+const CACHE_RATE_NOTE =
+  '命中率由本机按上式计算的派生值（分子分母均取模型商上报值，非估算），与模型商后台的展示口径可能不同；'
+  + '且只统计经本应用发起的调用 —— 终端里直接跑 CLI 的用量不入库，而厂商后台会计入。';
+
+/* ── 趋势：按区间跨度自动换粒度（日 / 周 / 月）─────────────────────────────
+   为什么必须聚合：「全部」会返回表里每一个有数据的日子，逐日一行时用一年就是几百行 ——
+   那既看不出形状（是清单不是趋势），又把页面拉成一条长带。
+   粒度按**时间跨度**而不是行数决定：跨度才是决定横轴密度的量（用得少的人行数少、跨度却可能很大）。 */
+type TrendGranularity = 'day' | 'week' | 'month';
+
+function granularityOf(spanDays: number): TrendGranularity {
+  if (spanDays <= 60) return 'day';
+  if (spanDays <= 420) return 'week';
+  return 'month';
+}
+
+/** 某个日期属于哪个桶：日 = 当天；周 = 当周周一（周一为一周之始）；月 = `YYYY-MM`。 */
+function bucketKey(date: string, g: TrendGranularity): string {
+  if (g === 'day') return date;
+  if (g === 'month') return date.slice(0, 7);
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+/** 下一个桶 key（按 key 自身步进，用来把中间缺数据的桶补出来）。 */
+function nextKey(key: string, g: TrendGranularity): string {
+  if (g === 'month') {
+    const [y, m] = key.split('-').map(Number);
+    return m >= 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+  }
+  const d = new Date(`${key}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + (g === 'week' ? 7 : 1));
+  return d.toISOString().slice(0, 10);
+}
+
+interface TrendBucket {
+  key: string;
+  /** 桶内实际有数据的天数（周/月聚合时用来说明"这几天合计"） */
+  days: number;
+  /** 未命中输入 */
+  prompt: number;
+  /** 缓存命中读取 */
+  read: number;
+  /** 缓存写入 */
+  write: number;
+  /** 输入总量 = 未命中 + 缓存命中 + 缓存写（与「输入·总量」列、命中率分母同口径；不含输出） */
+  input: number;
+  hitRate: number;
+}
+
+/**
+ * 把逐日趋势聚合到指定粒度。
+ *
+ * 两个关键点：
+ * 1. 命中率是**比率**，聚合时**不能取平均** —— 必须按桶求和后重算（Σ读 / Σ(未命中+读+写)），
+ *    否则"某天只调了 1 次、命中 100%"会把整周拉高；
+ * 2. 中间没有数据的桶补 0：横轴要按时距等距，否则"隔了半年"会被画成相邻两根柱（假趋势）。
+ */
+function bucketize(trend: UsageDay[], g: TrendGranularity): TrendBucket[] {
+  const acc = new Map<string, { days: number; prompt: number; read: number; write: number }>();
+  for (const d of trend) {
+    const k = bucketKey(d.date, g);
+    const cur = acc.get(k) ?? { days: 0, prompt: 0, read: 0, write: 0 };
+    cur.days += 1;
+    cur.prompt += d.promptTokens ?? 0;
+    cur.read += d.cacheReadTokens ?? 0;
+    cur.write += d.cacheWriteTokens ?? 0;
+    acc.set(k, cur);
+  }
+  if (acc.size === 0) return [];
+  const keys = [...acc.keys()].sort(); // 同格式的 ISO key：字典序即时序
+  const zero = { days: 0, prompt: 0, read: 0, write: 0 };
+  const out: TrendBucket[] = [];
+  // 上限只是防 key 步进出错时死循环（正常最多几百个桶）
+  for (let k = keys[0]; k <= keys[keys.length - 1] && out.length < 4000; k = nextKey(k, g)) {
+    const v = acc.get(k) ?? zero;
+    const input = v.prompt + v.read + v.write;
+    out.push({
+      key: k,
+      days: v.days,
+      prompt: v.prompt,
+      read: v.read,
+      write: v.write,
+      input,
+      hitRate: input > 0 ? (v.read / input) * 100 : 0,
+    });
+  }
+  return out;
+}
+
+/** 输入构成三桶的柱色：同一主色的深浅阶梯，含义由图例给（不引入新色相）。 */
+const SEG_READ = 'var(--accent)';
+const SEG_PROMPT = 'color-mix(in srgb, var(--accent) 18%, var(--bg-tertiary))';
+const SEG_WRITE = 'color-mix(in srgb, var(--accent) 50%, var(--bg-tertiary))';
+
+/**
+ * 时间轴柱状图：每桶一列，柱高 = 值 / 上限。用 flex 列 + 百分比高度画，不引图表库 ——
+ * 只有几十根柱，库带来的体积与窄面板自适应成本都不划算。
+ *
+ * `stacked` 时按三桶堆叠（`flexGrow` 直接给出桶间比例，不必自己算百分比）；
+ * 否则单色一列（命中率，纵轴固定 0–100）。
+ */
+function TrendColumns({
+  buckets,
+  max,
+  height,
+  stacked,
+  titleOf,
+}: {
+  buckets: TrendBucket[];
+  /** 纵轴上限：输入构成用窗口内峰值；命中率固定 100 */
+  max: number;
+  height: number;
+  stacked?: boolean;
+  titleOf: (b: TrendBucket) => string;
+}) {
+  return (
+    <div className="flex items-stretch gap-px" style={{ height }}>
+      {buckets.map((b) => {
+        const value = stacked ? b.input : b.hitRate;
+        const h = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+        // 单色时的 flexGrow 取 1：柱高已由外层 height 决定，段内比例无所谓
+        const segs = stacked
+          ? [
+              { g: b.write, c: SEG_WRITE },
+              { g: b.prompt, c: SEG_PROMPT },
+              { g: b.read, c: SEG_READ },
+            ]
+          : [{ g: 1, c: SEG_READ }];
+        return (
+          <div key={b.key} className="flex-1 min-w-0 flex flex-col justify-end" title={titleOf(b)}>
+            <div className="flex flex-col overflow-hidden" style={{ height: `${h}%`, borderRadius: '2px 2px 0 0' }}>
+              {segs.map((s, i) => (
+                <div key={i} style={{ flexGrow: s.g, backgroundColor: s.c }} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -335,6 +488,32 @@ export function UsageStats() {
       ? detailGroups.map((g) => ({ ...g, name: kbNames[g.name] ?? g.name }))
       : detailGroups;
 
+  /**
+   * 趋势图的派生数据：先按**跨度**选粒度（日/周/月），再聚合。
+   * 这里读的是数据自带的日期字符串，不读当前时钟。
+   */
+  const trend = summary?.trend ?? [];
+  // 排序只为取最早/最晚（不依赖后端的 ORDER BY）：跨度为 0 时按"按天"处理
+  const trendDates = trend.map((d) => d.date).sort();
+  const trendSpanDays = trendDates.length > 1
+    ? Math.round(
+        (Date.parse(`${trendDates[trendDates.length - 1]}T00:00:00Z`) - Date.parse(`${trendDates[0]}T00:00:00Z`)) / 86400000,
+      )
+    : 0;
+  const trendGranularity = granularityOf(trendSpanDays);
+  const trendBuckets = bucketize(trend, trendGranularity);
+  // 纵轴上限：输入构成的峰值（下限 1 防 0 除）。命中率那根固定 0–100，用不到它。
+  const trendPeak = Math.max(1, ...trendBuckets.map((b) => b.input));
+  /** 桶的时间说明，用在 tooltip 里（按天时不需要） */
+  const bucketScope = trendGranularity === 'week' ? '那一周' : trendGranularity === 'month' ? '当月' : '';
+  const granularityLabel =
+    trendGranularity === 'day' ? '按天' : trendGranularity === 'week' ? '按周聚合' : '按月聚合';
+  const inputTitle = (b: TrendBucket) =>
+    `${b.key}${bucketScope}：输入 ${fmt(b.input)}（缓存命中 ${fmt(b.read)} / 未命中 ${fmt(b.prompt)} / 缓存写 ${fmt(b.write)}`
+    + `${b.days > 1 ? `，${b.days} 天合计` : ''}）`;
+  const rateTitle = (b: TrendBucket) =>
+    `${b.key}${bucketScope}：缓存命中率 ${fmtRate(b.hitRate)}${b.days > 1 ? `（${b.days} 天合计后重算）` : ''}`;
+
   return (
     <SettingsSection
       title="用量统计"
@@ -401,6 +580,9 @@ export function UsageStats() {
                 <span style={{ color: 'var(--text-primary)' }}>{fmtRate(t?.cacheHitRate ?? 0)}</span>
               </div>
               <Bar value={t?.cacheHitRate ?? 0} />
+              <div className="text-[10px] leading-relaxed mt-1.5" style={{ color: 'var(--text-tertiary)' }}>
+                {CACHE_RATE_NOTE}
+              </div>
             </div>
           </Block>
 
@@ -506,19 +688,47 @@ export function UsageStats() {
             )}
           </Block>
 
-          {summary.trend.length > 0 && (
-            <Block title="趋势" hint="按天缓存命中率（用来看优化有没有生效）">
-              {summary.trend.map((d) => (
-                <div key={d.date} className="flex items-center gap-2 mb-1">
-                  <span className="text-[10px] w-20 shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                    {d.date}
+          {trendBuckets.length > 0 && (
+            <Block
+              title="趋势"
+              hint={`上图每日输入构成、下图缓存命中率；${granularityLabel}（跨度 ${trendSpanDays} 天）`}
+            >
+              {/* 输入构成：柱高按窗口内峰值归一（纵轴不是 0–100%，故把峰值标出来） */}
+              <div className="flex items-center justify-between text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>
+                <span>每日输入 Token（柱高按窗口内峰值归一）</span>
+                <span>峰值 {fmt(trendPeak)}</span>
+              </div>
+              <TrendColumns buckets={trendBuckets} max={trendPeak} height={96} stacked titleOf={inputTitle} />
+
+              {/* 缓存命中率：纵轴固定 0–100% */}
+              <div className="flex items-center justify-between text-[10px] mt-3 mb-1" style={{ color: 'var(--text-tertiary)' }}>
+                <span>每日缓存命中率（0–100%）</span>
+                <span>窗口内 {fmtRate(t?.cacheHitRate ?? 0)}</span>
+              </div>
+              <TrendColumns buckets={trendBuckets} max={100} height={56} titleOf={rateTitle} />
+
+              {/* 横轴两端：给时间轴一个落点（中间刻度靠悬停看具体日期） */}
+              <div className="flex items-center justify-between text-[10px] mt-1" style={{ color: 'var(--text-tertiary)' }}>
+                <span>{trendBuckets[0].key}</span>
+                <span>{trendBuckets[trendBuckets.length - 1].key}</span>
+              </div>
+
+              {/* 上图三桶的图例（同一主色的深浅阶梯，颜色本身不带语义，含义靠这里给） */}
+              <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-2">
+                {[
+                  { label: '缓存命中读取', color: SEG_READ },
+                  { label: '未命中输入', color: SEG_PROMPT },
+                  { label: '缓存写入', color: SEG_WRITE },
+                ].map((s) => (
+                  <span key={s.label} className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    <span className="shrink-0" style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: s.color }} />
+                    {s.label}
                   </span>
-                  <div className="flex-1"><Bar value={d.cacheHitRate} /></div>
-                  <span className="text-[10px] w-14 text-right" style={{ color: 'var(--text-secondary)' }}>
-                    {fmtRate(d.cacheHitRate)}
-                  </span>
-                </div>
-              ))}
+                ))}
+                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  输入 = 三桶之和（不含输出）
+                </span>
+              </div>
             </Block>
           )}
         </>

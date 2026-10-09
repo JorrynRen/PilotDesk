@@ -319,6 +319,9 @@ export interface UsageDay {
   date: string;
   promptTokens: number;
   cachedTokens: number;
+  /** 与 `UsageTotals` 同口径：聚合（按周/月）时必须用这两项按桶求和后**重算**命中率，不能取平均。 */
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   cacheHitRate: number;
 }
 
