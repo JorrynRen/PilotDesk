@@ -91,7 +91,11 @@ export function useTheme() {
   useEffect(() => {
     if (!loaded) return;
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const apply = () => applyThemeToDocument(theme, mq.matches);
+    const apply = () => {
+      applyThemeToDocument(theme, mq.matches);
+      // 主题自带的强调色同步给 store：切主题后「主题色」区块才能对上号（见 themeStore.effectiveAccent）
+      useThemeStore.getState().syncEffectiveAccent();
+    };
     apply();
     if (theme === 'system') {
       mq.addEventListener('change', apply);
