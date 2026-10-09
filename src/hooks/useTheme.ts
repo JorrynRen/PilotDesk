@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useThemeStore } from '../stores/themeStore';
 
-export type Theme = 'light' | 'dark' | 'nightfall' | 'system';
+export type Theme = 'light' | 'dark' | 'nightfall' | 'celadon' | 'system';
 
 /** 可选主题白名单（读取持久化设置与切换时都要校验，避免脏值落到 data-theme 上） */
-export const THEMES: Theme[] = ['light', 'dark', 'nightfall', 'system'];
+export const THEMES: Theme[] = ['light', 'dark', 'nightfall', 'celadon', 'system'];
 
 /**
  * 默认主题（用户从未设置过主题时生效）。
@@ -17,7 +17,7 @@ export const DEFAULT_THEME: Theme = 'nightfall';
 
 /** 主题是否为深色族：所有"按深浅分叉"的地方都该走这里，而不是逐处写 `theme === 'dark'` */
 export function isDarkTheme(theme: Theme, systemPrefersDark = false): boolean {
-  if (theme === 'nightfall' || theme === 'dark') return true;
+  if (theme === 'nightfall' || theme === 'dark' || theme === 'celadon') return true;
   if (theme === 'system') return systemPrefersDark;
   return false;
 }

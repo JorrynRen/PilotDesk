@@ -4,7 +4,7 @@ import {
   Settings, Key, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Package, Cpu, User, Building2, Cloud, Upload,
+  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Palette, Package, Cpu, User, Building2, Cloud, Upload,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -205,6 +205,7 @@ function GeneralSettings() {
   const themeOptions = [
     { value: 'dark' as const, icon: Moon, label: '深色', title: '中性深色（#0F1117）' },
     { value: 'nightfall' as const, icon: Sparkles, label: '深空', title: '深空 Nightfall：冷蓝黑底 + 天青强调色（#38BDF8）' },
+    { value: 'celadon' as const, icon: Palette, label: '青瓷', title: '青瓷 Celadon：靛墨底 + 青灰栏 + 暖灰纸面 + 青瓷强调（#4FD1C5）' },
     { value: 'light' as const, icon: Sun, label: '浅色', title: '浅色' },
     { value: 'system' as const, icon: Monitor, label: '跟随系统', title: '跟随系统浅/深色' },
   ];

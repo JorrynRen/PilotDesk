@@ -252,6 +252,78 @@
   --shadow-lg: 0 14px 32px rgba(0, 0, 0, 0.55);
 }
 
+/* ═══════════════════════════════════════════════════
+   青瓷 Celadon — 第 5 个主题模式（深色系 · 多色系）
+   ═══════════════════════════════════════════════════
+   与 dark / nightfall 不同，这一套是**多色系**：壳层三块各带一个低彩度色相，
+   只有强调色是高饱和的单一色 —— 观感上"有颜色"，但互不争抢（彩度都压在 ~0.02–0.04）：
+     · 底 / 面板内的档  = 靛墨（冷）
+     · 左右栏           = 青灰（冷）
+     · 内容区            = 暖灰纸（暖）—— 靠**色相微反差**分层，而不是靠明度硬拉
+     · 强调色            = 青瓷（冷绿）
+   派生规则与 dark / nightfall 一致（底 = primary 压暗、左右栏 = secondary），
+   区别只在内容区：不取 secondary↔tertiary 的混色，而取一个"明度落在二者之间、色相偏暖"的专用值。
+   ⚠️ 三档仍需互相拉开（≥13/通道）；内容区不能与 secondary / tertiary 同值，
+      否则面板内复用三档的元素（卡片、分区正文、chips）会与它撞色。
+   =================================================== */
+[data-theme="celadon"] {
+  color-scheme: dark;
+
+  /* ── Background ── */
+  --bg-primary: #12141C;   /* 靛墨：面板内"最深"档（弹窗底、凹槽） */
+  --bg-secondary: #20242F; /* 青灰：左右栏，同时也是卡片（--bg-raised） */
+  --bg-tertiary: #2F3442;  /* 面板内浮起层：控件（--bg-field）、chips */
+  --bg-panel: #20242F;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-overlay: rgba(6, 8, 14, 0.62);
+
+  /* 壳层映射：底压暗（同 dark）；内容区取"暖灰纸"（见上方说明） */
+  --bg-canvas: color-mix(in srgb, black 55%, var(--bg-primary));
+  --bg-side: var(--bg-secondary);
+  --bg-content: #2C2926;
+
+  /* ── Text ── */
+  --text-primary: #E9E7E3;   /* 暖白：冷栏与暖纸上都压得住 */
+  --text-secondary: #A7A5A0;
+  --text-tertiary: #8E8C87;  /* 对暖纸 ~4.6:1、对靛墨 ~5.7:1，均达 AA 小字 */
+  --text-inverse: #12141C;
+
+  /* ── Border ── */
+  --border: #363B48;
+  --border-light: #2A2E39;
+
+  /* ── Accent ── */
+  --accent: #4FD1C5;        /* 青瓷 */
+  --accent-hover: #38B2AC;
+  --accent-light: rgba(79, 209, 197, 0.18);
+
+  /* ── Agent Tags ── */
+  --api-tag: #4ADE80;
+
+  /* ── Mode Colors ── */
+  --mode-native: var(--text-secondary);
+  --mode-fast: #4ADE80;
+  --mode-think: var(--accent);
+  --mode-expert: #A78BFA;
+
+  /* ── Status ──
+     成功色刻意从"青瓷绿"挪到偏黄的草绿（#4ADE80，色相差 ~33°），
+     否则与强调色同色族、分不清"这是强调还是成功"。 */
+  --status-success: #4ADE80;
+  --status-danger: #F87171;
+  --status-warning: #FBBF24;
+  --status-info: #60A5FA;
+  --status-success-bg: rgba(74, 222, 128, 0.16);
+  --status-danger-bg: rgba(248, 113, 113, 0.16);
+  --status-warning-bg: rgba(251, 191, 36, 0.16);
+  --status-info-bg: rgba(96, 165, 250, 0.16);
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.42);
+  --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.46);
+  --shadow-lg: 0 14px 32px rgba(0, 0, 0, 0.52);
+}
+
 /* Dark mode button overlay uses lighter overlay。
    用 data-theme-kind（深色族标记）而非具体主题名：以后再加深色主题不必回来改这些选择器。 */
 [data-theme-kind="dark"] button:hover {
