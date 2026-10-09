@@ -2776,13 +2776,16 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       {rightPanelOpen && (
         <aside
           className="w-[240px] shrink-0 flex flex-col overflow-hidden rounded-lg"
+          // 配色对齐会话页右栏（RightPanel）：整栏就是一个 --bg-side 底，面板级标题行只画 1px 下边框、
+          // 不填色；栏内分组标题条用 --bg-tertiary（同 InspirationPanel 的分段标题），分组正文保持透明。
+          // 这样右栏整块与会话页右栏一致，也不会因为正文填 --bg-primary 而看着像"露底"。
           style={{ backgroundColor: 'var(--bg-side)' }}
         >
         {/* Tab 切换栏：讨论 / 文件历史（h-10 与消息窗口顶部栏、左栏列表头部等高） */}
         <div
           className="flex h-10 shrink-0"
-          // 标题条用 tertiary：右边栏本身是 --bg-side（= secondary），同档会看不出是条带（见 globals.css 的说明）
-          style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)' }}
+          // 面板级标题行：与右栏同底色（不填色），只靠 1px 下边框分隔 —— 对齐会话页右栏的 header
+          style={{ borderBottom: '1px solid var(--border)' }}
         >
           <button
             onClick={() => setRightTab('overview')}
@@ -2852,7 +2855,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 </span>
               )}
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable" style={{ backgroundColor: 'var(--bg-primary)' }}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
               {stances.length === 0 && (
                 <div className="px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                   暂无立场
@@ -2907,7 +2910,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
             </div>
             <div
               className="p-2 grid grid-cols-3 gap-1.5 shrink-0 overflow-y-auto"
-              style={{ maxHeight: '190px', backgroundColor: 'var(--bg-primary)', borderBottom: '1px solid var(--border)' }}
+              style={{ maxHeight: '190px', borderBottom: '1px solid var(--border)' }}
             >
               {participants.length === 0 && (
                 <div className="col-span-3 px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
@@ -2963,8 +2966,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               <Folder size={10} style={{ color: 'var(--accent)' }} />
               产物目录
             </div>
-            {/* 内容区背景与「立场快照」内容区统一（bg-primary），标题行与立场快照标题行一致（bg-tertiary） */}
-            <div className="px-3 py-2 flex flex-col gap-1.5 shrink-0" style={{ backgroundColor: 'var(--bg-primary)', borderBottom: '1px solid var(--border)' }}>
+            {/* 正文不填色（右栏底色即为分组底），标题行与其余分组标题一致用 bg-tertiary */}
+            <div className="px-3 py-2 flex flex-col gap-1.5 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
               <div className="flex items-center gap-1">
                 <input
                   type="text"
@@ -3017,7 +3020,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 新增
               </button>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable" style={{ backgroundColor: 'var(--bg-primary)' }}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
               {tasks.length === 0 && (
                 <div className="px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
                   暂无任务
@@ -3117,7 +3120,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           <>
             {/* ── 文件历史 tab：当前房间 write_file/edit_file 快照，可撤销，占满整栏 ── */}
             {/* 记录开关：持久化 tool_overrides.groupchat 并热切换运行期标记（当前房间立即生效） */}
-            <div className="px-2 py-2 shrink-0 flex items-center justify-between gap-2" style={{ backgroundColor: 'var(--bg-primary)', borderBottom: '1px solid var(--border)' }}>
+            <div className="px-2 py-2 shrink-0 flex items-center justify-between gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
               <div className="min-w-0">
                 <div className="text-[10px] font-medium flex items-center gap-1" style={{ color: 'var(--text-primary)' }}>
                   <History size={10} style={{ color: 'var(--accent)' }} />
@@ -3159,7 +3162,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable" style={{ backgroundColor: 'var(--bg-primary)' }}>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
               {historyLoading ? (
                 <div className="flex items-center justify-center py-3">
                   <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />
@@ -3195,7 +3198,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                         onClick={(ev) => { ev.stopPropagation(); undoRoomHistory(e.id); }}
                         disabled={historyUndoingId === e.id}
                         className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] transition-colors disabled:opacity-40"
-                        style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--accent)', border: '1px solid var(--border)' }}
+                        style={{ backgroundColor: 'var(--bg-field)', color: 'var(--accent)', border: '1px solid var(--border)' }}
                         title="撤销到修改前版本"
                       >
                         {historyUndoingId === e.id ? <Loader2 size={9} className="animate-spin" /> : <Undo2 size={9} />}
