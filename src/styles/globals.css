@@ -38,15 +38,15 @@
   --bg-side: var(--bg-secondary);
   --bg-content: var(--bg-primary);
 
-  /* ── 控件 / 卡片底色（半透明叠加）──
+  /* ── 控件 / 卡片底色 ──
      输入框 / 选择器 / 分段控件 / 选项卡这类小控件用 --bg-field，卡片（SettingsCard 等）用 --bg-raised。
-     从前这两类都用不透明的 --bg-tertiary：壳层改造后内容面板（--bg-content）在深色下恰好也是
-     tertiary，于是"控件与面板完全同色、直接隐形"；而且面板 / 卡片 / 侧栏里各自需要的"差一档"
-     颜色并不相同，一个不透明值无法通吃。改用**半透明叠加**后，无论落在内容面板、卡片、侧栏
-     还是弹窗上，都会比所在底色亮（深色主题）或暗（浅色主题）一档。
-     raised 比 field 弱一档，保证"卡片里的控件"仍能与卡片本身区分开。 */
-  --bg-raised: rgba(0, 0, 0, 0.025);
-  --bg-field: rgba(0, 0, 0, 0.05);
+     两者都直接取调色板里现成的档：控件 = tertiary、卡片 = secondary，三个主题一致，因此只在 :root 声明。
+     之所以不再用"比所在底色亮一档"的半透明叠加：深色下壳层的底 / 内容区已经改成了"档间值"
+     （见下方壳层映射），三档都腾出来了，面板内元素直接绑档即可，不必再叠加。
+     ⚠️ 唯一要避免的是同档相撞：控件（tertiary）不要直接落在同为 tertiary 的块里；
+        卡片（secondary）不要落在左右栏（--bg-side 也是 secondary）里。 */
+  --bg-raised: var(--bg-secondary);
+  --bg-field: var(--bg-tertiary);
 
   /* ── Text ── */
   --text-primary: #1F2937;
@@ -144,10 +144,6 @@
   --bg-side: var(--bg-secondary);
   --bg-content: color-mix(in srgb, var(--bg-secondary) 50%, var(--bg-tertiary));
 
-  /* 控件 / 卡片底色：深色下用白色叠加（比所在底色亮一档），见 :root 的说明 */
-  --bg-raised: rgba(255, 255, 255, 0.04);
-  --bg-field: rgba(255, 255, 255, 0.08);
-
   /* ── Text ── */
   --text-primary: #E5E7EB;
   --text-secondary: #9CA3AF;
@@ -214,10 +210,6 @@
   --bg-canvas: color-mix(in srgb, black 55%, var(--bg-primary));
   --bg-side: var(--bg-secondary);
   --bg-content: color-mix(in srgb, var(--bg-secondary) 50%, var(--bg-tertiary));
-
-  /* 控件 / 卡片底色：同 dark（白色叠加），见 :root 的说明 */
-  --bg-raised: rgba(255, 255, 255, 0.045);
-  --bg-field: rgba(255, 255, 255, 0.085);
 
   /* ── Text ── */
   --text-primary: #E7ECF7;

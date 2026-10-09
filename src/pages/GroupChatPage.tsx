@@ -2781,7 +2781,8 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         {/* Tab 切换栏：讨论 / 文件历史（h-10 与消息窗口顶部栏、左栏列表头部等高） */}
         <div
           className="flex h-10 shrink-0"
-          style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+          // 标题条用 tertiary：右边栏本身是 --bg-side（= secondary），同档会看不出是条带（见 globals.css 的说明）
+          style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)' }}
         >
           <button
             onClick={() => setRightTab('overview')}
@@ -2840,7 +2841,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         {rightTab === 'stances' ? (
           <>
             {/* ── 立场快照 tab：独立展示参与者立场（自讨论页移出，节省 overview 空间） ── */}
-            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
+            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
               <Scale size={10} style={{ color: 'var(--accent)' }} />
               立场快照
               {stances.length > 0 && (
@@ -2891,7 +2892,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
           </>
         ) : rightTab === 'overview' ? (
           <>
-            <div className="px-3 py-2 text-[10px] font-medium flex items-center justify-between shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
+            <div className="px-3 py-2 text-[10px] font-medium flex items-center justify-between shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
               <span className="flex items-center gap-1"><Users size={10} style={{ color: 'var(--accent)' }} />参与者 ({participants.length})</span>
               {currentRoomId && (
                 <button
@@ -2958,11 +2959,11 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               })}
             </div>
 
-            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
+            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
               <Folder size={10} style={{ color: 'var(--accent)' }} />
               产物目录
             </div>
-            {/* 内容区背景与「立场快照」内容区统一（bg-primary），标题行与立场快照标题行一致（bg-secondary） */}
+            {/* 内容区背景与「立场快照」内容区统一（bg-primary），标题行与立场快照标题行一致（bg-tertiary） */}
             <div className="px-3 py-2 flex flex-col gap-1.5 shrink-0" style={{ backgroundColor: 'var(--bg-primary)', borderBottom: '1px solid var(--border)' }}>
               <div className="flex items-center gap-1">
                 <input
@@ -3002,7 +3003,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               </span>
             </div>
 
-            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
+            <div className="px-3 py-2 text-[10px] font-medium flex items-center gap-1 shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
               <ListTodo size={10} style={{ color: 'var(--accent)' }} />
               子任务
               <span className="flex-1" />
