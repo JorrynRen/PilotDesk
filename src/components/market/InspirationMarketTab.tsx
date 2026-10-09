@@ -175,7 +175,7 @@ export function InspirationMarketTab() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索灵感标题或摘要..."
             className="block w-full pl-8 pr-3 py-1.5 rounded-md text-[11px] outline-none"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
           />
         </div>
 

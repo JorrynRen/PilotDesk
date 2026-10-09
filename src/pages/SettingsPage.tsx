@@ -1835,13 +1835,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         onOpenKnowledge={() => navigate('/knowledge')}
         onOpenMarket={() => navigate('/market')}
       />
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
-
+      <div className="flex-1 min-h-0 px-2 flex gap-2">
       {/* 主体：左侧分组侧边栏 + 右侧内容区。
           gap-2 与左栏圆角：与壳层/知识库一致 —— 分栏靠"底色差 + 缝 + 圆角"，不靠竖线，
           也避免左栏与内容区里同色（--bg-side）的块左右紧贴连成一片。 */}
-      <div className="flex flex-1 overflow-hidden gap-2">
         {/* 侧边栏导航 */}
         <aside
           className="shrink-0 w-44 overflow-y-auto px-2 py-3 space-y-4 rounded-lg"
@@ -1871,7 +1868,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
         {/* 内容区：滚动条槽位常驻（pd-scroll-stable）——
             否则内容随筛选变短时滚动条消失，居中内容会因多出 8px 宽度整体右移（搜索框输入时最明显） */}
-        <div className="flex-1 overflow-y-auto pd-scroll-stable">
+        <div className="min-w-0 flex-1 rounded-lg overflow-hidden overflow-y-auto pd-scroll-stable" style={{ backgroundColor: 'var(--bg-content)' }}>
           <div className="p-4 max-w-2xl mx-auto w-full">
             {/* 通用设置：主题/工作区/语言/并发等 + 子页签「关于」（原独立 tab） */}
             {activeTab === 'general' && (
@@ -1945,6 +1942,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 <KbModelSettings />
                 <KbRootSettings />
                 <KbCloudSourceSettings />
+                <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  知识条目与 KV 记忆同库存储：不占用会话记忆配额（该配额可在「设置 › 记忆管理」中调整），也不会被自动清理。
+                </div>
               </div>
             )}
             {activeTab === 'customtabs' && <CustomTabsSettings />}
@@ -1973,9 +1973,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             )}
             {activeTab === 'filehistory' && <FileHistorySettings />}
           </div>
-        </div>
-      </div>
-
         </div>
       </div>
 

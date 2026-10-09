@@ -531,7 +531,7 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
                     </div>
 
                     <div className="flex items-center gap-3 text-[10px] flex-wrap" style={{ color: 'var(--text-tertiary)' }}>
-                      <span>分类：知识（不占 600 条会话记忆配额）</span>
+                      <span>分类：知识（不占用会话记忆配额）</span>
                       <span>热度 {e.accessCount}</span>
                       <span>创建 {fmtTime(e.createdAt)}</span>
                       {e.sourceRef && (

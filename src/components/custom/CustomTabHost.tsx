@@ -311,7 +311,11 @@ export function CustomTabHost() {
         )}
       </div>
 
-      {/* 内容区：门户页 / iframe keep-alive 常驻层（切换仅显隐） */}
+      {/* 内容区：门户页 / iframe keep-alive 常驻层（切换仅显隐）。
+          内嵌页面是**另一个文档**：它的原生滚动条颜色取决于那个文档的 color-scheme。
+          深色族下由 CSS 给 iframe 透传 color-scheme（见 globals.css），
+          让「自己没声明过颜色方案」的网页不再出现白滚动条；
+          而**自己声明了 light / 自带浅色 UI** 的网页我们无法干预 —— 那是对方的设计。 */}
       <div className="flex-1 relative" style={{ backgroundColor: isPortal ? 'var(--bg-content)' : '#fff' }}>
         {frames.map((t) => (
           <iframe

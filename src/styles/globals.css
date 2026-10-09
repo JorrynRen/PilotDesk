@@ -436,7 +436,7 @@ button:disabled:hover {
 }
 .pd-tab-active {
   color: var(--accent) !important;
-  background-color: var(--bg-tertiary) !important;
+  background-color: var(--bg-secondary) !important;
   border-bottom-color: var(--accent) !important;
 }
 .pd-tab-disabled {
@@ -1018,7 +1018,6 @@ body {
   width: 8px;
   height: 8px;
 }
-
 ::-webkit-scrollbar-track {
   /* 两端留白：滑块不伸进容器的圆角区域 */
   margin: 4px;
@@ -1035,6 +1034,14 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
+}
+
+/* 门户标签的内嵌页面是**另一个文档**：它的原生滚动条颜色由那个文档的 color-scheme 决定。
+   这里把宿主的深浅族透传给 iframe —— 于是「自己没声明过颜色方案」的内嵌网页在深色主题下
+   也会用深色滚动条，不再出现那条突兀的白滚动条。
+   （对方若自己声明了 light 或自带浅色 UI，我们改不了，那是它的设计。） */
+[data-theme-kind="dark"] iframe {
+  color-scheme: dark;
 }
 
 /* 滚动条槽位常驻：列表可滚动区统一加这个类。

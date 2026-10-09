@@ -968,7 +968,7 @@ export const WorkflowTemplateMarket: React.FC<{
         </div>
 
         {/* 右：结果区 */}
-        <div className="flex-1 min-w-0 h-full flex flex-col">
+        <div className="flex-1 min-w-0 h-full flex flex-col rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
           <div className="shrink-0 px-4 py-2 flex items-center justify-between"
             style={{ borderBottom: '1px solid var(--border-light)' }}>
             <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>

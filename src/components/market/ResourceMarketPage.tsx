@@ -232,7 +232,7 @@ function PluginMarketTab() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="search-input w-full"
-            style={{ paddingLeft: 32 }}
+            style={{ paddingLeft: 32, backgroundColor: 'var(--bg-secondary)' }}
           />
           {query && (
             <button

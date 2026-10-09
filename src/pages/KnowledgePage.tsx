@@ -111,12 +111,9 @@ export function KnowledgePage() {
         onOpenSettings={() => navigate('/settings')}
         onOpenMarket={() => navigate('/market')}
       />
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
-
+      <div className="flex-1 min-h-0 px-2 flex gap-2">
       {/* gap-2：左栏与右侧内容区之间留出"底"色的缝 —— 否则左栏（--bg-side）与内容区里同为
           --bg-side 的属性面板会左右紧贴、连成一片（同色 + 相邻 = 看不出是两块）。 */}
-      <div className="flex flex-1 overflow-hidden gap-2">
         {/* 左：知识库列表 */}
         <aside className="w-[240px] shrink-0 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-side)' }}>
           <div className="h-10 shrink-0 px-3 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -179,15 +176,11 @@ export function KnowledgePage() {
               );
             })}
           </div>
-
-          <div className="shrink-0 px-3 py-2 text-[9px] leading-relaxed" style={{ borderTop: '1px solid var(--border)', color: 'var(--text-tertiary)' }}>
-            知识条目与 KV 记忆同库存储：不占 600 条会话记忆配额，也不会被自动清理。
-          </div>
         </aside>
 
         {/* 右：选中库的视图 */}
         {base ? (
-          <main className="flex-1 flex flex-col overflow-hidden">
+          <main className="flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
             <div className="shrink-0 px-4 pt-3" style={{ borderBottom: '1px solid var(--border)' }}>
               <div className="flex flex-col">
                 {/* 标题行与按钮同一行：简介因此能占满整宽 —— 放在左侧那一列里时，
@@ -315,7 +308,7 @@ export function KnowledgePage() {
            * 内容高于一屏时靠外层滚动：`justify-center` 在滚动容器里会把顶部截掉，
            * 所以用 `min-h-full` 包一层 —— 内容不超过一屏时居中，超过了就从顶部正常排下来。
            */
-          <main className="flex-1 overflow-y-auto px-8 py-6">
+          <main className="flex-1 overflow-y-auto px-8 py-6 rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
             <div className="min-h-full flex flex-col items-center justify-center gap-4">
               <Library size={22} style={{ color: 'var(--text-tertiary)' }} />
               {bases.length === 0 ? (
@@ -352,9 +345,6 @@ export function KnowledgePage() {
             </div>
           </main>
         )}
-      </div>
-
-        </div>
       </div>
 
       {/* 全局状态栏：独立路由也要保留（与会话/工作流等模式一致），否则底部少一条、页面像被截断 */}
