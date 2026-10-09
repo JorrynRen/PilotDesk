@@ -226,9 +226,11 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
         term: '插件',
         desc: (
           <>
-            扩展右栏面板、命令、工作流节点与 Agent 会话 API（需在 manifest 声明权限）；安装在{' '}
+            扩展右栏面板、命令、工作流节点与 Agent 会话 API（需在 manifest 声明权限）；装在{' '}
             <PathText>{'<配置目录>\\plugins\\<插件id>\\'}</PathText>
-            （Windows：<PathText>{'%APPDATA%\\PilotDesk\\plugins\\<插件id>\\'}</PathText>），在右栏「插件」页签安装与管理
+            （Windows：<PathText>{'%APPDATA%\\PilotDesk\\plugins\\<插件id>\\'}</PathText>），
+            在「设置 › 插件管理」安装、启停与卸载（插件也可从资源市集获取）；
+            右栏的「插件」页签只放插件自带的运行时面板，装好并启用后才会出现
           </>
         ),
       },
