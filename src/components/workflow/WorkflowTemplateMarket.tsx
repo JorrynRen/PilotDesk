@@ -856,7 +856,9 @@ export const WorkflowTemplateMarket: React.FC<{
 
       {/* ── 筛选抽屉（可选展开）：触发方式 / 安装前置 ── */}
       {showFilters && (
-        <div className="shrink-0 pl-0 pr-0 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
+        // px-3：抽屉是一块带圆角描边的面板，别让它的圆角贴在内容区左右边缘上；
+        // 下边框留在外层（撑满整宽），所以分隔线仍是通栏的。
+        <div className="shrink-0 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
           <div className="rounded-lg px-2.5 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5"
             style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
             {/* 触发方式 */}

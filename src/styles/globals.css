@@ -132,10 +132,12 @@
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-overlay: rgba(0, 0, 0, 0.6);
 
-  /* 壳层映射：深色下 primary 是最暗的，故"底"用 primary、"内容区"用 tertiary（见 :root 的说明） */
+  /* 壳层映射：深色下 primary 是最暗的，故"底"用 primary；
+     内容区不再取 tertiary（那会让中间那栏比左右栏亮一大档、整块很跳），改用比左右栏只亮半档的
+     专用值，层次仍在但不抢眼；左右栏里的控件/卡片仍能靠 white 叠加区分。 */
   --bg-canvas: var(--bg-primary);
   --bg-side: var(--bg-secondary);
-  --bg-content: var(--bg-tertiary);
+  --bg-content: #1F222F;
 
   /* 控件 / 卡片底色：深色下用白色叠加（比所在底色亮一档），见 :root 的说明 */
   --bg-raised: rgba(255, 255, 255, 0.04);
@@ -149,7 +151,8 @@
 
   /* ── Border ── */
   --border: #2D3348;
-  --border-light: #1F2335;
+  /* 内容区底色调暗后要跟着提亮，否则内容区里的分隔线看不见（只用在少数列表头分隔） */
+  --border-light: #282D3F;
 
   /* ── Accent ── */
   --accent: #3B82F6;
@@ -202,10 +205,10 @@
   --bg-hover: rgba(255, 255, 255, 0.05);
   --bg-overlay: rgba(4, 8, 18, 0.62);
 
-  /* 壳层映射：同 dark —— primary 最暗作"底"、tertiary 最亮作"内容区" */
+  /* 壳层映射：同 dark —— primary 最暗作"底"；内容区取"比左右栏亮半档"的专用值（见 dark 的说明） */
   --bg-canvas: var(--bg-primary);
   --bg-side: var(--bg-secondary);
-  --bg-content: var(--bg-tertiary);
+  --bg-content: #161F37;
 
   /* 控件 / 卡片底色：同 dark（白色叠加），见 :root 的说明 */
   --bg-raised: rgba(255, 255, 255, 0.045);
@@ -220,7 +223,7 @@
 
   /* ── Border ── */
   --border: #232E4A;
-  --border-light: #1A233A;
+  --border-light: #1F2942;
 
   /* ── Accent ── */
   --accent: #38BDF8;
