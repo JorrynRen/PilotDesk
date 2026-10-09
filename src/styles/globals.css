@@ -132,12 +132,17 @@
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-overlay: rgba(0, 0, 0, 0.6);
 
-  /* 壳层映射：深色下 primary 是最暗的，故"底"用 primary；
-     内容区不再取 tertiary（那会让中间那栏比左右栏亮一大档、整块很跳），改用比左右栏只亮半档的
-     专用值，层次仍在但不抢眼；左右栏里的控件/卡片仍能靠 white 叠加区分。 */
-  --bg-canvas: var(--bg-primary);
+  /* 壳层映射（深色）：
+     ⚠️ 深色下这三档颜色本身会被"面板内的元素"大量复用（卡片、分区标题/主体、代码块…），
+     所以**底**和**内容区**都不能直接绑某一档，否则面板里用同档的元素会和它们撞成一片：
+       · 底     = primary 再压暗（比 primary 更暗 → 面板里用 primary 的元素才不会看着像"露底"，
+                  群聊页右边栏的分区主体就是 primary）
+       · 内容区 = secondary 与 tertiary 之间（比左右栏亮半档：面板里用 tertiary / secondary 的元素都仍可区分）
+     左右栏仍用 secondary（栏内那几条同为 secondary 的条带都自带 1px 下边框分隔）。
+     （浅色主题不需要这样处理：内容区是纯白，面板内元素用的是更深的档，天然分得开。） */
+  --bg-canvas: color-mix(in srgb, black 55%, var(--bg-primary));
   --bg-side: var(--bg-secondary);
-  --bg-content: #1F222F;
+  --bg-content: color-mix(in srgb, var(--bg-secondary) 50%, var(--bg-tertiary));
 
   /* 控件 / 卡片底色：深色下用白色叠加（比所在底色亮一档），见 :root 的说明 */
   --bg-raised: rgba(255, 255, 255, 0.04);
@@ -205,10 +210,10 @@
   --bg-hover: rgba(255, 255, 255, 0.05);
   --bg-overlay: rgba(4, 8, 18, 0.62);
 
-  /* 壳层映射：同 dark —— primary 最暗作"底"；内容区取"比左右栏亮半档"的专用值（见 dark 的说明） */
-  --bg-canvas: var(--bg-primary);
+  /* 壳层映射：同 dark —— 底压暗、内容区取 secondary 与 tertiary 之间（见 dark 的说明） */
+  --bg-canvas: color-mix(in srgb, black 55%, var(--bg-primary));
   --bg-side: var(--bg-secondary);
-  --bg-content: #161F37;
+  --bg-content: color-mix(in srgb, var(--bg-secondary) 50%, var(--bg-tertiary));
 
   /* 控件 / 卡片底色：同 dark（白色叠加），见 :root 的说明 */
   --bg-raised: rgba(255, 255, 255, 0.045);
