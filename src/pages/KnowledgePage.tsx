@@ -100,7 +100,7 @@ export function KnowledgePage() {
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
       <TitleBar
         mode={viewMode}
         onModeChange={handleModeChange}
@@ -114,7 +114,7 @@ export function KnowledgePage() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* 左：知识库列表 */}
-        <aside className="w-[240px] shrink-0 flex flex-col overflow-hidden" style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+        <aside className="w-[240px] shrink-0 flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-side)' }}>
           <div className="h-10 shrink-0 px-3 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
             <Library size={13} style={{ color: 'var(--accent)' }} />
             <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>知识库</span>

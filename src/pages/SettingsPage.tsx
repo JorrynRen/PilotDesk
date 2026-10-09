@@ -1822,7 +1822,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   }, [setMode, navigate]);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
       {/* TitleBar：组合开关注入「设置」段（thumb 定位到设置），点击其它模式段跳回主布局 */}
       <TitleBar
         mode={viewMode}
@@ -1841,7 +1841,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         {/* 侧边栏导航 */}
         <aside
           className="shrink-0 w-44 overflow-y-auto px-2 py-3 space-y-4"
-          style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+          style={{ backgroundColor: 'var(--bg-side)' }}
         >
           {SETTINGS_GROUPS.map((group) => (
             <div key={group.titleKey}>

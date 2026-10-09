@@ -308,14 +308,17 @@ function App() {
  * 与主壳层同款"一片底 + 一块圆角面板"：外层铺 --bg-canvas 并留左右/下 8px，
  * 页面自身（含它自己的 TitleBar）收进 --bg-content 的圆角面板里。
  * 这些页面不在 MainLayout 内、拿不到主壳层的容器，故在此补一层以保持观感一致。
- * 不加 overflow-hidden：页面里可能有绝对定位的下拉/浮层，裁切会把它们切掉。
  * 上边不留白：页面自己的 TitleBar 就是面板的第一行（与主壳层"顶栏不再单独占一条带"一致）。
+ *
+ * 必须有 `overflow-hidden`：页面根节点自己会刷一层与面板同色的底，不裁的话那层方形底会把
+ * 面板四角的圆角盖掉（看起来像没改）。裁切的代价只落在最外侧 8px 那一圈 ——
+ * 页面内的弹层多为 fixed（不受祖先裁切影响），绝对定位的下拉也基本用不到那 8px。
  */
 function RouteShell({ children }: { children: ReactNode }) {
   return (
     <div className="h-full" style={{ backgroundColor: 'var(--bg-canvas)' }}>
       <div className="h-full px-2 pb-2">
-        <div className="h-full rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
+        <div className="h-full rounded-lg overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
           {children}
         </div>
       </div>

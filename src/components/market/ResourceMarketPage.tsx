@@ -83,7 +83,7 @@ export function ResourceMarketPage() {
   const mine = MINE[activeTab];
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
       <TitleBar
         mode={viewMode}
         onModeChange={handleModeChange}

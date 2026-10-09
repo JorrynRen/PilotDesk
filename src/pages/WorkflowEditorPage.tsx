@@ -165,7 +165,7 @@ export function WorkflowEditorPage() {
   // 加载中
   if (creating) {
     return (
-      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-content)' }}>
         <TitleBar
         showBackButton={false}
         mode={viewMode}
@@ -186,7 +186,7 @@ export function WorkflowEditorPage() {
   // 创建失败
   if (error) {
     return (
-      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-content)' }}>
         <TitleBar
         showBackButton={false}
         mode={viewMode}
@@ -214,7 +214,7 @@ export function WorkflowEditorPage() {
   if (!readyId) return null;
 
   return (
-    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-content)' }}>
       <TitleBar
         showBackButton={false}
         mode={viewMode}

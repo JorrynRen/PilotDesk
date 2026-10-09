@@ -106,7 +106,7 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
       {/* Header */}
       <div className="shrink-0 px-4 py-3 flex items-center justify-between gap-3" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex items-center gap-3">
