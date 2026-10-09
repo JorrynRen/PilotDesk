@@ -161,7 +161,7 @@ export function VoiceInputSettings() {
               disabled={saving || !hasVoiceOverride(config)}
               className="pd-btn px-3 py-1.5 rounded-lg text-xs"
               style={{
-                backgroundColor: 'var(--bg-tertiary)',
+                backgroundColor: 'var(--bg-field)',
                 color: 'var(--text-secondary)',
                 border: '1px solid var(--border)',
                 opacity: saving || !hasVoiceOverride(config) ? 0.6 : 1,

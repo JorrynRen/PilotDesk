@@ -124,7 +124,7 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
             onClick={() => setFavoriteOnly(!favoriteOnly)}
             className="p-1.5 rounded-lg transition-colors"
             style={{
-              backgroundColor: favoriteOnly ? '#FBBF2422' : 'var(--bg-tertiary)',
+              backgroundColor: favoriteOnly ? '#FBBF2422' : 'var(--bg-field)',
               color: favoriteOnly ? '#FBBF24' : 'var(--text-secondary)',
             }}
           >
@@ -155,7 +155,7 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
             placeholder="搜索灵感..."
             className="w-full pl-9 pr-3 py-1.5 rounded-lg text-xs outline-none"
             style={{
-              backgroundColor: 'var(--bg-tertiary)',
+              backgroundColor: 'var(--bg-field)',
               color: 'var(--text-primary)',
               border: '1px solid var(--border)',
             }}

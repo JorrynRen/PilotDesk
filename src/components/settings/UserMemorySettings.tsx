@@ -83,7 +83,7 @@ export function UserMemorySettings() {
             placeholder={loaded?.exists ? '在此编辑全局用户偏好…' : '配置根还没有 USER.md。点击「使用模板创建」或直接输入内容后保存。'}
             className="w-full px-3 py-2 rounded-lg text-xs font-mono leading-relaxed resize-y outline-none"
             style={{
-              backgroundColor: 'var(--bg-tertiary)',
+              backgroundColor: 'var(--bg-field)',
               color: 'var(--text-primary)',
               border: '1px solid var(--border)',
               minHeight: '220px',

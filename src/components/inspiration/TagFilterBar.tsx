@@ -62,7 +62,7 @@ export function TagFilterBar({ tags, activeTag, onSelect, compact }: TagFilterBa
             title={`按标签筛选：${tag}`}
             className={`rounded-full shrink-0 transition-colors ${chipBase}`}
             style={{
-              backgroundColor: 'var(--bg-tertiary)',
+              backgroundColor: 'var(--bg-field)',
               color: 'var(--text-secondary)',
               border: '1px solid var(--border)',
             }}

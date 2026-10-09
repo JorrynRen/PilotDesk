@@ -470,7 +470,7 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
             `outline-none`，不加这个类的话描边会落在内层 input 上 —— 看着像"边框在外、焦点圈在内"。 */}
         <div
           className="pd-field flex items-center gap-1.5 px-2 py-1 rounded-lg flex-1 min-w-0"
-          style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)', maxWidth: 260 }}
+          style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)', maxWidth: 260 }}
         >
           <Search size={12} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
           <input
@@ -514,7 +514,7 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
               width: 26,
               height: 26,
               color: 'var(--text-secondary)',
-              backgroundColor: 'var(--bg-tertiary)',
+              backgroundColor: 'var(--bg-field)',
               border: '1px solid var(--border)',
             }}
             title={allCollapsed ? `全部展开（${folderLabels.length} 个目录）` : `全部折叠（${folderLabels.length} 个目录）`}
@@ -549,7 +549,7 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
           className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
           style={{
             color: selected.length > 0 ? 'var(--status-danger, #EF4444)' : 'var(--text-tertiary)',
-            backgroundColor: 'var(--bg-tertiary)',
+            backgroundColor: 'var(--bg-field)',
             border: '1px solid var(--border)',
             opacity: selected.length === 0 ? 0.5 : 1,
           }}
@@ -565,7 +565,7 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
             className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
             style={{
               color: 'var(--text-secondary)',
-              backgroundColor: 'var(--bg-tertiary)',
+              backgroundColor: 'var(--bg-field)',
               border: '1px solid var(--border)',
               opacity: busy ? 0.5 : 1,
             }}
@@ -746,7 +746,7 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
                         disabled={!!enriching}
                         className="pd-btn shrink-0 px-1.5 py-[1px] rounded text-[9px]"
                         style={{
-                          backgroundColor: f.enrichError ? 'rgba(239,68,68,0.12)' : 'var(--bg-tertiary)',
+                          backgroundColor: f.enrichError ? 'rgba(239,68,68,0.12)' : 'var(--bg-field)',
                           color: f.enrichError ? '#EF4444' : 'var(--text-secondary)',
                           border: '1px solid var(--border)',
                           opacity: enriching ? 0.5 : 1,
@@ -805,7 +805,7 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
                 className="pd-btn shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
                 style={{
                   color: 'var(--text-secondary)',
-                  backgroundColor: 'var(--bg-tertiary)',
+                  backgroundColor: 'var(--bg-field)',
                   border: '1px solid var(--border)',
                   opacity: f.absPath ? 1 : 0.5,
                   cursor: f.absPath ? 'pointer' : 'not-allowed',
@@ -820,7 +820,7 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
                 className="pd-btn shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
                 style={{
                   color: parentId || versionOf || replaces.length > 0 ? 'var(--accent)' : 'var(--text-secondary)',
-                  backgroundColor: 'var(--bg-tertiary)',
+                  backgroundColor: 'var(--bg-field)',
                   border: '1px solid var(--border)',
                 }}
                 title="设置与其它文件的关系：属于哪个正文、替代了哪一版"

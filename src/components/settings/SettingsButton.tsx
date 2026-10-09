@@ -19,7 +19,7 @@ const VARIANT_STYLES: Record<ButtonVariant, React.CSSProperties> = {
     border: 'none',
   },
   secondary: {
-    backgroundColor: 'var(--bg-secondary)',
+    backgroundColor: 'var(--bg-field)',
     color: 'var(--text-secondary)',
     border: '1px solid var(--border)',
   },

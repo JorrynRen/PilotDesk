@@ -271,7 +271,7 @@ export function ToolSettings() {
 
       {/* 筛选工具栏 */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="pd-field flex-1 min-w-[160px] flex items-center gap-1.5 px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+        <div className="pd-field flex-1 min-w-[160px] flex items-center gap-1.5 px-2 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}>
           <Search size={12} style={{ color: 'var(--text-tertiary)' }} />
           <input
             value={query}
@@ -318,7 +318,7 @@ export function ToolSettings() {
           onClick={handleReset}
           disabled={saving || loading}
           className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors disabled:opacity-50"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
         >
           <RotateCcw size={12} />
           重置（恢复默认）
@@ -352,7 +352,7 @@ export function ToolSettings() {
                 key={t.name}
                 className="px-3 py-2.5 rounded-lg transition-colors"
                 style={{
-                  backgroundColor: 'var(--bg-tertiary)', // 与 SettingsCard（环境检测等 tab）统一
+                  backgroundColor: 'var(--bg-raised)', // 与 SettingsCard（环境检测等 tab）统一
                   border: '1px solid transparent',
                   opacity: off && !locked ? 0.7 : 1,
                 }}
@@ -380,7 +380,7 @@ export function ToolSettings() {
                     title={locked ? '架构性禁用，不可启用' : off ? '点击启用' : '点击禁用'}
                     className="ml-auto relative shrink-0 w-9 h-5 rounded-full transition-colors disabled:opacity-50"
                     style={{
-                      backgroundColor: off ? 'var(--bg-tertiary)' : 'var(--accent)',
+                      backgroundColor: off ? 'var(--bg-field)' : 'var(--accent)',
                       border: '1px solid var(--border)',
                     }}
                   >

@@ -345,7 +345,7 @@ export function KnowledgeIngest({
         className="w-[400px] shrink-0 flex flex-col overflow-hidden p-4 gap-3"
         style={{ backgroundColor: 'var(--bg-side)' }}
       >
-        <div className="flex items-center gap-1 p-0.5 rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+        <div className="flex items-center gap-1 p-0.5 rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}>
           {(Object.keys(MODE_META) as Mode[]).map((m) => {
             const M = MODE_META[m];
             const active = mode === m;
@@ -395,14 +395,14 @@ export function KnowledgeIngest({
               onChange={(e) => setTitle(e.target.value)}
               placeholder="标题（可留空，由 AI 生成）"
               className="shrink-0 w-full px-2.5 py-1.5 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             />
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder={'把结论、摘录、规则丢进来……'}
               className="flex-1 w-full p-3 rounded-lg outline-none resize-none text-xs leading-relaxed"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             />
           </>
         )}
@@ -470,7 +470,7 @@ export function KnowledgeIngest({
                             placeholder={rename ? '留空则由 AI 取名' : stem}
                             className="pd-field flex-1 min-w-0 px-1.5 py-1 rounded text-[10px] outline-none"
                             style={{
-                              backgroundColor: 'var(--bg-tertiary)',
+                              backgroundColor: 'var(--bg-field)',
                               color: rename ? 'var(--text-primary)' : 'var(--text-tertiary)',
                               border: '1px solid var(--border)',
                             }}
@@ -511,14 +511,14 @@ export function KnowledgeIngest({
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://example.com/article"
               className="w-full px-2.5 py-1.5 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             />
             <input
               value={urlName}
               onChange={(e) => setUrlName(e.target.value)}
               placeholder="文件名（留空则由 AI 取名）"
               className="w-full px-2.5 py-1.5 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             />
             <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
               抓到的正文落盘为 .md，再由 AI <strong>整理成规范知识</strong>：剔掉导航 / 页脚 / 广告 /
@@ -567,7 +567,7 @@ export function KnowledgeIngest({
                     className="pd-btn shrink-0 px-2 py-1.5 rounded-lg text-[11px]"
                     onClick={() => void reloadCloud(cloudAccountId)}
                     disabled={cloudLoading}
-                    style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+                    style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
                     title="重新读取账号列表并刷新知识库"
                   >
                     {cloudLoading ? <Loader2 size={11} className="animate-spin" /> : '刷新'}
@@ -664,7 +664,7 @@ export function KnowledgeIngest({
               onChange={(e) => setTopic(e.target.value)}
               placeholder={'想要一条什么知识？\n例如：本项目里知识库与 KV 记忆是什么关系'}
               className="flex-1 w-full p-3 rounded-lg outline-none resize-none text-xs leading-relaxed"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             />
             <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
               由「知识库模型」生成（设置 › 知识库可指定，未配置则用第一个可用提供商），标题 / 正文 / 标签 / 专属属性一次给出，
@@ -688,7 +688,7 @@ export function KnowledgeIngest({
                   onClick={() => setExtraBaseIds((prev) => (on ? prev.filter((x) => x !== b.id) : [...prev, b.id]))}
                   className="pd-btn px-1.5 py-0.5 rounded text-[10px]"
                   style={{
-                    backgroundColor: on ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                    backgroundColor: on ? 'var(--accent-light)' : 'var(--bg-field)',
                     color: on ? 'var(--accent)' : 'var(--text-secondary)',
                     border: '1px solid var(--border)',
                   }}
@@ -826,7 +826,7 @@ function CandidateCard({
   const [meta, setMeta] = useState<KnowledgeMeta>(candidate.meta);
 
   const inputStyle = {
-    backgroundColor: 'var(--bg-tertiary)',
+    backgroundColor: 'var(--bg-field)',
     color: 'var(--text-primary)',
     border: '1px solid var(--border)',
   } as const;
@@ -899,7 +899,7 @@ function CandidateCard({
         <button
           onClick={() => onReject(candidate.id)}
           className="pd-btn shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
-          style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+          style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
         >
           <Trash2 size={11} />
           丢弃

@@ -167,7 +167,7 @@ export function KbRootSettings() {
               className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
               style={{
                 color: 'var(--text-secondary)',
-                backgroundColor: 'var(--bg-tertiary)',
+                backgroundColor: 'var(--bg-field)',
                 border: '1px solid var(--border)',
                 opacity: busy ? 0.5 : 1,
               }}
@@ -181,7 +181,7 @@ export function KbRootSettings() {
               className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
               style={{
                 color: 'var(--text-secondary)',
-                backgroundColor: 'var(--bg-tertiary)',
+                backgroundColor: 'var(--bg-field)',
                 border: '1px solid var(--border)',
                 opacity: busy || !info?.isCustom ? 0.5 : 1,
               }}

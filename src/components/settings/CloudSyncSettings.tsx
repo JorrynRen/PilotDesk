@@ -177,7 +177,7 @@ export function CloudSyncSettings() {
               style={{
                 width: 36,
                 height: 20,
-                backgroundColor: cloudSyncEnabled ? '#22c55e' : 'var(--bg-tertiary)',
+                backgroundColor: cloudSyncEnabled ? '#22c55e' : 'var(--bg-field)',
                 border: '1px solid var(--border)',
               }}
               title={!canCloudSync ? '云同步为专业版功能' : cloudSyncEnabled ? '点击关闭' : '点击开启'}

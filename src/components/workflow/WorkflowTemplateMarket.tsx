@@ -184,7 +184,7 @@ function InstallButton({
   if (installing) {
     return (
       <button disabled className={`pd-btn ${pad} rounded`}
-        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+        style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}>
         安装中…
       </button>
     );
@@ -733,7 +733,7 @@ export const WorkflowTemplateMarket: React.FC<{
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
       {/* ── 顶栏（一行紧凑布局）
            左：精选/浏览全部/我的收藏 Tab + 搜索框
            右：排序 → 显示方式 → 筛选 → 刷新
@@ -742,7 +742,7 @@ export const WorkflowTemplateMarket: React.FC<{
            再补一条横线只是把搜索行与内容割开，属于冗余线条 —— 分隔交给留白与面板圆角。 */}
       <div className="shrink-0 pl-0 pr-0 py-1.5 flex items-center gap-2">
         {/* Tab 组 */}
-        <div className="flex items-center rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+        <div className="flex items-center rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-field)' }}>
           {[
             { key: 'featured', label: '精选', icon: <Sparkles size={11} /> },
             { key: 'browse',   label: '浏览全部', icon: <FolderOpen size={11} /> },
@@ -783,7 +783,7 @@ export const WorkflowTemplateMarket: React.FC<{
             className="block w-full pl-8 pr-3 rounded-md text-[11px] outline-none"
             style={{
               height: 28, /* 对齐同行 Select(size=sm) 与 Tab 组 */
-              backgroundColor: 'var(--bg-tertiary)',
+              backgroundColor: 'var(--bg-field)',
               color: 'var(--text-primary)',
               border: '1px solid var(--border)',
             }}
@@ -803,7 +803,7 @@ export const WorkflowTemplateMarket: React.FC<{
           </div>
 
           {/* 视图模式切换 */}
-          <div className="flex rounded p-0.5" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+          <div className="flex rounded p-0.5" style={{ backgroundColor: 'var(--bg-field)' }}>
             <button
               onClick={() => setViewMode('grid')}
               className="pd-btn p-0.5 rounded"
@@ -831,7 +831,7 @@ export const WorkflowTemplateMarket: React.FC<{
           <button onClick={() => setShowFilters(f => !f)}
             className="pd-btn px-2 py-0.5 rounded text-[11px] relative"
             style={{
-              backgroundColor: showFilters || activeFilterCount > 0 ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+              backgroundColor: showFilters || activeFilterCount > 0 ? 'var(--accent-light)' : 'var(--bg-field)',
               color: showFilters || activeFilterCount > 0 ? 'var(--accent)' : 'var(--text-secondary)',
               display: 'inline-flex', alignItems: 'center', gap: 4,
               height: 28,

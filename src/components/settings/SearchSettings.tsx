@@ -106,7 +106,7 @@ export function SearchSettings() {
               placeholder="tvly-..."
               className="w-full mt-0.5 px-2 py-1.5 rounded text-xs outline-none"
               style={{
-                backgroundColor: 'var(--bg-tertiary)',
+                backgroundColor: 'var(--bg-field)',
                 color: 'var(--text-primary)',
                 border: '1px solid var(--border)',
               }}
@@ -123,7 +123,7 @@ export function SearchSettings() {
               placeholder="Azure 订阅密钥（Ocp-Apim-Subscription-Key）"
               className="w-full mt-0.5 px-2 py-1.5 rounded text-xs outline-none"
               style={{
-                backgroundColor: 'var(--bg-tertiary)',
+                backgroundColor: 'var(--bg-field)',
                 color: 'var(--text-primary)',
                 border: '1px solid var(--border)',
               }}

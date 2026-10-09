@@ -16,7 +16,7 @@ export function SettingsInput({
   rows,
 }: SettingsInputProps) {
   const baseStyle: React.CSSProperties = {
-    backgroundColor: 'var(--bg-secondary)',
+    backgroundColor: 'var(--bg-field)',
     color: 'var(--text-primary)',
     border: '1px solid var(--border)',
     outline: 'none',

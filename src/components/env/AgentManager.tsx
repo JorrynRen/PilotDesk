@@ -390,7 +390,7 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
             <button
               onClick={handleUploadIcon}
               className="px-2 py-1.5 rounded-lg text-xs outline-none shrink-0"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
               title="选择本地图片作为图标"
             >
               <Upload size={11} />
@@ -514,7 +514,7 @@ function FormField({ label, value, onChange, placeholder, readOnly }: {
         readOnly={readOnly}
         className="w-full px-2 py-1.5 rounded-lg text-xs outline-none"
         style={{ 
-          backgroundColor: readOnly ? 'var(--bg-tertiary)' : 'var(--bg-primary)', 
+          backgroundColor: readOnly ? 'var(--bg-field)' : 'var(--bg-primary)', 
           color: readOnly ? 'var(--text-tertiary)' : 'var(--text-primary)', 
           border: '1px solid var(--border)' 
         }}

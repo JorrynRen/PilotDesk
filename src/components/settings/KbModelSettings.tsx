@@ -250,7 +250,7 @@ export function KbModelSettings() {
               className="pd-btn px-3 py-1.5 rounded-lg text-xs"
               style={{
                 color: 'var(--text-secondary)',
-                backgroundColor: 'var(--bg-tertiary)',
+                backgroundColor: 'var(--bg-field)',
                 border: '1px solid var(--border)',
                 opacity: saving || !hasKbModelOverride(config) ? 0.5 : 1,
               }}
@@ -281,7 +281,7 @@ export function KbModelSettings() {
             style={{
               width: 36,
               height: 20,
-              backgroundColor: autoEnabled ? '#22c55e' : 'var(--bg-tertiary)',
+              backgroundColor: autoEnabled ? '#22c55e' : 'var(--bg-field)',
               border: '1px solid var(--border)',
             }}
             title={autoEnabled ? '点击关闭' : '点击开启'}

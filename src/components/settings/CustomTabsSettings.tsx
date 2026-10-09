@@ -79,7 +79,7 @@ function SortableTabRow({
   };
 
   const inputCls = 'px-2 py-1.5 rounded text-xs outline-none';
-  const inputStyle = { backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' };
+  const inputStyle = { backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)' };
 
   return (
     <div ref={setNodeRef} style={style} className="p-3 rounded-xl transition-all">
@@ -353,14 +353,14 @@ export function CustomTabsSettings() {
             onChange={(e) => { setLabel(e.target.value); if (formError) setFormError(''); }}
             placeholder="标签名称"
             className="flex-1 min-w-[100px] px-3 py-2 rounded-lg text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)' }}
           />
           <input
             value={url}
             onChange={(e) => { setUrl(e.target.value); if (formError) setFormError(''); }}
             placeholder="URL / 本地文件 / 本地目录（如 https://example.com、E:\doc\index.html 或 E:\doc）"
             className="flex-[2] min-w-[180px] px-3 py-2 rounded-lg text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)' }}
             onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
           />
           <button
@@ -380,7 +380,7 @@ export function CustomTabsSettings() {
             placeholder="分组（可留空 = 未分组，用于门户页归类）"
             maxLength={CUSTOM_TAB_GROUP_MAX}
             className="flex-1 min-w-[120px] px-3 py-2 rounded-lg text-xs outline-none"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}
+            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)' }}
           />
           <Select
             value={icon}

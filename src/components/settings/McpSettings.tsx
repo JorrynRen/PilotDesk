@@ -124,7 +124,7 @@ export function McpSettings() {
                   placeholder="名称（如 filesystem）"
                   className="flex-1 px-2 py-1 rounded text-xs outline-none"
                   style={{
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     color: 'var(--text-primary)',
                     border: '1px solid var(--border)',
                   }}
@@ -146,7 +146,7 @@ export function McpSettings() {
                   placeholder="命令（如 npx / node / uvx）"
                   className="w-full px-2 py-1 rounded text-xs outline-none"
                   style={{
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     color: 'var(--text-primary)',
                     border: '1px solid var(--border)',
                   }}
@@ -158,7 +158,7 @@ export function McpSettings() {
                   placeholder="参数（空格分隔，如 -y @modelcontextprotocol/server-filesystem /path）"
                   className="w-full px-2 py-1 rounded text-xs outline-none"
                   style={{
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     color: 'var(--text-primary)',
                     border: '1px solid var(--border)',
                   }}

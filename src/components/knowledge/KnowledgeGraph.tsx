@@ -1502,7 +1502,7 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
               disabled={expandTargets.length === 0 || expandedCount >= expandTargets.length}
               className="justify-center px-1 py-1 rounded-lg text-[10px]"
               style={{
-                color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+                color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)',
                 opacity: expandTargets.length === 0 || expandedCount >= expandTargets.length ? 0.5 : 1,
               }}
             >
@@ -1513,7 +1513,7 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
               disabled={expandedCount === 0}
               className="justify-center px-1 py-1 rounded-lg text-[10px]"
               style={{
-                color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+                color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)',
                 opacity: expandedCount === 0 ? 0.5 : 1,
               }}
             >
@@ -1557,7 +1557,7 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
                   className="w-full flex items-center gap-1.5 px-1.5 py-1 rounded text-[11px] transition-colors"
                   style={{
                     color: on ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                    backgroundColor: on ? 'var(--bg-tertiary)' : 'transparent',
+                    backgroundColor: on ? 'var(--bg-field)' : 'transparent',
                   }}
                 >
                   <span className="w-3 h-[2px] rounded shrink-0" style={{ backgroundColor: on ? kindColor(k) : 'var(--border)' }} />
@@ -1584,7 +1584,7 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
             <button
               onClick={resetView}
               className="flex items-center justify-center gap-1 px-1 py-1 rounded-lg text-[10px]"
-              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
               title="回到初始视角并取消选中"
             >
               <RotateCcw size={10} />
@@ -1595,7 +1595,7 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
               disabled={movedCount === 0}
               className="flex items-center justify-center gap-1 px-1 py-1 rounded-lg text-[10px]"
               style={{
-                color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+                color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)',
                 opacity: movedCount === 0 ? 0.5 : 1,
                 cursor: movedCount === 0 ? 'not-allowed' : 'pointer',
               }}
@@ -1623,7 +1623,7 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
                   className="justify-center px-1 py-1 rounded-lg text-[10px] truncate"
                   style={{
                     color: on ? 'var(--accent)' : 'var(--text-secondary)',
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
                   }}
                   title={
@@ -1671,7 +1671,7 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
             disabled={!paramsDirty}
             className="mt-2 w-full flex items-center justify-center gap-1 px-1 py-1 rounded-lg text-[10px]"
             style={{
-              color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+              color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)',
               opacity: paramsDirty ? 1 : 0.5,
               cursor: paramsDirty ? 'pointer' : 'not-allowed',
             }}
@@ -1810,7 +1810,7 @@ function DetailPanel({ base, node, chunk, sceneNode, links, onJump, onClose, onG
         <button
           onClick={onClose}
           className="pd-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-          style={{ color: 'var(--text-tertiary)', backgroundColor: 'var(--bg-tertiary)' }}
+          style={{ color: 'var(--text-tertiary)', backgroundColor: 'var(--bg-field)' }}
         >
           取消
         </button>
@@ -1907,7 +1907,7 @@ function DetailPanel({ base, node, chunk, sceneNode, links, onJump, onClose, onG
       <button
         onClick={onGoEntries}
         className="pd-btn w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg text-[11px]"
-        style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+        style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
       >
         <Maximize2 size={11} />
         去「知识」列表编辑

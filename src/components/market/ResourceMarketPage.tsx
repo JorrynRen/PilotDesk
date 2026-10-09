@@ -132,7 +132,7 @@ export function ResourceMarketPage() {
           className="pd-btn text-[11px] px-2 py-1 rounded flex items-center gap-1 shrink-0"
           style={{
             border: '1px solid var(--border)',
-            backgroundColor: 'var(--bg-tertiary)',
+            backgroundColor: 'var(--bg-field)',
             color: 'var(--text-secondary)',
           }}
           title={`前往${mine.where}`}
@@ -232,7 +232,7 @@ function PluginMarketTab() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="search-input w-full"
-            style={{ paddingLeft: 32, backgroundColor: 'var(--bg-secondary)' }}
+            style={{ paddingLeft: 32, backgroundColor: 'var(--bg-field)' }}
           />
           {query && (
             <button
@@ -264,7 +264,7 @@ function PluginMarketTab() {
           onClick={handleRefresh}
           disabled={refreshing}
           className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1 shrink-0"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
         >
           <RefreshCw size={11} className={refreshing ? 'pd-animate-spin' : ''} />
           刷新

@@ -132,7 +132,7 @@ export function KbCloudSourceSettings() {
                 onChange={(e) => setLabel(e.target.value)}
                 placeholder="留空则用平台账号名"
                 className="w-full px-2.5 py-1.5 rounded-lg text-xs outline-none"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
               />
             </div>
           </div>
@@ -147,7 +147,7 @@ export function KbCloudSourceSettings() {
               onChange={(e) => setToken(e.target.value)}
               placeholder="粘贴 Token"
               className="w-full px-2.5 py-1.5 rounded-lg text-xs outline-none"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
             />
             <div className="mt-1.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
               {CLOUD_SOURCE_LABEL[source]}：登录后到「账户设置 › Token」新建一个即可（

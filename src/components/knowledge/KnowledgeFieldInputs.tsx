@@ -24,7 +24,7 @@ const FIELD_TYPE_OPTIONS = (Object.keys(TYPE_LABEL) as KnowledgeFieldType[])
   .map((t) => ({ value: t, label: TYPE_LABEL[t] }));
 
 const inputStyle = {
-  backgroundColor: 'var(--bg-tertiary)',
+  backgroundColor: 'var(--bg-field)',
   color: 'var(--text-primary)',
   border: '1px solid var(--border)',
 } as const;

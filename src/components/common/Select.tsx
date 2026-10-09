@@ -219,7 +219,7 @@ export function Select({
           padding: pad,
           fontSize: fs,
           borderRadius: radius,
-          backgroundColor: 'var(--bg-tertiary)',
+          backgroundColor: 'var(--bg-field)',
           color: current ? 'var(--text-primary)' : 'var(--text-tertiary)',
           border: '1px solid var(--border)',
           opacity: disabled ? 0.6 : 1,

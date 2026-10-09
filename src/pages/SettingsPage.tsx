@@ -271,7 +271,7 @@ function GeneralSettings() {
               className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs transition-colors"
               style={{
                 color: theme === value ? '#fff' : 'var(--text-secondary)',
-                backgroundColor: theme === value ? 'var(--accent)' : 'var(--bg-tertiary)',
+                backgroundColor: theme === value ? 'var(--accent)' : 'var(--bg-field)',
                 border: '1px solid var(--border)',
               }}
             >
@@ -314,7 +314,7 @@ function GeneralSettings() {
               className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs transition-colors"
               style={{
                 color: locale === l ? '#fff' : 'var(--text-secondary)',
-                backgroundColor: locale === l ? 'var(--accent)' : 'var(--bg-tertiary)',
+                backgroundColor: locale === l ? 'var(--accent)' : 'var(--bg-field)',
                 border: '1px solid var(--border)',
               }}
             >
@@ -413,7 +413,7 @@ function GeneralSettings() {
             style={{
               width: 36,
               height: 20,
-              backgroundColor: autoRunNotify ? '#22c55e' : 'var(--bg-tertiary)',
+              backgroundColor: autoRunNotify ? '#22c55e' : 'var(--bg-field)',
               border: '1px solid var(--border)',
             }}
             title={autoRunNotify ? '点击关闭' : '点击开启'}
@@ -444,7 +444,7 @@ function GeneralSettings() {
             value={streamIdleSecs}
             onChange={(e) => handleStreamIdleSecsChange(parseInt(e.target.value))}
             className="flex-1 px-3 py-2 rounded-lg text-sm font-mono"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
           />
           <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>秒</span>
         </div>
@@ -611,7 +611,7 @@ function SortableProviderCard({
                     }
                     className="px-2 py-0.5 rounded text-xs outline-none"
                     style={{
-                      backgroundColor: 'var(--bg-tertiary)',
+                      backgroundColor: 'var(--bg-field)',
                       color: 'var(--text-primary)',
                       border: '1px solid var(--border)',
                       width: 180,
@@ -640,7 +640,7 @@ function SortableProviderCard({
                   disabled={testResult?.status === 'testing' || !p.apiKeySet}
                   className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-colors disabled:opacity-30"
                   style={{
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     color: testResult?.status === 'testing'
                       ? 'var(--text-tertiary)'
                       : 'var(--accent)',
@@ -736,7 +736,7 @@ function SortableProviderCard({
                   className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
                   placeholder="Base URL，如 https://api.siliconflow.cn/v1（部分服务含 /v1；不要拼 /chat/completions 等接口路径）"
                   style={{
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     color: 'var(--text-primary)',
                     border: '1px solid var(--border)',
                   }}
@@ -763,7 +763,7 @@ function SortableProviderCard({
                   placeholder={p.apiKeySet ? '输入新 Key 覆盖' : '输入 API Key'}
                   className="w-full mt-0.5 px-2 py-1 rounded text-xs outline-none"
                   style={{
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     color: 'var(--text-primary)',
                     border: '1px solid var(--border)',
                   }}
@@ -785,7 +785,7 @@ function SortableProviderCard({
                     placeholder="每行一个模型：模型名 = 备注（备注可选，供 LLM 选择模型时参考；如：dall-e-3 = 文生图/图生图）"
                     className="w-full px-2 py-1 rounded text-xs outline-none resize-y"
                     style={{
-                      backgroundColor: 'var(--bg-tertiary)',
+                      backgroundColor: 'var(--bg-field)',
                       color: 'var(--text-primary)',
                       border: '1px solid var(--border)',
                     }}
@@ -838,7 +838,7 @@ function SortableProviderCard({
                       placeholder="模型名 = 备注（逗号分隔可加多个）"
                       className="flex-1 px-2 py-0.5 rounded text-[10px] outline-none"
                       style={{
-                        backgroundColor: 'var(--bg-tertiary)',
+                        backgroundColor: 'var(--bg-field)',
                         color: 'var(--text-primary)',
                         border: '1px solid var(--border)',
                       }}
@@ -1404,7 +1404,7 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
             className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors whitespace-nowrap"
             style={{
               border: '1px solid var(--border)',
-              background: 'var(--bg-tertiary)',
+              background: 'var(--bg-field)',
               color: 'var(--text-secondary)',
             }}
           >
@@ -1418,7 +1418,7 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
               className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors whitespace-nowrap"
               style={{
                 border: '1px solid var(--border)',
-                background: 'var(--bg-tertiary)',
+                background: 'var(--bg-field)',
                 color: 'var(--text-secondary)',
               }}
             >

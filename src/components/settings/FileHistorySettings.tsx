@@ -173,7 +173,7 @@ export function FileHistorySettings() {
         />
         <div
           className="pd-field flex-1 min-w-[140px] flex items-center gap-1.5 px-2 py-1.5 rounded-lg"
-          style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+          style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
         >
           <Search size={12} style={{ color: 'var(--text-tertiary)' }} />
           <input
@@ -257,7 +257,7 @@ export function FileHistorySettings() {
               onClick={() => load(entries.length, true)}
               disabled={loadingMore}
               className="w-full py-2 rounded-lg text-xs transition-colors"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
             >
               {loadingMore ? '加载中...' : `加载更多（${entries.length}/${total}）`}
             </button>

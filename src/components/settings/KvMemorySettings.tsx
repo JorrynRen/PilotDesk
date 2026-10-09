@@ -69,7 +69,7 @@ interface InlineForm {
 }
 
 const inputStyle: CSSProperties = {
-  backgroundColor: 'var(--bg-tertiary)',
+  backgroundColor: 'var(--bg-field)',
   color: 'var(--text-primary)',
   border: '1px solid var(--border)',
 };
@@ -329,7 +329,7 @@ export function KvMemorySettings() {
       </p>
 
       {/* 意图检索注入设置：开关 + 可选路由模型覆盖 */}
-      <div className="rounded-lg px-3 py-2 mb-2 text-[11px] space-y-2" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+      <div className="rounded-lg px-3 py-2 mb-2 text-[11px] space-y-2" style={{ backgroundColor: 'var(--bg-raised)' }}>
         <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none" style={{ color: 'var(--text-primary)' }}>
           <input
             type="checkbox"
@@ -407,7 +407,7 @@ export function KvMemorySettings() {
       </div>
 
       {stats && policy && (
-        <div className="rounded-lg px-3 py-2 mb-2 text-[11px] space-y-1" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+        <div className="rounded-lg px-3 py-2 mb-2 text-[11px] space-y-1" style={{ backgroundColor: 'var(--bg-raised)' }}>
           <div style={{ color: 'var(--text-primary)' }}>
             共 {stats.total} 条 · pin 保护 {stats.pinned} 条 · 自动维护候选 {stats.candidates} 条
           </div>
@@ -432,7 +432,7 @@ export function KvMemorySettings() {
 
       {/* 清理预览确认（两步安全：先看将被删除的条目；确认后进入执行中） */}
       {cleanPhase !== 'idle' && (
-        <div className="rounded-lg px-3 py-2 mb-2 text-xs" style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}>
+        <div className="rounded-lg px-3 py-2 mb-2 text-xs" style={{ backgroundColor: 'var(--bg-raised)', border: '1px solid var(--border)' }}>
           {cleanPhase === 'running' ? (
             <div style={{ color: 'var(--text-secondary)' }}>清理执行中…</div>
           ) : (

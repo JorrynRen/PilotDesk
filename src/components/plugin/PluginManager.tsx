@@ -326,7 +326,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
             <button
               onClick={() => navigate('/market?tab=plugins')}
               className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
               title="前往资源市集 › 插件"
             >
               <Store size={11} />
@@ -336,7 +336,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
               onClick={() => setShowSandbox(!showSandbox)}
               className="pd-btn text-[10px] px-2 py-1 rounded"
               style={{
-                backgroundColor: showSandbox ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                backgroundColor: showSandbox ? 'var(--accent-light)' : 'var(--bg-field)',
                 color: showSandbox ? 'var(--accent)' : 'var(--text-tertiary)',
               }}
               title={showSandbox ? '收起沙箱信息' : '查看沙箱信息'}
@@ -400,7 +400,7 @@ export function PluginManager({ panelsByPluginId, onOpenPanel }: PluginManagerPr
                 <button
                   onClick={discover}
                   className="pd-btn text-[10px] px-2 py-1 rounded transition-all flex items-center gap-1"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                  style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
                   title="刷新插件列表"
                 >
                   <RefreshCw size={11} />

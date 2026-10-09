@@ -887,7 +887,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors shrink-0"
                   style={{
                     color: 'var(--text-secondary)',
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     border: '1px solid var(--border)',
                     height: '24px',
                   }}
@@ -904,7 +904,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
                   onClick={() => setShowModeDropdown((v) => !v)}
                   className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors"
                   style={{
-                    backgroundColor: 'var(--bg-tertiary)',
+                    backgroundColor: 'var(--bg-field)',
                     color: MODE_COLORS[mode],
                     border: '1px solid var(--border)',
                     height: '24px',

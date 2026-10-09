@@ -283,7 +283,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
               style={{
                 width: 36,
                 height: 20,
-                backgroundColor: reportEnabled ? '#22c55e' : 'var(--bg-tertiary)',
+                backgroundColor: reportEnabled ? '#22c55e' : 'var(--bg-field)',
                 border: '1px solid var(--border)',
               }}
               title={reportEnabled ? '点击关闭' : '点击开启'}
@@ -353,7 +353,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
         <button
           onClick={onOpenCloudSync}
           className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left"
-          style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+          style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
         >
           <Cloud size={13} className="shrink-0" style={{ color: 'var(--text-secondary)' }} />
           <span className="flex-1 text-xs" style={{ color: 'var(--text-primary)' }}>
@@ -409,7 +409,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
             </p>
           )}
 
-          <div className="mt-2 px-3 py-2.5 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+          <div className="mt-2 px-3 py-2.5 rounded-lg" style={{ backgroundColor: 'var(--bg-raised)' }}>
             <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
               已解锁功能
             </div>

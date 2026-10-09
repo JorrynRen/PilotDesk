@@ -62,7 +62,7 @@ export function TagEditor({ tags, onChange, compact }: TagEditorProps) {
           placeholder={compact ? '加标签...' : '添加标签...'}
           className={`rounded-full ${inputCls}`}
           style={{
-            backgroundColor: 'var(--bg-tertiary)',
+            backgroundColor: 'var(--bg-field)',
             color: 'var(--text-primary)',
             border: '1px solid var(--border)',
           }}

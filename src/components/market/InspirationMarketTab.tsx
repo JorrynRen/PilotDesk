@@ -175,7 +175,7 @@ export function InspirationMarketTab() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索灵感标题或摘要..."
             className="block w-full pl-8 pr-3 py-1.5 rounded-md text-[11px] outline-none"
-            style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
           />
         </div>
 
@@ -191,7 +191,7 @@ export function InspirationMarketTab() {
           onClick={() => { void load(); void loadImported(); }}
           disabled={loading}
           className="pd-btn text-[10px] px-2 py-1 rounded flex items-center gap-1 shrink-0"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+          style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
           title="重新获取市场索引"
         >
           <RefreshCw size={11} className={loading ? 'pd-animate-spin' : ''} />

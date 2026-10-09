@@ -12,7 +12,7 @@ export function SettingsCard({ children, className = '', highlight, style }: Set
     <div
       className={`flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors ${className}`}
       style={{
-        backgroundColor: highlight ? 'rgba(245, 158, 11, 0.06)' : 'var(--bg-tertiary)',
+        backgroundColor: highlight ? 'rgba(245, 158, 11, 0.06)' : 'var(--bg-raised)',
         border: highlight ? '1px solid rgba(245, 158, 11, 0.2)' : '1px solid transparent',
         ...style,
       }}

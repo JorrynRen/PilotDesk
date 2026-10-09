@@ -78,7 +78,7 @@ function RuleEditor({
         spellCheck={false}
         className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-y font-mono"
         style={{
-          backgroundColor: 'var(--bg-tertiary)',
+          backgroundColor: 'var(--bg-field)',
           color: 'var(--text-primary)',
           border: '1px solid var(--border)',
         }}

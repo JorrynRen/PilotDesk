@@ -653,7 +653,7 @@ export function UsageStats() {
               onClick={() => setDays(r.value)}
               className="px-2 py-0.5 rounded text-xs"
               style={{
-                background: days === r.value ? 'var(--bg-tertiary)' : 'transparent',
+                background: days === r.value ? 'var(--bg-field)' : 'transparent',
                 color: days === r.value ? 'var(--text-primary)' : 'var(--text-secondary)',
                 border: '1px solid var(--border)',
               }}
@@ -720,7 +720,7 @@ export function UsageStats() {
                   onClick={() => setTab(key)}
                   className="px-2 py-0.5 rounded text-xs"
                   style={{
-                    background: tab === key ? 'var(--bg-tertiary)' : 'transparent',
+                    background: tab === key ? 'var(--bg-field)' : 'transparent',
                     color: tab === key ? 'var(--text-primary)' : 'var(--text-secondary)',
                     border: '1px solid var(--border)',
                   }}

@@ -100,7 +100,7 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (t: string[])
   return (
     <div
       className="pd-field flex items-center gap-1.5 flex-wrap px-2 py-1.5 rounded-lg"
-      style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+      style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
     >
       {tags.map((t) => (
         <span
@@ -266,7 +266,7 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
               `outline-none`，不加这个类的话描边会落在内层 input 上 —— 看着像"边框在外、焦点圈在内"。 */}
           <div
             className="pd-field flex items-center gap-1.5 px-2 py-1 rounded-lg flex-1 min-w-0"
-            style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)', maxWidth: 320 }}
+            style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)', maxWidth: 320 }}
           >
             <Search size={12} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
             <input
@@ -294,7 +294,7 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
             className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
             style={{
               color: filters.pinOnly ? '#F59E0B' : 'var(--text-secondary)',
-              backgroundColor: filters.pinOnly ? 'rgba(245,158,11,0.12)' : 'var(--bg-tertiary)',
+              backgroundColor: filters.pinOnly ? 'rgba(245,158,11,0.12)' : 'var(--bg-field)',
               border: '1px solid var(--border)',
             }}
             title="只看重要（pin）"
@@ -306,7 +306,7 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
             <button
               onClick={resetFilters}
               className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
-              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+              style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
             >
               <RotateCcw size={11} />
               重置
@@ -519,7 +519,7 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
                         onChange={(ev) => setDraftValue(ev.target.value)}
                         rows={Math.min(18, Math.max(6, draftValue.split('\n').length))}
                         className="w-full p-3 rounded-lg text-xs leading-relaxed outline-none resize-y"
-                        style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+                        style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                       />
                     </div>
 
@@ -571,7 +571,7 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
                       <button
                         onClick={() => void copyText(toMarkdown(e, { value: draftValue, tags: draftTags, meta: draftMeta }), '已复制到剪贴板（markdown）')}
                         className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
-                        style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+                        style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
                         title="复制这一条为 markdown（标题 + 正文 + 标签 + 来源）"
                       >
                         <Copy size={11} />
@@ -580,7 +580,7 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
                       <button
                         onClick={() => void handleRemove(e)}
                         className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
-                        style={{ color: 'var(--status-danger, #EF4444)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+                        style={{ color: 'var(--status-danger, #EF4444)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
                         title={e.baseIds.length === 1 ? '删除该条知识' : '只解除与本库的关联'}
                       >
                         <Link2Off size={11} />
