@@ -486,9 +486,26 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
     },
     { total: 0, read: 0, prompt: 0, write: 0 },
   );
-  const usageRate = usageTotals.prompt + usageTotals.read + usageTotals.write > 0
-    ? (usageTotals.read / (usageTotals.prompt + usageTotals.read + usageTotals.write)) * 100
-    : 0;
+
+  /**
+   * 成本构成三段。分母与后端的命中率口径一致（prompt + read + write，completion 不计入），
+   * 所以「命中读取」那一段的长度**就是**命中率 —— 这样数字与图形不会互相打架。
+   * 三桶同属「输入 token」按缓存状态切分，故用同一主色的深浅阶梯（含义交给图例），不引入新色相。
+   */
+  const usageDenom = usageTotals.prompt + usageTotals.read + usageTotals.write;
+  const sharePct = (v: number) => (usageDenom > 0 ? (v / usageDenom) * 100 : 0);
+  const usageSegments = [
+    { key: 'read', label: '命中读取', pct: sharePct(usageTotals.read), color: 'var(--accent)' },
+    { key: 'write', label: '缓存写入', pct: sharePct(usageTotals.write), color: 'color-mix(in srgb, var(--accent) 50%, var(--bg-tertiary))' },
+    { key: 'prompt', label: '未命中输入', pct: sharePct(usageTotals.prompt), color: 'var(--bg-tertiary)' },
+  ];
+
+  /**
+   * 维度比例条的分母 = 最大的那个维度（而不是总量）：4 个维度里出现 0 值很常见（比如知识库没用过），
+   * 若按占总量比，所有条都会缩成一小段，反而比较不出谁大谁小。
+   * 下限取 1 只是防 0 除（全部为 0 时各条宽度都是 0，符合预期）。
+   */
+  const maxDimTokens = Math.max(1, ...dimensions.map((d) => d.totals.totalTokens));
 
   return (
     <div
@@ -929,22 +946,66 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
               <EmptyHint text={loadingUsage ? '加载中…' : '暂无用量数据。'} />
             ) : (
               <div className="space-y-1.5">
-                {dimensions.map((d) => (
-                  <div key={d.key} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg" style={{ backgroundColor: 'var(--bg-primary)' }}>
-                    <span className="text-[11px] flex-1 min-w-0 truncate" style={{ color: 'var(--text-primary)' }}>
-                      {DIMENSION_LABEL[d.key] ?? d.key}
-                    </span>
-                    <span className="text-[10px] shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                      {fmtTokens(d.totals.totalTokens)} token
-                    </span>
-                    <span className="text-[10px] shrink-0 w-14 text-right" style={{ color: 'var(--text-tertiary)' }}>
-                      命中 {d.totals.cacheHitRate.toFixed(1)}%
-                    </span>
+                {/* 维度行 = 标签 + 比例条 + 用量 + 调用次数 + 命中率。
+                    条是**行内**元素（h-1.5），不新增行高 —— 默认页"不出滚动条"的约束不能破；
+                    窄到装不下时条被压到 0（min-w-0），数字仍在，属于优雅降级而不是溢出。
+                    标签/数值都定宽，四条轨道的起止点才对齐，长度才可比。 */}
+                {dimensions.map((d) => {
+                  // 条长按**最大的维度**归一（比较的是维度之间谁大），
+                  // 占总量多少则放进 title：归一基准与总量不同，不在同一处混着看更清楚。
+                  const pct = (d.totals.totalTokens / maxDimTokens) * 100;
+                  const shareOfTotal = usageTotals.total > 0 ? (d.totals.totalTokens / usageTotals.total) * 100 : 0;
+                  return (
+                    <div key={d.key} className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ backgroundColor: 'var(--bg-primary)' }}>
+                      <span className="text-[11px] shrink-0 truncate" style={{ width: 44, color: 'var(--text-primary)' }}>
+                        {DIMENSION_LABEL[d.key] ?? d.key}
+                      </span>
+                      <span
+                        className="flex-1 min-w-0 h-1.5 rounded-full overflow-hidden"
+                        style={{ backgroundColor: 'var(--bg-tertiary)' }}
+                        title={`占总量 ${shareOfTotal.toFixed(1)}%`}
+                      >
+                        <span className="block h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: 'var(--accent)' }} />
+                      </span>
+                      <span className="text-[10px] shrink-0 w-[72px] text-right" style={{ color: 'var(--text-secondary)' }}>
+                        {fmtTokens(d.totals.totalTokens)} token
+                      </span>
+                      <span className="text-[10px] shrink-0 w-10 text-right" style={{ color: 'var(--text-tertiary)' }} title={`${d.totals.callCount} 次调用`}>
+                        {d.totals.callCount} 次
+                      </span>
+                      <span className="text-[10px] shrink-0 w-14 text-right" style={{ color: 'var(--text-tertiary)' }}>
+                        命中 {d.totals.cacheHitRate.toFixed(1)}%
+                      </span>
+                    </div>
+                  );
+                })}
+
+                {/* 总量构成：把「命中 x%」从数字变成看得见的比例。
+                    分母与命中率同口径，所以蓝色那段＝命中率本身（见上方 usageSegments 的注释）。
+                    同一主色的深浅阶梯表示"输入 token 归属哪一桶"，含义由图例给。 */}
+                <div className="px-2.5 py-2 rounded-lg space-y-2" style={{ backgroundColor: 'var(--bg-primary)' }}>
+                  <div className="flex h-1.5 rounded-full overflow-hidden">
+                    {usageSegments.map((s) => (
+                      <span
+                        key={s.key}
+                        style={{ width: `${s.pct}%`, backgroundColor: s.color }}
+                        title={`${s.label} ${s.pct.toFixed(1)}%`}
+                      />
+                    ))}
                   </div>
-                ))}
+                  <div className="flex items-center flex-wrap gap-x-3 gap-y-1">
+                    {usageSegments.map((s) => (
+                      <span key={s.key} className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        <span className="shrink-0 rounded-full" style={{ width: 6, height: 6, backgroundColor: s.color }} />
+                        {s.label} {s.pct.toFixed(1)}%
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="flex items-center justify-between gap-2 px-2.5 pt-1">
                   <span className="text-[10px] min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }}>
-                    合计 {fmtTokens(usageTotals.total)} token · 命中 {usageRate.toFixed(1)}%
+                    合计 {fmtTokens(usageTotals.total)} token
                   </span>
                   <button onClick={goUsageStats} className="text-[10px] shrink-0" style={{ color: 'var(--accent)' }}>
                     查看完整用量 ›
