@@ -17,6 +17,10 @@
    =================================================== */
 
 :root {
+  /* 让 WebView 的原生 UI（滚动条、输入框、下拉等）跟随主题渲染。
+     不声明时一律按浅色渲染 —— 深色主题下会出现"恒为白色"的原生滚动条（门户页最明显）。 */
+  color-scheme: light;
+
   /* ── Background ── */
   --bg-primary: #FFFFFF;
   --bg-secondary: #F5F5F5;
@@ -108,6 +112,8 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
+
   /* ── Background ── */
   --bg-primary: #0F1117;
   --bg-secondary: #1A1D27;
@@ -172,6 +178,8 @@
    - 阴影加深：中性深色的 shadow 在蓝黑底上几乎不可见。
    =================================================== */
 [data-theme="nightfall"] {
+  color-scheme: dark;
+
   /* ── Background ── */
   --bg-primary: #0B1020;
   --bg-secondary: #111A2E;

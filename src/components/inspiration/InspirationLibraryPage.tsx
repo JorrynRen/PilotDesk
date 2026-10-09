@@ -107,10 +107,9 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
-      {/* Header */}
-      <div className="shrink-0 px-4 py-3 flex items-center justify-between gap-3" style={{ borderBottom: '1px solid var(--border)' }}>
+      {/* Header：与其它独立路由页一致 —— 页头画在壳层那片"底"上、不在内容面板内；
+          因此也不画下边框（栏与面板靠底色差 + 圆角区分）。 */}
+      <div className="shrink-0 px-4 py-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="pd-btn p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
             <ArrowLeft size={16} />
@@ -141,6 +140,9 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
           </button>
         </div>
       </div>
+
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
 
       {/* Search + Tags */}
       <div className="shrink-0 px-4 py-2 space-y-2" style={{ borderBottom: '1px solid var(--border)' }}>

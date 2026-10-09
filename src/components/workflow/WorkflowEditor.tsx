@@ -4963,7 +4963,8 @@ export const WorkflowEditor: React.FC<Props> = ({ definitionId, onNameChange, on
       {selectedNodeId && selectedStageId && stages.some(s => s.id === selectedStageId && s.nodes.some(n => n.id === selectedNodeId)) && (
         <div
           className="w-[360px] shrink-0 overflow-auto p-5 flex flex-col"
-          style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)' }}
+          // 停靠面板：去竖线，靠底色差区分（这里不加圆角——它与画布紧邻，没有间隙时圆角会在四角留下缺口）
+          style={{ background: 'var(--bg-side)' }}
         >
           <WorkflowNodeConfig
             node={stages.find((s) => s.id === selectedStageId)!.nodes.find((n) => n.id === selectedNodeId)!}

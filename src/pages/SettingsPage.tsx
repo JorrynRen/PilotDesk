@@ -1838,11 +1838,13 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       <div className="flex-1 min-h-0 px-2">
         <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
 
-      {/* 主体：左侧分组侧边栏 + 右侧内容区 */}
-      <div className="flex flex-1 overflow-hidden">
+      {/* 主体：左侧分组侧边栏 + 右侧内容区。
+          gap-2 与左栏圆角：与壳层/知识库一致 —— 分栏靠"底色差 + 缝 + 圆角"，不靠竖线，
+          也避免左栏与内容区里同色（--bg-side）的块左右紧贴连成一片。 */}
+      <div className="flex flex-1 overflow-hidden gap-2">
         {/* 侧边栏导航 */}
         <aside
-          className="shrink-0 w-44 overflow-y-auto px-2 py-3 space-y-4"
+          className="shrink-0 w-44 overflow-y-auto px-2 py-3 space-y-4 rounded-lg"
           style={{ backgroundColor: 'var(--bg-side)' }}
         >
           {SETTINGS_GROUPS.map((group) => (

@@ -915,11 +915,11 @@ export const WorkflowTemplateMarket: React.FC<{
         </div>
       )}
 
-      {/* ── 主体：左侧分类 + 右侧网格/列表 ── */}
-      <div className="flex-1 flex min-h-0">
+      {/* ── 主体：左侧分类 + 右侧网格/列表（gap-2：靠缝 + 底色差分区，不画竖线） ── */}
+      <div className="flex-1 flex min-h-0 gap-2">
         {/* 左：分类列表（单层，带计数；只列有模板的分类） */}
-        <div className="w-56 shrink-0 h-full overflow-y-auto pd-scroll-stable"
-          style={{ borderRight: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
+        <div className="w-56 shrink-0 h-full overflow-y-auto pd-scroll-stable rounded-lg"
+          style={{ backgroundColor: 'var(--bg-side)' }}>
           <div className="px-3 py-3 space-y-0.5">
             <div className="text-[10px] mb-1.5 mt-2" style={{ color: 'var(--text-tertiary)' }}>
               <span className="flex items-center gap-1"><SlidersHorizontal size={10} /> 分类导航</span>

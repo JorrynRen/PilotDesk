@@ -114,9 +114,11 @@ export function KnowledgePage() {
       <div className="flex-1 min-h-0 px-2">
         <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
 
-      <div className="flex flex-1 overflow-hidden">
+      {/* gap-2：左栏与右侧内容区之间留出"底"色的缝 —— 否则左栏（--bg-side）与内容区里同为
+          --bg-side 的属性面板会左右紧贴、连成一片（同色 + 相邻 = 看不出是两块）。 */}
+      <div className="flex flex-1 overflow-hidden gap-2">
         {/* 左：知识库列表 */}
-        <aside className="w-[240px] shrink-0 flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-side)' }}>
+        <aside className="w-[240px] shrink-0 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-side)' }}>
           <div className="h-10 shrink-0 px-3 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
             <Library size={13} style={{ color: 'var(--accent)' }} />
             <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>知识库</span>
