@@ -186,13 +186,21 @@ export function KnowledgePage() {
                 {/* 标题行与按钮同一行：简介因此能占满整宽 —— 放在左侧那一列里时，
                     按钮一多就把简介挤窄、`line-clamp-2` 一到就截断，看着像"简介丢了后半句" */}
                 <div className="flex items-center gap-2 min-w-0">
-                  <h2 className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{base.name}</h2>
+                  <h2 className="text-sm font-medium truncate min-w-0" style={{ color: 'var(--text-primary)' }}>{base.name}</h2>
                   {loading && (
                     <span className="shrink-0 flex items-center gap-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
                       <Loader2 size={10} className="animate-spin" />
                       加载中
                     </span>
                   )}
+                  {/* 统计信息：紧跟在库名之后（原先自占一行，白吃一行高度）。
+                      用 shrink-0 + nowrap 保证四个数字始终同一行，空间不够时先压库名（它 truncate）。 */}
+                  <div className="flex items-center gap-3 shrink-0 whitespace-nowrap text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    <span>{base.entryCount} 条知识</span>
+                    <span>{base.fileCount} 个文件</span>
+                    <span>{base.pinnedCount} 条重要</span>
+                    <span>{base.fields.length} 个专属字段</span>
+                  </div>
                   <div className="flex-1" />
                   <div className="flex items-center gap-2 shrink-0">
                     <button
@@ -232,12 +240,6 @@ export function KnowledgePage() {
                   </div>
                 </div>
                 <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>{base.description}</div>
-                <div className="flex items-center gap-3 mt-1.5 text-[10px] flex-wrap" style={{ color: 'var(--text-tertiary)' }}>
-                  <span>{base.entryCount} 条知识</span>
-                  <span>{base.fileCount} 个文件</span>
-                  <span>{base.pinnedCount} 条重要</span>
-                  <span>{base.fields.length} 个专属字段</span>
-                </div>
               </div>
 
               {/* tab：知识 / 文件 / 投喂 / 图谱 */}
