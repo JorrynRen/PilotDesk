@@ -439,9 +439,6 @@ export function KvMemorySettings() {
           <div style={{ color: 'var(--text-primary)' }}>
             共 {stats.total} 条 · pin 保护 {stats.pinned} 条 · 自动维护候选 {stats.candidates} 条
           </div>
-          <CollapsibleNote title="自动维护规则">
-            总条数超 {policy.maxEntries} 条时按“最久未活跃”驱逐；超过 {policy.idleDays} 天既未被检索也未被编辑、且访问次数 ≤ {policy.minAccess} 次的未 pin 条目会被清理（pin 条目永不自动删除）。<strong>知识库条目不参与以上两项自动维护</strong>——它们既不占 {policy.maxEntries} 条配额，也不会被判为冷记忆；生命周期只由所属知识库决定（删库或从库中移除，且仅当不再被任何库关联时才连同条目删除）。
-          </CollapsibleNote>
           {/* 高频 top-5 现在独占一行：清理按钮已挪到下面的搜索行，这里不再需要撑开的按钮位
               （顺带把这一行从 30px 的按钮高度降回一行文字） */}
           {stats.injected.length > 0 ? (
@@ -451,6 +448,10 @@ export function KvMemorySettings() {
           ) : (
             <div style={{ color: 'var(--text-tertiary)' }}>暂无记忆</div>
           )}
+          {/* 规则说明放块末：它是这个块里唯一的"长解释"，压在最下面不打断上面的数字阅读 */}
+          <CollapsibleNote title="自动维护规则">
+            总条数超 {policy.maxEntries} 条时按“最久未活跃”驱逐；超过 {policy.idleDays} 天既未被检索也未被编辑、且访问次数 ≤ {policy.minAccess} 次的未 pin 条目会被清理（pin 条目永不自动删除）。<strong>知识库条目不参与以上两项自动维护</strong>——它们既不占 {policy.maxEntries} 条配额，也不会被判为冷记忆；生命周期只由所属知识库决定（删库或从库中移除，且仅当不再被任何库关联时才连同条目删除）。
+          </CollapsibleNote>
         </div>
       )}
 

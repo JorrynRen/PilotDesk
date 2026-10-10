@@ -4,7 +4,7 @@ import {
   Settings, Key, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload,
+  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
@@ -40,6 +40,7 @@ import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
 import { useAccountStore } from '../stores/accountStore';
 import { sendApiRequest } from '../utils/apiClient';
 import { useTerminal, type ViewMode } from '../TerminalManager';
+import { useCustomTabsStore } from '../stores/customTabsStore';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -1691,65 +1692,129 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
 // ============================================================
 // 5. About
 // ============================================================
+/**
+ * 「关于」页的对外链接。
+ *
+ * 打开方式统一为**门户标签**（不弹系统浏览器）：点击即把地址加成一个门户标签并切过去。
+ * `url` 为空 = 地址待补，渲染成不可点的行并标「待补充」；补齐字符串即生效，不需要改逻辑。
+ */
+const ABOUT_LINKS: Array<{ label: string; url: string }> = [
+  // 用户协议、隐私条款、开源软件声明（第三方依赖许可清单）、帮助文档：地址待提供
+  { label: '用户协议', url: '' },
+  { label: '隐私条款', url: '' },
+  { label: '开源软件声明', url: '' },
+  { label: '帮助文档', url: '' },
+  // 项目仓库：与「更新检查」同一个仓库（UpdateChecker 的 RELEASES_URL 就是它的 releases 页）
+  { label: '项目仓库', url: 'https://github.com/JorrynRen/PilotDesk' },
+];
+
+/**
+ * 关于页。
+ *
+ * 版式**对齐「通用设置」页**：`space-y-6` + 一串 `SettingsSection`（标题 + 占满整行的内容）。
+ * 原先这里是整体居中（logo 80px + 居中文字 + 整行卡片混排），每行可见宽度都不一样，
+ * 与通用设置页左侧对齐的统一版式不一致。
+ */
 function AboutSection() {
+  const { setMode } = useTerminal();
+
+  /**
+   * 在门户里打开外链：已有同地址的门户标签就直接切过去，否则新建一个再切过去。
+   * 新建失败（数量上限 / 地址非法 / 重复）用 toast 说明原因，不静默失败。
+   */
+  const openInPortal = useCallback(async (label: string, url: string) => {
+    if (!url) return;
+    const store = useCustomTabsStore.getState();
+    const existing = store.tabs.find((t) => t.url === url);
+    if (existing) {
+      store.setActiveTab(existing.id);
+    } else {
+      const res = await store.addTab(label, url);
+      if (!res.ok) {
+        showToast(`无法打开「${label}」：${res.error}`, 'error');
+        return;
+      }
+      // addTab 成功后重新取一次，拿新建那条的 id（不依赖它的返回结构）
+      const created = useCustomTabsStore.getState().tabs.find((t) => t.url === url);
+      if (created) useCustomTabsStore.getState().setActiveTab(created.id);
+    }
+    setMode('custom');
+  }, [setMode]);
+
   return (
-    <div className="flex flex-col items-center gap-6 py-8">
-      {/* Logo */}
-      <img
-        src="/logo-lg.png"
-        alt="PilotDesk"
-        className="w-20 h-20 rounded-2xl"
-        draggable={false}
-      />
-
-      {/* App name + version */}
-      <div className="text-center">
-        <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-          PilotDesk
-        </h3>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          v0.1.0
-        </p>
-      </div>
-
-      {/* Description */}
-      <p className="text-xs text-center leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-        Agent 统一桌面客户端。
-        集成多 Agent 管理、流式对话、灵感库、API 直连等功能。
-      </p>
-
-      {/* Update Checker */}
-      <div className="w-full">
-        <UpdateChecker />
-      </div>
-
-      {/* Tech stack */}
-      <div
-        className="grid grid-cols-2 gap-2 w-full"
-        style={{ fontSize: '11px' }}
-      >
-        {[
-          ['前端', 'React 19 + TypeScript + TailwindCSS v4'],
-          ['桌面', 'Tauri 2.0'],
-          ['后端', 'Rust + SQLite'],
-          ['Agent', 'Rust AgentManager + Tauri Event'],
-        ].map(([label, value]) => (
-          <div
-            key={label}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
-          >
-            <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
-            <span>{value}</span>
+    <div className="space-y-6">
+      <SettingsSection title="关于 PilotDesk">
+        <div className="flex items-start gap-3">
+          <img
+            src="/logo-lg.png"
+            alt="PilotDesk"
+            className="w-14 h-14 rounded-xl shrink-0"
+            draggable={false}
+          />
+          <div className="min-w-0">
+            <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>PilotDesk</div>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text-secondary)' }}>v0.1.0</div>
+            <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+              Agent 统一桌面客户端。集成多 Agent 管理、流式对话、灵感库、API 直连等功能。
+            </p>
           </div>
-        ))}
-      </div>
+        </div>
+      </SettingsSection>
 
-      {/* Copyright */}
-      <div className="text-center text-xs leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-        <p>Copyright &copy; @简意工作室（jorryn）</p>
-        <p className="mt-1">本项目基于 MIT License 开源</p>
-      </div>
+      <SettingsSection title="版本更新">
+        <UpdateChecker />
+      </SettingsSection>
+
+      <SettingsSection title="技术栈">
+        <div className="grid grid-cols-2 gap-2 w-full" style={{ fontSize: '11px' }}>
+          {[
+            ['前端', 'React 19 + TypeScript + TailwindCSS v4'],
+            ['桌面', 'Tauri 2.0'],
+            ['后端', 'Rust + SQLite'],
+            ['Agent', 'Rust AgentManager + Tauri Event'],
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg"
+              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+            >
+              <span style={{ color: 'var(--text-tertiary)' }}>{label}</span>
+              <span>{value}</span>
+            </div>
+          ))}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="相关链接">
+        <div className="flex flex-col gap-1">
+          {ABOUT_LINKS.map(({ label, url }) => (
+            <button
+              key={label}
+              onClick={() => void openInPortal(label, url)}
+              disabled={!url}
+              className="pd-btn flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-colors disabled:opacity-50"
+              style={{
+                backgroundColor: 'var(--bg-field)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-secondary)',
+                cursor: url ? 'pointer' : 'default',
+              }}
+              title={url ? `在门户标签内打开：${url}` : '外链地址待补充'}
+            >
+              <ExternalLink size={12} style={{ color: 'var(--text-tertiary)' }} />
+              <span style={{ color: 'var(--text-primary)' }}>{label}</span>
+              <span className="ml-auto text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                {url ? '在门户中打开' : '待补充'}
+              </span>
+            </button>
+          ))}
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="版权">
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>Copyright &copy; @简意工作室（jorryn）</p>
+        <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>本项目基于 MIT License 开源</p>
+      </SettingsSection>
     </div>
   );
 }
