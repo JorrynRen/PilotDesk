@@ -660,9 +660,10 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             </div>
           ) : (
             <>
-              {renderGroup(t('sessionList.group.today', '今天'), today)}
-              {renderGroup(t('sessionList.group.yesterday', '昨天'), yesterday)}
-              {renderGroup(t('sessionList.group.earlier', '更早'), earlier)}
+              {/* 「工作流会话」放在最前（原先在列表末尾）：它是节点执行自动创建的内部会话，
+                  数量随跑量增长，排在时间组之后时会被「更早」那一段一路冲到底 —— 入口要滚很久才够得到。
+                  默认仍折叠，只占一行；下方补一条细分隔线，否则紧接着的「今天」看起来像它的子项。
+                  分隔线只在下面确实还有内容时画，避免整列都是工作流会话时留一条悬空的线。 */}
               {workflowList.length > 0 && (
                 <div key="workflow-sessions">
                   {/* 折叠头：点击展开/收起；与时间组标题同字号、加计数，避免看起来像分组标签 */}
@@ -681,8 +682,14 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
                     <span style={{ color: 'var(--text-tertiary)' }}>{workflowList.length}</span>
                   </button>
                   {workflowExpanded && workflowList.map(renderItem)}
+                  {visibleList.length > 0 && (
+                    <div className="mx-3 my-1" style={{ height: 1, backgroundColor: 'var(--border)' }} />
+                  )}
                 </div>
               )}
+              {renderGroup(t('sessionList.group.today', '今天'), today)}
+              {renderGroup(t('sessionList.group.yesterday', '昨天'), yesterday)}
+              {renderGroup(t('sessionList.group.earlier', '更早'), earlier)}
             </>
           )}
         </div>
