@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, memo, type ReactNode } from 'react';
 import { Plus, Search, Archive, Key, X, FolderOpen, ChevronDown, ChevronRight, Terminal } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useApiProviderStore, getApiKey } from '../../stores/apiProviderStore';
 import { invoke } from '@tauri-apps/api/core';
@@ -28,6 +29,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const isLoadingSessions = useSessionStore((s) => s.isLoadingSessions);
   const showArchived = useSessionStore((s) => s.showArchived);
   const fetchSessions = useSessionStore((s) => s.fetchSessions);
+  const refreshSessions = useSessionStore((s) => s.refreshSessions);
   const selectSession = useSessionStore((s) => s.selectSession);
   const createSession = useSessionStore((s) => s.createSession);
   const archiveSession = useSessionStore((s) => s.archiveSession);
@@ -86,6 +88,41 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
       showToast(`加载会话失败: ${errorMessage(err)}`, 'error');
     });
   }, [fetchSessions, fetchProviders]);
+
+  /**
+   * 工作流 Agent 会话不会自己出现在列表里：它们由后端在节点执行时自动写库
+   * （`create_session_inner`，origin = `workflow:*`），前端内存里没有，只有重挂组件才会重新拉 ——
+   * 表现为"来自工作流的会话记录要刷新才看得到"。
+   *
+   * 这类会话**只有工作流这一个来源**，所以借引擎已在发的 `workflow:execution-progress` 把列表拉新即可，
+   * 不必新增后端接口（订阅的是既有事件，事件名与 notificationEvents.ts / 指挥中心保持一致）。
+   *
+   * 两个细节：
+   * - 用 `refreshSessions()`（静默刷新）而不是 `fetchSessions()`：前者不动 isLoadingSessions，
+   *   不会让列表闪一下加载态、也不打断当前选中。
+   * - 进度事件按节点成簇下发，做 2s 合并 —— 会话列表查询随会话数增长，不该按事件频率打。
+   */
+  useEffect(() => {
+    let disposed = false;
+    let timer: number | null = null;
+    let off: UnlistenFn | null = null;
+    void listen('workflow:execution-progress', () => {
+      if (timer !== null) return; // 已在合并窗口内，等这一轮跑完
+      timer = window.setTimeout(() => {
+        timer = null;
+        void refreshSessions();
+      }, 2000);
+    }).then((fn) => {
+      // 卸载与 listen() 的 Promise 存在竞态：cleanup 先跑时 off 还是 null，用 disposed 兜底
+      if (disposed) fn();
+      else off = fn;
+    });
+    return () => {
+      disposed = true;
+      if (timer !== null) window.clearTimeout(timer);
+      if (off) off();
+    };
+  }, [refreshSessions]);
 
   // Sync installed agents from envInfo (shared singleton, no extra detect_env call)。
   // 用「渲染期修正」而不是 effect：在 effect 里同步 setState 会多一轮级联渲染
