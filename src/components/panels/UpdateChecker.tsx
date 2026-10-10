@@ -86,12 +86,11 @@ export function UpdateChecker() {
       : null;
 
   return (
-    <div className="p-4 space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-          更新检查
-        </h3>
+    /* 不自带 p-4、也不自带标题：本组件嵌在「关于」页的 SettingsSection（标题 + 占满整行的内容）里，
+       自带的 16px 内边距会让内容比同页其它行右缩一截，破坏行宽一致；标题也由外层 section 承担。 */
+    <div className="space-y-4">
+      {/* Header：只剩操作按钮（标题在外层 section） */}
+      <div className="flex items-center justify-end">
         <button
           onClick={fetchUpdates}
           disabled={checking || installing}
