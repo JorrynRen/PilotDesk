@@ -1,111 +1,18 @@
-import { useState } from 'react';
-import { Download, Check, RefreshCw, Loader2, ExternalLink, Rocket } from 'lucide-react';
-import { open as openUrl } from '@tauri-apps/plugin-shell';
-import { check, type Update as UpdateHandle } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { errorMessage } from '../../utils/errorMessage';
+import { Download, Check, Loader2, ExternalLink, Rocket } from 'lucide-react';
+import { formatBytes, type Updater } from '../../hooks/useUpdater';
 
-// 版本号单一来源：由 vite.config.ts 从根 package.json 注入
-const APP_VERSION = import.meta.env.VITE_APP_VERSION as string;
-
-const RELEASES_URL = 'https://github.com/JorrynRen/PilotDesk/releases';
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-export function UpdateChecker() {
-  const [checking, setChecking] = useState(false);
-  const [installing, setInstalling] = useState(false);
-  const [checkedAt, setCheckedAt] = useState<string | null>(null);
-  const [currentVersion, setCurrentVersion] = useState<string>(APP_VERSION);
-  const [update, setUpdate] = useState<UpdateHandle | null>(null);
-  const [downloaded, setDownloaded] = useState(0);
-  const [contentLength, setContentLength] = useState<number | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleOpenReleasePage = async () => {
-    try {
-      await openUrl(RELEASES_URL);
-    } catch {
-      window.open(RELEASES_URL, '_blank');
-    }
-  };
-
-  const fetchUpdates = async () => {
-    setChecking(true);
-    setError(null);
-    try {
-      // 释放上一次检查留下、且未安装的 Update 资源（避免 Rust 侧句柄泄漏）
-      if (update) {
-        await update.close().catch(() => {});
-        setUpdate(null);
-      }
-      const result = await check();
-      setUpdate(result);
-      setCurrentVersion(result?.currentVersion ?? APP_VERSION);
-      setCheckedAt(new Date().toLocaleString());
-    } catch (e) {
-      const msg = errorMessage(e);
-      setError(`检查更新失败: ${msg}`);
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const handleInstall = async () => {
-    if (!update) return;
-    setInstalling(true);
-    setError(null);
-    setDownloaded(0);
-    setContentLength(undefined);
-    try {
-      await update.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          setContentLength(event.data.contentLength);
-        } else if (event.event === 'Progress') {
-          setDownloaded((prev) => prev + event.data.chunkLength);
-        }
-      });
-      // Windows 下安装器启动后应用会自动退出；macOS / Linux 需要主动重启以运行新版本
-      await relaunch();
-    } catch (e) {
-      const msg = errorMessage(e);
-      setError(`安装更新失败: ${msg}。可前往 GitHub Releases 手动下载。`);
-      setInstalling(false);
-    }
-  };
-
-  const hasUpdate = update !== null;
-  const percent =
-    contentLength && contentLength > 0
-      ? Math.min(100, Math.round((downloaded / contentLength) * 100))
-      : null;
+/**
+ * 更新检查正文。标题与「检查更新」按钮由外层区块承担（见设置页「关于」的版本更新区块），
+ * 所以这里不自带标题、也不自带内边距 —— 自带 p-4 会让内容比同页其它行右缩一截。
+ */
+export function UpdateChecker({ u }: { u: Updater }) {
+  const {
+    checking, installing, checkedAt, currentVersion, update, error,
+    percent, downloaded, contentLength, hasUpdate, install, openReleases,
+  } = u;
 
   return (
-    /* 不自带 p-4、也不自带标题：本组件嵌在「关于」页的 SettingsSection（标题 + 占满整行的内容）里，
-       自带的 16px 内边距会让内容比同页其它行右缩一截，破坏行宽一致；标题也由外层 section 承担。 */
     <div className="space-y-4">
-      {/* Header：只剩操作按钮（标题在外层 section） */}
-      <div className="flex items-center justify-end">
-        <button
-          onClick={fetchUpdates}
-          disabled={checking || installing}
-          className="pd-btn flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors disabled:opacity-50"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-        >
-          {checking ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <RefreshCw size={12} />
-          )}
-          {checking ? '检查中...' : '检查更新'}
-        </button>
-      </div>
-
       {/* Last checked time */}
       {checkedAt && (
         <p className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
@@ -159,7 +66,7 @@ export function UpdateChecker() {
         <div className="flex items-center gap-2 shrink-0">
           {hasUpdate && (
             <button
-              onClick={handleInstall}
+              onClick={() => void install()}
               disabled={installing}
               className="pd-btn flex items-center gap-1 px-2 py-1 rounded text-[10px]  transition-colors disabled:opacity-60"
               style={{ backgroundColor: '#F59E0B', color: '#fff' }}
@@ -193,7 +100,7 @@ export function UpdateChecker() {
               <span
                 className="cursor-pointer underline"
                 style={{ color: 'var(--accent)' }}
-                onClick={handleOpenReleasePage}
+                onClick={() => void openReleases()}
               >
                 GitHub Releases
               </span>{' '}
@@ -206,7 +113,7 @@ export function UpdateChecker() {
       {/* Fallback entry when update exists but install failed */}
       {hasUpdate && error && (
         <button
-          onClick={handleOpenReleasePage}
+          onClick={() => void openReleases()}
           className="pd-btn w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[10px] transition-colors"
           style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)', border: '1px solid var(--border)' }}
         >

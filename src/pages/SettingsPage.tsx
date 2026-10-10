@@ -4,9 +4,10 @@ import {
   Settings, Key, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink,
+  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink, RefreshCw,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { open as openUrl } from '@tauri-apps/plugin-shell';
 import { invoke } from '@tauri-apps/api/core';
 import {
   DndContext,
@@ -31,6 +32,7 @@ import { ThemeCustomizer } from '../components/settings/ThemeCustomizer';
 import { EnvManager } from '../components/env/EnvManager';
 import { AgentManager } from '../components/env/AgentManager';
 import { UpdateChecker } from '../components/panels/UpdateChecker';
+import { useUpdater } from '../hooks/useUpdater';
 import { ModePromptSettings } from '../components/panels/ModePromptSettings';
 import { PermissionSettings } from '../components/settings/AgentPermissionSettings';
 import { McpSettings } from '../components/settings/McpSettings';
@@ -40,7 +42,6 @@ import { useApiProviderStore, getApiKey } from '../stores/apiProviderStore';
 import { useAccountStore } from '../stores/accountStore';
 import { sendApiRequest } from '../utils/apiClient';
 import { useTerminal, type ViewMode } from '../TerminalManager';
-import { useCustomTabsStore } from '../stores/customTabsStore';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -1695,7 +1696,6 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
 /**
  * 「关于」页的对外链接。
  *
- * 打开方式统一为**门户标签**（不弹系统浏览器）：点击即把地址加成一个门户标签并切过去。
  * `url` 为空 = 地址待补，渲染成不可点的行并标「待补充」；补齐字符串即生效，不需要改逻辑。
  */
 const ABOUT_LINKS: Array<{ label: string; url: string }> = [
@@ -1716,34 +1716,23 @@ const ABOUT_LINKS: Array<{ label: string; url: string }> = [
  * 与通用设置页左侧对齐的统一版式不一致。
  */
 function AboutSection() {
-  const { setMode } = useTerminal();
-  const navigate = useNavigate();
+  const u = useUpdater();
 
   /**
-   * 在门户里打开外链：已有同地址的门户标签就直接切过去，否则新建一个再切过去。
-   * 新建失败（数量上限 / 地址非法 / 重复）用 toast 说明原因，不静默失败。
+   * 打开对外链接：交给**系统默认浏览器**，不在门户标签里内嵌。
+   *
+   * 原因：这些站点（GitHub 等）带 `X-Frame-Options` / CSP `frame-ancestors`，内嵌 iframe 会被直接拒绝，
+   * 门户里只会看到一个空白或"拒绝连接"的页面 —— 与"打不开"没区别，还不如交给浏览器。
    */
-  const openInPortal = useCallback(async (label: string, url: string) => {
+  const openExternal = async (url: string) => {
     if (!url) return;
-    const store = useCustomTabsStore.getState();
-    const existing = store.tabs.find((t) => t.url === url);
-    if (existing) {
-      store.setActiveTab(existing.id);
-    } else {
-      const res = await store.addTab(label, url);
-      if (!res.ok) {
-        showToast(`无法打开「${label}」：${res.error}`, 'error');
-        return;
-      }
-      // addTab 成功后重新取一次，拿新建那条的 id（不依赖它的返回结构）
-      const created = useCustomTabsStore.getState().tabs.find((t) => t.url === url);
-      if (created) useCustomTabsStore.getState().setActiveTab(created.id);
+    try {
+      await openUrl(url);
+    } catch {
+      // 非 Tauri 环境（例如浏览器里调试）兜底
+      window.open(url, '_blank');
     }
-    // 与顶栏模式切换（本页 handleModeChange）同一套动作：先切模式，再把路由从 /settings 带回主布局。
-    // 少了 navigate 这一步，settings 路由仍盖着内容区，表现就是「标签建好了但页面没切过去」。
-    setMode('custom');
-    navigate('/');
-  }, [setMode, navigate]);
+  };
 
   return (
     <div className="space-y-6">
@@ -1765,8 +1754,21 @@ function AboutSection() {
         </div>
       </SettingsSection>
 
-      <SettingsSection title="版本更新">
-        <UpdateChecker />
+      {/* 「检查更新」按钮走 SettingsSection 的 actions 槽，与标题同一行（靠右）——
+          所以更新检查的状态提到了 useUpdater()，按钮才拿得到它 */}
+      <SettingsSection
+        title="版本更新"
+        actions={
+          <SettingsButton
+            onClick={() => void u.check()}
+            disabled={u.checking || u.installing}
+            icon={u.checking ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          >
+            {u.checking ? '检查中…' : '检查更新'}
+          </SettingsButton>
+        }
+      >
+        <UpdateChecker u={u} />
       </SettingsSection>
 
       <SettingsSection title="技术栈">
@@ -1794,7 +1796,7 @@ function AboutSection() {
           {ABOUT_LINKS.map(({ label, url }) => (
             <button
               key={label}
-              onClick={() => void openInPortal(label, url)}
+              onClick={() => void openExternal(url)}
               disabled={!url}
               className="pd-btn flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-left transition-colors disabled:opacity-50"
               style={{
@@ -1803,12 +1805,12 @@ function AboutSection() {
                 color: 'var(--text-secondary)',
                 cursor: url ? 'pointer' : 'default',
               }}
-              title={url ? `在门户标签内打开：${url}` : '外链地址待补充'}
+              title={url ? `在系统浏览器中打开：${url}` : '外链地址待补充'}
             >
               <ExternalLink size={12} style={{ color: 'var(--text-tertiary)' }} />
               <span style={{ color: 'var(--text-primary)' }}>{label}</span>
               <span className="ml-auto text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                {url ? '在门户中打开' : '待补充'}
+                {url ? '在浏览器中打开' : '待补充'}
               </span>
             </button>
           ))}
