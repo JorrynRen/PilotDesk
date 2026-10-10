@@ -379,6 +379,19 @@ export function KvMemorySettings() {
           {intentModelDirty && (
             <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>有未保存的改动</span>
           )}
+          {/* 路由超时与模型设置同一行（原来自占一行）：用 ml-auto 把它推到行尾，
+              与左边「模型 + 保存」那组拉开层次 —— 它的落盘时机是失焦即存（见 saveIntentTimeout），
+              不属于上面那个「保存」按钮管的那组字段。输入框只需容纳 1~2 位数字，故比原来窄得多。 */}
+          <span className="shrink-0 ml-auto" style={{ color: 'var(--text-secondary)' }}>路由超时（秒）</span>
+          <input
+            value={intentTimeoutDraft}
+            onChange={(e) => setIntentTimeoutDraft(e.target.value)}
+            onBlur={saveIntentTimeout}
+            placeholder="留空 = 60"
+            title="上限而非等待时长：模型返回即继续，只有上游卡住才会等满。留空恢复默认 60；合法取值 1~60。"
+            className="w-24 px-2 py-1 rounded-md text-xs outline-none"
+            style={inputOnPanelStyle}
+          />
         </div>
         {intentProviderIsAnthropic && (
           <div style={{ color: '#F59E0B' }}>
@@ -390,17 +403,6 @@ export function KvMemorySettings() {
             当前是旧格式配置（只记了模型名「{intentLegacyModel}」，提供商跟随会话）。重新选择提供商与模型并保存后，会按新格式记录。
           </div>
         )}
-        <div className="flex items-center gap-2">
-          <span className="shrink-0" style={{ color: 'var(--text-secondary)' }}>路由超时（秒）</span>
-          <input
-            value={intentTimeoutDraft}
-            onChange={(e) => setIntentTimeoutDraft(e.target.value)}
-            onBlur={saveIntentTimeout}
-            placeholder="留空 = 60（合法 1~60）"
-            className="w-40 px-2 py-1 rounded-md text-xs outline-none"
-            style={inputOnPanelStyle}
-          />
-        </div>
         <div style={{ color: 'var(--text-tertiary)' }}>
           关闭后不再发起意图路由调用，KV 记忆不再自动注入；<strong>MEMORY.md / USER.md 仍随 system prompt 注入</strong>，模型仍可调用 <code>search_memory</code> 按需检索。路由模型默认跟随当前会话，也可以单独指定提供商 + 模型（建议选更小/更快的模型以降低开销，例如主对话用大模型、路由用便宜的小模型）；路由超时是<strong>上限而非等待时长</strong> —— 模型返回即继续（实际可能只需 1~2 秒），只有上游卡住才会等满，因此填大不会让每条消息都变慢。
         </div>
