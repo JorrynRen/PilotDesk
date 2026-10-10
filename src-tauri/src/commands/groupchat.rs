@@ -103,6 +103,10 @@ pub fn groupchat_create_room(
         goal_notes: "[]".into(),
         allow_auto_cli: input.allow_auto_cli,
         output_dir: input.output_dir,
+        // 派生字段：只有 list_rooms 会填
+        current_round: None,
+        task_total: None,
+        task_finished: None,
     };
 
     store::insert_room(&conn, &room)?;
@@ -1030,6 +1034,10 @@ mod tests {
             goal_notes: "[]".to_string(),
             allow_auto_cli: 1,
             output_dir: String::new(),
+            // 派生字段：只有 list_rooms 会填
+            current_round: None,
+            task_total: None,
+            task_finished: None,
         };
         store::insert_room(conn, &room).unwrap();
         for (id, kind, config) in [

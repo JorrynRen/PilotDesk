@@ -1595,6 +1595,10 @@ pub fn session_promote_to_room(
         goal_notes: "[]".into(),
         allow_auto_cli: input.allow_auto_cli,
         output_dir: input.output_dir.clone(),
+        // 派生字段：只有 list_rooms 会填
+        current_round: None,
+        task_total: None,
+        task_finished: None,
     };
     crate::groupchat::store::insert_room(&conn, &room)?;
     for p in &input.participants {

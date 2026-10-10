@@ -18,6 +18,16 @@ export interface GroupChatRoom {
   allowAutoCli?: number;
   /** 房间统一产物目录（绝对路径；空=运行时回退 <工作目录>/outputs/<房间标题>/） */
   outputDir?: string;
+  /**
+   * 以下三个是**派生字段**：后端只在房间列表（`list_rooms`）里读时聚合，房间详情/创建路径不返回。
+   *   currentRound  当前讨论轮次（= 消息 round 的最大值，讨论阶段的进度）
+   *   taskTotal     子任务总数（执行阶段进度的分母）
+   *   taskFinished  已结束的子任务数（含失败/跳过/中止）
+   * 取不到（undefined）时前端退化成"只显示状态与更新时间"，不编进度。
+   */
+  currentRound?: number;
+  taskTotal?: number;
+  taskFinished?: number;
 }
 
 export type ParticipantType = 'api' | 'cli' | 'user' | 'director';

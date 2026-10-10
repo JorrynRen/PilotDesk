@@ -59,7 +59,40 @@ pub fn list_rooms(conn: &Connection) -> Result<Vec<Room>, AppError> {
          FROM groupchat_rooms ORDER BY updated_at DESC",
     )?;
     let rows = stmt.query_map([], row_to_room)?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    let mut rooms = rows.collect::<Result<Vec<_>, _>>()?;
+    // 房间列表是指挥中心/侧栏看进度的唯一入口，这里按房间补上两个派生字段（读时聚合）。
+    for room in rooms.iter_mut() {
+        let (round, total, finished) = room_progress(conn, &room.id);
+        room.current_round = Some(round);
+        room.task_total = Some(total);
+        room.task_finished = Some(finished);
+    }
+    Ok(rooms)
+}
+
+/// 房间进度的两个派生值（读时聚合，不回写）：
+/// - 轮次：`room_events(kind='message')` 的 round 最大值（复用 `max_message_round`，与重启续轮同口径）；
+/// - 子任务：`task/created` + `task/status` 折叠出的快照，按「已结束（含失败/跳过/中止）/ 总数」计。
+/// 任务折叠失败按"无任务"返回（前端退化成只显示轮次），不让整张房间列表跟着失败。
+fn room_progress(conn: &Connection, room_id: &str) -> (i64, i64, i64) {
+    let round = max_message_round(conn, room_id);
+    let (total, finished) = match list_tasks(conn, room_id) {
+        Ok(tasks) => {
+            let total = tasks.len() as i64;
+            let finished = tasks
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t.status.as_str(),
+                        "success" | "failed" | "skipped" | "aborted"
+                    )
+                })
+                .count() as i64;
+            (total, finished)
+        }
+        Err(_) => (0, 0),
+    };
+    (round, total, finished)
 }
 
 /// 删除房间及其全部关联数据：事件（room_events 已事件化消息/任务）+ 立场/参与者/房间，
@@ -172,6 +205,10 @@ fn row_to_room(row: &rusqlite::Row<'_>) -> rusqlite::Result<Room> {
         goal_notes: row.get(11)?,
         allow_auto_cli: row.get(12)?,
         output_dir: row.get(13)?,
+        // 派生字段：由 list_rooms 单独补（见 room_progress）
+        current_round: None,
+        task_total: None,
+        task_finished: None,
     })
 }
 

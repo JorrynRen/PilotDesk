@@ -60,6 +60,13 @@ interface CommandCenterState {
    * 「刷新」按钮与内嵌实例的挂载刷新都走这里。
    */
   refreshCenter: () => Promise<void>;
+  /**
+   * 只刷新「进行中」相关的数据源（实例 / 房间 / 房间 Actor 存活）。
+   *
+   * 与 `refreshCenter()` 分开的原因：内嵌指挥中心在"确实有东西在跑"时会 4s 轮询一次，
+   * 若每次都把待处理、提供商、用量一起重拉，代价与副作用都太大（等于每 4s 打一次用量接口）。
+   */
+  pollActive: () => Promise<void>;
   /** 纯关闭（跳转类操作用：用户已经找到下一步，不需要额外提示） */
   setOpen: (open: boolean) => void;
   /** 显式关闭（X / Esc / 遮罩）：标记「使用指引已看过」，之后默认页不再展开整块引导 */
@@ -69,26 +76,33 @@ interface CommandCenterState {
 
 export const useCommandCenterStore = create<CommandCenterState>((set) => {
   /**
+   * 进行中的三处数据源：实例 / 房间 / 对运行中房间探测 Actor 存活
+   * （区分"真在跑"与"DB 残留 running"）。`refresh()` 与 4s 轮询共用这一份。
+   */
+  const syncActive = async () => {
+    const wf = useWorkflowStore.getState();
+    // 静默刷新：面板自己展示 loading，不需要各 store 的全局 loading 态
+    void wf.loadInstances(undefined, true);
+    const gc = useGroupChatStore.getState();
+    await gc.loadRooms();
+    useGroupChatStore
+      .getState()
+      .rooms.filter((r) => r.status === 'running')
+      .forEach((r) => void useGroupChatStore.getState().refreshActorAlive(r.id));
+  };
+
+  /**
    * 刷新全部数据源（不改 `open`）。模态打开与内嵌实例共用同一份实现，
    * 避免两处各维护一遍「刷新哪些列表」。
    */
   const refresh = async () => {
     set({ loadingUsage: true });
     const wf = useWorkflowStore.getState();
-    const gc = useGroupChatStore.getState();
-    // 三处列表都静默刷新：面板自己展示 loading，不需要各 store 的全局 loading 态
-    void wf.loadInstances(undefined, true);
+    void syncActive();
     void wf.loadPendingInputs();
     void wf.loadPendingApprovals();
     // 使用向导的就绪判定要看「提供商是否已配 Key / 模型」，故顺带刷新
     void useApiProviderStore.getState().fetchProviders();
-    void gc.loadRooms().then(() => {
-      // 运行中的房间额外探测 Actor 存活：区分"真在跑"与"DB 残留 running（待恢复）"
-      useGroupChatStore
-        .getState()
-        .rooms.filter((r) => r.status === 'running')
-        .forEach((r) => void useGroupChatStore.getState().refreshActorAlive(r.id));
-    });
     try {
       const usage = await getUsageAttribution(USAGE_DAYS);
       set({ usage, loadingUsage: false });
@@ -110,6 +124,8 @@ export const useCommandCenterStore = create<CommandCenterState>((set) => {
     },
 
     refreshCenter: refresh,
+
+    pollActive: syncActive,
 
     setOpen: (open) => set({ open }),
 

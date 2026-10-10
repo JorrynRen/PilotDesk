@@ -33,6 +33,18 @@ pub struct Room {
     /// 所有参与者产出的文件必须写入该目录，保证位置一致、房间内全局感知（v3.4ao）。
     #[serde(default)]
     pub output_dir: String,
+
+    // ── 以下为**派生字段**（不是表里的列，由 `store::list_rooms` 读时聚合）──
+    /// 当前讨论轮次 = `room_events(kind='message')` 里 round 的最大值（与 Actor 重启续轮同口径）。
+    /// 只有房间列表路径会填；房间详情/创建路径为 None（不在热路径上多做两次查询）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_round: Option<i64>,
+    /// 子任务总数（执行阶段进度的分母）。同 current_round，仅列表路径填。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_total: Option<i64>,
+    /// 已结束的子任务数：含失败/跳过/中止 —— 进度按"已结束"算，不是只算成功。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_finished: Option<i64>,
 }
 
 fn default_goal_notes() -> String {

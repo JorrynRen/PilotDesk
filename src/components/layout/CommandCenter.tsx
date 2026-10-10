@@ -139,6 +139,52 @@ function EmptyHint({ text }: { text: string }) {
   );
 }
 
+/**
+ * 状态词 + 进行中的呼吸点。
+ *
+ * 只有**确实在跑**才呼吸：暂停/待启动/待恢复都是静态的，否则"看起来在跑其实没跑"，
+ * 比不加动效更误导。三个色调用状态色而非装饰色：ok=在跑、warn=异常（如"待恢复"）、muted=其余。
+ */
+function StatusChip({ label, animating, tone = 'muted' }: {
+  label: string;
+  animating?: boolean;
+  tone?: 'ok' | 'warn' | 'muted';
+}) {
+  const color = tone === 'ok' ? 'var(--status-success)' : tone === 'warn' ? 'var(--status-warning)' : 'var(--text-tertiary)';
+  return (
+    <span className="shrink-0 flex items-center gap-1 text-[10px]" style={{ color }}>
+      {animating && (
+        <span
+          className="inline-block w-1.5 h-1.5 rounded-full shrink-0 pd-animate-breathe"
+          style={{ backgroundColor: 'currentColor' }}
+        />
+      )}
+      {label}
+    </span>
+  );
+}
+
+/**
+ * 行内进度条：宽高只占 1.5px，不新增行高（默认页"不出滚动条"的约束不能破）。
+ * 视觉语法与成本速览的份额条一致 —— 但语义不同：这里是**完成比率**，那边是**占全量份额**，
+ * 所以本条的百分比数字必须随之显示，别让读者混读。定格（暂停/待恢复）时降级成中性色。
+ */
+function ProgressBar({ pct, muted }: { pct: number; muted?: boolean }) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  return (
+    <span
+      className="flex-1 min-w-0 h-1.5 rounded-full overflow-hidden"
+      style={{ backgroundColor: 'var(--bg-tertiary)' }}
+      title={`${clamped.toFixed(0)}%`}
+    >
+      <span
+        className="block h-full rounded-full"
+        style={{ width: `${clamped}%`, backgroundColor: muted ? 'var(--text-tertiary)' : 'var(--accent)' }}
+      />
+    </span>
+  );
+}
+
 /** 路径/文件名等需要等宽展示的片段。 */
 function PathText({ children }: { children: ReactNode }) {
   return (
@@ -288,6 +334,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const markGuideSeen = useCommandCenterStore((s) => s.markGuideSeen);
   const usage = useCommandCenterStore((s) => s.usage);
   const loadingUsage = useCommandCenterStore((s) => s.loadingUsage);
+  const pollActive = useCommandCenterStore((s) => s.pollActive);
 
   const { setMode } = useTerminal();
   const navigate = useNavigate();
@@ -311,6 +358,13 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const [inputDrafts, setInputDrafts] = useState<Record<string, string>>({});
   const rooms = useGroupChatStore((s) => s.rooms);
   const roomsActorAlive = useGroupChatStore((s) => s.roomsActorAlive);
+
+  /**
+   * 「进行中」= 未到终态的实例/房间（与下面那个板块同一口径）。
+   * 提到这里是因为轮询要按"有没有进行中项"启停 —— hooks 必须在提前 return 之前。
+   */
+  const activeInstances = instances.filter((i) => ACTIVE_INSTANCE_STATUS.includes(i.status));
+  const activeRooms = rooms.filter((r) => ACTIVE_ROOM_STATUS.includes(r.status));
 
   // ── 使用向导：Agent 集成是否已就绪（决定能否开始首次会话）──
   const providers = useApiProviderStore((s) => s.providers);
@@ -368,6 +422,19 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   useEffect(() => {
     if (inline) void refreshCenter();
   }, [inline, refreshCenter]);
+
+  /**
+   * 进行中的呼吸点与进度条要"真在动"才有意义，而这两个数据源不会自己更新
+   * （实例只在显式 loadInstances 时刷新，房间同理）。所以：内嵌态可见 **且确实有进行中项** 时，
+   * 每 4s 静默轮询一次（只刷进行中那三处，不连带用量/提供商）；没有进行中项或切走时立即停，
+   * 不给空闲状态白打 IPC。
+   */
+  const activeCount = activeInstances.length + activeRooms.length;
+  useEffect(() => {
+    if (!inline || activeCount === 0) return;
+    const timer = window.setInterval(() => { void pollActive(); }, 4000);
+    return () => window.clearInterval(timer);
+  }, [inline, activeCount, pollActive]);
 
   if (!open && !inline) return null;
 
@@ -472,8 +539,6 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   };
 
   // ── 进行中 ──
-  const activeInstances = instances.filter((i) => ACTIVE_INSTANCE_STATUS.includes(i.status));
-  const activeRooms = rooms.filter((r) => ACTIVE_ROOM_STATUS.includes(r.status));
 
   const dimensions = usage?.dimensions ?? [];
   const usageTotals = dimensions.reduce(
@@ -872,56 +937,103 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
             </div>
           </Section>
 
-          {/* 进行中（占满整行：执行/房间行内含状态与来源，半列会挤） */}
+          {/* 进行中（占满整行：行内含状态、进度与来源，半列会挤）。
+              仍是两行（标题行 + 说明行），进度条做成**行内**元素（h-1.5），不新增行高 ——
+              默认页"不出滚动条"的约束不能破。 */}
           <Section title="进行中" icon={<Activity size={11} />} count={activeInstances.length + activeRooms.length} span>
             {activeInstances.length === 0 && activeRooms.length === 0 && (
               <EmptyHint text="暂无进行中的工作流执行或群聊房间。" />
             )}
             <div className="space-y-1.5">
-              {activeInstances.slice(0, MAX_ACTIVE_ROWS).map((i) => (
-                <div
-                  key={i.id}
-                  className="flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
-                  style={{ backgroundColor: 'var(--bg-primary)' }}
-                  onClick={goWorkflow}
-                  title="进入工作流页查看"
-                >
-                  <WorkflowIcon size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>
-                      {i.definitionName || '未命名工作流'}
+              {activeInstances.slice(0, MAX_ACTIVE_ROWS).map((i) => {
+                const running = i.status === 'running';
+                // completionRate 是后端算好的完成度（0–1），与工作流页/实例列表同口径
+                const pct = (i.completionRate ?? 0) * 100;
+                return (
+                  <div
+                    key={i.id}
+                    className="px-2.5 py-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
+                    style={{ backgroundColor: 'var(--bg-primary)' }}
+                    onClick={goWorkflow}
+                    title="进入工作流页查看"
+                  >
+                    <div className="flex items-center gap-2">
+                      <WorkflowIcon size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
+                      <div className="flex-1 min-w-0 text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>
+                        {i.definitionName || '未命名工作流'}
+                      </div>
+                      <StatusChip
+                        label={INSTANCE_STATUS_LABEL[i.status] ?? i.status}
+                        animating={running}
+                        tone={running ? 'ok' : 'muted'}
+                      />
+                      <ArrowRight size={11} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
                     </div>
-                    <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                      {INSTANCE_STATUS_LABEL[i.status] ?? i.status}
-                      {/* 自动触发的标出来源：用户没点过运行，得知道是谁在跑 */}
-                      {i.trigger === 'cron' ? ' · 定时触发' : i.trigger === 'event' ? ' · 事件触发' : ''}
-                      {' · 开始于 '}{fmtAgo(i.startedAt)}
+                    <div className="flex items-center gap-2 mt-1">
+                      <ProgressBar pct={pct} muted={!running} />
+                      <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                        已完成 {Math.round(pct)}%
+                        {/* 自动触发的标出来源：用户没点过运行，得知道是谁在跑 */}
+                        {i.trigger === 'cron' ? ' · 定时触发' : i.trigger === 'event' ? ' · 事件触发' : ''}
+                        {' · 开始于 '}{fmtAgo(i.startedAt)}
+                      </span>
                     </div>
                   </div>
-                  <ArrowRight size={11} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
-                </div>
-              ))}
+                );
+              })}
               {activeInstances.length > MAX_ACTIVE_ROWS && (
                 <EmptyHint text={`还有 ${activeInstances.length - MAX_ACTIVE_ROWS} 个执行，进入工作流页查看全部。`} />
               )}
               {activeRooms.slice(0, MAX_ACTIVE_ROWS).map((r) => {
                 const staleRun = r.status === 'running' && !roomsActorAlive[r.id];
+                const running = r.status === 'running' && !staleRun;
+                /**
+                 * 进度按阶段给，两个信号**不合成一根条**（语义不同）：
+                 *   已拆出子任务 → 子任务完成度（真比率；分母 = 总数，分子含失败/跳过/中止）
+                 *   还在讨论     → 讨论轮次 / 上限（这是预算消耗，不是完成度）
+                 * 两个都取不到（旧后端没这俩派生字段）就不画条，避免 0/0 的假进度。
+                 * 另一阶段的数字不丢：挂在 title 上，不挤行宽。
+                 */
+                const total = r.taskTotal ?? 0;
+                const finished = r.taskFinished ?? 0;
+                const round = r.currentRound ?? 0;
+                const hasTasks = total > 0;
+                // currentRound 缺席 = 后端没这俩派生字段（老版本）：宁可只显示时间，也不写"第 0/5 轮"
+                const hasRound = r.currentRound !== undefined && r.maxRounds > 0;
+                const canShowBar = hasTasks || hasRound;
+                const pct = hasTasks
+                  ? (finished / total) * 100
+                  : hasRound ? (round / r.maxRounds) * 100 : 0;
+                const progressText = hasTasks
+                  ? `子任务 ${finished}/${total}`
+                  : hasRound ? `第 ${round}/${r.maxRounds} 轮` : '';
+                const altText = hasTasks && hasRound ? ` · 讨论第 ${round}/${r.maxRounds} 轮` : '';
                 return (
                   <div
                     key={r.id}
-                    className="flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
+                    className="px-2.5 py-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
                     style={{ backgroundColor: 'var(--bg-primary)' }}
                     onClick={() => goRoom(r.id)}
-                    title="进入该群聊房间"
+                    title={`进入该群聊房间${altText}`}
                   >
-                    <Users size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>{r.title}</div>
-                      <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                        {staleRun ? '待恢复（进程已退出）' : ROOM_STATUS_LABEL[r.status] ?? r.status} · 更新于 {fmtAgo(r.updatedAt)}
-                      </div>
+                    <div className="flex items-center gap-2">
+                      <Users size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
+                      <div className="flex-1 min-w-0 text-[11px] truncate" style={{ color: 'var(--text-primary)' }}>{r.title}</div>
+                      <StatusChip
+                        label={staleRun ? '待恢复（进程已退出）' : ROOM_STATUS_LABEL[r.status] ?? r.status}
+                        animating={running}
+                        tone={running ? 'ok' : staleRun ? 'warn' : 'muted'}
+                      />
+                      <ArrowRight size={11} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
                     </div>
-                    <ArrowRight size={11} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
+                    <div className="flex items-center gap-2 mt-1">
+                      {canShowBar
+                        ? <ProgressBar pct={pct} muted={!running} />
+                        : <span className="flex-1 min-w-0" />}
+                      <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                        {progressText ? `${progressText} · ` : ''}更新于 {fmtAgo(r.updatedAt)}
+                      </span>
+                    </div>
                   </div>
                 );
               })}
