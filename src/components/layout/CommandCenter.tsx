@@ -12,6 +12,7 @@
  */
 import { useNavigate } from 'react-router-dom';
 import { useEffect, useState, type ReactNode } from 'react';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   LayoutDashboard,
   X,
@@ -435,6 +436,53 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
     const timer = window.setInterval(() => { void pollLive(); }, 4000);
     return () => window.clearInterval(timer);
   }, [inline, activeCount, pollLive]);
+
+  /**
+   * 把"自动触发的运行"叫醒 —— 单靠上面那个轮询是等不到的：定时/事件触发的工作流在落进列表之前，
+   * activeCount 是 0，轮询根本不启动，于是只能靠手动刷新。通知中心之所以即时，就是因为它订阅了这些事件；
+   * 这里订阅同一批（事件名与 notificationEvents.ts 保持一致，改一处要两处同步）：
+   *   workflow:execution-progress 实例落库/推进 → 重拉实例（后续进度由那时已启动的 4s 轮询接手）
+   *   awaiting-input / approval-required / approval-resolved → 重拉待处理两处
+   * 只在内嵌面板可见时订阅：不可见就不刷（回到默认页时挂载 effect 会补一次全量）。
+   * 进度事件按节点成簇下发，所以按类型各做 0.8s 合并，避免每个节点都打一遍 IPC。
+   */
+  useEffect(() => {
+    if (!inline) return;
+    let disposed = false;
+    let timer: number | null = null;
+    const dirty = { running: false, pending: false };
+    const offs: UnlistenFn[] = [];
+    /** 卸载与 listen() 的 Promise 存在竞态：cleanup 先跑时 unlisten 还是 null，用 disposed 兜底 */
+    const track = (p: Promise<UnlistenFn>) => {
+      void p.then((off) => { if (disposed) off(); else offs.push(off); });
+    };
+    const schedule = (kind: 'running' | 'pending') => {
+      dirty[kind] = true;
+      if (timer !== null) return; // 已在合并窗口内，等这一轮一起刷
+      timer = window.setTimeout(() => {
+        timer = null;
+        if (dirty.running) {
+          dirty.running = false;
+          void useWorkflowStore.getState().loadInstances(undefined, true);
+        }
+        if (dirty.pending) {
+          dirty.pending = false;
+          const wf = useWorkflowStore.getState();
+          void wf.loadPendingInputs();
+          void wf.loadPendingApprovals();
+        }
+      }, 800);
+    };
+    track(listen('workflow:execution-progress', () => schedule('running')));
+    track(listen('workflow:awaiting-input', () => schedule('pending')));
+    track(listen('workflow:approval-required', () => schedule('pending')));
+    track(listen('workflow:approval-resolved', () => schedule('pending')));
+    return () => {
+      disposed = true;
+      if (timer !== null) window.clearTimeout(timer);
+      offs.forEach((off) => off());
+    };
+  }, [inline]);
 
   if (!open && !inline) return null;
 
