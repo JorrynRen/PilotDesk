@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Search, Plus, Trash2, Pencil, X, Check, Star, Eraser } from 'lucide-react';
+import { Search, Plus, Trash2, Pencil, X, Check, Star, Eraser, ChevronDown, ChevronRight } from 'lucide-react';
 import { SettingsSection, SettingsButton } from './index';
 import { Select } from '../common/Select';
 import {
@@ -83,6 +83,32 @@ const inputOnPanelStyle: CSSProperties = {
 
 /** 列表分块每页条数 */
 const PAGE_SIZE = 100;
+
+/**
+ * 「说明」折叠行：把这类长解释默认收起来，避免设置页半屏都是文字；点标题才展开。
+ *
+ * 为什么不复用 WorkflowOutputCard 的 CollapsibleSection：那个是**带边框的详情盒**（还有内滚动），
+ * 用在产出卡片里合适；这里是正文里的次要说明，套盒子反而比正文更抢眼，所以只要一个行内开关。
+ */
+function CollapsibleNote({ title, children }: { title: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 text-[10px] transition-colors"
+        style={{ color: 'var(--text-tertiary)' }}
+        title={open ? '收起说明' : '展开说明'}
+      >
+        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        {title}
+      </button>
+      {open && (
+        <div className="mt-1" style={{ color: 'var(--text-tertiary)' }}>{children}</div>
+      )}
+    </div>
+  );
+}
 
 /** 设置「记忆管理」→ 全局 KV 记忆（MEMORY.db）：列表行内编辑 + pin 保护 + 自动维护两步清理 */
 export function KvMemorySettings() {
@@ -403,9 +429,9 @@ export function KvMemorySettings() {
             当前是旧格式配置（只记了模型名「{intentLegacyModel}」，提供商跟随会话）。重新选择提供商与模型并保存后，会按新格式记录。
           </div>
         )}
-        <div style={{ color: 'var(--text-tertiary)' }}>
+        <CollapsibleNote title="意图检索与路由说明">
           关闭后不再发起意图路由调用，KV 记忆不再自动注入；<strong>MEMORY.md / USER.md 仍随 system prompt 注入</strong>，模型仍可调用 <code>search_memory</code> 按需检索。路由模型默认跟随当前会话，也可以单独指定提供商 + 模型（建议选更小/更快的模型以降低开销，例如主对话用大模型、路由用便宜的小模型）；路由超时是<strong>上限而非等待时长</strong> —— 模型返回即继续（实际可能只需 1~2 秒），只有上游卡住才会等满，因此填大不会让每条消息都变慢。
-        </div>
+        </CollapsibleNote>
       </div>
 
       {stats && policy && (
@@ -413,22 +439,18 @@ export function KvMemorySettings() {
           <div style={{ color: 'var(--text-primary)' }}>
             共 {stats.total} 条 · pin 保护 {stats.pinned} 条 · 自动维护候选 {stats.candidates} 条
           </div>
-          <div style={{ color: 'var(--text-tertiary)' }}>
-            自动维护规则：总条数超 {policy.maxEntries} 条时按“最久未活跃”驱逐；超过 {policy.idleDays} 天既未被检索也未被编辑、且访问次数 ≤ {policy.minAccess} 次的未 pin 条目会被清理（pin 条目永不自动删除）。<strong>知识库条目不参与以上两项自动维护</strong>——它们既不占 {policy.maxEntries} 条配额，也不会被判为冷记忆；生命周期只由所属知识库决定（删库或从库中移除，且仅当不再被任何库关联时才连同条目删除）。
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {stats.injected.length > 0 ? (
-              <span style={{ color: 'var(--text-tertiary)' }}>
-                高频 top-5（仅统计参考，非实际注入；实际注入随当前对话意图检索决定）：{stats.injected.map((x) => x.key).join('、')}
-              </span>
-            ) : (
-              <span style={{ color: 'var(--text-tertiary)' }}>暂无记忆</span>
-            )}
-            <div className="flex-1" />
-            <SettingsButton onClick={openPreview} disabled={cleanPhase !== 'idle'} icon={<Eraser size={12} />}>
-              清理冷记忆
-            </SettingsButton>
-          </div>
+          <CollapsibleNote title="自动维护规则">
+            总条数超 {policy.maxEntries} 条时按“最久未活跃”驱逐；超过 {policy.idleDays} 天既未被检索也未被编辑、且访问次数 ≤ {policy.minAccess} 次的未 pin 条目会被清理（pin 条目永不自动删除）。<strong>知识库条目不参与以上两项自动维护</strong>——它们既不占 {policy.maxEntries} 条配额，也不会被判为冷记忆；生命周期只由所属知识库决定（删库或从库中移除，且仅当不再被任何库关联时才连同条目删除）。
+          </CollapsibleNote>
+          {/* 高频 top-5 现在独占一行：清理按钮已挪到下面的搜索行，这里不再需要撑开的按钮位
+              （顺带把这一行从 30px 的按钮高度降回一行文字） */}
+          {stats.injected.length > 0 ? (
+            <div style={{ color: 'var(--text-tertiary)' }}>
+              高频 top-5（仅统计参考，非实际注入；实际注入随当前对话意图检索决定）：{stats.injected.map((x) => x.key).join('、')}
+            </div>
+          ) : (
+            <div style={{ color: 'var(--text-tertiary)' }}>暂无记忆</div>
+          )}
         </div>
       )}
 
@@ -485,6 +507,11 @@ export function KvMemorySettings() {
           placeholder="全部分类"
           size="sm"
         />
+        {/* 清理冷记忆：维护类动作，挂在列表工具栏（原先在统计信息块里自占一行右端）。
+            放在「新增」左边：主操作仍留在最右。 */}
+        <SettingsButton onClick={openPreview} disabled={cleanPhase !== 'idle'} icon={<Eraser size={12} />}>
+          清理冷记忆
+        </SettingsButton>
         <SettingsButton onClick={startNew} icon={<Plus size={12} />} disabled={showNewRow}>
           新增
         </SettingsButton>
