@@ -1500,7 +1500,9 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                         </span>
                         <span className="flex items-center gap-1">
                           <Layers size={10} />
-                          {def.stages?.length || 0} 阶段
+                          {/* 阶段 + 节点一起给：只看阶段数看不出工作流规模（一个阶段里 1 个节点和 8 个节点差别很大）。
+                              格式与「工作流模板市场」的卡片一致；节点数按各阶段求和（nodes 可能因历史数据缺失）。 */}
+                          {def.stages?.length || 0} 阶段 · {def.stages?.reduce((n, s) => n + (s.nodes?.length || 0), 0) || 0} 节点
                         </span>
                         <span className="flex items-center gap-1">
                           <Zap size={10} />
