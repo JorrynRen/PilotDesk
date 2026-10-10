@@ -1717,6 +1717,7 @@ const ABOUT_LINKS: Array<{ label: string; url: string }> = [
  */
 function AboutSection() {
   const { setMode } = useTerminal();
+  const navigate = useNavigate();
 
   /**
    * 在门户里打开外链：已有同地址的门户标签就直接切过去，否则新建一个再切过去。
@@ -1738,8 +1739,11 @@ function AboutSection() {
       const created = useCustomTabsStore.getState().tabs.find((t) => t.url === url);
       if (created) useCustomTabsStore.getState().setActiveTab(created.id);
     }
+    // 与顶栏模式切换（本页 handleModeChange）同一套动作：先切模式，再把路由从 /settings 带回主布局。
+    // 少了 navigate 这一步，settings 路由仍盖着内容区，表现就是「标签建好了但页面没切过去」。
     setMode('custom');
-  }, [setMode]);
+    navigate('/');
+  }, [setMode, navigate]);
 
   return (
     <div className="space-y-6">
