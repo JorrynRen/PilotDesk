@@ -334,7 +334,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   const markGuideSeen = useCommandCenterStore((s) => s.markGuideSeen);
   const usage = useCommandCenterStore((s) => s.usage);
   const loadingUsage = useCommandCenterStore((s) => s.loadingUsage);
-  const pollActive = useCommandCenterStore((s) => s.pollActive);
+  const pollLive = useCommandCenterStore((s) => s.pollLive);
 
   const { setMode } = useTerminal();
   const navigate = useNavigate();
@@ -424,17 +424,17 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
   }, [inline, refreshCenter]);
 
   /**
-   * 进行中的呼吸点与进度条要"真在动"才有意义，而这两个数据源不会自己更新
-   * （实例只在显式 loadInstances 时刷新，房间同理）。所以：内嵌态可见 **且确实有进行中项** 时，
-   * 每 4s 静默轮询一次（只刷进行中那三处，不连带用量/提供商）；没有进行中项或切走时立即停，
+   * 进行中的呼吸点/进度条、以及待处理的审批与待输入，都要"真在看得到当下"才有意义，
+   * 而这些数据源都不会自己更新（只在显式 load* 时刷新）。所以：内嵌态可见 **且确实有进行中项** 时，
+   * 每 4s 静默轮询一次（进行中三处 + 待处理两处，不含用量/提供商）；没有进行中项或切走时立即停，
    * 不给空闲状态白打 IPC。
    */
   const activeCount = activeInstances.length + activeRooms.length;
   useEffect(() => {
     if (!inline || activeCount === 0) return;
-    const timer = window.setInterval(() => { void pollActive(); }, 4000);
+    const timer = window.setInterval(() => { void pollLive(); }, 4000);
     return () => window.clearInterval(timer);
-  }, [inline, activeCount, pollActive]);
+  }, [inline, activeCount, pollLive]);
 
   if (!open && !inline) return null;
 

@@ -61,12 +61,15 @@ interface CommandCenterState {
    */
   refreshCenter: () => Promise<void>;
   /**
-   * 只刷新「进行中」相关的数据源（实例 / 房间 / 房间 Actor 存活）。
+   * 轻量实时刷新：**进行中**（实例 / 房间 / 房间 Actor 存活）+ **待处理**（工具审批 / 等待人工输入）。
    *
-   * 与 `refreshCenter()` 分开的原因：内嵌指挥中心在"确实有东西在跑"时会 4s 轮询一次，
-   * 若每次都把待处理、提供商、用量一起重拉，代价与副作用都太大（等于每 4s 打一次用量接口）。
+   * 与 `refreshCenter()` 的分工：后者是"打开面板时的一次性全量刷新"（还含用量、提供商），
+   * 前者是内嵌面板可见且有活动项时每 4s 跑的轻量版（省掉用量与提供商两件重活）。
+   *
+   * 待处理必须一起刷：它原先只在面板挂载时拉一次，于是"在别处触发的审批 / 待输入"回到默认页根本看不到
+   * （表现为「待处理获取不到信息」）；进行中一旦变成实时（轮询），这种不一致会更刺眼。
    */
-  pollActive: () => Promise<void>;
+  pollLive: () => Promise<void>;
   /** 纯关闭（跳转类操作用：用户已经找到下一步，不需要额外提示） */
   setOpen: (open: boolean) => void;
   /** 显式关闭（X / Esc / 遮罩）：标记「使用指引已看过」，之后默认页不再展开整块引导 */
@@ -76,15 +79,18 @@ interface CommandCenterState {
 
 export const useCommandCenterStore = create<CommandCenterState>((set) => {
   /**
-   * 进行中的三处数据源：实例 / 房间 / 对运行中房间探测 Actor 存活
-   * （区分"真在跑"与"DB 残留 running"）。`refresh()` 与 4s 轮询共用这一份。
+   * 实时数据（进行中 + 待处理）的刷新实现：`refresh()` 与 4s 轮询共用这一份。
+   * 刻意**不含**用量与提供商 —— 它们不会秒级变化，每 4s 重拉纯属浪费。
    */
-  const syncActive = async () => {
+  const pollLive = async () => {
     const wf = useWorkflowStore.getState();
     // 静默刷新：面板自己展示 loading，不需要各 store 的全局 loading 态
     void wf.loadInstances(undefined, true);
+    void wf.loadPendingInputs();
+    void wf.loadPendingApprovals();
     const gc = useGroupChatStore.getState();
     await gc.loadRooms();
+    // 运行中的房间额外探测 Actor 存活：区分"真在跑"与"DB 残留 running（待恢复）"
     useGroupChatStore
       .getState()
       .rooms.filter((r) => r.status === 'running')
@@ -97,10 +103,7 @@ export const useCommandCenterStore = create<CommandCenterState>((set) => {
    */
   const refresh = async () => {
     set({ loadingUsage: true });
-    const wf = useWorkflowStore.getState();
-    void syncActive();
-    void wf.loadPendingInputs();
-    void wf.loadPendingApprovals();
+    void pollLive();
     // 使用向导的就绪判定要看「提供商是否已配 Key / 模型」，故顺带刷新
     void useApiProviderStore.getState().fetchProviders();
     try {
@@ -125,7 +128,7 @@ export const useCommandCenterStore = create<CommandCenterState>((set) => {
 
     refreshCenter: refresh,
 
-    pollActive: syncActive,
+    pollLive,
 
     setOpen: (open) => set({ open }),
 
