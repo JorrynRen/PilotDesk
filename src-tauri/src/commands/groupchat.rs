@@ -809,7 +809,7 @@ fn build_groupchat_workflow(
         .filter(|c| !c.is_empty())
         .unwrap_or_else(|| {
             format!(
-                "群聊「{}」讨论产出，共 {} 项任务。",
+                "圆桌「{}」讨论产出，共 {} 项任务。",
                 room.title,
                 tasks.len()
             )
@@ -948,7 +948,7 @@ fn build_groupchat_workflow(
         name: room.title.clone(),
         version: "1.0.0".to_string(),
         description: format!(
-            "{}\n\n— 由群聊「{}」转换：{} 个子任务，任务依赖与前置产出引用已保留。",
+            "{}\n\n— 由圆桌「{}」转换：{} 个子任务，任务依赖与前置产出引用已保留。",
             conclusion,
             room.title,
             kept_indices.len()
@@ -960,7 +960,7 @@ fn build_groupchat_workflow(
         },
         stages: vec![Stage {
             id: stage_id,
-            name: "群聊任务".to_string(),
+            name: "圆桌任务".to_string(),
             order: 0,
             nodes,
             edges,

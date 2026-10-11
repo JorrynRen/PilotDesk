@@ -801,7 +801,7 @@ mod tests {
         assert!(llm_p.contains("不要调用 ask_user 工具"));
         assert!(llm_p.contains("【职责分层】"));
         let cli_p = render_participant(fragments::RULE_TOOL_DISCIPLINE_CLI.body.trim());
-        assert!(cli_p.contains("无法调用本群聊的内置工具"));
+        assert!(cli_p.contains("无法调用本圆桌的内置工具"));
         assert!(!cli_p.contains("【工具使用纪律】"));
         assert!(cli_p.contains("【职责分层】"));
     }

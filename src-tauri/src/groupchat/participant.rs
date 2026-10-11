@@ -559,7 +559,7 @@ fn build_participant_sections(view: &TurnView) -> ParticipantSections {
         String::new()
     } else {
         format!(
-            "\n\n【产物规范】本群聊用户使用{}交流：你生成/落盘的产物（文档、图片、脚本、配置文件等文件名）\
+            "\n\n【产物规范】本圆桌用户使用{}交流：你生成/落盘的产物（文档、图片、脚本、配置文件等文件名）\
              优先使用该语言命名；提及产物文件时给出**绝对路径**（如 E:\\PilotDesk\\Foo.tsx），\
              方便用户直接点击打开；若以表格形式统计展示多个产物（如列：文件名/大小/状态），可保持简洁不附完整路径；\
              代码/工程文件（如 main.py、package.json、src/ 目录结构等）命名遵循技术规范，不强行替换。",

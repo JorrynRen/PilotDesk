@@ -1825,7 +1825,7 @@ mod convert_tests {
             wf
         );
         assert!(wf.contains("default") && wf.contains("必填"));
-        assert!(room.contains("群聊") && room.contains("主持人"), "{}", room);
+        assert!(room.contains("圆桌") && room.contains("主持人"), "{}", room);
         assert!(room.contains("统一写 \"kind\":\"task\""));
         assert!(!room.contains("人工交互"));
         // 任务边界（流水线型任务：准备类节点只交付中间结果，别把最终产物也做了）
@@ -1942,7 +1942,7 @@ fn build_extract_prompt(goal: &str, user_lines: &str, target: ExtractTarget) -> 
              不要写\"待用户确认\"这类无效值；\n\
               - 或者把它改写成 Agent 能自主完成的子任务：detail 写成\"自动生成需求目标\"——\
              自行推断需求、在 detail 里写清推断依据与假设，**不要向用户收集确认**；\n",
-        ExtractTarget::Room => "4. 本清单将交给**群聊**多 Agent 协作执行，主持人（Director）**可以**向用户发起确认，因此：\n\
+        ExtractTarget::Room => "4. 本清单将交给**圆桌**多 Agent 协作执行，主持人（Director）**可以**向用户发起确认，因此：\n\
               - 统一写 \"kind\":\"task\"，不要产出 confirm；\n\
               - 需要用户拍板或补充的信息，直接在 detail 里写明（例如\"方案取舍不确定时由主持人向用户发起确认\"），\
              由主持人按需向用户确认，不必为此单独建任务；\n\

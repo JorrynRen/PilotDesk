@@ -6008,7 +6008,7 @@ mod tests {
             resolve_run_terminal_status(
                 1,
                 2,
-                Some("阶段 '群聊任务' 门控策略 All 不满足: 1/2 个节点失败，工作流中止"),
+                Some("阶段 '圆桌任务' 门控策略 All 不满足: 1/2 个节点失败，工作流中止"),
                 true,
             ),
             "failed"
