@@ -613,7 +613,7 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
             type="text"
             value={outputDir}
             onChange={(e) => setOutputDir(e.target.value)}
-            placeholder="留空=默认 <工作目录>/outputs/<主题目录名>/"
+            placeholder="留空=默认 <工作目录>/outputs/<圆桌标题>/"
             className="w-62 rounded-md px-2 py-1 text-[11px] outline-none"
             style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
           />

@@ -2276,11 +2276,15 @@ impl RoomRuntime {
         let cwd = crate::utils::paths::resolve_workspace_path(None, "", &conn)
             .to_string_lossy()
             .to_string();
-        // 目录名：主持人命名优先（简短贴切），否则按目标主题截断兜底；均去除换行等空白。
-        let source = if dir_name_hint.trim().is_empty() {
-            goal
-        } else {
+        // 目录名：主持人命名优先（简短贴切）；主持人未命名（如阶段A整理失败/未返回该字段）时
+        // 回退**圆桌标题**（用户创建时必填的短名），标题也缺失时再退回目标主题。
+        // 绝不把用户首条消息全文当目录名——那会生成一个又长又含标点的路径。
+        let source = if !dir_name_hint.trim().is_empty() {
             dir_name_hint
+        } else if !self.room.title.trim().is_empty() {
+            self.room.title.as_str()
+        } else {
+            goal
         };
         let dir_name = sanitize_room_title(&source.replace(['\n', '\r', '\t'], ""));
 
