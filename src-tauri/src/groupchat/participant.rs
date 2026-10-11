@@ -407,7 +407,7 @@ impl Participant for LlmParticipant {
                 tool_calls: String::new(),
                 reasoning_content: String::new(),
                 metadata: None,
-                error: Some(format!("[{} 发言失败] {}", self.id, e)),
+                error: Some(format!("[@{}] 发言失败：{}", self.id, e)),
                 confirmation: None,
             },
         }
@@ -463,7 +463,7 @@ impl Participant for CliParticipant {
                 tool_calls: String::new(),
                 reasoning_content: String::new(),
                 metadata: None,
-                error: Some(format!("[{} 执行失败] {}", self.id, e)),
+                error: Some(format!("[@{}] 执行失败：{}", self.id, e)),
                 confirmation: None,
             },
         }
