@@ -941,7 +941,7 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                     style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
                     value={topic}
                     onChange={(e) => { topicTouchedRef.current = true; setTopic(e.target.value); }}
-                    placeholder="留空时以进入房间后的第一条指令作为目标"
+                    placeholder="留空时以进入圆桌后的第一条指令作为目标"
                   />
                 </label>
 

@@ -1086,7 +1086,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 );
               })}
               {activeRooms.length > MAX_ACTIVE_ROWS && (
-                <EmptyHint text={`还有 ${activeRooms.length - MAX_ACTIVE_ROWS} 个房间，进入圆桌页查看全部。`} />
+                <EmptyHint text={`还有 ${activeRooms.length - MAX_ACTIVE_ROWS} 个圆桌，进入圆桌页查看全部。`} />
               )}
             </div>
           </Section>

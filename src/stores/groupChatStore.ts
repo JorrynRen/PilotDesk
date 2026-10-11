@@ -287,7 +287,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
 
   addParticipant: async (input) => {
     const roomId = get().currentRoomId;
-    if (!roomId) throw new Error('未选择房间');
+    if (!roomId) throw new Error('未选择圆桌');
     set({ error: null });
     await invoke('groupchat_join_room', { roomId, participant: input });
     await get().selectRoom(roomId);
@@ -295,7 +295,7 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
 
   removeParticipant: async (participantId) => {
     const roomId = get().currentRoomId;
-    if (!roomId) throw new Error('未选择房间');
+    if (!roomId) throw new Error('未选择圆桌');
     set({ error: null });
     await invoke('groupchat_remove_participant', { roomId, participantId });
     await get().selectRoom(roomId);
@@ -381,19 +381,19 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
 
   exportWorkflow: async () => {
     const roomId = get().currentRoomId;
-    if (!roomId) throw new Error('未选择房间');
+    if (!roomId) throw new Error('未选择圆桌');
     return invoke<Record<string, unknown>>('groupchat_export_workflow', { roomId });
   },
 
   skipTask: async (taskId) => {
     const roomId = get().currentRoomId;
-    if (!roomId) throw new Error('未选择房间');
+    if (!roomId) throw new Error('未选择圆桌');
     await invoke<GroupChatTask>('groupchat_task_skip', { roomId, taskId });
   },
 
   addTask: async (description, dependsOn, assignee) => {
     const roomId = get().currentRoomId;
-    if (!roomId) throw new Error('未选择房间');
+    if (!roomId) throw new Error('未选择圆桌');
     await invoke<GroupChatTask>('groupchat_task_add', {
       input: { roomId, description, dependsOn, assignee: assignee ?? null },
     });
@@ -401,19 +401,19 @@ export const useGroupChatStore = create<GroupChatStoreState>((set, get) => ({
 
   updateTaskDeps: async (taskId, dependsOn) => {
     const roomId = get().currentRoomId;
-    if (!roomId) throw new Error('未选择房间');
+    if (!roomId) throw new Error('未选择圆桌');
     await invoke<GroupChatTask>('groupchat_task_update_deps', { roomId, taskId, dependsOn });
   },
 
   previewTaskDeps: async (taskId, dependsOn) => {
     const roomId = get().currentRoomId;
-    if (!roomId) throw new Error('未选择房间');
+    if (!roomId) throw new Error('未选择圆桌');
     return invoke<GroupChatDepChangePreview>('groupchat_task_deps_preview', { roomId, taskId, dependsOn });
   },
 
   promoteWorkflow: async () => {
     const roomId = get().currentRoomId;
-    if (!roomId) throw new Error('未选择房间');
+    if (!roomId) throw new Error('未选择圆桌');
     const def = await invoke<{ id: string; name: string }>('groupchat_promote_workflow', { roomId });
     return { id: def.id, name: def.name };
   },

@@ -2091,7 +2091,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
 
   const handlePickRoomDir = useCallback(async () => {
     if (!currentRoomId) {
-      showToast('请先选择或创建一个房间', 'info');
+      showToast('请先选择或创建一个圆桌', 'info');
       return;
     }
     try {
@@ -2106,7 +2106,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
 
   const saveAttachments = useCallback(async (items: PendingAttachment[]): Promise<Attachment[]> => {
     if (!currentRoomId) {
-      showToast('请先选择或创建一个房间', 'info');
+      showToast('请先选择或创建一个圆桌', 'info');
       return [];
     }
     if (items.length === 0) return [];
@@ -2405,7 +2405,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5 pd-scroll-stable">
           {rooms.length === 0 && (
             <div className="px-3 py-4 text-[11px] text-center" style={{ color: 'var(--text-tertiary)' }}>
-              暂无房间，点击「新建」创建。
+              暂无圆桌，点击「新建」创建。
             </div>
           )}
           {rooms.map((r) => {
@@ -2448,7 +2448,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 onClick={(e) => { e.stopPropagation(); handleDeleteRoom(r.id); }}
                 className="absolute top-1.5 right-1.5 p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
                 style={{ color: 'var(--text-tertiary)' }}
-                title="删除房间"
+                title="删除圆桌"
               >
                 <Trash2 size={12} />
               </button>
@@ -2500,7 +2500,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 title={
                   runningAlive ? '暂停讨论'
                   : statusIsPaused ? '继续讨论'
-                  : '恢复运行（重新启动房间 Actor）'
+                  : '恢复运行（重新启动圆桌 Actor）'
                 }
               >
                 {runningAlive ? <Pause size={11} /> : <Play size={11} />}
@@ -2694,7 +2694,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 value={input}
                 onChange={handleInputChange}
                 onPaste={handlePaste}
-                placeholder={currentRoomId ? '输入发言，启动或继续讨论…（Shift+Enter 换行）' : '请先选择或创建一个房间'}
+                placeholder={currentRoomId ? '输入发言，启动或继续讨论…（Shift+Enter 换行）' : '请先选择或创建一个圆桌'}
                 title="输入 @ 可提及参与者；Enter 发送，Shift+Enter 换行"
                 onInput={(e) => {
                   const el = e.currentTarget;
@@ -2752,7 +2752,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       转写只认 设置 › 语音识别 指定的专用转写模型 */}
                   <VoiceInputButton
                     disabled={!currentRoomId}
-                    disabledHint="请先选择或创建一个房间"
+                    disabledHint="请先选择或创建一个圆桌"
                     onTranscribed={(text) => {
                       setInput((prev) => (prev.trim() ? `${prev.replace(/\s+$/, '')} ${text}` : text));
                       inputAreaRef.current?.focus();
@@ -2840,7 +2840,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               color: rightTab === 'files' ? 'var(--accent)' : 'var(--text-secondary)',
               borderBottom: rightTab === 'files' ? '2px solid var(--accent)' : '2px solid transparent',
             }}
-            title="当前房间文件修改历史"
+            title="当前圆桌文件修改历史"
           >
             <History size={11} />
             文件历史
