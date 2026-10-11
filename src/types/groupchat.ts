@@ -10,7 +10,8 @@ export interface GroupChatRoom {
   strategy: string;
   /**
    * 讨论轮次**参考预算**（DB `max_rounds`）。**不是硬上限**：引擎不据此中断讨论，
-   * 只是给"计划讨论多少轮"一个参考刻度，可由主持人在讨论中调整；`0`/负 = 不设预算。
+   * 只是给"计划讨论多少轮"一个参考刻度。由主持人在任务编排时按复杂度估算给出，
+   * 讨论中也可调整；`0`/负 = 不设预算（前端不显示参考刻度）。
    */
   maxRounds: number;
   maxParallel: number;

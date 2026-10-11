@@ -12,8 +12,9 @@ pub struct Room {
     pub status: String,
     /// 发言策略（round_robin 等）
     pub strategy: String,
-    /// 讨论轮次**参考预算**：仅作参考刻度，**不是硬上限**（引擎不据此收敛），
-    /// 可由主持人在 next_speaker 决策里调整（见 `SpeakerDecision.round_budget`）；0/负 = 不设预算。
+    /// 讨论轮次**参考预算**：仅作参考刻度，**不是硬上限**（引擎不据此收敛）。
+    /// 由主持人在**任务编排（kickoff）**时按子任务数与复杂度估算给出（见 `KickoffPlan.round_budget`），
+    /// 讨论中也可通过 `SpeakerDecision.round_budget` 调整；0/负 = 不设预算。
     pub max_rounds: i64,
     /// 执行阶段并行上限
     pub max_parallel: i64,

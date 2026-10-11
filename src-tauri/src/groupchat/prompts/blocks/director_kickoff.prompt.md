@@ -16,8 +16,8 @@
 {{SECTION:failures}}
 
 {{FRAGMENT:rule.strict_json}}，格式：
-{"tasks":[{"description":"子任务描述","depends_on":[前置任务下标数组],"assignee":"负责执行的参与者id"}],"roles":{"参与者id":"角色名"},"new_participants":[{"id":"新参与者唯一id","display_name":"显示名","system_role":"角色定位","participant_type":"api|cli","provider":"提供商id(api必填)","model":"模型名(api必填)","agent_type":"CLI Agent类型(cli必填)","reason":"补充原因(可选，说明为何需要该参与者)"}]}
-new_participants 为可选字段（名册无需补充时省略或输出空数组）。
+{"tasks":[{"description":"子任务描述","depends_on":[前置任务下标数组],"assignee":"负责执行的参与者id"}],"roles":{"参与者id":"角色名"},"new_participants":[{"id":"新参与者唯一id","display_name":"显示名","system_role":"角色定位","participant_type":"api|cli","provider":"提供商id(api必填)","model":"模型名(api必填)","agent_type":"CLI Agent类型(cli必填)","reason":"补充原因(可选，说明为何需要该参与者)"}],"round_budget":0}
+new_participants 为可选字段（名册无需补充时省略或输出空数组）；round_budget 为讨论轮次参考预算（见要求 9）。
 
 要求：
 1. 任务个数由你根据目标复杂度自行决定，但**非单原子目标必须拆分为多个可独立完成的子任务（建议 ≥2 个），禁止将用户指令原样作为单一任务**——每个 description 须体现拆解后的具体目标与可验证的验收标准，不得直接复制用户指令原文；roles 覆盖每个参与者（每个参与者都必须有角色定位，即使暂未分配任务也要给出角色方向）；
@@ -34,3 +34,4 @@ new_participants 为可选字段（名册无需补充时省略或输出空数组
 {{FRAGMENT:rule.slot_limit}}
 - 参与者列表为空（仅主持人与用户）时，可批量补充覆盖任务所需核心角色，最多 {{VAR:max_new_participants}} 个；参与者列表已有参与者时，{{FRAGMENT:rule.minimal_roster}}；
 {{FRAGMENT:rule.new_participant_spec}}
+9. 【讨论轮次参考预算】结合你刚拆出的**子任务数量、依赖层数与复杂度**，给出本次讨论需要的**发言轮次预算** `round_budget`（正整数，泛指参与者发言次数）——例如每层任务的方案讨论约需"参与者数 × 1~2"次发言，多任务/多依赖按层累加后取合适总量。该值仅作**参考刻度**（系统不会据此中断讨论），后续可按实际情况调整；确实无法估算时填 0（表示不设预算）。

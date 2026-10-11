@@ -64,6 +64,8 @@ pub struct KickoffPlan {
     pub new_participants: Vec<NewParticipantDraft>,
     /// 未被 Director 覆盖角色、由代码兜底补"未分配"的参与者 id（调用方据此落提示）。
     pub missing_roles: Vec<String>,
+    /// 主持人按任务复杂度估算的「讨论轮次参考预算」（可选）。缺省 = 不设。
+    pub round_budget: Option<i64>,
 }
 
 /// 阶段A 目标确定结果：主持人理解整理后的总目标 + 是否需要向用户确认。
@@ -569,6 +571,7 @@ impl Director {
             roles,
             new_participants: parse_new_participants(&v),
             missing_roles,
+            round_budget: parse_round_budget(&v),
         })
     }
 
@@ -1038,12 +1041,7 @@ impl Director {
             .unwrap_or_default()
             .to_string();
         let new_participants = parse_new_participants(&v);
-        // 可选：主持人调整「讨论轮次参考预算」。键缺失/null/非法 → None（本轮不动）；
-        // 数字（或数字字符串）→ Some(n)，其中 0 表示取消预算。仅参考刻度，不做硬上限。
-        let round_budget = v.get("round_budget").and_then(|x| {
-            x.as_i64()
-                .or_else(|| x.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
-        });
+        let round_budget = parse_round_budget(&v);
         if speaker.is_empty() && new_participants.is_empty() {
             None
         } else {
@@ -1498,6 +1496,16 @@ fn normalize_ref(raw: &str) -> String {
         s = rest.trim();
     }
     s.to_string()
+}
+
+/// 解析 Director 输出中的 `round_budget`（讨论轮次参考预算，可选）。
+/// 宽容取值：数字或数字字符串；键缺失/null/非法 → `None`（表示"不动/未给出"）。
+/// `Some(0)` = 明确取消预算。预算仅作参考刻度，**不做硬上限**。
+fn parse_round_budget(v: &serde_json::Value) -> Option<i64> {
+    v.get("round_budget").and_then(|x| {
+        x.as_i64()
+            .or_else(|| x.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+    })
 }
 
 /// 解析 Director 输出中的 new_participants 数组（按需组建参与者）。

@@ -94,7 +94,8 @@ pub fn groupchat_create_room(
         topic: input.topic.clone(),
         status: "idle".into(),
         strategy: "round_robin".into(),
-        max_rounds: 5,
+        // 讨论轮次参考预算：0 = 不设，由主持人在任务编排（kickoff）时按复杂度估算给出。
+        max_rounds: 0,
         max_parallel: 2,
         director_id: Some(input.director_id.clone()),
         current_task_id: None,

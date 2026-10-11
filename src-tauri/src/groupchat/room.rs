@@ -3116,7 +3116,12 @@ impl RoomRuntime {
                     roles,
                     new_participants,
                     missing_roles,
+                    round_budget,
                 } = plan;
+                // 主持人按任务复杂度估算的「讨论轮次参考预算」（可选）：与任务编排一同给出。
+                if let Some(budget) = round_budget {
+                    self.apply_round_budget(budget).await;
+                }
                 // v3.4as：Director 未覆盖角色的参与者由代码兜底补"未分配"，并落提示便于追溯。
                 if !missing_roles.is_empty() {
                     let names = missing_roles
@@ -4149,35 +4154,9 @@ impl RoomRuntime {
                         continue;
                     }
                 }
-                // 主持人调整「讨论轮次参考预算」（可选）：仅参考刻度，**不做硬上限判定**；
-                // 变更时落一条【调度】提示，让用户看到刻度被调成了多少（不改则静默）。
+                // 主持人调整「讨论轮次参考预算」（可选）：仅参考刻度，不做硬上限判定。
                 if let Some(budget) = dec.round_budget {
-                    if budget != self.room.max_rounds {
-                        self.room.max_rounds = budget;
-                        if let Ok(conn) = self.conn() {
-                            let _ = store::update_room_round_budget(&conn, &self.room_id, budget);
-                        }
-                        let text = if budget > 0 {
-                            format!("【调度】讨论轮次参考预算调整为 {} 轮（仅供参考，不设硬上限）", budget)
-                        } else {
-                            "【调度】已取消讨论轮次参考预算，不再显示参考刻度".to_string()
-                        };
-                        let director_sender = self.director_sender();
-                        let msg = self
-                            .persist_message(
-                                &director_sender,
-                                &[],
-                                "director_notice",
-                                None,
-                                &text,
-                                &[],
-                                "",
-                                "",
-                            )
-                            .await;
-                        self.memory.apply_message(&msg, &self.all_participant_ids());
-                        self.emit(GroupChatEvent::message(&self.room_id, msg));
-                    }
+                    self.apply_round_budget(budget).await;
                 }
             }
             // 主持人本次选人决策的思考链（供落库展示）。
@@ -4734,6 +4713,42 @@ impl RoomRuntime {
             stage, detail
         );
         self.persist_control_notice(&text).await;
+    }
+
+    /// 应用主持人给出的「讨论轮次参考预算」：写库 + 落一条【调度】提示（值无变化则静默）。
+    /// 仅参考刻度，**不做硬上限判定**；`budget <= 0` 表示取消预算（前端不再显示参考刻度）。
+    /// 来源：开场编排（`kickoff`，按任务复杂度估算）与讨论中调整（`next_speaker`）。
+    async fn apply_round_budget(&mut self, budget: i64) {
+        if budget == self.room.max_rounds {
+            return;
+        }
+        self.room.max_rounds = budget;
+        if let Ok(conn) = self.conn() {
+            let _ = store::update_room_round_budget(&conn, &self.room_id, budget);
+        }
+        let text = if budget > 0 {
+            format!(
+                "【调度】讨论轮次参考预算调整为 {} 轮（仅供参考，不设硬上限）",
+                budget
+            )
+        } else {
+            "【调度】已取消讨论轮次参考预算，不再显示参考刻度".to_string()
+        };
+        let director_sender = self.director_sender();
+        let msg = self
+            .persist_message(
+                &director_sender,
+                &[],
+                "director_notice",
+                None,
+                &text,
+                &[],
+                "",
+                "",
+            )
+            .await;
+        self.memory.apply_message(&msg, &self.all_participant_ids());
+        self.emit(GroupChatEvent::message(&self.room_id, msg));
     }
 
     /// participant_id -> display_name（供 Director 编排与 LLM 视图使用可读名称）。
