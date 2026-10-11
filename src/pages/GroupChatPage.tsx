@@ -2896,7 +2896,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         ) : rightTab === 'overview' ? (
           <>
             <div className="px-3 py-2 text-[10px] font-medium flex items-center justify-between shrink-0" style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border)' }}>
-              <span className="flex items-center gap-1"><Users size={10} style={{ color: 'var(--accent)' }} />参与者 ({participants.length})</span>
+              <span className="flex items-center gap-1"><Users size={10} style={{ color: 'var(--accent)' }} />席位 ({participants.length})</span>
               {currentRoomId && (
                 <button
                   className="pd-btn pd-btn-sm"
@@ -2908,50 +2908,68 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                 </button>
               )}
             </div>
+            {/* 席位列表（原为 3 列卡片墙）：一席一行 = 头像 + 名字 + 角色/模型 + 实时状态。
+                卡片墙只能表达"是谁"，表达不了"在干什么" —— 而讨论/执行时最需要知道的恰恰是后者。
+                状态数据都是现成的（currentSpeaker / executingIds / directorBusy），不新增接口。
+                每人用量暂不做：后端只按"房间 + 模型"聚合（见 RoomUsageBar），要按席位得先补聚合。
+                ⚠️ 状态守卫：房间非运行（已暂停/结束/中止）时即使 currentSpeaker/执行中任务未及时清空，
+                也不点亮呼吸点。 */}
             <div
-              className="p-2 grid grid-cols-3 gap-1.5 shrink-0 overflow-y-auto"
+              className="p-2 flex flex-col gap-1 shrink-0 overflow-y-auto"
               style={{ maxHeight: '190px', borderBottom: '1px solid var(--border)' }}
             >
               {participants.length === 0 && (
-                <div className="col-span-3 px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
-                  暂无参与者
+                <div className="px-2 py-1.5 rounded-lg text-[10px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+                  暂无席位
                 </div>
               )}
               {participants.map((p, idx) => {
                 const color = colorOf(p, idx);
                 const removable = p.participantType === 'api' || p.participantType === 'cli';
-                // 状态守卫：房间非运行（已暂停/结束/中止）时即使 currentSpeaker/执行中任务未及时清空，也不点亮呼吸圆点。
-                // 主持人无 floor：其"发言/调度"用 directorBusy（调度空窗/自身推理/被指定发言）判定。
-                const isSpeaking = currentRoom?.status === 'running' &&
-                  (p.participantType === 'director' ? directorBusy : (p.id === currentSpeaker || executingIds.has(p.id)));
+                const isDirector = p.participantType === 'director';
+                const roomRunning = currentRoom?.status === 'running';
+                const executing = roomRunning && executingIds.has(p.id);
+                const speaking = roomRunning && (isDirector ? directorBusy : p.id === currentSpeaker);
+                // 三态互斥取一个：执行任务 > 发言/调度中 > 待命（配色与「指挥中心·进行中」同一口径：
+                // 在跑=status-success、当前焦点=accent、静默=tertiary）
+                const st = !roomRunning
+                  ? { label: '待命', color: 'var(--text-tertiary)', breathe: false }
+                  : executing
+                    ? { label: '执行任务', color: 'var(--status-success)', breathe: true }
+                    : speaking
+                      ? { label: isDirector ? '调度中' : '发言中', color: 'var(--accent)', breathe: true }
+                      : { label: '待命', color: 'var(--text-tertiary)', breathe: false };
+                const cfg = parseAgentConfig(p.agentConfig);
+                const modelLine = cfg.model || cfg.agent_type || cfg.agentType || '';
+                const roleLine = isDirector ? '主席' : (p.systemRole || '参与者');
                 return (
                   <div
                     key={p.id}
-                    className="group relative flex flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg"
+                    className="group flex items-center gap-2 px-2 py-1.5 rounded-lg"
                     style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
                   >
-                    <div className="relative">
-                      <ParticipantAvatar icon={participantIcon(p.participantType)} color={color} small agentType={participantAgentType(p)} />
-                      {isSpeaking && (
-                        <span
-                          className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full"
-                          style={{ backgroundColor: 'var(--accent)', animation: 'pd-breathe 1.2s ease-in-out infinite' }}
-                        />
+                    <ParticipantAvatar icon={participantIcon(p.participantType)} color={color} small agentType={participantAgentType(p)} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] leading-tight truncate" style={{ color: 'var(--text-primary)' }} title={p.displayName}>{p.displayName}</div>
+                      <div
+                        className="text-[9px] leading-tight truncate"
+                        style={{ color: isDirector ? 'var(--accent)' : 'var(--text-tertiary)' }}
+                        title={modelLine ? `${roleLine} · ${modelLine}` : roleLine}
+                      >
+                        {roleLine}{modelLine ? ` · ${modelLine}` : ''}
+                      </div>
+                    </div>
+                    <span className="shrink-0 flex items-center gap-1 text-[9px]" style={{ color: st.color }} title={st.label}>
+                      {st.breathe && (
+                        <span className="inline-block w-1.5 h-1.5 rounded-full pd-animate-breathe" style={{ backgroundColor: 'currentColor' }} />
                       )}
-                    </div>
-                    <div className="w-full text-center text-[10px] leading-tight truncate" style={{ color: 'var(--text-primary)' }} title={p.displayName}>{p.displayName}</div>
-                    <div
-                      className="w-full text-center text-[9px] leading-tight truncate"
-                      style={{ color: p.participantType === 'director' ? 'var(--accent)' : 'var(--text-tertiary)' }}
-                      title={p.participantType === 'director' ? '主席' : (p.systemRole || p.participantType)}
-                    >
-                      {p.participantType === 'director' ? '主席' : (p.systemRole || p.participantType)}
-                    </div>
+                      {st.label}
+                    </span>
                     {removable && (
                       <button
-                        className="absolute top-0.5 right-0.5 p-0.5 rounded opacity-0 group-hover:opacity-100"
+                        className="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
                         style={{ color: 'var(--status-danger)' }}
-                        title="移除参与者"
+                        title="移除席位"
                         onClick={() => handleRemoveParticipant(p.id)}
                       >
                         <XCircle size={11} />
