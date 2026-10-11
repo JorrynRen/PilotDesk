@@ -27,16 +27,24 @@
  * 这是结构性不可稳定，不是实现没写好。条目级"更新时间"该由 git 历史回答，
  * 不要往派生物里塞；真要展示"更新于"，在 UI 侧按需查 git，或让作者在源文件里自己写。
  *
- * 身份约定：**`id` 以文件里的字段为准**，目录名与文件名只是物理位置。
- * 三者不一致只提示、不拦截 —— 若把它们绑死，"把目录改通顺"就会变成破坏性操作
- * （改名就得改 id，而改 id 会让已导入这条灵感的用户重复导入）。
- * 因为 id 与物理位置解耦，**id 撞车成为可能**，所以这里必须查重。
+ * 身份约定：**`id` 是权威键**，且必须**等于其目录名**（布局固定为 `<id>/<id>.json`），
+ * 并满足 `^[a-z0-9][a-z0-9-]*$`、长度 ≤ 64。任何一条不满足 → **直接报错退出**（让 CI 挂掉），
+ * 绝不静默跳过；id 撞车同样直接报错。
+ *
+ * ⚠️ **`id` 一旦发布即不可更改**：它是客户端判断"这条是否已导入过"的依据，
+ * 改 id 等于**新增一条**——已导入旧 id 的用户会重复导入一份，且旧条目不会被新内容覆盖。
+ * 要改名请新开一个 id（新目录），不要原地改 id。
+ *
+ * 每条额外输出 **`contentHash`**：对 `{id,title,icon,content,tags}` 做稳定序列化
+ * （对象键按字典序、数组保持原序）后取 sha256 前 16 位十六进制。用途：客户端据此判断
+ * "市场内容是否变过"——哈希不变即可跳过重新拉取；它与 id 正交（id 不变、内容可变）。
  *
  * 只读不写业务数据：本脚本不修改任何灵感文件，只提取并校验。
  *
  * 用法：node server/scripts/generate-inspiration-index.mjs
  */
 
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +61,32 @@ const EXCERPT_LEN = 200;
 const MAX_TAGS = 8;
 /** 单个标签的长度上限：标签是"分类"，不是句子 */
 const MAX_TAG_LEN = 32;
+/** id 允许的字符集：小写字母 / 数字 / 短横线，且以字母或数字开头（同时也是目录名与 URL 片段） */
+const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+/** id 长度上限：够长，又能保证跨平台目录名与 URL 片段都不会出问题 */
+const ID_MAX_LEN = 64;
+
+/**
+ * 稳定序列化：对象键按**字典序**输出，数组保持原序（递归）。
+ * 用于 contentHash —— 保证「同内容 ⇒ 同哈希」，不受键书写顺序影响。
+ */
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * 单条市场内容的稳定哈希：对 `{id,title,icon,content,tags}` 稳定序列化后取 sha256 前 16 位十六进制。
+ * 客户端据此判断"市场内容是否变过"（哈希不变即可跳过重新拉取）。
+ */
+function contentHashOf({ id, title, icon, content, tags }) {
+  const payload = stableStringify({ id, title, icon, content, tags });
+  return createHash('sha256').update(payload, 'utf8').digest('hex').slice(0, 16);
+}
 
 /**
  * 写入索引，并让顶层 `updatedAt` 只在**内容真的变了**时才更新。
@@ -149,6 +183,7 @@ async function main() {
   const inspirations = [];
   const skipped = [];
   const warnings = [];
+  const errors = []; // 硬校验失败（id 非法 / 撞车等）：汇总后直接退出，让 CI 挂掉
   const seen = new Map(); // id -> 物理位置，用于查重
 
   // 旧布局（扁平文件）要明确报出来：否则最容易出现"文件还在、市场里却没有这条"
@@ -189,18 +224,33 @@ async function main() {
       continue;
     }
 
-    // id 必须显式给出：它同时是去重键（客户端靠它判断"这条是否已导入过"）。
-    // 这里**不猜测、不回落**到目录名 —— 静默回落的代价是"忘了写 id"变成一个
-    // 看不出来的状态，而写错 id 则会以另一条灵感的名义混进市场。
+    // id 是**权威键**：必须显式给出、**等于目录名**，且满足字符集 / 长度约束。
+    // 这里**不猜测、不回落**到目录名；任何一条不满足都直接记为硬错误（而不是静默跳过），
+    // 由 main 末尾统一报错退出 —— 静默跳过的代价是"写错 id"以另一条灵感的名义混进市场，
+    // 而"改 id"又会让已导入旧 id 的用户重复导入（故 id 一旦发布即不可更改，见文件头）。
     const id = typeof item.id === 'string' ? item.id.trim() : '';
     if (!id) {
-      skipped.push(`${location}（缺少 id 字段）`);
+      errors.push(`${location}（缺少 id 字段：id 是权威键，必须显式给出）`);
+      continue;
+    }
+    if (id !== dir) {
+      errors.push(`${location}（id「${id}」与目录名「${dir}」不一致：id 必须以目录名为准）`);
+      continue;
+    }
+    if (id.length > ID_MAX_LEN) {
+      errors.push(`${location}（id「${id}」长度 ${id.length} 超过上限 ${ID_MAX_LEN}）`);
+      continue;
+    }
+    if (!ID_PATTERN.test(id)) {
+      errors.push(
+        `${location}（id「${id}」不符合 ${ID_PATTERN}：仅允许小写字母 / 数字 / 短横线，且以字母或数字开头）`,
+      );
       continue;
     }
 
     // id 全局唯一：客户端用它判断"是否已导入"，两条撞同一个 id 会互相覆盖
     if (seen.has(id)) {
-      skipped.push(`${location}（id「${id}」与 ${seen.get(id)} 重复：id 是去重键，不能撞车）`);
+      errors.push(`${location}（id「${id}」与 ${seen.get(id)} 重复：id 是权威键，不能撞车）`);
       continue;
     }
 
@@ -215,22 +265,29 @@ async function main() {
       continue;
     }
 
-    // 提示只针对"真正收录进来"的条目：被跳过的目录再提示它的名字没意义
-    if (id !== dir) {
-      warnings.push(`${location}（声明的 id 是「${id}」：建议把目录改名为 ${id}，不改也能正常工作）`);
-    }
-
     seen.set(id, location);
+    // icon / tags 先行归一：contentHash 要反映**最终发布值**（与索引里写出的字段一致）
+    const icon = typeof item.icon === 'string' && item.icon ? item.icon : '💡';
+    // 可选：不写就是无标签（本地库、市场卡片、会话侧栏三处都能正确处理空数组）
+    const tags = normalizeTags(item.tags, location, warnings);
     inspirations.push({
       id,
       title,
-      icon: typeof item.icon === 'string' && item.icon ? item.icon : '💡',
-      // 可选：不写就是无标签（本地库、市场卡片、会话侧栏三处都能正确处理空数组）
-      tags: normalizeTags(item.tags, location, warnings),
+      icon,
+      tags,
       excerpt: excerptOf(content),
+      // 客户端据此判断"市场内容是否变过"：对 {id,title,icon,content,tags} 稳定序列化后取 sha256 前 16 位
+      contentHash: contentHashOf({ id, title, icon, content, tags }),
       // 两段分别 URL 编码：目录名与文件名都允许中文，让调用方各自编码迟早出错，这里一次编好
       path: `inspirations/${encodeURIComponent(dir)}/${encodeURIComponent(file)}`,
     });
+  }
+
+  // 硬校验失败：汇总报出后退出（不写索引），让 CI 明确挂掉
+  if (errors.length > 0) {
+    console.error(`校验失败 ${errors.length} 处（id 是权威键，必须与目录名一致且合法）：`);
+    for (const e of errors) console.error(`  ✗ ${e}`);
+    process.exit(1);
   }
 
   inspirations.sort((a, b) => a.title.localeCompare(b.title, 'zh'));

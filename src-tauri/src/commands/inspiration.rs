@@ -131,6 +131,9 @@ pub fn create_inspiration(
         [],
     )?;
 
+    // 云同步：新灵感视为本地已改动，下轮会作为上传候选推送到云端（best-effort）
+    crate::commands::cloud_sync::mark_inspiration_dirty(conn, &id);
+
     get_inspiration(conn, id)
 }
 
@@ -178,15 +181,26 @@ pub fn update_inspiration(
         [],
     )?;
 
+    // 云同步：内容 / 标签变更视为本地已改动，下轮会作为上传候选推送（best-effort）
+    crate::commands::cloud_sync::mark_inspiration_dirty(conn, &payload.id);
+
     get_inspiration(conn, payload.id)
 }
 
 /// Delete an inspiration
 pub fn delete_inspiration(conn: &Connection, id: String) -> Result<(), AppError> {
+    // 显式删标签：外键级联依赖 PRAGMA foreign_keys=ON，显式删在两种配置下都稳。
+    conn.execute(
+        "DELETE FROM inspiration_tags WHERE inspiration_id = ?1",
+        params![id],
+    )?;
     let rows = conn.execute("DELETE FROM inspirations WHERE id = ?1", params![id])?;
     if rows == 0 {
         return Err(AppError::NotFound("灵感不存在".to_string()));
     }
+    // 云同步：删除即硬删（灵感无回收站）→ 直接写墓碑，靠墓碑补送通道把删除意图送达云端（best-effort，
+    // 不影响删除本身）。
+    crate::commands::cloud_sync::mark_inspiration_deleted(conn, &id);
     Ok(())
 }
 

@@ -24,6 +24,32 @@ const SYNC_INTERVAL_MIN = 1;
 const SYNC_INTERVAL_MAX = 1440;
 const SYNC_INTERVAL_DEFAULT = 10;
 
+/** 同步范围设置键（CSV；与后端 `cloud_sync.rs::SYNC_KINDS_KEY` 一致） */
+const SYNC_KINDS_KEY = 'cloud_sync_kinds';
+/** 同步范围选项：kind 与展示名（与后端 `KIND_WORKFLOW` / `KIND_INSPIRATION` 一致，顺序固定） */
+const SYNC_KIND_OPTIONS: { kind: string; label: string }[] = [
+  { kind: 'workflow', label: '工作流' },
+  { kind: 'inspiration', label: '灵感' },
+];
+/** 全部 kind（缺省全开时用） */
+const SYNC_KIND_ALL = SYNC_KIND_OPTIONS.map((o) => o.kind);
+
+/**
+ * 解析同步范围 CSV：只保留已支持的 kind、去重；缺省 / 空 / 全部非法 → 两项全开。
+ * 判据与后端 `cloud_sync.rs::sync_kinds` 保持一致。
+ */
+function parseSyncKinds(raw: string | null): string[] {
+  const picked = new Set(
+    (raw ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => SYNC_KIND_ALL.includes(s)),
+  );
+  if (picked.size === 0) return [...SYNC_KIND_ALL];
+  return SYNC_KIND_ALL.filter((k) => picked.has(k));
+}
+
+
 /** 云同步结果摘要：有打包失败 / 冲突对象时带上数量与说明（不静默）。 */
 function cloudSyncSummary(r: CloudSyncResult): string {
   let text = `拉取 ${r.pulled} / 推送 ${r.pushed} / 冲突 ${r.conflicts}`;
@@ -100,6 +126,45 @@ export function CloudSyncSettings() {
     try {
       await invoke('set_app_setting', { key: SYNC_INTERVAL_KEY, value: String(clamped) });
     } catch (e) {
+      showToast(`保存失败: ${errorMessage(e)}`, 'error');
+    }
+  };
+
+  // 同步范围（逐类开关）：读/写主库设置 `cloud_sync_kinds`（CSV），缺省视为两项全开
+  const [syncKinds, setSyncKinds] = useState<string[]>(SYNC_KIND_ALL);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const raw = await invoke<string | null>('get_app_setting', { key: SYNC_KINDS_KEY });
+        if (!alive) return;
+        setSyncKinds(parseSyncKinds(raw));
+      } catch {
+        /* 忽略：读不到就按默认全开展示 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const toggleSyncKind = async (kind: string) => {
+    const on = syncKinds.includes(kind);
+    // 至少留一项：静默的「全关」会被后端按「全部非法」读回全开，故这里直接拦下并回滚
+    if (on && syncKinds.length <= 1) {
+      showToast('至少保留一项同步范围', 'warning');
+      return;
+    }
+    const next = on ? syncKinds.filter((k) => k !== kind) : [...syncKinds, kind];
+    // 写回完整 CSV，且按固定顺序归一（与后端一致）
+    const ordered = SYNC_KIND_OPTIONS.map((o) => o.kind).filter((k) => next.includes(k));
+    const prev = syncKinds;
+    setSyncKinds(ordered);
+    try {
+      await invoke('set_app_setting', { key: SYNC_KINDS_KEY, value: ordered.join(',') });
+    } catch (e) {
+      setSyncKinds(prev); // 回滚
       showToast(`保存失败: ${errorMessage(e)}`, 'error');
     }
   };
@@ -232,14 +297,52 @@ export function CloudSyncSettings() {
         )}
       </SettingsSection>
 
-      {/* ② 同步范围：当前仅工作流；插件与灵感待做 */}
+      {/* ② 同步范围：逐类开关（工作流 / 灵感）；插件与技能文件的同步待做 */}
       <SettingsSection title="同步范围">
         <SettingsCard>
-          <div className="text-xs" style={{ color: 'var(--text-primary)' }}>
-            当前支持：工作流
+          <div className="space-y-3">
+            {SYNC_KIND_OPTIONS.map((opt) => {
+              const on = syncKinds.includes(opt.kind);
+              return (
+                <div key={opt.kind} className="flex items-center gap-3">
+                  <button
+                    onClick={() => void toggleSyncKind(opt.kind)}
+                    disabled={!canCloudSync || !cloudSyncEnabled}
+                    className="relative rounded-full transition-colors shrink-0 disabled:opacity-50"
+                    style={{
+                      width: 36,
+                      height: 20,
+                      backgroundColor: on ? '#22c55e' : 'var(--bg-field)',
+                      border: '1px solid var(--border)',
+                    }}
+                    title={
+                      !canCloudSync || !cloudSyncEnabled
+                        ? '云同步已关闭（或当前等级不支持）'
+                        : on
+                          ? `点击关闭${opt.label}`
+                          : `点击开启${opt.label}`
+                    }
+                  >
+                    <div
+                      className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
+                      style={{ left: on ? '18px' : '2px' }}
+                    />
+                  </button>
+                  <span className="text-xs" style={{ color: 'var(--text-primary)' }}>
+                    {opt.label}
+                  </span>
+                  <span
+                    className="text-[11px]"
+                    style={{ color: on ? '#22c55e' : 'var(--text-tertiary)' }}
+                  >
+                    {on ? '已开启' : '已关闭'}
+                  </span>
+                </div>
+              );
+            })}
           </div>
-          <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-            插件与灵感暂不支持（待后续版本）。
+          <div className="mt-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            插件与技能文件的同步待后续版本；至少保留一项。
           </div>
         </SettingsCard>
         {/* 说明：子工作流不是独立同步对象，其内容随所属主工作流一并上传，避免对端重复导入 */}

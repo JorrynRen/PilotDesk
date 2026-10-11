@@ -11,8 +11,8 @@
 #
 # 注意：index.json 是**生成物**，不要在 PR 里手改它（会被下一次生成覆盖）。
 # 要加/改一条灵感，请新建或编辑对应目录里的源文件。
-# 其中 `id` 以**文件里的字段为准**（它是客户端判断"是否已导入"的依据），
-# 目录名与文件名只是物理位置 —— 建议同名，不同名脚本会提示但不影响生成。
+# 其中 `id` 是**权威键**，必须等于目录名（布局固定为 <id>/<id>.json）且满足 ^[a-z0-9][a-z0-9-]*$、
+# 长度 ≤ 64 —— 校验失败会直接报错退出（让 CI 挂掉）；`id` 一旦发布即不可更改（改 id = 视为新条目）。
 #
 # 生成逻辑在 Node 脚本 server/scripts/generate-inspiration-index.mjs（本地可跑：npm run market:index:inspirations）。
 # 本文件与 generate-plugin-index.yml / generate-workflow-index.yml 对称 —— 缺了它，

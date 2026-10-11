@@ -35,14 +35,23 @@
 //!   墓碑**永久保留**，仅此标志用于去重推送；pull 拉到该 key 的 `deleted = true` 时视为删除意图已达成，
 //!   一并置 `tombstone_pushed = 1` 并推进版本。
 //!
-//! ## 本次范围：只同步「工作流」（kind = "workflow"）
+//! ## 同步对象类型：工作流（kind = "workflow"）与灵感（kind = "inspiration"）
 //!
-//! 插件与灵感**暂不同步**：两者的本地主键（插件 id / 灵感 id）是否**跨设备稳定**尚未确认——
-//! 若同一资产在两台设备上生成了不同 id，按 id 对齐会产生重复条目或误覆盖；工作流用自身 UUID 作
-//! 主键、天然稳定，所以先只做工作流。（若后续确认灵感 id 稳定且改动很小，可扩展 `kind`，见交付报告建议。）
+//! 两种对象**各自独立实现**（灵感没有工作流那套回收站软删 / 子流捆绑 / 冲突留档概念，故不复用）：
+//! - **工作流**：payload 复用「导出 / 组织共享」的同一套打包/解析逻辑
+//!   （[`build_workflow_export_json`] / [`apply_workflow_bundle_in_place`]），含子流捆绑，保证跨设备还原一致。
+//!   删除走「回收站软删 → purge 墓碑」两段式（见上文墓碑说明）。
+//! - **灵感**：对象键 = `inspirations.id`（UUID，跨设备稳定）。payload 是灵感整行 JSON（含标签），
+//!   内容哈希只取 `{icon,title,content,tags}`（不含时间戳，避免每次同步都被判成"有改动"）。
+//!   灵感**没有回收站**：删除即硬删并**直接写墓碑**，靠墓碑补送通道把 `deleted` 送达云端；
+//!   冲突**不自动选边留档**，而是按 `updatedAt` 做 LWW（Last-Write-Wins）——远端更新（严格大于）
+//!   才覆盖本地，否则保留本地并在本轮 push 上去。
 //!
-//! 工作流 payload 复用「导出 / 组织共享」的同一套打包/解析逻辑（[`build_workflow_export_json`] /
-//! [`apply_workflow_bundle_in_place`]），含子流捆绑，保证跨设备还原一致。
+//! 两类对象的同步游标**按 kind 分开存取**（[`read_cursor`] / [`write_cursor`]），否则一方推进水位会让
+//! 另一方漏拉增量。
+//!
+//! 插件**仍不同步**：插件 id 是否跨设备稳定尚未确认——若同一插件在两台设备上生成了不同 id，
+//! 按 id 对齐会产生重复条目或误覆盖。
 //!
 //! ## 同步对象集合：只同步「根工作流」
 //!
@@ -67,7 +76,8 @@ use crate::utils::platform;
 
 /// 云同步开关（**默认关闭**，用户显式开启才同步）：仅 `1` / `true` 视为开启。
 pub const SYNC_ENABLED_KEY: &str = "cloud_sync_enabled";
-/// 上次同步游标（平台 watermark）
+/// 上次同步游标（平台 watermark）的**旧键**：新版按 kind 分开存取，键名为 `sync_cursor:<kind>`
+/// （见 [`cursor_key`]）。该常量仅保留作 workflow 的向后兼容回退键。
 pub const SYNC_CURSOR_KEY: &str = "sync_cursor";
 /// 上次同步时间（本地可读字符串，供 UI 展示）
 pub const SYNC_LAST_AT_KEY: &str = "sync_last_at";
@@ -76,8 +86,10 @@ pub const SYNC_LAST_RESULT_KEY: &str = "sync_last_result";
 /// 云同步能力键（pro / team 才有）
 pub const CAP_CLOUD_SYNC: &str = "sync.cloud";
 
-/// 同步对象类型（当前只做工作流）
+/// 同步对象类型：工作流
 const KIND_WORKFLOW: &str = "workflow";
+/// 同步对象类型：灵感
+const KIND_INSPIRATION: &str = "inspiration";
 /// 单次 push 条目上限（平台契约，见平台 `app/src/services/sync/service.ts::PUSH_MAX_ITEMS`）
 const PUSH_MAX_ITEMS: usize = 100;
 /// 自动同步间隔设置键（**分钟**）：缺省 10，范围 1..=1440（clamp），循环每轮读取。
@@ -88,6 +100,15 @@ const SYNC_INTERVAL_DEFAULT_MINUTES: u64 = 10;
 const SYNC_INTERVAL_MIN_MINUTES: u64 = 1;
 /// 自动同步间隔上界（分钟）——1440 分钟 = 24 小时。
 const SYNC_INTERVAL_MAX_MINUTES: u64 = 1440;
+/// 同步范围设置键：逗号分隔的 kind 列表（如 `workflow,inspiration`），控制**逐类开关**。
+///
+/// 缺省 / 空 / 全部非法 → 视为全部已支持的 kind（默认全开，保持存量用户行为不变）。
+pub const SYNC_KINDS_KEY: &str = "cloud_sync_kinds";
+
+/// 已支持的同步对象 kind（顺序即默认全开与写回 CSV 时的固定顺序）。
+fn supported_kinds() -> [&'static str; 2] {
+    [KIND_WORKFLOW, KIND_INSPIRATION]
+}
 
 // ════════════════════════════════════════════════════════════
 // 设置读取
@@ -121,18 +142,102 @@ pub fn sync_interval_minutes(conn: &Connection) -> u64 {
         .unwrap_or(SYNC_INTERVAL_DEFAULT_MINUTES)
 }
 
-/// 读同步游标（上次 watermark；缺省/非法 → 0）。
-fn read_cursor(conn: &Connection) -> i64 {
-    get_setting(conn, SYNC_CURSOR_KEY)
+/// 读同步范围（逐类开关）：返回当前**开启**的 kind 列表。
+///
+/// 缺省 / 空 / 全部非法 → 返回全部已支持的 kind（默认全开，保持存量用户行为不变）。
+/// 解析时只保留已支持的 kind、去重、忽略空白与未知值；输出顺序固定为 [`supported_kinds`]，
+/// 保证「读回」稳定、不受 CSV 里书写顺序影响。
+pub fn sync_kinds(conn: &Connection) -> Vec<String> {
+    let supported = supported_kinds();
+    let raw = get_setting(conn, SYNC_KINDS_KEY)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let mut on: Vec<String> = Vec::new();
+    for part in raw.split(',') {
+        let k = part.trim();
+        if !k.is_empty() && supported.contains(&k) && !on.iter().any(|x| x.as_str() == k) {
+            on.push(k.to_string());
+        }
+    }
+    if on.is_empty() {
+        // 缺省 / 空 / 全部非法：默认全开
+        return supported.iter().map(|k| k.to_string()).collect();
+    }
+    // 按固定顺序输出，避免 CSV 书写顺序带来的抖动
+    supported
+        .iter()
+        .filter(|k| on.iter().any(|x| x.as_str() == **k))
+        .map(|k| k.to_string())
+        .collect()
+}
+
+/// 增删某一类同步对象并写回 CSV（整量覆盖）。不支持的 kind → [`AppError::InvalidInput`]。
+///
+/// 说明：本函数不阻止把集合清空（会写回空串）；但 [`sync_kinds`] 对「空 / 全部非法」按默认全开读取，
+/// 因此调用方（含前端）需自行保证至少留一项，否则「全部关闭」会被读成「全部开启」。
+#[allow(dead_code)] // 前端经 `set_app_setting` 直接写 `cloud_sync_kinds`；本函数供后端逻辑与单测覆盖
+pub fn set_sync_kind(conn: &Connection, kind: &str, enabled: bool) -> Result<(), AppError> {
+    if !supported_kinds().contains(&kind) {
+        return Err(AppError::InvalidInput(format!(
+            "不支持的同步对象类型：{}",
+            kind
+        )));
+    }
+    let mut on = sync_kinds(conn);
+    let has = on.iter().any(|k| k.as_str() == kind);
+    if enabled {
+        if !has {
+            on.push(kind.to_string());
+        }
+    } else {
+        on.retain(|k| k.as_str() != kind);
+    }
+    // 按固定顺序归一后写回
+    let csv: Vec<String> = supported_kinds()
+        .iter()
+        .filter(|k| on.iter().any(|x| x.as_str() == **k))
+        .map(|k| k.to_string())
+        .collect();
+    set_setting(conn, SYNC_KINDS_KEY, &csv.join(","))
+}
+
+/// 某 kind 的游标设置键：`sync_cursor:<kind>`。
+///
+/// 按 kind 分开存取的**原因**：两类对象的平台 watermark 是各自序列的，若共用一个水位，一方推进后
+/// 另一方用同一水位拉取会漏掉「低于该水位」的增量（在另一 kind 序列里属于新事件）。
+fn cursor_key(kind: &str) -> String {
+    format!("{}:{}", SYNC_CURSOR_KEY, kind)
+}
+
+/// 读某 kind 的同步游标（上次 watermark；缺省/非法 → 0）。
+///
+/// 向后兼容：workflow 若尚无新键 `sync_cursor:workflow`，则回退读旧键 `sync_cursor`，读到后顺便迁移
+/// 写入新键。**否则**升级后首轮会把已同步过的历史当成增量重新拉取（重复应用一遍）。
+fn read_cursor(conn: &Connection, kind: &str) -> i64 {
+    if let Some(c) = read_cursor_value(conn, &cursor_key(kind)) {
+        return c;
+    }
+    if kind == KIND_WORKFLOW {
+        if let Some(c) = read_cursor_value(conn, SYNC_CURSOR_KEY) {
+            let _ = write_cursor(conn, kind, c); // 迁移到新键，之后走新键
+            return c;
+        }
+    }
+    0
+}
+
+/// 读某个设置键并解析为游标（缺省 / 非法 → `None`）。
+fn read_cursor_value(conn: &Connection, key: &str) -> Option<i64> {
+    get_setting(conn, key)
         .ok()
         .flatten()
         .and_then(|v| v.trim().parse::<i64>().ok())
-        .unwrap_or(0)
 }
 
-/// 写同步游标。
-fn write_cursor(conn: &Connection, cursor: i64) -> Result<(), AppError> {
-    set_setting(conn, SYNC_CURSOR_KEY, &cursor.to_string())
+/// 写某 kind 的同步游标。
+fn write_cursor(conn: &Connection, kind: &str, cursor: i64) -> Result<(), AppError> {
+    set_setting(conn, &cursor_key(kind), &cursor.to_string())
 }
 
 // ════════════════════════════════════════════════════════════
@@ -140,11 +245,11 @@ fn write_cursor(conn: &Connection, cursor: i64) -> Result<(), AppError> {
 // ════════════════════════════════════════════════════════════
 
 /// 读某对象的本地已知远端版本（无记录 → 0，视为新建）。
-fn server_version_of(conn: &Connection, key: &str) -> Result<i64, AppError> {
+fn server_version_of(conn: &Connection, kind: &str, key: &str) -> Result<i64, AppError> {
     let v: Option<i64> = conn
         .query_row(
             "SELECT server_version FROM sync_state WHERE kind = ?1 AND object_key = ?2",
-            params![KIND_WORKFLOW, key],
+            params![kind, key],
             |r| r.get(0),
         )
         .optional()?;
@@ -172,10 +277,10 @@ fn local_content_hash(conn: &Connection, key: &str) -> Result<Option<u64>, AppEr
 }
 
 /// 读某对象 `last_synced_hash`（原样字符串；无记录 → `None`）。
-fn last_synced_hash_of(conn: &Connection, key: &str) -> Option<String> {
+fn last_synced_hash_of(conn: &Connection, kind: &str, key: &str) -> Option<String> {
     conn.query_row(
         "SELECT last_synced_hash FROM sync_state WHERE kind = ?1 AND object_key = ?2",
-        params![KIND_WORKFLOW, key],
+        params![kind, key],
         |r| r.get::<_, Option<String>>(0),
     )
     .optional()
@@ -193,17 +298,17 @@ fn local_differs_from_synced(conn: &Connection, key: &str) -> Result<bool, AppEr
     let Some(h) = local_content_hash(conn, key)? else {
         return Ok(false);
     };
-    Ok(last_synced_hash_of(conn, key).as_deref() != Some(h.to_string().as_str()))
+    Ok(last_synced_hash_of(conn, KIND_WORKFLOW, key).as_deref() != Some(h.to_string().as_str()))
 }
 
 /// 读某对象的墓碑状态 `(是否墓碑, 墓碑记录的远端版本)`。
 /// 墓碑版本复用 `server_version`（= 彻底删除时本地已知的远端版本）；删除事件被平台接受后该列会推进，
 /// 从而本机自己的删除事件不会误触发「清墓碑复活」。
-fn tombstone_of(conn: &Connection, key: &str) -> Result<(bool, i64), AppError> {
+fn tombstone_of(conn: &Connection, kind: &str, key: &str) -> Result<(bool, i64), AppError> {
     let row: Option<(i64, i64)> = conn
         .query_row(
             "SELECT tombstone, server_version FROM sync_state WHERE kind = ?1 AND object_key = ?2",
-            params![KIND_WORKFLOW, key],
+            params![kind, key],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
@@ -215,11 +320,11 @@ fn tombstone_of(conn: &Connection, key: &str) -> Result<(bool, i64), AppError> {
 
 /// 清除某对象的墓碑（远端发生了更高版本的新事件 → 接受复活）。同时复位 `tombstone_pushed`
 /// （墓碑已清，推送标志随之失效；下次若再 purge 会由 [`mark_workflow_purged`] 重新置 0）。
-fn clear_tombstone(conn: &Connection, key: &str) -> Result<(), AppError> {
+fn clear_tombstone(conn: &Connection, kind: &str, key: &str) -> Result<(), AppError> {
     conn.execute(
         "UPDATE sync_state SET tombstone = 0, tombstone_pushed = 0
          WHERE kind = ?1 AND object_key = ?2",
-        params![KIND_WORKFLOW, key],
+        params![kind, key],
     )?;
     Ok(())
 }
@@ -227,11 +332,11 @@ fn clear_tombstone(conn: &Connection, key: &str) -> Result<(), AppError> {
 /// 读某墓碑的「删除意图是否已送达云端」标志（无记录 → false）。
 /// 仅单测直接读取该列；生产路径由 `list_push_candidates` 的 SQL 判据消费，故只在测试构建编译。
 #[cfg(test)]
-fn tombstone_pushed_of(conn: &Connection, key: &str) -> Result<bool, AppError> {
+fn tombstone_pushed_of(conn: &Connection, kind: &str, key: &str) -> Result<bool, AppError> {
     let v: Option<i64> = conn
         .query_row(
             "SELECT tombstone_pushed FROM sync_state WHERE kind = ?1 AND object_key = ?2",
-            params![KIND_WORKFLOW, key],
+            params![kind, key],
             |r| r.get(0),
         )
         .optional()?;
@@ -246,6 +351,7 @@ fn tombstone_pushed_of(conn: &Connection, key: &str) -> Result<bool, AppError> {
 /// accepted 回执上调用，不会污染常规同步对象。
 fn mark_tombstone_pushed(
     conn: &Connection,
+    kind: &str,
     key: &str,
     server_version: Option<i64>,
 ) -> Result<(), AppError> {
@@ -254,12 +360,12 @@ fn mark_tombstone_pushed(
             "UPDATE sync_state
                 SET tombstone_pushed = 1, server_version = MAX(server_version, ?3)
               WHERE kind = ?1 AND object_key = ?2 AND tombstone = 1",
-            params![KIND_WORKFLOW, key, v],
+            params![kind, key, v],
         )?,
         None => conn.execute(
             "UPDATE sync_state SET tombstone_pushed = 1
               WHERE kind = ?1 AND object_key = ?2 AND tombstone = 1",
-            params![KIND_WORKFLOW, key],
+            params![kind, key],
         )?,
     };
     Ok(())
@@ -271,6 +377,7 @@ fn mark_tombstone_pushed(
 /// 因此「哈希相等」等价于「与远端一致」。
 fn upsert_sync_state(
     conn: &Connection,
+    kind: &str,
     key: &str,
     server_version: i64,
     dirty: bool,
@@ -283,7 +390,7 @@ fn upsert_sync_state(
          ON CONFLICT(kind, object_key)
          DO UPDATE SET server_version = ?3, local_updated_at = ?4, dirty = ?5, last_synced_hash = ?6",
         params![
-            KIND_WORKFLOW,
+            kind,
             key,
             server_version,
             crate::utils::now(),
@@ -349,7 +456,7 @@ pub fn mark_workflow_dirty(conn: &Connection, id: &str) {
     if id.is_empty() {
         return;
     }
-    if let Err(e) = mark_dirty_row(conn, id) {
+    if let Err(e) = mark_dirty_row(conn, KIND_WORKFLOW, id) {
         log::debug!("[CloudSync] 标记脏位失败 {}：{}", id, e);
         return;
     }
@@ -361,12 +468,12 @@ pub fn mark_workflow_dirty(conn: &Connection, id: &str) {
 }
 
 /// 只置本行脏位（不新建为 0 版本则保留原 server_version）。
-fn mark_dirty_row(conn: &Connection, id: &str) -> Result<(), AppError> {
+fn mark_dirty_row(conn: &Connection, kind: &str, id: &str) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO sync_state (kind, object_key, server_version, local_updated_at, dirty)
          VALUES (?1, ?2, 0, ?3, 1)
          ON CONFLICT(kind, object_key) DO UPDATE SET dirty = 1, local_updated_at = ?3",
-        params![KIND_WORKFLOW, id, crate::utils::now()],
+        params![kind, id, crate::utils::now()],
     )?;
     Ok(())
 }
@@ -381,7 +488,7 @@ fn mark_ancestors_dirty(
         if !visited.insert(parent.clone()) {
             continue;
         }
-        mark_dirty_row(conn, &parent)?;
+        mark_dirty_row(conn, KIND_WORKFLOW, &parent)?;
         mark_ancestors_dirty(conn, &parent, visited)?;
     }
     Ok(())
@@ -651,15 +758,16 @@ fn fold_pull_pages(since: i64, pages: Vec<(i64, Vec<RemoteItem>, bool)>) -> (i64
 }
 
 /// 拉取自 `since` 之后的全部对象（自动翻页直到 `hasMore = false`）。
-/// 返回 `(最终 watermark, 全部条目)`。
-async fn fetch_all_objects(token: &str, since: i64) -> Result<(i64, Vec<RemoteItem>), AppError> {
+/// 返回 `(最终 watermark, 全部条目)`。`kind` 决定拉取哪一类同步对象。
+async fn fetch_all_objects(
+    token: &str,
+    since: i64,
+    kind: &str,
+) -> Result<(i64, Vec<RemoteItem>), AppError> {
     let mut pages: Vec<(i64, Vec<RemoteItem>, bool)> = Vec::new();
     let mut cursor = since;
     loop {
-        let path = format!(
-            "/api/v1/me/sync/objects?since={}&kind={}",
-            cursor, KIND_WORKFLOW
-        );
+        let path = format!("/api/v1/me/sync/objects?since={}&kind={}", cursor, kind);
         let resp: PullResp = platform::get_json(&path, Some(token)).await?;
         cursor = resp.watermark;
         let has_more = resp.has_more;
@@ -731,11 +839,11 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
     }
 
     // 墓碑守卫：墓碑记录的版本 = server_version（本地已知的远端版本）
-    let (tombstone, tomb_version) = tombstone_of(conn, &item.key)?;
+    let (tombstone, tomb_version) = tombstone_of(conn, KIND_WORKFLOW, &item.key)?;
     if tombstone {
         if item.deleted {
             // 云端已是删除态 → 删除意图已达成：标记已送达并推进版本；本机已真删，无其它动作。
-            mark_tombstone_pushed(conn, &item.key, Some(item.version))?;
+            mark_tombstone_pushed(conn, KIND_WORKFLOW, &item.key, Some(item.version))?;
             return Ok(ApplyOutcome::default());
         }
         if item.version <= tomb_version {
@@ -743,10 +851,10 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
         }
         // 远端版本 > 墓碑记录版本且 deleted=false → 远端发生了更高版本的新事件（另一设备显式恢复/更新）
         // → 清墓碑并接受复活，继续按正常流程应用。
-        clear_tombstone(conn, &item.key)?;
+        clear_tombstone(conn, KIND_WORKFLOW, &item.key)?;
     }
 
-    if !pull_should_apply(item.version, server_version_of(conn, &item.key)?) {
+    if !pull_should_apply(item.version, server_version_of(conn, KIND_WORKFLOW, &item.key)?) {
         return Ok(ApplyOutcome::default());
     }
 
@@ -763,7 +871,7 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
         crate::workflow::soft_delete_definition(conn, &item.key)
             .map_err(|e| AppError::Db(format!("删除失败: {}", e)))?;
         // 本地内容已软删除 → 与远端一致（都处于删除态），哈希置空
-        upsert_sync_state(conn, &item.key, item.version, false, None)?;
+        upsert_sync_state(conn, KIND_WORKFLOW, &item.key, item.version, false, None)?;
         return Ok(ApplyOutcome {
             applied: true,
             conflict: None,
@@ -776,7 +884,7 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
             // 无改动 → 跳过内容写入与快照，仅推进 sync_state（避免版本表膨胀）
             if payload_matches_local_definition(conn, &item.key, payload)? {
                 let h = local_content_hash(conn, &item.key)?;
-                upsert_sync_state(conn, &item.key, item.version, false, h)?;
+                upsert_sync_state(conn, KIND_WORKFLOW, &item.key, item.version, false, h)?;
                 return Ok(ApplyOutcome::default());
             }
             // 本地有真实改动 + 远端也变了 → 冲突：先给本地内容留档为本地版本，再应用远端（主对象跟随远端）
@@ -804,7 +912,7 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
                 apply_workflow_bundle_in_place(conn, &item.key, payload)?;
             // 应用后本地内容 = 远端内容 → 记录为已同步
             let h = local_content_hash(conn, &item.key)?;
-            upsert_sync_state(conn, &item.key, item.version, false, h)?;
+            upsert_sync_state(conn, KIND_WORKFLOW, &item.key, item.version, false, h)?;
             // 本地无改动、直接跟随远端 = 被云端更新（覆盖本地）；与冲突互斥，不重复计入
             let updated_record = if conflict_record.is_none() {
                 let name = if applied_def.name.trim().is_empty() {
@@ -827,8 +935,8 @@ fn apply_one_remote_item(conn: &Connection, item: &RemoteItem) -> Result<ApplyOu
         }
         // payload 缺失（协议异常）：只推进版本、保留原哈希，避免反复拉取（无法判定本地是否与远端一致）
         _ => {
-            let h = last_synced_hash_of(conn, &item.key).and_then(|s| s.parse::<u64>().ok());
-            upsert_sync_state(conn, &item.key, item.version, false, h)?;
+            let h = last_synced_hash_of(conn, KIND_WORKFLOW, &item.key).and_then(|s| s.parse::<u64>().ok());
+            upsert_sync_state(conn, KIND_WORKFLOW, &item.key, item.version, false, h)?;
             Ok(ApplyOutcome {
                 applied: true,
                 conflict: None,
@@ -857,7 +965,7 @@ fn list_push_candidates(conn: &Connection) -> Result<Vec<(String, i64)>, AppErro
     // ① 上传候选：活跃定义且本地内容偏离上次同步内容
     for d in crate::workflow::list_definitions(conn)? {
         if local_differs_from_synced(conn, &d.id)? {
-            let base = server_version_of(conn, &d.id)?;
+            let base = server_version_of(conn, KIND_WORKFLOW, &d.id)?;
             candidates.insert(d.id, base);
         }
     }
@@ -875,9 +983,9 @@ fn list_push_candidates(conn: &Connection) -> Result<Vec<(String, i64)>, AppErro
         if candidates.contains_key(&d.id) || !tracked.contains(&d.id) || referenced.contains(&d.id) {
             continue;
         }
-        let (is_tombstone, server_version) = tombstone_of(conn, &d.id)?;
+        let (is_tombstone, server_version) = tombstone_of(conn, KIND_WORKFLOW, &d.id)?;
         // 墓碑（已彻底删除过）不推删除；远端未知（server_version = 0）不推删除；删除已推送（dirty=0）不重复推
-        if is_tombstone || server_version <= 0 || !is_dirty(conn, &d.id) {
+        if is_tombstone || server_version <= 0 || !is_dirty(conn, KIND_WORKFLOW, &d.id) {
             continue;
         }
         candidates.insert(d.id, server_version);
@@ -907,10 +1015,10 @@ fn list_push_candidates(conn: &Connection) -> Result<Vec<(String, i64)>, AppErro
 }
 
 /// 读某对象的 `dirty` 标记（无记录 → false）。
-fn is_dirty(conn: &Connection, key: &str) -> bool {
+fn is_dirty(conn: &Connection, kind: &str, key: &str) -> bool {
     conn.query_row(
         "SELECT dirty FROM sync_state WHERE kind = ?1 AND object_key = ?2",
-        params![KIND_WORKFLOW, key],
+        params![kind, key],
         |r| r.get::<_, i64>(0),
     )
     .optional()
@@ -970,6 +1078,651 @@ fn chunk_push_items(items: &[PushItem]) -> Vec<Vec<PushItem>> {
 }
 
 // ════════════════════════════════════════════════════════════
+// 灵感同步（kind = "inspiration"）
+// ════════════════════════════════════════════════════════════
+//
+// 与工作流**独立实现**：灵感没有回收站软删 / 子流捆绑 / 冲突留档概念，故不复用工作流那套逻辑。
+// - 删除即硬删 + 直接写墓碑（[`mark_inspiration_deleted`]），靠墓碑补送通道把 `deleted` 送达云端；
+// - pull 的「两侧都改过」按 `updatedAt` 做 LWW（Last-Write-Wins），**不**产生 `conflictItems`。
+
+/// 灵感对象在网络上的 payload（整行 JSON，字段名 camelCase，与对端约定一致）。
+///
+/// 时间戳（`createdAt` / `updatedAt`）用于 LWW 判据，但**不进内容哈希**（见 [`inspiration_content_hash`]）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InspirationPayload {
+    id: String,
+    icon: String,
+    title: String,
+    content: String,
+    source_agent: String,
+    is_favorite: bool,
+    tags: Vec<String>,
+    created_at: i64,
+    updated_at: i64,
+    market_id: Option<String>,
+}
+
+impl InspirationPayload {
+    fn from_model(i: &crate::commands::inspiration::Inspiration) -> Self {
+        Self {
+            id: i.id.clone(),
+            icon: i.icon.clone(),
+            title: i.title.clone(),
+            content: i.content.clone(),
+            source_agent: i.source_agent.clone(),
+            is_favorite: i.is_favorite,
+            tags: i.tags.clone(),
+            created_at: i.created_at,
+            updated_at: i.updated_at,
+            market_id: i.market_id.clone(),
+        }
+    }
+}
+
+/// 灵感**内容哈希**：只取 `{icon,title,content,tags}`（tags 先排序去重）——**不含时间戳 / market_id**。
+///
+/// 为什么不含时间戳：时间戳每次本地写入都会变，若纳入哈希则每次同步都被判成"有改动"，永不停歇地上传。
+/// 复用 [`crate::workflow::normalized_content_hash`]（对象键排序 + 递归归一的 FNV-1a），与工作流哈希同一套实现。
+fn inspiration_content_hash(i: &crate::commands::inspiration::Inspiration) -> u64 {
+    let mut tags = i.tags.clone();
+    tags.sort();
+    tags.dedup();
+    let v = serde_json::json!({
+        "icon": i.icon,
+        "title": i.title,
+        "content": i.content,
+        "tags": tags,
+    });
+    crate::workflow::normalized_content_hash(&v)
+}
+
+/// 按 id 读取灵感；不存在返回 `None`（把 `NotFound` 与数据库错误区分开）。
+fn get_inspiration_opt(
+    conn: &Connection,
+    key: &str,
+) -> Result<Option<crate::commands::inspiration::Inspiration>, AppError> {
+    match crate::commands::inspiration::get_inspiration(conn, key.to_string()) {
+        Ok(i) => Ok(Some(i)),
+        Err(AppError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// 本地灵感当前内容的哈希；本地不存在 → `None`。
+fn inspiration_local_content_hash(conn: &Connection, key: &str) -> Result<Option<u64>, AppError> {
+    Ok(get_inspiration_opt(conn, key)?.map(|i| inspiration_content_hash(&i)))
+}
+
+/// 本地灵感当前内容是否偏离上次成功同步的内容（「本地有真实改动」判据，仅依赖内容哈希）。
+fn inspiration_local_differs_from_synced(
+    conn: &Connection,
+    key: &str,
+) -> Result<bool, AppError> {
+    let Some(h) = inspiration_local_content_hash(conn, key)? else {
+        return Ok(false);
+    };
+    Ok(last_synced_hash_of(conn, KIND_INSPIRATION, key).as_deref() != Some(h.to_string().as_str()))
+}
+
+/// 灵感展示名（用于「被云端更新」提示）：标题为空则回退 id。
+fn inspiration_display_name(p: &InspirationPayload) -> String {
+    if p.title.trim().is_empty() {
+        p.id.clone()
+    } else {
+        p.title.clone()
+    }
+}
+
+/// 就地把一条灵感（含标签）写入本地：不存在则插入，存在则整行覆盖（以远端 payload 为准）。
+///
+/// 灵感的标签是**整组覆盖**（先清后插），与 `inspiration.rs::update_inspiration` 的语义一致。
+fn upsert_inspiration_local(
+    conn: &Connection,
+    p: &InspirationPayload,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO inspirations (id, icon, title, content, source_agent, is_favorite, created_at, updated_at, market_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(id) DO UPDATE SET icon = ?2, title = ?3, content = ?4, source_agent = ?5,
+             is_favorite = ?6, created_at = ?7, updated_at = ?8, market_id = ?9",
+        params![
+            p.id,
+            p.icon,
+            p.title,
+            p.content,
+            p.source_agent,
+            p.is_favorite as i32,
+            p.created_at,
+            p.updated_at,
+            p.market_id
+        ],
+    )?;
+    conn.execute(
+        "DELETE FROM inspiration_tags WHERE inspiration_id = ?1",
+        params![p.id],
+    )?;
+    let mut stmt = conn.prepare(
+        "INSERT OR IGNORE INTO inspiration_tags (inspiration_id, tag) VALUES (?1, ?2)",
+    )?;
+    for tag in &p.tags {
+        stmt.execute(params![p.id, tag])?;
+    }
+    conn.execute(
+        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
+        [],
+    )?;
+    Ok(())
+}
+
+/// 硬删本地某灵感（行 + 标签 + FTS 重建）。不存在也静默通过（幂等）。
+fn delete_inspiration_local(conn: &Connection, id: &str) -> Result<(), AppError> {
+    conn.execute(
+        "DELETE FROM inspiration_tags WHERE inspiration_id = ?1",
+        params![id],
+    )?;
+    conn.execute("DELETE FROM inspirations WHERE id = ?1", params![id])?;
+    conn.execute(
+        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
+        [],
+    )?;
+    Ok(())
+}
+
+/// 灵感**删除**后的同步语义：删除本地行的同时置墓碑（`tombstone = 1`、`tombstone_pushed = 0`、
+/// `dirty = 1`、`last_synced_hash = NULL`），**保留 `server_version`** 作补送 `deleted` 的 baseVersion。
+///
+/// 灵感没有回收站：删除即硬删 → 直接写墓碑，靠补送通道把删除意图送达云端。**best-effort**：表缺失 /
+/// 写失败静默忽略；用 `UPDATE`（非 upsert）**不会**为从未被跟踪的 key 凭空造墓碑。
+pub fn mark_inspiration_deleted(conn: &Connection, id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    if let Err(e) = conn.execute(
+        "UPDATE sync_state SET tombstone = 1, tombstone_pushed = 0, dirty = 1, last_synced_hash = NULL
+         WHERE kind = ?1 AND object_key = ?2",
+        params![KIND_INSPIRATION, id],
+    ) {
+        log::debug!("[CloudSync] 灵感置墓碑失败 {}：{}", id, e);
+    }
+}
+
+/// 标记某灵感本地已改动（`dirty = 1`）。由灵感的集中写入点（创建 / 更新 / 标签变更）调用。
+/// **best-effort**：sync_state 表不存在或写失败静默忽略，绝不影响本地灵感的正常读写。
+pub fn mark_inspiration_dirty(conn: &Connection, id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    if let Err(e) = mark_dirty_row(conn, KIND_INSPIRATION, id) {
+        log::debug!("[CloudSync] 标记灵感脏位失败 {}：{}", id, e);
+    }
+}
+
+/// 应用一批远端灵感条目，返回 `(实际落地条数, 本轮被云端更新清单)`。灵感**不产生冲突清单**（LWW 自动选边）。
+fn apply_remote_inspiration_items(
+    conn: &Connection,
+    items: &[RemoteItem],
+) -> (usize, Vec<SyncUpdated>) {
+    let mut applied = 0usize;
+    let mut updated = Vec::new();
+    for item in items {
+        match apply_one_remote_inspiration(conn, item) {
+            Ok(o) => {
+                if o.applied {
+                    applied += 1;
+                }
+                if let Some(u) = o.updated {
+                    updated.push(u);
+                }
+            }
+            Err(e) => log::warn!("[CloudSync] 应用远端灵感失败 {}：{}", item.key, e),
+        }
+    }
+    (applied, updated)
+}
+
+/// 应用单条远端灵感条目。
+///
+/// - **墓碑守卫**：与工作流同规则（远端 `deleted` → 标记已送达；远端 `!deleted` 且 `version > 墓碑版本`
+///   → 清墓碑复活；否则保持墓碑）；
+/// - **版本判据**：[`pull_should_apply`]（仅远端版本严格更大才处理）；
+/// - 远端 `deleted = true` → **本地硬删该行**（灵感无回收站）+ 清 `last_synced_hash`，推进 `sync_state`；
+/// - 远端 `deleted = false` 且有 payload：
+///   - 本地不存在 → 直接插入（含标签）；
+///   - 本地存在且本地无改动 → 跟随远端（覆盖内容 + 标签）；
+///   - 本地存在且本地有真实改动 → **两侧都改过** → 按 `updatedAt` LWW：远端更新（严格大于）才覆盖本地，
+///     否则保留本地；同时把 `server_version` 推进到远端版本，让本轮 push 以远端最新为 baseVersion 提交
+///     本地内容（否则 baseVersion 落后会 409，而灵感不处理冲突 → 本地改动永远推不上去）；
+/// - 应用后 `last_synced_hash` = 应用后本地内容哈希（表示「与远端一致」）。
+fn apply_one_remote_inspiration(
+    conn: &Connection,
+    item: &RemoteItem,
+) -> Result<ApplyOutcome, AppError> {
+    if item.key.is_empty() {
+        return Ok(ApplyOutcome::default());
+    }
+
+    // 墓碑守卫：墓碑记录的版本 = server_version
+    let (tombstone, tomb_version) = tombstone_of(conn, KIND_INSPIRATION, &item.key)?;
+    if tombstone {
+        if item.deleted {
+            // 云端已是删除态 → 删除意图已达成：标记已送达并推进版本；本机早已真删。
+            mark_tombstone_pushed(conn, KIND_INSPIRATION, &item.key, Some(item.version))?;
+            return Ok(ApplyOutcome::default());
+        }
+        if item.version <= tomb_version {
+            return Ok(ApplyOutcome::default()); // 保持墓碑、等待补推（不复活）
+        }
+        // 远端发生更高版本的新事件 → 清墓碑并接受复活（尊重远端显式事件）
+        clear_tombstone(conn, KIND_INSPIRATION, &item.key)?;
+    }
+
+    if !pull_should_apply(item.version, server_version_of(conn, KIND_INSPIRATION, &item.key)?) {
+        return Ok(ApplyOutcome::default());
+    }
+
+    if item.deleted {
+        // 远端删除传播 → 本地**硬删**（灵感无回收站），清哈希，推进 sync_state 到远端版本
+        delete_inspiration_local(conn, &item.key)?;
+        upsert_sync_state(conn, KIND_INSPIRATION, &item.key, item.version, false, None)?;
+        return Ok(ApplyOutcome {
+            applied: true,
+            conflict: None,
+            updated: None,
+        });
+    }
+
+    // 解析 payload；缺失 / 损坏（协议异常）→ 只推进版本、保留原哈希，避免反复拉取
+    let payload: Option<InspirationPayload> = item
+        .payload
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+        .and_then(|p| serde_json::from_str(p).ok());
+    let Some(payload) = payload else {
+        let h = last_synced_hash_of(conn, KIND_INSPIRATION, &item.key)
+            .and_then(|s| s.parse::<u64>().ok());
+        upsert_sync_state(conn, KIND_INSPIRATION, &item.key, item.version, false, h)?;
+        return Ok(ApplyOutcome {
+            applied: true,
+            conflict: None,
+            updated: None,
+        });
+    };
+
+    let local = get_inspiration_opt(conn, &item.key)?;
+    let follow_remote = match &local {
+        // 本地不存在 → 直接插入
+        None => true,
+        Some(local) => {
+            if !inspiration_local_differs_from_synced(conn, &item.key)? {
+                // 本地无改动 → 跟随远端
+                true
+            } else {
+                // 两侧都改过 → LWW：远端严格更新才覆盖本地
+                payload.updated_at > local.updated_at
+            }
+        }
+    };
+
+    if follow_remote {
+        upsert_inspiration_local(conn, &payload)?;
+        let h = inspiration_local_content_hash(conn, &item.key)?;
+        upsert_sync_state(conn, KIND_INSPIRATION, &item.key, item.version, false, h)?;
+        return Ok(ApplyOutcome {
+            applied: true,
+            conflict: None,
+            updated: Some(SyncUpdated {
+                id: item.key.clone(),
+                name: inspiration_display_name(&payload),
+            }),
+        });
+    }
+
+    // 本地赢（两侧都改过且本地不旧）：保持本地内容，推进 server_version 让本轮 push 以远端最新为
+    // baseVersion 提交本地内容；哈希置空 → 本地仍被视为「有改动」，进入本轮 push 候选。
+    upsert_sync_state(conn, KIND_INSPIRATION, &item.key, item.version, true, None)?;
+    Ok(ApplyOutcome::default())
+}
+
+/// 灵感一轮 push 的候选对象 `(key, baseVersion)`：
+/// - **上传候选**：本地存在的灵感且 [`inspiration_local_differs_from_synced`] 为真（从未跟踪时哈希为空、
+///   本地存在 → 视为有改动，baseVersion = 0 → 首次整体上传）；
+/// - **删除候选**：仅「已跟踪（`sync_state` 有行）、远端已知 `server_version > 0`、`dirty = 1`、
+///   且**非墓碑**（`tombstone = 0`）」且**本地已无该行**的 key → 推 `deleted`。正常删除会先写墓碑
+///   （走 ③），故本通道是「**墓碑写失败**（best-effort 忽略）时的兜底」，与 ③ 互斥不重复推送；
+/// - **墓碑补送候选**：`tombstone = 1` 且 `tombstone_pushed = 0` 且 `server_version > 0` → 补送 `deleted`。
+///
+/// 收窄规则保证「**首次同步（新设备上没有任何被跟踪 key）只做全量拉取、不推删除**」——不会用本地空数据
+/// 误删云端对象。
+fn list_inspiration_push_candidates(conn: &Connection) -> Result<Vec<(String, i64)>, AppError> {
+    let mut candidates: HashMap<String, i64> = HashMap::new();
+
+    // ① 上传候选：本地存在且内容偏离上次同步内容
+    for i in crate::commands::inspiration::list_inspirations(conn, None, false)? {
+        if inspiration_local_differs_from_synced(conn, &i.id)? {
+            let base = server_version_of(conn, KIND_INSPIRATION, &i.id)?;
+            candidates.insert(i.id, base);
+        }
+    }
+
+    // ② 删除候选（兜底）：已跟踪、远端已知、待推送删除，且本地已无该行、且非墓碑
+    //    （墓碑行由 ③ 负责，二者 key 集合不相交，避免已送达的墓碑被本通道重复选中）
+    {
+        let mut stmt = conn.prepare(
+            "SELECT object_key, server_version FROM sync_state
+              WHERE kind = ?1 AND server_version > 0 AND dirty = 1 AND tombstone = 0",
+        )?;
+        let rows: Vec<(String, i64)> = stmt
+            .query_map(params![KIND_INSPIRATION], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (key, server_version) in rows {
+            if candidates.contains_key(&key) {
+                continue; // 本地仍存在 → 由上传候选处理
+            }
+            if get_inspiration_opt(conn, &key)?.is_none() {
+                candidates.insert(key, server_version);
+            }
+        }
+    }
+
+    // ③ 墓碑补送候选：已硬删但删除意图尚未送达云端
+    {
+        let mut stmt = conn.prepare(
+            "SELECT object_key, server_version FROM sync_state
+              WHERE kind = ?1 AND tombstone = 1 AND tombstone_pushed = 0",
+        )?;
+        let rows: Vec<(String, i64)> = stmt
+            .query_map(params![KIND_INSPIRATION], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (key, server_version) in rows {
+            if server_version > 0 {
+                candidates.entry(key).or_insert(server_version);
+            }
+        }
+    }
+
+    Ok(candidates.into_iter().collect())
+}
+
+/// 收集本地待推送灵感 → push items（分批前）。返回 `(push items, 失败原因)`。
+fn build_inspiration_push_items(
+    conn: &Connection,
+) -> Result<(Vec<PushItem>, Vec<String>), AppError> {
+    let mut items = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for (key, base_version) in list_inspiration_push_candidates(conn)? {
+        match get_inspiration_opt(conn, &key) {
+            Ok(Some(i)) => match serde_json::to_string(&InspirationPayload::from_model(&i)) {
+                Ok(payload) => items.push(PushItem {
+                    key,
+                    payload: Some(payload),
+                    deleted: None,
+                    base_version,
+                }),
+                Err(e) => {
+                    log::warn!("[CloudSync] 打包灵感失败，跳过推送 {}：{}", key, e);
+                    failures.push(format!("灵感：{}（{}）", key, e));
+                }
+            },
+            // 本地已删（含墓碑补送）→ 推 deleted
+            Ok(None) => items.push(PushItem {
+                key,
+                payload: None,
+                deleted: Some(true),
+                base_version,
+            }),
+            Err(e) => {
+                log::warn!("[CloudSync] 查询灵感失败，跳过推送 {}：{}", key, e);
+                failures.push(format!("灵感：读取失败（{}）", e));
+            }
+        }
+    }
+    Ok((items, failures))
+}
+
+/// market_id 归并：同一非空 `market_id` 若本地存在 ≥2 条，只保留 `updated_at` 最大的一条，其余
+/// **硬删并写墓碑**（随 push 把云端冗余副本一并删除）。**幂等**（归并后同 market_id 仅剩一条）。
+///
+/// 场景：同一市场灵感在两台设备各导入一次，产生不同 id 的两条；双向同步后本地出现重复，需收敛为一条。
+fn merge_inspirations_by_market_id(conn: &Connection) -> Result<(), AppError> {
+    let dup_market_ids: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT market_id FROM inspirations
+              WHERE market_id IS NOT NULL AND market_id != ''
+              GROUP BY market_id HAVING COUNT(*) > 1",
+        )?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for market_id in dup_market_ids {
+        // updated_at 降序（并列时按 id 升序，保证结果稳定 / 幂等）：保留第一条，其余删除
+        let ids: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM inspirations WHERE market_id = ?1 ORDER BY updated_at DESC, id ASC",
+            )?;
+            let rows = stmt
+                .query_map(params![market_id], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for id in ids.into_iter().skip(1) {
+            delete_inspiration_local(conn, &id)?;
+            // 写墓碑：若该 key 已被跟踪且远端有副本 → 随 push 删除云端冗余（best-effort）
+            mark_inspiration_deleted(conn, &id);
+        }
+    }
+    Ok(())
+}
+
+/// 工作流的一轮同步（pull → push），结果累计进 `result`。
+///
+/// 返回 `Some(失败结果)` 表示本轮发生致命错误（已保存摘要，调用方应直接返回该结果、跳过其余范围）；
+/// 返回 `None` 表示已跑完（成功，或仅有部分对象打包失败——失败明细已记入 `result`）。
+async fn run_workflow_round(
+    state: &crate::DbState,
+    token: &str,
+    result: &mut CloudSyncResult,
+) -> Option<CloudSyncResult> {
+    // ── pull（工作流）──（连接作用域内完成，避免跨 await 持有）
+    let cursor = match state.get_conn() {
+        Ok(c) => read_cursor(&c, KIND_WORKFLOW),
+        Err(_) => 0,
+    };
+    match fetch_all_objects(token, cursor, KIND_WORKFLOW).await {
+        Ok((watermark, items)) => {
+            if let Ok(conn) = state.get_conn() {
+                let (applied, conflicts, updated) = apply_remote_items(&conn, &items);
+                result.pulled = applied;
+                // 冲突 / 被云端更新两类清单各自独立：冲突 = 本地有改动已留档；更新 = 本地无改动直接跟随
+                result.conflict_items.extend(conflicts);
+                result.updated_items.extend(updated);
+                let _ = write_cursor(&conn, KIND_WORKFLOW, watermark);
+            }
+        }
+        Err(e) => {
+            let r = CloudSyncResult::failure(format!("拉取失败：{}", e));
+            save_round_meta(state, &r);
+            return Some(r);
+        }
+    }
+
+    // ── push（工作流）──
+    let (push_items, failures) = match state.get_conn() {
+        Ok(conn) => match build_push_items(&conn) {
+            Ok(v) => v,
+            Err(e) => {
+                let r = CloudSyncResult::failure(format!("收集本地变更失败：{}", e));
+                save_round_meta(state, &r);
+                return Some(r);
+            }
+        },
+        Err(e) => {
+            let r = CloudSyncResult::failure(format!("数据库连接失败：{}", e));
+            save_round_meta(state, &r);
+            return Some(r);
+        }
+    };
+    // 打包失败的对象计入本轮结果（不静默）：UI 据此提示「N 个失败（原因）」
+    result.failed = failures.len();
+    result.failures = failures;
+
+    for chunk in chunk_push_items(&push_items) {
+        let body = PushBody {
+            kind: KIND_WORKFLOW,
+            items: chunk,
+        };
+        let resp: PushResp = match platform::post_json("/api/v1/me/sync/push", &body, Some(token))
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                // 保留本轮已收集的打包失败信息，避免被整轮错误覆盖而丢失
+                let mut r = CloudSyncResult::failure(format!("推送失败：{}", e));
+                r.failed = result.failed;
+                r.failures = result.failures.clone();
+                save_round_meta(state, &r);
+                return Some(r);
+            }
+        };
+        // accepted 落版本（连接作用域内完成，不跨 await）：本地内容此刻已与远端一致 → 记录哈希
+        if let Ok(conn) = state.get_conn() {
+            for acc in &resp.accepted {
+                let h = local_content_hash(&conn, &acc.key).unwrap_or(None);
+                if let Err(e) = upsert_sync_state(&conn, KIND_WORKFLOW, &acc.key, acc.version, false, h) {
+                    log::warn!("[CloudSync] 更新已推送对象版本失败 {}：{}", acc.key, e);
+                }
+                // 若该 key 是墓碑（补送 `deleted` 被接受）→ 删除意图已送达：置 tombstone_pushed = 1，
+                // 之后不再进入补送候选。版本已由上面的 upsert 更新，此处无需再动版本。
+                // 对普通条目（tombstone = 0）是 no-op。
+                if let Err(e) = mark_tombstone_pushed(&conn, KIND_WORKFLOW, &acc.key, None) {
+                    log::warn!("[CloudSync] 标记墓碑已推送失败 {}：{}", acc.key, e);
+                }
+                result.pushed += 1;
+            }
+        }
+        // 冲突处理（不自动选边：留档本地 + 跟随远端；内部自行取连接，不在此持有）。
+        // 先摘出墓碑补送的 409：它们不进入常规冲突处理，也不计入 `conflicts`
+        // （保证「冲突 N」与 `conflictItems` 始终一致）。
+        if !resp.conflicts.is_empty() {
+            let (real_conflicts, tombstone_409) = match state.get_conn() {
+                Ok(conn) => split_tombstone_conflicts(&conn, resp.conflicts).unwrap_or_else(|e| {
+                    log::warn!("[CloudSync] 拆分冲突失败，本轮按无冲突处理：{}", e);
+                    (Vec::new(), 0)
+                }),
+                // 取不到连接：保守起见不处理冲突（与原行为一致：连接失败时不改本地）
+                Err(_) => (Vec::new(), 0),
+            };
+            if tombstone_409 > 0 {
+                log::debug!(
+                    "[CloudSync] 墓碑补送的 {} 条 409 不计入冲突（等下一轮 pull 重新判定）",
+                    tombstone_409
+                );
+            }
+            match resolve_conflicts(state, token, &real_conflicts).await {
+                Ok((records, failures)) => {
+                    result.conflict_items.extend(records);
+                    result.failed += failures.len();
+                    result.failures.extend(failures);
+                }
+                Err(e) => log::warn!("[CloudSync] 冲突处理失败：{}", e),
+            }
+        }
+    }
+
+    None
+}
+
+/// 灵感的一轮同步（pull → market_id 归并 → push），结果累计进 `result`。
+///
+/// 工作流流程已跑完才进入本函数；灵感本轮的失败只记进 `result`（信息带「灵感」前缀），不回退工作流结果。
+async fn run_inspiration_round(
+    state: &crate::DbState,
+    token: &str,
+    result: &mut CloudSyncResult,
+) {
+    // ── pull ──（连接作用域内完成，避免跨 await 持有）
+    let cursor = state
+        .get_conn()
+        .map(|c| read_cursor(&c, KIND_INSPIRATION))
+        .unwrap_or(0);
+    match fetch_all_objects(token, cursor, KIND_INSPIRATION).await {
+        Ok((watermark, items)) => {
+            if let Ok(conn) = state.get_conn() {
+                let (applied, updated) = apply_remote_inspiration_items(&conn, &items);
+                result.pulled += applied;
+                result.updated_items.extend(updated);
+                // 应用后做一次 market_id 归并（幂等）：收敛同 market_id 的重复条目
+                if let Err(e) = merge_inspirations_by_market_id(&conn) {
+                    log::warn!("[CloudSync] 灵感 market_id 归并失败：{}", e);
+                }
+                let _ = write_cursor(&conn, KIND_INSPIRATION, watermark);
+            }
+        }
+        Err(e) => {
+            result.failed += 1;
+            result.failures.push(format!("灵感：拉取失败（{}）", e));
+        }
+    }
+
+    // ── push ──
+    let (items, failures) = match state.get_conn() {
+        Ok(conn) => match build_inspiration_push_items(&conn) {
+            Ok(v) => v,
+            Err(e) => {
+                result.failed += 1;
+                result.failures.push(format!("灵感：收集本地变更失败（{}）", e));
+                (Vec::new(), Vec::new())
+            }
+        },
+        Err(_) => (Vec::new(), Vec::new()),
+    };
+    result.failed += failures.len();
+    result.failures.extend(failures);
+
+    for chunk in chunk_push_items(&items) {
+        let body = PushBody {
+            kind: KIND_INSPIRATION,
+            items: chunk,
+        };
+        let resp: PushResp =
+            match platform::post_json("/api/v1/me/sync/push", &body, Some(token)).await {
+                Ok(v) => v,
+                Err(e) => {
+                    result.failed += 1;
+                    result.failures.push(format!("灵感：推送失败（{}）", e));
+                    break;
+                }
+            };
+        // accepted 落版本（连接作用域内完成，不跨 await）
+        if let Ok(conn) = state.get_conn() {
+            for acc in &resp.accepted {
+                let h = inspiration_local_content_hash(&conn, &acc.key).unwrap_or(None);
+                if let Err(e) =
+                    upsert_sync_state(&conn, KIND_INSPIRATION, &acc.key, acc.version, false, h)
+                {
+                    log::warn!("[CloudSync] 更新已推送灵感版本失败 {}：{}", acc.key, e);
+                }
+                // 若为墓碑补送的 `deleted` 被接受 → 删除意图已送达：置 tombstone_pushed = 1
+                if let Err(e) = mark_tombstone_pushed(&conn, KIND_INSPIRATION, &acc.key, None) {
+                    log::warn!("[CloudSync] 标记灵感墓碑已推送失败 {}：{}", acc.key, e);
+                }
+                result.pushed += 1;
+            }
+        }
+        // 灵感不做「不自动选边」的冲突留档：push 409 表示远端版本已变，交给下一轮 pull 按 LWW 重新判定。
+        // 因此**不产生** conflict_items（保持为空），仅记日志。
+        if !resp.conflicts.is_empty() {
+            log::debug!(
+                "[CloudSync] 灵感 push 收到 {} 条 409，留待下一轮 pull 按 LWW 处理",
+                resp.conflicts.len()
+            );
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════
 // 冲突处理（不自动选边：留档本地 + 跟随远端）
 // ════════════════════════════════════════════════════════════
 
@@ -990,7 +1743,7 @@ fn split_tombstone_conflicts(
         if c.key.is_empty() {
             continue;
         }
-        if tombstone_of(conn, &c.key)?.0 {
+        if tombstone_of(conn, KIND_WORKFLOW, &c.key)?.0 {
             tombstone += 1;
         } else {
             real.push(c);
@@ -1021,7 +1774,7 @@ async fn resolve_conflicts(
         return Ok((Vec::new(), Vec::new()));
     }
     // 取回远端最新内容（since=0），按 key 归集（用于「跟随远端」）
-    let (_watermark, items) = fetch_all_objects(token, 0).await?;
+    let (_watermark, items) = fetch_all_objects(token, 0, KIND_WORKFLOW).await?;
     let remote: HashMap<String, RemoteItem> = items
         .into_iter()
         .filter(|i| !i.key.is_empty())
@@ -1044,7 +1797,7 @@ async fn resolve_conflicts(
         // 继续由补送候选重推（tombstone_pushed 保持 0，不会被永久跳过）。因此不需要额外的特殊重试逻辑。
         // 这里必须跳过「跟随远端」流程：本机对象已真删，套用常规冲突处理会把远端内容重新落回本地
         // （等于复活墓碑），违背墓碑语义。
-        if tombstone_of(&conn, &c.key)?.0 {
+        if tombstone_of(&conn, KIND_WORKFLOW, &c.key)?.0 {
             continue;
         }
         // 名称（取本地工作流名；取不到则用 key）
@@ -1067,7 +1820,9 @@ async fn resolve_conflicts(
                     crate::workflow::soft_delete_definition(&conn, &c.key)
                 {
                     failures.push(format!("{}：跟随远端删除失败（{}）", name, e));
-                } else if let Err(e) = upsert_sync_state(&conn, &c.key, r.version, false, None) {
+                } else if let Err(e) =
+                    upsert_sync_state(&conn, KIND_WORKFLOW, &c.key, r.version, false, None)
+                {
                     log::warn!("[CloudSync] 冲突后更新 sync_state 失败 {}：{}", c.key, e);
                 }
             }
@@ -1079,7 +1834,7 @@ async fn resolve_conflicts(
                             Ok(_) => {
                                 let h = local_content_hash(&conn, &c.key)?;
                                 if let Err(e) =
-                                    upsert_sync_state(&conn, &c.key, r.version, false, h)
+                                    upsert_sync_state(&conn, KIND_WORKFLOW, &c.key, r.version, false, h)
                                 {
                                     log::warn!(
                                         "[CloudSync] 冲突后更新 sync_state 失败 {}：{}",
@@ -1093,9 +1848,9 @@ async fn resolve_conflicts(
                     }
                     // 远端无内容（协议异常）：仅推进版本、保留原哈希
                     None => {
-                        let h = last_synced_hash_of(&conn, &c.key)
+                        let h = last_synced_hash_of(&conn, KIND_WORKFLOW, &c.key)
                             .and_then(|s| s.parse::<u64>().ok());
-                        let _ = upsert_sync_state(&conn, &c.key, r.version, false, h);
+                        let _ = upsert_sync_state(&conn, KIND_WORKFLOW, &c.key, r.version, false, h);
                     }
                 }
             }
@@ -1144,110 +1899,38 @@ pub async fn run_sync_round(state: &crate::DbState) -> CloudSyncResult {
 
     let mut result = CloudSyncResult::default();
 
-    // ── pull ──（连接作用域内完成，避免跨 await 持有）
-    let cursor = match state.get_conn() {
-        Ok(c) => read_cursor(&c),
-        Err(_) => 0,
+    // ── 同步范围（逐类开关）── 只读一次，工作流 / 灵感两段各自判断是否要跑
+    let kinds = match state.get_conn() {
+        Ok(c) => sync_kinds(&c),
+        Err(e) => return CloudSyncResult::failure(format!("数据库连接失败：{}", e)),
     };
-    match fetch_all_objects(&token, cursor).await {
-        Ok((watermark, items)) => {
-            if let Ok(conn) = state.get_conn() {
-                let (applied, conflicts, updated) = apply_remote_items(&conn, &items);
-                result.pulled = applied;
-                // 冲突 / 被云端更新两类清单各自独立：冲突 = 本地有改动已留档；更新 = 本地无改动直接跟随
-                result.conflict_items.extend(conflicts);
-                result.updated_items.extend(updated);
-                let _ = write_cursor(&conn, watermark);
-            }
+    let do_workflow = kinds.iter().any(|k| k.as_str() == KIND_WORKFLOW);
+    let do_inspiration = kinds.iter().any(|k| k.as_str() == KIND_INSPIRATION);
+
+    // 两类都未开启：**没有需要同步的范围**。这不是失败 —— 返回全零结果，并把摘要写成可读文案，
+    // 避免 UI 只看到「拉取 0 / 推送 0 / 冲突 0」而无从解释。
+    if !do_workflow && !do_inspiration {
+        let text = "没有需要同步的范围（工作流与灵感均未开启）";
+        if let Ok(conn) = state.get_conn() {
+            let at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            let _ = set_setting(&conn, SYNC_LAST_AT_KEY, &at);
+            let _ = set_setting(&conn, SYNC_LAST_RESULT_KEY, text);
         }
-        Err(e) => {
-            let r = CloudSyncResult::failure(format!("拉取失败：{}", e));
-            save_round_meta(state, &r);
+        log::info!("[CloudSync] {}", text);
+        return result;
+    }
+
+    // ── 工作流：pull + push（仅当同步范围包含 workflow 时跑；发生致命错误则提前返回该轮结果）──
+    if do_workflow {
+        if let Some(r) = run_workflow_round(state, &token, &mut result).await {
             return r;
         }
     }
 
-    // ── push ──
-    let (push_items, failures) = match state.get_conn() {
-        Ok(conn) => match build_push_items(&conn) {
-            Ok(v) => v,
-            Err(e) => {
-                let r = CloudSyncResult::failure(format!("收集本地变更失败：{}", e));
-                save_round_meta(state, &r);
-                return r;
-            }
-        },
-        Err(e) => {
-            let r = CloudSyncResult::failure(format!("数据库连接失败：{}", e));
-            save_round_meta(state, &r);
-            return r;
-        }
-    };
-    // 打包失败的对象计入本轮结果（不静默）：UI 据此提示「N 个失败（原因）」
-    result.failed = failures.len();
-    result.failures = failures;
-
-    for chunk in chunk_push_items(&push_items) {
-        let body = PushBody {
-            kind: KIND_WORKFLOW,
-            items: chunk,
-        };
-        let resp: PushResp = match platform::post_json("/api/v1/me/sync/push", &body, Some(&token))
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                // 保留本轮已收集的打包失败信息，避免被整轮错误覆盖而丢失
-                let mut r = CloudSyncResult::failure(format!("推送失败：{}", e));
-                r.failed = result.failed;
-                r.failures = result.failures.clone();
-                save_round_meta(state, &r);
-                return r;
-            }
-        };
-        // accepted 落版本（连接作用域内完成，不跨 await）：本地内容此刻已与远端一致 → 记录哈希
-        if let Ok(conn) = state.get_conn() {
-            for acc in &resp.accepted {
-                let h = local_content_hash(&conn, &acc.key).unwrap_or(None);
-                if let Err(e) = upsert_sync_state(&conn, &acc.key, acc.version, false, h) {
-                    log::warn!("[CloudSync] 更新已推送对象版本失败 {}：{}", acc.key, e);
-                }
-                // 若该 key 是墓碑（补送 `deleted` 被接受）→ 删除意图已送达：置 tombstone_pushed = 1，
-                // 之后不再进入补送候选。版本已由上面的 upsert 更新，此处无需再动版本。
-                // 对普通条目（tombstone = 0）是 no-op。
-                if let Err(e) = mark_tombstone_pushed(&conn, &acc.key, None) {
-                    log::warn!("[CloudSync] 标记墓碑已推送失败 {}：{}", acc.key, e);
-                }
-                result.pushed += 1;
-            }
-        }
-        // 冲突处理（不自动选边：留档本地 + 跟随远端；内部自行取连接，不在此持有）。
-        // 先摘出墓碑补送的 409：它们不进入常规冲突处理，也不计入 `conflicts`
-        // （保证「冲突 N」与 `conflictItems` 始终一致）。
-        if !resp.conflicts.is_empty() {
-            let (real_conflicts, tombstone_409) = match state.get_conn() {
-                Ok(conn) => split_tombstone_conflicts(&conn, resp.conflicts).unwrap_or_else(|e| {
-                    log::warn!("[CloudSync] 拆分冲突失败，本轮按无冲突处理：{}", e);
-                    (Vec::new(), 0)
-                }),
-                // 取不到连接：保守起见不处理冲突（与原行为一致：连接失败时不改本地）
-                Err(_) => (Vec::new(), 0),
-            };
-            if tombstone_409 > 0 {
-                log::debug!(
-                    "[CloudSync] 墓碑补送的 {} 条 409 不计入冲突（等下一轮 pull 重新判定）",
-                    tombstone_409
-                );
-            }
-            match resolve_conflicts(state, &token, &real_conflicts).await {
-                Ok((records, failures)) => {
-                    result.conflict_items.extend(records);
-                    result.failed += failures.len();
-                    result.failures.extend(failures);
-                }
-                Err(e) => log::warn!("[CloudSync] 冲突处理失败：{}", e),
-            }
-        }
+    // ── 灵感：pull + push（独立一轮，先 pull 后 push，与工作流一致）──
+    // 灵感失败只记进本轮结果（信息带「灵感」前缀），不影响已跑完的工作流同步。
+    if do_inspiration {
+        run_inspiration_round(state, &token, &mut result).await;
     }
 
     // 冲突计数与清单同源：`conflicts` 恒等于 `conflictItems.len()`（墓碑 409 不进入清单也不计数）
@@ -1284,10 +1967,11 @@ fn save_round_meta(state: &crate::DbState, result: &CloudSyncResult) {
                     result.conflicts
                 ));
             }
-            // 被云端更新（覆盖本地）不静默：明确提示「已跟随远端，本地原内容也已备份为本地版本」
+            // 被云端更新（覆盖本地）不静默：工作流会备份本地原内容为本地版本；灵感按 LWW 直接跟随。
+            // updated_items 现在同时涵盖两类对象，故用中性文案（不写死「工作流」）。
             if !result.updated_items.is_empty() {
                 text.push_str(&format!(
-                    "；已跟随云端更新 {} 个工作流（本地原内容已备份为本地版本，可在「版本」中回滚）",
+                    "；已跟随云端更新 {} 个对象",
                     result.updated_items.len()
                 ));
             }
@@ -1339,7 +2023,7 @@ pub fn cloud_sync_status(
         object_count,
         root_count,
         subflow_count,
-        cursor: read_cursor(&conn),
+        cursor: read_cursor(&conn, KIND_WORKFLOW),
     })
 }
 
@@ -1444,7 +2128,7 @@ mod tests {
         assert!(!sync_enabled(&conn), "非 1/true 一律视为关闭");
     }
 
-    /// 游标读写：缺省 0，写入后可读回。
+    /// 游标读写：按 kind 分开存取，缺省 0，写入后可读回；两类 kind 互不影响。
     #[test]
     fn cursor_roundtrip() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1452,9 +2136,31 @@ mod tests {
             "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);",
         )
         .unwrap();
-        assert_eq!(read_cursor(&conn), 0);
-        write_cursor(&conn, 42).unwrap();
-        assert_eq!(read_cursor(&conn), 42);
+        assert_eq!(read_cursor(&conn, KIND_WORKFLOW), 0);
+        write_cursor(&conn, KIND_WORKFLOW, 42).unwrap();
+        assert_eq!(read_cursor(&conn, KIND_WORKFLOW), 42);
+        // 灵感游标独立，不受工作流游标影响
+        assert_eq!(read_cursor(&conn, KIND_INSPIRATION), 0);
+        write_cursor(&conn, KIND_INSPIRATION, 7).unwrap();
+        assert_eq!(read_cursor(&conn, KIND_INSPIRATION), 7);
+        assert_eq!(read_cursor(&conn, KIND_WORKFLOW), 42, "两类 kind 游标互不推进");
+    }
+
+    /// 游标向后兼容：旧键 `sync_cursor` 存在但无新键时，workflow 回退读旧键并迁移写入新键。
+    #[test]
+    fn cursor_workflow_falls_back_to_legacy_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        set_setting(&conn, SYNC_CURSOR_KEY, "123").unwrap();
+        assert_eq!(read_cursor(&conn, KIND_WORKFLOW), 123, "应回退读旧键");
+        // 已迁移到新键：清掉旧键后仍能读回
+        set_setting(&conn, SYNC_CURSOR_KEY, "").unwrap();
+        assert_eq!(read_cursor(&conn, KIND_WORKFLOW), 123, "应已迁移到新键");
+        // 灵感**不**回退旧键（旧键属于工作流）
+        assert_eq!(read_cursor(&conn, KIND_INSPIRATION), 0);
     }
 
     /// sync_state：初次 upsert 记为新建（version 0），随后可推进版本、清脏并记录内容哈希。
@@ -1473,14 +2179,20 @@ mod tests {
                 PRIMARY KEY (kind, object_key));",
         )
         .unwrap();
-        assert_eq!(server_version_of(&conn, "w1").unwrap(), 0);
-        upsert_sync_state(&conn, "w1", 3, true, Some(11)).unwrap();
-        assert_eq!(server_version_of(&conn, "w1").unwrap(), 3);
-        assert_eq!(last_synced_hash_of(&conn, "w1").as_deref(), Some("11"));
+        assert_eq!(server_version_of(&conn, KIND_WORKFLOW, "w1").unwrap(), 0);
+        upsert_sync_state(&conn, KIND_WORKFLOW, "w1", 3, true, Some(11)).unwrap();
+        assert_eq!(server_version_of(&conn, KIND_WORKFLOW, "w1").unwrap(), 3);
+        assert_eq!(
+            last_synced_hash_of(&conn, KIND_WORKFLOW, "w1").as_deref(),
+            Some("11")
+        );
         // 再写一次：版本、脏位、哈希都覆盖
-        upsert_sync_state(&conn, "w1", 4, false, Some(22)).unwrap();
-        assert_eq!(server_version_of(&conn, "w1").unwrap(), 4);
-        assert_eq!(last_synced_hash_of(&conn, "w1").as_deref(), Some("22"));
+        upsert_sync_state(&conn, KIND_WORKFLOW, "w1", 4, false, Some(22)).unwrap();
+        assert_eq!(server_version_of(&conn, KIND_WORKFLOW, "w1").unwrap(), 4);
+        assert_eq!(
+            last_synced_hash_of(&conn, KIND_WORKFLOW, "w1").as_deref(),
+            Some("22")
+        );
         let dirty: i64 = conn
             .query_row(
                 "SELECT dirty FROM sync_state WHERE kind='workflow' AND object_key='w1'",
@@ -1563,13 +2275,18 @@ mod tests {
                 PRIMARY KEY (kind, object_key));",
         )
         .unwrap();
+        // 灵感同步路径会重建 FTS（与 init_db 一致）；测试库沿用同一虚拟表，避免 apply 时报缺表。
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);",
+        )
+        .unwrap();
         conn
     }
 
     /// 把某对象标记为「已与远端同步」：记录当前本地内容哈希（= 与远端一致）。
     fn mark_synced(conn: &Connection, key: &str, server_version: i64) {
         let h = local_content_hash(conn, key).unwrap();
-        upsert_sync_state(conn, key, server_version, false, h).unwrap();
+        upsert_sync_state(conn, KIND_WORKFLOW, key, server_version, false, h).unwrap();
     }
 
     fn sync_def(id: &str, name: &str) -> crate::workflow::WorkflowDefinition {
@@ -1627,7 +2344,7 @@ mod tests {
             "远端删除应落到回收站"
         );
         // 软删除后本地内容已不存在 → last_synced_hash 置空
-        assert_eq!(last_synced_hash_of(&conn, "w1"), None);
+        assert_eq!(last_synced_hash_of(&conn, KIND_WORKFLOW, "w1"), None);
     }
 
     /// 本地软删除的**已跟踪**工作流 → push 选择「删除」动作（deleted=true），而不是把已删内容又上传。
@@ -1676,7 +2393,7 @@ mod tests {
             "无改动不应建快照"
         );
         assert_eq!(
-            server_version_of(&conn, "w1").unwrap(),
+            server_version_of(&conn, KIND_WORKFLOW, "w1").unwrap(),
             2,
             "只推进 sync_state"
         );
@@ -1933,11 +2650,11 @@ mod tests {
         crate::workflow::purge_workflow(&conn, "w1").unwrap();
 
         // sync_state 行保留、tombstone=1、记录当时的远端版本、删除意图尚未送达
-        let (tombstone, version) = tombstone_of(&conn, "w1").unwrap();
+        let (tombstone, version) = tombstone_of(&conn, KIND_WORKFLOW, "w1").unwrap();
         assert!(tombstone, "彻底删除后应保留墓碑");
         assert_eq!(version, 3, "墓碑记录当时已知的远端版本");
         assert!(
-            !tombstone_pushed_of(&conn, "w1").unwrap(),
+            !tombstone_pushed_of(&conn, KIND_WORKFLOW, "w1").unwrap(),
             "刚 purge 时删除意图尚未送达"
         );
         assert!(
@@ -1978,7 +2695,7 @@ mod tests {
             crate::workflow::get_definition(&conn, "w1").unwrap().is_none(),
             "墓碑存在期间不得被 pull 复活"
         );
-        assert!(tombstone_of(&conn, "w1").unwrap().0, "墓碑应仍存在");
+        assert!(tombstone_of(&conn, KIND_WORKFLOW, "w1").unwrap().0, "墓碑应仍存在");
 
         // 远端更高版本的新事件（另一设备显式恢复/更新）→ 清墓碑并接受复活
         crate::workflow::create_definition(&conn, &sync_def("w2", "远端复活内容")).unwrap();
@@ -1992,7 +2709,7 @@ mod tests {
         };
         let o2 = apply_one_remote_item(&conn, &newer).unwrap();
         assert!(o2.applied, "更高版本应接受复活");
-        assert!(!tombstone_of(&conn, "w1").unwrap().0, "墓碑应被清除");
+        assert!(!tombstone_of(&conn, KIND_WORKFLOW, "w1").unwrap().0, "墓碑应被清除");
         assert_eq!(
             crate::workflow::get_active_definition(&conn, "w1")
                 .unwrap()
@@ -2017,7 +2734,7 @@ mod tests {
             "恢复视为本地有真实改动（last_synced_hash 已清空）"
         );
         assert_eq!(
-            last_synced_hash_of(&conn, "w1"),
+            last_synced_hash_of(&conn, KIND_WORKFLOW, "w1"),
             None,
             "恢复应清空 last_synced_hash"
         );
@@ -2047,8 +2764,8 @@ mod tests {
         purged_tombstone(&conn, "w1", 3);
 
         // purge 即置 tombstone=1 / tombstone_pushed=0，保留 server_version 作 baseVersion
-        assert!(tombstone_of(&conn, "w1").unwrap().0, "应保留墓碑");
-        assert!(!tombstone_pushed_of(&conn, "w1").unwrap(), "刚 purge 未送达");
+        assert!(tombstone_of(&conn, KIND_WORKFLOW, "w1").unwrap().0, "应保留墓碑");
+        assert!(!tombstone_pushed_of(&conn, KIND_WORKFLOW, "w1").unwrap(), "刚 purge 未送达");
         let (items, _f) = build_push_items(&conn).unwrap();
         let item = items
             .iter()
@@ -2059,9 +2776,9 @@ mod tests {
         assert_eq!(item.base_version, 3, "baseVersion = 墓碑记录的 server_version");
 
         // 模拟 push 被接受：accepted 回执落版本（upsert）+ 置 tombstone_pushed = 1
-        upsert_sync_state(&conn, "w1", 4, false, None).unwrap();
-        mark_tombstone_pushed(&conn, "w1", None).unwrap();
-        assert!(tombstone_pushed_of(&conn, "w1").unwrap(), "送达后应置标志");
+        upsert_sync_state(&conn, KIND_WORKFLOW, "w1", 4, false, None).unwrap();
+        mark_tombstone_pushed(&conn, KIND_WORKFLOW, "w1", None).unwrap();
+        assert!(tombstone_pushed_of(&conn, KIND_WORKFLOW, "w1").unwrap(), "送达后应置标志");
         assert!(
             !list_push_candidates(&conn)
                 .unwrap()
@@ -2090,7 +2807,7 @@ mod tests {
             "推送失败后仍应在候选中，等待下一轮继续推送"
         );
         assert!(
-            !tombstone_pushed_of(&conn, "w1").unwrap(),
+            !tombstone_pushed_of(&conn, KIND_WORKFLOW, "w1").unwrap(),
             "失败不得把标志置为已送达"
         );
         // 下一轮再次构造 → 仍能拿到同一个补送项（baseVersion 未回退）
@@ -2116,9 +2833,9 @@ mod tests {
         };
         let o = apply_one_remote_item(&conn, &item).unwrap();
         assert!(!o.applied, "本机无本地数据可改，不算落地");
-        assert!(tombstone_of(&conn, "w1").unwrap().0, "墓碑应保留");
-        assert!(tombstone_pushed_of(&conn, "w1").unwrap(), "删除意图已达成 → 置标志");
-        assert_eq!(server_version_of(&conn, "w1").unwrap(), 5, "推进 server_version");
+        assert!(tombstone_of(&conn, KIND_WORKFLOW, "w1").unwrap().0, "墓碑应保留");
+        assert!(tombstone_pushed_of(&conn, KIND_WORKFLOW, "w1").unwrap(), "删除意图已达成 → 置标志");
+        assert_eq!(server_version_of(&conn, KIND_WORKFLOW, "w1").unwrap(), 5, "推进 server_version");
         assert!(
             crate::workflow::get_definition(&conn, "w1").unwrap().is_none(),
             "不得复活"
@@ -2150,8 +2867,8 @@ mod tests {
         };
         let o = apply_one_remote_item(&conn, &item).unwrap();
         assert!(o.applied, "更高版本 → 接受复活");
-        assert!(!tombstone_of(&conn, "w1").unwrap().0, "墓碑应被清除");
-        assert!(!tombstone_pushed_of(&conn, "w1").unwrap(), "清墓碑时标志应复位");
+        assert!(!tombstone_of(&conn, KIND_WORKFLOW, "w1").unwrap().0, "墓碑应被清除");
+        assert!(!tombstone_pushed_of(&conn, KIND_WORKFLOW, "w1").unwrap(), "清墓碑时标志应复位");
         assert_eq!(
             crate::workflow::get_active_definition(&conn, "w1")
                 .unwrap()
@@ -2186,8 +2903,8 @@ mod tests {
         };
         let o = apply_one_remote_item(&conn, &item).unwrap();
         assert!(!o.applied, "版本不高于墓碑 → 不复活");
-        assert!(tombstone_of(&conn, "w1").unwrap().0, "墓碑应保持");
-        assert!(!tombstone_pushed_of(&conn, "w1").unwrap(), "仍未送达");
+        assert!(tombstone_of(&conn, KIND_WORKFLOW, "w1").unwrap().0, "墓碑应保持");
+        assert!(!tombstone_pushed_of(&conn, KIND_WORKFLOW, "w1").unwrap(), "仍未送达");
         assert!(
             crate::workflow::get_definition(&conn, "w1").unwrap().is_none(),
             "不得复活"
@@ -2220,7 +2937,7 @@ mod tests {
         assert_eq!(i2.base_version, 4);
 
         // 墓碑补送标志只作用于 w2：置 1 后 w2 退出候选，而 w1 的常规删除候选不受影响
-        mark_tombstone_pushed(&conn, "w2", None).unwrap();
+        mark_tombstone_pushed(&conn, KIND_WORKFLOW, "w2", None).unwrap();
         let (items2, _f) = build_push_items(&conn).unwrap();
         assert!(
             !items2.iter().any(|i| i.key == "w2"),
@@ -2231,8 +2948,8 @@ mod tests {
             "常规删除候选不受墓碑标志影响"
         );
         // 反向：w1 的 dirty 与 w2 无关
-        assert!(!tombstone_of(&conn, "w1").unwrap().0, "w1 非墓碑");
-        assert!(tombstone_of(&conn, "w2").unwrap().0, "w2 仍是墓碑");
+        assert!(!tombstone_of(&conn, KIND_WORKFLOW, "w1").unwrap().0, "w1 非墓碑");
+        assert!(tombstone_of(&conn, KIND_WORKFLOW, "w2").unwrap().0, "w2 仍是墓碑");
     }
 
     // ── 分页 / 分批（纯函数，无需真实大数据量）──
@@ -2366,5 +3083,285 @@ mod tests {
         // 非法：回退默认
         set_setting(&conn, SYNC_INTERVAL_KEY, "abc").unwrap();
         assert_eq!(sync_interval_minutes(&conn), 10);
+    }
+
+    // ── 同步范围（逐类开关）──
+
+    /// 同步范围读取：缺省 / 空 / 全部非法 → 全开；部分列表只保留已支持、去重、忽略空白与未知。
+    #[test]
+    fn sync_kinds_default_all_and_filter() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let all = vec!["workflow".to_string(), "inspiration".to_string()];
+        // 缺省（键不存在）→ 默认全开
+        assert_eq!(sync_kinds(&conn), all, "缺省默认全开");
+        // 空串 / 全空白 / 全部非法 → 一律按「全部非法」回退默认全开
+        for raw in ["", "   ", " , , ", "bogus", "bogus,unknown"] {
+            set_setting(&conn, SYNC_KINDS_KEY, raw).unwrap();
+            assert_eq!(sync_kinds(&conn), all, "「{}」应回退默认全开", raw);
+        }
+        // 部分列表：只保留已支持、去重、忽略空白与未知值，输出按固定顺序
+        set_setting(
+            &conn,
+            SYNC_KINDS_KEY,
+            " inspiration , workflow , workflow , unknown ",
+        )
+        .unwrap();
+        assert_eq!(sync_kinds(&conn), all, "去重、忽略空白与未知值");
+        // 单类：只开灵感
+        set_setting(&conn, SYNC_KINDS_KEY, "inspiration").unwrap();
+        assert_eq!(sync_kinds(&conn), vec!["inspiration".to_string()]);
+        // 单类：只开工作流（书写带空格也应归一）
+        set_setting(&conn, SYNC_KINDS_KEY, " workflow ").unwrap();
+        assert_eq!(sync_kinds(&conn), vec!["workflow".to_string()]);
+    }
+
+    /// 增删某一类：按需增删并写回，读回一致；重复操作幂等；不支持的 kind 报错且不改动设置。
+    #[test]
+    fn set_sync_kind_enable_disable_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);",
+        )
+        .unwrap();
+        // 默认全开 → 关掉灵感，只剩工作流
+        set_sync_kind(&conn, KIND_INSPIRATION, false).unwrap();
+        assert_eq!(sync_kinds(&conn), vec!["workflow".to_string()]);
+        // 再开回灵感 → 两项都开
+        set_sync_kind(&conn, KIND_INSPIRATION, true).unwrap();
+        assert_eq!(
+            sync_kinds(&conn),
+            vec!["workflow".to_string(), "inspiration".to_string()]
+        );
+        // 关闭工作流，只剩灵感；重复关闭幂等
+        set_sync_kind(&conn, KIND_WORKFLOW, false).unwrap();
+        set_sync_kind(&conn, KIND_WORKFLOW, false).unwrap();
+        assert_eq!(sync_kinds(&conn), vec!["inspiration".to_string()]);
+        // 不支持的 kind → 报错，且不改动已有设置
+        assert!(set_sync_kind(&conn, "plugin", false).is_err());
+        assert_eq!(sync_kinds(&conn), vec!["inspiration".to_string()]);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // 灵感同步（kind = "inspiration"）
+    // ════════════════════════════════════════════════════════════
+
+    /// 直接插入一条灵感（跳过 inspiration.rs 的标脏，便于精确构造 sync_state 状态）。
+    fn insert_inspiration(
+        conn: &Connection,
+        id: &str,
+        title: &str,
+        updated_at: i64,
+        market_id: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO inspirations (id, icon, title, content, source_agent, is_favorite, created_at, updated_at, market_id)
+             VALUES (?1, '💡', ?2, '', 'manual', 0, ?3, ?3, ?4)",
+            params![id, title, updated_at, market_id],
+        )
+        .unwrap();
+    }
+
+    /// 把某灵感标记为「已与远端同步」：记录当前本地内容哈希。
+    fn mark_inspiration_synced(conn: &Connection, key: &str, server_version: i64) {
+        let h = inspiration_local_content_hash(conn, key).unwrap();
+        upsert_sync_state(conn, KIND_INSPIRATION, key, server_version, false, h).unwrap();
+    }
+
+    /// 造一条远端灵感条目（LWW 用的时间戳在 payload 里，故 `updated_at` 字段留空）。
+    fn inspiration_remote_item(
+        key: &str,
+        version: i64,
+        deleted: bool,
+        payload: Option<String>,
+    ) -> RemoteItem {
+        RemoteItem {
+            key: key.to_string(),
+            version,
+            deleted,
+            payload,
+            updated_at: None,
+        }
+    }
+
+    /// 构造一个远端灵感 payload。
+    fn inspiration_payload(id: &str, title: &str, updated_at: i64) -> InspirationPayload {
+        InspirationPayload {
+            id: id.to_string(),
+            icon: "💡".to_string(),
+            title: title.to_string(),
+            content: String::new(),
+            source_agent: "manual".to_string(),
+            is_favorite: false,
+            tags: vec![],
+            created_at: 1,
+            updated_at,
+            market_id: None,
+        }
+    }
+
+    /// 首次同步（本地有灵感但无任何 sync_state 记录，模拟新设备）→ **只产生上传候选，绝不推删除**。
+    #[test]
+    fn inspiration_first_sync_never_deletes() {
+        let conn = full_sync_conn();
+        insert_inspiration(&conn, "i1", "本地灵感A", 100, None);
+        insert_inspiration(&conn, "i2", "本地灵感B", 200, None);
+
+        let (items, failures) = build_inspiration_push_items(&conn).unwrap();
+        assert!(failures.is_empty());
+        assert_eq!(items.len(), 2, "两条本地灵感都应作为上传候选");
+        assert!(
+            items.iter().all(|i| i.deleted != Some(true)),
+            "首次同步不得产生删除候选：{:?}",
+            items
+        );
+        assert!(items.iter().all(|i| i.base_version == 0), "从未跟踪 → baseVersion = 0");
+
+        // sync_state 中没有任何被跟踪的 inspiration key
+        let tracked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_state WHERE kind = ?1",
+                params![KIND_INSPIRATION],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tracked, 0);
+    }
+
+    /// LWW：两侧都改过时，远端 `updatedAt` 更新（严格大于）→ 覆盖本地；本地不旧（>=）→ 保留本地并进入补推。
+    #[test]
+    fn inspiration_lww_picks_newer_updated_at() {
+        let conn = full_sync_conn();
+
+        // 情形 A：远端更新（200 > 本地 150）→ 覆盖本地
+        insert_inspiration(&conn, "a", "本地旧", 100, None);
+        mark_inspiration_synced(&conn, "a", 1);
+        conn.execute(
+            "UPDATE inspirations SET title = '本地新', updated_at = 150 WHERE id = 'a'",
+            [],
+        )
+        .unwrap();
+        assert!(inspiration_local_differs_from_synced(&conn, "a").unwrap());
+
+        let item_a = inspiration_remote_item(
+            "a",
+            2,
+            false,
+            Some(serde_json::to_string(&inspiration_payload("a", "远端更新", 200)).unwrap()),
+        );
+        let o_a = apply_one_remote_inspiration(&conn, &item_a).unwrap();
+        assert!(o_a.applied, "远端更新 → 应覆盖");
+        assert!(o_a.conflict.is_none(), "灵感不产生冲突");
+        assert_eq!(
+            crate::commands::inspiration::get_inspiration(&conn, "a".to_string())
+                .unwrap()
+                .title,
+            "远端更新"
+        );
+
+        // 情形 B：本地更新（300 >= 远端 200）→ 保留本地
+        insert_inspiration(&conn, "b", "本地旧", 100, None);
+        mark_inspiration_synced(&conn, "b", 1);
+        conn.execute(
+            "UPDATE inspirations SET title = '本地更新', updated_at = 300 WHERE id = 'b'",
+            [],
+        )
+        .unwrap();
+
+        let item_b = inspiration_remote_item(
+            "b",
+            2,
+            false,
+            Some(serde_json::to_string(&inspiration_payload("b", "远端较旧", 200)).unwrap()),
+        );
+        let o_b = apply_one_remote_inspiration(&conn, &item_b).unwrap();
+        assert!(!o_b.applied, "本地不旧 → 不覆盖");
+        assert_eq!(
+            crate::commands::inspiration::get_inspiration(&conn, "b".to_string())
+                .unwrap()
+                .title,
+            "本地更新"
+        );
+        // 本地赢：server_version 推进到远端版本，本地仍「有改动」→ 本轮 push 候选（baseVersion = 远端版本）
+        assert_eq!(server_version_of(&conn, KIND_INSPIRATION, "b").unwrap(), 2);
+        assert!(inspiration_local_differs_from_synced(&conn, "b").unwrap());
+        assert!(
+            list_inspiration_push_candidates(&conn)
+                .unwrap()
+                .iter()
+                .any(|(k, base)| k == "b" && *base == 2),
+            "本地赢的条目应以远端最新为 baseVersion 进入本轮 push 候选"
+        );
+    }
+
+    /// 删除传播：本地删除写墓碑 → 进入补送候选；远端 `deleted` 到达 → 标记已送达且不复活。
+    #[test]
+    fn inspiration_delete_tombstone_propagates_and_remote_deleted_marks_pushed() {
+        let conn = full_sync_conn();
+        insert_inspiration(&conn, "i1", "待删除灵感", 100, None);
+        mark_inspiration_synced(&conn, "i1", 3);
+
+        // 本地删除（走 inspiration.rs 删除路径：硬删本地行 + 写墓碑）
+        crate::commands::inspiration::delete_inspiration(&conn, "i1".to_string()).unwrap();
+        assert!(get_inspiration_opt(&conn, "i1").unwrap().is_none(), "本地应硬删");
+        let (tombstone, ver) = tombstone_of(&conn, KIND_INSPIRATION, "i1").unwrap();
+        assert!(tombstone, "本地删除应写墓碑");
+        assert_eq!(ver, 3, "墓碑保留既有 server_version");
+        assert!(!tombstone_pushed_of(&conn, KIND_INSPIRATION, "i1").unwrap(), "尚未送达");
+
+        // 补送候选：推 deleted，baseVersion = 墓碑记录的 server_version
+        let (items, _f) = build_inspiration_push_items(&conn).unwrap();
+        let item = items.iter().find(|i| i.key == "i1").expect("应进入补送候选");
+        assert_eq!(item.deleted, Some(true));
+        assert!(item.payload.is_none(), "删除动作不带内容");
+        assert_eq!(item.base_version, 3);
+
+        // 远端 deleted 到达 → 标记已送达，本机不复活
+        let remote = inspiration_remote_item("i1", 4, true, None);
+        let o = apply_one_remote_inspiration(&conn, &remote).unwrap();
+        assert!(!o.applied, "本机已真删，无本地内容可改");
+        assert!(
+            tombstone_pushed_of(&conn, KIND_INSPIRATION, "i1").unwrap(),
+            "远端已删除 → 删除意图达成，应置已送达"
+        );
+        assert!(get_inspiration_opt(&conn, "i1").unwrap().is_none(), "不得复活");
+        assert!(
+            !list_inspiration_push_candidates(&conn)
+                .unwrap()
+                .iter()
+                .any(|(k, _)| k == "i1"),
+            "已送达的墓碑不再补送"
+        );
+    }
+
+    /// market_id 归并：同 market_id 两条 → 保留 updated_at 大的一条，另一条被删并写墓碑；幂等。
+    #[test]
+    fn inspiration_market_id_merge_keeps_newest_tombstones_rest() {
+        let conn = full_sync_conn();
+        insert_inspiration(&conn, "old", "旧副本", 100, Some("m-1"));
+        insert_inspiration(&conn, "new", "新副本", 200, Some("m-1"));
+        insert_inspiration(&conn, "other", "不同市场", 50, Some("m-2"));
+        // 都被跟踪（云端有副本）→ 被删那条才会进入补送候选
+        mark_inspiration_synced(&conn, "old", 5);
+        mark_inspiration_synced(&conn, "new", 5);
+        mark_inspiration_synced(&conn, "other", 5);
+
+        merge_inspirations_by_market_id(&conn).unwrap();
+
+        assert!(get_inspiration_opt(&conn, "new").unwrap().is_some(), "保留 updated_at 最大者");
+        assert!(get_inspiration_opt(&conn, "old").unwrap().is_none(), "冗余副本应被删除");
+        assert!(
+            get_inspiration_opt(&conn, "other").unwrap().is_some(),
+            "不同 market_id 不受影响"
+        );
+        assert!(tombstone_of(&conn, KIND_INSPIRATION, "old").unwrap().0, "被删副本应写墓碑");
+
+        // 幂等：再跑一次无变化、不 panic
+        merge_inspirations_by_market_id(&conn).unwrap();
+        assert!(get_inspiration_opt(&conn, "new").unwrap().is_some());
+        assert!(get_inspiration_opt(&conn, "old").unwrap().is_none());
     }
 }
