@@ -143,7 +143,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
   // 组合开关段：会话 / 群聊 / 工作流 / 知识库（独立路由，常驻）/ 终端 + 门户（固定）+ 门户标签（前 N 个参与 thumb 滑动）+ 设置段（仅设置页）
   const segments: { key: string; icon: ReactNode; label: string; title: string; tabId?: string }[] = [
     { key: 'session', icon: <MessageSquare size={11} />, label: t('titleBar.session', '会话'), title: t('titleBar.session.title', '切换到会话模式') },
-    { key: 'groupchat', icon: <Users size={11} />, label: t('titleBar.groupchat', '群聊'), title: t('titleBar.groupchat.title', '多 Agent 群聊') },
+    { key: 'groupchat', icon: <Users size={11} />, label: t('titleBar.groupchat', '圆桌'), title: t('titleBar.groupchat.title', '多 Agent 圆桌协作') },
     { key: 'workflow', icon: <Workflow size={11} />, label: t('titleBar.workflow', '工作流'), title: t('titleBar.workflow.title', '工作流管理') },
     {
       key: 'knowledge',

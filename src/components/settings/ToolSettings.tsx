@@ -261,7 +261,7 @@ export function ToolSettings() {
             onClick={() => setScene(s)}
             className={'pd-tab' + (scene === s ? ' pd-tab-active' : '')}
           >
-            {s === 'session' ? '会话模式' : '群聊模式'}
+            {s === 'session' ? '会话模式' : '圆桌模式'}
           </button>
         ))}
         <span className="ml-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
@@ -417,11 +417,11 @@ export function ToolSettings() {
 
       {/* 底部说明 */}
       <p className="text-[11px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-        - 工具开关仅在「{scene === 'session' ? '会话模式' : '群聊模式'}」生效；修改将在<b>新会话 / 新房间</b>启动时生效，当前会话不受影响。
+        - 工具开关仅在「{scene === 'session' ? '会话模式' : '圆桌模式'}」生效；修改将在<b>新会话 / 新圆桌</b>启动时生效，当前会话不受影响。
         <br />
-        - 锁定的工具为架构性禁用（如群聊中的子代理/记忆/任务等，与其场景语义冲突），不可启用。
+        - 锁定的工具为架构性禁用（如圆桌中的子代理/记忆/任务等，与其场景语义冲突），不可启用。
         <br />
-        - 「mcp:*」控制 MCP 整体启用：会话与群聊均默认开启（具体服务器在「MCP 服务器」设置管理，群聊为房间级共享连接池），可按场景整体禁用。
+        - 「mcp:*」控制 MCP 整体启用：会话与圆桌均默认开启（具体服务器在「MCP 服务器」设置管理，圆桌内共享连接池），可按场景整体禁用。
         <br />
         - 「file_history」为文件快照记录能力（write_file/edit_file 自动触发，非 Agent 可调用工具）。
         <br />

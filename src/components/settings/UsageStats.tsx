@@ -432,7 +432,7 @@ const TABS: { key: TabKey; label: string }[] = [
 const DIMENSION_ORDER: DimensionKey[] = ['session', 'groupchat', 'workflow', 'knowledge'];
 const DIMENSION_META: Record<DimensionKey, { label: string; title: string }> = {
   session: { label: '会话', title: '按会话（一行一会话）' },
-  groupchat: { label: '群聊', title: '按群聊（按房间聚合）' },
+  groupchat: { label: '圆桌', title: '按圆桌聚合' },
   workflow: { label: '工作流', title: '按工作流（按定义聚合）' },
   knowledge: {
     label: '知识库',
@@ -643,7 +643,7 @@ export function UsageStats() {
   return (
     <SettingsSection
       title="用量统计"
-      description="Token 用量与缓存命中（含单 Agent 会话、群聊与知识库整理/生成调用）；可按 Provider / Model 分组，并按会话 / 群聊 / 工作流 / 知识库归因。四桶互斥口径：输入=未命中输入（OpenAI 协议已扣除命中部分）、输出、缓存读=命中读取、缓存写=写入；合计 = 四桶之和。缓存写只有 Anthropic 上报（cache_creation_input_tokens），OpenAI 兼容协议（OpenAI / DeepSeek / Qwen 等）响应里没有该字段，故恒为 0。命中率 = 缓存读 / (输入 + 读 + 写)。"
+      description="Token 用量与缓存命中（含单 Agent 会话、圆桌与知识库整理/生成调用）；可按 Provider / Model 分组，并按会话 / 圆桌 / 工作流 / 知识库归因。四桶互斥口径：输入=未命中输入（OpenAI 协议已扣除命中部分）、输出、缓存读=命中读取、缓存写=写入；合计 = 四桶之和。缓存写只有 Anthropic 上报（cache_creation_input_tokens），OpenAI 兼容协议（OpenAI / DeepSeek / Qwen 等）响应里没有该字段，故恒为 0。命中率 = 缓存读 / (输入 + 读 + 写)。"
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1">
@@ -729,7 +729,7 @@ export function UsageStats() {
                 </button>
               ))}
               {/* 表格单位统一在这里声明，表头不再逐个带单位（列多时表头会挤不下） */}
-              <span className="text-[10px] ml-auto" style={{ color: 'var(--text-tertiary)' }} title="调用 = 每次模型请求；群聊多参与者、多轮讨论与每轮工具迭代都会各计一次，因此会明显大于「你发起的次数」">单位：token · 调用按每次模型请求计（群聊多轮/多参与者会累计，可在「按归因」页用「场景」维度看拆分）</span>
+              <span className="text-[10px] ml-auto" style={{ color: 'var(--text-tertiary)' }} title="调用 = 每次模型请求；圆桌多参与者、多轮讨论与每轮工具迭代都会各计一次，因此会明显大于「你发起的次数」">单位：token · 调用按每次模型请求计（圆桌多轮/多参与者会累计，可在「按归因」页用「场景」维度看拆分）</span>
               {/* 维度明细下拉：紧贴「按归因」之后，选中后展示该维度明细（默认只显示维度汇总） */}
               {tab === 'attribution' && (
                 <div className="relative" ref={dimMenuRef}>
@@ -787,7 +787,7 @@ export function UsageStats() {
             {tab === 'model' && <GroupTable title="按 Model" rows={summary.byModel} />}
             {tab === 'attribution' && (
               <>
-                <GroupTable title="维度汇总（会话 / 群聊 / 工作流 / 知识库）" rows={summaryRows} />
+                <GroupTable title="维度汇总（会话 / 圆桌 / 工作流 / 知识库）" rows={summaryRows} />
                 {dimension !== 'summary' && (
                   // 二级维度明细与上面的「维度汇总」是两层不同的东西（汇总=全维度合计，
                   // 明细=某一个维度按实体下钻），所以这里也要一条分隔线 —— 只有间距时两张表会连成一片

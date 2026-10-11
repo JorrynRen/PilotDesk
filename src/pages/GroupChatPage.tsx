@@ -344,7 +344,7 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
   async function submit() {
     setError(null);
     if (!title.trim()) {
-      setError('请填写房间标题');
+      setError('请填写圆桌标题');
       return;
     }
     if (!directorProvider || !directorModel) {
@@ -435,7 +435,7 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>新建群聊房间</span>
+          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>新建圆桌</span>
           <button className="pd-btn pd-btn-sm" onClick={onClose} style={{ color: 'var(--text-secondary)' }}>
             <XCircle size={14} />
           </button>
@@ -443,7 +443,7 @@ function CreateRoomModal({ onClose }: { onClose: () => void }) {
 
         <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-4 pd-scroll-stable">
         <label className="flex flex-col gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          房间标题
+          圆桌标题
           <input
             className="px-3 py-2 rounded-lg text-xs outline-none"
             style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
@@ -938,17 +938,17 @@ function GroupChatIntro() {
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
             <Users size={15} style={{ color: 'var(--accent)' }} />
-            多 Agent 群聊协作
+            多 Agent 圆桌协作
           </div>
           <div className="text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            由主持人（Director）统一调度多名 AI 参与者与本地 CLI Agent 组成的群聊，围绕目标分工协作、讨论决策、产出文件。适合方案对比、头脑风暴、多角色内容生产等场景。
+            由主持人（Director）统一调度多名 AI 参与者与本地 CLI Agent 组成的圆桌，围绕目标分工协作、讨论决策、产出文件。适合方案对比、头脑风暴、多角色内容生产等场景。
           </div>
         </div>
 
         <div className="flex flex-col gap-1.5">
           <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>快速开始</div>
           <ol className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
-            <li>1. 点击左上角「新建」，填写房间标题与目标（可直接粘贴需求），选择主持人模型与参与者（可留空由主持人自动组建）；</li>
+            <li>1. 点击左上角「新建」，填写圆桌标题与目标（可直接粘贴需求），选择主持人模型与参与者（可留空由主持人自动组建）；</li>
             <li>2. 主持人理解目标后自动编排任务与议程，有歧义时会向你发起确认（确认项可多选、可选填补充内容）；</li>
             <li>3. 讨论进行中可直接发送消息插话/调整方向，主持人/其他参与者的推理与工具调用可在「实时活动」与思维链中查看；</li>
             <li>4. 产物统一写入右侧面板指定的产物目录；任务结束后可导出为工作流复用。</li>
@@ -972,7 +972,7 @@ function GroupChatIntro() {
           <div className="flex items-center gap-1.5 mb-1">
             <Sparkles size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
             <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>
-              如何选择：普通会话 还是 群聊协作？
+              如何选择：普通会话 还是 圆桌协作？
             </span>
           </div>
           <ul className="text-[11px] leading-relaxed flex flex-col gap-1" style={{ color: 'var(--text-secondary)' }}>
@@ -980,9 +980,9 @@ function GroupChatIntro() {
               · 简单明确的目标（修 bug、写函数、生成文档、查资料等）建议直接用<b>普通会话</b>：更快、更省；
             </li>
             <li>
-              · 需要多方视角 / 评审 / 复杂澄清的目标（方案取舍、设计评审、多角色复盘等）适合用<b>群聊</b>：角色独立、立场可见、由主持人协调收敛；
+              · 需要多方视角 / 评审 / 复杂澄清的目标（方案取舍、设计评审、多角色复盘等）适合用<b>圆桌</b>：角色独立、立场可见、由主持人协调收敛；
             </li>
-            <li>· 群聊通常比普通会话更慢、token 消耗更高，请按目标特性自行选择模式。</li>
+            <li>· 圆桌通常比普通会话更慢、token 消耗更高，请按目标特性自行选择模式。</li>
           </ul>
         </div>
       </div>
@@ -1691,6 +1691,20 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
     return set;
   }, [tasks]);
 
+  /**
+   * 席位列表的显示顺序：**主席置顶**，其余保持原顺序（Array.sort 稳定）。
+   *
+   * 为什么连原下标一起带上：`colorOf()` 是按"参与者在原数组里的下标"取色的
+   * （消息区 1835、立场快照 2866 同源），置顶后若改用新下标，所有人的颜色会跟着错位。
+   */
+  const seats = useMemo(
+    () =>
+      participants
+        .map((p, i) => ({ p, i }))
+        .sort((a, b) => Number(b.p.participantType === 'director') - Number(a.p.participantType === 'director')),
+    [participants],
+  );
+
   // 可被 @ 的参与者（仅 api/cli Agent，不含 user/director），按输入过滤。
   const mentionCandidates = useMemo(() => {
     if (!mentionOpen) return [];
@@ -2028,7 +2042,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               </div>
             ) : (
               <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                该房间 Actor 未在运行（上次会话可能已中断），点击右上角「恢复」重新启动讨论。
+                该圆桌 Actor 未在运行（上次会话可能已中断），点击右上角「恢复」重新启动讨论。
               </div>
             )}
           </div>
@@ -2050,7 +2064,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
   async function handleDeleteRoom(roomId: string) {
     const ok = await confirmDialog({
       title: '确认删除',
-      message: '确定删除该群聊房间及其全部消息、任务、参与者数据与该房间的用量记录？',
+      message: '确定删除该圆桌及其全部消息、任务、参与者数据与该圆桌的用量记录？',
       confirmText: '删除',
     });
     if (!ok) return;
@@ -2376,11 +2390,11 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
         style={{ backgroundColor: 'var(--bg-side)' }}
       >
         <div className="flex items-center px-3 h-10" style={{ borderBottom: '1px solid var(--border)' }}>
-          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>群聊房间</span>
+          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>圆桌</span>
           <div className="flex-1" />
           <button
             className="pd-btn pd-btn-sm pd-btn-primary"
-            title="新建群聊房间"
+            title="新建圆桌"
             style={{ display: 'flex', alignItems: 'center', gap: 4 }}
             onClick={() => setShowCreate(true)}
           >
@@ -2448,7 +2462,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
       <main className="flex-1 flex flex-col overflow-hidden rounded-lg" style={{ backgroundColor: 'var(--bg-content)' }}>
         <div className="flex items-center gap-2 px-4 h-10 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
           <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-            {currentRoom?.title || '选择或创建一个群聊房间'}
+            {currentRoom?.title || '选择或创建一个圆桌'}
           </span>
           {currentRoom && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}>
@@ -2923,7 +2937,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                   暂无席位
                 </div>
               )}
-              {participants.map((p, idx) => {
+              {seats.map(({ p, i: idx }) => {
                 const color = colorOf(p, idx);
                 const removable = p.participantType === 'api' || p.participantType === 'cli';
                 const isDirector = p.participantType === 'director';
@@ -2969,7 +2983,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
                       <button
                         className="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
                         style={{ color: 'var(--status-danger)' }}
-                        title="移除席位"
+                        title="移除参与者"
                         onClick={() => handleRemoveParticipant(p.id)}
                       >
                         <XCircle size={11} />
@@ -3285,7 +3299,7 @@ export function GroupChatPage({ rightPanelOpen = true }: { rightPanelOpen?: bool
               </button>
             </div>
             <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-              以下即「转为可运行工作流」将创建的定义原文：任务依赖按群聊议程还原为 DAG，
+              以下即「转为可运行工作流」将创建的定义原文：任务依赖按圆桌议程还原为 DAG，
               节点提示词已带总目标与前置产出的取值引用（作废任务不进工作流）。
             </span>
             <pre

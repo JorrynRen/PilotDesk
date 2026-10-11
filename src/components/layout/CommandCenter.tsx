@@ -56,7 +56,7 @@ const ROOM_STATUS_LABEL: Record<string, string> = {
 /** 归因维度展示名（key 与后端 UsageDimension.key 对应，顺序固定：会话 → 群聊 → 工作流 → 知识库）。 */
 const DIMENSION_LABEL: Record<string, string> = {
   session: '会话',
-  groupchat: '群聊',
+  groupchat: '圆桌',
   workflow: '工作流',
   knowledge: '知识库',
 };
@@ -256,8 +256,8 @@ const GUIDE_GROUPS: { title: string; items: { term: string; desc: ReactNode }[] 
     title: '五种工作模式',
     items: [
       { term: '会话', desc: '单 Agent 干活（问答、写代码、改文件），带工具、审批与文件改动历史' },
-      { term: '群聊', desc: '多 Agent 动态任务编排：主持人拆任务、按依赖并行推进，执行中可干预' },
-      { term: '工作流', desc: '多 Agent 静态任务编排 + 能力拓展：可视化拖拽 + 可定时触发 + 可复用（群聊结论亦可导出成工作流供复用）' },
+      { term: '圆桌', desc: '多 Agent 动态任务编排：主持人拆任务、按依赖并行推进，执行中可干预' },
+      { term: '工作流', desc: '多 Agent 静态任务编排 + 能力拓展：可视化拖拽 + 可定时触发 + 可复用（圆桌结论亦可导出成工作流供复用）' },
       { term: '终端', desc: '本地 Shell 直通，可手动跑 claude / codex 等 CLI Agent 和其他命令；切换模式不丢会话' },
       { term: '门户', desc: '把常用网页或本地文件、目录挂成标签实现快捷直达（设置 → 门户标签），常驻不重载' },
     ],
@@ -990,7 +990,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
               默认页"不出滚动条"的约束不能破。 */}
           <Section title="进行中" icon={<Activity size={11} />} count={activeInstances.length + activeRooms.length} span>
             {activeInstances.length === 0 && activeRooms.length === 0 && (
-              <EmptyHint text="暂无进行中的工作流执行或群聊房间。" />
+              <EmptyHint text="暂无进行中的工作流执行或圆桌。" />
             )}
             <div className="space-y-1.5">
               {activeInstances.slice(0, MAX_ACTIVE_ROWS).map((i) => {
@@ -1062,7 +1062,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                     className="px-2.5 py-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
                     style={{ backgroundColor: 'var(--bg-primary)' }}
                     onClick={() => goRoom(r.id)}
-                    title={`进入该群聊房间${altText}`}
+                    title={`进入该圆桌${altText}`}
                   >
                     <div className="flex items-center gap-2">
                       <Users size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
@@ -1086,7 +1086,7 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 );
               })}
               {activeRooms.length > MAX_ACTIVE_ROWS && (
-                <EmptyHint text={`还有 ${activeRooms.length - MAX_ACTIVE_ROWS} 个房间，进入群聊页查看全部。`} />
+                <EmptyHint text={`还有 ${activeRooms.length - MAX_ACTIVE_ROWS} 个房间，进入圆桌页查看全部。`} />
               )}
             </div>
           </Section>

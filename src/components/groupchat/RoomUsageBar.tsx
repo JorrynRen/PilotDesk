@@ -129,7 +129,7 @@ export function RoomUsageBar({ roomId }: { roomId: string | null }) {
     >
       <button className="flex items-center gap-2 hover:opacity-90" onClick={() => setExpanded((v) => !v)}>
         {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        <span>本房间用量（含历史累计）</span>
+        <span>本圆桌用量（含历史累计）</span>
         <span>调用 {fmt(t.callCount)}</span>
         <span style={{ opacity: 0.5 }}>|</span>
         <span title="输入按「总量/未命中」展示；缓存命中是单独一桶">输入 {fmt(t.promptTokens + read + write)}/{fmt(t.promptTokens)}(未命中) tok</span>

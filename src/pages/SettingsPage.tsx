@@ -453,7 +453,7 @@ function GeneralSettings() {
           <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>秒</span>
         </div>
         <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-          流式响应超过该秒数仍未收到任何数据时，判定为上游连接假死并终止本次调用（会话与群聊共用）。0 表示关闭空闲检测（调试用）；合法范围 10-600，默认 90。
+          流式响应超过该秒数仍未收到任何数据时，判定为上游连接假死并终止本次调用（会话与圆桌共用）。0 表示关闭空闲检测（调试用）；合法范围 10-600，默认 90。
         </p>
       </SettingsSection>
     </div>

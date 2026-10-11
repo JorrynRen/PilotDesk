@@ -152,7 +152,7 @@ export function PermissionSettings() {
     <div className="space-y-5">
       <SettingsSection
         title="权限清单"
-        description="清单只对命令/路径分类（高风险 / 风险 / 安全），不直接决定行为。实际拦截/审批/放行由会话窗口与群聊窗口选择的「会话安全模式」（严格 / 标准 / 宽松 / 无限制）按子策略矩阵决定。"
+        description="清单只对命令/路径分类（高风险 / 风险 / 安全），不直接决定行为。实际拦截/审批/放行由会话窗口与圆桌窗口选择的「会话安全模式」（严格 / 标准 / 宽松 / 无限制）按子策略矩阵决定。"
         actions={
           <SettingsButton
             onClick={save}

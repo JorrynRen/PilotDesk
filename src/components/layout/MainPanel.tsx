@@ -1129,10 +1129,10 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
                   className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] shrink-0 transition-colors"
                   style={{ color: 'var(--text-secondary)' }}
                   onClick={() => setShowRoomModal(true)}
-                  title="把本会话的任务清单转为群聊房间，由多 Agent 协作执行"
+                  title="把本会话的任务清单转为圆桌，由多 Agent 协作执行"
                 >
                   <Users size={11} />
-                  转为群聊
+                  转为圆桌
                 </button>
               </>
             }

@@ -557,7 +557,7 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
   async function handleCreate() {
     setError(null);
     if (!title.trim()) {
-      setError('请填写房间标题');
+      setError('请填写圆桌标题');
       return;
     }
     if (submitTasks.length === 0) {
@@ -630,7 +630,7 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
     try {
       setCreating(true);
       const room = await promoteToRoom(sessionId, input, assigneeId || null, submitTasks);
-      showToast('群聊已创建', 'success');
+      showToast('圆桌已创建', 'success');
       onCreated(room.roomId);
     } catch (err) {
       // 失败保留弹窗，用户可调整成员/负责人后重试
@@ -660,7 +660,7 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
         <div className="flex items-center justify-between shrink-0">
           <span className="text-sm font-medium flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
             <Users size={14} style={{ color: 'var(--accent)' }} />
-            转为群聊
+            转为圆桌
           </span>
           <button
             className="pd-btn pd-btn-sm"
@@ -674,8 +674,8 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
         </div>
 
         <span className="text-[10px] leading-relaxed shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-          把会话「{sessionTitle || '未命名会话'}」的任务清单转为群聊房间，由多 Agent 协作执行。
-          勾选并编辑下列任务后创建，创建后自动进入该房间，可继续调整成员或直接开始讨论。
+          把会话「{sessionTitle || '未命名会话'}」的任务清单转为圆桌，由多 Agent 协作执行。
+          勾选并编辑下列任务后创建，创建后自动进入该圆桌，可继续调整成员或直接开始讨论。
         </span>
 
         {/* 加载中 */}
@@ -919,7 +919,7 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
 
                 {/* 标题 / 议题（默认取预览值，可编辑） */}
                 <label className="flex flex-col gap-1 text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>
-                  房间标题
+                  圆桌标题
                   <input
                     className="px-3 py-2 rounded-lg text-xs outline-none"
                     style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
@@ -932,7 +932,7 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
                 <label className="flex flex-col gap-1 text-xs shrink-0" style={{ color: 'var(--text-secondary)' }}>
                   讨论议题
                   <span className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-                    默认取会话标题与摘要，可自行修改；它会作为房间的目标锚点，也是本次创建任务的共同目标。
+                    默认取会话标题与摘要，可自行修改；它会作为圆桌的目标锚点，也是本次创建任务的共同目标。
                     {refreshing && '（预览更新中…）'}
                   </span>
                   <textarea
@@ -1115,9 +1115,9 @@ export function SessionToRoomModal({ open, sessionId, sessionTitle, onClose, onC
             className="pd-btn pd-btn-primary px-3 py-1.5 text-xs rounded transition-colors"
             disabled={creating || loading || !!previewError || !plan || submitTasks.length === 0}
             onClick={handleCreate}
-            title={submitTasks.length === 0 ? '至少保留一个任务' : '创建后自动进入该群聊房间'}
+            title={submitTasks.length === 0 ? '至少保留一个任务' : '创建后自动进入该圆桌'}
           >
-            {creating ? '创建中…' : '创建并进入群聊'}
+            {creating ? '创建中…' : '创建并进入圆桌'}
           </button>
         </div>
       </div>

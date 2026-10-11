@@ -41,7 +41,7 @@ function formatTime(secs: number): string {
 
 function scopeLabel(sid: string, kind?: string): string {
   const short = sid.slice(0, 8);
-  return kind === 'room' ? `群聊 ${short}…` : `会话 ${short}…`;
+  return kind === 'room' ? `圆桌 ${short}…` : `会话 ${short}…`;
 }
 
 export function FileHistorySettings() {
@@ -121,7 +121,7 @@ export function FileHistorySettings() {
       scope === 'all'
         ? '确定清空全部文件修改历史吗？此操作不可恢复。'
         : scope === 'session'
-          ? `确定清空该${sessionFilter && kindMap.get(sessionFilter) === 'room' ? '群聊房间' : '会话'}（${sessionFilter?.slice(0, 8) || ''}…）的全部历史记录吗？`
+          ? `确定清空该${sessionFilter && kindMap.get(sessionFilter) === 'room' ? '圆桌' : '会话'}（${sessionFilter?.slice(0, 8) || ''}…）的全部历史记录吗？`
           : '确定删除该条历史记录吗？';
     const ok = await confirmDialog({
       title: scope === 'one' ? '确认删除' : '确认清空',
