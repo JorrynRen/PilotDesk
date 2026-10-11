@@ -128,6 +128,9 @@ pub struct RoomUsage {
     pub totals: UsageTotals,
     pub by_model: Vec<UsageGroup>,
     pub by_provider: Vec<UsageGroup>,
+    /// 按**席位（参与者）**分组：主持人（房间级调用）排第一，其余按参与者 id。
+    /// 名称取 `groupchat_participants.display_name`；参与者已被移出时回落 id。
+    pub by_participant: Vec<UsageGroup>,
 }
 
 /// 房间内按某维度分组（col ∈ {provider, model}，仅本文件调用，字面量可信）。
@@ -172,6 +175,68 @@ fn room_group_by(conn: &Connection, room_id: &str, col: &str) -> Result<Vec<Usag
     }
 }
 
+/// 房间内按**席位（参与者）**分组。
+///
+/// 分组键从 `session_id` 里取：`groupchat:{room}` 是房间级调用（主持人推理/纯补全），
+/// `groupchat:{room}:{participantId}` 是某位参与者的调用 —— 与 `room_group_by` 扫的是同一批行，
+/// 只是换了分组口径，不新增列、不改写入路径。
+///
+/// 名称解析：主持人（或已被移出者）尽量取 `groupchat_participants.display_name`，
+/// 表缺失/查不到时回落 id，房间级那行回落「主席」。
+fn room_group_by_participant(conn: &Connection, room_id: &str) -> Result<Vec<UsageGroup>, AppError> {
+    let exact = format!("groupchat:{}", room_id);
+    let prefix = format!("groupchat:{}:%", room_id);
+    let sql =
+        "SELECT CASE WHEN session_id = ?1 THEN '' ELSE SUBSTR(session_id, LENGTH(?1) + 2) END AS pid,
+                COUNT(*), COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+                COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cached_tokens), 0),
+                      COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+         FROM api_usage_log
+         WHERE session_id = ?1 OR session_id LIKE ?2
+         GROUP BY pid ORDER BY pid";
+    let mut stmt = conn.prepare(sql)?;
+    let it = stmt.query_map(params![exact, prefix], |r| {
+        Ok((r.get::<_, String>(0)?, UsageTotals::from_row_at(r, 1)?))
+    })?;
+    let mut rows = it.collect::<Result<Vec<_>, _>>()?;
+
+    // 参与者 id → 显示名；同时记下主持人 id（房间级那行归给他）
+    let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut director_id: Option<String> = None;
+    if table_exists(conn, "groupchat_participants") {
+        if let Ok(mut s) = conn.prepare(
+            "SELECT id, COALESCE(display_name, ''), COALESCE(participant_type, '')
+             FROM groupchat_participants WHERE room_id = ?1",
+        ) {
+            if let Ok(ps) = s.query_map(params![room_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            }) {
+                for (id, name, ptype) in ps.flatten() {
+                    if ptype == "director" && director_id.is_none() {
+                        director_id = Some(id.clone());
+                    }
+                    let label = if name.trim().is_empty() { id.clone() } else { name };
+                    names.insert(id, label);
+                }
+            }
+        }
+    }
+    let room_level_label = director_id
+        .as_ref()
+        .and_then(|id| names.get(id).cloned())
+        .unwrap_or_else(|| "主席".to_string());
+
+    for (pid, _) in rows.iter_mut() {
+        if pid.is_empty() {
+            *pid = room_level_label.clone();
+        } else if let Some(label) = names.get(pid) {
+            *pid = label.clone();
+        }
+        // 查不到名字（参与者已被移出）：保留 id，至少还能对上用量归属
+    }
+    Ok(rows.into_iter().map(|(name, totals)| UsageGroup { name, totals }).collect())
+}
+
 /// 群聊房间用量合计（含多参与者/多模型；room 无记录时返回全 0）。
 pub fn room_usage(conn: &Connection, room_id: &str) -> Result<RoomUsage, AppError> {
     let sql =
@@ -188,6 +253,7 @@ pub fn room_usage(conn: &Connection, room_id: &str) -> Result<RoomUsage, AppErro
         totals,
         by_model: room_group_by(conn, room_id, "model")?,
         by_provider: room_group_by(conn, room_id, "provider")?,
+        by_participant: room_group_by_participant(conn, room_id)?,
     })
 }
 
@@ -1549,6 +1615,13 @@ mod tests {
         let by_provider: std::collections::BTreeMap<String, &UsageGroup> =
             r1.by_provider.iter().map(|g| (g.name.clone(), g)).collect();
         assert_eq!(by_provider.len(), 2);
+        // 按席位：房间级（主持人）在前，其余两名参与者；三者互不混算、名称互不相同。
+        // 名称不锁定具体文案（测试库未必建了 groupchat_participants 表）：表缺失时回落 id /「主席」。
+        assert_eq!(r1.by_participant.len(), 3);
+        assert_eq!(r1.by_participant[0].totals.prompt_tokens, 100);
+        assert_eq!(r1.by_participant[1].totals.prompt_tokens, 200);
+        assert_eq!(r1.by_participant[2].totals.prompt_tokens, 300);
+        assert_eq!(names(&r1.by_participant).len(), 3);
         let empty = room_usage(&conn, "empty").unwrap();
         assert_eq!(empty.totals.call_count, 0);
     }

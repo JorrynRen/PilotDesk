@@ -369,11 +369,16 @@ export async function getUsageAttribution(days = 30): Promise<UsageAttribution> 
   return await _invoke('get_usage_attribution', { days });
 }
 
-/** 群聊房间用量（director + 各参与者，按 model/provider 聚合）。 */
+/** 群聊房间用量（director + 各参与者，按 model/provider/席位 聚合）。 */
 export interface RoomUsage {
   totals: UsageTotals;
   byModel: UsageGroup[];
   byProvider: UsageGroup[];
+  /**
+   * 按**席位（参与者）**聚合：主持人（房间级调用）排第一，其余按参与者 id。
+   * 名称取参与者显示名；参与者已被移出时回落 id，房间级那行回落「主席」。
+   */
+  byParticipant: UsageGroup[];
 }
 
 export async function getRoomUsage(roomId: string): Promise<RoomUsage> {
