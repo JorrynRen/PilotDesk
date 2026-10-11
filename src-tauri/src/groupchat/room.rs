@@ -975,10 +975,18 @@ fn build_llm_client(
         format.clone(),
     )
     // 用量归因元数据（写 api_usage_log + `usage-recorded` 脏标记所需）：
-    // provider=provider id；usage_key=房间级占位 scope；app_handle=房间 emitter/handle。
+    // provider=provider id；usage_key=scope；app_handle=房间 emitter/handle。
+    // scope：**参与者**用 `groupchat:{room}:{participantId}`（RoomUsage 的按席位聚合据此拆分），
+    // 主持人/房间级调用（event_session_id 为 None）用 `groupchat:{room}`。
+    // `event_session_id` 仅 api 参与者（工具模式）有值 → 席位归因覆盖 API 参与者；
+    // CLI 参与者不经常驻 LLM 客户端上报用量，故不出现在席位明细。
     .with_usage_meta(
         provider_id.to_string(),
-        Some(format!("groupchat:{}", room_id)),
+        Some(
+            event_session_id
+                .clone()
+                .unwrap_or_else(|| format!("groupchat:{}", room_id)),
+        ),
         app.clone(),
     );
     // 持久化权限规则：群聊与会话共用同一清单分类体系（高风险/风险/安全）
