@@ -1052,17 +1052,19 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 const pct = hasTasks
                   ? (finished / total) * 100
                   : hasRound ? (round / r.maxRounds) * 100 : 0;
+                // 两个阶段信号都摆到行内：有子任务时「讨论第 X/Y 轮 · 子任务 a/b」，纯讨论时只有轮次。
+                // （原先前者只在悬浮提示里，行内看不到，等于没显示。）
+                const roundText = hasRound ? `讨论第 ${round}/${r.maxRounds} 轮` : '';
                 const progressText = hasTasks
-                  ? `子任务 ${finished}/${total}`
-                  : hasRound ? `第 ${round}/${r.maxRounds} 轮` : '';
-                const altText = hasTasks && hasRound ? ` · 讨论第 ${round}/${r.maxRounds} 轮` : '';
+                  ? [roundText, `子任务 ${finished}/${total}`].filter(Boolean).join(' · ')
+                  : roundText;
                 return (
                   <div
                     key={r.id}
                     className="px-2.5 py-2 rounded-lg cursor-pointer transition-opacity hover:opacity-80"
                     style={{ backgroundColor: 'var(--bg-primary)' }}
                     onClick={() => goRoom(r.id)}
-                    title={`进入该圆桌${altText}`}
+                    title="进入该圆桌"
                   >
                     <div className="flex items-center gap-2">
                       <Users size={12} className="shrink-0" style={{ color: 'var(--accent)' }} />
