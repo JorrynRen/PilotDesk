@@ -1088,7 +1088,7 @@ pub fn configured_report_org(conn: &Connection) -> Option<i64> {
 
 /// 选择本次上报的组织（**纯函数**，便于单测回退逻辑）：
 /// 配置了 `report_org_id` 且它仍在「在用组织」列表里 → 用它；否则回退第一个在用组织。
-/// 无任何在用组织 → `None`（上报不带 `orgId`）。
+/// 无任何在用组织 → `None`（调用方据此**放弃上报**，见 [`resolve_report_org_id`]）。
 fn pick_report_org(configured: Option<i64>, active_ids: &[i64]) -> Option<i64> {
     match configured {
         Some(id) if active_ids.contains(&id) => Some(id),
@@ -1099,12 +1099,11 @@ fn pick_report_org(configured: Option<i64>, active_ids: &[i64]) -> Option<i64> {
 /// 解析本次上报的目标组织 id：拉 `/organizations/mine` 取在用组织（`seatStatus === 'active'`
 /// 且 `status === 'active'`），再按 [`pick_report_org`] 选定（配置失效则回退第一个）。
 ///
-/// 无组织 → `Ok(None)`，上报不带 `orgId`；接口失败 → `Err`，调用方据此**放弃本次上报**
-/// （不做无组织的降级上报，避免用量被静默记到个人维度）。
-async fn resolve_report_org_id(
-    configured: Option<i64>,
-    token: &str,
-) -> Result<Option<i64>, AppError> {
+/// **必须有在用组织**，否则 `Err`（调用方放弃本次上报）：
+/// 不带 `orgId` 上报会被平台按「权益来源」回退（见平台 `resolveUsageOwner`），
+/// 可能落到**个人维度**——而个人维度在平台侧没有任何展示/消费点，等于写死数据；
+/// 接口失败同样 `Err`，避免把用量静默记错维度。
+async fn resolve_report_org_id(configured: Option<i64>, token: &str) -> Result<i64, AppError> {
     let resp: MineOrgsResp =
         crate::utils::platform::get_json("/api/v1/organizations/mine", Some(token)).await?;
     let active: Vec<i64> = resp
@@ -1126,7 +1125,9 @@ async fn resolve_report_org_id(
             );
         }
     }
-    Ok(chosen)
+    chosen.ok_or_else(|| {
+        AppError::Config("当前账号没有在用组织，向组织上报无归属目标".to_string())
+    })
 }
 
 /// 平台上报请求体
@@ -1134,9 +1135,9 @@ async fn resolve_report_org_id(
 #[serde(rename_all = "camelCase")]
 struct ReportBody<'a> {
     day: &'a str,
-    /// 归属组织 id；无组织时不序列化该字段
-    #[serde(skip_serializing_if = "Option::is_none")]
-    org_id: Option<i64>,
+    /// 归属组织 id（**必填**）：无组织的上报已在上游被放弃（见 [`resolve_report_org_id`]），
+    /// 不再走"不带 orgId → 平台按权益来源回退"的路径。
+    org_id: i64,
     items: &'a [UsageItem],
 }
 
@@ -1150,11 +1151,11 @@ struct ReportResp {
     owner_type: Option<String>,
 }
 
-/// 实际 POST（命令与后台任务共用）。
+/// 实际 POST（命令与后台任务共用）。`org_id` 必填——无组织时调用方已放弃上报。
 async fn post_report(
     token: &str,
     day: &str,
-    org_id: Option<i64>,
+    org_id: i64,
     items: &[UsageItem],
 ) -> Result<ReportResp, AppError> {
     crate::utils::platform::post_json(
@@ -1250,14 +1251,16 @@ pub async fn usage_report_now(
     };
 
     // ③ 归属组织：读主库设置里配置的组织（缺省=第一个在用组织）；配置失效则回退第一个。
-    //    先同步读出配置值（不跨 await 持有连接），再联网解析；失败则放弃本次上报。
+    //    先同步读出配置值（不跨 await 持有连接），再联网解析。
+    //    **必须有在用组织**（无组织 / 接口失败都放弃本次上报）——不带 orgId 会被平台回退到
+    //    权益来源，可能记到个人维度，而个人维度在平台侧没有展示页，等于写死数据。
     let configured_org = {
         let conn = state.get_conn().map_err(String::from)?;
         configured_report_org(&conn)
     };
     let org_id = match resolve_report_org_id(configured_org, &token).await {
         Ok(id) => id,
-        Err(e) => return Ok(fail(format!("获取组织信息失败，未上报：{}", e))),
+        Err(e) => return Ok(fail(format!("未上报：{}", e))),
     };
 
     // ④ 上报：幂等覆盖写，失败只回文案
@@ -1303,8 +1306,8 @@ async fn auto_report_once(state: &crate::DbState) -> Result<(), AppError> {
     let Some(token) = crate::commands::account::current_access_token(state).await? else {
         return Ok(()); // 未登录：静默
     };
-    // 归属组织：读主库配置（缺省=第一个在用组织，配置失效回退第一个）；取组织失败则本轮跳过
-    // （下次重试，当天累计值覆盖写不丢数据）
+    // 归属组织：读主库配置（缺省=第一个在用组织，配置失效回退第一个）；取组织失败或
+    // **无在用组织**则本轮跳过（下次重试，当天累计值覆盖写不丢数据）
     let org_id = resolve_report_org_id(configured_org, &token).await?;
     match post_report(&token, &day, org_id, &items).await {
         Ok(resp) => {
@@ -1888,9 +1891,9 @@ mod tests {
         assert_eq!(report_day(dt2), "2026-01-01");
     }
 
-    /// 上报请求体：有组织时序列化 `orgId`（camelCase），无组织时**不带该字段**。
+    /// 上报请求体：`orgId` 为**必填**（无组织的上报已在上游被放弃），恒以 camelCase 序列化。
     #[test]
-    fn report_body_serializes_org_id_only_when_present() {
+    fn report_body_always_serializes_org_id() {
         let items = [UsageItem {
             model: "gpt-4o".into(),
             calls: 7,
@@ -1898,27 +1901,16 @@ mod tests {
             output_tokens: 800,
             cost_fen: 0,
         }];
-        let with_org = serde_json::to_value(ReportBody {
+        let body = serde_json::to_value(ReportBody {
             day: "2026-10-06",
-            org_id: Some(8),
+            org_id: 8,
             items: &items,
         })
         .unwrap();
-        assert_eq!(with_org["orgId"], 8);
-        assert_eq!(with_org["day"], "2026-10-06");
-        assert_eq!(with_org["items"][0]["calls"], 7);
-        assert_eq!(with_org["items"][0]["inputTokens"], 1200);
-
-        let without_org = serde_json::to_value(ReportBody {
-            day: "2026-10-06",
-            org_id: None,
-            items: &items,
-        })
-        .unwrap();
-        assert!(
-            without_org.get("orgId").is_none(),
-            "无组织时不应出现 orgId 字段"
-        );
+        assert_eq!(body["orgId"], 8);
+        assert_eq!(body["day"], "2026-10-06");
+        assert_eq!(body["items"][0]["calls"], 7);
+        assert_eq!(body["items"][0]["inputTokens"], 1200);
     }
 
     /// 开关判据：缺省开启；只认 '0' / 'false' 为关闭。

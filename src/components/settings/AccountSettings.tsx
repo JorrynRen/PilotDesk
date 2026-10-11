@@ -117,6 +117,14 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
   const [reportOrgId, setReportOrgId] = useState('');
   const [orgFallbackHint, setOrgFallbackHint] = useState('');
 
+  // 「向组织上报」必须落到一个**在用组织**上：
+  //   · 不带 orgId 上报时，平台会按「权益来源」回退，可能记到**个人维度**；
+  //   · 而个人维度在平台侧没有任何展示/消费点（等于写死数据）。
+  //   故「未登录」与「无在用组织（或组织信息取不到）」时，开关与按钮一律不可用。
+  const orgReady = orgOptions !== null;
+  const hasOrg = !!orgOptions && orgOptions.length > 0;
+  const canReportNow = canReport && hasOrg;
+
   useEffect(() => {
     if (!account) return; // 未登录不做组织选择（渲染处也用 account 兜底，避免展示过期选项）
     let alive = true;
@@ -280,7 +288,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
           <div className="flex items-center gap-3">
             <button
               onClick={() => void toggleReport()}
-              disabled={loadingReportEnabled || !canReport}
+              disabled={loadingReportEnabled || !canReportNow}
               className="relative rounded-full transition-colors shrink-0 disabled:opacity-50"
               style={{
                 width: 36,
@@ -291,9 +299,13 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
               title={
                 !canReport
                   ? '需先登录平台账号后才能向组织上报用量'
-                  : reportEnabled
-                    ? '点击关闭'
-                    : '点击开启'
+                  : !orgReady
+                    ? '正在读取组织信息（或读取失败），暂不可上报'
+                    : !hasOrg
+                      ? '当前账号没有在用组织，向组织上报无归属目标'
+                      : reportEnabled
+                        ? '点击关闭'
+                        : '点击开启'
               }
             >
               <div
@@ -303,15 +315,19 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
             </button>
             <span
               className="text-xs"
-              style={{ color: canReport && reportEnabled ? '#22c55e' : 'var(--text-tertiary)' }}
+              style={{ color: canReportNow && reportEnabled ? '#22c55e' : 'var(--text-tertiary)' }}
             >
               {loadingReportEnabled
                 ? '读取中…'
                 : !canReport
                   ? '未登录'
-                  : reportEnabled
-                    ? '已开启'
-                    : '已关闭'}
+                  : !orgReady
+                    ? '组织信息不可用'
+                    : !hasOrg
+                      ? '未加入组织'
+                      : reportEnabled
+                        ? '已开启'
+                        : '已关闭'}
             </span>
           </div>
         </SettingsCard>
@@ -351,13 +367,17 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
               )
             }
             onClick={() => void reportNow()}
-            disabled={reporting || !canReport}
+            disabled={reporting || !canReportNow}
             title={
               !canReport
                 ? '需先登录平台账号后才能上报用量'
-                : reportEnabled
-                  ? '立即上报当天用量'
-                  : '已关闭上报'
+                : !orgReady
+                  ? '正在读取组织信息（或读取失败），暂不可上报'
+                  : !hasOrg
+                    ? '当前账号没有在用组织，向组织上报无归属目标'
+                    : reportEnabled
+                      ? '立即上报当天用量'
+                      : '已关闭上报'
             }
           >
             立即上报
