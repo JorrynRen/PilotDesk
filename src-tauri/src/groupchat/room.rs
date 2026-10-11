@@ -92,10 +92,20 @@ where
         }
         attempt += 1;
         if attempt >= DIRECTOR_RETRY_LIMIT {
+            log::warn!(
+                "[GroupChat] Director 决策连续失败 {} 次（含超时/输出不可解析），放弃本次调用",
+                attempt
+            );
             return None;
         }
         // 退避等待：第 1 次失败等 2s，第 2 次失败等 4s。
-        tokio::time::sleep(Duration::from_secs(u64::from(attempt) * 2)).await;
+        let backoff = u64::from(attempt) * 2;
+        log::warn!(
+            "[GroupChat] Director 决策失败，{}s 后重试（第 {} 次）",
+            backoff,
+            attempt
+        );
+        tokio::time::sleep(Duration::from_secs(backoff)).await;
     }
 }
 
@@ -2685,17 +2695,27 @@ impl RoomRuntime {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // 阶段A1 目标整理：主持人理解并生成总目标 + 产物目录名；调用失败/超时降级为按用户原文编排（不阻塞）。
         let notes = self.combined_notes();
+        // 阶段A1 目标整理：主持人理解并生成总目标 + 产物目录名；调用失败/超时降级为按用户原文编排（不阻塞），
+        // 但把失败与重试轨迹记录下来，稍后诚实落库（否则静默失效）。
+        let mut clarify_failure: Option<Vec<String>> = None;
         let (goal, need_confirmation, questions, dir_name) = match self.director.clone() {
-            Some(d) => call_director_retry(|| {
+            Some(d) => match call_director_retry(|| {
                 d.clarify_goal(&self.room.topic, latest_llm, &notes, &roster_text)
             })
             .await
-            .map(|c| (c.goal, c.need_confirmation, c.questions, c.output_dir_name))
-            .unwrap_or((raw.to_string(), false, Vec::new(), String::new())),
+            {
+                Some(c) => (c.goal, c.need_confirmation, c.questions, c.output_dir_name),
+                None => {
+                    clarify_failure = Some(d.take_last_errors());
+                    (raw.to_string(), false, Vec::new(), String::new())
+                }
+            },
             None => (raw.to_string(), false, Vec::new(), String::new()),
         };
+        if let Some(errors) = clarify_failure {
+            self.notice_director_call_failure("目标理解", errors).await;
+        }
         // 主持人本次目标理解决策的思考链（供落库展示）。
         let clarify_reasoning = self.take_director_reasoning();
 
@@ -3068,6 +3088,7 @@ impl RoomRuntime {
                 evidence
             ));
         }
+        let mut kickoff_failure: Option<Vec<String>> = None;
         if let Some(director) = &self.director {
             if let Some(plan) = call_director_retry(|| {
                 director.kickoff(
@@ -3173,6 +3194,9 @@ impl RoomRuntime {
                 }
                 // 应用角色分配（白名单校验：协调类角色仅限 Director 持有）。
                 rejected_roles = self.apply_role_assignments(&role_map).await;
+            } else {
+                // 编排调用失败（重试耗尽）：记下失败轨迹，待在块外诚实落库（此处不能再借用 &mut self）。
+                kickoff_failure = Some(director.take_last_errors());
             }
 
             // 主席开场调度信息以正式发言方式显示在消息流中（自动补充参与者 + 任务清单 + 角色指派）。
@@ -3234,6 +3258,9 @@ impl RoomRuntime {
                     .await;
                 self.emit(GroupChatEvent::message(&self.room_id, schedule_msg));
             }
+        }
+        if let Some(errors) = kickoff_failure {
+            self.notice_director_call_failure("任务编排", errors).await;
         }
 
         // 无 Director 或编排失败 → 兜底生成单一任务（仅首轮）
@@ -3298,27 +3325,33 @@ impl RoomRuntime {
             .min(MAX_AUTO_NEW_PARTICIPANTS_REPLAN);
         // B 层注入：用户输入物解析结果并入 Director 上下文（notes）。
         let notes = self.combined_notes();
-        let plan = match &self.director {
-            Some(d) => {
-                call_director_retry(|| {
-                    d.replan(
-                        &self.room.topic,
-                        latest,
-                        &notes,
-                        &existing,
-                        &roster,
-                        &roster_catalog,
-                        max_new_participants,
-                        &participant_failures,
-                    )
-                })
-                .await
-            }
-            None => None,
+        let (plan, replan_failure) = match &self.director {
+            Some(d) => match call_director_retry(|| {
+                d.replan(
+                    &self.room.topic,
+                    latest,
+                    &notes,
+                    &existing,
+                    &roster,
+                    &roster_catalog,
+                    max_new_participants,
+                    &participant_failures,
+                )
+            })
+            .await
+            {
+                Some(p) => (Some(p), None),
+                None => (None, Some(d.take_last_errors())),
+            },
+            None => (None, None),
         };
 
         let Some(plan) = plan else {
             // Director 不可用或对账失败：保守策略，不新增、不删减、不重分配。
+            // 若是主持人调用失败（而非"无主持人"），诚实把失败与重试落库，避免用户只见"重排没生效"。
+            if let Some(errors) = replan_failure {
+                self.notice_director_call_failure("追加编排", errors).await;
+            }
             return KickoffResult { added: 0 };
         };
 
@@ -4638,6 +4671,30 @@ impl RoomRuntime {
             )
             .await;
         self.emit(GroupChatEvent::message(&self.room_id, msg));
+    }
+
+    /// 主持人模型调用失败时的**诚实提示**：把失败原因与重试轨迹落进消息流。
+    /// 没有它，编排静默失败会退化成「兜底单任务 → 无可用执行者 → 共 0 轮结束」，用户看不出真正原因。
+    /// `errors` 为各次尝试的失败原因（空表示调用本身没报错，失败出在输出解析或超时）。
+    async fn notice_director_call_failure(&mut self, stage: &str, errors: Vec<String>) {
+        let detail = if errors.is_empty() {
+            "模型输出无法解析/不完整，或调用超时".to_string()
+        } else {
+            errors
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    let line: String = e.trim().chars().take(200).collect();
+                    format!("第 {} 次：{}", i + 1, line)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let text = format!(
+            "⚠️ 主持人模型调用失败（{}），重试后仍未成功：\n{}\n请检查「设置 › 模型提供商」中主持人模型的端点 / 密钥 / 模型名，修正后重新发送指令。",
+            stage, detail
+        );
+        self.persist_control_notice(&text).await;
     }
 
     /// participant_id -> display_name（供 Director 编排与 LLM 视图使用可读名称）。

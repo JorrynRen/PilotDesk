@@ -227,6 +227,9 @@ pub struct Director {
     director_id: String,
     /// 最近一次 LLM 调用的思考链（reasoning_content），供决策消息落库、前端无差异展示。
     last_reasoning: Mutex<String>,
+    /// 本轮决策的失败轨迹：每次 LLM 调用出错追加一条（含超时/HTTP 错误原因），任一调用成功即清空。
+    /// 供调用方在最终降级为兜底之前，把「失败 + 重试」诚实落库给用户看（否则表现为静默失效）。
+    last_errors: Mutex<Vec<String>>,
 }
 
 impl Director {
@@ -235,13 +238,14 @@ impl Director {
             llm,
             director_id,
             last_reasoning: Mutex::new(String::new()),
+            last_errors: Mutex::new(Vec::new()),
         }
     }
 
     /// 调用 LLM 完成一次决策：捕获思考链（reasoning_content）供落库展示，返回决策正文。
     /// 与参与者一致使用 complete_with_tool_calls，使主持人推理也能被前端无差异渲染。
     async fn complete_decision(&self, prompt: &str) -> Result<String, String> {
-        let (content, _tool_calls, reasoning) = self
+        match self
             .llm
             .complete_with_tool_calls(
                 &self.system_prompt(),
@@ -249,11 +253,38 @@ impl Director {
                 None,
                 None,
             )
-            .await?;
-        if let Ok(mut g) = self.last_reasoning.lock() {
-            *g = reasoning;
+            .await
+        {
+            Ok((content, _tool_calls, reasoning)) => {
+                if let Ok(mut g) = self.last_reasoning.lock() {
+                    *g = reasoning;
+                }
+                // 任一调用成功即视为本轮已恢复：清空失败轨迹，避免旧错误被带进下次提示。
+                if let Ok(mut v) = self.last_errors.lock() {
+                    v.clear();
+                }
+                Ok(content)
+            }
+            Err(e) => {
+                if let Ok(mut v) = self.last_errors.lock() {
+                    v.push(e.clone());
+                    // 只留最近 8 条（每次调用都失败才增长；正常一成功就清空），防长会话累积。
+                    if v.len() > 8 {
+                        let drop_n = v.len() - 8;
+                        v.drain(..drop_n);
+                    }
+                }
+                Err(e)
+            }
         }
-        Ok(content)
+    }
+
+    /// 取走本轮决策失败轨迹（取后清空）。空 Vec 表示调用本身成功——失败只可能出在输出解析。
+    pub fn take_last_errors(&self) -> Vec<String> {
+        self.last_errors
+            .lock()
+            .map(|mut v| std::mem::take(&mut *v))
+            .unwrap_or_default()
     }
 
     /// 取走最近一次决策的思考链（取后清空，避免重复落库）。
