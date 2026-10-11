@@ -67,6 +67,8 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
 
   // 组织来源：升级 / 续费与账户信息都指到平台的组织页
   const fromOrganization = account?.source === 'organization';
+  // 未登录时连「组织」都无从谈知：上报开关与「立即上报」一律不可用，避免点了才报错
+  const canReport = !!account;
 
   // 向组织上报用量：开关（默认开启）+ 立即上报 + 上次上报时间
   const [reportEnabled, setReportEnabled] = useState(true);
@@ -278,7 +280,7 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
           <div className="flex items-center gap-3">
             <button
               onClick={() => void toggleReport()}
-              disabled={loadingReportEnabled}
+              disabled={loadingReportEnabled || !canReport}
               className="relative rounded-full transition-colors shrink-0 disabled:opacity-50"
               style={{
                 width: 36,
@@ -286,7 +288,13 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
                 backgroundColor: reportEnabled ? '#22c55e' : 'var(--bg-field)',
                 border: '1px solid var(--border)',
               }}
-              title={reportEnabled ? '点击关闭' : '点击开启'}
+              title={
+                !canReport
+                  ? '需先登录平台账号后才能向组织上报用量'
+                  : reportEnabled
+                    ? '点击关闭'
+                    : '点击开启'
+              }
             >
               <div
                 className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm"
@@ -295,9 +303,15 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
             </button>
             <span
               className="text-xs"
-              style={{ color: reportEnabled ? '#22c55e' : 'var(--text-tertiary)' }}
+              style={{ color: canReport && reportEnabled ? '#22c55e' : 'var(--text-tertiary)' }}
             >
-              {loadingReportEnabled ? '读取中…' : reportEnabled ? '已开启' : '已关闭'}
+              {loadingReportEnabled
+                ? '读取中…'
+                : !canReport
+                  ? '未登录'
+                  : reportEnabled
+                    ? '已开启'
+                    : '已关闭'}
             </span>
           </div>
         </SettingsCard>
@@ -337,8 +351,14 @@ export function AccountSettings({ onOpenCloudSync }: AccountSettingsProps) {
               )
             }
             onClick={() => void reportNow()}
-            disabled={reporting}
-            title={reportEnabled ? '立即上报当天用量' : '已关闭上报'}
+            disabled={reporting || !canReport}
+            title={
+              !canReport
+                ? '需先登录平台账号后才能上报用量'
+                : reportEnabled
+                  ? '立即上报当天用量'
+                  : '已关闭上报'
+            }
           >
             立即上报
           </SettingsButton>
