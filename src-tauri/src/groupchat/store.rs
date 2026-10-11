@@ -71,11 +71,13 @@ pub fn list_rooms(conn: &Connection) -> Result<Vec<Room>, AppError> {
 }
 
 /// 房间进度的两个派生值（读时聚合，不回写）：
-/// - 轮次：`room_events(kind='message')` 的 round 最大值（复用 `max_message_round`，与重启续轮同口径）；
+/// - 轮次：**当前讨论段**（最近一条用户指令之后）的 `round` 最大值 —— 与运行时
+///   `RoomStateMachine.round` 同口径（每条新指令把轮次归零，故不能用全历史 MAX，
+///   否则刷新看到的是历史最大轮数，与当前讨论对不上）；
 /// - 子任务：`task/created` + `task/status` 折叠出的快照，按「已结束（含失败/跳过/中止）/ 总数」计。
 /// 任务折叠失败按"无任务"返回（前端退化成只显示轮次），不让整张房间列表跟着失败。
 fn room_progress(conn: &Connection, room_id: &str) -> (i64, i64, i64) {
-    let round = max_message_round(conn, room_id);
+    let round = current_discussion_round(conn, room_id);
     let (total, finished) = match list_tasks(conn, room_id) {
         Ok(tasks) => {
             let total = tasks.len() as i64;
@@ -185,6 +187,20 @@ pub fn update_room_output_dir(
     conn.execute(
         "UPDATE groupchat_rooms SET output_dir = ?1, updated_at = ?2 WHERE id = ?3",
         params![output_dir, crate::utils::now(), room_id],
+    )?;
+    Ok(())
+}
+
+/// 更新房间的「讨论轮次参考预算」（`max_rounds`）。仅作参考刻度，不做硬上限判定。
+/// `n <= 0` 表示**不设预算**（前端只显示已讨论轮次，不显示分母）。
+pub fn update_room_round_budget(
+    conn: &Connection,
+    room_id: &str,
+    n: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE groupchat_rooms SET max_rounds = ?1, updated_at = ?2 WHERE id = ?3",
+        params![n, crate::utils::now(), room_id],
     )?;
     Ok(())
 }
@@ -419,6 +435,25 @@ pub fn max_message_round(conn: &Connection, room_id: &str) -> i64 {
     .unwrap_or(0)
 }
 
+/// **当前讨论段**的轮次：最近一条用户指令（`kind='directive'`）之后、消息事件里 `round` 的最大值。
+///
+/// 与运行时 `RoomStateMachine.round` 同口径（`state.start()` 每条新指令把轮次归零），
+/// 供指挥中心展示「讨论第 X 轮」——避免用全历史 MAX 导致刷新后显示历史最大轮数。
+/// 没有任何指令时退化为全量（与 `max_message_round` 一致）。
+pub fn current_discussion_round(conn: &Connection, room_id: &str) -> i64 {
+    conn.query_row(
+        "SELECT COALESCE(MAX(json_extract(payload, '$.round')), 0) FROM room_events
+         WHERE room_id = ?1 AND kind = 'message'
+           AND json_extract(payload, '$.seq') > COALESCE((
+                 SELECT MAX(json_extract(payload, '$.seq')) FROM room_events
+                 WHERE room_id = ?1 AND kind = 'message' AND json_extract(payload, '$.kind') = 'directive'
+               ), 0)",
+        params![room_id],
+        |row| row.get(0),
+    )
+    .unwrap_or(0)
+}
+
 // ── Stance ──
 
 pub fn upsert_stance(
@@ -584,6 +619,31 @@ mod tests {
         assert_eq!(page.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![2, 3]);
         let up = list_messages_page(&conn, "r1", Some(3), 2).unwrap();
         assert_eq!(up.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![1, 2]);
+    }
+
+    #[test]
+    fn current_discussion_round_uses_latest_directive_segment() {
+        let conn = mem_conn();
+        // 第一段讨论：指令后 round 跑到 7
+        let mut d1 = msg("d1", 1);
+        d1.kind = "directive".to_string();
+        insert_message(&conn, &d1).unwrap();
+        let mut a1 = msg("a1", 2);
+        a1.round = 7;
+        insert_message(&conn, &a1).unwrap();
+        assert_eq!(max_message_round(&conn, "r1"), 7);
+        assert_eq!(current_discussion_round(&conn, "r1"), 7);
+
+        // 第二条指令（轮次归零）之后只跑到 2 轮：全历史仍取 7（续轮用），当前段应只算 2
+        let mut d2 = msg("d2", 3);
+        d2.kind = "directive".to_string();
+        d2.round = 0;
+        insert_message(&conn, &d2).unwrap();
+        let mut a2 = msg("a2", 4);
+        a2.round = 2;
+        insert_message(&conn, &a2).unwrap();
+        assert_eq!(max_message_round(&conn, "r1"), 7);
+        assert_eq!(current_discussion_round(&conn, "r1"), 2);
     }
 
     fn task(id: &str, no: i64, status: &str) -> TaskRow {

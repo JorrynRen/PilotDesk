@@ -8,6 +8,10 @@ export interface GroupChatRoom {
   topic: string;
   status: RoomStatus;
   strategy: string;
+  /**
+   * 讨论轮次**参考预算**（DB `max_rounds`）。**不是硬上限**：引擎不据此中断讨论，
+   * 只是给"计划讨论多少轮"一个参考刻度，可由主持人在讨论中调整；`0`/负 = 不设预算。
+   */
   maxRounds: number;
   maxParallel: number;
   directorId?: string;
@@ -20,7 +24,8 @@ export interface GroupChatRoom {
   outputDir?: string;
   /**
    * 以下三个是**派生字段**：后端只在房间列表（`list_rooms`）里读时聚合，房间详情/创建路径不返回。
-   *   currentRound  当前讨论轮次（= 消息 round 的最大值，讨论阶段的进度）
+   *   currentRound  当前**讨论段**（最近一条用户指令之后）的轮次——与运行时口径一致，
+   *                 不是全历史最大值（每条新指令会把轮次归零）
    *   taskTotal     子任务总数（执行阶段进度的分母）
    *   taskFinished  已结束的子任务数（含失败/跳过/中止）
    * 取不到（undefined）时前端退化成"只显示状态与更新时间"，不编进度。

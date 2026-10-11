@@ -4086,6 +4086,7 @@ impl RoomRuntime {
                     reason: "用户 @ 指定".into(),
                     work_content: String::new(),
                     new_participants: Vec::new(),
+                    round_budget: None,
                 }),
                 _ => match &self.director {
                     Some(d) => {
@@ -4146,6 +4147,36 @@ impl RoomRuntime {
                         ))
                         .await;
                         continue;
+                    }
+                }
+                // 主持人调整「讨论轮次参考预算」（可选）：仅参考刻度，**不做硬上限判定**；
+                // 变更时落一条【调度】提示，让用户看到刻度被调成了多少（不改则静默）。
+                if let Some(budget) = dec.round_budget {
+                    if budget != self.room.max_rounds {
+                        self.room.max_rounds = budget;
+                        if let Ok(conn) = self.conn() {
+                            let _ = store::update_room_round_budget(&conn, &self.room_id, budget);
+                        }
+                        let text = if budget > 0 {
+                            format!("【调度】讨论轮次参考预算调整为 {} 轮（仅供参考，不设硬上限）", budget)
+                        } else {
+                            "【调度】已取消讨论轮次参考预算，不再显示参考刻度".to_string()
+                        };
+                        let director_sender = self.director_sender();
+                        let msg = self
+                            .persist_message(
+                                &director_sender,
+                                &[],
+                                "director_notice",
+                                None,
+                                &text,
+                                &[],
+                                "",
+                                "",
+                            )
+                            .await;
+                        self.memory.apply_message(&msg, &self.all_participant_ids());
+                        self.emit(GroupChatEvent::message(&self.room_id, msg));
                     }
                 }
             }

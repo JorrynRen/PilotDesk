@@ -1036,25 +1036,34 @@ export function CommandCenter({ variant = 'modal' }: { variant?: 'modal' | 'inli
                 const staleRun = r.status === 'running' && !roomsActorAlive[r.id];
                 const running = r.status === 'running' && !staleRun;
                 /**
-                 * 进度按阶段给，两个信号**不合成一根条**（语义不同）：
-                 *   已拆出子任务 → 子任务完成度（真比率；分母 = 总数，分子含失败/跳过/中止）
-                 *   还在讨论     → 讨论轮次 / 上限（这是预算消耗，不是完成度）
-                 * 两个都取不到（旧后端没这俩派生字段）就不画条，避免 0/0 的假进度。
-                 * 另一阶段的数字不丢：挂在 title 上，不挤行宽。
+                 * 进度条只表达**完成度**（子任务完成度，真比率；分子含失败/跳过/中止）。
+                 * 讨论轮次**不是完成度**——它是参考预算（非硬上限、可被超出、可被取消），
+                 * 故只以文字展示、不画条，避免把"讨论了很久"读成"快完成了"。
+                 * 两处数字都摆在行内，不挤在 title 里。
                  */
                 const total = r.taskTotal ?? 0;
                 const finished = r.taskFinished ?? 0;
                 const round = r.currentRound ?? 0;
                 const hasTasks = total > 0;
-                // currentRound 缺席 = 后端没这俩派生字段（老版本）：宁可只显示时间，也不写"第 0/5 轮"
-                const hasRound = r.currentRound !== undefined && r.maxRounds > 0;
-                const canShowBar = hasTasks || hasRound;
-                const pct = hasTasks
-                  ? (finished / total) * 100
-                  : hasRound ? (round / r.maxRounds) * 100 : 0;
-                // 两个阶段信号都摆到行内：有子任务时「讨论第 X/Y 轮 · 子任务 a/b」，纯讨论时只有轮次。
-                // （原先前者只在悬浮提示里，行内看不到，等于没显示。）
-                const roundText = hasRound ? `讨论第 ${round}/${r.maxRounds} 轮` : '';
+                // 讨论轮次**参考预算**（后端 groupchat_rooms.max_rounds）：0/负 = 不设预算。
+                // 它不是硬上限（引擎不据此收敛），主持人可在讨论中调整。
+                const budget = r.maxRounds;
+                // currentRound 缺席 = 后端没这派生字段（老版本）：宁可只显示时间，也不写"第 0 轮"
+                const hasRound = r.currentRound !== undefined;
+                // 进度条只表达"完成度"：只有子任务完成度是真比率。
+                // 轮次/预算不是完成度（可被超出、可被取消），故纯讨论阶段不画条，只显示文字。
+                const canShowBar = hasTasks;
+                const pct = hasTasks ? (finished / total) * 100 : 0;
+                // 轮次文案：设了预算 → 「讨论第 X 轮（参考预算 Y）」，超出时如实标注（不假装满格）；
+                // 未设预算 → 只显示已讨论轮次。
+                const roundText = !hasRound
+                  ? ''
+                  : budget > 0
+                    ? (round > budget
+                        ? `讨论第 ${round} 轮 · 已超参考预算 ${budget}`
+                        : `讨论第 ${round} 轮（参考预算 ${budget}）`)
+                    : `讨论第 ${round} 轮`;
+                // 两个阶段信号都摆到行内：有子任务时「…轮次… · 子任务 a/b」，纯讨论时只有轮次。
                 const progressText = hasTasks
                   ? [roundText, `子任务 ${finished}/${total}`].filter(Boolean).join(' · ')
                   : roundText;

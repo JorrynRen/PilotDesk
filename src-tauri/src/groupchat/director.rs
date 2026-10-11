@@ -160,6 +160,10 @@ pub struct SpeakerDecision {
     /// 名册缺身份/能力时的补人提案（v3.4bb）：由系统创建专用参与者承接该身份，
     /// **不会**让现有参与者临时扮演他人（身份纪律由提示词层约束）。空数组表示不需补人。
     pub new_participants: Vec<NewParticipantDraft>,
+    /// 主持人调整「讨论轮次参考预算」（可选）：`Some(n)` 表示把预算改为 n 轮；
+    /// `Some(0)` 表示取消预算（不设参考刻度）。`None` = 本轮不动。
+    /// 预算**不是硬上限**——仅作参考刻度，引擎不会据此中断讨论。
+    pub round_budget: Option<i64>,
 }
 
 /// Director 讨论收敛审查结果。
@@ -1034,6 +1038,12 @@ impl Director {
             .unwrap_or_default()
             .to_string();
         let new_participants = parse_new_participants(&v);
+        // 可选：主持人调整「讨论轮次参考预算」。键缺失/null/非法 → None（本轮不动）；
+        // 数字（或数字字符串）→ Some(n)，其中 0 表示取消预算。仅参考刻度，不做硬上限。
+        let round_budget = v.get("round_budget").and_then(|x| {
+            x.as_i64()
+                .or_else(|| x.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        });
         if speaker.is_empty() && new_participants.is_empty() {
             None
         } else {
@@ -1044,6 +1054,7 @@ impl Director {
                 reason,
                 work_content,
                 new_participants,
+                round_budget,
             })
         }
     }
