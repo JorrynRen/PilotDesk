@@ -397,37 +397,37 @@
 }
 
 /* ═══════════════════════════════════════════════════
-   原色 Primary — 第 7 个主题模式（浅色系 · 纯白底 + 黑字 · 四色点缀）
+   原色 Primary — 第 7 个主题模式（浅色系 · 三原色上墙 + 黑字 + 红强调）
    ═══════════════════════════════════════════════════
-   性格：一张白纸 + 黑字，彩度全部让给**红 / 绿 / 蓝 / 黄**四色的小块（控件、标签、状态、图标）。
-   大面积仍是白与浅灰（"亮色为主"落在底色上，饱和色只在需要"指认"的地方出现），所以不显花、又够醒目：
-     · 底 / 缝        = 浅灰（三块白面板之间的缝）
-     · 左右栏         = 近白
+   性格：把"红 / 绿 / 蓝 / 黄"直接铺到**壳层与卡片**上（而不是只做小徽章），
+   内容区留纯白当阅读面，文字压黑 —— 一眼就与「浅色」（白/灰 + 蓝强调）区分开：
+     · 底 / 缝        = 淡黄（面板之间的缝 + 窗口四周）
+     · 左右栏         = 淡蓝
      · 内容区         = 纯白（大面积阅读面）
-     · 卡片           = 极浅灰（--bg-raised = secondary）
-     · 控件           = 浅灰（--bg-field = tertiary）
-     · 强调色         = 蓝（主操作 / 链接 / 选中；四色里唯一能同时压住"白字实底"与"深色小字"的一支）
-     · 组合色         = 红（危险 / 专家）+ 绿（成功 / 快速）+ 蓝（强调 / 信息）+ 黄（警告 / 标签）
+     · 卡片           = 淡绿（--bg-raised = secondary）
+     · 控件           = 中性浅灰（--bg-field = tertiary；四色已落在面板与卡片上，控件保持中性免得打架）
+     · 强调色         = 红（主操作 / 链接 / 选中；黑字白底之上最强的"指认"色）
    ⚠️ 壳层三块**无边框**，只靠底色区分（见 App.tsx：面板圆角浮在 --bg-canvas 的"底"上，
-      中间靠 gap 露缝），所以这里的中性灰必须逐级拉开，否则三栏会"白成一片"：
-        底 #E7EAEF(=233) → 左右栏 #F4F6F9(=245) → 内容区 #FFFFFF(=255)，档差 ≥10。
-      内容区与 --bg-primary 同为纯白（浅色族同 :root：面板内元素用的是更深的档，天然分得开）；
-      --bg-side 另给近白值，避免与卡片 secondary 撞色。
+      中间靠 gap 露缝）—— 这里靠**色相**拉开（黄 / 蓝 / 白），比靠明度硬拉更稳：
+        底 #FBF0CE → 左右栏 #E6F0FF → 内容区 #FFFFFF。
+      --bg-side 另给淡蓝值，不与卡片 secondary（淡绿）撞色；控件 tertiary 是中性灰，
+      落在黄缝 / 蓝栏 / 白内容 / 绿卡片上都分得开。
+      内容区与 --bg-primary 同为纯白（浅色族同 :root：面板内元素用的是更深的档，天然分得开）。
    =================================================== */
 [data-theme="primary"] {
   color-scheme: light;
 
   /* ── Background ── */
   --bg-primary: #FFFFFF;
-  --bg-secondary: #F1F3F6; /* 卡片：极浅灰（--bg-raised） */
-  --bg-tertiary: #E4E8ED;  /* 控件 / 分组正文：浅灰（--bg-field） */
+  --bg-secondary: #DCF3E3; /* 卡片：淡绿（--bg-raised；比白底明显一档，否则只剩边框在撑） */
+  --bg-tertiary: #EFF1F5;  /* 控件 / 分组正文：中性浅灰（--bg-field） */
   --bg-panel: #FFFFFF;
   --bg-hover: rgba(0, 0, 0, 0.045);
   --bg-overlay: rgba(0, 0, 0, 0.45);
 
-  /* 壳层映射：底(灰) → 左右栏(近白) → 内容区(纯白)，逐级提亮 */
-  --bg-canvas: #E7EAEF;   /* 底 / 缝：浅灰 */
-  --bg-side: #F4F6F9;     /* 左右栏：近白偏灰 */
+  /* 壳层映射：黄缝 → 蓝栏 → 纯白内容区（靠色相分层） */
+  --bg-canvas: #FBF0CE;   /* 底 / 缝：淡黄 */
+  --bg-side: #E6F0FF;     /* 左右栏：淡蓝 */
   --bg-content: #FFFFFF;  /* 内容区：纯白 */
 
   /* ── Text ──（主色黑） */
@@ -437,26 +437,27 @@
   --text-inverse: #FFFFFF;
 
   /* ── Border ── */
-  --border: #E2E5EA;
-  --border-light: #EFF1F4;
+  --border: #D9DFE8;
+  --border-light: #E9EDF3;
 
-  /* ── Accent ──（蓝：四色里对文字最友好的一支） */
-  --accent: #2563EB;
-  --accent-hover: #1D4ED8;
-  --accent-light: rgba(37, 99, 235, 0.12);
+  /* ── Accent ──（红：白底黑字上最强的"指认"色） */
+  --accent: #DC2626;
+  --accent-hover: #B91C1C;
+  --accent-light: rgba(220, 38, 38, 0.12);
 
-  /* ── Agent Tags ──（黄） */
-  --api-tag: #F59E0B;
+  /* ── Agent Tags ──（黄：直接压到可读的深琥珀，浅黄当文字色对比度不够） */
+  --api-tag: #B45309;
 
-  /* ── Mode Colors ──（四色铺进模式：绿 / 蓝 / 红） */
+  /* ── Mode Colors ──（绿 / 红 / 蓝） */
   --mode-native: var(--text-secondary);
   --mode-fast: #16A34A;
   --mode-think: var(--accent);
-  --mode-expert: #EF4444;
+  --mode-expert: #2563EB;
 
-  /* ── Status ──（绿 / 红 / 黄 / 蓝） */
+  /* ── Status ──（绿 / 红 / 黄 / 蓝）
+     危险色刻意压深一档，与同为红的"强调色"靠明度区分开（成功/警告/信息则与强调色不同族）。 */
   --status-success: #16A34A;
-  --status-danger: #DC2626;
+  --status-danger: #991B1B;
   --status-warning: #D97706;
   --status-info: #2563EB;
   --status-success-bg: #DCFCE7;

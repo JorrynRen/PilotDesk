@@ -210,7 +210,7 @@ function GeneralSettings() {
     { value: 'celadon' as const, icon: Palette, label: '青瓷', title: '青瓷 Celadon：靛墨底 + 青灰栏 + 暖灰纸面 + 青瓷强调（#4FD1C5）' },
     { value: 'light' as const, icon: Sun, label: '浅色', title: '浅色' },
     { value: 'mint' as const, icon: Droplet, label: '薄荷', title: '薄荷 Mint：亮板面 + 天青/薄荷内嵌层 + 紫罗兰强调（#7C5CFA）' },
-    { value: 'primary' as const, icon: Shapes, label: '原色', title: '原色 Primary：纯白底 + 黑字 + 红/绿/蓝/黄 四色点缀（强调蓝 #2563EB）' },
+    { value: 'primary' as const, icon: Shapes, label: '原色', title: '原色 Primary：三原色面板（淡蓝栏 / 淡黄缝 / 淡绿卡片）+ 纯白内容区 + 黑字 + 红强调（#DC2626）' },
     { value: 'confetti' as const, icon: Rainbow, label: '缤纷', title: '缤纷 Confetti：淡紫底 + 天青栏 + 薄荷卡片 + 品红强调（#C026D3）' },
     { value: 'system' as const, icon: Monitor, label: '跟随系统', title: '跟随系统浅/深色' },
   ];
