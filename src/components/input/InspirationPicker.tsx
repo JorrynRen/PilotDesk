@@ -36,7 +36,9 @@ export function InspirationPicker({ onSelect, onClose, dropUp = true }: Inspirat
       (insp) =>
         insp.title.toLowerCase().includes(q) ||
         insp.content.toLowerCase().includes(q) ||
-        insp.icon.includes(q)
+        insp.icon.includes(q) ||
+        // 与灵感库页 / 会话侧栏同一口径：输入标签名也能命中
+        insp.tags.some((t) => t.toLowerCase().includes(q))
     );
   }, [query, inspirations]);
 
