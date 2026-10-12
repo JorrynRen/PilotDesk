@@ -2327,6 +2327,8 @@ pub fn run() {
             commands::inspiration::suggest_market_inspiration_id,
             commands::inspiration::export_inspiration_json,
             commands::inspiration::export_inspirations_zip,
+            commands::inspiration::import_inspirations_from_files,
+            commands::inspiration::import_inspirations_zip,
             list_tags,
             list_api_providers,
             get_api_provider,

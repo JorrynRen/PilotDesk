@@ -417,6 +417,294 @@ pub fn export_inspirations_zip(
     Ok(count)
 }
 
+// ── 灵感导入（投稿 JSON / 全量备份 zip）──────────────────────────────────
+//
+// 与导出互逆：把符合市场格式的单条 JSON 或导出产出的 zip 重新灌回本地库。落库口径与
+// 「资源市集 › 灵感」导入**同源**（见 `src/components/market/InspirationMarketTab.tsx`）：
+// 以 `market_id`（= 文件里的 `id`）判重，本地已有同 market_id 的那条就覆盖更新，否则新建；
+// 新建的 `source_agent` 标记为 `market`，`market_id` 记下导入的市场 id（不发明新的来源标记）。
+
+/// 导入结果统计。`errors` 为被跳过/失败的文件或条目 + 原因（供 UI 展示前几条）。
+#[derive(serde::Serialize, Default)]
+pub struct InspirationImportResult {
+    pub created: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    pub errors: Vec<String>,
+}
+
+/// 导入文件的字段（市场格式：id/title/content 必填，icon/tags 可选）。
+#[derive(serde::Deserialize)]
+struct MarketInspirationImport {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    content: Option<String>,
+}
+
+/// 已通过校验的一条导入条目（id 合法、title/content 非空）。
+struct ValidEntry {
+    id: String,
+    title: String,
+    icon: String,
+    tags: Vec<String>,
+    content: String,
+}
+
+/// 单条失败原因分类：
+/// - `Parse`：JSON 无法解析（只计入 errors，不占 skipped）；
+/// - `Invalid`：可解析但不满足必填/合规要求（计入 skipped + errors）。
+enum EntryError {
+    Parse(String),
+    Invalid(String),
+}
+
+/// 解析并校验一份市场格式 JSON（`id/title/content` 必填，`icon/tags` 可选）。
+fn parse_and_validate_market_entry(text: &str) -> Result<ValidEntry, EntryError> {
+    let raw: MarketInspirationImport =
+        serde_json::from_str(text).map_err(|e| EntryError::Parse(format!("解析失败（{}）", e)))?;
+    if let Err(reason) = validate_market_inspiration_id(&raw.id) {
+        return Err(EntryError::Invalid(format!("id 不合规（{}）", reason)));
+    }
+    let title = raw.title.unwrap_or_default();
+    if title.trim().is_empty() {
+        return Err(EntryError::Invalid("title 不能为空".to_string()));
+    }
+    let content = raw.content.unwrap_or_default();
+    if content.trim().is_empty() {
+        return Err(EntryError::Invalid("content 不能为空".to_string()));
+    }
+    // icon 缺省与本地新建同源（💡）；tags 缺省为空数组
+    let icon = raw
+        .icon
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "💡".to_string());
+    Ok(ValidEntry {
+        id: raw.id,
+        title,
+        icon,
+        tags: raw.tags.unwrap_or_default(),
+        content,
+    })
+}
+
+/// 同批内按 id 去重：后出现的覆盖先出现的，整体只保留一条（不重复计数）。
+fn dedup_entries_by_id(entries: Vec<ValidEntry>) -> Vec<ValidEntry> {
+    let mut ordered: Vec<ValidEntry> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for e in entries {
+        match index.get(&e.id) {
+            Some(&i) => ordered[i] = e,
+            None => {
+                index.insert(e.id.clone(), ordered.len());
+                ordered.push(e);
+            }
+        }
+    }
+    ordered
+}
+
+/// 在一个事务里落库：按 `market_id` 判重，命中则覆盖更新（仅 title/icon/content/tags，不动创建时间），
+/// 否则新建（来源标记 `market`）。返回 `(created, updated)`。
+fn apply_import_entries(
+    conn: &mut Connection,
+    entries: &[ValidEntry],
+) -> Result<(usize, usize), AppError> {
+    use rusqlite::OptionalExtension;
+
+    let tx = conn.transaction()?;
+    let mut created = 0usize;
+    let mut updated = 0usize;
+
+    for e in entries {
+        let now = crate::utils::now();
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT id FROM inspirations WHERE market_id = ?1 LIMIT 1",
+                params![e.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        let local_id = match existing {
+            Some(local_id) => {
+                tx.execute(
+                    "UPDATE inspirations SET icon = ?1, title = ?2, content = ?3, updated_at = ?4 WHERE id = ?5",
+                    params![e.icon, e.title, e.content, now, local_id],
+                )?;
+                updated += 1;
+                local_id
+            }
+            None => {
+                let local_id = crate::utils::new_id();
+                tx.execute(
+                    "INSERT INTO inspirations (id, icon, title, content, source_agent, is_favorite, created_at, updated_at, market_id) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6, ?7)",
+                    params![local_id, e.icon, e.title, e.content, "market", now, e.id],
+                )?;
+                created += 1;
+                local_id
+            }
+        };
+
+        // 标签整体替换为导入值（与市场导入/更新语义一致）
+        tx.execute(
+            "DELETE FROM inspiration_tags WHERE inspiration_id = ?1",
+            params![local_id],
+        )?;
+        {
+            let mut tag_stmt = tx.prepare(
+                "INSERT OR IGNORE INTO inspiration_tags (inspiration_id, tag) VALUES (?1, ?2)",
+            )?;
+            for tag in &e.tags {
+                tag_stmt.execute(params![local_id, tag])?;
+            }
+        }
+
+        // 云同步：导入即本地已改动，下轮作为上传候选推送（best-effort）
+        crate::commands::cloud_sync::mark_inspiration_dirty(&tx, &local_id);
+    }
+
+    // 统一重建 FTS 索引
+    tx.execute(
+        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
+        [],
+    )?;
+    tx.commit()?;
+    Ok((created, updated))
+}
+
+/// 去重 + 落库，并把计数累加回结果（供两个导入命令共用）。
+fn finalize_import(
+    conn: &mut Connection,
+    entries: Vec<ValidEntry>,
+    result: &mut InspirationImportResult,
+) -> Result<(), String> {
+    let deduped = dedup_entries_by_id(entries);
+    let (created, updated) = apply_import_entries(conn, &deduped).map_err(|e| e.to_string())?;
+    result.created += created;
+    result.updated += updated;
+    Ok(())
+}
+
+/// 从 zip 归档收集导入条目（与 `export_inspirations_zip` 的布局同构：`inspirations/<id>/<id>.json`）。
+/// 非 `.json` 或不符合布局的条目忽略并记入 `errors`；归档损坏 → `Err`。
+fn read_zip_entries<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    result: &mut InspirationImportResult,
+) -> Result<Vec<ValidEntry>, String> {
+    use std::io::Read;
+
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("读取压缩包失败：{}", e))?;
+    let mut valid: Vec<ValidEntry> = Vec::new();
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("读取压缩包条目失败：{}", e))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_string();
+        if !name.ends_with(".json") {
+            result.errors.push(format!("{}：忽略非 JSON 文件", name));
+            continue;
+        }
+        // 布局校验：`inspirations/<id>/<id>.json`
+        let parts: Vec<&str> = name.split('/').collect();
+        let layout_ok = parts.len() == 3
+            && parts[0] == "inspirations"
+            && !parts[1].is_empty()
+            && parts[1] == parts[2].trim_end_matches(".json");
+        if !layout_ok {
+            result.errors.push(format!(
+                "{}：不符合导入布局（应为 inspirations/<id>/<id>.json）",
+                name
+            ));
+            continue;
+        }
+        let mut text = String::new();
+        if let Err(e) = entry.read_to_string(&mut text) {
+            result.errors.push(format!("{}：读取失败（{}）", name, e));
+            continue;
+        }
+        match parse_and_validate_market_entry(&text) {
+            Ok(parsed) => valid.push(parsed),
+            Err(EntryError::Parse(msg)) => result.errors.push(format!("{}：{}", name, msg)),
+            Err(EntryError::Invalid(msg)) => {
+                result.skipped += 1;
+                result.errors.push(format!("{}：{}", name, msg));
+            }
+        }
+    }
+    Ok(valid)
+}
+
+/// [Tauri Command] 从若干 JSON 文件导入灵感（投稿格式；支持一次选多个文件）。
+///
+/// 每个文件独立处理：读取/解析失败只记入 `errors`，不影响其它文件；校验失败计入 `skipped`。
+/// 全部成功条目的落库在一个事务里完成；单文件失败不回滚已成功的条目。
+#[tauri::command]
+pub async fn import_inspirations_from_files(
+    state: tauri::State<'_, crate::DbState>,
+    paths: Vec<String>,
+) -> Result<InspirationImportResult, String> {
+    let mut result = InspirationImportResult::default();
+    let mut valid: Vec<ValidEntry> = Vec::new();
+
+    for path in &paths {
+        let label = std::path::Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| path.clone());
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                result.errors.push(format!("{}：读取失败（{}）", label, e));
+                continue;
+            }
+        };
+        match parse_and_validate_market_entry(&text) {
+            Ok(entry) => valid.push(entry),
+            Err(EntryError::Parse(msg)) => result.errors.push(format!("{}：{}", label, msg)),
+            Err(EntryError::Invalid(msg)) => {
+                result.skipped += 1;
+                result.errors.push(format!("{}：{}", label, msg));
+            }
+        }
+    }
+
+    let mut conn = state.get_conn().map_err(|e| e.to_string())?;
+    finalize_import(&mut conn, valid, &mut result)?;
+    Ok(result)
+}
+
+/// [Tauri Command] 从 zip 导入灵感（布局与 `export_inspirations_zip` 的产出同构）。
+///
+/// zip 不存在/损坏 → `Err`；归档内不符合布局的条目忽略并记入 `errors`。
+#[tauri::command]
+pub async fn import_inspirations_zip(
+    state: tauri::State<'_, crate::DbState>,
+    zip_path: String,
+) -> Result<InspirationImportResult, String> {
+    let path = zip_path.trim();
+    if path.is_empty() {
+        return Err("请选择要导入的压缩包".to_string());
+    }
+    let file = std::fs::File::open(path).map_err(|e| format!("打开压缩包失败：{}", e))?;
+    let mut result = InspirationImportResult::default();
+    let valid = read_zip_entries(file, &mut result)?;
+
+    let mut conn = state.get_conn().map_err(|e| e.to_string())?;
+    finalize_import(&mut conn, valid, &mut result)?;
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,5 +829,243 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_str(&market_json_string(&insp, "no-tag")).unwrap();
         assert_eq!(v["tags"], serde_json::json!([]));
+    }
+
+    // ── 导入单测 ──────────────────────────────────────────────────────────
+
+    /// 内存库 + 终态 schema + FTS 虚表（`create/import` 会重建 FTS 索引）。
+    fn import_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL).unwrap();
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn valid_entry(id: &str, title: &str, content: &str, tags: &[&str]) -> ValidEntry {
+        ValidEntry {
+            id: id.to_string(),
+            title: title.to_string(),
+            icon: "📝".to_string(),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            content: content.to_string(),
+        }
+    }
+
+    fn market_json(id: &str, title: &str, content: &str, tags: &[&str]) -> String {
+        serde_json::json!({
+            "id": id,
+            "title": title,
+            "icon": "📝",
+            "tags": tags,
+            "content": content,
+        })
+        .to_string()
+    }
+
+    /// 取某 market_id 对应的标签（按 tag 排序，便于断言）。
+    fn tags_of(conn: &Connection, market_id: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT it.tag FROM inspiration_tags it \
+                 JOIN inspirations i ON i.id = it.inspiration_id \
+                 WHERE i.market_id = ?1 ORDER BY it.tag",
+            )
+            .unwrap();
+        stmt.query_map(params![market_id], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    #[test]
+    fn import_creates_new_marked_as_market() {
+        let mut conn = import_conn();
+        let mut result = InspirationImportResult::default();
+        finalize_import(
+            &mut conn,
+            vec![valid_entry("new-tip", "标题", "正文", &["b", "a"])],
+            &mut result,
+        )
+        .unwrap();
+
+        assert_eq!((result.created, result.updated, result.skipped), (1, 0, 0));
+        assert!(result.errors.is_empty());
+        let (market_id, source, is_fav): (Option<String>, String, i64) = conn
+            .query_row(
+                "SELECT market_id, source_agent, is_favorite FROM inspirations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(market_id.as_deref(), Some("new-tip"));
+        // 来源标记与市场导入一致（InspirationMarketTab: sourceAgent: 'market'）
+        assert_eq!(source, "market");
+        assert_eq!(is_fav, 0);
+        assert_eq!(tags_of(&conn, "new-tip"), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn import_same_market_id_updates_in_place_and_replaces_tags() {
+        let mut conn = import_conn();
+        let mut r1 = InspirationImportResult::default();
+        finalize_import(
+            &mut conn,
+            vec![valid_entry("tip", "旧标题", "旧正文", &["旧"])],
+            &mut r1,
+        )
+        .unwrap();
+        assert_eq!((r1.created, r1.updated), (1, 0));
+        let (first_local_id, created_at): (String, i64) = conn
+            .query_row("SELECT id, created_at FROM inspirations", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+
+        let mut r2 = InspirationImportResult::default();
+        finalize_import(
+            &mut conn,
+            vec![valid_entry("tip", "新标题", "新正文", &["新1", "新2"])],
+            &mut r2,
+        )
+        .unwrap();
+        assert_eq!((r2.created, r2.updated), (0, 1));
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inspirations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "同 market_id 不应产生重复行");
+
+        let (local_id, title, content, cat): (String, String, String, i64) = conn
+            .query_row(
+                "SELECT id, title, content, created_at FROM inspirations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(local_id, first_local_id, "应更新同一条本地行");
+        assert_eq!(title, "新标题");
+        assert_eq!(content, "新正文");
+        assert_eq!(cat, created_at, "创建时间不应被改动");
+        assert_eq!(tags_of(&conn, "tip"), vec!["新1".to_string(), "新2".to_string()]);
+    }
+
+    #[test]
+    fn invalid_id_is_rejected_with_reason() {
+        match parse_and_validate_market_entry(&market_json("Bad_ID", "t", "c", &[])) {
+            Err(EntryError::Invalid(msg)) => {
+                assert!(msg.contains("id 不合规"), "msg = {}", msg)
+            }
+            Err(EntryError::Parse(m)) => panic!("应为校验失败而非解析失败：{}", m),
+            Ok(_) => panic!("非法 id 不应通过校验"),
+        }
+    }
+
+    #[test]
+    fn empty_title_or_content_is_rejected() {
+        match parse_and_validate_market_entry(&market_json("ok-id", "  ", "c", &[])) {
+            Err(EntryError::Invalid(m)) => assert!(m.contains("title"), "m = {}", m),
+            _ => panic!("空 title 应被拒绝"),
+        }
+        match parse_and_validate_market_entry(&market_json("ok-id", "t", "", &[])) {
+            Err(EntryError::Invalid(m)) => assert!(m.contains("content"), "m = {}", m),
+            _ => panic!("空 content 应被拒绝"),
+        }
+        // 缺字段（title/content 缺失）同样按空处理被拒
+        let missing: String = serde_json::json!({ "id": "ok-id" }).to_string();
+        match parse_and_validate_market_entry(&missing) {
+            Err(EntryError::Invalid(_)) => {}
+            _ => panic!("缺失 title/content 应被拒绝"),
+        }
+    }
+
+    #[test]
+    fn duplicate_ids_in_one_batch_count_once_and_last_wins() {
+        let deduped = dedup_entries_by_id(vec![
+            valid_entry("dup", "第一次", "c1", &["a"]),
+            valid_entry("dup", "第二次", "c2", &["b"]),
+        ]);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].title, "第二次");
+
+        let mut conn = import_conn();
+        let mut result = InspirationImportResult::default();
+        finalize_import(
+            &mut conn,
+            vec![
+                valid_entry("dup", "第一次", "c1", &["a"]),
+                valid_entry("dup", "第二次", "c2", &["b"]),
+            ],
+            &mut result,
+        )
+        .unwrap();
+        assert_eq!(
+            (result.created, result.updated),
+            (1, 0),
+            "同批重复 id 只应计一次"
+        );
+        let (count, title): (i64, String) = conn
+            .query_row("SELECT COUNT(*), MAX(title) FROM inspirations", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(title, "第二次");
+    }
+
+    #[test]
+    fn zip_import_reads_layout_and_tolerates_extras() {
+        use std::io::Write;
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("inspirations/first-tip/first-tip.json", opts)
+                .unwrap();
+            zip.write_all(market_json("first-tip", "标题一", "正文一", &["x"]).as_bytes())
+                .unwrap();
+            zip.start_file("inspirations/second-tip/second-tip.json", opts)
+                .unwrap();
+            zip.write_all(market_json("second-tip", "标题二", "正文二", &[]).as_bytes())
+                .unwrap();
+            // 混入：非 json 文件
+            zip.start_file("README.md", opts).unwrap();
+            zip.write_all(b"hello").unwrap();
+            // 混入：布局不符（文件名与目录名不一致）
+            zip.start_file("inspirations/broken/other-name.json", opts)
+                .unwrap();
+            zip.write_all(market_json("broken", "t", "c", &[]).as_bytes())
+                .unwrap();
+            // 混入：布局对但 id 非法 → 计入 skipped
+            zip.start_file("inspirations/xyz/xyz.json", opts).unwrap();
+            zip.write_all(market_json("Bad_ID", "t", "c", &[]).as_bytes())
+                .unwrap();
+            zip.finish().unwrap();
+        }
+
+        let mut result = InspirationImportResult::default();
+        let valid = read_zip_entries(buf, &mut result).unwrap();
+        assert_eq!(valid.len(), 2, "仅两条合布局且合规的条目进入待导入");
+        assert_eq!(result.skipped, 1, "非法 id 条目计入 skipped");
+        assert_eq!(result.errors.len(), 3, "非 json / 布局不符 / id 非法各一条");
+
+        let mut conn = import_conn();
+        finalize_import(&mut conn, valid, &mut result).unwrap();
+        assert_eq!((result.created, result.updated, result.skipped), (2, 0, 1));
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inspirations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(tags_of(&conn, "first-tip"), vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn corrupted_zip_returns_error() {
+        let mut result = InspirationImportResult::default();
+        let err = read_zip_entries(std::io::Cursor::new(b"definitely not a zip".to_vec()), &mut result);
+        assert!(err.is_err(), "损坏的压缩包应返回 Err");
     }
 }

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
-import { save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { Search, Plus, Star, Package } from 'lucide-react';
+import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
+import { Search, Plus, Star, Package, Lightbulb, Upload } from 'lucide-react';
 import { TitleBar, StatusBar } from '../layout';
 import { useTerminal, type ViewMode } from '../../TerminalManager';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
@@ -15,6 +15,14 @@ import { TagFilter } from './TagFilter';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+
+/** 后端导入结果（与 `src-tauri` 的 `InspirationImportResult` 同构） */
+interface InspirationImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
 
 /**
  * 灵感库（独立路由 /inspirations）。
@@ -127,6 +135,54 @@ export function InspirationLibraryPage() {
     }
   };
 
+  /**
+   * 导入灵感：一个入口同时吃市场格式的 `.json`（可多选）与本工具导出的 `.zip` 备份 ——
+   * 用户不必先分辨格式，按扩展名分派即可。落库语义由后端统一（同 `market_id` 覆盖更新，否则新建），
+   * 与「资源市集 › 灵感」的导入保持一致。
+   */
+  const handleImport = async () => {
+    try {
+      const picked = await openDialog({
+        multiple: true,
+        filters: [{ name: '灵感文件（.json / .zip）', extensions: ['json', 'zip'] }],
+      });
+      const paths = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter(
+        (p): p is string => typeof p === 'string',
+      );
+      if (paths.length === 0) return;
+
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+      const errors: string[] = [];
+      const merge = (r: InspirationImportResult) => {
+        created += r.created;
+        updated += r.updated;
+        skipped += r.skipped;
+        errors.push(...r.errors);
+      };
+      const jsonPaths = paths.filter((p) => p.toLowerCase().endsWith('.json'));
+      const zipPaths = paths.filter((p) => p.toLowerCase().endsWith('.zip'));
+      if (jsonPaths.length > 0) {
+        merge(await invoke<InspirationImportResult>('import_inspirations_from_files', { paths: jsonPaths }));
+      }
+      for (const zipPath of zipPaths) {
+        merge(await invoke<InspirationImportResult>('import_inspirations_zip', { zipPath }));
+      }
+
+      await fetchInspirations();
+      await fetchTags();
+      showToast(
+        `导入完成：新增 ${created} 条，更新 ${updated} 条${skipped > 0 ? `，跳过 ${skipped} 条` : ''}`,
+        skipped > 0 ? 'warning' : 'success',
+      );
+      // 跳过原因取第一条（通常是 id 不合规 / 缺 title）—— 比只报"跳过 N 条"更能指导用户改文件
+      if (errors.length > 0) showToast(errors[0], 'warning');
+    } catch (e) {
+      showToast(`导入失败：${errorMessage(e)}`, 'error');
+    }
+  };
+
   const openNewForm = () => {
     setEditingInspiration(null);
     setPrefillContent('');
@@ -154,15 +210,30 @@ export function InspirationLibraryPage() {
         onOpenSettings={() => navigate('/settings')}
       />
 
-      {/* 工具栏：页头由 TitleBar 承担（模式段 + 右侧图标区），这里保留页面标题与"条数 + 操作" */}
-      <div className="shrink-0 px-4 pt-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>灵感库</h2>
+      <div className="flex-1 min-h-0 px-2">
+        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
+
+      {/* 标题行 + 操作：与「资源市集」首行同构 —— 容器 pt-1、标题带强调色图标、下边框收口。
+          放在**内容面板内**（而不是 TitleBar 与面板之间那条飘在画布上的工具条），两页才是同级观感。 */}
+      <div className="shrink-0 px-4 pt-1 pb-1 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="flex items-center gap-2 shrink-0">
+          <Lightbulb size={14} style={{ color: 'var(--accent)' }} />
+          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>灵感库</span>
           <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
             {inspirations.length}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex-1" />
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => void handleImport()}
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs"
+            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+            title="导入灵感：市场格式的 .json（可多选）或本工具导出的 .zip 备份"
+          >
+            <Upload size={12} />
+            导入
+          </button>
           <button
             onClick={() => void handleExportZip()}
             disabled={exportingZip || inspirations.length === 0}
@@ -180,6 +251,7 @@ export function InspirationLibraryPage() {
               backgroundColor: favoriteOnly ? '#FBBF2422' : 'var(--bg-field)',
               color: favoriteOnly ? '#FBBF24' : 'var(--text-secondary)',
             }}
+            title={favoriteOnly ? '显示全部' : '只看收藏'}
           >
             <Star size={14} fill={favoriteOnly ? '#FBBF24' : 'none'} />
           </button>
@@ -193,9 +265,6 @@ export function InspirationLibraryPage() {
           </button>
         </div>
       </div>
-
-      <div className="flex-1 min-h-0 px-2">
-        <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
 
       {/* Search + Tags */}
       <div className="shrink-0 px-4 py-2 space-y-2" style={{ borderBottom: '1px solid var(--border)' }}>
