@@ -323,10 +323,12 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
           )}
         </div>
 
-        {/* Message card — w-full 确保所有类型宽度一致 */}
-        <div className="w-full">
+        {/* 卡片容器：用户消息取 w-fit —— 宽度跟随内容，但底部操作键行也是它的 flex 子项，
+            会被 items-stretch 拉到同宽，于是气泡自然"最窄不小于操作键宽度"；
+            助手 / 系统消息仍整行，内容直接撑满容器（不再有气泡底色与内边距）。 */}
+        <div className={isUser ? 'flex flex-col items-stretch w-fit max-w-full' : 'w-full'}>
           {isUser ? (
-            <div className="message-bubble-user rounded-xl px-3.5 py-2.5 w-full min-w-0 break-all" style={{ backgroundColor: 'var(--accent)', color: '#fff', ...highlightStyle }}>
+            <div className="message-bubble-user rounded-xl px-3.5 py-2.5 min-w-0 break-all" style={{ backgroundColor: 'var(--accent)', color: '#fff', ...highlightStyle }}>
               {isEditing ? (
                 <textarea
                   ref={editRef}
@@ -379,8 +381,8 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
               const accentColor = isError ? 'var(--danger, #EF4444)' : isTimeout ? 'var(--warning, #F59E0B)' : isStopped ? 'var(--text-tertiary, #9CA3AF)' : 'var(--info, #3B82F6)';
               const displayContent = message.content.replace(/^[⏱❗⏸ℹ]\s*/, '');
               return (
-                <div className="rounded-lg w-full" style={{ backgroundColor: 'var(--bg-tertiary)', borderLeft: `3px solid ${accentColor}`, ...highlightStyle }}>
-                  <div className="flex items-center gap-2 px-3.5 py-2">
+                <div className="w-full" style={{ ...highlightStyle }}>
+                  <div className="flex items-center gap-2">
                     <span className="shrink-0" style={{ color: accentColor }}>
                       {isError ? (
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -398,7 +400,7 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
               );
             })()
           ) : (
-            <div className="rounded-xl w-full px-3.5 py-2.5 min-w-0 break-all" style={{ backgroundColor: 'var(--bg-secondary)', ...highlightStyle }}>
+            <div className="w-full min-w-0 break-all" style={{ ...highlightStyle }}>
               {/* 思维链 */}
               <ThinkingChain
                 steps={mergedThinkingChain}

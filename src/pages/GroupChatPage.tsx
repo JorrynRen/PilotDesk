@@ -1033,11 +1033,19 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
             </span>
           </div>
           <div
-            className={`block w-full rounded-xl text-xs leading-relaxed break-all overflow-hidden${isUser ? ' message-bubble-user' : ''}`}
+            className={
+              isConclusion
+                ? 'block w-full rounded-xl text-xs leading-relaxed break-all overflow-hidden'
+                : isUser
+                  // 用户消息：气泡宽度跟随内容（w-fit），不再默认整行
+                  ? 'message-bubble-user rounded-xl w-fit max-w-full text-xs leading-relaxed break-all'
+                  // 参与者 / 助手消息：去掉气泡底色与内边距，内容直接撑满容器
+                  : 'block text-xs leading-relaxed break-all'
+            }
             style={{
-              backgroundColor: isConclusion ? 'var(--accent-light)' : isUser ? 'var(--accent)' : 'var(--bg-secondary)',
+              backgroundColor: isConclusion ? 'var(--accent-light)' : isUser ? 'var(--accent)' : undefined,
               color: isUser ? '#fff' : 'var(--text-primary)',
-              border: `1px solid ${isConclusion ? 'var(--accent)' : isUser ? 'transparent' : 'var(--border)'}`,
+              border: isConclusion ? '1px solid var(--accent)' : undefined,
             }}
           >
             {isConclusion && (
@@ -1046,7 +1054,7 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
                 <span className="font-semibold" style={{ color: '#fff', fontSize: '12px' }}>最终结论</span>
               </div>
             )}
-            <div className="px-3 py-2">
+            <div className={isUser || isConclusion ? 'px-3 py-2' : ''}>
             {atts.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-1.5">
                 {atts.map((att, ai) =>
