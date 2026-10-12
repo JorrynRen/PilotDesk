@@ -380,8 +380,10 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
               const isStopped = message.content.startsWith('⏸');
               const accentColor = isError ? 'var(--danger, #EF4444)' : isTimeout ? 'var(--warning, #F59E0B)' : isStopped ? 'var(--text-tertiary, #9CA3AF)' : 'var(--info, #3B82F6)';
               const displayContent = message.content.replace(/^[⏱❗⏸ℹ]\s*/, '');
+              // rounded-lg 保留：无底色时圆角本身看不见，但搜索定位的 outline 会跟着它走 ——
+              // 去掉圆角会让高亮框变成直角矩形。
               return (
-                <div className="w-full" style={{ ...highlightStyle }}>
+                <div className="w-full rounded-lg" style={{ ...highlightStyle }}>
                   <div className="flex items-center gap-2">
                     <span className="shrink-0" style={{ color: accentColor }}>
                       {isError ? (
@@ -400,7 +402,8 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
               );
             })()
           ) : (
-            <div className="w-full min-w-0 break-all" style={{ ...highlightStyle }}>
+            <div className="w-full min-w-0 break-all rounded-xl" style={{ ...highlightStyle }}>
+              {/* rounded-xl 保留：无底色时圆角看不见，但搜索定位的 outline 会跟着它走（去掉会变直角矩形） */}
               {/* 思维链 */}
               <ThinkingChain
                 steps={mergedThinkingChain}
