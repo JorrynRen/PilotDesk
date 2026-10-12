@@ -1,4 +1,4 @@
-import { Star, Send, Trash2 } from 'lucide-react';
+import { Star, Send, Trash2, Download } from 'lucide-react';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import type { InspirationItem } from '../../stores/inspirationStore';
 import { elide } from '../../utils/text';
@@ -10,9 +10,11 @@ interface InspirationCardProps {
   onSendToSession: (content: string) => void;
   onDelete: (id: string) => void;
   onEdit: (inspiration: InspirationItem) => void;
+  /** 导出为市场 JSON（投稿用） */
+  onExport: (inspiration: InspirationItem) => void;
 }
 
-export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession, onDelete, onEdit }: InspirationCardProps) {
+export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession, onDelete, onEdit, onExport }: InspirationCardProps) {
   const { getTheme } = useAgentRegistry();
   const sourceTheme = getTheme(inspiration.sourceAgent);
   const sourceLabel = sourceTheme.label;
@@ -50,6 +52,17 @@ export function InspirationCard({ inspiration, onToggleFavorite, onSendToSession
             style={{ color: inspiration.isFavorite ? '#FBBF24' : 'var(--text-tertiary)' }}
           >
             <Star size={14} fill={inspiration.isFavorite ? '#FBBF24' : 'none'} />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onExport(inspiration);
+            }}
+            className="p-1 rounded transition-colors"
+            style={{ color: 'var(--text-tertiary)' }}
+            title="导出为市场 JSON（投稿用）"
+          >
+            <Download size={14} />
           </button>
           <button
             onClick={(e) => {

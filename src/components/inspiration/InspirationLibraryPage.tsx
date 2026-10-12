@@ -1,12 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Plus, Star, ArrowLeft } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { Search, Plus, Star, ArrowLeft, Package } from 'lucide-react';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { InspirationCard } from './InspirationCard';
 import { InspirationForm } from './InspirationForm';
+import { InspirationExportDialog } from './InspirationExportDialog';
 import { TagFilter } from './TagFilter';
 import { confirmDialog } from '../../stores/confirmStore';
+import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
 
 interface InspirationLibraryPageProps {
   onBack: () => void;
@@ -39,6 +44,10 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
   const [showForm, setShowForm] = useState(false);
   const [editingInspiration, setEditingInspiration] = useState<InspirationItem | null>(null);
   const [prefillContent, setPrefillContent] = useState('');
+  /** 导出为市场 JSON 的目标条目（非空即弹窗） */
+  const [exportTarget, setExportTarget] = useState<InspirationItem | null>(null);
+  /** 全量导出（备份）进行中 */
+  const [exportingZip, setExportingZip] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentSession = useSessionStore((s) => {
@@ -99,6 +108,24 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
     }
   };
 
+  /** 全量导出：把全部灵感打包成 zip（目录布局与市场同构，供备份） */
+  const handleExportZip = async () => {
+    try {
+      const destPath = await saveDialog({
+        defaultPath: 'inspirations-backup.zip',
+        filters: [{ name: 'ZIP', extensions: ['zip'] }],
+      });
+      if (!destPath) return;
+      setExportingZip(true);
+      const count = await invoke<number>('export_inspirations_zip', { destPath });
+      showToast(`已导出 ${count} 条灵感到备份文件`, 'success');
+    } catch (e) {
+      showToast(`导出失败：${errorMessage(e)}`, 'error');
+    } finally {
+      setExportingZip(false);
+    }
+  };
+
   const openNewForm = () => {
     setEditingInspiration(null);
     setPrefillContent('');
@@ -120,6 +147,16 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => void handleExportZip()}
+            disabled={exportingZip || inspirations.length === 0}
+            className="pd-btn flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs disabled:opacity-50"
+            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+            title="把全部灵感导出为 zip 备份（目录布局与市场同构）"
+          >
+            <Package size={12} />
+            {exportingZip ? '导出中…' : '全量导出'}
+          </button>
           <button
             onClick={() => setFavoriteOnly(!favoriteOnly)}
             className="p-1.5 rounded-lg transition-colors"
@@ -193,6 +230,7 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
                 onSendToSession={handleSendToSession}
                 onDelete={handleDelete}
                 onEdit={handleEdit}
+                onExport={setExportTarget}
               />
             ))}
           </div>
@@ -212,6 +250,14 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
             setEditingInspiration(null);
             setPrefillContent('');
           }}
+        />
+      )}
+
+      {/* 导出为市场 JSON（投稿用） */}
+      {exportTarget && (
+        <InspirationExportDialog
+          inspiration={exportTarget}
+          onClose={() => setExportTarget(null)}
         />
       )}
         </div>
