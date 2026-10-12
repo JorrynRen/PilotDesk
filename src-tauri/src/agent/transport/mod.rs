@@ -15,6 +15,7 @@
 pub mod jsonrpc;
 pub mod subprocess;
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -164,7 +165,9 @@ impl Default for TransportKind {
 }
 
 /// 建立一次会话所需的连接参数。
-#[derive(Debug, Clone)]
+///
+/// 注：不派生 `Debug` —— `on_pid` 是 `dyn Fn`，无法实现 `Debug`。
+#[derive(Clone)]
 pub struct AgentConn {
     /// 本应用侧会话 id（事件回传时携带）
     pub session_id: String,
@@ -178,6 +181,22 @@ pub struct AgentConn {
     pub conn: serde_json::Value,
     /// 恢复用的对端会话 id（ACP `session/load` / CLI `--resume`）
     pub resume_id: Option<String>,
+    /// 取消令牌：调用方与实现**共享同一份**，任一侧置位即终止本回合
+    pub abort: Arc<AtomicBool>,
+    /// 进程启动回调（携带 pid）：供调用方注册进程表，以支持按 pid 终止整棵进程树
+    pub on_pid: Option<PidCallback>,
+}
+
+/// 进程启动回调（`Fn` 而非 `FnMut`：可能被多线程共享）。
+pub type PidCallback = Arc<dyn Fn(u32) + Send + Sync>;
+
+/// 一轮执行的产出。
+#[derive(Debug, Clone)]
+pub struct PromptOutput {
+    /// 结束原因
+    pub stop_reason: StopReason,
+    /// 本回合累计正文（口径与现有 `ExecuteResult.stdout` 一致）
+    pub text: String,
 }
 
 /// 会话句柄。
@@ -299,7 +318,7 @@ pub trait AgentSession: Send + Sync {
         &self,
         handle: &SessionHandle,
         input: PromptInput,
-    ) -> Result<StopReason, AgentError>;
+    ) -> Result<PromptOutput, AgentError>;
 
     /// 取消当前回合。
     async fn cancel(&self, handle: &SessionHandle) -> Result<(), AgentError>;

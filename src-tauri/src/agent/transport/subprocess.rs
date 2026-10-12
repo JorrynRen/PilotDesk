@@ -7,9 +7,8 @@
 //! 唯一差别是**出口**：本实现把结果投影为 `UnifiedAgentEvent`
 //! （P0 阶段只产出原有 4 类：`Chunk` / `AgentSessionId` / `Done` / `Error`）。
 //!
-//! 取消语义的相对变化（接线时由调用方收敛）：本实现把"用户取消"表达为
-//! `Err(AgentError::Cancelled)`，由上层映射为 `agent-cancelled`；
-//! 原实现是 kill 后按 exit_code 走 `agent-error`。
+//! 取消与进程登记沿用调用方注入的 `AgentConn.abort` / `AgentConn.on_pid`，
+//! 因此"按 pid 终止进程树"与"共享取消标志"两种既有机制完全保留。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,8 +18,8 @@ use crate::agent::async_process::{AsyncConsole, TokioConsole};
 use crate::agent::config::AgentConfig;
 use crate::agent::handler::{ProcessHandler, StdioHandler};
 use crate::agent::transport::{
-    AgentConn, AgentError, AgentSession, Capabilities, EventSink, PromptInput, SessionHandle,
-    StopReason, TransportKind, UnifiedAgentEvent,
+    AgentConn, AgentError, AgentSession, Capabilities, EventSink, PidCallback, PromptInput,
+    PromptOutput, SessionHandle, StopReason, TransportKind, UnifiedAgentEvent,
 };
 use crate::utils::process::{
     check_process_state, make_still_alive_error, TimeoutError, TimeoutPolicy,
@@ -33,8 +32,10 @@ pub struct SubprocessSession {
     session_id: String,
     cwd: String,
     sink: Option<EventSink>,
-    /// 取消标志：`cancel` 置位，IO 循环轮询到即终止本回合
-    aborted: Arc<AtomicBool>,
+    /// 取消令牌（与调用方共享同一份 `Arc`）
+    abort: Arc<AtomicBool>,
+    /// 进程启动回调（把 pid 交回调用方登记）
+    on_pid: Option<PidCallback>,
 }
 
 impl SubprocessSession {
@@ -45,7 +46,8 @@ impl SubprocessSession {
             session_id: String::new(),
             cwd: String::new(),
             sink: None,
-            aborted: Arc::new(AtomicBool::new(false)),
+            abort: Arc::new(AtomicBool::new(false)),
+            on_pid: None,
         }
     }
 
@@ -72,7 +74,7 @@ impl AgentSession for SubprocessSession {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // 文本/JSON 解析不产出结构化工具事件与思考链
+            // 文本 / JSON 解析不产出结构化工具事件与思考链
             tool_events: false,
             permission: false,
             reasoning: false,
@@ -97,6 +99,8 @@ impl AgentSession for SubprocessSession {
             conn.cwd.clone()
         };
         self.sink = Some(sink);
+        self.abort = Arc::clone(&conn.abort);
+        self.on_pid = conn.on_pid.clone();
         Ok(SessionHandle {
             session_id: conn.session_id.clone(),
             remote_id: conn.resume_id.clone(),
@@ -107,16 +111,21 @@ impl AgentSession for SubprocessSession {
         &self,
         handle: &SessionHandle,
         input: PromptInput,
-    ) -> Result<StopReason, AgentError> {
+    ) -> Result<PromptOutput, AgentError> {
         let handler = StdioHandler::from_config(self.config.clone());
         let (exe, args) = handler.build_command(&input.text, handle.remote_id.as_deref());
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         let mut console = TokioConsole::new();
-        let (_pid, mut stdout_rx, mut stderr_rx) = console
+        let (pid, mut stdout_rx, mut stderr_rx) = console
             .spawn(&exe, &arg_refs, &self.cwd)
             .await
             .map_err(|e| AgentError::Connect(format!("启动进程失败: {}", e)))?;
+
+        // 把 pid 交回调用方登记（保留"按 pid 终止进程树"的既有能力）
+        if let Some(cb) = &self.on_pid {
+            cb(pid);
+        }
 
         let stderr_buf = Arc::new(Mutex::new(String::new()));
         let mut full_output = String::new();
@@ -126,9 +135,9 @@ impl AgentSession for SubprocessSession {
         let sid_from_stderr = self.config.session_id_source.starts_with("stderr-");
 
         loop {
-            // 取消检查
-            if self.aborted.load(Ordering::Relaxed) {
-                log::info!("[transport/subprocess] abort requested, killing pid={}", _pid);
+            // 取消检查（调用方与实现共享同一令牌）
+            if self.abort.load(Ordering::Relaxed) {
+                log::info!("[transport/subprocess] abort requested, killing pid={}", pid);
                 let _ = console.kill().await;
                 return Err(AgentError::Cancelled);
             }
@@ -228,11 +237,14 @@ impl AgentSession for SubprocessSession {
             });
         }
 
-        Ok(StopReason::EndTurn)
+        Ok(PromptOutput {
+            stop_reason: StopReason::EndTurn,
+            text: full_output,
+        })
     }
 
     async fn cancel(&self, _handle: &SessionHandle) -> Result<(), AgentError> {
-        self.aborted.store(true, Ordering::Relaxed);
+        self.abort.store(true, Ordering::Relaxed);
         Ok(())
     }
 

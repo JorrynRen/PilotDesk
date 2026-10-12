@@ -60,6 +60,20 @@ fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> Strin
 }
 
 // ------------------------------------------------------------------
+//  P0-v2 开关
+// ------------------------------------------------------------------
+
+/// P0-v2 开关：设置 `PILOTDESK_TRANSPORT_V2=1` 时启用传输抽象层路径。
+///
+/// 缺省关闭 —— 保证本次落位**零行为变化**；验证通过后再把缺省改为开启。
+fn transport_v2_enabled() -> bool {
+    matches!(
+        std::env::var("PILOTDESK_TRANSPORT_V2").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+// ------------------------------------------------------------------
 //  统一执行参数与结果类型
 // ------------------------------------------------------------------
 
@@ -185,7 +199,31 @@ impl AgentManager {
     //  异步路径实现（核心 IO 循环）
     // ------------------------------------------------------------------
 
-    /// 异步会话执行（会话模式）
+    /// 异步会话执行（会话模式）——分发入口。
+    ///
+    /// - 设置 `PILOTDESK_TRANSPORT_V2=1` → 走传输抽象层（`execute_async_v2`，P0-v2）
+    /// - 否则 → 既有实现（`execute_async_legacy`，**默认路径**）
+    ///
+    /// 两条路径返回同一 `ExecuteResult` 契约，故上层调用方无需感知差异。
+    #[allow(unused_assignments)]
+    async fn execute_async(
+        &self,
+        async_opts: AsyncOptions,
+        callbacks: AsyncCallbacks,
+        config: &AgentConfig,
+        message: &str,
+        agent_session_id: Option<&str>,
+    ) -> Result<ExecuteResult, String> {
+        if transport_v2_enabled() {
+            self.execute_async_v2(async_opts, callbacks, config, message, agent_session_id)
+                .await
+        } else {
+            self.execute_async_legacy(async_opts, callbacks, config, message, agent_session_id)
+                .await
+        }
+    }
+
+    /// 既有实现（保留原样，作为默认路径与回退）。
     ///
     /// 通过 async_process::TokioConsole 创建异步进程控制台，
     /// ProcessHandler 驱动命令构建和输出解析，
@@ -193,7 +231,7 @@ impl AgentManager {
     ///
     /// 会话启动前先执行 "CD {cwd}" 确保 Agent 在指定目录下工作。
     #[allow(unused_assignments)]
-    async fn execute_async(
+    async fn execute_async_legacy(
         &self,
         async_opts: AsyncOptions,
         callbacks: AsyncCallbacks,
@@ -425,6 +463,133 @@ impl AgentManager {
             exit_code,
             stderr: stderr_text,
         })
+    }
+
+    // ------------------------------------------------------------------
+    //  P0-v2：经传输抽象层执行（PILOTDESK_TRANSPORT_V2=1 启用）
+    // ------------------------------------------------------------------
+
+    /// 经 `transport::subprocess` 执行一轮 CLI 会话（P0-v2 路径）。
+    ///
+    /// 与 legacy 路径**语义等价**：命令构建 / 输出解析 / session_id 提取 /
+    /// 超时轮询 / 取消 / 错误映射全部沿用同一套元信息与工具函数；
+    /// pid 与取消令牌仍登记进既有 `processes` 进程表，故
+    /// 「停止生成」「取消工作流」等按 pid 终止的实现**零改动**。
+    async fn execute_async_v2(
+        &self,
+        async_opts: AsyncOptions,
+        callbacks: AsyncCallbacks,
+        config: &AgentConfig,
+        message: &str,
+        agent_session_id: Option<&str>,
+    ) -> Result<ExecuteResult, String> {
+        use crate::agent::transport::{
+            AgentConn, AgentError, AgentSession, PidCallback, PromptInput, TransportKind,
+            UnifiedAgentEvent,
+        };
+
+        let session_id = async_opts.session_id.clone();
+        let agent_type = config.agent_type.clone();
+        let cwd = if async_opts.cwd.is_empty() {
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
+        } else {
+            async_opts.cwd.clone()
+        };
+
+        log::info!(
+            "[Agent/execute_async_v2] session='{}' agent_type='{}' cwd='{}' msg_len={}",
+            session_id,
+            agent_type,
+            cwd,
+            message.len()
+        );
+
+        // 取消令牌与进程表共用同一个 AtomicBool：
+        // stop_generation / stop_generation_no_mut 置位后，传输层循环即刻感知并终止。
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_for_map = Arc::clone(&aborted);
+        let processes_for_pid = Arc::clone(&self.processes);
+        let session_for_pid = session_id.clone();
+        let on_pid: PidCallback = Arc::new(move |pid: u32| {
+            processes_for_pid.lock().unwrap().insert(
+                session_for_pid.clone(),
+                AgentProcess {
+                    pid: Some(pid),
+                    aborted: Arc::clone(&aborted_for_map),
+                },
+            );
+        });
+
+        // 事件出口：把 UnifiedAgentEvent 投影回既有 Tauri 事件
+        // （`on_chunk` 是 `Box<dyn Fn + Send>`，用 Mutex 包成 `Sync` 以满足 EventSink）
+        let on_chunk = Mutex::new(callbacks.on_chunk);
+        let on_session_id = std::sync::Arc::clone(&callbacks.on_session_id);
+        let sink: crate::agent::transport::EventSink = Arc::new(move |ev: UnifiedAgentEvent| {
+            match ev {
+                UnifiedAgentEvent::Chunk { content, .. } => {
+                    if let Ok(f) = on_chunk.lock() {
+                        f(content);
+                    }
+                }
+                UnifiedAgentEvent::AgentSessionId {
+                    agent_session_id, ..
+                } => {
+                    (on_session_id)(agent_session_id);
+                }
+                _ => {}
+            }
+        });
+
+        let conn = AgentConn {
+            session_id: session_id.clone(),
+            agent_id: agent_type.clone(),
+            transport: TransportKind::Subprocess,
+            cwd,
+            conn: serde_json::Value::Null,
+            resume_id: agent_session_id.map(|s| s.to_string()),
+            abort: Arc::clone(&aborted),
+            on_pid: Some(on_pid),
+        };
+
+        let mut session =
+            crate::agent::transport::subprocess::SubprocessSession::new(config.clone());
+        let handle = session
+            .connect(&conn, sink)
+            .await
+            .map_err(|e| format!("建立会话失败: {}", e))?;
+
+        let result = session
+            .prompt(
+                &handle,
+                PromptInput {
+                    text: message.to_string(),
+                    images: Vec::new(),
+                },
+            )
+            .await;
+
+        // 运行结束即摘除进程表项（与 legacy 的 stop_generation 收尾口径一致）
+        if let Ok(mut procs) = self.processes.lock() {
+            procs.remove(&session_id);
+        }
+
+        match result {
+            Ok(out) => Ok(ExecuteResult {
+                stdout: out.text.trim().to_string(),
+                exit_code: 0,
+                stderr: String::new(),
+            }),
+            // 非 0 退出：与 legacy 一致地返回 Ok + 非 0 退出码，交由上层做友好错误映射
+            Err(AgentError::ProcessExited { exit_code, stderr }) => Ok(ExecuteResult {
+                stdout: String::new(),
+                exit_code,
+                stderr,
+            }),
+            Err(AgentError::Cancelled) => Err("已取消".to_string()),
+            Err(e) => Err(format!("{}", e)),
+        }
     }
 
     // ------------------------------------------------------------------
