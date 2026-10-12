@@ -9,6 +9,38 @@
 use crate::agent::config::AgentConfig;
 use crate::agent::line_processor::LineProcessor;
 
+/// 从 CLI 输出中提取的**结构化事件**（尚未绑定会话 id）。
+///
+/// 仅在 `output_parser = "json-stream"` 且对端确有结构化输出时产生；
+/// 由传输层（`transport::subprocess`）绑定会话 id 后投影为 `UnifiedAgentEvent`。
+///
+/// 字段口径来自**实测样本**（见实施计划 §十三）：claude `stream-json` 的
+/// `assistant.message.usage`（已实测）、`assistant.message.content[].tool_use`、
+/// `user.message.content[].tool_result`、`result.is_error`。
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamEvent {
+    /// 本轮某次 API 调用的用量（Anthropic 口径：`input_tokens` 不含缓存部分）
+    Usage {
+        prompt: u32,
+        completion: u32,
+        total: u32,
+    },
+    /// 工具调用开始
+    ToolStart {
+        tool_id: String,
+        name: String,
+        args: String,
+    },
+    /// 工具调用结束
+    ToolResult {
+        tool_id: String,
+        result: String,
+        success: bool,
+    },
+    /// 对端自报失败（判据**优先于** exit code）
+    Failed { message: String },
+}
+
 /// 进程交互协议抽象
 pub trait ProcessHandler: Send + Sync {
     /// 构建命令和参数
@@ -22,6 +54,14 @@ pub trait ProcessHandler: Send + Sync {
     /// 从输出行提取 agent session_id
     /// is_stderr: 当前行是否来自 stderr
     fn extract_session_id(&self, line: &str) -> Option<String>;
+
+    /// 从一行输出中提取**结构化事件**（工具调用 / 用量 / 失败标记）。
+    ///
+    /// 默认返回空：多数 CLI 无结构化输出，只有 `json-stream` 类解析器才有。
+    /// 传输层据此补上此前被整体丢弃的工具链路与用量信息。
+    fn parse_stream_events(&self, _line: &str) -> Vec<StreamEvent> {
+        Vec::new()
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -148,6 +188,96 @@ impl ProcessHandler for StdioHandler {
             _ => None,
         }
     }
+
+    fn parse_stream_events(&self, line: &str) -> Vec<StreamEvent> {
+        // 只有 json-stream 解析器才有结构化事件；ansi-text / raw-text 无
+        if self.config.output_parser != "json-stream" {
+            return Vec::new();
+        }
+        parse_json_stream_events(line)
+    }
+}
+
+/// 解析 claude `stream-json` 的**结构化事件**。
+///
+/// 样本依据（实施计划 §十三）：`tool_use` / `text` 同处 `assistant.message.content[]`；
+/// 诚实标注：**当前样本仅实测到 `text` 与 `message.usage`**，
+/// `tool_use` / `tool_result` 为文档化块类型，实现后需一次真实工具调用复核。
+///
+/// 非 JSON 行（如 `[claude-code:unrecognized_model] {...}` 噪声）直接返回空。
+fn parse_json_stream_events(line: &str) -> Vec<StreamEvent> {
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+
+    match event["type"].as_str().unwrap_or("") {
+        "assistant" => {
+            // ── 用量（已实测字段；此前被整体丢弃）──
+            // Anthropic 口径：input_tokens 不含缓存，故四桶相加为 total（与 api_agent 落库口径一致）
+            let usage = &event["message"]["usage"];
+            if usage.is_object() {
+                let prompt = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
+                let completion = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
+                let cache_read = usage["cache_read_input_tokens"].as_u64().unwrap_or(0) as u32;
+                let cache_write = usage["cache_creation_input_tokens"]
+                    .as_u64()
+                    .unwrap_or(0) as u32;
+                if prompt + completion + cache_read + cache_write > 0 {
+                    out.push(StreamEvent::Usage {
+                        prompt,
+                        completion,
+                        total: prompt + completion + cache_read + cache_write,
+                    });
+                }
+            }
+
+            // ── 工具调用 ──
+            if let Some(blocks) = event["message"]["content"].as_array() {
+                for b in blocks {
+                    if b["type"] == "tool_use" {
+                        out.push(StreamEvent::ToolStart {
+                            tool_id: b["id"].as_str().unwrap_or_default().to_string(),
+                            name: b["name"].as_str().unwrap_or_default().to_string(),
+                            args: b["input"].to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        "user" => {
+            // ── 工具结果（claude 以 user 消息回传 tool_result）──
+            if let Some(blocks) = event["message"]["content"].as_array() {
+                for b in blocks {
+                    if b["type"] == "tool_result" {
+                        let content = match &b["content"] {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        out.push(StreamEvent::ToolResult {
+                            tool_id: b["tool_use_id"].as_str().unwrap_or_default().to_string(),
+                            result: content,
+                            success: !b["is_error"].as_bool().unwrap_or(false),
+                        });
+                    }
+                }
+            }
+        }
+        "result" => {
+            // ── 对端自报失败：比 exit code 更可靠的判据（实测：exit=1 而 subtype=success）──
+            if event["is_error"].as_bool().unwrap_or(false) {
+                out.push(StreamEvent::Failed {
+                    message: event["result"]
+                        .as_str()
+                        .unwrap_or("Agent 自报失败")
+                        .to_string(),
+                });
+            }
+        }
+        _ => {}
+    }
+
+    out
 }
 
 // ──────────────────────────────────────────────
@@ -355,5 +485,78 @@ mod tests {
             result, None,
             "Default prefix is 'session_id: ', not 'Session: '"
         );
+    }
+}
+
+/// 结构化事件解析测试：用例取自**实测样本**（实施计划 §十三）。
+#[cfg(test)]
+mod stream_event_tests {
+    use super::*;
+
+    /// assistant 消息：文本块 + 用量（Anthropic 口径，total = 四桶之和）
+    #[test]
+    fn parses_assistant_usage() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}],"usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":4}},"session_id":"s1"}"#;
+        assert_eq!(
+            parse_json_stream_events(line),
+            vec![StreamEvent::Usage {
+                prompt: 10,
+                completion: 2,
+                total: 19,
+            }]
+        );
+    }
+
+    /// 工具调用块（文档化块类型；本次样本未观测到，待真实工具调用复核）
+    #[test]
+    fn parses_tool_use_block() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"a.rs"}}]}}"#;
+        match parse_json_stream_events(line).as_slice() {
+            [StreamEvent::ToolStart { tool_id, name, args }] => {
+                assert_eq!(tool_id, "tu_1");
+                assert_eq!(name, "Read");
+                assert!(args.contains("a.rs"));
+            }
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+
+    /// 工具结果块（claude 以 user 消息回传）
+    #[test]
+    fn parses_tool_result_block() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"ok"}]}}"#;
+        assert_eq!(
+            parse_json_stream_events(line),
+            vec![StreamEvent::ToolResult {
+                tool_id: "tu_1".into(),
+                result: "ok".into(),
+                success: true,
+            }]
+        );
+    }
+
+    /// result 信封的 is_error：优先于 exit code 的失败判据
+    #[test]
+    fn parses_result_error_envelope() {
+        let line = r#"{"type":"result","subtype":"success","is_error":true,"result":"API Error: 400"}"#;
+        match parse_json_stream_events(line).as_slice() {
+            [StreamEvent::Failed { message }] => assert!(message.contains("API Error")),
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+
+    /// 非 JSON 噪声行（`[claude-code:unrecognized_model] {…}`）被忽略
+    #[test]
+    fn ignores_noise_line() {
+        assert!(
+            parse_json_stream_events("[claude-code:unrecognized_model] {\"model\":\"x\"}").is_empty()
+        );
+    }
+
+    /// 全零用量不产生事件（避免噪声 Usage）
+    #[test]
+    fn skips_zero_usage() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":0,"output_tokens":0}}}"#;
+        assert!(parse_json_stream_events(line).is_empty());
     }
 }

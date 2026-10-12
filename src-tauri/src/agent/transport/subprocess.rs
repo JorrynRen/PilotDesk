@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use crate::agent::async_process::{AsyncConsole, TokioConsole};
 use crate::agent::config::AgentConfig;
-use crate::agent::handler::{ProcessHandler, StdioHandler};
+use crate::agent::handler::{ProcessHandler, StdioHandler, StreamEvent};
 use crate::agent::transport::{
     AgentConn, AgentError, AgentSession, Capabilities, EventSink, PidCallback, PromptInput,
     PromptOutput, SessionHandle, StopReason, TransportKind, UnifiedAgentEvent,
@@ -129,6 +129,8 @@ impl AgentSession for SubprocessSession {
 
         let stderr_buf = Arc::new(Mutex::new(String::new()));
         let mut full_output = String::new();
+        // 对端自报的失败信息（优先于 exit code）
+        let mut failed: Option<String> = None;
         let poll_start = Instant::now();
 
         let sid_from_stdout = self.config.session_id_source.starts_with("stdout-");
@@ -203,6 +205,40 @@ impl AgentSession for SubprocessSession {
                             content,
                         });
                     }
+                    // 结构化事件：补齐此前被整体丢弃的工具链路与用量
+                    for ev in handler.parse_stream_events(&line) {
+                        match ev {
+                            StreamEvent::Usage {
+                                prompt,
+                                completion,
+                                total,
+                            } => self.emit(UnifiedAgentEvent::Usage {
+                                session_id: self.session_id.clone(),
+                                prompt,
+                                completion,
+                                total,
+                            }),
+                            StreamEvent::ToolStart { tool_id, name, args } => {
+                                self.emit(UnifiedAgentEvent::ToolStart {
+                                    session_id: self.session_id.clone(),
+                                    tool_id,
+                                    name,
+                                    args,
+                                })
+                            }
+                            StreamEvent::ToolResult {
+                                tool_id,
+                                result,
+                                success,
+                            } => self.emit(UnifiedAgentEvent::ToolResult {
+                                session_id: self.session_id.clone(),
+                                tool_id,
+                                result,
+                                success,
+                            }),
+                            StreamEvent::Failed { message } => failed = Some(message),
+                        }
+                    }
                 }
                 Some(line) = stderr_rx.recv() => {
                     if sid_from_stderr {
@@ -234,6 +270,15 @@ impl AgentSession for SubprocessSession {
             return Err(AgentError::ProcessExited {
                 exit_code,
                 stderr: combined,
+            });
+        }
+
+        // 对端自报失败优先于 exit code（实测：claude 可能 exit=1 而 subtype=success，
+        // 反之也可能退出码为 0 却 is_error=true）→ 统一按失败上报，交由上层做友好映射
+        if let Some(msg) = failed {
+            return Err(AgentError::ProcessExited {
+                exit_code: if exit_code == 0 { 1 } else { exit_code },
+                stderr: msg,
             });
         }
 
