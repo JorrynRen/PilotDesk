@@ -19,6 +19,8 @@ pub mod config;
 pub mod handler;
 pub mod line_processor;
 pub mod list_skills;
+// P0 连接传输抽象层（契约）。当前仅声明、未被上层引用，接线在 P0-4 落地。
+pub mod transport;
 
 // ------------------------------------------------------------------
 //  统一错误映射
