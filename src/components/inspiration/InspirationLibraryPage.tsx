@@ -224,9 +224,9 @@ export function InspirationLibraryPage() {
             {inspirations.length}
           </span>
         </div>
-        {/* 搜索并入标题行（原先独占一行）：与「资源市集」把筛选控件放在首行同一思路，
-            少一行纵向占用；标题块与右侧操作 shrink-0，输入框居中自适应 */}
-        <div className="relative flex-1 min-w-[140px] max-w-sm">
+        {/* 搜索并入标题行（原先独占一行），省一行纵向占用；标题块留在左侧，
+            搜索框与右侧操作按钮作为一组靠右对齐（ml-auto 把这一组推到行尾） */}
+        <div className="relative w-56 shrink-0 ml-auto">
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
           <input
             type="text"
