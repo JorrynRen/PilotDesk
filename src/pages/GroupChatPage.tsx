@@ -1054,7 +1054,7 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
                 <span className="font-semibold" style={{ color: '#fff', fontSize: '12px' }}>最终结论</span>
               </div>
             )}
-            <div className={isUser || isConclusion ? 'px-3 py-2' : ''}>
+            <div className={isUser || isConclusion ? 'px-3 py-2' : 'py-2'}>
             {atts.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-1.5">
                 {atts.map((att, ai) =>
