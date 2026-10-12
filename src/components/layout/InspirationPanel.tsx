@@ -56,9 +56,12 @@ export function InspirationPanel() {
     if (activeTag && !insp.tags.includes(activeTag)) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
+      // 与灵感库页（后端 LIKE）同一口径：标题 / 正文 / 标签任一命中即可，
+      // 否则"输入标签名搜不到"会在侧栏与独立页之间出现行为差异
       return (
         insp.title.toLowerCase().includes(q) ||
-        insp.content.toLowerCase().includes(q)
+        insp.content.toLowerCase().includes(q) ||
+        insp.tags.some((t) => t.toLowerCase().includes(q))
       );
     }
     return true;
