@@ -65,13 +65,14 @@ fn friendly_agent_error(agent_type: &str, exit_code: i32, stderr: &str) -> Strin
 //  P0-v2 开关
 // ------------------------------------------------------------------
 
-/// P0-v2 开关：设置 `PILOTDESK_TRANSPORT_V2=1` 时启用传输抽象层路径。
+/// v2 开关：缺省**开启**（CLI 会话经传输抽象层执行）。
 ///
-/// 缺省关闭 —— 保证本次落位**零行为变化**；验证通过后再把缺省改为开启。
+/// 设 `PILOTDESK_TRANSPORT_V2=0`（或 `false`）可**立即回退**到 legacy 路径，
+/// **无需重新编译** —— 作为线上兜底开关。
 fn transport_v2_enabled() -> bool {
-    matches!(
+    !matches!(
         std::env::var("PILOTDESK_TRANSPORT_V2").as_deref(),
-        Ok("1") | Ok("true")
+        Ok("0") | Ok("false")
     )
 }
 
