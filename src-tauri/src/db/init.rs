@@ -14,7 +14,7 @@ pub const SCHEMA_VERSION: i64 = 8;
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
 /// - v5 起老库按列增量补齐（见 migrate_schema/ensure_column），新列一律带 DEFAULT 回填历史行。
-/// 额外的基础兜底表（file_history、inspirations_fts）仍在 init_db 中执行。
+/// 额外的基础兜底表（file_history 等）仍在 init_db 中执行。
 pub const FINAL_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS agents (
             agent_type TEXT PRIMARY KEY,
@@ -240,8 +240,7 @@ pub fn init_db() -> Result<DbPool, AppError> {
     migrate_schema(&conn)?;
 
     conn.execute_batch(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);
-        CREATE INDEX IF NOT EXISTS idx_inspirations_favorite ON inspirations(is_favorite, updated_at);
+        "CREATE INDEX IF NOT EXISTS idx_inspirations_favorite ON inspirations(is_favorite, updated_at);
         CREATE INDEX IF NOT EXISTS idx_inspirations_tags ON inspiration_tags(tag);"
     )?;
 

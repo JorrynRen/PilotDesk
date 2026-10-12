@@ -1208,24 +1208,16 @@ fn upsert_inspiration_local(
     for tag in &p.tags {
         stmt.execute(params![p.id, tag])?;
     }
-    conn.execute(
-        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
-        [],
-    )?;
     Ok(())
 }
 
-/// 硬删本地某灵感（行 + 标签 + FTS 重建）。不存在也静默通过（幂等）。
+/// 硬删本地某灵感（行 + 标签）。不存在也静默通过（幂等）。
 fn delete_inspiration_local(conn: &Connection, id: &str) -> Result<(), AppError> {
     conn.execute(
         "DELETE FROM inspiration_tags WHERE inspiration_id = ?1",
         params![id],
     )?;
     conn.execute("DELETE FROM inspirations WHERE id = ?1", params![id])?;
-    conn.execute(
-        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
-        [],
-    )?;
     Ok(())
 }
 
@@ -2273,11 +2265,6 @@ mod tests {
                 tombstone INTEGER NOT NULL DEFAULT 0,
                 tombstone_pushed INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (kind, object_key));",
-        )
-        .unwrap();
-        // 灵感同步路径会重建 FTS（与 init_db 一致）；测试库沿用同一虚拟表，避免 apply 时报缺表。
-        conn.execute_batch(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);",
         )
         .unwrap();
         conn

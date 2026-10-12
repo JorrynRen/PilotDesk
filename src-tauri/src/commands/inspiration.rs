@@ -125,12 +125,6 @@ pub fn create_inspiration(
         }
     }
 
-    // Trigger FTS5 reindex
-    conn.execute(
-        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
-        [],
-    )?;
-
     // 云同步：新灵感视为本地已改动，下轮会作为上传候选推送到云端（best-effort）
     crate::commands::cloud_sync::mark_inspiration_dirty(conn, &id);
 
@@ -175,12 +169,6 @@ pub fn update_inspiration(
         }
     }
 
-    // Reindex FTS5
-    conn.execute(
-        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
-        [],
-    )?;
-
     // 云同步：内容 / 标签变更视为本地已改动，下轮会作为上传候选推送（best-effort）
     crate::commands::cloud_sync::mark_inspiration_dirty(conn, &payload.id);
 
@@ -204,27 +192,74 @@ pub fn delete_inspiration(conn: &Connection, id: String) -> Result<(), AppError>
     Ok(())
 }
 
-/// Full-text search using FTS5
+/// 转义 LIKE 通配符（`%` / `_`）与转义符自身，配合 SQL 里的 `ESCAPE '\'` 使用。
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// Search inspirations by title / content / tag.
+///
+/// 走 LIKE 子串匹配，**不用 FTS5**：FTS5 默认的 unicode61 分词器会把一整串汉字当成
+/// 一个 token，中文等于搜不到（知识库为此专门换成 trigram 分词器）；而且 `MATCH` 遇到
+/// `-` / 引号等字符会直接语法报错。灵感库是个人级小数据集，全表 LIKE 足够且没有这些坑，
+/// 也不需要 tokenizer 迁移。多个词按空白/常见分隔符切分，词间 OR（任一命中即返回），
+/// 与知识库搜索同一口径。
 pub fn search_inspirations(
     conn: &Connection,
     query: String,
     limit: u32,
 ) -> Result<Vec<Inspiration>, AppError> {
     let limit = limit.max(1).min(100);
+    let terms: Vec<String> = query
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | '，' | '、' | ';' | '；' | '|'))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(escape_like)
+        .collect();
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // 每个词匹配「标题 / 正文 / 标签」任一字段；词间 OR。列名用 ?1、?2… 显式编号，
+    // 因为这里要把同一批词重复绑定 3 次（三个字段各一次），位置参数容易数错。
+    let mut idx = 0usize;
+    let mut clauses: Vec<String> = Vec::new();
+    for _ in &terms {
+        let (a, b, c) = (idx + 1, idx + 2, idx + 3);
+        idx += 3;
+        clauses.push(format!(
+            "(i.title LIKE ?{a} ESCAPE '\\' OR i.content LIKE ?{b} ESCAPE '\\' \
+             OR EXISTS (SELECT 1 FROM inspiration_tags it2 WHERE it2.inspiration_id = i.id AND it2.tag LIKE ?{c} ESCAPE '\\'))"
+        ));
+    }
     let sql = format!(
         "SELECT i.id, i.icon, i.title, i.content, i.source_agent, i.is_favorite, i.created_at, i.updated_at, i.market_id, \
          COALESCE(json_group_array(it.tag) FILTER (WHERE it.tag IS NOT NULL), '[]') as tags \
          FROM inspirations i \
-         JOIN inspirations_fts fts ON i.rowid = fts.rowid \
          LEFT JOIN inspiration_tags it ON i.id = it.inspiration_id \
-         WHERE inspirations_fts MATCH ?1 \
+         WHERE {} \
          GROUP BY i.id \
-         ORDER BY rank \
-         LIMIT ?2"
+         ORDER BY i.updated_at DESC \
+         LIMIT ?{}",
+        clauses.join(" OR "),
+        idx + 1
     );
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    for t in &terms {
+        let pattern = format!("%{}%", t);
+        for _ in 0..3 {
+            params_vec.push(Box::new(pattern.clone()));
+        }
+    }
+    params_vec.push(Box::new(limit as i64));
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params_vec.iter().map(|p| p.as_ref()).collect();
+
     let mut stmt = conn.prepare(&sql)?;
     let rows: Vec<Inspiration> = stmt
-        .query_map(params![query, limit], row_to_inspiration)?
+        .query_map(param_refs.as_slice(), row_to_inspiration)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(rows)
@@ -569,11 +604,6 @@ fn apply_import_entries(
         crate::commands::cloud_sync::mark_inspiration_dirty(&tx, &local_id);
     }
 
-    // 统一重建 FTS 索引
-    tx.execute(
-        "INSERT INTO inspirations_fts(inspirations_fts) VALUES('rebuild')",
-        [],
-    )?;
     tx.commit()?;
     Ok((created, updated))
 }
@@ -833,14 +863,10 @@ mod tests {
 
     // ── 导入单测 ──────────────────────────────────────────────────────────
 
-    /// 内存库 + 终态 schema + FTS 虚表（`create/import` 会重建 FTS 索引）。
+    /// 内存库 + 终态 schema（导入用例只依赖 inspirations / inspiration_tags 两张表）。
     fn import_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL).unwrap();
-        conn.execute_batch(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS inspirations_fts USING fts5(title, content, content=inspirations, content_rowid=rowid);",
-        )
-        .unwrap();
         conn
     }
 
@@ -1067,5 +1093,54 @@ mod tests {
         let mut result = InspirationImportResult::default();
         let err = read_zip_entries(std::io::Cursor::new(b"definitely not a zip".to_vec()), &mut result);
         assert!(err.is_err(), "损坏的压缩包应返回 Err");
+    }
+
+    // ── 搜索单测 ──────────────────────────────────────────────────────────
+
+    /// 直接插一行灵感（+ 标签），供搜索用例使用。
+    fn insert_inspiration(conn: &Connection, id: &str, title: &str, content: &str, tags: &[&str]) {
+        conn.execute(
+            "INSERT INTO inspirations (id, icon, title, content, source_agent, is_favorite, created_at, updated_at, market_id)
+             VALUES (?1, '💡', ?2, ?3, 'manual', 0, 1, 1, NULL)",
+            rusqlite::params![id, title, content],
+        )
+        .unwrap();
+        for t in tags {
+            conn.execute(
+                "INSERT OR IGNORE INTO inspiration_tags (inspiration_id, tag) VALUES (?1, ?2)",
+                rusqlite::params![id, t],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn search_matches_chinese_substring_in_title_content_and_tag() {
+        let conn = import_conn();
+        insert_inspiration(&conn, "a", "写作助手：先给结论", "把要点放在最前面", &["写作"]);
+        insert_inspiration(&conn, "b", "代码评审清单", "先给结论再给依据", &["编程"]);
+
+        // 中文两字子串（FTS5 默认 unicode61 分词器会把整串汉字当一个 token，这种查询必定搜不到）
+        let hit = search_inspirations(&conn, "结论".to_string(), 50).unwrap();
+        assert_eq!(hit.len(), 2, "标题/正文中的「结论」都应命中");
+
+        // 标签命中
+        let by_tag = search_inspirations(&conn, "写作".to_string(), 50).unwrap();
+        assert_eq!(by_tag.len(), 1);
+        assert_eq!(by_tag[0].id, "a");
+
+        // 多个词：词间 OR（任一命中即返回）
+        let any = search_inspirations(&conn, "写作 评审".to_string(), 50).unwrap();
+        assert_eq!(any.len(), 2);
+
+        // 无命中
+        assert!(search_inspirations(&conn, "查无此词".to_string(), 50)
+            .unwrap()
+            .is_empty());
+
+        // 通配符被转义：`%` 只当普通字符，不能退化成"匹配全部"
+        assert!(search_inspirations(&conn, "%".to_string(), 50)
+            .unwrap()
+            .is_empty());
     }
 }
