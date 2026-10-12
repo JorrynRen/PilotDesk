@@ -12,6 +12,7 @@
 //! 故暂时整体 `allow(dead_code)`；接线完成后删除该 allow。
 #![allow(dead_code)]
 
+pub mod http;
 pub mod jsonrpc;
 pub mod subprocess;
 
