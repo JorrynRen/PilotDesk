@@ -90,6 +90,7 @@ export function ResourceMarketPage() {
         noActiveSegment
         marketOpen
         onOpenMarket={() => navigate('/')}
+        onOpenInspirations={() => navigate('/inspirations')}
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
       />

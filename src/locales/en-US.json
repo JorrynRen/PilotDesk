@@ -109,6 +109,7 @@
   "titleBar.knowledge": "Knowledge",
   "titleBar.knowledge.title": "Knowledge base: snippets / file knowledge / graph",
   "titleBar.knowledge.title.pending": "Knowledge base ({count} items to verify)",
+  "titleBar.inspirations": "Inspiration library",
   "titleBar.terminal": "Terminal",
   "titleBar.terminal.title": "Switch to terminal mode",
   "titleBar.settings": "Settings",

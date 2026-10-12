@@ -174,7 +174,8 @@ export function WorkflowEditorPage() {
         statusHint={statusHint}
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenMarket={() => navigate('/market')} />
+        onOpenMarket={() => navigate('/market')}
+        onOpenInspirations={() => navigate('/inspirations')} />
       <div className="flex-1 min-h-0 px-2">
         <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
         <div className="flex-1 flex items-center justify-center">
@@ -199,7 +200,8 @@ export function WorkflowEditorPage() {
         statusHint={statusHint}
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
-        onOpenMarket={() => navigate('/market')} />
+        onOpenMarket={() => navigate('/market')}
+        onOpenInspirations={() => navigate('/inspirations')} />
       <div className="flex-1 min-h-0 px-2">
         <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>
         <div className="flex flex-col items-center justify-center flex-1 gap-3">
@@ -232,6 +234,7 @@ export function WorkflowEditorPage() {
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
         onOpenMarket={() => navigate('/market')}
+        onOpenInspirations={() => navigate('/inspirations')}
       />
       <div className="flex-1 min-h-0 px-2">
         <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>

@@ -110,6 +110,7 @@ export function KnowledgePage() {
         onOpenKnowledge={() => { /* 已在知识库页，无需动作 */ }}
         onOpenSettings={() => navigate('/settings')}
         onOpenMarket={() => navigate('/market')}
+        onOpenInspirations={() => navigate('/inspirations')}
       />
       <div className="flex-1 min-h-0 px-2 flex gap-2">
       {/* gap-2：左栏与右侧内容区之间留出"底"色的缝 —— 否则左栏（--bg-side）与内容区里同为

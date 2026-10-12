@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Settings, Bell, Library, Store, LayoutGrid } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Settings, Bell, Library, Store, LayoutGrid, Lightbulb } from 'lucide-react';
 import type { ViewMode } from '../../TerminalManager';
 import { useCustomTabsStore, PORTAL_TAB_ID } from '../../stores/customTabsStore';
 import { useNotificationStore, countUnread } from '../../stores/notificationStore';
@@ -52,6 +52,14 @@ interface TitleBarProps {
   /** 资源市集页传 true：图标高亮 */
   marketOpen?: boolean;
   /**
+   * 灵感库（独立路由 /inspirations）：入口同样放在右侧图标区。
+   *
+   * 灵感库是"我的数据"页（本地灵感/提示词，可编辑、可投稿），此前只能从资源市集里的
+   * 「我的灵感」链接进入 —— 与知识库（标题栏一等段）相比属于一处发现性缺口。
+   * 页内暂无标题栏，故不设高亮态（与资源市集的 `marketOpen` 不同）。
+   */
+  onOpenInspirations?: () => void;
+  /**
    * 该路由不对应任何模式段（如资源市集）：组合菜单照常可点击跳转，但不显示任何段的选中态。
    * 不传则按 mode/knowledgeOpen/settingsOpen 正常高亮。
    */
@@ -93,7 +101,7 @@ function StatusHintBadge({ hint }: { hint: StatusHint }) {
   );
 }
 
-export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen, onOpenKnowledge, knowledgeOpen, onOpenMarket, marketOpen, noActiveSegment }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen, onOpenKnowledge, knowledgeOpen, onOpenMarket, marketOpen, onOpenInspirations, noActiveSegment }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const { t } = useI18n();
   const customTabs = useCustomTabsStore((s) => s.tabs);
@@ -700,6 +708,27 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                 : t('titleBar.market', '资源市集：插件 / 工作流模板 / CLI Agent 配置 / 灵感')}
             >
               <Store size={13} />
+            </button>
+          )}
+          {/* 灵感库：我自己的灵感/提示词（可编辑、可导出投稿）。与资源市集同排 ——
+              两者是"逛别人的"与"管自己的"的一对，放在一起比藏进市集里更符合直觉。 */}
+          {onOpenInspirations && (
+            <button
+              onClick={onOpenInspirations}
+              className="relative flex items-center justify-center hover:opacity-80 transition-all shrink-0 ml-2"
+              style={{
+                width: 28,
+                height: 28,
+                alignSelf: 'center',
+                padding: 0,
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                color: 'var(--text-secondary)',
+                background: 'transparent',
+              }}
+              title={t('titleBar.inspirations', '灵感库：本地保存的灵感 / 提示词（可编辑、可导出投稿）')}
+            >
+              <Lightbulb size={13} />
             </button>
           )}
           {/* 设置：原先在底部状态栏最左，现按位置习惯移回顶部功能按钮区。

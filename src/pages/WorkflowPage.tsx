@@ -1039,6 +1039,7 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
           onBack={() => navigate('/')}
           onOpenSettings={() => navigate('/settings')}
           onOpenMarket={() => navigate('/market')}
+          onOpenInspirations={() => navigate('/inspirations')}
         />
       )}
       {/* Tab navigation — 与设置页同一套UI。

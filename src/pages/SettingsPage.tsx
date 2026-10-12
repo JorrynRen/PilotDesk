@@ -1907,6 +1907,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         onOpenSettings={() => { /* 已在设置页，无需动作 */ }}
         onOpenKnowledge={() => navigate('/knowledge')}
         onOpenMarket={() => navigate('/market')}
+        onOpenInspirations={() => navigate('/inspirations')}
       />
       <div className="flex-1 min-h-0 px-2 flex gap-2">
       {/* 主体：左侧分组侧边栏 + 右侧内容区。

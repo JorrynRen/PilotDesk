@@ -94,6 +94,7 @@ function MainLayout() {
           onOpenSettings={() => navigate('/settings')}
           onOpenKnowledge={() => navigate('/knowledge')}
           onOpenMarket={() => navigate('/market')}
+          onOpenInspirations={() => navigate('/inspirations')}
           onToggleRightPanel={rightPanelMode ? toggleRightPanel : undefined}
           rightPanelOpen={rightPanelMode ? rightPanelOpen : undefined}
         />
