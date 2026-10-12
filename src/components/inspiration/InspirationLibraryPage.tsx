@@ -16,17 +16,13 @@ import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 
-interface InspirationLibraryPageProps {
-  onBack: () => void;
-}
-
 /**
  * 灵感库（独立路由 /inspirations）。
  *
  * 原名「灵感市集」：名字里的"市集"是空头承诺 —— 这里全是**本地**保存的灵感，
  * 没有任何在线内容。在线灵感将由「资源市集 › 灵感」提供，两者是"我的"与"获取"的关系。
  */
-export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) {
+export function InspirationLibraryPage() {
   const { viewMode, setMode } = useTerminal();
   const navigate = useNavigate();
   const {
@@ -145,12 +141,9 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
-      {/* Header：与其它独立路由页一致 —— 页头画在壳层那片"底"上、不在内容面板内；
-          因此也不画下边框（栏与面板靠底色差 + 圆角区分）。 */}
+      {/* 页头：与知识库/资源市集一致 —— 走 TitleBar（模式段 + 右侧图标区），
+          画在壳层那片"底"上、不在内容面板内，因此不画下边框（栏与面板靠底色差 + 圆角区分）。 */}
       <TitleBar
-        showBackButton
-        onBack={onBack}
-        titleText="灵感库"
         mode={viewMode}
         onModeChange={handleModeChange}
         noActiveSegment
@@ -161,11 +154,14 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
         onOpenSettings={() => navigate('/settings')}
       />
 
-      {/* 工具栏：页头已交给 TitleBar（与资源市集/知识库一致），这里只留"条数 + 操作" */}
+      {/* 工具栏：页头由 TitleBar 承担（模式段 + 右侧图标区），这里保留页面标题与"条数 + 操作" */}
       <div className="shrink-0 px-4 pt-3 flex items-center justify-between gap-3">
-        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
-          {inspirations.length}
-        </span>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>灵感库</h2>
+          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+            {inspirations.length}
+          </span>
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => void handleExportZip()}

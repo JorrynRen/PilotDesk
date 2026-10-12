@@ -287,7 +287,7 @@ function App() {
       <Routes>
         <Route path="/" element={<MainLayout />} />
         {/* 灵感库：本地灵感/提示词（/market 已让给「资源市集」） */}
-        <Route path="/inspirations" element={<InspirationLibraryPage onBack={() => window.history.back()} />} />
+        <Route path="/inspirations" element={<InspirationLibraryPage />} />
         {/* 资源市集：插件 / 工作流模板 / CLI Agent 配置 / 灵感 的统一获取入口 */}
         <Route path="/market" element={<ResourceMarketPage />} />
         {/* 工作流/群聊：不再独立全屏路由，挂载后切到对应模式并回到主布局（用户感知为开关滑动） */}
