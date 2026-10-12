@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
-import { Search, Plus, Star, Package, Lightbulb, Upload } from 'lucide-react';
+import { Search, Plus, Star, FolderDown, Lightbulb, Upload } from 'lucide-react';
 import { TitleBar, StatusBar } from '../layout';
 import { useTerminal, type ViewMode } from '../../TerminalManager';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
@@ -35,6 +35,7 @@ export function InspirationLibraryPage() {
   const navigate = useNavigate();
   const {
     inspirations,
+    tags,
     loading,
     error,
     searchQuery,
@@ -223,7 +224,23 @@ export function InspirationLibraryPage() {
             {inspirations.length}
           </span>
         </div>
-        <div className="flex-1" />
+        {/* 搜索并入标题行（原先独占一行）：与「资源市集」把筛选控件放在首行同一思路，
+            少一行纵向占用；标题块与右侧操作 shrink-0，输入框居中自适应 */}
+        <div className="relative flex-1 min-w-[140px] max-w-sm">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => handleSearch(e.target.value)}
+            placeholder="搜索灵感..."
+            className="w-full pl-7 pr-2 py-1 rounded-lg text-xs outline-none"
+            style={{
+              backgroundColor: 'var(--bg-field)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border)',
+            }}
+          />
+        </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={() => void handleImport()}
@@ -241,7 +258,7 @@ export function InspirationLibraryPage() {
             style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
             title="把全部灵感导出为 zip 备份（目录布局与市场同构）"
           >
-            <Package size={12} />
+            <FolderDown size={12} />
             {exportingZip ? '导出中…' : '全量导出'}
           </button>
           <button
@@ -266,25 +283,13 @@ export function InspirationLibraryPage() {
         </div>
       </div>
 
-      {/* Search + Tags */}
-      <div className="shrink-0 px-4 py-2 space-y-2" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-tertiary)' }} />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => handleSearch(e.target.value)}
-            placeholder="搜索灵感..."
-            className="w-full pl-9 pr-3 py-1.5 rounded-lg text-xs outline-none"
-            style={{
-              backgroundColor: 'var(--bg-field)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border)',
-            }}
-          />
+      {/* 标签筛选：搜索已上移到标题行；`TagFilterBar` 在「无标签且未选中」时自身返回 null，
+          所以整行也一并条件渲染，避免留下一条空白带 */}
+      {tags.length > 0 && (
+        <div className="shrink-0 px-4 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
+          <TagFilter />
         </div>
-        <TagFilter />
-      </div>
+      )}
 
       {/* Grid */}
       <div className="flex-1 overflow-y-auto p-4 pd-scroll-stable">
