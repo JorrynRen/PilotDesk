@@ -397,73 +397,77 @@
 }
 
 /* ═══════════════════════════════════════════════════
-   晨曦 Dawn — 第 7 个主题模式（浅色系 · 暖调 · 多色系）
+   原色 Primary — 第 7 个主题模式（浅色系 · 纯白底 + 黑字 · 四色点缀）
    ═══════════════════════════════════════════════════
-   性格：暖光晨曦。壳层三块是一道**暖色梯度**——金 → 杏 → 玫瑰，
-   色相都落在红橙区，靠**色相微差**分层而不是靠明度硬拉（明度差大了就发闷、不"清爽"）：
-     · 底 / 缝        = 暖金（比内容深一档 → 内容区像浮起的一张暖纸）
-     · 内容区         = 近白暖纸（大面积阅读面，最亮、最干净）
-     · 左右栏         = 玫瑰粉（暖调里的"朝霞"色，与内容区靠色相区分）
-     · 卡片           = 杏（--bg-raised = secondary）
-     · 控件           = 更深的杏（--bg-field = tertiary）
-     · 强调色         = 柿子橙（唯一一处高饱和；刻意避开状态色的红 / 金 / 绿 / 天蓝）
-   ⚠️ 三档仍需逐级拉开；--bg-side / --bg-content 不能与三档同值（面板内元素在复用三档）。
+   性格：一张白纸 + 黑字，彩度全部让给**红 / 绿 / 蓝 / 黄**四色的小块（控件、标签、状态、图标）。
+   大面积仍是白与浅灰（"亮色为主"落在底色上，饱和色只在需要"指认"的地方出现），所以不显花、又够醒目：
+     · 底 / 缝        = 浅灰（三块白面板之间的缝）
+     · 左右栏         = 近白
+     · 内容区         = 纯白（大面积阅读面）
+     · 卡片           = 极浅灰（--bg-raised = secondary）
+     · 控件           = 浅灰（--bg-field = tertiary）
+     · 强调色         = 蓝（主操作 / 链接 / 选中；四色里唯一能同时压住"白字实底"与"深色小字"的一支）
+     · 组合色         = 红（危险 / 专家）+ 绿（成功 / 快速）+ 蓝（强调 / 信息）+ 黄（警告 / 标签）
+   ⚠️ 壳层三块**无边框**，只靠底色区分（见 App.tsx：面板圆角浮在 --bg-canvas 的"底"上，
+      中间靠 gap 露缝），所以这里的中性灰必须逐级拉开，否则三栏会"白成一片"：
+        底 #E7EAEF(=233) → 左右栏 #F4F6F9(=245) → 内容区 #FFFFFF(=255)，档差 ≥10。
+      内容区与 --bg-primary 同为纯白（浅色族同 :root：面板内元素用的是更深的档，天然分得开）；
+      --bg-side 另给近白值，避免与卡片 secondary 撞色。
    =================================================== */
-[data-theme="dawn"] {
+[data-theme="primary"] {
   color-scheme: light;
 
   /* ── Background ── */
-  --bg-primary: #FFFFFF;   /* 弹窗 / 浮层底：最亮档 */
-  --bg-secondary: #FFEEDC; /* 卡片：浅杏（--bg-raised） */
-  --bg-tertiary: #FFDFC5;  /* 控件 / 分组正文：杏（--bg-field） */
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F1F3F6; /* 卡片：极浅灰（--bg-raised） */
+  --bg-tertiary: #E4E8ED;  /* 控件 / 分组正文：浅灰（--bg-field） */
   --bg-panel: #FFFFFF;
-  --bg-hover: rgba(146, 64, 14, 0.055);
-  --bg-overlay: rgba(96, 48, 16, 0.38);
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --bg-overlay: rgba(0, 0, 0, 0.45);
 
-  /* 壳层映射：内容区浮在暖金底上，左右栏取玫瑰粉 */
-  --bg-canvas: #FBF0E1;   /* 底 / 缝：暖金 */
-  --bg-side: #FFE0E6;     /* 左右栏：玫瑰粉（朝霞） */
-  --bg-content: #FFFCF6;  /* 内容区：近白暖纸 */
+  /* 壳层映射：底(灰) → 左右栏(近白) → 内容区(纯白)，逐级提亮 */
+  --bg-canvas: #E7EAEF;   /* 底 / 缝：浅灰 */
+  --bg-side: #F4F6F9;     /* 左右栏：近白偏灰 */
+  --bg-content: #FFFFFF;  /* 内容区：纯白 */
 
-  /* ── Text ──（暖调深棕，压在暖白上不发灰） */
-  --text-primary: #3B2A20;
-  --text-secondary: #7A6152;
-  --text-tertiary: #9B8375;
+  /* ── Text ──（主色黑） */
+  --text-primary: #111214;
+  --text-secondary: #4B5563;
+  --text-tertiary: #8A93A2;
   --text-inverse: #FFFFFF;
 
   /* ── Border ── */
-  --border: #F1D8C0;
-  --border-light: #F8E9DB;
+  --border: #E2E5EA;
+  --border-light: #EFF1F4;
 
-  /* ── Accent ──（柿子橙：暖调里唯一的高饱和，明快不刺眼） */
-  --accent: #EA580C;
-  --accent-hover: #C2410C;
-  --accent-light: rgba(234, 88, 12, 0.14);
+  /* ── Accent ──（蓝：四色里对文字最友好的一支） */
+  --accent: #2563EB;
+  --accent-hover: #1D4ED8;
+  --accent-light: rgba(37, 99, 235, 0.12);
 
-  /* ── Agent Tags ──（冷色一点，给全暖的面板留一个跳色） */
-  --api-tag: #0EA5E9;
+  /* ── Agent Tags ──（黄） */
+  --api-tag: #F59E0B;
 
-  /* ── Mode Colors ── */
+  /* ── Mode Colors ──（四色铺进模式：绿 / 蓝 / 红） */
   --mode-native: var(--text-secondary);
   --mode-fast: #16A34A;
   --mode-think: var(--accent);
-  --mode-expert: #D946A6;
+  --mode-expert: #EF4444;
 
-  /* ── Status ──（浅色族用实底浅色，同 :root 的取法；四色刻意压在
-     红 / 金 / 绿 / 天蓝，与强调橙相邻但不同族） */
+  /* ── Status ──（绿 / 红 / 黄 / 蓝） */
   --status-success: #16A34A;
   --status-danger: #DC2626;
-  --status-warning: #CA8A04;
-  --status-info: #0EA5E9;
+  --status-warning: #D97706;
+  --status-info: #2563EB;
   --status-success-bg: #DCFCE7;
   --status-danger-bg: #FEE2E2;
-  --status-warning-bg: #FEF9C3;
-  --status-info-bg: #E0F2FE;
+  --status-warning-bg: #FEF3C7;
+  --status-info-bg: #DBEAFE;
 
-  /* ── Shadows ──（暖调，柔而浅） */
-  --shadow-sm: 0 1px 2px rgba(120, 72, 30, 0.07);
-  --shadow-md: 0 4px 8px rgba(120, 72, 30, 0.09);
-  --shadow-lg: 0 12px 26px rgba(120, 72, 30, 0.13);
+  /* ── Shadows ──（中性，轻） */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 8px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 12px 26px rgba(15, 23, 42, 0.12);
 }
 
 /* ═══════════════════════════════════════════════════

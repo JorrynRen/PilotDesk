@@ -4,7 +4,7 @@ import {
   Settings, Key, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink, RefreshCw, Sunrise, Rainbow,
+  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink, RefreshCw, Shapes, Rainbow,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
@@ -210,7 +210,7 @@ function GeneralSettings() {
     { value: 'celadon' as const, icon: Palette, label: '青瓷', title: '青瓷 Celadon：靛墨底 + 青灰栏 + 暖灰纸面 + 青瓷强调（#4FD1C5）' },
     { value: 'light' as const, icon: Sun, label: '浅色', title: '浅色' },
     { value: 'mint' as const, icon: Droplet, label: '薄荷', title: '薄荷 Mint：亮板面 + 天青/薄荷内嵌层 + 紫罗兰强调（#7C5CFA）' },
-    { value: 'dawn' as const, icon: Sunrise, label: '晨曦', title: '晨曦 Dawn：暖金底 + 玫瑰栏 + 近白暖纸面 + 柿子橙强调（#EA580C）' },
+    { value: 'primary' as const, icon: Shapes, label: '原色', title: '原色 Primary：纯白底 + 黑字 + 红/绿/蓝/黄 四色点缀（强调蓝 #2563EB）' },
     { value: 'confetti' as const, icon: Rainbow, label: '缤纷', title: '缤纷 Confetti：淡紫底 + 天青栏 + 薄荷卡片 + 品红强调（#C026D3）' },
     { value: 'system' as const, icon: Monitor, label: '跟随系统', title: '跟随系统浅/深色' },
   ];
