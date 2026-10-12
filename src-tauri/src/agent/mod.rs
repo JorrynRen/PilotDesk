@@ -16,6 +16,8 @@ use tauri::Emitter;
 use crate::decode_windows_output;
 pub mod async_process;
 pub mod config;
+// P1 描述符：把 agents / api_providers 两张表统一成同一种内存模型（步骤 A，零 DDL）
+pub mod descriptor;
 pub mod handler;
 pub mod line_processor;
 pub mod list_skills;
@@ -548,6 +550,7 @@ impl AgentManager {
             transport: TransportKind::Subprocess,
             cwd,
             conn: serde_json::Value::Null,
+            secret: None,
             resume_id: agent_session_id.map(|s| s.to_string()),
             abort: Arc::clone(&aborted),
             on_pid: Some(on_pid),

@@ -180,6 +180,8 @@ pub struct AgentConn {
     pub cwd: String,
     /// transport 专属参数（JSON）。**密钥不在此处**——走凭据引用（见设计文档 §4.3）。
     pub conn: serde_json::Value,
+    /// 运行时注入的凭据（密钥）：由调用方从独立存储解析后注入，**不落库、不进 `conn`**。
+    pub secret: Option<String>,
     /// 恢复用的对端会话 id（ACP `session/load` / CLI `--resume`）
     pub resume_id: Option<String>,
     /// 取消令牌：调用方与实现**共享同一份**，任一侧置位即终止本回合

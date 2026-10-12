@@ -90,7 +90,12 @@ impl AgentSession for HttpSession {
         sink: EventSink,
     ) -> Result<SessionHandle, AgentError> {
         self.endpoint = Self::conn_str(&conn.conn, "baseUrl");
-        self.api_key = Self::conn_str(&conn.conn, "apiKey");
+        // 凭据优先取运行时注入的 `secret`（§4.3：密钥不进 conn）；回落 `conn.apiKey` 以兼容早期配置
+        self.api_key = conn
+            .secret
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| Self::conn_str(&conn.conn, "apiKey"));
         self.model = Self::conn_str(&conn.conn, "model");
         if self.endpoint.is_empty() {
             return Err(AgentError::Connect(
