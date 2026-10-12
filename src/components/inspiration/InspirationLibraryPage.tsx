@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { Search, Plus, Star, ArrowLeft, Package } from 'lucide-react';
+import { Search, Plus, Star, Package } from 'lucide-react';
+import { TitleBar, StatusBar } from '../layout';
+import { useTerminal, type ViewMode } from '../../TerminalManager';
 import { useInspirationStore, type InspirationItem } from '../../stores/inspirationStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
@@ -24,6 +27,8 @@ interface InspirationLibraryPageProps {
  * 没有任何在线内容。在线灵感将由「资源市集 › 灵感」提供，两者是"我的"与"获取"的关系。
  */
 export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) {
+  const { viewMode, setMode } = useTerminal();
+  const navigate = useNavigate();
   const {
     inspirations,
     loading,
@@ -132,20 +137,35 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
     setShowForm(true);
   };
 
+  // 组合开关点击：切模式并回到主布局（与设置页/知识库同一套处理）
+  const handleModeChange = useCallback((mode: ViewMode) => {
+    setMode(mode);
+    navigate('/');
+  }, [setMode, navigate]);
+
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
       {/* Header：与其它独立路由页一致 —— 页头画在壳层那片"底"上、不在内容面板内；
           因此也不画下边框（栏与面板靠底色差 + 圆角区分）。 */}
-      <div className="shrink-0 px-4 py-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <button onClick={onBack} className="pd-btn p-1 rounded" style={{ color: 'var(--text-secondary)' }}>
-            <ArrowLeft size={16} />
-          </button>
-          <h2 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>灵感库</h2>
-          <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
-            {inspirations.length}
-          </span>
-        </div>
+      <TitleBar
+        showBackButton
+        onBack={onBack}
+        titleText="灵感库"
+        mode={viewMode}
+        onModeChange={handleModeChange}
+        noActiveSegment
+        inspirationsOpen
+        onOpenInspirations={() => navigate('/')}
+        onOpenMarket={() => navigate('/market')}
+        onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenSettings={() => navigate('/settings')}
+      />
+
+      {/* 工具栏：页头已交给 TitleBar（与资源市集/知识库一致），这里只留"条数 + 操作" */}
+      <div className="shrink-0 px-4 pt-3 flex items-center justify-between gap-3">
+        <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}>
+          {inspirations.length}
+        </span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => void handleExportZip()}
@@ -262,6 +282,12 @@ export function InspirationLibraryPage({ onBack }: InspirationLibraryPageProps) 
       )}
         </div>
       </div>
+
+      {/* 全局状态栏：独立路由也要保留（与会话/知识库等模式一致），否则底部少一条、页面像被截断 */}
+      <StatusBar
+        onOpenSettings={() => navigate('/settings')}
+        onOpenEnvSettings={() => navigate('/settings?tab=environment')}
+      />
     </div>
   );
 }
