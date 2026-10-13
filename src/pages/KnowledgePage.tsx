@@ -152,10 +152,14 @@ export function KnowledgePage() {
                     gap: 0,
                     // 卡片态：未选中也要有边框，否则一堆卡片贴在侧栏底色上，边界全糊在一起。
                     // 选中态**统一按会话列表（`SessionListItem`）的口径**：选中 = `var(--border)` 底、
-                    // 未选中 = 透明（卡片描边另给）。主题色（`--accent-light`）只留给批量多选，
-                    // 不用它表达"我在哪儿" —— 一屏卡片里只有一个"当前"，铺主题色太吵。
+                    // 未选中 = 透明（卡片描边另给）；底色之外再给一条主题色左侧竖条 ——
+                    // `--border` 底在不少主题里与侧栏底几乎同色，只靠它分不出"我在哪儿"。
                     backgroundColor: active ? 'var(--border)' : 'transparent',
                     border: '1px solid var(--border)',
+                    // 竖条用背景渐变画：不占布局（圆角处也会跟着裁切），也不会被 button:hover 覆盖
+                    backgroundImage: active
+                      ? 'linear-gradient(to right, var(--accent) 3px, transparent 3px)'
+                      : undefined,
                   }}
                 >
                   <div className="flex items-center gap-1.5 min-w-0">

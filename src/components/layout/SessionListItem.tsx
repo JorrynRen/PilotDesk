@@ -92,6 +92,12 @@ export const SessionListItem = memo(function SessionListItem({
       style={{
         backgroundColor: selected ? 'var(--accent-light)' : isActive ? 'var(--border)' : 'transparent',
         borderBottom: '1px solid var(--border)',
+        // 选中 / 当前项左侧压一条主题色竖条：选中底（--border / --accent-light）在不少主题里与侧栏底
+        // 几乎同色，只靠底色分不出"我在哪儿"。用背景渐变画竖条 —— 不占布局（不会把内容挤右）、
+        // 也不像 box-shadow 那样会被 <button> 的 hover 覆盖。
+        backgroundImage: selected || isActive
+          ? 'linear-gradient(to right, var(--accent) 3px, transparent 3px)'
+          : undefined,
       }}
       data-session-id={session.id}
       onClick={isEditing ? undefined : batchMode ? (e) => { e.stopPropagation(); onToggleSelect?.(session.id); } : undefined}
