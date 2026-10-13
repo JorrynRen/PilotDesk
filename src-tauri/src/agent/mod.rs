@@ -776,6 +776,22 @@ impl AgentManager {
         // （一条真实失败原因 + 一条误导性的兜底提示）。
         let mut failed = false;
 
+        // 用户主动停止时（`session_runs` 的无锁取消通路已置位）取消**不是错误**：
+        // 发 `agent-cancelled` 让前端收尾落库，避免弹出"错误：已取消"提示。
+        let was_cancelled = crate::api_agent::session_runs::cancel_token(&sid_for_result)
+            .is_some_and(|t| t.load(Ordering::Relaxed));
+        if was_cancelled {
+            log::info!(
+                "[Agent/send_message] 已取消，发 agent-cancelled（不报错）: {}",
+                sid_for_result
+            );
+            let _ = app_for_result.emit(
+                "agent-cancelled",
+                serde_json::json!({ "sessionId": sid_for_result }),
+            );
+            return Ok(());
+        }
+
         match result {
             Ok(exec_result) => {
                 if exec_result.exit_code != 0 {
