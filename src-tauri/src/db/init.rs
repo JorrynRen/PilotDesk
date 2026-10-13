@@ -317,6 +317,11 @@ pub fn init_db() -> Result<DbPool, AppError> {
     ensure_column(&conn, "agents", "conn", "TEXT")?;
     ensure_column(&conn, "agents", "secret_ref", "TEXT")?;
 
+    // 4a：把既有 API 供应商回填成 `api:<id>` 的 http 接入 + 凭据副本（只读源表、幂等）。
+    // 回填的行暂不对用户可见（list_agents 按 transport='subprocess' 过滤），
+    // 待 §八 管理页落地后统一呈现。
+    backfill_api_providers_into_agents(&conn)?;
+
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
     let now = crate::utils::now();
 
@@ -536,9 +541,149 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
     Ok(())
 }
 
+/// 把 `api_providers` 回填为 `agents` 里的 http 接入（`api:<provider_id>`）+ `agent_secrets`。
+///
+/// **只读源表、纯增量、幂等**：源表 `api_providers` 不被修改或删除，
+/// 故重复执行没有副作用；最坏情况只是新表里多一行可重跑的副本。
+///
+/// 凭据搬的是**密文**（`api_providers.api_key` 本身就是加密存储），保持同一存储约定；
+/// `agents.conn` 里**只有** baseUrl/apiFormat/models，**不含密钥**。
+///
+/// 注：本函数只负责"数据就绪"。`api:*` 行在 §八 管理页落地前**不对用户可见**
+/// —— `list_agents` 已按 `transport = 'subprocess'` 过滤。
+///
+/// 用 Rust 逐行写入而非 SQL 的 `json_object()`：不依赖 SQLite 的 JSON1 扩展，
+/// 避免不同运行环境的 SQLite 编译选项差异。
+pub fn backfill_api_providers_into_agents(conn: &Connection) -> Result<(), AppError> {
+    let rows: Vec<(String, String, String, String, String, Option<String>, i64, i64)> = conn
+        .prepare(
+            "SELECT id, name, api_endpoint, api_format, models, api_key, created_at, updated_at \
+             FROM api_providers",
+        )?
+        .query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+            ))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for (id, name, endpoint, format, models_json, api_key, created_at, updated_at) in rows {
+        // models 列是 JSON 文本（对象数组）；解析失败退回空数组（不因一行坏数据中断回填）
+        let models: serde_json::Value =
+            serde_json::from_str(&models_json).unwrap_or_else(|_| serde_json::json!([]));
+        let conn_json = serde_json::json!({
+            "baseUrl": endpoint,
+            "apiFormat": format,
+            "models": models,
+        })
+        .to_string();
+
+        conn.execute(
+            "INSERT OR IGNORE INTO agents
+                (agent_type, display_name, description, cli_command, transport, conn, secret_ref,
+                 created_at, updated_at)
+             VALUES (?1, ?2, '', '', 'http', ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                format!("api:{}", id),
+                name,
+                conn_json,
+                format!("secret:{}", id),
+                created_at,
+                updated_at
+            ],
+        )?;
+
+        if let Some(k) = api_key.filter(|k| !k.is_empty()) {
+            conn.execute(
+                "INSERT OR IGNORE INTO agent_secrets (id, secret, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![format!("secret:{}", id), k, created_at, updated_at],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 4a：API 供应商回填为 `api:<id>` 行 + 凭据副本，且**幂等**（跑两遍不增行）、源表原样
+    #[test]
+    fn backfill_api_providers_is_idempotent_and_keeps_source() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(FINAL_SCHEMA_SQL).unwrap();
+        conn.execute(
+            "INSERT INTO api_providers
+                (id, name, api_endpoint, api_key, models, api_format, sort_order, created_at, updated_at)
+             VALUES ('p1','DeepSeek','https://api.deepseek.com/v1','CIPHERTEXT',
+                     '[\"deepseek-chat\"]','openai',0,11,22)",
+            [],
+        )
+        .unwrap();
+
+        backfill_api_providers_into_agents(&conn).unwrap();
+        backfill_api_providers_into_agents(&conn).unwrap(); // 幂等：第二次不得增行
+
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agents WHERE agent_type LIKE 'api:%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "重复回填不得增行");
+
+        let (name, transport, conn_json, secret_ref): (String, String, String, String) = conn
+            .query_row(
+                "SELECT display_name, transport, conn, secret_ref FROM agents WHERE agent_type='api:p1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "DeepSeek");
+        assert_eq!(transport, "http");
+        assert_eq!(secret_ref, "secret:p1");
+        let v: serde_json::Value = serde_json::from_str(&conn_json).unwrap();
+        assert_eq!(v["baseUrl"], "https://api.deepseek.com/v1");
+        assert_eq!(v["apiFormat"], "openai");
+        assert_eq!(v["models"][0], "deepseek-chat");
+        // 连接参数里**不得**出现密钥
+        assert!(v.get("apiKey").is_none());
+        assert!(v.get("secret").is_none());
+
+        // 凭据：密文原样搬入，且只搬一份
+        let sec: String = conn
+            .query_row(
+                "SELECT secret FROM agent_secrets WHERE id='secret:p1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sec, "CIPHERTEXT");
+        let nsec: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agent_secrets", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(nsec, 1);
+
+        // 源表必须原样保留（回填是"加副本"，不是"搬家"）
+        let src: String = conn
+            .query_row(
+                "SELECT api_key FROM api_providers WHERE id='p1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(src, "CIPHERTEXT", "源表必须原样保留");
+    }
 
     /// v9 新增：`agents` 的接入方式/连接参数列 + 凭据表；老库补列幂等、带 DEFAULT 回填。
     #[test]

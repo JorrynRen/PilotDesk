@@ -387,7 +387,9 @@ fn row_to_agent(row: &rusqlite::Row) -> rusqlite::Result<AgentConfig> {
 
 pub fn list_agents_inner(conn: &Connection) -> Result<Vec<AgentConfig>, AppError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {} FROM agents ORDER BY sort_order ASC, agent_type ASC",
+        // 只列 CLI 接入（transport='subprocess'）：v9 起 API 供应商会被回填成 `api:<id>` 的
+        // http 接入行；在 §八 管理页落地前不应对用户可见（否则列表里会出现字段全空的 Agent）。
+        "SELECT {} FROM agents WHERE transport = 'subprocess' ORDER BY sort_order ASC, agent_type ASC",
         SELECT_COLS
     ))?;
 
