@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Pencil, X, Loader2, Check, Download, Upload, Info, Package, Terminal, Repeat, Activity, BookOpen, Store as StoreIcon } from 'lucide-react';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -326,6 +326,51 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
   saving: boolean;
   mode: 'add' | 'edit';
 }) {
+  // ── 接入方式（设计文档 §4.2）──
+  // 刻意**不进 AgentConfig**（否则牵动其 4 个 Rust 构造点）：独立 state + 独立的
+  // `get/set_agent_transport` 命令对。也刻意不做成表单主字段——`update_agent` 不碰这两列，
+  // 各走各的写入路径，市场导入/更新就不会清掉接入方式。
+  const [transport, setTransport] = useState('subprocess');
+  const [connJson, setConnJson] = useState('');
+  const [savingTransport, setSavingTransport] = useState(false);
+
+  // 编辑态打开时回显当前值。**必须回显**：否则"打开面板→保存"会把已配好的
+  // ACP/http 设置悄悄重置回默认值（数据丢失）。添加态没有 agent_type，无从读取。
+  useEffect(() => {
+    if (mode !== 'edit' || !form.agentType) return;
+    let alive = true;
+    invoke<{ transport: string; conn: string | null }>('get_agent_transport', {
+      agentType: form.agentType,
+    })
+      .then((r) => {
+        if (!alive) return;
+        setTransport(r.transport);
+        setConnJson(r.conn ?? '');
+      })
+      .catch(() => {
+        // 读不到就保持默认，不打断表单
+      });
+    return () => {
+      alive = false;
+    };
+  }, [mode, form.agentType]);
+
+  const handleSaveTransport = async () => {
+    if (!form.agentType) return;
+    setSavingTransport(true);
+    try {
+      await invoke('set_agent_transport', {
+        agentType: form.agentType,
+        transport,
+        connJson,
+      });
+      showToast('接入方式已保存', 'success');
+    } catch (err) {
+      showToast(`保存接入方式失败: ${errorMessage(err)}`, 'error');
+    }
+    setSavingTransport(false);
+  };
+
   const handleUploadIcon = async () => {
     try {
       
@@ -485,6 +530,45 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           ]} />
         </div>
       </div>
+
+      {/* 接入方式（仅编辑态）：独立保存按钮 —— 不与上面的表单字段混在一起，
+          因为 update_agent 不写这两列，混在一起会让"保存"语义含混 */}
+      {mode === 'edit' && form.agentType && (
+        <div>
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+            <Repeat size={11} style={{ color: 'var(--accent)' }} />
+            <span>接入方式</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <SelectField
+              label="接入方式"
+              value={transport}
+              onChange={setTransport}
+              options={[
+                { value: 'subprocess', label: 'subprocess（本地 CLI，默认）' },
+                { value: 'acp', label: 'acp（Agent Client Protocol）' },
+                { value: 'http', label: 'http（在线版开放 API）' },
+              ]}
+            />
+          </div>
+          <div className="mt-2">
+            <FormField
+              label="连接参数（JSON；留空表示无）"
+              value={connJson}
+              onChange={setConnJson}
+              placeholder='{"command":"hermes","args":["acp"]}'
+            />
+          </div>
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary, var(--text-secondary))' }}>
+              acp 例：command 填 CLI，args 填 ACP 参数；http 例：baseUrl + model
+            </span>
+            <SettingsButton variant="secondary" onClick={handleSaveTransport} disabled={savingTransport}>
+              {savingTransport ? '保存中' : '保存接入方式'}
+            </SettingsButton>
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-2 justify-end pt-1">
         <SettingsButton variant="secondary" onClick={onCancel}>取消</SettingsButton>
