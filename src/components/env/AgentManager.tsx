@@ -488,12 +488,15 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
     onChange({ ...form, conn: JSON.stringify(o) });
   };
 
-  // ACP 预置：命令 + 默认参数。选中即预填 args，**仍可编辑覆盖**（预填 ≠ 锁死）。
-  // 只列有依据的：`hermes acp` 已真机实测；`gemini --acp` 见官方文档。
-  // 其余（含 claude / codex 的第三方 ACP 适配器）走「自定义」——参数不猜，等实测再补。
-  const ACP_PRESETS: Array<{ command: string; args: string }> = [
-    { command: 'hermes', args: 'acp' },
-    { command: 'gemini', args: '--acp' },
+  // ACP 预置：命令 + 默认参数。选中即预填，**仍可编辑覆盖**（预填 ≠ 锁死）。
+  // 依据：hermes 的 `hermes acp` 已真机实测；gemini 的 `--acp` 见官方文档；
+  //      claude/codex 用社区 ACP 适配器（claude-code-acp / @agentclientprotocol/codex-acp，
+  //      codex-acp 是 stdio ACP server，官方推荐以 npx 启动）。参数不猜，改动请附来源。
+  const ACP_PRESETS: Array<{ label: string; command: string; args: string }> = [
+    { label: 'Hermes', command: 'hermes', args: 'acp' },
+    { label: 'Gemini CLI', command: 'gemini', args: '--acp' },
+    { label: 'Claude Code', command: 'claude-code-acp', args: '' },
+    { label: 'Codex', command: 'npx', args: '-y @agentclientprotocol/codex-acp' },
   ];
   const connSetPreset = (command: string, args: string) => {
     const o = parseConn();
@@ -501,10 +504,11 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
     o.args = args.split(/\s+/).filter(Boolean);
     onChange({ ...form, conn: JSON.stringify(o) });
   };
-  // 当前命令是否命中预置；否则视为「自定义」
-  const curCommand = ACP_PRESETS.some((p) => p.command === connGet('command'))
-    ? connGet('command')
-    : '__custom__';
+  // 用 command|args 共同匹配（两个预置可能共用命令，如 npx）；不命中即视为「自定义」
+  const curPreset = ACP_PRESETS.find(
+    (p) => p.command === connGet('command') && p.args === connArgsText()
+  );
+  const curPresetKey = curPreset ? curPreset.label : '__custom__';
 
   return (
     <div className="w-full space-y-4">
@@ -531,20 +535,20 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
             <div className="mt-2 space-y-2">
               <div className="grid grid-cols-2 gap-2">
                 <SelectField
-                  label="命令（command）"
-                  value={curCommand}
+                  label="接入方式预置"
+                  value={curPresetKey}
                   onChange={(v) => {
                     if (v === '__custom__') {
                       connSet('command', ''); // 清空让用户自己填
                       return;
                     }
-                    const p = ACP_PRESETS.find((x) => x.command === v);
+                    const p = ACP_PRESETS.find((x) => x.label === v);
                     if (p) connSetPreset(p.command, p.args);
                   }}
                   options={[
                     ...ACP_PRESETS.map((p) => ({
-                      value: p.command,
-                      label: `${p.command}（默认 ${p.args}）`,
+                      value: p.label,
+                      label: `${p.label}（${p.command}${p.args ? ' ' + p.args : ''}）`,
                     })),
                     { value: '__custom__', label: '自定义…' },
                   ]}
@@ -556,16 +560,15 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
                   placeholder="留空＝当前目录"
                 />
               </div>
-              {curCommand === '__custom__' && (
-                <FormField
-                  label="自定义命令"
-                  value={connGet('command')}
-                  onChange={(v) => connSet('command', v)}
-                  placeholder="如 claude-code-acp"
-                />
-              )}
+              {/* 命令输入框**始终显示**（选预置也显示）：便于查看/微调解析后的真实命令 */}
               <FormField
-                label="参数（args，空格分隔；切换上方命令会自动预填，可直接改）"
+                label="命令（command，可直接修改）"
+                value={connGet('command')}
+                onChange={(v) => connSet('command', v)}
+                placeholder="如 hermes / npx / claude-code-acp"
+              />
+              <FormField
+                label="参数（args，空格分隔；切换上方预置会自动预填，可直接改）"
                 value={connArgsText()}
                 onChange={connSetArgs}
                 placeholder="如 acp"
