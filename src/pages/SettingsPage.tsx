@@ -52,12 +52,7 @@ interface SettingsPageProps {
 //   语音识别 / 对话模式 / 权限规则 → API 集成配置
 type SettingsTab =
   | 'account' | 'cloudsync' | 'general' | 'agents' | 'api' | 'mcp' | 'search'
-  | 'tools' | 'skills' | 'plugins' | 'knowledge' | 'customtabs' | 'memory' | 'filehistory'
-  // 以下 5 项**并非接入方式专属**，故从各自父 tab 的提升为独立顶层 tab：
-  //   环境检测 —— 是 Agent 运行前提，与"用哪种接入方式"无关；
-  //   用量统计 / 语音识别 / 对话模式 / 权限规则 —— 全局设置，API 只是其中之一。
-  // 「集成配置」tab 从此只负责接入方式本身。
-  | 'env' | 'usage' | 'voice' | 'mode' | 'permission';
+  | 'tools' | 'skills' | 'plugins' | 'knowledge' | 'customtabs' | 'memory' | 'filehistory';
 
 // 设置项按类别分组，左侧侧边栏渲染（避免全部平铺顶部拥挤）
 //
@@ -81,16 +76,11 @@ const SETTINGS_GROUPS: {
     titleKey: 'settings.group.agentApi',
     titleZh: '集成与运行',
     items: [
-      // 「集成配置」= 5 种接入方式：本地 CLI(subprocess/acp) · 在线 API(http) · MCP · 内嵌 Web
+      // 「集成配置」= 只负责 5 种接入方式：本地 CLI(subprocess/acp) · 在线 API(http) · MCP · 内嵌 Web
       { id: 'agents', icon: Bot, labelKey: 'settings.tab.agents', labelZh: '集成配置' },
-      // 以下 5 项原为各自父 tab 的子页签，现独立（不属任何接入方式）
-      { id: 'env', icon: Monitor, labelKey: 'settings.tab.env', labelZh: '环境检测' },
-      { id: 'usage', icon: Zap, labelKey: 'settings.tab.usage', labelZh: '用量统计' },
-      { id: 'voice', icon: Droplet, labelKey: 'settings.tab.voice', labelZh: '语音识别' },
-      { id: 'mode', icon: Sparkles, labelKey: 'settings.tab.mode', labelZh: '对话模式' },
-      { id: 'permission', icon: Check, labelKey: 'settings.tab.permission', labelZh: '权限规则' },
-      // 旧顶层项：分两步走，先加新、确认无回归后再删（第二步移除）
-      { id: 'api', icon: Key, labelKey: 'settings.tab.api', labelZh: 'API集成配置（待移除）' },
+      // 「运行与策略」= 与接入方式无关的运行前提与全局策略，聚为一个 tab（子页签见 ApiConfig）：
+      // 环境检测 / API 提供商列表 / 用量统计 / 语音识别 / 对话模式 / 权限规则
+      { id: 'api', icon: Monitor, labelKey: 'settings.tab.api', labelZh: '运行与策略' },
     ],
   },
   {
@@ -907,7 +897,7 @@ function SortableProviderCard({
 
 
 /** API 集成配置的子页签（对话模式 / 权限规则随本 tab 收拢，语音识别为模型级配置） */
-type ApiSubTab = 'providers' | 'usage' | 'voice' | 'mode' | 'permission';
+type ApiSubTab = 'env' | 'providers' | 'usage' | 'voice' | 'mode' | 'permission';
 
 /** 组织共享空间：我所属组织（与 Rust `org_list_mine` 返回对齐，只保留在用成员） */
 interface OrgCredOrg {
@@ -990,7 +980,7 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
   // 子页签支持 URL 直达（如 /settings?tab=api&apiTab=usage，供指挥中心「查看完整用量」精准跳转）：
   // 页面内点击优先，故用 override 叠加在 URL 之上——避免在 effect 里 setState 的级联渲染。
   const [apiTabOverride, setApiTabOverride] = useState<ApiSubTab | null>(deepLinkSub ?? null);
-  const urlSub: ApiSubTab = urlApiTab === 'usage' || urlApiTab === 'voice' ? urlApiTab : 'providers';
+  const urlSub: ApiSubTab = urlApiTab === 'env' || urlApiTab === 'usage' || urlApiTab === 'voice' ? urlApiTab : 'providers';
   const apiTab: ApiSubTab = apiTabOverride ?? urlSub;
 
   // Load providers from SQLite on mount
@@ -1385,9 +1375,12 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
 
   return (
     <div className="space-y-4">
-      {/* 子 Tab：提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则 */}
+      {/* 子 Tab：环境检测 / 提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则
+          —— 这些不是"API 方式专属"：环境检测是 Agent 运行前提，其余为全局策略，
+          故聚在同一个「运行与策略」tab 下（原来散在 Agent / API 两个 tab 里）。 */}
       <div className="flex items-center gap-1 flex-wrap">
         {([
+          { key: 'env', label: t('settings.sub.api.env', '环境检测') },
           { key: 'providers', label: t('settings.sub.api.providers', 'API 提供商列表') },
           { key: 'usage', label: t('settings.sub.api.usage', '用量统计') },
           { key: 'voice', label: t('settings.sub.api.voice', '语音识别') },
@@ -1696,6 +1689,7 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
         </>
       )}
 
+      {apiTab === 'env' && <EnvManager />}
       {apiTab === 'usage' && <UsageStats />}
       {apiTab === 'voice' && <VoiceInputSettings />}
       {apiTab === 'mode' && <ModePromptSettings />}
@@ -1896,16 +1890,9 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       setActiveTab(link.tab);
       if (link.tab === 'general') setGeneralTab(link.sub === 'about' ? 'about' : 'main');
       if (link.tab === 'agents') {
-        // 环境检测已提升为独立顶层 tab：旧的 `tab=agents&sub=env` 深链重定向过去，避免链接失效；
-        // 其余子页签（providers/mcp/web）照常落位。
+        // 集成配置的子页签只有这几个（环境检测已并入「运行与策略」）
         const sub = link.sub as string | undefined;
-        if (sub === 'env') {
-          setActiveTab('env');
-        } else if (sub === 'providers' || sub === 'mcp' || sub === 'web') {
-          setAgentTab(sub);
-        } else {
-          setAgentTab('config');
-        }
+        setAgentTab(sub === 'providers' || sub === 'mcp' || sub === 'web' ? sub : 'config');
       }
     }
   }
@@ -2015,14 +2002,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 )}
               </div>
             )}
-            {/* ── 以下 5 项原为各自父 tab 的子页签，现独立为顶层 tab ──
-                它们并非接入方式专属：环境检测是 Agent 运行前提；用量/语音/对话模式/权限规则是全局设置。
-                前 4 项复用现成的 <ApiConfig deepLinkSub=… />，不重写其内部（第二步再做真正的拆分）。 */}
-            {activeTab === 'env' && <EnvManager />}
-            {activeTab === 'usage' && <ApiConfig deepLinkSub="usage" />}
-            {activeTab === 'voice' && <ApiConfig deepLinkSub="voice" />}
-            {activeTab === 'mode' && <ApiConfig deepLinkSub="mode" />}
-            {activeTab === 'permission' && <ApiConfig deepLinkSub="permission" />}
+            {/* 运行与策略：环境检测 / API 提供商列表 / 用量统计 / 语音识别 / 对话模式 / 权限规则
+                —— 这些不属"接入方式"，故聚在本 tab 的子页签里（见 ApiConfig） */}
             {/* API 集成配置：提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则 */}
             {activeTab === 'api' && (
               <ApiConfig deepLinkSub={link?.tab === 'api' && link.sub ? (link.sub as ApiSubTab) : undefined} />
