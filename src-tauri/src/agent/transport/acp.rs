@@ -21,8 +21,8 @@ use tokio::io::AsyncReadExt;
 
 use super::jsonrpc::JsonRpcPeer;
 use crate::agent::transport::{
-    AgentConn, AgentError, AgentSession, Capabilities, EventSink, PromptInput, PromptOutput,
-    SessionHandle, StopReason, TransportKind, UnifiedAgentEvent,
+    AgentConn, AgentError, AgentSession, Capabilities, EventSink, PermissionDecision, PromptInput,
+    PromptOutput, SessionHandle, StopReason, TransportKind, UnifiedAgentEvent,
 };
 
 /// 本实现使用的 ACP 协议版本（客户端在 `initialize` 中声明）。
@@ -153,6 +153,147 @@ fn with_peer_stderr(err: String, stderr: &Arc<Mutex<String>>) -> AgentError {
         AgentError::Protocol(err)
     } else {
         AgentError::Protocol(format!("{}（对端 stderr: {}）", err, detail))
+    }
+}
+
+// ──────────────────────────────────────────────
+//  权限请求：选项匹配
+// ──────────────────────────────────────────────
+
+/// ACP 权限请求给出的一个选项（`params.options[]` 元素）。
+///
+/// ⚠️ 形状取自 schema（`{optionId, name, kind}`），**尚未观测到真实样例**——
+/// 本步只做"决策 → optionId"的纯逻辑，接入审批时一并用真机复核。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermissionOption {
+    pub option_id: String,
+    /// 语义类型，常见值：`allow_once` / `allow_always` / `reject_once` / `reject_always`
+    pub kind: String,
+}
+
+/// 从权限请求参数里解析选项列表（缺失/形状不符时返回空）。
+pub fn parse_permission_options(params: &Value) -> Vec<PermissionOption> {
+    params["options"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|o| PermissionOption {
+                    option_id: o["optionId"].as_str().unwrap_or_default().to_string(),
+                    kind: o["kind"].as_str().unwrap_or_default().to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 把我们的三态决策映射到 ACP 的 `optionId`。
+///
+/// 匹配顺序：**精确 kind** → **前缀**（`allow*` / `reject*`）→ 兜底
+/// （`AllowAlways` 退化为 `Allow`；`Deny` 取最后一项——多数实现把拒绝放末位）。
+/// 无可用选项时返回 `None`，调用方应据此按拒绝处理（**绝不默认放行**）。
+pub fn pick_option_id(options: &[PermissionOption], decision: PermissionDecision) -> Option<String> {
+    if options.is_empty() {
+        return None;
+    }
+
+    let exact: &[&str] = match decision {
+        PermissionDecision::Allow => &["allow_once", "allow"],
+        PermissionDecision::AllowAlways => &["allow_always"],
+        PermissionDecision::Deny => &["reject_once", "reject"],
+    };
+    for want in exact {
+        if let Some(o) = options.iter().find(|o| o.kind == *want) {
+            return Some(o.option_id.clone());
+        }
+    }
+
+    let prefix = match decision {
+        PermissionDecision::Allow | PermissionDecision::AllowAlways => "allow",
+        PermissionDecision::Deny => "reject",
+    };
+    if let Some(o) = options.iter().find(|o| o.kind.starts_with(prefix)) {
+        return Some(o.option_id.clone());
+    }
+
+    match decision {
+        // 无 allow_always 可用 → 退化为一次允许（不会扩大授权范围）
+        PermissionDecision::AllowAlways => pick_option_id(options, PermissionDecision::Allow),
+        // 拒绝兜底：取末位选项
+        PermissionDecision::Deny => options.last().map(|o| o.option_id.clone()),
+        PermissionDecision::Allow => None,
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn opts(items: &[(&str, &str)]) -> Vec<PermissionOption> {
+        items
+            .iter()
+            .map(|(id, kind)| PermissionOption {
+                option_id: (*id).to_string(),
+                kind: (*kind).to_string(),
+            })
+            .collect()
+    }
+
+    /// 标准四选项：精确 kind 优先命中
+    #[test]
+    fn picks_exact_kinds() {
+        let o = opts(&[
+            ("a1", "allow_once"),
+            ("a2", "allow_always"),
+            ("r1", "reject_once"),
+        ]);
+        assert_eq!(
+            pick_option_id(&o, PermissionDecision::Allow),
+            Some("a1".to_string())
+        );
+        assert_eq!(
+            pick_option_id(&o, PermissionDecision::AllowAlways),
+            Some("a2".to_string())
+        );
+        assert_eq!(
+            pick_option_id(&o, PermissionDecision::Deny),
+            Some("r1".to_string())
+        );
+    }
+
+    /// 前缀兜底 + 安全默认
+    #[test]
+    fn falls_back_by_prefix_and_never_auto_allows() {
+        // 无 allow_once（只有 allow_always）→ 前缀命中
+        let o = opts(&[("a2", "allow_always"), ("r2", "reject_always")]);
+        assert_eq!(
+            pick_option_id(&o, PermissionDecision::Allow),
+            Some("a2".to_string())
+        );
+        assert_eq!(
+            pick_option_id(&o, PermissionDecision::Deny),
+            Some("r2".to_string())
+        );
+
+        // 只有拒绝项时，Allow 必须返回 None（**绝不默认放行**）
+        let only_reject = opts(&[("r1", "reject_once")]);
+        assert_eq!(pick_option_id(&only_reject, PermissionDecision::Allow), None);
+
+        // kind 形状不符（空串）→ 前缀不命中；Deny 取末位
+        let unknown = opts(&[("u1", ""), ("u2", "")]);
+        assert_eq!(
+            pick_option_id(&unknown, PermissionDecision::Deny),
+            Some("u2".to_string())
+        );
+        assert_eq!(pick_option_id(&[], PermissionDecision::Deny), None);
+    }
+
+    /// 参数解析：正常 / 缺失
+    #[test]
+    fn parses_options_from_params() {
+        let p = json!({ "options": [ { "optionId": "x", "kind": "allow_once", "name": "允许" } ] });
+        assert_eq!(parse_permission_options(&p), opts(&[("x", "allow_once")]));
+        assert!(parse_permission_options(&json!({})).is_empty());
     }
 }
 
@@ -302,12 +443,17 @@ impl AgentSession for AcpSession {
                     params
                 );
                 if let Some(id) = id {
+                    // 用选项匹配逻辑挑"拒绝"项，而不是硬编码 optionId
+                    // （形状与取值待接入审批时用真机复核）
+                    let option_id =
+                        pick_option_id(&parse_permission_options(&params), PermissionDecision::Deny)
+                            .unwrap_or_else(|| "reject_once".to_string());
                     let peer = peer.clone();
                     tokio::spawn(async move {
                         peer.respond(
                             id,
                             Ok(json!({
-                                "outcome": { "outcome": "selected", "optionId": "reject_once" }
+                                "outcome": { "outcome": "selected", "optionId": option_id }
                             })),
                         )
                         .await;
