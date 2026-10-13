@@ -118,12 +118,16 @@ export function AgentManager() {
           version: editForm.version,
         },
       });
-      // 接入方式独立落库（`update_agent` 不写 transport/conn 这两列）
-      await invoke('set_agent_transport', {
-        agentType: editingType,
-        transport: editForm.transport ?? 'subprocess',
-        connJson: editForm.conn ?? '',
-      });
+      // 接入方式独立落库（`update_agent` 不写这两列）。
+      // **只在拿到回显值时才写**：编辑态若因故没回显成功，`editForm.transport` 为空，
+      // 此时绝不能按默认值回写——那会把已配好的 ACP 设置覆盖成兼容模式（数据丢失）。
+      if (editForm.transport) {
+        await invoke('set_agent_transport', {
+          agentType: editingType,
+          transport: editForm.transport,
+          connJson: editForm.conn ?? '',
+        });
+      }
       showToast('Agent 配置已更新', 'success');
       setEditingType(null);
       setEditForm(null);
@@ -446,6 +450,38 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
   };
   return (
     <div className="w-full space-y-4">
+      {/* 接入方式：**只在「添加自定义 Agent」时出现，且置于最前**——先选方式，再填该方式需要的字段。
+          编辑既有 Agent 时不显示（避免误改一个已跑通 Agent 的接入方式）。
+          只留两种：兼容模式(subprocess) / ACP；http(在线API) 与 内嵌Web 各有专属入口，不列
+          （列进来会变成"两个入口配同一件事"）。 */}
+      {mode === 'add' && (
+        <div>
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+            <Repeat size={11} style={{ color: 'var(--accent)' }} />
+            <span>接入方式</span>
+          </div>
+          <SelectField
+            label="接入方式"
+            value={form.transport || 'subprocess'}
+            onChange={(v) => onChange({ ...form, transport: v })}
+            options={[
+              { value: 'subprocess', label: '兼容模式（本地 CLI，默认）' },
+              { value: 'acp', label: 'ACP（Agent Client Protocol）' },
+            ]}
+          />
+          {(form.transport || 'subprocess') === 'acp' && (
+            <div className="mt-2">
+              <FormField
+                label="连接参数（JSON）：command 填 CLI，args 填 ACP 参数"
+                value={form.conn || ''}
+                onChange={(v) => onChange({ ...form, conn: v })}
+                placeholder='{"command":"hermes","args":["acp"]}'
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-2 mb-4">
         <FormField label="排序序号" value={String(form.sortOrder ?? 0)} onChange={(v) => onChange({ ...form, sortOrder: parseInt(v) || 0 })} placeholder="如 0" />
         <FormField label="配置版本号（非Agent版本号）" value={form.version || ''} onChange={(v) => {
@@ -584,37 +620,6 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
         </>
       )}
 
-      {/* 接入方式（**添加与编辑都显示**；设计文档 §4.2）。
-          只留两种：兼容模式(subprocess) / ACP。
-          `http`(在线 API) 与 `内嵌 Web` 各有专属入口（集成配置 → API 供应商 / 内嵌 Web 子页签），
-          放进这里会变成"两个入口配同一件事"，故不列。 */}
-      <div>
-        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
-          <Repeat size={11} style={{ color: 'var(--accent)' }} />
-          <span>接入方式</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <SelectField
-            label="接入方式"
-            value={form.transport || 'subprocess'}
-            onChange={(v) => onChange({ ...form, transport: v })}
-            options={[
-              { value: 'subprocess', label: '兼容模式（本地 CLI，默认）' },
-              { value: 'acp', label: 'ACP（Agent Client Protocol）' },
-            ]}
-          />
-        </div>
-        {(form.transport || 'subprocess') === 'acp' && (
-          <div className="mt-2">
-            <FormField
-              label="连接参数（JSON）：command 填 CLI，args 填 ACP 参数"
-              value={form.conn || ''}
-              onChange={(v) => onChange({ ...form, conn: v })}
-              placeholder='{"command":"hermes","args":["acp"]}'
-            />
-          </div>
-        )}
-      </div>
       <div className="flex gap-2 justify-end pt-1">
         <SettingsButton variant="secondary" onClick={onCancel}>取消</SettingsButton>
         <SettingsButton variant="primary" onClick={onSubmit} disabled={saving}>
