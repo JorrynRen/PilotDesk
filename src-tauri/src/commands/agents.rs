@@ -561,6 +561,114 @@ pub fn add_agent_inner(
     })
 }
 
+/// 设置 Agent 的**接入方式**与连接参数（设计文档 §4.2）。
+///
+/// 前端「编辑 Agent」面板的「接入方式」区保存时调本命令。
+///
+/// 刻意用**独立的 2 参数语句**，不碰 `update_agent_inner` 那 28 个位置参数——
+/// 位置参数一旦错位，rusqlite 只会在**运行时**报错（能编译通过），
+/// 在那个语句上加列的风险与收益不成比例。
+#[tauri::command]
+pub fn set_agent_transport(
+    state: tauri::State<'_, crate::DbState>,
+    agent_type: String,
+    transport: String,
+    conn_json: Option<String>,
+) -> Result<(), AppError> {
+    let conn = state.get_conn()?;
+    set_agent_transport_inner(&conn, &agent_type, &transport, conn_json.as_deref())
+}
+
+/// 落库实现（可单测）：
+/// - `transport` 必须是已知取值 —— 拒绝写入拼错的接入方式（否则会在路由时才炸）；
+/// - `conn_json` 非空时必须是**合法 JSON** —— 早失败好过拖到 `connect` 阶段；
+///   空串/`None` 一律置 NULL。
+pub fn set_agent_transport_inner(
+    conn: &Connection,
+    agent_type: &str,
+    transport: &str,
+    conn_json: Option<&str>,
+) -> Result<(), AppError> {
+    if crate::agent::transport::TransportKind::from_db_str(transport).is_none() {
+        return Err(AppError::External(format!("未知接入方式: {}", transport)));
+    }
+    let conn_value = conn_json.map(|s| s.trim()).filter(|s| !s.is_empty());
+    if let Some(s) = conn_value {
+        serde_json::from_str::<serde_json::Value>(s)
+            .map_err(|e| AppError::External(format!("连接参数不是合法 JSON: {}", e)))?;
+    }
+    conn.execute(
+        "UPDATE agents SET transport = ?1, conn = ?2, updated_at = ?3 WHERE agent_type = ?4",
+        params![transport, conn_value, now(), agent_type],
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    fn seed() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL).unwrap();
+        conn.execute(
+            "INSERT INTO agents (agent_type, display_name, created_at, updated_at) VALUES ('hermes','Hermes',0,0)",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    /// 正常写入 + 两类校验（未知接入方式 / 非法 JSON）+ 清空置 NULL
+    #[test]
+    fn set_agent_transport_roundtrip_and_validation() {
+        let conn = seed();
+
+        set_agent_transport_inner(
+            &conn,
+            "hermes",
+            "acp",
+            Some("{\"command\":\"hermes\",\"args\":[\"acp\"]}"),
+        )
+        .unwrap();
+        let (t, c): (String, String) = conn
+            .query_row(
+                "SELECT transport, conn FROM agents WHERE agent_type='hermes'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(t, "acp");
+        assert!(c.contains("\"command\""));
+
+        // 未知接入方式 → 拒绝（不写拼错的值，否则路由时才炸）
+        assert!(set_agent_transport_inner(&conn, "hermes", "acpp", None).is_err());
+        // 非法 JSON → 拒绝
+        assert!(set_agent_transport_inner(&conn, "hermes", "acp", Some("{oops")).is_err());
+        // 上面两次失败都不得改动已写入的值
+        let still: String = conn
+            .query_row(
+                "SELECT transport FROM agents WHERE agent_type='hermes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, "acp", "校验失败不得留下半改状态");
+
+        // 清空 conn（空串）→ NULL，接入方式可改回 subprocess
+        set_agent_transport_inner(&conn, "hermes", "subprocess", Some("  ")).unwrap();
+        let (t2, c2): (String, Option<String>) = conn
+            .query_row(
+                "SELECT transport, conn FROM agents WHERE agent_type='hermes'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(t2, "subprocess");
+        assert!(c2.is_none(), "空串应置 NULL");
+    }
+}
+
 pub fn update_agent_inner(
     conn: &Connection,
     payload: UpdateAgentPayload,
