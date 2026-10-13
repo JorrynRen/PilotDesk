@@ -99,7 +99,9 @@ function ensureStarted(): void {
     }),
     listen<{ sessionId: string; content?: string }>('agent-cancelled', (event) => {
       // 用户点"停止生成"：中断时已产出的正文照常收尾落库，而不是按失败丢弃。
-      useAgentStreamStore.getState().finishRun(event.payload.sessionId, event.payload.content);
+      // 第三个参数传 false：**取消不是"空响应"**——不写"未收到模型有效响应"提示
+      // （没有正文时由 MainPanel 的停止路径写"已停止生成"，避免两条互相矛盾的系统消息）。
+      useAgentStreamStore.getState().finishRun(event.payload.sessionId, event.payload.content, false);
       dispatch('onCancelled', event.payload.sessionId, event.payload.content);
     }),
     listen<{ sessionId: string; error: string }>('agent-error', (event) => {
