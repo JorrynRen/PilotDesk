@@ -560,6 +560,7 @@ impl AgentManager {
             resume_id: agent_session_id.map(|s| s.to_string()),
             abort: Arc::clone(&aborted),
             on_pid: Some(on_pid),
+            approvals: None,
         };
 
         let mut session =

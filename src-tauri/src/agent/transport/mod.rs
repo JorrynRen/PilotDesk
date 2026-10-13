@@ -166,6 +166,19 @@ impl Default for TransportKind {
     }
 }
 
+/// 审批闸门：把"请用户批准"抽象出来，**避免传输层直接依赖 Tauri 状态**。
+///
+/// 调用方（`lib.rs`）用现有 `PendingApprovals::register(call_id)` 实现它——
+/// 于是 CLI / API / ACP 三条路共用同一套审批 UI 与回收逻辑，无需各自造注册表。
+///
+/// 返回 `true` = 允许；`false` = 拒绝（含超时、无人在场）。
+/// 实现方应自带超时：**未决**一律按拒绝处理，绝不默认放行。
+#[async_trait::async_trait]
+pub trait ApprovalGate: Send + Sync {
+    /// 请求一次审批；`call_id` 用于把界面上的决定对应回本次请求。
+    async fn request_approval(&self, call_id: &str) -> bool;
+}
+
 /// 建立一次会话所需的连接参数。
 ///
 /// 注：不派生 `Debug` —— `on_pid` 是 `dyn Fn`，无法实现 `Debug`。
@@ -189,6 +202,8 @@ pub struct AgentConn {
     pub abort: Arc<AtomicBool>,
     /// 进程启动回调（携带 pid）：供调用方注册进程表，以支持按 pid 终止整棵进程树
     pub on_pid: Option<PidCallback>,
+    /// 审批闸门（`None` = 未接入审批 → 需要授权的请求一律按拒绝处理）
+    pub approvals: Option<Arc<dyn ApprovalGate>>,
 }
 
 /// 进程启动回调（`Fn` 而非 `FnMut`：可能被多线程共享）。

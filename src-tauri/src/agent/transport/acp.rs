@@ -224,6 +224,23 @@ pub fn pick_option_id(options: &[PermissionOption], decision: PermissionDecision
     }
 }
 
+/// 构造 ACP 权限响应体（`outcome.selected.optionId`）。
+///
+/// 期望允许但**没有** `allow*` 选项时，退回挑一个**合法**的拒绝项——
+/// 宁可按拒绝回答，也不发一个对方不认识的 optionId。
+/// 纯函数以便单测；`optionId` 形状取自 schema，**待真机复核**。
+pub fn permission_response(options: &[PermissionOption], allowed: bool) -> Value {
+    let decision = if allowed {
+        PermissionDecision::Allow
+    } else {
+        PermissionDecision::Deny
+    };
+    let option_id = pick_option_id(options, decision)
+        .or_else(|| pick_option_id(options, PermissionDecision::Deny))
+        .unwrap_or_else(|| "reject_once".to_string());
+    json!({ "outcome": { "outcome": "selected", "optionId": option_id } })
+}
+
 #[cfg(test)]
 mod permission_tests {
     use super::*;
@@ -294,6 +311,21 @@ mod permission_tests {
         let p = json!({ "options": [ { "optionId": "x", "kind": "allow_once", "name": "允许" } ] });
         assert_eq!(parse_permission_options(&p), opts(&[("x", "allow_once")]));
         assert!(parse_permission_options(&json!({})).is_empty());
+    }
+
+    /// 响应体构造：允许 / 拒绝 / 无 allow 项时的安全退化
+    #[test]
+    fn builds_permission_response() {
+        let o = opts(&[("a1", "allow_once"), ("r1", "reject_once")]);
+        assert_eq!(permission_response(&o, true)["outcome"]["optionId"], "a1");
+        assert_eq!(permission_response(&o, false)["outcome"]["optionId"], "r1");
+
+        // 期望允许但对方没给 allow* 选项 → 退回一个**合法**的拒绝项（不发未知 id）
+        let only_reject = opts(&[("r1", "reject_once")]);
+        assert_eq!(
+            permission_response(&only_reject, true)["outcome"]["optionId"],
+            "r1"
+        );
     }
 }
 
@@ -431,34 +463,58 @@ impl AgentSession for AcpSession {
             }),
         );
 
-        // 2b) session/request_permission：权限请求
-        // TODO(P2-3)：接入 `PendingApprovals`，由用户在界面上批准/拒绝。
-        // 当前**默认拒绝**——按设计文档 D 的原则，绝不提供"默认放行"后门；
-        // 在接入审批之前，需要权限的工具会失败，这是刻意的安全默认。
+        // 2b) session/request_permission：权限请求 → 审批闸门
+        // 安全默认：闸门缺失、或超时未决 → **拒绝**（绝不默认放行）；
+        // 且只在**真有闸门**时才发审批卡——没闸门却发卡，只会让用户点了没反应。
+        let sink_perm = Arc::clone(&sink);
+        let sid_perm = self.session_id.clone();
+        let gate_perm = conn.approvals.clone();
         peer.on(
             peer_method::SESSION_REQUEST_PERMISSION,
             Arc::new(move |peer, id, params| {
-                log::warn!(
-                    "[acp] 收到权限请求，审批尚未接入 → 默认拒绝: {}",
-                    params
+                let options = parse_permission_options(&params);
+                let call_id = format!(
+                    "acp-{}-{}",
+                    sid_perm,
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
                 );
-                if let Some(id) = id {
-                    // 用选项匹配逻辑挑"拒绝"项，而不是硬编码 optionId
-                    // （形状与取值待接入审批时用真机复核）
-                    let option_id =
-                        pick_option_id(&parse_permission_options(&params), PermissionDecision::Deny)
-                            .unwrap_or_else(|| "reject_once".to_string());
-                    let peer = peer.clone();
-                    tokio::spawn(async move {
-                        peer.respond(
-                            id,
-                            Ok(json!({
-                                "outcome": { "outcome": "selected", "optionId": option_id }
-                            })),
-                        )
-                        .await;
+                let gate = gate_perm.clone();
+
+                if gate.is_some() {
+                    sink_perm(UnifiedAgentEvent::ApprovalRequired {
+                        session_id: sid_perm.clone(),
+                        call_id: call_id.clone(),
+                        name: params["toolCall"]["title"]
+                            .as_str()
+                            .unwrap_or("工具调用")
+                            .to_string(),
+                        args: params["toolCall"]["rawInput"].to_string(),
+                        risk: String::new(),
                     });
                 }
+
+                let peer = peer.clone();
+                tokio::spawn(async move {
+                    let allowed = match gate {
+                        Some(g) => tokio::time::timeout(
+                            std::time::Duration::from_secs(300),
+                            g.request_approval(&call_id),
+                        )
+                        .await
+                        .unwrap_or(false),
+                        None => {
+                            log::warn!("[acp] 权限请求：审批闸门未接入 → 拒绝: {}", params);
+                            false
+                        }
+                    };
+                    if let Some(id) = id {
+                        peer.respond(id, Ok(permission_response(&options, allowed)))
+                            .await;
+                    }
+                });
             }),
         );
 
