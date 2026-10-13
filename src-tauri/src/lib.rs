@@ -459,6 +459,37 @@ async fn agent_send_message_with_config(
     } else {
         cwd
     };
+    // ── 接入方式路由（v9 起 `agents.transport`）──
+    // 非 `subprocess` 走传输抽象层；`subprocess` 仍走既有 execute_async（legacy/v2 开关不变）。
+    // 本步只接线、不改 subprocess 行为：`transport` 列默认值就是 'subprocess'。
+    let descriptor = crate::agent::descriptor::AgentDescriptor::from_agents_row(&conn, &agent_type)
+        .map_err(|e| format!("解析接入方式失败: {}", e))?;
+    if let Some(desc) = descriptor {
+        if desc.transport != crate::agent::transport::TransportKind::Subprocess {
+            let sid = session_id.clone();
+            let run_token = crate::api_agent::session_runs::begin(&sid);
+            let gate: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>> = app
+                .try_state::<PendingApprovals>()
+                .map(|p| {
+                    std::sync::Arc::new(TauriApprovalGate {
+                        pending: p.inner().clone(),
+                    }) as std::sync::Arc<dyn crate::agent::transport::ApprovalGate>
+                });
+            let result = crate::agent::run_transport_session(
+                app,
+                &desc,
+                &sid,
+                &message,
+                resolved_cwd.as_deref().unwrap_or_default(),
+                agent_session_id.as_deref(),
+                gate,
+            )
+            .await;
+            crate::api_agent::session_runs::finish(&sid, &run_token);
+            return result;
+        }
+    }
+
     // CLI 会话同样登记运行态：两种模式的列表脉冲与重入判断口径一致。
     let sid_for_registry = session_id.clone();
     let run_token = crate::api_agent::session_runs::begin(&sid_for_registry);
@@ -582,6 +613,25 @@ pub struct PendingApprovals {
     confirmation_reqs: Arc<
         std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     >,
+}
+
+/// 把现有 `PendingApprovals` 适配成传输层的审批闸门（ACP 等对端请求授权时用）。
+///
+/// `call_id` 与发给前端的 `toolId` **同源**（见实施计划 §十五）——前端以 `toolId` 作 callId，
+/// 故用户在审批卡上点"批准"能对应回这条请求。超时/通道断 → 拒绝（**绝不默认放行**）。
+struct TauriApprovalGate {
+    pending: PendingApprovals,
+}
+
+#[async_trait::async_trait]
+impl crate::agent::transport::ApprovalGate for TauriApprovalGate {
+    async fn request_approval(&self, call_id: &str) -> bool {
+        let rx = self.pending.register(call_id.to_string());
+        match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
+            Ok(Ok(approved)) => approved,
+            _ => false,
+        }
+    }
 }
 
 impl PendingApprovals {

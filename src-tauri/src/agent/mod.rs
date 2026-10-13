@@ -1064,6 +1064,142 @@ impl AgentManager {
     }
 }
 
+/// 经传输抽象层跑一轮会话（供 `lib.rs` 按 `agents.transport` 路由非 subprocess 接入方式）。
+///
+/// 与 `execute_async_v2` 同口径：
+/// - 取消走 `session_runs` 的**无锁**令牌（前端"停止生成"在拿 `AgentManager` 锁之前就置位它）；
+/// - 收尾只在**一处**发事件（`agent-done` / `agent-error` / `agent-cancelled`），避免两条系统消息；
+/// - **取消不是错误**：先判取消再判错误，否则会弹"错误：已取消"。
+///
+/// 事件载荷字段名逐字对齐前端 `agentEventBus`（见实施计划 §十五）：
+/// ⚠️ 审批事件**没有 `callId` 字段**，前端以 `toolId` 作 callId —— 故这里把 `call_id` 写进 `toolId`。
+pub async fn run_transport_session(
+    app: tauri::AppHandle,
+    descriptor: &crate::agent::descriptor::AgentDescriptor,
+    session_id: &str,
+    message: &str,
+    cwd: &str,
+    agent_session_id: Option<&str>,
+    approvals: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>>,
+) -> Result<(), String> {
+    use crate::agent::transport::{
+        build_session, AgentConn, AgentSession, PromptInput, UnifiedAgentEvent,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let Some(mut session) = build_session(descriptor.transport, None) else {
+        return Err(format!(
+            "接入方式 {:?} 暂不支持会话（mcp 为能力面、webview 为承载）",
+            descriptor.transport
+        ));
+    };
+    log::info!(
+        "[Agent/run_transport_session] session='{}' agent='{}' transport={:?}",
+        session_id,
+        descriptor.agent_id,
+        descriptor.transport
+    );
+
+    // 事件出口：MVP 只投影"能在界面上正常回答"所必需的几类。
+    // reasoning / tool-start / tool-result / usage 的载荷字段名尚未逐一确认（§十五），
+    // 待确认后再补——不猜。
+    let app_evt = app.clone();
+    let sid_evt = session_id.to_string();
+    let sink: crate::agent::transport::EventSink = std::sync::Arc::new(move |ev| match ev {
+        UnifiedAgentEvent::Chunk { content, .. } => {
+            let _ = app_evt.emit(
+                "agent-chunk",
+                serde_json::json!({ "sessionId": sid_evt, "content": content }),
+            );
+        }
+        UnifiedAgentEvent::AgentSessionId {
+            agent_session_id, ..
+        } => {
+            let _ = app_evt.emit(
+                "agent-session",
+                serde_json::json!({ "sessionId": sid_evt, "agentSessionId": agent_session_id }),
+            );
+        }
+        UnifiedAgentEvent::ApprovalRequired {
+            call_id,
+            name,
+            args,
+            risk,
+            ..
+        } => {
+            let _ = app_evt.emit(
+                "agent-approval-required",
+                serde_json::json!({
+                    "sessionId": sid_evt,
+                    "toolId": call_id,          // ← 前端以 toolId 作 callId（§十五 的坑）
+                    "toolName": name,
+                    "arguments": args,
+                    "riskDescription": risk,
+                }),
+            );
+        }
+        _ => {}
+    });
+
+    let abort = crate::api_agent::session_runs::cancel_token(session_id)
+        .unwrap_or_else(|| std::sync::Arc::new(AtomicBool::new(false)));
+
+    let conn = AgentConn {
+        session_id: session_id.to_string(),
+        agent_id: descriptor.agent_id.clone(),
+        transport: descriptor.transport,
+        cwd: cwd.to_string(),
+        conn: descriptor.conn.clone(),
+        secret: None,
+        resume_id: agent_session_id.map(|s| s.to_string()),
+        abort: std::sync::Arc::clone(&abort),
+        on_pid: None,
+        approvals,
+    };
+
+    let handle = session
+        .connect(&conn, sink)
+        .await
+        .map_err(|e| format!("建立会话失败: {}", e))?;
+    let result = session
+        .prompt(
+            &handle,
+            PromptInput {
+                text: message.to_string(),
+                images: Vec::new(),
+            },
+        )
+        .await;
+
+    // 取消优先：取消不是错误
+    let cancelled = abort.load(Ordering::Relaxed)
+        || crate::api_agent::session_runs::cancel_token(session_id)
+            .is_some_and(|t| t.load(Ordering::Relaxed));
+
+    if cancelled {
+        let _ = app.emit(
+            "agent-cancelled",
+            serde_json::json!({ "sessionId": session_id }),
+        );
+        return Ok(());
+    }
+
+    match result {
+        Ok(_) => {
+            let _ = app.emit("agent-done", serde_json::json!({ "sessionId": session_id }));
+            Ok(())
+        }
+        Err(e) => {
+            // 与既有 CLI 口径一致：错误已上报，不再向调用方冒泡
+            let _ = app.emit(
+                "agent-error",
+                serde_json::json!({ "sessionId": session_id, "error": format!("{}", e) }),
+            );
+            Ok(())
+        }
+    }
+}
+
 impl Drop for AgentManager {
     fn drop(&mut self) {
         if let Ok(mut processes) = self.processes.lock() {
