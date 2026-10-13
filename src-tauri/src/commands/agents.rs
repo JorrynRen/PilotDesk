@@ -561,6 +561,44 @@ pub fn add_agent_inner(
     })
 }
 
+/// 接入方式回显（供编辑面板预填；与 `set_agent_transport` 配对）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTransportInfo {
+    pub transport: String,
+    pub conn: Option<String>,
+}
+
+/// 读取 Agent 的接入方式与连接参数。
+///
+/// 与 `set_agent_transport` 配对：编辑面板打开时预填**当前值**，
+/// 避免"打开面板→保存"把接入方式悄悄重置回默认值（那会丢掉 ACP/http 配置）。
+#[tauri::command]
+pub fn get_agent_transport(
+    state: tauri::State<'_, crate::DbState>,
+    agent_type: String,
+) -> Result<AgentTransportInfo, AppError> {
+    let conn = state.get_conn()?;
+    get_agent_transport_inner(&conn, &agent_type)
+}
+
+pub fn get_agent_transport_inner(
+    conn: &Connection,
+    agent_type: &str,
+) -> Result<AgentTransportInfo, AppError> {
+    conn.query_row(
+        "SELECT transport, conn FROM agents WHERE agent_type = ?1",
+        params![agent_type],
+        |r| {
+            Ok(AgentTransportInfo {
+                transport: r.get(0)?,
+                conn: r.get(1)?,
+            })
+        },
+    )
+    .map_err(|e| AppError::External(format!("读取接入方式失败: {}", e)))
+}
+
 /// 设置 Agent 的**接入方式**与连接参数（设计文档 §4.2）。
 ///
 /// 前端「编辑 Agent」面板的「接入方式」区保存时调本命令。
