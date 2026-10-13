@@ -1082,9 +1082,7 @@ pub async fn run_transport_session(
     agent_session_id: Option<&str>,
     approvals: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>>,
 ) -> Result<(), String> {
-    use crate::agent::transport::{
-        build_session, AgentConn, AgentSession, PromptInput, UnifiedAgentEvent,
-    };
+    use crate::agent::transport::{build_session, AgentConn, PromptInput, UnifiedAgentEvent};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let Some(mut session) = build_session(descriptor.transport, None) else {
