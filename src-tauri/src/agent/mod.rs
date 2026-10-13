@@ -290,9 +290,11 @@ impl AgentManager {
         (callbacks.on_pid)(pid);
         log::info!("[Agent/execute_async] async console spawned, pid={}", pid);
 
-        // 注册 PID 到进程管理表
+        // 注册 PID 到进程管理表：取消令牌复用运行登记表的令牌（无锁通路），
+        // 使「停止生成」在 AgentManager 锁被占住时也能即时生效（与 v2 路径同口径）。
         {
-            let aborted = Arc::new(AtomicBool::new(false));
+            let aborted = crate::api_agent::session_runs::cancel_token(&session_id)
+                .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
             let aborted_clone = aborted.clone();
             self.processes.lock().unwrap().insert(
                 session_id.clone(),
@@ -734,17 +736,22 @@ impl AgentManager {
                 );
             }),
             abort_check: Box::new(move || {
-                // 检查 aborted 标志
-                let val = aborted_clone.load(Ordering::Relaxed);
-                if val {
-                    // 额外检查进程表中的 aborted（stop_generation 可能通过 pid 直接 kill）
-                    if let Ok(procs) = processes_arc.lock() {
-                        if let Some(proc) = procs.get(&*session_for_abort_check) {
-                            return proc.aborted.load(Ordering::Relaxed);
+                // 无锁通路优先：stop 命令在拿 AgentManager 锁【之前】就已 `session_runs::cancel()`，
+                // 而 CLI 生成期间那把锁被 send 一直持有 —— 只有这条通路能即时生效。
+                if crate::api_agent::session_runs::cancel_token(&*session_for_abort_check)
+                    .is_some_and(|t| t.load(Ordering::Relaxed))
+                {
+                    return true;
+                }
+                // 进程表标志（stop_generation 按 pid 终止时的正交信号）
+                if let Ok(procs) = processes_arc.lock() {
+                    if let Some(proc) = procs.get(&*session_for_abort_check) {
+                        if proc.aborted.load(Ordering::Relaxed) {
+                            return true;
                         }
                     }
                 }
-                val
+                aborted_clone.load(Ordering::Relaxed)
             }),
             on_pid: Box::new(move |spawned_pid: u32| {
                 log::info!(
