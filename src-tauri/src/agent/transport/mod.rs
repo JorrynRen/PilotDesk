@@ -12,6 +12,7 @@
 //! 故暂时整体 `allow(dead_code)`；接线完成后删除该 allow。
 #![allow(dead_code)]
 
+pub mod acp;
 pub mod http;
 pub mod jsonrpc;
 pub mod subprocess;
@@ -28,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// 统一 Agent 事件：与前端 `agentEventBus` 的 12 类事件一一对应。
 ///
 /// 各传输实现负责把协议事件"投影"到本枚举；上层只认本枚举。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum UnifiedAgentEvent {
     /// 正文增量 → `agent-chunk`
