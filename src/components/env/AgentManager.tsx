@@ -118,6 +118,12 @@ export function AgentManager() {
           version: editForm.version,
         },
       });
+      // 接入方式独立落库（`update_agent` 不写 transport/conn 这两列）
+      await invoke('set_agent_transport', {
+        agentType: editingType,
+        transport: editForm.transport ?? 'subprocess',
+        connJson: editForm.conn ?? '',
+      });
       showToast('Agent 配置已更新', 'success');
       setEditingType(null);
       setEditForm(null);
@@ -155,7 +161,19 @@ export function AgentManager() {
     }
     setSaving(true);
     try {
-      await invoke('add_agent', { payload: { ...addForm, icon: addForm.icon || '', version: addForm.version || '' } });
+      // transport/conn 不属于 CreateAgentPayload，先摘掉（后端只认 CLI 那批字段）
+      const addPayload: Partial<AgentConfig> = { ...addForm };
+      delete addPayload.transport;
+      delete addPayload.conn;
+      await invoke('add_agent', { payload: { ...addPayload, icon: addForm.icon || '', version: addForm.version || '' } });
+      // 新建成功后再落库接入方式（添加态没有既存行，只能建完再设）
+      if (addForm.agentType) {
+        await invoke('set_agent_transport', {
+          agentType: addForm.agentType,
+          transport: addForm.transport ?? 'subprocess',
+          connJson: addForm.conn ?? '',
+        });
+      }
       showToast('Agent 已添加', 'success');
       setShowAddForm(false);
       setAddForm({});
@@ -375,15 +393,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
   mode: 'add' | 'edit';
 }) {
   // ── 接入方式（设计文档 §4.2）──
-  // 刻意**不进 AgentConfig**（否则牵动其 4 个 Rust 构造点）：独立 state + 独立的
-  // `get/set_agent_transport` 命令对。也刻意不做成表单主字段——`update_agent` 不碰这两列，
-  // 各走各的写入路径，市场导入/更新就不会清掉接入方式。
-  const [transport, setTransport] = useState('subprocess');
-  const [connJson, setConnJson] = useState('');
-  const [savingTransport, setSavingTransport] = useState(false);
-
-  // 编辑态打开时回显当前值。**必须回显**：否则"打开面板→保存"会把已配好的
-  // ACP/http 设置悄悄重置回默认值（数据丢失）。添加态没有 agent_type，无从读取。
+  // state 就放在 `form` 里（TS 类型已加可选的 transport/conn），由**父组件**在创建/更新成功后
+  // 统一落库（set_agent_transport）——添加态没有既存行，只能建完再设。
+  // 编辑态打开时回显当前值；必须回显，否则"打开面板→保存"会把已配好的 ACP 设置重置掉。
   useEffect(() => {
     if (mode !== 'edit' || !form.agentType) return;
     let alive = true;
@@ -392,32 +404,19 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
     })
       .then((r) => {
         if (!alive) return;
-        setTransport(r.transport);
-        setConnJson(r.conn ?? '');
+        // 幂等守卫：避免 setState → 重渲染 → 再 setState 的循环
+        if (form.transport === r.transport && (form.conn ?? '') === (r.conn ?? '')) return;
+        onChange({ ...form, transport: r.transport, conn: r.conn ?? '' });
       })
       .catch(() => {
-        // 读不到就保持默认，不打断表单
+        // 读不到就按默认（兼容模式）显示，不打断表单
       });
     return () => {
       alive = false;
     };
+    // 只在切换 Agent / 模式时重跑（form 不放进依赖，见上面的幂等守卫）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, form.agentType]);
-
-  const handleSaveTransport = async () => {
-    if (!form.agentType) return;
-    setSavingTransport(true);
-    try {
-      await invoke('set_agent_transport', {
-        agentType: form.agentType,
-        transport,
-        connJson,
-      });
-      showToast('接入方式已保存', 'success');
-    } catch (err) {
-      showToast(`保存接入方式失败: ${errorMessage(err)}`, 'error');
-    }
-    setSavingTransport(false);
-  };
 
   const handleUploadIcon = async () => {
     try {
@@ -492,6 +491,10 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
         </div>
       </div>
 
+      {/* ── 以下整段是**本地 CLI（兼容模式）专属**：选了 ACP 就整体隐藏 ──
+          ACP 自描述（连接靠 command/args 建立），包名/输出解析/session id/技能目录都不适用。 */}
+      {(form.transport || 'subprocess') === 'subprocess' && (
+        <>
       {/* 包参数配置 */}
       <div>
         <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
@@ -578,46 +581,40 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           ]} />
         </div>
       </div>
+        </>
+      )}
 
-      {/* 接入方式（仅编辑态）：独立保存按钮 —— 不与上面的表单字段混在一起，
-          因为 update_agent 不写这两列，混在一起会让"保存"语义含混 */}
-      {mode === 'edit' && form.agentType && (
-        <div>
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
-            <Repeat size={11} style={{ color: 'var(--accent)' }} />
-            <span>接入方式</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <SelectField
-              label="接入方式"
-              value={transport}
-              onChange={setTransport}
-              options={[
-                { value: 'subprocess', label: 'subprocess（本地 CLI，默认）' },
-                { value: 'acp', label: 'acp（Agent Client Protocol）' },
-                { value: 'http', label: 'http（在线版开放 API）' },
-              ]}
-            />
-          </div>
+      {/* 接入方式（**添加与编辑都显示**；设计文档 §4.2）。
+          只留两种：兼容模式(subprocess) / ACP。
+          `http`(在线 API) 与 `内嵌 Web` 各有专属入口（集成配置 → API 供应商 / 内嵌 Web 子页签），
+          放进这里会变成"两个入口配同一件事"，故不列。 */}
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
+          <Repeat size={11} style={{ color: 'var(--accent)' }} />
+          <span>接入方式</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <SelectField
+            label="接入方式"
+            value={form.transport || 'subprocess'}
+            onChange={(v) => onChange({ ...form, transport: v })}
+            options={[
+              { value: 'subprocess', label: '兼容模式（本地 CLI，默认）' },
+              { value: 'acp', label: 'ACP（Agent Client Protocol）' },
+            ]}
+          />
+        </div>
+        {(form.transport || 'subprocess') === 'acp' && (
           <div className="mt-2">
             <FormField
-              label="连接参数（JSON；留空表示无）"
-              value={connJson}
-              onChange={setConnJson}
+              label="连接参数（JSON）：command 填 CLI，args 填 ACP 参数"
+              value={form.conn || ''}
+              onChange={(v) => onChange({ ...form, conn: v })}
               placeholder='{"command":"hermes","args":["acp"]}'
             />
           </div>
-          <div className="flex items-center justify-between mt-2">
-            <span className="text-[10px]" style={{ color: 'var(--text-tertiary, var(--text-secondary))' }}>
-              acp 例：command 填 CLI，args 填 ACP 参数；http 例：baseUrl + model
-            </span>
-            <SettingsButton variant="secondary" onClick={handleSaveTransport} disabled={savingTransport}>
-              {savingTransport ? '保存中' : '保存接入方式'}
-            </SettingsButton>
-          </div>
-        </div>
-      )}
-
+        )}
+      </div>
       <div className="flex gap-2 justify-end pt-1">
         <SettingsButton variant="secondary" onClick={onCancel}>取消</SettingsButton>
         <SettingsButton variant="primary" onClick={onSubmit} disabled={saving}>

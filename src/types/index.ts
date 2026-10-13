@@ -410,6 +410,11 @@ export interface AgentConfig {
   skillsDir: string;
   skillEntryFile: string;
   skillDisplayMode: string;
+  /** v9：接入方式（`subprocess` 兼容模式 / `acp`）。仅本地 CLI 会话用——
+   *  http(在线 API) 与 内嵌Web 各有专属入口，不在此处选。 */
+  transport?: string;
+  /** 连接参数（JSON 文本），与 `transport` 成对；`acp` 例：{"command":"hermes","args":["acp"]} */
+  conn?: string;
   color: string;
   icon?: string;
   sortOrder: number;
