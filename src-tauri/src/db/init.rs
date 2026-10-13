@@ -9,7 +9,7 @@ use std::fs;
 /// 打开到比当前更新的库时明确报错，绝不 wipe。v1-v4 为预发布期整库重置，无独立旧库留存。
 /// 约定：每次修改 FINAL_SCHEMA_SQL 都必须把 SCHEMA_VERSION +1，
 /// 否则 user_version 相等的旧库走快速路径、不会补齐缺表/缺列。
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
@@ -48,7 +48,21 @@ CREATE TABLE IF NOT EXISTS agents (
             is_builtin INTEGER DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
-        , version TEXT NOT NULL DEFAULT '');
+        , version TEXT NOT NULL DEFAULT ''
+        -- v9：接入方式与连接参数（设计文档 §4.2）。
+        -- transport 默认 'subprocess' —— 现有 CLI Agent 行为**零变化**；
+        -- conn 为 transport 专属参数（JSON），**不含密钥**；密钥只留 secret_ref 指向 agent_secrets。
+        , transport TEXT NOT NULL DEFAULT 'subprocess'
+        , conn TEXT
+        , secret_ref TEXT);
+-- 凭据独立存储（设计文档 §4.3）：密钥不进 agents.conn，agents.secret_ref 指向本表。
+-- 新表用 IF NOT EXISTS 每次启动即补齐，老库无需 schema 版本迁移。
+CREATE TABLE IF NOT EXISTS agent_secrets (
+            id TEXT PRIMARY KEY,
+            secret TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL DEFAULT 0
+        );
 CREATE TABLE IF NOT EXISTS api_providers (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL DEFAULT '',
@@ -290,6 +304,19 @@ pub fn init_db() -> Result<DbPool, AppError> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
 
+    // 老库补列：agents 增加 transport / conn / secret_ref（设计文档 §4.2 / §4.3）。
+    // 与上面 sync_state 同一做法：只加列、带 DEFAULT 回填历史行、不随 SCHEMA_VERSION 门控。
+    // 本步**不做**任何 api_providers → agents 回填——那会与 §八 管理页耦合（回填出的
+    // `api:*` 行会立刻出现在既有 Agent 列表里），留到管理页同批做。
+    ensure_column(
+        &conn,
+        "agents",
+        "transport",
+        "TEXT NOT NULL DEFAULT 'subprocess'",
+    )?;
+    ensure_column(&conn, "agents", "conn", "TEXT")?;
+    ensure_column(&conn, "agents", "secret_ref", "TEXT")?;
+
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
     let now = crate::utils::now();
 
@@ -512,6 +539,60 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// v9 新增：`agents` 的接入方式/连接参数列 + 凭据表；老库补列幂等、带 DEFAULT 回填。
+    #[test]
+    fn v9_agent_transport_columns_and_secrets_table() {
+        // 全新库：FINAL_SCHEMA_SQL 必须带上三列与凭据表
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(FINAL_SCHEMA_SQL).unwrap();
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(agents)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for c in ["transport", "conn", "secret_ref"] {
+            assert!(
+                cols.contains(&c.to_string()),
+                "agents 缺列 {}（实际 {:?}）",
+                c,
+                cols
+            );
+        }
+        conn.execute(
+            "INSERT INTO agent_secrets (id, secret, created_at, updated_at) VALUES ('k1','s',0,0)",
+            [],
+        )
+        .unwrap();
+
+        // 老库补列：ensure_column 幂等，且新列以 DEFAULT 回填历史行
+        let old = rusqlite::Connection::open_in_memory().unwrap();
+        old.execute_batch(
+            "CREATE TABLE agents (agent_type TEXT PRIMARY KEY);
+             INSERT INTO agents (agent_type) VALUES ('claude');",
+        )
+        .unwrap();
+        for _ in 0..2 {
+            ensure_column(
+                &old,
+                "agents",
+                "transport",
+                "TEXT NOT NULL DEFAULT 'subprocess'",
+            )
+            .unwrap();
+        }
+        let t: String = old
+            .query_row(
+                "SELECT transport FROM agents WHERE agent_type='claude'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(t, "subprocess", "历史行必须以 DEFAULT 回填");
+    }
 
     /// 终态校验：FINAL_SCHEMA_SQL 能完整建出事件表与核心表，且不含任何旧表。
     #[test]
