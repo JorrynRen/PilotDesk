@@ -2504,6 +2504,7 @@ pub fn run() {
             commands::agents::update_agent,
             commands::agents::set_agent_transport,
             commands::agents::get_agent_transport,
+            commands::agents::list_agent_transports,
             commands::agents::delete_agent,
             commands::agents::export_agents_json,
             commands::agents::import_agents_json,

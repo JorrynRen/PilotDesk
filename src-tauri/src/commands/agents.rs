@@ -561,6 +561,42 @@ pub fn add_agent_inner(
     })
 }
 
+/// Agent 接入方式速查项（供前端按接入方式分组渲染）。
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTransportRef {
+    pub agent_type: String,
+    pub transport: String,
+}
+
+/// 列出各 Agent 的接入方式。
+///
+/// 刻意做成**独立只读命令**而不是把 `transport` 加进 `AgentConfig`：
+/// 后者要改它 4 处手工构造点（级联），而前端只是要"按接方式分组"这一件事。
+/// 只返回能承载会话的两种：`subprocess`（兼容模式）/ `acp`。
+#[tauri::command]
+pub fn list_agent_transports(
+    state: tauri::State<'_, crate::DbState>,
+) -> Result<Vec<AgentTransportRef>, AppError> {
+    let conn = state.get_conn()?;
+    list_agent_transports_inner(&conn)
+}
+
+pub fn list_agent_transports_inner(conn: &Connection) -> Result<Vec<AgentTransportRef>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT agent_type, transport FROM agents \
+         WHERE transport IN ('subprocess', 'acp') \
+         ORDER BY sort_order ASC, agent_type ASC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(AgentTransportRef {
+            agent_type: r.get(0)?,
+            transport: r.get(1)?,
+        })
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
 /// 接入方式回显（供编辑面板预填；与 `set_agent_transport` 配对）。
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

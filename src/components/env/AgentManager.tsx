@@ -47,6 +47,37 @@ export function AgentManager() {
     })
   );
 
+  // 接入方式速查（agentType → transport）：用于把列表按「兼容模式 / ACP」分组。
+  // 走独立的只读命令而不是把该列塞进 AgentConfig——后者要改它 4 处手工构造点（级联）。
+  const [transportMap, setTransportMap] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    invoke<Array<{ agentType: string; transport: string }>>('list_agent_transports')
+      .then((rows) => {
+        if (!alive) return;
+        const m: Record<string, string> = {};
+        rows.forEach((r) => {
+          m[r.agentType] = r.transport;
+        });
+        setTransportMap(m);
+      })
+      .catch(() => {
+        // 读不到就都按兼容模式显示，不打断列表
+      });
+    return () => {
+      alive = false;
+    };
+  }, [agents.length]);
+
+  const transportOf = (agentType: string) => transportMap[agentType] ?? 'subprocess';
+  // 分组只影响**渲染顺序与标题**：兼容模式在前、ACP 在后，组内保持原序。
+  // 拖拽仍走同一个 SortableContext，故排序语义不变（组内拖动落在同一索引区间）。
+  const groupedAgents = [...agents].sort(
+    (a, b) =>
+      (transportOf(a.agentType) === 'acp' ? 1 : 0) -
+      (transportOf(b.agentType) === 'acp' ? 1 : 0)
+  );
+
   const handleEdit = (agent: AgentConfig) => {
     setEditingType(agent.agentType);
     setEditForm({ ...agent });
@@ -271,22 +302,39 @@ export function AgentManager() {
 
         <div className="space-y-2">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-            <SortableContext items={agents.map(a => a.agentType)} strategy={verticalListSortingStrategy}>
-              {agents.map((agent) => (
-                <SortableAgentItem
-                  key={agent.agentType}
-                  agent={agent}
-                  isEditing={editingType === agent.agentType}
-                  editForm={editForm}
-                  setEditForm={setEditForm}
-                  handleSave={handleSave}
-                  saving={saving}
-                  setEditingType={setEditingType}
-                  handleToggleEnabled={handleToggleEnabled}
-                  handleEdit={handleEdit}
-                  requestDelete={requestDelete}
-                />
-              ))}
+            {/* 单一 SortableContext：分组只影响渲染顺序与标题，不改变拖拽语义 */}
+            <SortableContext items={groupedAgents.map(a => a.agentType)} strategy={verticalListSortingStrategy}>
+              {groupedAgents.map((agent, i) => {
+                const t = transportOf(agent.agentType);
+                const prevT = i > 0 ? transportOf(groupedAgents[i - 1].agentType) : null;
+                return (
+                  <React.Fragment key={agent.agentType}>
+                    {/* 分组标题：接入方式切换处插一条（兼容模式 / ACP） */}
+                    {t !== prevT && (
+                      <div
+                        className="flex items-center gap-2 pt-1 pb-0.5 text-[10px] font-semibold"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        <span>{t === 'acp' ? 'ACP（Agent Client Protocol）' : '兼容模式（本地 CLI）'}</span>
+                        <span className="flex-1 h-px" style={{ backgroundColor: 'var(--border)' }} />
+                      </div>
+                    )}
+                    <SortableAgentItem
+                      key={agent.agentType}
+                      agent={agent}
+                      isEditing={editingType === agent.agentType}
+                      editForm={editForm}
+                      setEditForm={setEditForm}
+                      handleSave={handleSave}
+                      saving={saving}
+                      setEditingType={setEditingType}
+                      handleToggleEnabled={handleToggleEnabled}
+                      handleEdit={handleEdit}
+                      requestDelete={requestDelete}
+                    />
+                  </React.Fragment>
+                );
+              })}
             </SortableContext>
           </DndContext>
         </div>
