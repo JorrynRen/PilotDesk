@@ -159,8 +159,24 @@ export function AgentManager() {
   };
 
   const handleAdd = async () => {
-    if (!addForm.agentType || !addForm.displayName || !addForm.cliCommand) {
-      showToast('请填写 Agent 标识、名称和 CLI 命令', 'error');
+    // ACP 不用 CLI 命令（它取 conn 里的 command），故校验按接入方式区分——
+    // 否则纯 ACP 的 Agent 会被这条校验卡住：必须填一个永不使用的 CLI 命令才能创建。
+    const isAcp = (addForm.transport || 'subprocess') === 'acp';
+    let acpCommand = '';
+    if (isAcp) {
+      try {
+        acpCommand = (JSON.parse(addForm.conn || '{}') as { command?: string }).command || '';
+      } catch {
+        acpCommand = ''; // conn 非法就当作没填，由下面的提示拦住
+      }
+    }
+    const missing =
+      !addForm.agentType || !addForm.displayName || (isAcp ? !acpCommand : !addForm.cliCommand);
+    if (missing) {
+      showToast(
+        isAcp ? '请填写 Agent 标识、名称和连接命令（command）' : '请填写 Agent 标识、名称和 CLI 命令',
+        'error'
+      );
       return;
     }
     setSaving(true);
@@ -607,7 +623,15 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           <FormField label="显示名称" value={form.displayName || ''} onChange={(v) => onChange({ ...form, displayName: v })} placeholder="如 Claude Code" />
         </div>
         <FormField label="描述" value={form.description || ''} onChange={(v) => onChange({ ...form, description: v })} placeholder="如 Anthropic 官方 CLI Agent，支持多文件编辑" />
-        <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="如 claude" />
+        {/* CLI 命令只对「兼容模式」有意义；ACP 的命令在上方「接入方式」区的 command 里填，
+            两处都叫"命令"会让用户不知道填哪个——故 ACP 时隐藏此项。 */}
+        {(form.transport || 'subprocess') === 'subprocess' ? (
+          <FormField label="CLI 命令" value={form.cliCommand || ''} onChange={(v) => onChange({ ...form, cliCommand: v })} placeholder="如 claude" />
+        ) : (
+          <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+            ACP 接入方式的命令请在「接入方式」区填写（command + args），此处无需 CLI 命令。
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-2 mt-2">
           <FormField label="主题色" value={form.color || '#6366F1'} onChange={(v) => onChange({ ...form, color: v })} placeholder="如 #6366F1" />
           <div className="flex gap-2 items-end">
