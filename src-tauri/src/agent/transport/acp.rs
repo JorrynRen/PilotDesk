@@ -17,6 +17,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
+use tokio::io::AsyncReadExt;
 
 use super::jsonrpc::JsonRpcPeer;
 use crate::agent::transport::{
@@ -139,6 +140,22 @@ pub fn project_session_update(session_id: &str, params: &Value) -> Vec<UnifiedAg
     }
 }
 
+/// 把对端 stderr（若有）附加到协议错误上。
+///
+/// ACP 对端的**致命错误常常只写在 stderr**（例：`hermes acp` 缺 `.[acp]` 依赖），
+/// 不附加的话用户只会看到"JSON-RPC 请求超时"，无从排查。
+fn with_peer_stderr(err: String, stderr: &Arc<Mutex<String>>) -> AgentError {
+    let detail = stderr
+        .lock()
+        .map(|b| b.trim().to_string())
+        .unwrap_or_default();
+    if detail.is_empty() {
+        AgentError::Protocol(err)
+    } else {
+        AgentError::Protocol(format!("{}（对端 stderr: {}）", err, detail))
+    }
+}
+
 // ──────────────────────────────────────────────
 //  AcpSession：会话面实现
 // ──────────────────────────────────────────────
@@ -232,10 +249,25 @@ impl AgentSession for AcpSession {
             .current_dir(&conn.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        let child = cmd
+            .stderr(Stdio::piped());
+        let mut child = cmd
             .spawn()
             .map_err(|e| AgentError::Connect(format!("启动 ACP 进程失败: {}", e)))?;
+
+        // stderr **必须捕获**：ACP 对端把"依赖未安装"这类致命信息写在 stderr，
+        // 若丢成 Stdio::null()，失败只会表现为 initialize 超时（30s），用户看不到真正原因。
+        // （实测：`hermes acp` 未装 `.[acp]` extra 时正是如此。）
+        let stderr_text = Arc::new(Mutex::new(String::new()));
+        if let Some(mut err) = child.stderr.take() {
+            let buf = Arc::clone(&stderr_text);
+            tokio::spawn(async move {
+                let mut s = String::new();
+                let _ = err.read_to_string(&mut s).await;
+                if let Ok(mut b) = buf.lock() {
+                    b.push_str(&s);
+                }
+            });
+        }
 
         let peer = JsonRpcPeer::new(child).map_err(AgentError::Connect)?;
 
@@ -296,7 +328,7 @@ impl AgentSession for AcpSession {
                 }),
             )
             .await
-            .map_err(AgentError::Protocol)?;
+            .map_err(|e| with_peer_stderr(e, &stderr_text))?;
 
         // ── 4) 建会话（有 resume_id 则走 session/load）──
         let new_params = json!({ "cwd": conn.cwd, "mcpServers": [] });
@@ -308,7 +340,7 @@ impl AgentSession for AcpSession {
             }
             None => peer.request(method::SESSION_NEW, new_params).await,
         }
-        .map_err(AgentError::Protocol)?;
+        .map_err(|e| with_peer_stderr(e, &stderr_text))?;
 
         self.remote_id = resp["sessionId"]
             .as_str()
