@@ -945,7 +945,17 @@ function isOrgOwnerOrAdmin(org: OrgCredOrg): boolean {
   return role === 'owner' || role === 'admin';
 }
 
-function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
+function ApiConfig({
+  deepLinkSub,
+  hideTabs = false,
+  hideProviders = false,
+}: {
+  deepLinkSub?: ApiSubTab;
+  /** 内嵌到别处（如「集成配置 → API 供应商」）时，不再渲染自己那条子页签条 */
+  hideTabs?: boolean;
+  /** 「运行与策略」里不展示提供商（提供商属"接入方式"，归「集成配置」） */
+  hideProviders?: boolean;
+}) {
   const { t } = useI18n();
   const { providers, loading, fetchProviders, saveProvider, deleteProvider, reorderProviders } = useApiProviderStore();
   const [editingProvider, setEditingProvider] = useState<EditingProvider | null>(null);
@@ -980,7 +990,12 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
   // 子页签支持 URL 直达（如 /settings?tab=api&apiTab=usage，供指挥中心「查看完整用量」精准跳转）：
   // 页面内点击优先，故用 override 叠加在 URL 之上——避免在 effect 里 setState 的级联渲染。
   const [apiTabOverride, setApiTabOverride] = useState<ApiSubTab | null>(deepLinkSub ?? null);
-  const urlSub: ApiSubTab = urlApiTab === 'env' || urlApiTab === 'usage' || urlApiTab === 'voice' ? urlApiTab : 'providers';
+  const urlSub: ApiSubTab =
+    urlApiTab === 'env' || urlApiTab === 'usage' || urlApiTab === 'voice'
+      ? urlApiTab
+      : hideProviders
+        ? 'env'
+        : 'providers';
   const apiTab: ApiSubTab = apiTabOverride ?? urlSub;
 
   // Load providers from SQLite on mount
@@ -1377,7 +1392,9 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
     <div className="space-y-4">
       {/* 子 Tab：环境检测 / 提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则
           —— 这些不是"API 方式专属"：环境检测是 Agent 运行前提，其余为全局策略，
-          故聚在同一个「运行与策略」tab 下（原来散在 Agent / API 两个 tab 里）。 */}
+          故聚在同一个「运行与策略」tab 下（原来散在 Agent / API 两个 tab 里）。
+          `hideTabs`（被内嵌时）不渲染本条；`hideProviders`（「运行与策略」）不展示提供商。 */}
+      {!hideTabs && (
       <div className="flex items-center gap-1 flex-wrap">
         {([
           { key: 'env', label: t('settings.sub.api.env', '环境检测') },
@@ -1386,7 +1403,9 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
           { key: 'voice', label: t('settings.sub.api.voice', '语音识别') },
           { key: 'mode', label: t('settings.sub.api.mode', '对话模式') },
           { key: 'permission', label: t('settings.sub.api.permission', '权限规则') },
-        ] as const).map((tab) => (
+        ] as const)
+          .filter((tab) => !(hideProviders && tab.key === 'providers'))
+          .map((tab) => (
           <button
             key={tab.key}
             onClick={() => setApiTabOverride(tab.key)}
@@ -1396,6 +1415,7 @@ function ApiConfig({ deepLinkSub }: { deepLinkSub?: ApiSubTab }) {
           </button>
         ))}
       </div>
+      )}
 
       {apiTab === 'providers' && (
         <>
@@ -1990,7 +2010,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 {agentTab === 'config' ? (
                   <AgentManager />
                 ) : agentTab === 'providers' ? (
-                  <ApiConfig deepLinkSub="providers" />
+                  <ApiConfig deepLinkSub="providers" hideTabs />
                 ) : agentTab === 'mcp' ? (
                   <McpSettings />
                 ) : (
@@ -2006,7 +2026,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 —— 这些不属"接入方式"，故聚在本 tab 的子页签里（见 ApiConfig） */}
             {/* API 集成配置：提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则 */}
             {activeTab === 'api' && (
-              <ApiConfig deepLinkSub={link?.tab === 'api' && link.sub ? (link.sub as ApiSubTab) : undefined} />
+              <ApiConfig
+                hideProviders
+                deepLinkSub={link?.tab === 'api' && link.sub ? (link.sub as ApiSubTab) : undefined}
+              />
             )}
             {activeTab === 'mcp' && <McpSettings />}
             {activeTab === 'search' && <SearchSettings />}
