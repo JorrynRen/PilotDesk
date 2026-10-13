@@ -1869,7 +1869,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(link?.tab ?? 'general');
   // 合并后收纳进子页签的低频项
   const [generalTab, setGeneralTab] = useState<'main' | 'about'>(link?.sub === 'about' ? 'about' : 'main');
-  const [agentTab, setAgentTab] = useState<'config' | 'env'>(link?.sub === 'env' ? 'env' : 'config');
+  const [agentTab, setAgentTab] = useState<'config' | 'providers' | 'env'>(link?.sub === 'env' ? 'env' : 'config');
 
   // URL 深链变化时对齐状态：用「渲染期修正」（React adjust-during-render）而不是 effect ——
   // 后者是「effect 体内同步 setState」，会多一轮级联渲染（`react-hooks/set-state-in-effect`），
@@ -1963,15 +1963,25 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             {/* Agent 集成配置：Agent 配置 + 子页签「环境检测」（原独立 tab，是 Agent 运行前提） */}
             {activeTab === 'agents' && (
               <div className="space-y-4">
-                <SubTabs<'config' | 'env'>
+                <SubTabs<'config' | 'providers' | 'env'>
                   value={agentTab}
                   onChange={setAgentTab}
                   items={[
                     { key: 'config', label: t('settings.sub.agents.config', 'Agent 配置') },
+                    { key: 'providers', label: t('settings.sub.agents.providers', 'API 供应商') },
                     { key: 'env', label: t('settings.sub.agents.env', '环境检测') },
                   ]}
                 />
-                {agentTab === 'config' ? <AgentManager /> : <EnvManager />}
+                {/* 4b：API 供应商并入本 tab（原为顶层「API 集成配置」，此处只做入口合并）。
+                    直接复用现成的 <ApiConfig />，不重写其内部；deepLinkSub 传 providers
+                    让它落在「供应商」子页签上，其余子页签（用量/语音/模式/权限）保持可达。 */}
+                {agentTab === 'config' ? (
+                  <AgentManager />
+                ) : agentTab === 'providers' ? (
+                  <ApiConfig deepLinkSub="providers" />
+                ) : (
+                  <EnvManager />
+                )}
               </div>
             )}
             {/* API 集成配置：提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则 */}
