@@ -81,8 +81,12 @@ impl AsyncConsole for TokioConsole {
         tokio::sync::mpsc::Receiver<String>,
         tokio::sync::mpsc::Receiver<String>,
     )> {
-        let mut cmd = hidden_tokio_command(command);
-        cmd.args(args)
+        // Windows：npm 全局 CLI 只有 .cmd/.ps1 垫片、没有 .exe，而 CreateProcess 不会走 PATHEXT。
+        // 先解析出可真正启动的目标（.exe 直连 / .js 用 node / 退回 cmd /C），否则 "program not found"。
+        let (program, prefix_args) = crate::utils::process::resolve_windows_program(command);
+        let mut cmd = hidden_tokio_command(&program);
+        cmd.args(&prefix_args)
+            .args(args)
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

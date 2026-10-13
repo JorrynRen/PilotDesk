@@ -265,6 +265,198 @@ pub fn hidden_command(program: &str) -> std::process::Command {
     cmd
 }
 
+// ──────────────────────────────────────────────
+//  Windows 可执行文件解析
+// ──────────────────────────────────────────────
+
+/// 把裸命令名解析为**可被 CreateProcess 真正启动**的目标。
+///
+/// 背景：Windows 的 `CreateProcess` **只自动补 `.exe`**，不会走 `PATHEXT`。
+/// npm 全局安装的 CLI（如 `claude` / `codex`）只有 `*.cmd` / `*.ps1` 垫片、
+/// **没有同名 `.exe`**，因此 `Command::new("claude")` 必然 "program not found"。
+///
+/// 返回 `(程序, 前置参数)`；调用方执行 `程序 前置参数... 原参数...`。
+///
+/// 解析顺序（仅 Windows 生效）：
+/// 1. 已含路径分隔符 → 原样；
+/// 2. PATH 中存在 `name.exe` → 直连；
+/// 3. 存在 `name.cmd` / `name.bat` → 解析垫片取**真实目标**：
+///    `.exe` 直连（零 shell、参数无损）；`.js` / `.cjs` 用 `node` 启动；
+///    解析不出则退回 `cmd /C <垫片>`；
+/// 4. 只有 `name.ps1` → `powershell -NoProfile -ExecutionPolicy Bypass -File <垫片>`。
+#[cfg(target_os = "windows")]
+pub fn resolve_windows_program(program: &str) -> (String, Vec<String>) {
+    use std::path::{Path, PathBuf};
+
+    // 1) 已带路径：原样交给 CreateProcess
+    if program.contains('\\') || program.contains('/') {
+        return (program.to_string(), Vec::new());
+    }
+
+    let dirs: Vec<PathBuf> = std::env::var("PATH")
+        .unwrap_or_default()
+        .split(';')
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .collect();
+
+    // 2) name.exe 直连
+    for d in &dirs {
+        let p = d.join(format!("{}.exe", program));
+        if p.is_file() {
+            return (p.to_string_lossy().to_string(), Vec::new());
+        }
+    }
+
+    // 3) name.cmd / name.bat 垫片
+    for ext in ["cmd", "bat"] {
+        for d in &dirs {
+            let shim = d.join(format!("{}.{}", program, ext));
+            if !shim.is_file() {
+                continue;
+            }
+            let shim_dir = shim.parent().unwrap_or(Path::new("."));
+            if let Ok(content) = std::fs::read_to_string(&shim) {
+                let targets = extract_shim_targets(&content, &shim_dir.to_string_lossy());
+                if let Some((prog, prefix)) = pick_shim_target(&targets) {
+                    return (prog, prefix);
+                }
+            }
+            // 垫片格式无法解析：退回经 cmd 启动（此路径参数会多经一层 cmd 解析）
+            return (
+                "cmd".to_string(),
+                vec![
+                    "/C".to_string(),
+                    shim.to_string_lossy().to_string(),
+                ],
+            );
+        }
+    }
+
+    // 4) name.ps1 垫片
+    for d in &dirs {
+        let p = d.join(format!("{}.ps1", program));
+        if p.is_file() {
+            return (
+                "powershell".to_string(),
+                vec![
+                    "-NoProfile".to_string(),
+                    "-ExecutionPolicy".to_string(),
+                    "Bypass".to_string(),
+                    "-File".to_string(),
+                    p.to_string_lossy().to_string(),
+                ],
+            );
+        }
+    }
+
+    (program.to_string(), Vec::new())
+}
+
+/// 非 Windows：无需解析（POSIX 由 execvp 走 PATH，可直接执行脚本）。
+#[cfg(not(target_os = "windows"))]
+pub fn resolve_windows_program(program: &str) -> (String, Vec<String>) {
+    (program.to_string(), Vec::new())
+}
+
+/// 从 npm 垫片内容里提取候选目标路径（展开 `%~dp0` / `%dp0%`），**不检查存在性**。
+///
+/// 只取引号内的字符串——npm 生成的垫片一律用引号包裹路径。
+#[cfg(target_os = "windows")]
+fn extract_shim_targets(content: &str, shim_dir: &str) -> Vec<String> {
+    let dir = format!("{}\\", shim_dir.trim_end_matches('\\'));
+    let expanded = content.replace("%~dp0", &dir).replace("%dp0%", &dir);
+
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quote = false;
+    for ch in expanded.chars() {
+        match ch {
+            '"' => {
+                if in_quote {
+                    // 展开后可能出现双反斜杠（`%dp0%` 自带尾分隔符 + 垫片里的 `\`），归一化
+                    let t = cur.trim().replace("\\\\", "\\");
+                    if t.len() > 3
+                        && (t.ends_with(".exe") || t.ends_with(".js") || t.ends_with(".cjs"))
+                    {
+                        out.push(t);
+                    }
+                    cur.clear();
+                }
+                in_quote = !in_quote;
+            }
+            _ => {
+                if in_quote {
+                    cur.push(ch);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 在候选中选真实目标：优先**存在**的 `.exe`（直连），其次存在的 `.js` / `.cjs`（用 `node` 启动）。
+#[cfg(target_os = "windows")]
+fn pick_shim_target(targets: &[String]) -> Option<(String, Vec<String>)> {
+    for t in targets {
+        if t.ends_with(".exe") && std::path::Path::new(t).is_file() {
+            return Some((t.clone(), Vec::new()));
+        }
+    }
+    for t in targets {
+        if (t.ends_with(".js") || t.ends_with(".cjs")) && std::path::Path::new(t).is_file() {
+            return Some(("node".to_string(), vec![t.clone()]));
+        }
+    }
+    None
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_shim_tests {
+    use super::*;
+
+    /// 实测样本：`claude.cmd` → 直连 node_modules 下的 `claude.exe`
+    const CLAUDE_CMD: &str = concat!(
+        "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\n",
+        "SETLOCAL\nCALL :find_dp0\n",
+        "\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\n"
+    );
+
+    /// 实测样本：`codex.cmd` → `node` + `codex.js`
+    const CODEX_CMD: &str = concat!(
+        "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\n",
+        "IF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n",
+        "  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\n",
+        "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\n"
+    );
+
+    #[test]
+    fn claude_shim_yields_real_exe() {
+        assert_eq!(
+            extract_shim_targets(CLAUDE_CMD, r"C:\npm"),
+            vec![r"C:\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe".to_string()]
+        );
+    }
+
+    #[test]
+    fn codex_shim_yields_js_target() {
+        let targets = extract_shim_targets(CODEX_CMD, r"C:\npm");
+        assert!(
+            targets.iter().any(|t| t.ends_with(r"@openai\codex\bin\codex.js")),
+            "targets={:?}",
+            targets
+        );
+    }
+
+    /// 已含路径分隔符 → 原样透传（不做任何猜测）
+    #[test]
+    fn path_like_program_passes_through() {
+        let (p, a) = resolve_windows_program(r"C:\x\y.exe");
+        assert_eq!(p, r"C:\x\y.exe");
+        assert!(a.is_empty());
+    }
+}
+
 /// 构造一个"不弹控制台窗口"的 `tokio::process::Command`。
 pub fn hidden_tokio_command(program: &str) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(program);
