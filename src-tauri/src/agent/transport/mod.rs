@@ -355,3 +355,75 @@ pub trait AgentSession: Send + Sync {
     /// 关闭连接（释放进程 / 网络资源）。
     async fn close(&self, handle: &SessionHandle) -> Result<(), AgentError>;
 }
+
+// ──────────────────────────────────────────────
+//  会话工厂（路由原语）
+// ──────────────────────────────────────────────
+
+/// 按接入方式构造会话实现 —— 这是"路由"的**唯一原语**：
+/// 上层只需拿到 `AgentDescriptor.transport`，交给它即可，无需认识各传输类型。
+///
+/// `config` 仅 `subprocess` 需要（命令模板与输出解析器都来自 `AgentConfig`）；
+/// `http` / `acp` 自描述，不需要它。
+///
+/// 返回 `None` 表示该接入方式**尚无可承载会话的实现**：
+/// - `Mcp`：是**能力面**（提供工具），不承载会话；
+/// - `Webview`：是**承载**（需人工操作），不是可调用 Agent；
+/// - `InProcess`：内置 API Agent 仍走 `lib.rs` 的 `agent_loop`（`inprocess.rs` 推迟到 P1）。
+pub fn build_session(
+    kind: TransportKind,
+    config: Option<crate::agent::config::AgentConfig>,
+) -> Option<Box<dyn AgentSession>> {
+    match kind {
+        TransportKind::Subprocess => config
+            .map(|c| Box::new(subprocess::SubprocessSession::new(c)) as Box<dyn AgentSession>),
+        TransportKind::Acp => Some(Box::new(acp::AcpSession::new())),
+        TransportKind::Http => Some(Box::new(http::HttpSession::new())),
+        TransportKind::InProcess | TransportKind::Mcp | TransportKind::Webview => None,
+    }
+}
+
+#[cfg(test)]
+mod factory_tests {
+    use super::*;
+    use crate::agent::config::AgentConfig;
+
+    /// 自描述的传输无需 config 即可构造，且回报的 transport 与请求一致
+    #[test]
+    fn builds_self_describing_transports_without_config() {
+        let acp = build_session(TransportKind::Acp, None).expect("acp 应可构造");
+        assert_eq!(acp.transport(), TransportKind::Acp);
+
+        let http = build_session(TransportKind::Http, None).expect("http 应可构造");
+        assert_eq!(http.transport(), TransportKind::Http);
+    }
+
+    /// subprocess 依赖 AgentConfig：缺 config 必须拒绝构造，而不是造出个跑不了的会话
+    #[test]
+    fn subprocess_requires_config() {
+        assert!(build_session(TransportKind::Subprocess, None).is_none());
+        let cfg = AgentConfig {
+            agent_type: "claude".into(),
+            cli_command: "claude".into(),
+            ..Default::default()
+        };
+        let s = build_session(TransportKind::Subprocess, Some(cfg)).expect("有 config 应可构造");
+        assert_eq!(s.transport(), TransportKind::Subprocess);
+    }
+
+    /// 能力面 / 承载类 / 未实现者一律返回 None（而非造一个空会话）
+    #[test]
+    fn non_session_transports_return_none() {
+        for k in [
+            TransportKind::Mcp,
+            TransportKind::Webview,
+            TransportKind::InProcess,
+        ] {
+            assert!(
+                build_session(k, None).is_none(),
+                "{:?} 不应构造出会话",
+                k
+            );
+        }
+    }
+}
