@@ -14,6 +14,7 @@
 // 接线完成后删除该 allow。单元测试已覆盖映射口径。
 #![allow(dead_code)]
 
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use crate::agent::config::AgentConfig;
@@ -74,6 +75,59 @@ impl AgentDescriptor {
     /// UI 据此把它排除在会话选择器之外或置灰。
     pub fn is_automatable(&self) -> bool {
         !matches!(self.transport, TransportKind::Webview)
+    }
+
+    /// 从 `agents` 表**按列直查**构造描述符（含 v9 新增的 `transport` / `conn`）。
+    ///
+    /// 刻意**不复用 `AgentConfig`**：它有 4 处手工构造点，"加两个字段"会级联改动；
+    /// 而描述符只是"连接视图"，按列查更小、更独立。
+    ///
+    /// 容错口径：
+    /// - `transport` 未知/空 → 回退 `Subprocess`（历史行的列默认值正是它）；
+    /// - `conn` 为空或非法 JSON → `Null`（**不报错**：连接参数缺失该在 `connect` 阶段暴露，
+    ///   而不是让"读一行配置"整体失败）；
+    /// - `conn` 为空且是 subprocess 时，回落用 `cli_command` 填 `cliCommand`
+    ///   （与 `from_agent_config` 同一口径）。
+    pub fn from_agents_row(conn: &Connection, agent_type: &str) -> Result<Option<Self>, String> {
+        let row = conn
+            .query_row(
+                "SELECT agent_type, display_name, cli_command, transport, conn \
+                 FROM agents WHERE agent_type = ?1",
+                rusqlite::params![agent_type],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("查询 agents 行失败: {}", e))?;
+
+        let Some((agent_id, name, cli_command, transport_str, conn_text)) = row else {
+            return Ok(None);
+        };
+
+        let transport = TransportKind::from_db_str(&transport_str).unwrap_or_default();
+        let mut conn_value = conn_text
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .unwrap_or(serde_json::Value::Null);
+        if conn_value.is_null() && transport == TransportKind::Subprocess && !cli_command.is_empty()
+        {
+            conn_value = json!({ "cliCommand": cli_command });
+        }
+
+        Ok(Some(Self {
+            agent_id,
+            name,
+            transport,
+            conn: conn_value,
+        }))
     }
 }
 
@@ -144,5 +198,43 @@ mod tests {
             conn: json!({}),
         };
         assert!(!d.is_automatable());
+    }
+
+    /// 按列直查（真表）：读 v9 的 `transport` / `conn`；历史行回退 subprocess + cliCommand
+    #[test]
+    fn from_agents_row_reads_transport_and_conn() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::init::FINAL_SCHEMA_SQL).unwrap();
+        conn.execute(
+            "INSERT INTO agents (agent_type, display_name, cli_command, created_at, updated_at, transport, conn)
+             VALUES ('hermes-acp','Hermes ACP','hermes',0,0,'acp','{\"command\":\"hermes\",\"args\":[\"acp\"]}')",
+            [],
+        )
+        .unwrap();
+        // 历史行：不指定 transport → 取列默认值 'subprocess'；conn 为空
+        conn.execute(
+            "INSERT INTO agents (agent_type, display_name, cli_command, created_at, updated_at)
+             VALUES ('claude','Claude','claude',0,0)",
+            [],
+        )
+        .unwrap();
+
+        let d = AgentDescriptor::from_agents_row(&conn, "hermes-acp")
+            .unwrap()
+            .unwrap();
+        assert_eq!(d.transport, TransportKind::Acp);
+        assert_eq!(d.name, "Hermes ACP");
+        assert_eq!(d.conn["command"], "hermes");
+        assert_eq!(d.conn["args"][0], "acp");
+
+        let c = AgentDescriptor::from_agents_row(&conn, "claude")
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.transport, TransportKind::Subprocess);
+        assert_eq!(c.conn["cliCommand"], "claude");
+
+        assert!(AgentDescriptor::from_agents_row(&conn, "nope")
+            .unwrap()
+            .is_none());
     }
 }

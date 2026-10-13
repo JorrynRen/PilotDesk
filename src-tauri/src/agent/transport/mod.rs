@@ -157,6 +157,21 @@ impl TransportKind {
             Self::Webview => "webview",
         }
     }
+
+    /// 从落库字符串解析；未知或空 → `None`（由调用方决定回退，通常是 `subprocess`）。
+    ///
+    /// 与 `as_str` 配对，避免"落库一个值、读回另一个值"的漂移。
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "inprocess" => Some(Self::InProcess),
+            "subprocess" => Some(Self::Subprocess),
+            "http" => Some(Self::Http),
+            "acp" => Some(Self::Acp),
+            "mcp" => Some(Self::Mcp),
+            "webview" => Some(Self::Webview),
+            _ => None,
+        }
+    }
 }
 
 impl Default for TransportKind {
@@ -425,5 +440,22 @@ mod factory_tests {
                 k
             );
         }
+    }
+
+    /// `as_str` / `from_db_str` 必须互为逆运算（落库值不允许漂移）
+    #[test]
+    fn transport_kind_db_roundtrip() {
+        for k in [
+            TransportKind::InProcess,
+            TransportKind::Subprocess,
+            TransportKind::Http,
+            TransportKind::Acp,
+            TransportKind::Mcp,
+            TransportKind::Webview,
+        ] {
+            assert_eq!(TransportKind::from_db_str(k.as_str()), Some(k));
+        }
+        assert_eq!(TransportKind::from_db_str(""), None);
+        assert_eq!(TransportKind::from_db_str("AGP"), None);
     }
 }
