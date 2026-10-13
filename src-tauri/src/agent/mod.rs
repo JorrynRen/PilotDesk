@@ -1098,9 +1098,13 @@ pub async fn run_transport_session(
         descriptor.transport
     );
 
-    // 事件出口：MVP 只投影"能在界面上正常回答"所必需的几类。
-    // reasoning / tool-start / tool-result / usage 的载荷字段名尚未逐一确认（§十五），
-    // 待确认后再补——不猜。
+    // 事件出口：载荷字段名逐字对齐前端 `agentEventBus`（实施计划 §十五）。
+    // `Usage` 暂不投影——其载荷键名尚未确认，不猜。
+    //
+    // 这里本地维护 `toolId → toolName`：`agent-tool-result` 要求 `toolName`，
+    // 而统一事件里的 `ToolResult` 不带名字（ACP 的 `tool_call_update` 也不保证带 title）。
+    let tool_names: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let app_evt = app.clone();
     let sid_evt = session_id.to_string();
     let sink: crate::agent::transport::EventSink = std::sync::Arc::new(move |ev| match ev {
@@ -1108,6 +1112,60 @@ pub async fn run_transport_session(
             let _ = app_evt.emit(
                 "agent-chunk",
                 serde_json::json!({ "sessionId": sid_evt, "content": content }),
+            );
+        }
+        UnifiedAgentEvent::Reasoning { content, .. } => {
+            let _ = app_evt.emit(
+                "agent-reasoning",
+                serde_json::json!({ "sessionId": sid_evt, "content": content }),
+            );
+        }
+        UnifiedAgentEvent::ToolStart {
+            tool_id,
+            name,
+            args,
+            ..
+        } => {
+            if let Ok(mut m) = tool_names.lock() {
+                m.insert(tool_id.clone(), name.clone());
+            }
+            let _ = app_evt.emit(
+                "agent-tool-start",
+                serde_json::json!({
+                    "sessionId": sid_evt,
+                    "toolId": tool_id,
+                    "toolName": name,
+                    "arguments": args,
+                }),
+            );
+        }
+        UnifiedAgentEvent::ToolResult {
+            tool_id,
+            result,
+            success,
+            ..
+        } => {
+            // 名字取自本轮 `ToolStart` 的记录（缺则空串）
+            let name = tool_names
+                .lock()
+                .ok()
+                .and_then(|mut m| m.remove(&tool_id))
+                .unwrap_or_default();
+            let _ = app_evt.emit(
+                "agent-tool-result",
+                serde_json::json!({
+                    "sessionId": sid_evt,
+                    "toolId": tool_id,
+                    "toolName": name,
+                    "result": result,
+                    "success": success,
+                }),
+            );
+        }
+        UnifiedAgentEvent::FileDiff { path, diff, .. } => {
+            let _ = app_evt.emit(
+                "agent-file-diff",
+                serde_json::json!({ "sessionId": sid_evt, "path": path, "diff": diff }),
             );
         }
         UnifiedAgentEvent::AgentSessionId {
