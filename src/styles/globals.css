@@ -6,6 +6,10 @@
    Usage guidelines:
      --bg-*       : Background colors (primary/secondary/tertiary/panel)
      --bg-canvas  : 壳层"底"（三栏之间的缝 + 窗口四周），--bg-side / --bg-content 为浮在其上的左右栏与内容区
+     --bg-primary : **仅用于浮层** —— 弹窗 / 下拉 / 菜单 / picker / tooltip。
+                    ⚠️ 它的明暗方向在浅色族与深色族是**相反**的（浅色最亮、深色最暗），且深色族的
+                    --bg-canvas 正是由它压暗而来。把它当"面板内的普通底色"用，元素会与外壳/面板糊成一片
+                    —— 消息工具栏踩过这个坑（深色 / 深空 / 青瓷 / 薄荷，其中薄荷 primary 与 canvas 只差 1 档）。
      --text-*     : Text colors (primary/secondary/tertiary)
      --border     : Border color
      --accent     : Primary accent (interactive elements, links)
@@ -44,7 +48,13 @@
      之所以不再用"比所在底色亮一档"的半透明叠加：深色下壳层的底 / 内容区已经改成了"档间值"
      （见下方壳层映射），三档都腾出来了，面板内元素直接绑档即可，不必再叠加。
      ⚠️ 唯一要避免的是同档相撞：控件（tertiary）不要直接落在同为 tertiary 的块里；
-        卡片（secondary）不要落在左右栏（--bg-side 也是 secondary）里。 */
+        卡片（secondary）不要落在左右栏（--bg-side 也是 secondary）里。
+     ── 面板内的"面"怎么选（壳体内部一律不绑 --bg-primary）──
+        与所在面板同层（工具栏 / 带状表头，只想靠 1px 线区分）→ --bg-content / --bg-side；
+        抬升的卡片 → --bg-raised；凹槽 / 控件 → --bg-field；浮层（弹窗/下拉/菜单/picker）→ --bg-primary。
+     ⚠️ 已知缺口：面板内只有一个"抬升"档（--bg-raised = secondary），它落在左右栏（同值）会撞色、
+        落在深色族的内容区又只差 ~6 档；需要"明显抬起"的栏内卡片时暂时没有合适 token，
+        只能临时借 --bg-primary。真补时应新增一档专用色并同步全部主题，别继续滥借 primary。 */
   --bg-raised: var(--bg-secondary);
   --bg-field: var(--bg-tertiary);
 
