@@ -239,9 +239,15 @@ export function MessageList({ messages, session, isGenerating, streamingProgress
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* 顶部一栏：搜索框 + 检索导航 + 业务操作位（会话页的「转为工作流 / 转为群聊」）。
-          会话标题不再占这一行——标题在左侧列表里已有，省下的横向空间留给搜索与操作。 */}
+          会话标题不再占这一行——标题在左侧列表里已有，省下的横向空间留给搜索与操作。
+
+          底色用 `--bg-content`（与消息区同底），**不要绑 `--bg-primary`**：primary 的明暗方向在
+          浅色族与深色族是**相反**的（浅色最亮、深色最暗），深色族里它又几乎等于由它压暗出来的
+          `--bg-canvas`（外壳的"底"，顶栏/状态栏/三栏之间的缝共用），于是这条工具栏会和外壳糊成一片、
+          看不出面板上沿（薄荷下 primary #FAFCFE 与 canvas #FCFEFD 也只差 1 档）。与消息区同底后，
+          面板上沿/工具栏下缘各靠 1px 分隔线区分即可。 */}
       {messages.length > 0 && (
-        <div className="shrink-0 px-4 flex items-center gap-2 border-b" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-primary)', height: '36px' }}>
+        <div className="shrink-0 px-4 flex items-center gap-2 border-b" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-content)', height: '36px' }}>
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <div className="relative flex-1">
               <input
