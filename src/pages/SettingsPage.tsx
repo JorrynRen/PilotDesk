@@ -145,6 +145,7 @@ import { CloudSyncSettings } from '../components/settings/CloudSyncSettings';
 import { confirmDialog } from '../stores/confirmStore';
 import { UsageStats } from '../components/settings/UsageStats';
 import { CustomTabsSettings } from '../components/settings/CustomTabsSettings';
+import { EmbeddedWebSettings } from '../components/settings/EmbeddedWebSettings';
 import { ProjectMemorySettings } from '../components/settings/ProjectMemorySettings';
 import { UserMemorySettings } from '../components/settings/UserMemorySettings';
 import { KvMemorySettings } from '../components/settings/KvMemorySettings';
@@ -2014,11 +2015,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
                 ) : agentTab === 'mcp' ? (
                   <McpSettings />
                 ) : (
-                  <div className="text-[11px] space-y-1.5 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-                    <div>内嵌 Web 是承载类接入（设计文档 §1.1 的 L2）：把在线版 Agent 的网页嵌进内置窗口承载。</div>
-                    <div>它不可程序化调用，因此**不会**出现在会话选择器里——只提供"在应用内打开并用"的容器。</div>
-                    <div>实现待 P4（需先确认目标站点是否允许被内嵌；不允许的站点 `iframe` 会白屏）。</div>
-                  </div>
+                  <EmbeddedWebSettings />
                 )}
               </div>
             )}

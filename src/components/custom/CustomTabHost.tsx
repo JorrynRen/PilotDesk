@@ -411,7 +411,19 @@ export function CustomTabHost() {
                                 <TabIcon icon={t.icon} size={15} />
                               </span>
                               <span className="min-w-0 flex-1">
-                                <span className="block text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{t.label}</span>
+                                <span className="flex items-center gap-1.5 min-w-0">
+                                  <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{t.label}</span>
+                                  {/* 内嵌 Web（在线版 Agent 站点）标记：与普通书签区分，说明它属于「集成配置 → 内嵌 Web」 */}
+                                  {t.kind === 'agent' && (
+                                    <span
+                                      className="shrink-0 text-[9px] px-1 py-px rounded-full"
+                                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
+                                      title="内嵌 Web：在线版 Agent 站点（需人工操作）"
+                                    >
+                                      Web
+                                    </span>
+                                  )}
+                                </span>
                                 <span className="flex items-center gap-1.5 mt-0.5 min-w-0">
                                   <span className="text-[10px] truncate" style={{ color: 'var(--text-tertiary)' }}>{subtitleOf(t.url)}</span>
                                   {opened && (

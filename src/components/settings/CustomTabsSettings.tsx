@@ -151,6 +151,16 @@ function SortableTabRow({
             <span className="flex-1 min-w-[90px] text-xs truncate" style={{ color: 'var(--text-primary)' }} title={tab.label}>
               {tab.label}
             </span>
+            {/* 内嵌 Web 标记：该条同时受「集成配置 → 内嵌 Web」管理（同一份数据，两处均可管理） */}
+            {tab.kind === 'agent' && (
+              <span
+                className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px]"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
+                title="内嵌 Web：在线版 Agent 站点（集成配置 → 内嵌 Web 亦可管理）"
+              >
+                Web
+              </span>
+            )}
             {/* 分组：有分组时展示为小胶囊，未分组不显示 */}
             {tab.group && (
               <span
