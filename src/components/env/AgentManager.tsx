@@ -549,33 +549,27 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
           />
           {(form.transport || 'subprocess') === 'acp' && (
             <div className="mt-2 space-y-2">
-              <div className="grid grid-cols-2 gap-2">
-                <SelectField
-                  label="接入方式预置"
-                  value={curPresetKey}
-                  onChange={(v) => {
-                    if (v === '__custom__') {
-                      connSet('command', ''); // 清空让用户自己填
-                      return;
-                    }
-                    const p = ACP_PRESETS.find((x) => x.label === v);
-                    if (p) connSetPreset(p.command, p.args);
-                  }}
-                  options={[
-                    ...ACP_PRESETS.map((p) => ({
-                      value: p.label,
-                      label: `${p.label}（${p.command}${p.args ? ' ' + p.args : ''}）`,
-                    })),
-                    { value: '__custom__', label: '自定义…' },
-                  ]}
-                />
-                <FormField
-                  label="工作目录（cwd，可选）"
-                  value={connGet('cwd')}
-                  onChange={(v) => connSet('cwd', v)}
-                  placeholder="留空＝当前目录"
-                />
-              </div>
+              <SelectField
+                label="接入方式预置"
+                value={curPresetKey}
+                onChange={(v) => {
+                  if (v === '__custom__') {
+                    connSet('command', ''); // 清空让用户自己填
+                    return;
+                  }
+                  const p = ACP_PRESETS.find((x) => x.label === v);
+                  if (p) connSetPreset(p.command, p.args);
+                }}
+                options={[
+                  ...ACP_PRESETS.map((p) => ({
+                    value: p.label,
+                    label: `${p.label}（${p.command}${p.args ? ' ' + p.args : ''}）`,
+                  })),
+                  { value: '__custom__', label: '自定义…' },
+                ]}
+              />
+              {/* 工作目录不在此配置：运行时 cwd 取「会话/项目工作目录」（为空回退全局工作区），
+                  见 lib.rs resolved_cwd。此处若再放一个 cwd 字段是无消费方的死配置。 */}
               {/* 命令输入框**始终显示**（选预置也显示）：便于查看/微调解析后的真实命令 */}
               <FormField
                 label="命令（command，可直接修改）"
@@ -589,6 +583,9 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
                 onChange={connSetArgs}
                 placeholder="如 acp"
               />
+              <div className="text-[10px]" style={{ color: 'var(--text-tertiary, var(--text-secondary))' }}>
+                工作目录跟随「会话 / 项目工作目录」，无需在此配置。
+              </div>
               <div className="text-[10px]" style={{ color: 'var(--text-tertiary, var(--text-secondary))' }}>
                 将保存为：{form.conn || '{}'}
               </div>
