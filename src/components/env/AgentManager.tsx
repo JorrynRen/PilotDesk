@@ -448,6 +448,64 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
       showToast(`上传失败: ${errorMessage(err)}`, 'error');
     }
   };
+  // ── conn 的界面拆字段 ──
+  // 落库格式仍是 JSON 文本（`conn`），但界面上拆成独立字段：用户只填值，不需要面对 JSON。
+  // 解析失败一律当空对象处理，不报错、不打断表单。
+  const parseConn = (): Record<string, unknown> => {
+    try {
+      const o = JSON.parse(form.conn || '{}');
+      return o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  };
+  const connGet = (k: string): string => {
+    const v = parseConn()[k];
+    return typeof v === 'string' ? v : '';
+  };
+  const connSet = (k: string, v: string) => {
+    const o = parseConn();
+    if (v.trim()) {
+      o[k] = v;
+    } else {
+      delete o[k]; // 留空即不写入该字段（保持 conn 干净）
+    }
+    onChange({ ...form, conn: JSON.stringify(o) });
+  };
+  // args 是数组：界面用一个输入框（空格分隔），保存时拆成数组
+  const connArgsText = (): string => {
+    const a = parseConn().args;
+    return Array.isArray(a) ? a.map(String).join(' ') : '';
+  };
+  const connSetArgs = (v: string) => {
+    const o = parseConn();
+    const parts = v.split(/\s+/).filter(Boolean);
+    if (parts.length) {
+      o.args = parts;
+    } else {
+      delete o.args;
+    }
+    onChange({ ...form, conn: JSON.stringify(o) });
+  };
+
+  // ACP 预置：命令 + 默认参数。选中即预填 args，**仍可编辑覆盖**（预填 ≠ 锁死）。
+  // 只列有依据的：`hermes acp` 已真机实测；`gemini --acp` 见官方文档。
+  // 其余（含 claude / codex 的第三方 ACP 适配器）走「自定义」——参数不猜，等实测再补。
+  const ACP_PRESETS: Array<{ command: string; args: string }> = [
+    { command: 'hermes', args: 'acp' },
+    { command: 'gemini', args: '--acp' },
+  ];
+  const connSetPreset = (command: string, args: string) => {
+    const o = parseConn();
+    o.command = command;
+    o.args = args.split(/\s+/).filter(Boolean);
+    onChange({ ...form, conn: JSON.stringify(o) });
+  };
+  // 当前命令是否命中预置；否则视为「自定义」
+  const curCommand = ACP_PRESETS.some((p) => p.command === connGet('command'))
+    ? connGet('command')
+    : '__custom__';
+
   return (
     <div className="w-full space-y-4">
       {/* 接入方式：**只在「添加自定义 Agent」时出现，且置于最前**——先选方式，再填该方式需要的字段。
@@ -470,13 +528,51 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
             ]}
           />
           {(form.transport || 'subprocess') === 'acp' && (
-            <div className="mt-2">
+            <div className="mt-2 space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <SelectField
+                  label="命令（command）"
+                  value={curCommand}
+                  onChange={(v) => {
+                    if (v === '__custom__') {
+                      connSet('command', ''); // 清空让用户自己填
+                      return;
+                    }
+                    const p = ACP_PRESETS.find((x) => x.command === v);
+                    if (p) connSetPreset(p.command, p.args);
+                  }}
+                  options={[
+                    ...ACP_PRESETS.map((p) => ({
+                      value: p.command,
+                      label: `${p.command}（默认 ${p.args}）`,
+                    })),
+                    { value: '__custom__', label: '自定义…' },
+                  ]}
+                />
+                <FormField
+                  label="工作目录（cwd，可选）"
+                  value={connGet('cwd')}
+                  onChange={(v) => connSet('cwd', v)}
+                  placeholder="留空＝当前目录"
+                />
+              </div>
+              {curCommand === '__custom__' && (
+                <FormField
+                  label="自定义命令"
+                  value={connGet('command')}
+                  onChange={(v) => connSet('command', v)}
+                  placeholder="如 claude-code-acp"
+                />
+              )}
               <FormField
-                label="连接参数（JSON）：command 填 CLI，args 填 ACP 参数"
-                value={form.conn || ''}
-                onChange={(v) => onChange({ ...form, conn: v })}
-                placeholder='{"command":"hermes","args":["acp"]}'
+                label="参数（args，空格分隔；切换上方命令会自动预填，可直接改）"
+                value={connArgsText()}
+                onChange={connSetArgs}
+                placeholder="如 acp"
               />
+              <div className="text-[10px]" style={{ color: 'var(--text-tertiary, var(--text-secondary))' }}>
+                将保存为：{form.conn || '{}'}
+              </div>
             </div>
           )}
         </div>
