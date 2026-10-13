@@ -52,7 +52,12 @@ interface SettingsPageProps {
 //   语音识别 / 对话模式 / 权限规则 → API 集成配置
 type SettingsTab =
   | 'account' | 'cloudsync' | 'general' | 'agents' | 'api' | 'mcp' | 'search'
-  | 'tools' | 'skills' | 'plugins' | 'knowledge' | 'customtabs' | 'memory' | 'filehistory';
+  | 'tools' | 'skills' | 'plugins' | 'knowledge' | 'customtabs' | 'memory' | 'filehistory'
+  // 以下 5 项**并非接入方式专属**，故从各自父 tab 的提升为独立顶层 tab：
+  //   环境检测 —— 是 Agent 运行前提，与"用哪种接入方式"无关；
+  //   用量统计 / 语音识别 / 对话模式 / 权限规则 —— 全局设置，API 只是其中之一。
+  // 「集成配置」tab 从此只负责接入方式本身。
+  | 'env' | 'usage' | 'voice' | 'mode' | 'permission';
 
 // 设置项按类别分组，左侧侧边栏渲染（避免全部平铺顶部拥挤）
 //
@@ -74,17 +79,25 @@ const SETTINGS_GROUPS: {
   },
   {
     titleKey: 'settings.group.agentApi',
-    titleZh: 'Agent 与 API',
+    titleZh: '集成与运行',
     items: [
-      { id: 'agents', icon: Bot, labelKey: 'settings.tab.agents', labelZh: 'Agent集成配置' },
-      { id: 'api', icon: Key, labelKey: 'settings.tab.api', labelZh: 'API集成配置' },
+      // 「集成配置」= 5 种接入方式：本地 CLI(subprocess/acp) · 在线 API(http) · MCP · 内嵌 Web
+      { id: 'agents', icon: Bot, labelKey: 'settings.tab.agents', labelZh: '集成配置' },
+      // 以下 5 项原为各自父 tab 的子页签，现独立（不属任何接入方式）
+      { id: 'env', icon: Monitor, labelKey: 'settings.tab.env', labelZh: '环境检测' },
+      { id: 'usage', icon: Zap, labelKey: 'settings.tab.usage', labelZh: '用量统计' },
+      { id: 'voice', icon: Droplet, labelKey: 'settings.tab.voice', labelZh: '语音识别' },
+      { id: 'mode', icon: Sparkles, labelKey: 'settings.tab.mode', labelZh: '对话模式' },
+      { id: 'permission', icon: Check, labelKey: 'settings.tab.permission', labelZh: '权限规则' },
+      // 旧顶层项：分两步走，先加新、确认无回归后再删（第二步移除）
+      { id: 'api', icon: Key, labelKey: 'settings.tab.api', labelZh: 'API集成配置（待移除）' },
     ],
   },
   {
     titleKey: 'settings.group.connection',
     titleZh: '连接',
     items: [
-      { id: 'mcp', icon: Plug, labelKey: 'settings.tab.mcp', labelZh: 'MCP 服务器' },
+      // MCP 服务器已归入「集成配置」的 5 种接入方式之一，不再单列（深链仍可用）。
       { id: 'search', icon: Search, labelKey: 'settings.tab.search', labelZh: '联网搜索' },
     ],
   },
@@ -1869,7 +1882,8 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(link?.tab ?? 'general');
   // 合并后收纳进子页签的低频项
   const [generalTab, setGeneralTab] = useState<'main' | 'about'>(link?.sub === 'about' ? 'about' : 'main');
-  const [agentTab, setAgentTab] = useState<'config' | 'providers' | 'env'>(link?.sub === 'env' ? 'env' : 'config');
+  // 「集成配置」的子页签 = 接入方式本身（环境检测已提升为独立顶层 tab）
+  const [agentTab, setAgentTab] = useState<'config' | 'providers' | 'mcp' | 'web'>('config');
 
   // URL 深链变化时对齐状态：用「渲染期修正」（React adjust-during-render）而不是 effect ——
   // 后者是「effect 体内同步 setState」，会多一轮级联渲染（`react-hooks/set-state-in-effect`），
@@ -1881,7 +1895,18 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     if (link) {
       setActiveTab(link.tab);
       if (link.tab === 'general') setGeneralTab(link.sub === 'about' ? 'about' : 'main');
-      if (link.tab === 'agents') setAgentTab(link.sub === 'env' ? 'env' : 'config');
+      if (link.tab === 'agents') {
+        // 环境检测已提升为独立顶层 tab：旧的 `tab=agents&sub=env` 深链重定向过去，避免链接失效；
+        // 其余子页签（providers/mcp/web）照常落位。
+        const sub = link.sub as string | undefined;
+        if (sub === 'env') {
+          setActiveTab('env');
+        } else if (sub === 'providers' || sub === 'mcp' || sub === 'web') {
+          setAgentTab(sub);
+        } else {
+          setAgentTab('config');
+        }
+      }
     }
   }
 
@@ -1963,27 +1988,41 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             {/* Agent 集成配置：Agent 配置 + 子页签「环境检测」（原独立 tab，是 Agent 运行前提） */}
             {activeTab === 'agents' && (
               <div className="space-y-4">
-                <SubTabs<'config' | 'providers' | 'env'>
+                {/* 「集成配置」只负责接入方式本身：CLI(subprocess/acp) · 在线 API(http) · MCP · 内嵌 Web。
+                    环境检测、用量统计、语音识别、对话模式、权限规则已提升为独立顶层 tab。 */}
+                <SubTabs<'config' | 'providers' | 'mcp' | 'web'>
                   value={agentTab}
                   onChange={setAgentTab}
                   items={[
                     { key: 'config', label: t('settings.sub.agents.config', 'Agent 配置') },
                     { key: 'providers', label: t('settings.sub.agents.providers', 'API 供应商') },
-                    { key: 'env', label: t('settings.sub.agents.env', '环境检测') },
+                    { key: 'mcp', label: t('settings.sub.agents.mcp', 'MCP 服务器') },
+                    { key: 'web', label: t('settings.sub.agents.web', '内嵌 Web') },
                   ]}
                 />
-                {/* 4b：API 供应商并入本 tab（原为顶层「API 集成配置」，此处只做入口合并）。
-                    直接复用现成的 <ApiConfig />，不重写其内部；deepLinkSub 传 providers
-                    让它落在「供应商」子页签上，其余子页签（用量/语音/模式/权限）保持可达。 */}
                 {agentTab === 'config' ? (
                   <AgentManager />
                 ) : agentTab === 'providers' ? (
                   <ApiConfig deepLinkSub="providers" />
+                ) : agentTab === 'mcp' ? (
+                  <McpSettings />
                 ) : (
-                  <EnvManager />
+                  <div className="text-[11px] space-y-1.5 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                    <div>内嵌 Web 是承载类接入（设计文档 §1.1 的 L2）：把在线版 Agent 的网页嵌进内置窗口承载。</div>
+                    <div>它不可程序化调用，因此**不会**出现在会话选择器里——只提供"在应用内打开并用"的容器。</div>
+                    <div>实现待 P4（需先确认目标站点是否允许被内嵌；不允许的站点 `iframe` 会白屏）。</div>
+                  </div>
                 )}
               </div>
             )}
+            {/* ── 以下 5 项原为各自父 tab 的子页签，现独立为顶层 tab ──
+                它们并非接入方式专属：环境检测是 Agent 运行前提；用量/语音/对话模式/权限规则是全局设置。
+                前 4 项复用现成的 <ApiConfig deepLinkSub=… />，不重写其内部（第二步再做真正的拆分）。 */}
+            {activeTab === 'env' && <EnvManager />}
+            {activeTab === 'usage' && <ApiConfig deepLinkSub="usage" />}
+            {activeTab === 'voice' && <ApiConfig deepLinkSub="voice" />}
+            {activeTab === 'mode' && <ApiConfig deepLinkSub="mode" />}
+            {activeTab === 'permission' && <ApiConfig deepLinkSub="permission" />}
             {/* API 集成配置：提供商 / 用量统计 / 语音识别 / 对话模式 / 权限规则 */}
             {activeTab === 'api' && (
               <ApiConfig deepLinkSub={link?.tab === 'api' && link.sub ? (link.sub as ApiSubTab) : undefined} />
