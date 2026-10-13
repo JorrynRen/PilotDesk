@@ -81,6 +81,17 @@ pub fn cancel(session_id: &str) -> bool {
     }
 }
 
+/// 查询该会话（或别名指向的会话）的运行取消标志；无运行记录时返回 `None`。
+///
+/// 供 CLI 传输层把"停止生成"接进来：`agent_stop_generation` 会**先**调用
+/// 本模块的 `cancel`（无锁）、**再**去拿 `AgentManager` 锁；而 CLI 生成期间那把锁
+/// 被 `send_message_with_config` 一直持有，所以只有这条无锁通路能即时生效。
+pub fn cancel_token(session_id: &str) -> Option<Arc<AtomicBool>> {
+    let target = aliases().lock().unwrap().get(session_id).cloned();
+    let key = target.as_deref().unwrap_or(session_id);
+    runs().lock().unwrap().get(key).map(Arc::clone)
+}
+
 /// 该会话当前是否有运行中的后台任务。生产路径用 `running_sessions` 一次性对齐前端状态、
 /// 用 `cancel` 停止运行，都不需要单点查询，故仅编译于测试目标。
 #[cfg(test)]

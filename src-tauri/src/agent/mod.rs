@@ -509,9 +509,12 @@ impl AgentManager {
             message.len()
         );
 
-        // 取消令牌与进程表共用同一个 AtomicBool：
-        // stop_generation / stop_generation_no_mut 置位后，传输层循环即刻感知并终止。
-        let aborted = Arc::new(AtomicBool::new(false));
+        // 取消令牌**复用运行登记表的令牌**（`api_agent::session_runs`）：
+        // `agent_stop_generation` 在拿 `AgentManager` 锁**之前**就会 `session_runs::cancel()`，
+        // 而 CLI 生成期间那把锁被 send 一直持有 —— 只有这条**无锁**通路能即时取消。
+        // 同一令牌随后登记进进程表，故 `stop_generation` 的置位也作用在它上面。
+        let aborted = crate::api_agent::session_runs::cancel_token(&session_id)
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let aborted_for_map = Arc::clone(&aborted);
         let processes_for_pid = Arc::clone(&self.processes);
         let session_for_pid = session_id.clone();
