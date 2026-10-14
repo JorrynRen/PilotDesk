@@ -387,9 +387,11 @@ fn row_to_agent(row: &rusqlite::Row) -> rusqlite::Result<AgentConfig> {
 
 pub fn list_agents_inner(conn: &Connection) -> Result<Vec<AgentConfig>, AppError> {
     let mut stmt = conn.prepare(&format!(
-        // 只列 CLI 接入（transport='subprocess'）：v9 起 API 供应商会被回填成 `api:<id>` 的
-        // http 接入行；在 §八 管理页落地前不应对用户可见（否则列表里会出现字段全空的 Agent）。
-        "SELECT {} FROM agents WHERE transport = 'subprocess' ORDER BY sort_order ASC, agent_type ASC",
+        // 只排除 API 供应商行（transport='http'，v9 起由 `api:<id>` 承载）：这类行由
+        // 「API 供应商」子页签单独呈现，混进 Agent 列表会出现字段全空的卡片。
+        // **不能用 `transport='subprocess'`**——那会连 ACP（transport='acp'）一起隐藏，
+        // 导致 ACP 接入的 Agent 在配置页消失。
+        "SELECT {} FROM agents WHERE transport <> 'http' ORDER BY sort_order ASC, agent_type ASC",
         SELECT_COLS
     ))?;
 
@@ -742,6 +744,40 @@ mod transport_tests {
             .unwrap();
         assert_eq!(t2, "subprocess");
         assert!(c2.is_none(), "空串应置 NULL");
+    }
+
+    /// 列表口径：ACP 行**必须可见**；`api:*`（transport='http'）行**必须隐藏**。
+    /// 回归用例——曾误用 `transport='subprocess'` 过滤，把 ACP 行一起挡掉导致其从配置页消失。
+    #[test]
+    fn list_agents_keeps_acp_and_hides_http() {
+        let conn = seed();
+        conn.execute(
+            "INSERT INTO agents (agent_type, display_name, transport, created_at, updated_at)
+             VALUES ('myacp','My ACP','acp',0,0),
+                    ('api:p1','供应商','http',0,0)",
+            [],
+        )
+        .unwrap();
+
+        let listed: Vec<String> = list_agents_inner(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.agent_type)
+            .collect();
+        assert!(listed.contains(&"hermes".to_string()), "subprocess 行应可见");
+        assert!(listed.contains(&"myacp".to_string()), "ACP 行必须可见");
+        assert!(
+            !listed.contains(&"api:p1".to_string()),
+            "http(api:*) 行不得混入 Agent 列表"
+        );
+
+        let refs: Vec<String> = list_agent_transports_inner(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.agent_type)
+            .collect();
+        assert!(refs.contains(&"myacp".to_string()));
+        assert!(!refs.contains(&"api:p1".to_string()));
     }
 }
 
