@@ -390,7 +390,22 @@ fn set_theme_cmd(
 
 // ── Agent 命令 ──
 
-/// 使用 AgentConfig 元信息驱动的 send_message
+/// 运行态登记的 RAII 守卫：无论本轮是正常结束、返回错误，还是中途 panic（unwind），
+/// 都一定把会话从后端运行态注册表注销。
+/// 遗留的"运行中"记录会让前端在**每次重入该会话**时都把它当作仍在生成，
+/// 进而由静默看门狗误报"长时间无响应：已停止本轮"。
+struct SessionRunGuard {
+    session_id: String,
+    token: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for SessionRunGuard {
+    fn drop(&mut self) {
+        crate::api_agent::session_runs::finish(&self.session_id, &self.token);
+    }
+}
+
+/// 使用 AgentConfig 元信息驱动的 send_message。
 /// API Agent（agent_type == "api"）使用 AgentLoop 编排，
 /// CLI Agent（claude/hermes/codex）使用子进程交互。
 #[tauri::command]
@@ -468,6 +483,11 @@ async fn agent_send_message_with_config(
         if desc.transport != crate::agent::transport::TransportKind::Subprocess {
             let sid = session_id.clone();
             let run_token = crate::api_agent::session_runs::begin(&sid);
+            // 守卫兜底：本轮即使 panic 也不会留下"幽灵运行中"
+            let _run_guard = SessionRunGuard {
+                session_id: sid.clone(),
+                token: run_token,
+            };
             let gate: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>> = app
                 .try_state::<PendingApprovals>()
                 .map(|p| {
@@ -485,7 +505,6 @@ async fn agent_send_message_with_config(
                 gate,
             )
             .await;
-            crate::api_agent::session_runs::finish(&sid, &run_token);
             return result;
         }
     }
@@ -493,6 +512,11 @@ async fn agent_send_message_with_config(
     // CLI 会话同样登记运行态：两种模式的列表脉冲与重入判断口径一致。
     let sid_for_registry = session_id.clone();
     let run_token = crate::api_agent::session_runs::begin(&sid_for_registry);
+    // 守卫兜底：本轮即使 panic 也不会留下"幽灵运行中"（守卫最后析构，锁已释放）
+    let _run_guard = SessionRunGuard {
+        session_id: sid_for_registry.clone(),
+        token: run_token,
+    };
     let mut mgr = agent_mgr.lock().await;
     let result = mgr
         .send_message_with_config(
@@ -506,7 +530,6 @@ async fn agent_send_message_with_config(
             agent_session_id,
         )
         .await;
-    crate::api_agent::session_runs::finish(&sid_for_registry, &run_token);
     result
 }
 

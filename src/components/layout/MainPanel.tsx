@@ -525,6 +525,13 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   const genStartTimesRef = useRef<Record<string, number>>({});
   /** 已发起"静默取消"的会话 → 发起时间戳；等后端 agent-cancelled 收尾，超时则前端自行收尾 */
   const idleCancelRef = useRef<Record<string, number>>({});
+  /**
+   * 会话 → 本组件**本次开始观察它"生成中"**的时刻。
+   * 用于给静默看门狗兜底：重入一个后端仍在跑、但本组件毫不知情的会话时，
+   * store 里那条旧事件时间戳可能已是几分钟前，若直接当作静默时长会立刻误报卡死。
+   * 静默时长只能从"本次真正观察到它"算起。
+   */
+  const observedAtRef = useRef<Record<string, number>>({});
 
   const currentSession = sessions.find((s) => s.id === currentSessionId)
     || archivedSessions.find((s) => s.id === currentSessionId)
@@ -835,6 +842,16 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     const generatingIds = Object.keys(state.generatingSessions);
     if (generatingIds.length === 0) return;
 
+    // 观察起点：本组件"本次看到它生成中"的时刻。会话离开生成集即清理，
+    // 重入时重新计时 —— 否则会拿上一次观察留下的旧时间戳当作已静默的时长。
+    const observedAt = observedAtRef.current;
+    for (const key of Object.keys(observedAt)) {
+      if (!generatingIds.includes(key)) delete observedAt[key];
+    }
+    for (const sid of generatingIds) {
+      if (observedAt[sid] === undefined) observedAt[sid] = Date.now();
+    }
+
     const timer = setInterval(() => {
       const now = Date.now();
       const streams = useAgentStreamStore.getState().streams;
@@ -851,9 +868,12 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
           continue;
         }
 
+        // 静默时长 = now − 最近一次"确凿活动"。活动只可能来自：本轮起点、真实流式事件、
+        // 或本组件本次开始观察它的时刻（重入旧会话时旧时间戳不可信，见 observedAtRef 注释）。
         const lastActivity = Math.max(
           genStartTimesRef.current[sid] ?? 0,
           useGeneratingStore.getState().lastEventAt[sid] ?? 0,
+          observedAtRef.current[sid] ?? 0,
         );
         // 本组件既没有本轮起点、也没有任何事件记录（如别处发起的运行）：无从判断，不动它
         if (lastActivity === 0) continue;
