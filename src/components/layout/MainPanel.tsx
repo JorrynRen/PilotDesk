@@ -12,6 +12,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useGroupChatStore } from '../../stores/groupChatStore';
 import { useTerminal } from '../../TerminalManager';
 import { useAgentEvent } from '../../hooks/useAgentEvent';
+import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { useSessionDraftStore } from '../../stores/sessionDraftStore';
 import { showToast } from '../../utils/toast';
@@ -138,9 +139,17 @@ const STREAM_IDLE_TIMEOUT_MS = 180_000;
 /** 发起静默取消后，等后端 agent-cancelled 回执的兜底时长；超时则前端自行收尾 */
 const CANCEL_FALLBACK_MS = 15_000;
 
-/** 静默卡死终止的用户可见说明（与"上游超时""用户停止"区分开） */
-function idleTimeoutNotice(): string {
-  return `⏱ 长时间无响应：已停止本轮（超过 ${STREAM_IDLE_TIMEOUT_MS / 1000} 秒没有任何进展）。请重试或检查 API 提供商状态。`;
+/**
+ * 静默卡死终止的用户可见说明（与"上游超时""用户停止"区分开）。
+ * 按接入方式分支：ACP 的对端是**本地 Agent 进程**（很可能仍在跑工具调用），
+ * 提示"检查 API 提供商状态"会把人引到错误方向；只有 HTTP/API 才与提供商状态相关。
+ */
+function idleTimeoutNotice(transport?: string): string {
+  const head = `⏱ 长时间无响应：已停止本轮（超过 ${STREAM_IDLE_TIMEOUT_MS / 1000} 秒没有任何进展）。`;
+  if (transport === 'acp') {
+    return `${head}对端 Agent 长时间没有回传，可能仍在执行工具调用。可重试，或检查该 Agent 的运行状态。`;
+  }
+  return `${head}请重试或检查 API 提供商状态。`;
 }
 
 /**
@@ -483,6 +492,8 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const navigate = useNavigate();
   const { setMode } = useTerminal();
+  // 接入方式查询（acp / subprocess）：静默超时提示文案需要按接入方式区分
+  const { getTransport } = useAgentRegistry();
 
   // ── 会话 → 工作流：预览弹窗开关（仅当前会话可用）──
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
@@ -539,6 +550,24 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
 
   const currentAgentType = currentSession?.agentType ?? null;
 
+  /**
+   * 会话 id → 接入方式（`acp` / `subprocess` / `http`）。
+   * 静默超时的提示文案按此分支（ACP 的对端是本地 Agent 进程，与"API 提供商状态"无关）。
+   * 走 `getState()` 读会话表而非渲染闭包，故可在事件回调/看门狗里按任意会话 id 查询。
+   */
+  const transportOfSession = useCallback(
+    (sessionId: string): string => {
+      const st = useSessionStore.getState();
+      const sess =
+        st.sessions.find((s) => s.id === sessionId) ??
+        st.archivedSessions.find((s) => s.id === sessionId);
+      const agentType = sess?.agentType;
+      if (!agentType) return '';
+      return isApiSession(agentType) ? 'http' : getTransport(agentType);
+    },
+    [getTransport],
+  );
+
   // 当前会话的生成状态
   const currentGenState = currentSessionId
     ? state.generatingSessions[currentSessionId]
@@ -577,11 +606,15 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     delete genStartTimesRef.current[sessionId];
     delete idleCancelRef.current[sessionId];
     if (idleRequested) {
-      dispatch({ type: 'GENERATION_DONE', sessionId, systemMessage: idleTimeoutNotice() });
+      dispatch({
+        type: 'GENERATION_DONE',
+        sessionId,
+        systemMessage: idleTimeoutNotice(transportOfSession(sessionId)),
+      });
       return;
     }
     dispatch({ type: 'GENERATION_ERROR', sessionId, error: '' });
-  }, []);
+  }, [transportOfSession]);
 
   const onError = useCallback((sessionId: string, error: string) => {
     console.log('[MainPanel] onError received:', sessionId, error);
@@ -863,7 +896,11 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
             // 后端没回 agent-cancelled（进程卡死等）：前端自行收尾，别一直挂在"生成中"
             delete idleCancelRef.current[sid];
             console.warn('[MainPanel] 静默取消未收到后端回执，前端自行收尾:', sid);
-            dispatch({ type: 'GENERATION_DONE', sessionId: sid, systemMessage: idleTimeoutNotice() });
+            dispatch({
+              type: 'GENERATION_DONE',
+              sessionId: sid,
+              systemMessage: idleTimeoutNotice(transportOfSession(sid)),
+            });
           }
           continue;
         }
@@ -899,7 +936,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     // 依赖刻意只取"会话 id 集合"（joined 字符串），不取 `state.generatingSessions` 本身：
     // 后者每个流式 token 都会换一个新对象，effect 会被高频重建，5 秒看门狗等于永远不会触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [Object.keys(state.generatingSessions).join(','), stopGeneration, confirmation]);
+  }, [Object.keys(state.generatingSessions).join(','), stopGeneration, transportOfSession, confirmation]);
 
   // ── Send / Stop handlers ──
 

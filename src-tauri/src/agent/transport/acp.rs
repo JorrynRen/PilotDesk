@@ -14,6 +14,7 @@
 //! 本仓库已有先例（Codex `mcp-server` 被 App Server 取代），协议会变。
 
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -356,6 +357,10 @@ pub struct AcpSession {
     caps: Capabilities,
     /// 本轮累计正文（`Chunk` 事件由 `session/update` 处理器追加）
     text_buf: Arc<Mutex<String>>,
+    /// 取消令牌：与调用方**共享同一份**（`connect` 时取 `conn.abort`）。
+    /// `prompt` 等待期间轮询它——置位即主动结束等待并发 `session/cancel`，
+    /// 让"停止生成"能即时打断 ACP 回合（否则只能干等到回合自然结束或回合超时）。
+    abort: Arc<AtomicBool>,
 }
 
 impl AcpSession {
@@ -367,6 +372,7 @@ impl AcpSession {
             sink: None,
             caps: Capabilities::default(),
             text_buf: Arc::new(Mutex::new(String::new())),
+            abort: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -407,6 +413,8 @@ impl AgentSession for AcpSession {
     ) -> Result<SessionHandle, AgentError> {
         self.session_id = conn.session_id.clone();
         self.sink = Some(Arc::clone(&sink));
+        // 共享取消令牌：调用方（session_runs）置位后，`prompt` 的轮询即可感知
+        self.abort = Arc::clone(&conn.abort);
 
         // ── 1) 启动 ACP 进程 ──
         // `conn.command` / `conn.args`：如 hermes → ["acp"]、gemini → ["--acp"]
@@ -604,17 +612,35 @@ impl AgentSession for AcpSession {
 
         // 诊断打点：本轮"结束信号"是否到达、几时到达。
         log::info!("[acp] session/prompt 发出，等待对端回合结束响应：session={}", sid);
-        let resp = peer
-            .request_with_timeout(
+        // "停止生成"接线：把共享取消令牌与回合请求一起竞速。
+        // 否则该等待最长会挂到 TURN_TIMEOUT(1800s)，用户点了停止也没有任何反应。
+        let abort = Arc::clone(&self.abort);
+        let sid_cancel = sid.clone();
+        let outcome = tokio::select! {
+            r = peer.request_with_timeout(
                 method::SESSION_PROMPT,
                 json!({ "sessionId": sid, "prompt": blocks }),
                 TURN_TIMEOUT,
-            )
-            .await
-            .map_err(|e| {
-                log::warn!("[acp] session/prompt 未拿到回合结束响应：session={} err={}", sid, e);
-                AgentError::Protocol(e)
-            })?;
+            ) => r,
+            _ = async {
+                // 200ms 轮询：与既有 CLI/API 路径的协作式取消粒度一致
+                while !abort.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            } => {
+                // 先按协议取消（让对端终止其内部工具），再按"已取消"返回；
+                // run_transport_session 的取消分支随后会 close 对端并上报 agent-cancelled。
+                log::info!("[acp] 收到取消信号，发送 session/cancel：session={}", sid_cancel);
+                let _ = peer
+                    .notify(method::SESSION_CANCEL, json!({ "sessionId": sid_cancel }))
+                    .await;
+                return Err(AgentError::Cancelled);
+            }
+        };
+        let resp = outcome.map_err(|e| {
+            log::warn!("[acp] session/prompt 未拿到回合结束响应：session={} err={}", sid, e);
+            AgentError::Protocol(e)
+        })?;
         log::info!(
             "[acp] session/prompt 收到回合结束响应：session={} stopReason={}",
             sid,
