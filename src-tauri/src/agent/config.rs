@@ -76,7 +76,9 @@ pub struct CreateAgentPayload {
     pub agent_type: String,
     pub display_name: String,
     pub description: Option<String>,
-    pub cli_command: String,
+    /// CLI 命令名。**可选**：ACP 接入方式不需要 CLI 命令（命令在 `conn.command` 里），
+    /// 前端该字段会缺省；缺省即视为空串（列本身 NOT NULL DEFAULT ''）。
+    pub cli_command: Option<String>,
     pub npm_package: Option<String>,
     pub pip_package: Option<String>,
     pub install_cmd: Option<String>,

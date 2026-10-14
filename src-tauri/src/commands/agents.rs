@@ -149,7 +149,7 @@ pub fn import_agents_json(
                 agent_type: agent.agent_type.clone(),
                 display_name: agent.display_name.clone(),
                 description: Some(agent.description.clone()),
-                cli_command: agent.cli_command.clone(),
+                cli_command: Some(agent.cli_command.clone()),
                 npm_package: agent.npm_package.clone(),
                 pip_package: agent.pip_package.clone(),
                 install_cmd: Some(agent.install_cmd.clone()),
@@ -462,16 +462,18 @@ pub fn add_agent_inner(
 ) -> Result<AgentConfig, AppError> {
     let now_ts = now();
     let description = payload.description.unwrap_or_default();
+    // CLI 命令可选：ACP 等不需要 CLI 的接入方式会缺省该字段，缺省按空串落库。
+    let cli_command = payload.cli_command.clone().unwrap_or_default();
     let install_cmd = payload.install_cmd.unwrap_or_default();
     let uninstall_cmd = payload.uninstall_cmd.unwrap_or_default();
     let update_cmd = payload.update_cmd.unwrap_or_default();
     let version_cmd = payload
         .version_cmd
-        .unwrap_or_else(|| format!("{} --version", payload.cli_command));
+        .unwrap_or_else(|| format!("{} --version", cli_command));
     let latest_version_cmd = payload.latest_version_cmd.unwrap_or_default();
     let run_cmd_template = payload
         .run_cmd_template
-        .unwrap_or_else(|| format!("{} {{message}}", payload.cli_command));
+        .unwrap_or_else(|| format!("{} {{message}}", cli_command));
     let output_parser = payload
         .output_parser
         .unwrap_or_else(|| "raw-text".to_string());
@@ -516,7 +518,7 @@ pub fn add_agent_inner(
          color, icon, sort_order, is_enabled, is_builtin, version, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, 0, ?28, ?29, ?29)",
         params![
-            payload.agent_type, payload.display_name, description, payload.cli_command,
+            payload.agent_type, payload.display_name, description, cli_command,
             payload.npm_package, payload.pip_package,
             install_cmd, uninstall_cmd, update_cmd, version_cmd, latest_version_cmd, run_cmd_template,
             output_parser, output_filter_regex, version_pattern, supports_session_continuity,
@@ -530,7 +532,7 @@ pub fn add_agent_inner(
         agent_type: payload.agent_type,
         display_name: payload.display_name,
         description,
-        cli_command: payload.cli_command,
+        cli_command,
         npm_package: payload.npm_package,
         pip_package: payload.pip_package,
         install_cmd,

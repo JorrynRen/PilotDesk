@@ -185,7 +185,9 @@ export function AgentManager() {
       const addPayload: Partial<AgentConfig> = { ...addForm };
       delete addPayload.transport;
       delete addPayload.conn;
-      await invoke('add_agent', { payload: { ...addPayload, icon: addForm.icon || '', version: addForm.version || '' } });
+      // cliCommand 一律带默认空串：ACP 接入方式不填 CLI 命令（字段被隐藏），
+      // 缺省时后端会判为「缺少字段」而报错，故这里显式补空串。
+      await invoke('add_agent', { payload: { ...addPayload, cliCommand: addForm.cliCommand || '', icon: addForm.icon || '', version: addForm.version || '' } });
       // 新建成功后再落库接入方式（添加态没有既存行，只能建完再设）
       if (addForm.agentType) {
         await invoke('set_agent_transport', {
@@ -303,6 +305,13 @@ export function AgentManager() {
             >
               导入配置
             </SettingsButton>
+            <SettingsButton
+              variant="secondary"
+              icon={<StoreIcon size={11} />}
+              onClick={() => navigate('/market?tab=agents')}
+            >
+              从资源市集获取配置
+            </SettingsButton>
           </div>
           {!showAddForm ? (
             <SettingsButton
@@ -376,24 +385,6 @@ export function AgentManager() {
             </SortableContext>
           </DndContext>
         </div>
-      </SettingsSection>
-
-      {/* Agent 配置市场已迁至「资源市集 › CLI Agent 配置」：设置页只保留本地 Registry 的增删改与排序 */}
-      <SettingsSection title="Agent 配置市场" description="在线浏览与拉取各 CLI Agent 的集成配置">
-        <SettingsCard>
-          <div className="flex items-center gap-3 w-full">
-            <StoreIcon size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-            <div className="min-w-0 flex-1">
-              <div className="text-xs" style={{ color: 'var(--text-primary)' }}>去资源市集获取 Agent 配置</div>
-            </div>
-            <SettingsButton
-              variant="primary"
-              onClick={() => navigate('/market?tab=agents')}
-            >
-              前往资源市集
-            </SettingsButton>
-          </div>
-        </SettingsCard>
       </SettingsSection>
 
     </div>
