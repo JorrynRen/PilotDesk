@@ -1,10 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
-  Settings, Key, Bot, MemoryStick, Library,
+  Settings, Bot, MemoryStick, Library,
   Sun, Moon, Monitor, FolderOpen,
   Plus, Trash2, Check, X, Pencil,
-  Loader2, Zap, GripVertical, Plug, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink, RefreshCw, Shapes, Rainbow,
+  Loader2, Zap, GripVertical, Search, Bookmark, Wrench, History, Sparkles, Palette, Droplet, Package, Cpu, User, Building2, Cloud, Upload, ExternalLink, RefreshCw, Shapes, Rainbow,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
@@ -76,7 +76,8 @@ const SETTINGS_GROUPS: {
     titleKey: 'settings.group.agentApi',
     titleZh: '集成与运行',
     items: [
-      // 「集成配置」= 只负责 5 种接入方式：本地 CLI(subprocess/acp) · 在线 API(http) · MCP · 内嵌 Web
+      // 「集成配置」= 只负责接入方式：本地 CLI(subprocess/acp) · 在线 API(http) · MCP
+      // （在线版 Agent 的「内嵌 Web（承载）」即门户标签，统一在「门户标签」tab 管理，不单列）
       { id: 'agents', icon: Bot, labelKey: 'settings.tab.agents', labelZh: '集成配置' },
       // 「运行与策略」= 与接入方式无关的运行前提与全局策略，聚为一个 tab（子页签见 ApiConfig）：
       // 环境检测 / API 提供商列表 / 用量统计 / 语音识别 / 对话模式 / 权限规则
@@ -145,7 +146,6 @@ import { CloudSyncSettings } from '../components/settings/CloudSyncSettings';
 import { confirmDialog } from '../stores/confirmStore';
 import { UsageStats } from '../components/settings/UsageStats';
 import { CustomTabsSettings } from '../components/settings/CustomTabsSettings';
-import { EmbeddedWebSettings } from '../components/settings/EmbeddedWebSettings';
 import { ProjectMemorySettings } from '../components/settings/ProjectMemorySettings';
 import { UserMemorySettings } from '../components/settings/UserMemorySettings';
 import { KvMemorySettings } from '../components/settings/KvMemorySettings';
@@ -1898,7 +1898,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   // 合并后收纳进子页签的低频项
   const [generalTab, setGeneralTab] = useState<'main' | 'about'>(link?.sub === 'about' ? 'about' : 'main');
   // 「集成配置」的子页签 = 接入方式本身（环境检测已提升为独立顶层 tab）
-  const [agentTab, setAgentTab] = useState<'config' | 'providers' | 'mcp' | 'web'>('config');
+  const [agentTab, setAgentTab] = useState<'config' | 'providers' | 'mcp'>('config');
 
   // URL 深链变化时对齐状态：用「渲染期修正」（React adjust-during-render）而不是 effect ——
   // 后者是「effect 体内同步 setState」，会多一轮级联渲染（`react-hooks/set-state-in-effect`），
@@ -1913,7 +1913,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       if (link.tab === 'agents') {
         // 集成配置的子页签只有这几个（环境检测已并入「运行与策略」）
         const sub = link.sub as string | undefined;
-        setAgentTab(sub === 'providers' || sub === 'mcp' || sub === 'web' ? sub : 'config');
+        setAgentTab(sub === 'providers' || sub === 'mcp' ? sub : 'config');
       }
     }
   }
@@ -1996,26 +1996,25 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             {/* Agent 集成配置：Agent 配置 + 子页签「环境检测」（原独立 tab，是 Agent 运行前提） */}
             {activeTab === 'agents' && (
               <div className="space-y-4">
-                {/* 「集成配置」只负责接入方式本身：CLI(subprocess/acp) · 在线 API(http) · MCP · 内嵌 Web。
-                    环境检测、用量统计、语音识别、对话模式、权限规则已提升为独立顶层 tab。 */}
-                <SubTabs<'config' | 'providers' | 'mcp' | 'web'>
+                {/* 「集成配置」只负责接入方式本身：CLI(subprocess/acp) · 在线 API(http) · MCP。
+                    环境检测、用量统计、语音识别、对话模式、权限规则已提升为独立顶层 tab。
+                    在线版 Agent 的「内嵌 Web（承载）」不再单列——它就是门户标签（同一套 iframe 外壳），
+                    统一在「设置 → 门户标签」管理，避免两个入口配同一件事。 */}
+                <SubTabs<'config' | 'providers' | 'mcp'>
                   value={agentTab}
                   onChange={setAgentTab}
                   items={[
                     { key: 'config', label: t('settings.sub.agents.config', 'Agent 配置') },
                     { key: 'providers', label: t('settings.sub.agents.providers', 'API 供应商') },
                     { key: 'mcp', label: t('settings.sub.agents.mcp', 'MCP 服务器') },
-                    { key: 'web', label: t('settings.sub.agents.web', '内嵌 Web') },
                   ]}
                 />
                 {agentTab === 'config' ? (
                   <AgentManager />
                 ) : agentTab === 'providers' ? (
                   <ApiConfig deepLinkSub="providers" hideTabs />
-                ) : agentTab === 'mcp' ? (
-                  <McpSettings />
                 ) : (
-                  <EmbeddedWebSettings />
+                  <McpSettings />
                 )}
               </div>
             )}

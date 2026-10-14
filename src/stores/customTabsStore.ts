@@ -1,17 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 
-/**
- * 门户标签的语义类目（可选）：
- * - 缺省 = 通用网页/本地文件书签（门户页的日常用途）；
- * - `agent` = 在线版 Agent 站点（设计文档 §1.1 的 L2「承载类接入」，即「内嵌 Web」）。
- *
- * 为什么复用门户标签而不新建一套：内嵌 Web 与门户标签的**内核完全相同**（都是 iframe 承载一个网址、
- * 同一套 LRU 保活外壳），另建一套存储会出现「同一网址配两处」的双份配置。
- * 用可选标记而非独立表：只有 `agent` 的条目才在「集成配置 → 内嵌 Web」里出现，普通书签不受影响。
- */
-export type CustomTabKind = 'agent';
-
 /** 门户标签页：label 显示名，url 为网络地址(http/https)或本地文件路径 */
 export interface CustomTab {
   id: string;
@@ -23,8 +12,6 @@ export interface CustomTab {
   group?: string;
   /** 图标 key（可选）：取值限于 CUSTOM_TAB_ICONS；未设置 = 默认地球图标 */
   icon?: string;
-  /** 语义类目（可选）：`agent` = 在线版 Agent 站点（内嵌 Web）；缺省 = 通用书签 */
-  kind?: CustomTabKind;
 }
 
 /**
@@ -85,16 +72,6 @@ export type CustomTabIcon = (typeof CUSTOM_TAB_ICONS)[number];
 /** 图标 key 容错：非法 / 缺失一律返回 undefined（渲染时回落默认地球图标） */
 export function normalizeTabIcon(raw: unknown): string | undefined {
   return typeof raw === 'string' && (CUSTOM_TAB_ICONS as readonly string[]).includes(raw) ? raw : undefined;
-}
-
-/** 语义类目容错：只认 'agent'，其它（含旧数据缺失）一律 undefined = 通用书签 */
-export function normalizeTabKind(raw: unknown): CustomTabKind | undefined {
-  return raw === 'agent' ? 'agent' : undefined;
-}
-
-/** 是否网络地址（http/https）。内嵌 Web 只接受网络地址——本地文件不属于「在线版 Agent」。 */
-export function isWebUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url);
 }
 
 /** 图标展示名（设置页下拉用；与 CUSTOM_TAB_ICONS 一一对应） */
@@ -219,10 +196,10 @@ interface CustomTabsState {
   titleBarLimit: number;
   loaded: boolean;
   load: () => Promise<void>;
-  addTab: (label: string, url: string, group?: string, icon?: string, kind?: CustomTabKind) => Promise<CustomTabMutationResult>;
+  addTab: (label: string, url: string, group?: string, icon?: string) => Promise<CustomTabMutationResult>;
   updateTab: (
     id: string,
-    patch: Partial<Pick<CustomTab, 'label' | 'url' | 'group' | 'icon' | 'kind'>>,
+    patch: Partial<Pick<CustomTab, 'label' | 'url' | 'group' | 'icon'>>,
   ) => Promise<CustomTabMutationResult>;
   removeTab: (id: string) => Promise<void>;
   reorderTabs: (from: number, to: number) => Promise<void>;
@@ -286,8 +263,6 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
                 // 分组 / 图标：旧数据（无这两字段）经规范化后为 undefined，即未分组 + 默认图标
                 group: normalizeTabGroup(t.group),
                 icon: normalizeTabIcon(t.icon),
-                // 语义类目：旧数据无 kind → undefined = 通用书签（不影响既有门户标签）
-                kind: normalizeTabKind(t.kind),
               }))
           );
           set({ tabs });
@@ -307,7 +282,7 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
     set({ loaded: true });
   },
 
-  addTab: async (label, url, group, icon, kind) => {
+  addTab: async (label, url, group, icon) => {
     // store 为最终把关：设置页虽已即时校验，但此处仍再校验一次（以 store 为准）
     const checked = validateCustomTabInput(label, url, get().tabs, null);
     if (!checked.ok) return { ok: false as const, error: checked.error };
@@ -319,7 +294,6 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
       order: nextOrder,
       group: normalizeTabGroup(group),
       icon: normalizeTabIcon(icon),
-      kind: normalizeTabKind(kind),
     };
     const tabs = normalize([...get().tabs, tab]);
     set({ tabs });
@@ -341,11 +315,9 @@ export const useCustomTabsStore = create<CustomTabsState>((set, get) => ({
     // 分组 / 图标：设置页始终传入完整字段（清空即空串），故用 ?? 兜底"未传"分支即可
     const nextGroup = normalizeTabGroup(patch.group ?? current.group);
     const nextIcon = normalizeTabIcon(patch.icon ?? current.icon);
-    // 语义类目：未传即保持原值（通用设置页不涉及该字段，只有「内嵌 Web」页会传）
-    const nextKind = patch.kind === undefined ? current.kind : normalizeTabKind(patch.kind);
     const tabs = get().tabs.map((t) =>
       t.id === id
-        ? { ...t, label: checked.label, url: checked.url, group: nextGroup, icon: nextIcon, kind: nextKind }
+        ? { ...t, label: checked.label, url: checked.url, group: nextGroup, icon: nextIcon }
         : t
     );
     set({ tabs });

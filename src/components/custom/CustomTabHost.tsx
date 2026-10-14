@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { Globe, Plus, X, Settings2, ExternalLink, AlertTriangle, Search, LayoutGrid } from 'lucide-react';
 import { useCustomTabsStore, groupCustomTabs, PORTAL_TAB_ID, type CustomTab } from '../../stores/customTabsStore';
 import { useTerminal } from '../../TerminalManager';
-import { CustomTabsSettings } from '../settings/CustomTabsSettings';
 import { TabIcon } from '../common/TabIcon';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -53,20 +53,23 @@ function subtitleOf(url: string): string {
  * - 「门户」是 custom 模式下的首页（非真实标签，用哨兵 id 表示）：按分组渲染全部标签卡片网格，
  *   卡片点击即打开该标签（顶栏切到该标签、加载其 iframe），另提供搜索 / 管理与「在浏览器打开」；
  *   进入 custom 模式时**默认落在此页**（无有效激活标签即回落门户），不预加载任何标签的 iframe；
- * - 顶栏「＋」打开「标签管理」覆盖层（**门户态隐藏** —— 门户内容区已有「管理」按钮，
- *   两处并存只是同一功能的两个入口）：管理页以 absolute 覆盖叠加在主视图之上，
- *   主树（含全部 iframe）保持挂载，关闭覆盖层不会导致内容重新加载；
+ * - 顶栏「＋」与门户页「管理」都**导航到「设置 → 门户标签」**（`/settings?tab=customtabs`）：
+ *   管理只有唯一实现（`CustomTabsSettings`），此处不再自建一套覆盖层，避免双份维护与行为漂移；
  * - 每个标签右上角的关闭角标（悬停 / 聚焦该标签时显现，触屏常显）：**关闭 = 卸载其 iframe**
  *   并把激活态回落门户页，但标签按钮**保留在顶栏** —— 关闭不是"让标签消失"，只是取消它的
- *   激活 / 加载状态，再次点击即重新加载；配置始终保留（删除配置在「标签管理」里做）。
+ *   激活 / 加载状态，再次点击即重新加载；配置始终保留（删除配置在「设置 → 门户标签」里做）。
  * - 离开 custom 模式会清空 LRU 窗口（卸载全部 iframe）：下次进门户是干净的默认页，不预加载任何标签。
  */
 export function CustomTabHost() {
   const { tabs, activeTabId, setActiveTab } = useCustomTabsStore();
   const { viewMode } = useTerminal();
+  const navigate = useNavigate();
 
-  // 标签管理覆盖层（覆盖叠加在主视图上，不替换/卸载主树）
-  const [showManage, setShowManage] = useState(false);
+  /**
+   * 管理门户标签：**导航到「设置 → 门户标签」**，不在门户里再实现一套管理。
+   * 两套实现的代价是双份维护且行为会漂移；设置页那份才是唯一实现（`CustomTabsSettings`）。
+   */
+  const openManage = useCallback(() => navigate('/settings?tab=customtabs'), [navigate]);
 
   // 已挂载 iframe 的标签，**按最近使用排序（队首最新）**，并裁到 FRAME_LRU_MAX（LRU keep-alive）
   const [activatedIds, setActivatedIds] = useState<string[]>([]);
@@ -301,10 +304,10 @@ export function CustomTabHost() {
             门户态隐藏 —— 门户内容区已有「管理」按钮，两者并存只是同一功能的两个入口。 */}
         {!isPortal && (
           <button
-            onClick={() => setShowManage(true)}
+            onClick={openManage}
             className="flex items-center px-1.5 py-1 rounded-md text-xs shrink-0 transition-colors"
             style={{ color: 'var(--text-secondary)' }}
-            title="管理门户标签"
+            title="管理门户标签（前往 设置 → 门户标签）"
           >
             <Plus size={14} />
           </button>
@@ -340,10 +343,10 @@ export function CustomTabHost() {
                 <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>共 {tabs.length} 个门户标签</span>
                 <div className="flex-1" />
                 <button
-                  onClick={() => setShowManage(true)}
+                  onClick={openManage}
                   className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs transition-all active:scale-[.98]"
                   style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}
-                  title="管理门户标签"
+                  title="管理门户标签（前往 设置 → 门户标签）"
                 >
                   <Settings2 size={12} />
                   管理
@@ -368,7 +371,7 @@ export function CustomTabHost() {
                   <Globe size={24} style={{ color: 'var(--text-tertiary)' }} />
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>还没有门户标签，去添加</p>
                   <button
-                    onClick={() => setShowManage(true)}
+                    onClick={openManage}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all active:scale-[.98]"
                     style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
                   >
@@ -411,19 +414,7 @@ export function CustomTabHost() {
                                 <TabIcon icon={t.icon} size={15} />
                               </span>
                               <span className="min-w-0 flex-1">
-                                <span className="flex items-center gap-1.5 min-w-0">
-                                  <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{t.label}</span>
-                                  {/* 内嵌 Web（在线版 Agent 站点）标记：与普通书签区分，说明它属于「集成配置 → 内嵌 Web」 */}
-                                  {t.kind === 'agent' && (
-                                    <span
-                                      className="shrink-0 text-[9px] px-1 py-px rounded-full"
-                                      style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
-                                      title="内嵌 Web：在线版 Agent 站点（需人工操作）"
-                                    >
-                                      Web
-                                    </span>
-                                  )}
-                                </span>
+                                <span className="block text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>{t.label}</span>
                                 <span className="flex items-center gap-1.5 mt-0.5 min-w-0">
                                   <span className="text-[10px] truncate" style={{ color: 'var(--text-tertiary)' }}>{subtitleOf(t.url)}</span>
                                   {opened && (
@@ -489,12 +480,12 @@ export function CustomTabHost() {
             </button>
           </div>
         )}
-        {tabs.length === 0 && !active && !isPortal && !showManage && (
+        {tabs.length === 0 && !active && !isPortal && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <Globe size={22} style={{ color: 'var(--text-tertiary)' }} />
             <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>暂无门户标签</p>
             <button
-              onClick={() => setShowManage(true)}
+              onClick={openManage}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all active:scale-[.98]"
               style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
             >
@@ -510,27 +501,6 @@ export function CustomTabHost() {
           </div>
         )}
       </div>
-
-      {/* 标签管理覆盖层：叠加在主视图之上，主树（iframe）保持挂载 */}
-      {showManage && (
-        <div className="absolute inset-0 z-30 flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-content)' }}>
-          <div className="flex items-center gap-2 px-3 h-9 shrink-0" style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}>
-            <button
-              onClick={() => setShowManage(false)}
-              className="flex items-center gap-1 px-2 py-1 rounded-md text-xs shrink-0 transition-colors"
-              style={{ color: 'var(--text-secondary)' }}
-              title="返回标签页"
-            >
-              <X size={13} />
-              返回
-            </button>
-            <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>门户标签管理</span>
-          </div>
-          <div className="flex-1 overflow-y-auto px-5 py-4">
-            <CustomTabsSettings />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
