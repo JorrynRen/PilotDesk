@@ -1233,6 +1233,9 @@ pub async fn run_transport_session(
             .is_some_and(|t| t.load(Ordering::Relaxed));
 
     if cancelled {
+        // 取消后必须关闭对端：否则进程变成孤儿，继续往**已结束的回合**发流式事件，
+        // 前端会看到"停止后仍在输出"，静默看门狗还会再补一次超时收尾。
+        let _ = session.close(&handle).await;
         let _ = app.emit(
             "agent-cancelled",
             serde_json::json!({ "sessionId": session_id }),
@@ -1252,6 +1255,9 @@ pub async fn run_transport_session(
                 session_id,
                 e
             );
+            // 错误路径同样必须关闭对端：本轮已判死，但孤儿进程仍持有 stdout，
+            // 会持续向已结束的回合推送事件（现场表现："报错后仍继续"）。
+            let _ = session.close(&handle).await;
             // 与既有 CLI 口径一致：错误已上报，不再向调用方冒泡
             let _ = app.emit(
                 "agent-error",

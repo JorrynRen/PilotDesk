@@ -15,6 +15,7 @@
 
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
@@ -27,6 +28,16 @@ use crate::agent::transport::{
 
 /// 本实现使用的 ACP 协议版本（客户端在 `initialize` 中声明）。
 pub const ACP_PROTOCOL_VERSION: u32 = 1;
+
+/// 单轮 `session/prompt` 的等待上限。
+///
+/// **不能沿用控制面的 30s 默认超时**：一次"含工具调用"的复杂任务要跑数分钟，
+/// 30s 判死会让对端迟到的回合结束响应被丢弃（`jsonrpc` 超时后即把 pending 移除，
+/// 迟到的响应按 id 找不到接收端 → 静默丢弃），回合结束信号永久丢失，
+/// 表现为"任务已完成却仍在等输出"，最终由前端静默看门狗以 180s 误报
+/// "长时间无响应：已停止本轮"。回合时长 ≈ 任务时长，故与后端
+/// `AGENT_LOOP_TIMEOUT_SECS`(1800) 对齐；控制面（initialize / session-new）仍用 30s。
+pub const TURN_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// ACP 方法名（客户端 → 对端）。
 pub mod method {
@@ -594,9 +605,10 @@ impl AgentSession for AcpSession {
         // 诊断打点：本轮"结束信号"是否到达、几时到达。
         log::info!("[acp] session/prompt 发出，等待对端回合结束响应：session={}", sid);
         let resp = peer
-            .request(
+            .request_with_timeout(
                 method::SESSION_PROMPT,
                 json!({ "sessionId": sid, "prompt": blocks }),
+                TURN_TIMEOUT,
             )
             .await
             .map_err(|e| {
