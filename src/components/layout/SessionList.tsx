@@ -68,7 +68,7 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
   const [sessionMaxTokens, setSessionMaxTokens] = useState<number | undefined>(undefined);
   const [creating, setCreating] = useState(false);
 
-  const { getDisplayName, getEnabledAgentTypes } = useAgentRegistry();
+  const { getDisplayName, getEnabledAgentTypes, getTransport } = useAgentRegistry();
 
   // WebSocket for Agent session lifecycle
   const { createAgentSession: wsCreateSession, closeAgentSession: wsCloseSession } = useAgentEvent();
@@ -153,7 +153,10 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
    * 用「渲染期修正」而不是 effect：不可用时立刻改写状态，收敛后即不再触发，与 effect 等价。
    */
   if (showNewDialog) {
-    const cliTypes = getEnabledAgentTypes().filter((t) => t !== 'api' && installedAgents.has(t));
+    // ACP 自描述（命令在 conn 里），不参与"是否已安装 CLI"的检测，故不要求 installedAgents。
+    const cliTypes = getEnabledAgentTypes().filter(
+      (t) => t !== 'api' && (installedAgents.has(t) || getTransport(t) === 'acp'),
+    );
     const usable = newSessionType === 'api' ? apiProviders.length > 0 : cliTypes.includes(newSessionType);
     if (!usable) {
       if (apiProviders.length > 0) setNewSessionType('api');
@@ -711,8 +714,10 @@ function SessionListFn({ style }: { style?: React.CSSProperties } = {}) {
             {/* 会话方式：一级「CLI Agent / API Agent」两个按钮 + 二级下拉（与 InputBar 快捷开始同构） */}
             <div className="mb-4">
               {(() => {
-                // CLI：只列"已启用且本机已安装"的；API：需要有提供商
-                const cliTypes = getEnabledAgentTypes().filter((t) => t !== 'api' && installedAgents.has(t));
+                // 本地 Agent：已启用的「已安装 CLI」或 ACP（自描述、无需 CLI 检测）；API：需要有提供商
+                const cliTypes = getEnabledAgentTypes().filter(
+                  (t) => t !== 'api' && (installedAgents.has(t) || getTransport(t) === 'acp'),
+                );
                 const hasApi = apiProviders.length > 0;
                 if (cliTypes.length === 0 && !hasApi) {
                   return (

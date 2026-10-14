@@ -49,6 +49,8 @@ function agentTypeToInitial(agentType: string): string {
 
 // Global singleton state — shared across all components
 let globalAgents: AgentConfig[] = [];
+/** agentType → 接入方式（subprocess / acp）。独立于 AgentConfig：后端刻意不把 transport 放进列表结构。 */
+let globalTransports: Record<string, string> = {};
 let globalLoading = true;
 let globalFetching = false;
 let globalError: string | null = null;
@@ -68,6 +70,17 @@ async function fetchAgentsGlobal(): Promise<AgentConfig[]> {
   try {
     const result = await invoke<AgentConfig[]>('list_agents');
     globalAgents = result;
+    // 接入方式单列（List 结构里没有 transport）；ACP 需要它才能被判定为“可直接建会话”。
+    try {
+      const refs = await invoke<Array<{ agentType: string; transport: string }>>(
+        'list_agent_transports',
+      );
+      const map: Record<string, string> = {};
+      for (const r of refs) map[r.agentType] = r.transport;
+      globalTransports = map;
+    } catch {
+      // 读不到就保持默认（视为 subprocess），不影响 Agent 列表本身
+    }
     globalError = null;
     return result;
   } catch (err) {
@@ -128,6 +141,14 @@ export function useAgentRegistry() {
     return agent?.displayName || SOURCE_LABELS[agentType] || agentType;
   }, []);
 
+  /**
+   * Get an agent's transport kind (`subprocess` / `acp`)。
+   * 未知或读取失败一律按 `subprocess` 处理——与后端列默认值一致，绝不误判成 acp。
+   */
+  const getTransport = useCallback((agentType: string): string => {
+    return globalTransports[agentType] ?? 'subprocess';
+  }, []);
+
   /** Get enabled agent types (for session creation dropdown) */
   const getEnabledAgentTypes = useCallback((): string[] => {
     const dbTypes = globalAgents.filter(a => a.isEnabled).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)).map(a => a.agentType);
@@ -145,6 +166,7 @@ export function useAgentRegistry() {
     getAgent,
     getTheme,
     getDisplayName,
+    getTransport,
     getEnabledAgentTypes,
   };
 }

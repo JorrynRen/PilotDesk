@@ -130,7 +130,7 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
 
   // ── 会话方式 / 工作目录（无会话时的"快捷开始"草稿）──
   const { providers: apiProviders, fetchProviders } = useApiProviderStore();
-  const { getEnabledAgentTypes, getDisplayName, getTheme, fetchAgents } = useAgentRegistry();
+  const { getEnabledAgentTypes, getDisplayName, getTheme, getTransport, fetchAgents } = useAgentRegistry();
   const { envInfo } = useEnvInfo();
   const draftChoice = useSessionDraftStore((s) => s.choice);
   const draftCwd = useSessionDraftStore((s) => s.cwd);
@@ -144,10 +144,16 @@ export function InputBar({ session, onSend, onEnsureSession, onStop, isGeneratin
     fetchAgents().catch(() => {});
   }, [fetchProviders, fetchAgents]);
 
-  /** 已安装且启用的 CLI Agent 类型（未安装的不列，避免选中后发送即失败） */
+  /**
+   * 可用的本地 Agent 类型：已启用的「已装 CLI」或 ACP。
+   * ACP 自描述（命令在 conn 里），不参与"是否已安装 CLI"检测，否则永远选不到。
+   * 未安装的本地 CLI 仍不列，避免选中后发送即失败。
+   */
   const installedClis = useMemo(
-    () => getEnabledAgentTypes().filter((t) => t !== 'api' && (envInfo?.agentVersions?.[t] ?? null) !== null),
-    [getEnabledAgentTypes, envInfo],
+    () => getEnabledAgentTypes().filter(
+      (t) => t !== 'api' && ((envInfo?.agentVersions?.[t] ?? null) !== null || getTransport(t) === 'acp'),
+    ),
+    [getEnabledAgentTypes, getTransport, envInfo],
   );
 
   /** API Agent 分组（已配 Key 且配了模型的提供商）：无会话新建与已有会话切换模型共用同一份 */

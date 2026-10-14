@@ -519,11 +519,13 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
 
   return (
     <div className="w-full space-y-4">
-      {/* 接入方式：**只在「添加自定义 Agent」时出现，且置于最前**——先选方式，再填该方式需要的字段。
-          编辑既有 Agent 时不显示（避免误改一个已跑通 Agent 的接入方式）。
+      {/* 接入方式：**添加与编辑都显示，且置于最前**——先确认方式，再填该方式需要的字段。
+          编辑态必须显示：ACP 的关键字段（command / args）只存在于本区块，
+          若只在添加态渲染，编辑既有 ACP Agent 时这些字段就无处可看、无处可改。
+          编辑态由上方 effect 经 `get_agent_transport` 预填当前值，因此打开即回显原配置。
           只留两种：兼容模式(subprocess) / ACP；http(在线API) 与 内嵌Web 各有专属入口，不列
           （列进来会变成"两个入口配同一件事"）。 */}
-      {mode === 'add' && (
+      {(mode === 'add' || mode === 'edit') && (
         <div>
           <div className="flex items-center gap-1.5 text-[10px] font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>
             <Repeat size={11} style={{ color: 'var(--accent)' }} />
