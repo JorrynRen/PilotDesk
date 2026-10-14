@@ -1246,6 +1246,10 @@ pub async fn run_transport_session(
     match result {
         Ok(_) => {
             log::info!("[Agent/run_transport_session] 回合结束(完成)：session={}", session_id);
+            // 成功路径同样必须关闭对端：会话是**每轮新建**的（`build_session` 每次都会起
+            // 一个新进程），不关闭会留下常驻的孤儿 `hermes acp` 进程——它们仍持有会话与
+            // stdout，下一轮复用同一会话时会把事件串到已结束的回合里。
+            let _ = session.close(&handle).await;
             let _ = app.emit("agent-done", serde_json::json!({ "sessionId": session_id }));
             Ok(())
         }

@@ -463,9 +463,31 @@ impl AgentSession for AcpSession {
 
         let peer = JsonRpcPeer::new(child).map_err(AgentError::Connect)?;
 
+        // ── 1b) 事件泵：把 sink 从读循环里剥离 ──
+        // 读循环**必须永远保持排水**：ACP 的回合结束响应与被丢弃的 session/update 走同一条
+        // stdout，一旦读取被下游（Tauri IPC / 前端渲染）的背压卡住，对端写满管道后会连
+        // 回合结束响应都发不出来——现场表现正是"内容早已显示、随后长时间静默、最终以超时
+        // 收尾"（对端侧会留下一个卡在 `session_update()` 里的 pending 任务）。
+        // 改经无界通道交给独立任务转发后，读循环只剩"解析 + 分发 + 唤醒等待者"，
+        // 不再被消费者拖住；积压超阈值时打点，供下次复现时确认背压来源。
+        let (evt_tx, mut evt_rx) = tokio::sync::mpsc::unbounded_channel::<UnifiedAgentEvent>();
+        let sink_pump = Arc::clone(&sink);
+        tokio::spawn(async move {
+            while let Some(ev) = evt_rx.recv().await {
+                let backlog = evt_rx.len();
+                if backlog > 64 {
+                    log::warn!(
+                        "[acp] 事件泵积压 {} 条：下游消费过慢（读循环不受影响）",
+                        backlog
+                    );
+                }
+                sink_pump(ev);
+            }
+        });
+
         // ── 2) 注册"对端 → 客户端"的处理器 ──
         // 2a) session/update：流式正文/思考/工具/计划
-        let sink_update = Arc::clone(&sink);
+        let tx_update = evt_tx.clone();
         let sid_update = self.session_id.clone();
         let text_buf = Arc::clone(&self.text_buf);
         peer.on(
@@ -477,7 +499,7 @@ impl AgentSession for AcpSession {
                             buf.push_str(content);
                         }
                     }
-                    sink_update(ev);
+                    let _ = tx_update.send(ev);
                 }
             }),
         );
@@ -485,7 +507,7 @@ impl AgentSession for AcpSession {
         // 2b) session/request_permission：权限请求 → 审批闸门
         // 安全默认：闸门缺失、或超时未决 → **拒绝**（绝不默认放行）；
         // 且只在**真有闸门**时才发审批卡——没闸门却发卡，只会让用户点了没反应。
-        let sink_perm = Arc::clone(&sink);
+        let tx_perm = evt_tx.clone();
         let sid_perm = self.session_id.clone();
         let gate_perm = conn.approvals.clone();
         peer.on(
@@ -503,7 +525,7 @@ impl AgentSession for AcpSession {
                 let gate = gate_perm.clone();
 
                 if gate.is_some() {
-                    sink_perm(UnifiedAgentEvent::ApprovalRequired {
+                    let _ = tx_perm.send(UnifiedAgentEvent::ApprovalRequired {
                         session_id: sid_perm.clone(),
                         call_id: call_id.clone(),
                         name: params["toolCall"]["title"]
