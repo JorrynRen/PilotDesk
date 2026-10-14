@@ -248,7 +248,8 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
   // ── 统一父容器：所有内容块共享同一个 flex 布局，自然撑满一致宽度 ──
   return (
     <>
-      <div className="w-full group flex gap-2.5 items-start px-4 py-[3px]">
+      {/* 用户消息整行镜像（flex-row-reverse）：头像移到右侧，内容列右对齐 —— 见下方 items-end */}
+      <div className={`w-full group flex gap-2.5 items-start px-4 py-[3px]${isUser ? ' flex-row-reverse' : ''}`}>
       {/* 多选勾选框：只在消息列表进入多选时出现（系统提示不参与沉淀） */}
       {selectable && message.role !== 'system' && (
         <input
@@ -295,8 +296,8 @@ export function MessageBubble({ message, agentType, apiProviderId, apiModel, thi
         )}
       </div>
 
-      {/* Content column */}
-      <div className="flex-1 min-w-0">
+      {/* Content column：用户消息右对齐（items-end），使气泡与底部操作键都贴右侧 */}
+      <div className={`flex-1 min-w-0${isUser ? ' flex flex-col items-end' : ''}`}>
         {/* Label row */}
         <div className="flex items-center gap-2 mb-1">
           {isUser ? (

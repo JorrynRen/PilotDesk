@@ -1014,7 +1014,8 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
     : null;
   return (
     <div className="flex justify-start px-4 py-1.5">
-      <div className="flex w-full items-start gap-2">
+      {/* 用户消息整行镜像（flex-row-reverse）：头像移到右侧，内容列右对齐 —— 见下方 items-end */}
+      <div className={`flex w-full items-start gap-2${isUser ? ' flex-row-reverse' : ''}`}>
         {/* 多选勾选框：只在群聊页进入多选时出现（确认请求/回复是流程动作，不参与沉淀） */}
         {selectable && <input
           type="checkbox"
@@ -1025,7 +1026,8 @@ const GroupChatMessageItem = memo(function GroupChatMessageItem({
           title="选中后可与其它消息一起沉淀为知识"
         />}
         <ParticipantAvatar icon={participantIcon(participant?.participantType ?? 'agent')} color={color} agentType={participantAgentType(participant)} />
-        <div className="min-w-0 flex-1">
+        {/* 内容列：用户消息右对齐（items-end），气泡（w-fit）与附件等一并贴右侧 */}
+        <div className={`min-w-0 flex-1${isUser ? ' flex flex-col items-end' : ''}`}>
           <div className="flex items-center gap-2 mb-0.5">
             <span className="text-[10px] font-medium truncate" style={{ color }}>{displayName}</span>
             <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
