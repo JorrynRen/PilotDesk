@@ -297,19 +297,30 @@ export function CustomTabsSettings() {
     <div>
       <div className="mb-4">
         <h3 className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>门户标签</h3>
-        <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-          门户标签会直接加入标题栏组合开关（工作流 / 会话 / 群聊 / 终端之后），点击即可快速切换访问常用页面。
-          <br />
-          支持三种地址：网络地址（http/https 网页）、本地 HTML 文件（任意文件完整路径，如 E:\doc\index.html，经 asset 协议加载）、本地目录（如 E:\doc，自动生成文件列表页，可进入子目录 / 打开文件）。
-          <br />
-          未带协议的域名（如 www.example.com）会自动补 https://；仅支持 http/https 与本地文件/目录路径，其它协议会被拒绝。
-          <br />
-          可为标签设置「分组」（门户页按分组归类，留空为未分组）与「图标」（门户卡片与顶栏展示用，默认地球图标）。
-          <br />
-          提示：部分站点通过 X-Frame-Options / CSP 禁止被内嵌，此类页面可能无法在标签中显示。
-          <br />
-          按住左侧手柄可拖动排序，顺序会持久化保存。
-        </p>
+        {/* 说明按「前缀 + 内容」逐条列出：条目多时列表比连续段落更易扫读 */}
+        <ul className="text-xs space-y-1 list-disc pl-4" style={{ color: 'var(--text-tertiary)' }}>
+          <li>
+            <span style={{ color: 'var(--text-secondary)' }}>用途</span>：承载在线版 Agent 站点（如 chat.deepseek.com），也支持本地文件 / 目录等常用页面。
+          </li>
+          <li>
+            <span style={{ color: 'var(--text-secondary)' }}>入口</span>：直接加入标题栏组合开关（工作流 / 会话 / 群聊 / 终端之后），点击即可快速切换。
+          </li>
+          <li>
+            <span style={{ color: 'var(--text-secondary)' }}>地址</span>：网络地址（http/https）· 本地 HTML 文件（如 E:\doc\index.html，经 asset 协议加载）· 本地目录（如 E:\doc，自动生成文件列表页）。
+          </li>
+          <li>
+            <span style={{ color: 'var(--text-secondary)' }}>容错</span>：未带协议的域名（如 www.example.com）自动补 https://；仅支持 http/https 与本地文件 / 目录，其它协议会被拒绝。
+          </li>
+          <li>
+            <span style={{ color: 'var(--text-secondary)' }}>分组 / 图标</span>：分组用于门户页归类（留空 = 未分组）；图标用于门户卡片与顶栏（默认地球）。
+          </li>
+          <li>
+            <span style={{ color: 'var(--text-secondary)' }}>限制</span>：部分站点通过 X-Frame-Options / CSP 禁止被内嵌。打开这类标签时会主动提示并给出「在浏览器打开」入口，门户卡片上也会标注「无法内嵌」。
+          </li>
+          <li>
+            <span style={{ color: 'var(--text-secondary)' }}>排序</span>：按住左侧手柄拖动，顺序会持久化保存。
+          </li>
+        </ul>
       </div>
 
       {/* 顶栏平铺显示个数：设置组合开关里平铺几个门户标签，其余收进「更多」下拉 */}

@@ -12,6 +12,90 @@ pub fn path_is_directory(path: String) -> bool {
         .unwrap_or(false)
 }
 
+/// 门户标签「能否被内嵌」的探测结果
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedProbe {
+    /// `ok` = 允许内嵌；`blocked` = 明确被拒；`unknown` = 无法判定（网络失败等，前端回退超时提示）
+    pub status: &'static str,
+    /// `blocked` 时的中文依据（其它状态为空串）
+    pub reason: String,
+}
+
+/// 从 CSP 头中取出 `frame-ancestors` 指令的值（指令名大小写不敏感）。
+fn frame_ancestors_of(csp: &str) -> Option<&str> {
+    csp.split(';').find_map(|d| {
+        let d = d.trim();
+        let mut it = d.splitn(2, char::is_whitespace);
+        let name = it.next()?;
+        if name.eq_ignore_ascii_case("frame-ancestors") {
+            Some(it.next().unwrap_or("").trim())
+        } else {
+            None
+        }
+    })
+}
+
+/// 探测某个网络地址是否允许被 iframe 内嵌。
+///
+/// 依据响应头的 `X-Frame-Options` 与 `Content-Security-Policy: frame-ancestors` ——
+/// 这两者是浏览器拒绝内嵌的**标准依据**（多数浏览器下被拒的 iframe 仍会触发 onload，
+/// 前端无法从事件中判别，故必须在加载前主动探测）。本地路径不走此命令
+/// （asset / dirindex 协议由本应用自身提供，恒可内嵌）。
+#[tauri::command]
+pub async fn probe_embed_allowed(url: String) -> EmbedProbe {
+    let ok = || EmbedProbe { status: "ok", reason: String::new() };
+    let unknown = || EmbedProbe { status: "unknown", reason: String::new() };
+    let blocked = |reason: &str| EmbedProbe { status: "blocked", reason: reason.to_string() };
+
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return ok();
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return unknown(),
+    };
+    // 只需要响应头；不读正文（拿到响应头即返回，随后丢弃连接）
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(_) => return unknown(),
+    };
+    let headers = resp.headers();
+
+    if let Some(xfo) = headers.get("x-frame-options").and_then(|v| v.to_str().ok()) {
+        let v = xfo.trim().to_ascii_uppercase();
+        if v.starts_with("DENY") {
+            return blocked("站点通过 X-Frame-Options: DENY 禁止被任何页面内嵌");
+        }
+        if v.starts_with("SAMEORIGIN") {
+            return blocked("站点通过 X-Frame-Options: SAMEORIGIN 仅允许同源页面内嵌");
+        }
+        if v.starts_with("ALLOW-FROM") {
+            return blocked("站点通过 X-Frame-Options: ALLOW-FROM 仅允许指定来源内嵌");
+        }
+    }
+
+    for csp in headers.get_all("content-security-policy").iter() {
+        let Some(ancestors) = csp.to_str().ok().and_then(frame_ancestors_of) else {
+            continue;
+        };
+        let tokens: Vec<&str> = ancestors.split_whitespace().collect();
+        if tokens.iter().any(|t| *t == "'none'") {
+            return blocked("站点通过 CSP frame-ancestors 'none' 禁止被任何页面内嵌");
+        }
+        // 允许 `*`（任意来源）；其余（'self' / 具体来源列表）一律视为不允许本应用内嵌
+        if !tokens.iter().any(|t| *t == "*") {
+            return blocked("站点通过 CSP frame-ancestors 仅允许指定来源内嵌");
+        }
+    }
+
+    ok()
+}
+
 /// HTML 转义（防止路径/文件名中的特殊字符破坏页面结构）
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

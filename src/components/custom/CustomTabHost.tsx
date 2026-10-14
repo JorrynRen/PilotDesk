@@ -19,11 +19,15 @@ const DIRINDEX_BASE = 'http://dirindex.localhost/';
 const FRAME_LRU_MAX = 8;
 
 /**
- * iframe 加载超时阈值（毫秒）。
- * 无法可靠探测 X-Frame-Options / CSP 拒绝（多数浏览器下被拒的 iframe 仍会触发 onload），
- * 故采用「超时提示 + 手动出口」：超过此时长仍未 onload，则该标签内容区顶部给出提示条。
+ * iframe 加载超时阈值（毫秒）——**兜底**手段。
+ * 主动判据走后端 `probe_embed_allowed`（读 X-Frame-Options / CSP frame-ancestors），
+ * 命中即立刻提示；此超时只在探测结果 `unknown`（网络失败 / 探测缺失）时才作为近似判据：
+ * 超过此时长仍未 onload，则该标签内容区顶部给出提示条。
  */
 const LOAD_TIMEOUT_MS = 8000;
+
+/** 内嵌可行性探测结果（后端读响应头得出）；`unknown` 时前端回退到超时近似 */
+type EmbedProbe = { status: 'ok' | 'blocked' | 'unknown'; reason: string };
 
 /** 把标签 url 解析为 iframe src：
  *  网络地址(http/https)直接使用；本地目录走 dirindex 协议生成索引页；本地文件走 asset 协议 */
@@ -81,6 +85,8 @@ export function CustomTabHost() {
   const [frameLoadState, setFrameLoadState] = useState<Record<string, 'loaded' | 'timeout'>>({});
   // 用户手动关闭「可能无法内嵌」提示的标签（key）
   const [dismissedTip, setDismissedTip] = useState<Record<string, boolean>>({});
+  // 内嵌可行性探测结果：url -> 结果（后端读 X-Frame-Options / CSP frame-ancestors）；按 url 缓存
+  const [embedProbe, setEmbedProbe] = useState<Record<string, EmbedProbe>>({});
 
   const active = useMemo(() => tabs.find((t) => t.id === activeTabId) || null, [tabs, activeTabId]);
 
@@ -156,6 +162,33 @@ export function CustomTabHost() {
   }, [activeUrl, dirByUrl]);
 
   /**
+   * 内嵌可行性探测（**主动**）：对「当前激活标签」与「门户页可见的全部网络标签」各探测一次，
+   * 结果按 url 缓存。命中 `blocked` 即立刻给出提示条与「在浏览器中打开」出口，
+   * 不再依赖 8 秒超时让用户自行判断（被拒的 iframe 多数仍会触发 onload，超时根本等不到）。
+   * 探测失败（网络异常）记 `unknown`，由超时兜底。
+   */
+  useEffect(() => {
+    const targets = new Set<string>();
+    if (active && /^https?:\/\//i.test(active.url)) targets.add(active.url);
+    if (isPortal) {
+      tabs.forEach((t) => { if (/^https?:\/\//i.test(t.url)) targets.add(t.url); });
+    }
+    const pending = [...targets].filter((u) => embedProbe[u] === undefined);
+    if (pending.length === 0) return;
+    let cancelled = false;
+    pending.forEach((u) => {
+      invoke<EmbedProbe>('probe_embed_allowed', { url: u })
+        .then((r) => {
+          if (!cancelled) setEmbedProbe((m) => (m[u] ? m : { ...m, [u]: r }));
+        })
+        .catch(() => {
+          if (!cancelled) setEmbedProbe((m) => (m[u] ? m : { ...m, [u]: { status: 'unknown', reason: '' } }));
+        });
+    });
+    return () => { cancelled = true; };
+  }, [active, isPortal, tabs, embedProbe]);
+
+  /**
    * 关闭指定标签（顶栏标签行的关闭角标共用此逻辑）：**卸载其 iframe**（移出 LRU 窗口）
    * 并把激活态回落门户页；标签按钮**保留在顶栏**（关闭不是"让标签消失"，只是取消激活 / 加载），
    * 再次点击即重新加载。配置始终保留 —— 删除配置在「标签管理」里做。
@@ -228,8 +261,14 @@ export function CustomTabHost() {
     }
   }, []);
 
-  // 提示条只在「当前激活标签超时未加载且用户未关闭提示」时显示
-  const showEmbedTip = !!activeKey && frameLoadState[activeKey] === 'timeout' && !dismissedTip[activeKey];
+  // 当前激活标签的探测结果（网络地址才有；本地路径不走探测）
+  const activeProbe = active ? embedProbe[active.url] : undefined;
+  // 明确被拒（主动探测命中）——此时**立即**提示，不等超时
+  const embedBlocked = activeProbe?.status === 'blocked';
+  // 兜底：探测 `unknown`（或未探测）时，超时未加载仍给出提示
+  const embedTimeout = !!activeKey && frameLoadState[activeKey] === 'timeout';
+  // 提示条在「明确被拒 或 超时未加载」且用户未关闭提示时显示
+  const showEmbedTip = !!activeKey && (embedBlocked || embedTimeout) && !dismissedTip[activeKey];
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden relative">
@@ -395,6 +434,9 @@ export function CustomTabHost() {
                       {g.items.map((t) => {
                         // 「已打开」= iframe 当前真的挂载着（LRU 窗口内）；关闭后会摘掉这个标记
                         const opened = activatedIds.includes(t.id);
+                        // 主动探测结果：明确被拒的标签先在门户卡片上标出，并常显「在浏览器打开」出口
+                        const probe = embedProbe[t.url];
+                        const blocked = probe?.status === 'blocked';
                         return (
                           <div
                             key={t.id}
@@ -425,15 +467,25 @@ export function CustomTabHost() {
                                       已打开
                                     </span>
                                   )}
+                                  {blocked && (
+                                    <span
+                                      className="shrink-0 text-[9px] px-1 py-px rounded-full"
+                                      style={{ backgroundColor: 'var(--status-danger-bg, #FEE2E2)', color: 'var(--danger, #EF4444)' }}
+                                      title={probe?.reason}
+                                    >
+                                      无法内嵌
+                                    </span>
+                                  )}
                                 </span>
                               </span>
                             </button>
-                            {/* 在浏览器打开：悬停卡片时才显现 */}
+                            {/* 在浏览器打开：一般悬停卡片时才显现；
+                                「无法内嵌」的标签**常显**并标红 —— 用户一眼就知道该走浏览器，不必自己试。 */}
                             <button
                               onClick={() => void openInBrowser(t.url)}
-                              className="shrink-0 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                              style={{ color: 'var(--text-secondary)' }}
-                              title="在浏览器中打开"
+                              className={`shrink-0 p-1.5 rounded-md transition-opacity ${blocked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                              style={{ color: blocked ? 'var(--danger, #EF4444)' : 'var(--text-secondary)' }}
+                              title={blocked ? '该站点不支持内嵌，在浏览器中打开' : '在浏览器中打开'}
                             >
                               <ExternalLink size={13} />
                             </button>
@@ -448,8 +500,8 @@ export function CustomTabHost() {
           </div>
         )}
 
-        {/* 白屏降级提示条：8 秒内未 onload（可能被 X-Frame-Options / CSP 拒绝内嵌）时就地给出出口。
-            无法可靠探测拒绝（被拒 iframe 多数仍触发 onload），故用超时近似 + 手动"在浏览器打开"。 */}
+        {/* 无法内嵌提示条：主动探测命中（X-Frame-Options / CSP frame-ancestors 明确拒绝）时**立即**给出；
+            探测 `unknown` 时回退为「8 秒未 onload」的近似判据。两种情形都给「在浏览器打开」出口。 */}
         {showEmbedTip && active && (
           <div
             className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-3 py-2 text-[11px]"
@@ -460,7 +512,9 @@ export function CustomTabHost() {
           >
             <AlertTriangle size={13} className="shrink-0" style={{ color: 'var(--status-warning, #F59E0B)' }} />
             <span className="flex-1 leading-relaxed" style={{ color: 'var(--text-primary)' }}>
-              页面可能不允许被内嵌（X-Frame-Options / CSP）。你可以点这里在浏览器中打开。
+              {embedBlocked
+                ? `该页面无法在标签内打开：${activeProbe?.reason || '站点拒绝被内嵌'}。请在浏览器中打开。`
+                : '页面可能不允许被内嵌（X-Frame-Options / CSP）。你可以点这里在浏览器中打开。'}
             </span>
             <button
               onClick={() => void openInBrowser(active.url)}

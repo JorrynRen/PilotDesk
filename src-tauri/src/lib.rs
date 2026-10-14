@@ -2367,6 +2367,7 @@ pub fn run() {
             commands::attachment::delete_attachment,
             commands::attachment::open_path,
             commands::dirindex::path_is_directory,
+            commands::dirindex::probe_embed_allowed,
             commands::env::ensure_dir,
             list_inspirations,
             get_inspiration,
