@@ -29,6 +29,9 @@ export function McpSettings() {
   const [servers, setServers] = useState<McpServerConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // 是否有未保存的改动（新增 / 删除 / 编辑任一项即置位）：
+  // 没有改动时不展示「保存」——包括刚进入页面、以及没有任何服务器表单可编辑时。
+  const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -45,14 +48,17 @@ export function McpSettings() {
 
   const handleAdd = useCallback(() => {
     setServers((prev) => [...prev, { ...EMPTY_SERVER }]);
+    setDirty(true);
   }, []);
 
   const handleRemove = useCallback((idx: number) => {
     setServers((prev) => prev.filter((_, i) => i !== idx));
+    setDirty(true);
   }, []);
 
   const handleChange = useCallback((idx: number, patch: Partial<McpServerConfig>) => {
     setServers((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+    setDirty(true);
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -63,6 +69,7 @@ export function McpSettings() {
     try {
       await invoke('set_mcp_servers', { servers: cleaned });
       setServers(cleaned);
+      setDirty(false);
     } catch (e) {
       console.error('保存 MCP 服务器失败:', e);
     } finally {
@@ -169,15 +176,20 @@ export function McpSettings() {
         </div>
       )}
 
-      <div className="flex items-center justify-end">
-        <SettingsButton onClick={handleSave} icon={saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} disabled={saving}>
-          保存
-        </SettingsButton>
-      </div>
+      {/* 仅在「有未保存改动」时出现保存：未打开任何服务器表单 / 无改动时不该有保存按钮 */}
+      {dirty && (
+        <>
+          <div className="flex items-center justify-end">
+            <SettingsButton onClick={handleSave} icon={saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} disabled={saving}>
+              保存
+            </SettingsButton>
+          </div>
 
-      <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-        保存后将在下一次 API Agent 会话时生效（每轮对话会重新连接并列出工具）。
-      </p>
+          <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+            保存后将在下一次 API Agent 会话时生效（每轮对话会重新连接并列出工具）。
+          </p>
+        </>
+      )}
     </div>
   );
 }
