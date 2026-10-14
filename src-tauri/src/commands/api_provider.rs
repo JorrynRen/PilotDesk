@@ -13,8 +13,8 @@ use std::collections::HashMap;
 /// 本文件所有对外函数的签名 / 返回结构与合并前**完全一致**，因此命令层、知识库、语音、
 /// 圆桌、组织上报、工作流、前端 store 全部零改动。
 ///
-/// 旧表 `api_providers` 自本版本起**冻结为只读遗留表**：运行期不再读写它，
-/// 仅由 `db/init.rs` 的一次性迁移读取一次（见 `backfill_api_providers_into_agents`）。
+/// 旧表 `api_providers` 已于 v10 **物理移除**：其数据由 `db/init.rs` 一次性迁移后 `DROP`。
+/// 全新库的终态 schema 不再包含该表（见 `FINAL_SCHEMA_SQL`）。
 const AGENT_PREFIX: &str = "api:";
 const SECRET_PREFIX: &str = "secret:";
 
@@ -541,11 +541,15 @@ mod tests {
             .unwrap();
         assert_eq!(nsec, 0);
 
-        // 旧表 `api_providers` 不再被写入（冻结为只读遗留表）
-        let nold: i64 = conn
-            .query_row("SELECT COUNT(*) FROM api_providers", [], |r| r.get(0))
+        // v10 起旧表 `api_providers` 已从终态 schema 移除，不再存在
+        let has_legacy: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='api_providers'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(nold, 0);
+        assert_eq!(has_legacy, 0, "v10 终态 schema 不应再含旧表");
 
         // 读出：裸 id 与 `api:<id>` 两种写法等价
         let a = get_api_provider(&conn, "p1").unwrap().unwrap();

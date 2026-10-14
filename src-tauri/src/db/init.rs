@@ -9,7 +9,10 @@ use std::fs;
 /// 打开到比当前更新的库时明确报错，绝不 wipe。v1-v4 为预发布期整库重置，无独立旧库留存。
 /// 约定：每次修改 FINAL_SCHEMA_SQL 都必须把 SCHEMA_VERSION +1，
 /// 否则 user_version 相等的旧库走快速路径、不会补齐缺表/缺列。
-pub const SCHEMA_VERSION: i64 = 9;
+///
+/// v10：物理移除旧表 `api_providers`——其数据已并入 `agents(transport='http')` + `agent_secrets`，
+/// 终态脚本不再建该表；存量库在迁移时先一次性回填、再 `DROP`（见 `backfill_api_providers_into_agents`）。
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// 当前终态建表脚本（唯一 schema 定义）。依据既有生产库 schema 固化：
 /// - 全部使用 IF NOT EXISTS，可每次启动安全执行；
@@ -63,18 +66,6 @@ CREATE TABLE IF NOT EXISTS agent_secrets (
             created_at INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL DEFAULT 0
         );
-CREATE TABLE IF NOT EXISTS api_providers (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL DEFAULT '',
-            api_endpoint TEXT NOT NULL DEFAULT '',
-            api_key TEXT DEFAULT '',
-            api_key_masked TEXT DEFAULT '',
-            api_key_set INTEGER DEFAULT 0,
-            models TEXT NOT NULL DEFAULT '[]',
-            sort_order INTEGER DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        , api_format TEXT NOT NULL DEFAULT 'openai');
 CREATE TABLE IF NOT EXISTS api_usage_log (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id        TEXT NOT NULL,
@@ -306,8 +297,6 @@ pub fn init_db() -> Result<DbPool, AppError> {
 
     // 老库补列：agents 增加 transport / conn / secret_ref（设计文档 §4.2 / §4.3）。
     // 与上面 sync_state 同一做法：只加列、带 DEFAULT 回填历史行、不随 SCHEMA_VERSION 门控。
-    // 本步**不做**任何 api_providers → agents 回填——那会与 §八 管理页耦合（回填出的
-    // `api:*` 行会立刻出现在既有 Agent 列表里），留到管理页同批做。
     ensure_column(
         &conn,
         "agents",
@@ -317,9 +306,14 @@ pub fn init_db() -> Result<DbPool, AppError> {
     ensure_column(&conn, "agents", "conn", "TEXT")?;
     ensure_column(&conn, "agents", "secret_ref", "TEXT")?;
 
-    // 4a：把既有 API 供应商一次性迁移成 `api:<id>` 的 http 接入 + 凭据副本（只读源表）。
-    // 迁移后运行期读写一律走 agents/agent_secrets，`api_providers` 冻结为只读遗留表。
+    // 4a：把既有 API 供应商一次性迁移成 `api:<id>` 的 http 接入 + 凭据副本（标记守卫、只跑一次）。
     backfill_api_providers_into_agents(&conn)?;
+
+    // 4b（v10）：迁移完成后物理移除旧表 `api_providers`。
+    // 顺序很关键——必须先回填再删（老库首次升级时数据还在旧表里）；
+    // 已迁移过的库（标记已置位）回填直接空跑，这里仅清理遗留表。
+    // 全新库无该表，`IF EXISTS` 空跑。
+    conn.execute("DROP TABLE IF EXISTS api_providers", [])?;
 
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
     let now = crate::utils::now();
@@ -523,6 +517,16 @@ fn migrate_schema(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 表是否存在（供旧表移除后的条件迁移使用，如 v10 的 `api_providers`）。
+fn table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        rusqlite::params![table],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 /// 幂等补列：目标表已有该列则跳过，否则 `ALTER TABLE ADD COLUMN`。
 /// 新列一律带 DEFAULT，历史行自动回填默认值，不触发全表重写。
 fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), AppError> {
@@ -561,6 +565,10 @@ const API_PROVIDERS_MIGRATED_KEY: &str = "api_providers_migrated_into_agents";
 /// 用 Rust 逐行写入而非 SQL 的 `json_object()`：不依赖 SQLite 的 JSON1 扩展，
 /// 避免不同运行环境的 SQLite 编译选项差异。
 pub fn backfill_api_providers_into_agents(conn: &Connection) -> Result<(), AppError> {
+    // v10 起终态脚本不再建该表：全新库 / 已移除旧表的库无迁移源，直接空跑。
+    if !table_exists(conn, "api_providers") {
+        return Ok(());
+    }
     if crate::commands::app_settings::get_setting(conn, API_PROVIDERS_MIGRATED_KEY)?.as_deref()
         == Some("1")
     {
@@ -661,6 +669,15 @@ mod tests {
     fn backfill_api_providers_is_idempotent_and_keeps_source() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(FINAL_SCHEMA_SQL).unwrap();
+        // v10 起终态脚本不再建旧表：此处手工造一个「迁移前」的旧表作为夹具。
+        conn.execute_batch(
+            "CREATE TABLE api_providers (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+                api_endpoint TEXT NOT NULL DEFAULT '', api_key TEXT DEFAULT '',
+                models TEXT NOT NULL DEFAULT '[]', api_format TEXT NOT NULL DEFAULT 'openai',
+                sort_order INTEGER DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);",
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO api_providers
                 (id, name, api_endpoint, api_key, models, api_format, sort_order, created_at, updated_at)
@@ -723,6 +740,27 @@ mod tests {
             )
             .unwrap();
         assert_eq!(src, "CIPHERTEXT", "源表必须原样保留");
+    }
+
+    /// v10：终态脚本不再建旧表 `api_providers`；旧表缺失时回填必须安全空跑（全新库不报错）。
+    #[test]
+    fn v10_legacy_table_absent_and_backfill_noops() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(FINAL_SCHEMA_SQL).unwrap();
+        assert!(
+            !table_exists(&conn, "api_providers"),
+            "v10 终态脚本不得再建 api_providers"
+        );
+        // 无旧表 → 回填空跑、不得报错、不得凭空造 api:* 行
+        backfill_api_providers_into_agents(&conn).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agents WHERE agent_type LIKE 'api:%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     /// v9 新增：`agents` 的接入方式/连接参数列 + 凭据表；老库补列幂等、带 DEFAULT 回填。
