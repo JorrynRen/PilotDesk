@@ -88,6 +88,12 @@ impl JsonRpcPeer {
                     }
                 }
             }
+            // 读循环结束 = 对端已断开。必须把在途请求全部唤醒为错误：
+            // 否则它们会一直干等到各自超时（ACP 回合表现为"对端已死却仍显示思考中"）。
+            let mut pending = reader.inner.pending.lock().await;
+            for (_id, tx) in pending.drain() {
+                let _ = tx.send(Err("对端连接已断开（进程退出或 stdout 关闭）".to_string()));
+            }
         });
 
         Ok(peer)
