@@ -76,9 +76,14 @@ impl JsonRpcPeer {
                             Err(e) => log::warn!("[jsonrpc] 丢弃不可解析的行: {}", e),
                         }
                     }
-                    Ok(None) => break, // 对端关闭
+                    Ok(None) => {
+                        // 读循环退出必须在日志里可见：ACP 的回合结束响应走同一条 stdout，
+                        // 若循环先死，后续响应会被永久吞掉（表现为"任务已完成却一直等待"）。
+                        log::warn!("[jsonrpc] 读循环退出：对端 stdout 已关闭");
+                        break;
+                    }
                     Err(e) => {
-                        log::warn!("[jsonrpc] 读取失败: {}", e);
+                        log::warn!("[jsonrpc] 读循环退出：读取失败 err={}", e);
                         break;
                     }
                 }
@@ -172,15 +177,29 @@ impl JsonRpcPeer {
         match (method, id) {
             // 响应：有 id、无 method
             (None, Some(id)) => {
-                if let Some(k) = id.as_i64() {
-                    if let Some(tx) = self.inner.pending.lock().await.remove(&k) {
-                        let res = if let Some(err) = v.get("error") {
-                            Err(format!("对端错误：{}", err))
+                // 兼容对端把 id 回成字符串的实现（ACP 真机联调中曾见）
+                let key = id
+                    .as_i64()
+                    .or_else(|| id.as_str().and_then(|s| s.parse::<i64>().ok()));
+                match key {
+                    Some(k) => {
+                        if let Some(tx) = self.inner.pending.lock().await.remove(&k) {
+                            let res = if let Some(err) = v.get("error") {
+                                Err(format!("对端错误：{}", err))
+                            } else {
+                                Ok(v.get("result").cloned().unwrap_or(Value::Null))
+                            };
+                            let _ = tx.send(res);
                         } else {
-                            Ok(v.get("result").cloned().unwrap_or(Value::Null))
-                        };
-                        let _ = tx.send(res);
+                            // 无主响应：要么是超时/取消后迟到的响应，要么是对端 id 不匹配。
+                            // 必须打日志——否则"回合结束响应被丢弃"完全看不见。
+                            log::warn!("[jsonrpc] 收到无主响应（无对应在途请求，已丢弃）：id={}", k);
+                        }
                     }
+                    None => log::warn!(
+                        "[jsonrpc] 响应 id 既非整数也非数字字符串，无法匹配（已丢弃）：id={}",
+                        id
+                    ),
                 }
             }
             // 入站请求 / 通知
