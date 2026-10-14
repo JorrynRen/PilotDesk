@@ -136,20 +136,31 @@ const initialState: MainPanelState = {
  */
 const STREAM_IDLE_TIMEOUT_MS = 180_000;
 
+/**
+ * ACP 回合的静默判定阈值（显著放宽）。
+ *
+ * ACP 回合的**权威结束信号是 `session/prompt` 的响应**（后端已按回合级超时等待，
+ * 见 `transport/acp.rs` 的 `TURN_TIMEOUT`）。而 ACP 回合中"工具调用之间的长 LLM 推理"
+ * 属正常静默——实测（hermes-agent v0.17.0）单步推理/工具间隙约 10s，慢供应商 + 大上下文
+ * 下会更久。沿用 180s 会把**仍在运行的活回合**误杀：现场表现为"复杂任务跑了几分钟后被
+ * 判超时，且日志里始终没有回合结束响应"。所以 ACP 只用一个远宽于此的兜底网，
+ * 真正的结束由后端信号决定。
+ */
+const ACP_IDLE_TIMEOUT_MS = 900_000;
+
 /** 发起静默取消后，等后端 agent-cancelled 回执的兜底时长；超时则前端自行收尾 */
 const CANCEL_FALLBACK_MS = 15_000;
 
 /**
  * 静默卡死终止的用户可见说明（与"上游超时""用户停止"区分开）。
- * 按接入方式分支：ACP 的对端是**本地 Agent 进程**（很可能仍在跑工具调用），
+ * 按接入方式分支：ACP 的对端是**本地 Agent 进程**（很可能仍在跑工具调用/推理），
  * 提示"检查 API 提供商状态"会把人引到错误方向；只有 HTTP/API 才与提供商状态相关。
  */
 function idleTimeoutNotice(transport?: string): string {
-  const head = `⏱ 长时间无响应：已停止本轮（超过 ${STREAM_IDLE_TIMEOUT_MS / 1000} 秒没有任何进展）。`;
   if (transport === 'acp') {
-    return `${head}对端 Agent 长时间没有回传，可能仍在执行工具调用。可重试，或检查该 Agent 的运行状态。`;
+    return `⏱ 长时间无响应：已停止本轮（超过 ${ACP_IDLE_TIMEOUT_MS / 1000} 秒没有任何进展）。对端 Agent 长时间没有回传，可能仍在执行工具调用或推理。可重试，或检查该 Agent 的运行状态。`;
   }
-  return `${head}请重试或检查 API 提供商状态。`;
+  return `⏱ 长时间无响应：已停止本轮（超过 ${STREAM_IDLE_TIMEOUT_MS / 1000} 秒没有任何进展）。请重试或检查 API 提供商状态。`;
 }
 
 /**
@@ -914,7 +925,10 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         );
         // 本组件既没有本轮起点、也没有任何事件记录（如别处发起的运行）：无从判断，不动它
         if (lastActivity === 0) continue;
-        if (now - lastActivity <= STREAM_IDLE_TIMEOUT_MS) continue;
+        // 阈值按接入方式分支：ACP 的结束点由后端回合信号决定，静默只作兜底（见 ACP_IDLE_TIMEOUT_MS）。
+        const idleLimit =
+          transportOfSession(sid) === 'acp' ? ACP_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
+        if (now - lastActivity <= idleLimit) continue;
         if (hasRunningTool(streams[sid])) continue;
         const awaitingUser =
           (approvals.items[sid] ?? []).some((item) => item.approved === undefined)
