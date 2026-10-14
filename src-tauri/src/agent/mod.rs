@@ -1242,10 +1242,16 @@ pub async fn run_transport_session(
 
     match result {
         Ok(_) => {
+            log::info!("[Agent/run_transport_session] 回合结束(完成)：session={}", session_id);
             let _ = app.emit("agent-done", serde_json::json!({ "sessionId": session_id }));
             Ok(())
         }
         Err(e) => {
+            log::warn!(
+                "[Agent/run_transport_session] 回合结束(错误)：session={} err={}",
+                session_id,
+                e
+            );
             // 与既有 CLI 口径一致：错误已上报，不再向调用方冒泡
             let _ = app.emit(
                 "agent-error",

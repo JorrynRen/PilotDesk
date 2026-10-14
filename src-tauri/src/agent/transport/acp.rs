@@ -591,13 +591,23 @@ impl AgentSession for AcpSession {
             blocks.push(json!({ "type": "image", "uri": img }));
         }
 
+        // 诊断打点：本轮"结束信号"是否到达、几时到达。
+        log::info!("[acp] session/prompt 发出，等待对端回合结束响应：session={}", sid);
         let resp = peer
             .request(
                 method::SESSION_PROMPT,
                 json!({ "sessionId": sid, "prompt": blocks }),
             )
             .await
-            .map_err(AgentError::Protocol)?;
+            .map_err(|e| {
+                log::warn!("[acp] session/prompt 未拿到回合结束响应：session={} err={}", sid, e);
+                AgentError::Protocol(e)
+            })?;
+        log::info!(
+            "[acp] session/prompt 收到回合结束响应：session={} stopReason={}",
+            sid,
+            resp["stopReason"].as_str().unwrap_or("<缺失>")
+        );
 
         let stop = resp["stopReason"].as_str().unwrap_or("end_turn");
         let text = self

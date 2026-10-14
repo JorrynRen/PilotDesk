@@ -136,11 +136,10 @@ impl JsonRpcPeer {
             Ok(Err(_)) => Err(format!("请求 {} 的响应通道已关闭", method)),
             Err(_) => {
                 self.inner.pending.lock().await.remove(&id);
-                Err(format!(
-                    "JSON-RPC 请求超时（{}s）：{}",
-                    timeout.as_secs(),
-                    method
-                ))
+                let msg = format!("JSON-RPC 请求超时（{}s）：{}", timeout.as_secs(), method);
+                // 诊断打点：回合级请求被超时判死时必须在日志里可见（否则表现为"对端无响应"）
+                log::warn!("[jsonrpc] {}", msg);
+                Err(msg)
             }
         }
     }
