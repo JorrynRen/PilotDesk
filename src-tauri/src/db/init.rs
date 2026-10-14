@@ -317,9 +317,8 @@ pub fn init_db() -> Result<DbPool, AppError> {
     ensure_column(&conn, "agents", "conn", "TEXT")?;
     ensure_column(&conn, "agents", "secret_ref", "TEXT")?;
 
-    // 4a：把既有 API 供应商回填成 `api:<id>` 的 http 接入 + 凭据副本（只读源表、幂等）。
-    // 回填的行暂不对用户可见（list_agents 按 transport='subprocess' 过滤），
-    // 待 §八 管理页落地后统一呈现。
+    // 4a：把既有 API 供应商一次性迁移成 `api:<id>` 的 http 接入 + 凭据副本（只读源表）。
+    // 迁移后运行期读写一律走 agents/agent_secrets，`api_providers` 冻结为只读遗留表。
     backfill_api_providers_into_agents(&conn)?;
 
     // ===== 种子数据（INSERT OR IGNORE，已有数据不覆盖） =====
@@ -541,23 +540,47 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
     Ok(())
 }
 
-/// 把 `api_providers` 回填为 `agents` 里的 http 接入（`api:<provider_id>`）+ `agent_secrets`。
+/// 一次性迁移标记：置位后不再回填/重新同步。
 ///
-/// **只读源表、纯增量、幂等**：源表 `api_providers` 不被修改或删除，
-/// 故重复执行没有副作用；最坏情况只是新表里多一行可重跑的副本。
+/// 迁移完成后 `api_providers` 只是**只读遗留表**；若每次启动都回填，用户在管理页
+/// 删除某个 provider 后会被遗留表里的历史行"复活"（`INSERT OR IGNORE` 会补回缺行）。
+/// 因此回填必须只跑一次。
+const API_PROVIDERS_MIGRATED_KEY: &str = "api_providers_migrated_into_agents";
+
+/// 把 `api_providers` 一次性迁移为 `agents` 里的 http 接入（`api:<provider_id>`）+ `agent_secrets`。
+///
+/// **只读源表、纯增量、只跑一次**（以 `app_settings` 标记守卫）：源表 `api_providers`
+/// 不被修改或删除，但迁移后运行期不再读写它，故不会被重复回填。
 ///
 /// 凭据搬的是**密文**（`api_providers.api_key` 本身就是加密存储），保持同一存储约定；
 /// `agents.conn` 里**只有** baseUrl/apiFormat/models，**不含密钥**。
 ///
-/// 注：本函数只负责"数据就绪"。`api:*` 行在 §八 管理页落地前**不对用户可见**
-/// —— `list_agents` 已按 `transport = 'subprocess'` 过滤。
+/// 顺带修正早期回填的缺陷：早期版本未复制 `sort_order`，导致 `api:*` 行排序全为 0；
+/// 这里统一按源表补齐一次（同样只做一次，避免覆盖用户在管理页里的排序）。
 ///
 /// 用 Rust 逐行写入而非 SQL 的 `json_object()`：不依赖 SQLite 的 JSON1 扩展，
 /// 避免不同运行环境的 SQLite 编译选项差异。
 pub fn backfill_api_providers_into_agents(conn: &Connection) -> Result<(), AppError> {
-    let rows: Vec<(String, String, String, String, String, Option<String>, i64, i64)> = conn
+    if crate::commands::app_settings::get_setting(conn, API_PROVIDERS_MIGRATED_KEY)?.as_deref()
+        == Some("1")
+    {
+        return Ok(());
+    }
+
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+        i64,
+        i64,
+    )> = conn
         .prepare(
-            "SELECT id, name, api_endpoint, api_format, models, api_key, created_at, updated_at \
+            "SELECT id, name, api_endpoint, api_format, models, api_key, \
+                    COALESCE(sort_order, 0), created_at, updated_at \
              FROM api_providers",
         )?
         .query_map([], |r| {
@@ -570,12 +593,15 @@ pub fn backfill_api_providers_into_agents(conn: &Connection) -> Result<(), AppEr
                 r.get(5)?,
                 r.get(6)?,
                 r.get(7)?,
+                r.get(8)?,
             ))
         })?
         .filter_map(|r| r.ok())
         .collect();
 
-    for (id, name, endpoint, format, models_json, api_key, created_at, updated_at) in rows {
+    for (id, name, endpoint, format, models_json, api_key, sort_order, created_at, updated_at) in
+        rows
+    {
         // models 列是 JSON 文本（对象数组）；解析失败退回空数组（不因一行坏数据中断回填）
         let models: serde_json::Value =
             serde_json::from_str(&models_json).unwrap_or_else(|_| serde_json::json!([]));
@@ -589,13 +615,14 @@ pub fn backfill_api_providers_into_agents(conn: &Connection) -> Result<(), AppEr
         conn.execute(
             "INSERT OR IGNORE INTO agents
                 (agent_type, display_name, description, cli_command, transport, conn, secret_ref,
-                 created_at, updated_at)
-             VALUES (?1, ?2, '', '', 'http', ?3, ?4, ?5, ?6)",
+                 sort_order, created_at, updated_at)
+             VALUES (?1, ?2, '', '', 'http', ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 format!("api:{}", id),
                 name,
                 conn_json,
                 format!("secret:{}", id),
+                sort_order,
                 created_at,
                 updated_at
             ],
@@ -609,6 +636,19 @@ pub fn backfill_api_providers_into_agents(conn: &Connection) -> Result<(), AppEr
             )?;
         }
     }
+
+    // 一次性补齐既有 `api:*` 行的 sort_order（早期回填遗留的缺陷）：有源表行才覆盖，
+    // 无源表行保持原值（COALESCE 兜底）。
+    conn.execute(
+        "UPDATE agents SET sort_order = COALESCE(
+                (SELECT ap.sort_order FROM api_providers ap
+                 WHERE 'api:' || ap.id = agents.agent_type),
+                sort_order)
+         WHERE transport = 'http' AND agent_type LIKE 'api:%'",
+        [],
+    )?;
+
+    crate::commands::app_settings::set_setting(conn, API_PROVIDERS_MIGRATED_KEY, "1")?;
     Ok(())
 }
 

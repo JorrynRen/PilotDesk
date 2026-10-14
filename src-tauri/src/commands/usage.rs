@@ -267,19 +267,24 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
     .is_ok()
 }
 
-/// provider 显示名映射：api_providers.id → api_providers.name（表不存在/无行时回落原值）。
+/// provider 显示名映射：`api:<id>` 行的 `display_name` → 展示名（表不存在/无行时回落原值）。
+/// v9 起 provider 数据源已合并到 `agents`，此处随之改读 `agents(transport='http')`。
 fn provider_display_names(conn: &Connection) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
-    if !table_exists(conn, "api_providers") {
+    if !table_exists(conn, "agents") {
         return map;
     }
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT id, name FROM api_providers WHERE TRIM(COALESCE(name, '')) != ''")
-    {
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT agent_type, display_name FROM agents
+         WHERE transport = 'http' AND agent_type LIKE 'api:%'
+           AND TRIM(COALESCE(display_name, '')) != ''",
+    ) {
         if let Ok(it) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         {
             for row in it.flatten() {
-                map.insert(row.0, row.1);
+                if let Some(id) = row.0.strip_prefix("api:") {
+                    map.insert(id.to_string(), row.1);
+                }
             }
         }
     }
@@ -1446,20 +1451,20 @@ mod tests {
     fn provider_group_uses_display_name_when_known() {
         let conn = mem_conn();
         conn.execute_batch(
-            "CREATE TABLE api_providers (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
-                api_endpoint TEXT NOT NULL DEFAULT '', api_key TEXT DEFAULT ''
+            "CREATE TABLE agents (
+                agent_type TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '',
+                transport TEXT NOT NULL DEFAULT 'subprocess'
             );",
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO api_providers (id, name) VALUES ('deepseek', 'DeepSeek')",
+            "INSERT INTO agents (agent_type, display_name, transport) VALUES ('api:deepseek', 'DeepSeek', 'http')",
             [],
         )
         .unwrap();
         let now = crate::utils::now();
         insert(&conn, "s1", "deepseek", "deepseek-chat", 100, 20, 40, now);
-        // 未在 api_providers 注册的 id → 回落显示 id。
+        // 未在 agents 注册的 id → 回落显示 id。
         insert(&conn, "s2", "custom", "m", 10, 5, 0, now);
 
         let s = usage_summary(&conn, None).unwrap();
@@ -1467,7 +1472,7 @@ mod tests {
             s.by_provider.iter().map(|g| (g.name.clone(), g)).collect();
         assert!(
             by_provider.contains_key("DeepSeek"),
-            "应显示 api_providers.name"
+            "应显示 display_name"
         );
         assert!(
             by_provider.contains_key("custom"),
@@ -1480,14 +1485,14 @@ mod tests {
     fn provider_group_merges_id_and_display_name_rows() {
         let conn = mem_conn();
         conn.execute_batch(
-            "CREATE TABLE api_providers (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
-                api_endpoint TEXT NOT NULL DEFAULT '', api_key TEXT DEFAULT ''
+            "CREATE TABLE agents (
+                agent_type TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '',
+                transport TEXT NOT NULL DEFAULT 'subprocess'
             );",
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO api_providers (id, name) VALUES ('deepseek', 'DeepSeek')",
+            "INSERT INTO agents (agent_type, display_name, transport) VALUES ('api:deepseek', 'DeepSeek', 'http')",
             [],
         )
         .unwrap();
@@ -1517,14 +1522,14 @@ mod tests {
     fn room_provider_group_merges_id_and_display_name_rows() {
         let conn = mem_conn();
         conn.execute_batch(
-            "CREATE TABLE api_providers (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
-                api_endpoint TEXT NOT NULL DEFAULT '', api_key TEXT DEFAULT ''
+            "CREATE TABLE agents (
+                agent_type TEXT PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '',
+                transport TEXT NOT NULL DEFAULT 'subprocess'
             );",
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO api_providers (id, name) VALUES ('deepseek', 'DeepSeek')",
+            "INSERT INTO agents (agent_type, display_name, transport) VALUES ('api:deepseek', 'DeepSeek', 'http')",
             [],
         )
         .unwrap();

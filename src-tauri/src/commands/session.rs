@@ -2448,21 +2448,29 @@ mod model_switch_tests {
                 origin TEXT,
                 temperature REAL,
                 max_tokens INTEGER);
-             CREATE TABLE api_providers (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL DEFAULT '',
-                api_endpoint TEXT NOT NULL DEFAULT '',
-                api_key TEXT DEFAULT '',
-                api_key_masked TEXT DEFAULT '',
-                api_key_set INTEGER DEFAULT 0,
-                models TEXT NOT NULL DEFAULT '[]',
+             CREATE TABLE agents (
+                agent_type TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                transport TEXT NOT NULL DEFAULT 'subprocess',
+                conn TEXT,
+                secret_ref TEXT,
                 sort_order INTEGER DEFAULT 0,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                api_format TEXT NOT NULL DEFAULT 'openai');
-             INSERT INTO api_providers (id, name, api_key_set, models, created_at, updated_at)
-                VALUES ('p1', '甲商', 1, '[{\"name\":\"m-a\"},{\"name\":\"m-b\"}]', 1, 1),
-                       ('p2', '乙商', 0, '[{\"name\":\"m-c\"}]', 1, 1);
+                updated_at INTEGER NOT NULL);
+             CREATE TABLE agent_secrets (
+                id TEXT PRIMARY KEY,
+                secret TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO agents (agent_type, display_name, transport, conn, secret_ref, sort_order, created_at, updated_at)
+                VALUES ('api:p1', '甲商', 'http',
+                        '{\"baseUrl\":\"https://a/v1\",\"apiFormat\":\"openai\",\"models\":[{\"name\":\"m-a\"},{\"name\":\"m-b\"}]}',
+                        'secret:p1', 0, 1, 1),
+                       ('api:p2', '乙商', 'http',
+                        '{\"baseUrl\":\"https://b/v1\",\"apiFormat\":\"openai\",\"models\":[{\"name\":\"m-c\"}]}',
+                        NULL, 1, 1, 1);
+             INSERT INTO agent_secrets (id, secret, created_at, updated_at)
+                VALUES ('secret:p1', 'CIPHERTEXT', 1, 1);
              INSERT INTO sessions (id, agent_type, api_provider, api_model, created_at, updated_at)
                 VALUES ('s-api', 'api', 'p1', 'm-a', 1, 100),
                        ('s-cli', 'claude-code', NULL, NULL, 1, 100);",

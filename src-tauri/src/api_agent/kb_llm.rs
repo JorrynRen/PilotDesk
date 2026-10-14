@@ -101,45 +101,30 @@ pub fn resolve_kb_model(conn: &Connection) -> Result<KbModel, String> {
         }
     }
 
-    // 回落：第一个"能用"的提供商（按 sort_order，跳过 anthropic 原生格式 —— 走不了 /chat/completions）
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, name, api_endpoint, api_format, models FROM api_providers ORDER BY sort_order",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, Option<String>>(3)?
-                    .unwrap_or_else(|| "openai".into()),
-                r.get::<_, String>(4)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?;
+    // 回落：第一个"能用"的提供商（按 sort_order，跳过 anthropic 原生格式 —— 走不了 /chat/completions）。
+    // 数据源已随 v9 合并切到 `agents(transport='http')`，但对外仍是同一套 provider 形态。
+    let providers =
+        crate::commands::api_provider::list_api_providers(conn).map_err(|e| e.to_string())?;
 
     let mut saw_any = false;
-    for row in rows.filter_map(|r| r.ok()) {
-        let (id, name, endpoint, api_format, models_json) = row;
-        if endpoint.trim().is_empty() || models_from_json(&models_json).is_empty() {
+    for p in providers {
+        if p.api_endpoint.trim().is_empty() || p.models.is_empty() {
             continue;
         }
         saw_any = true;
-        if api_format.to_lowercase().contains("anthropic") {
+        if p.api_format.to_lowercase().contains("anthropic") {
             continue;
         }
-        let Some(key) = get_api_key(conn, &id).map_err(|e| e.to_string())? else {
+        let Some(key) = get_api_key(conn, &p.id).map_err(|e| e.to_string())? else {
             continue;
         };
         return Ok(KbModel {
-            provider_id: id,
-            provider_name: name,
-            endpoint,
+            provider_id: p.id,
+            provider_name: p.name,
+            endpoint: p.api_endpoint,
             api_key: key,
-            api_format,
-            model: models_from_json(&models_json)[0].clone(),
+            api_format: p.api_format,
+            model: p.models[0].clone(),
             from_fallback: true,
             usage: KbUsage::default(),
         });
@@ -159,25 +144,19 @@ struct ProviderRow {
 }
 
 fn provider_row(conn: &Connection, id: &str) -> Result<Option<ProviderRow>, String> {
-    use rusqlite::{params, OptionalExtension};
-    conn.query_row(
-        "SELECT name, api_endpoint, api_format FROM api_providers WHERE id = ?1",
-        params![id],
-        |r| {
-            Ok(ProviderRow {
-                name: r.get(0)?,
-                endpoint: r.get(1)?,
-                api_format: r
-                    .get::<_, Option<String>>(2)?
-                    .unwrap_or_else(|| "openai".into()),
-            })
-        },
-    )
-    .optional()
-    .map_err(|e| e.to_string())
+    match crate::commands::api_provider::get_api_provider(conn, id) {
+        Ok(Some(p)) => Ok(Some(ProviderRow {
+            name: p.name,
+            endpoint: p.api_endpoint,
+            api_format: p.api_format,
+        })),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// models 列是 `[{name, note}]`（也兼容纯字符串数组）
+#[allow(dead_code)] // 仅供单元测试：正式路径的模型清单由 `list_api_providers` 直接给出
 fn models_from_json(raw: &str) -> Vec<String> {
     match serde_json::from_str::<Value>(raw) {
         Ok(Value::Array(items)) => items
