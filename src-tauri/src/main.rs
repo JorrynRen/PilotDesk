@@ -2,8 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
-        .init();
+    // 日志初始化移至 lib（见 `pilotdesk_lib::init_logging`）：除 stdout 外还会落盘到
+    // `<配置根>/logs/agent.log` —— release 构建没有可见终端，不落盘就无从取证。
+    pilotdesk_lib::init_logging();
     pilotdesk_lib::run()
 }

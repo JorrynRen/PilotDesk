@@ -19,6 +19,11 @@ export interface AgentEventHandlers {
   /** 运行被取消（用户点"停止生成"）：正文已由事件总线按已产出内容落库，组件只需收起流式视图。 */
   onCancelled?: (sessionId: string, content?: string) => void;
   onError?: (sessionId: string, error: string) => void;
+  /**
+   * 对端失活被终止（后端活性看门狗判定"连续无回传"后主动取消）。
+   * 与 onError 分开：这是**明确的终态原因**，不是笼统的"请求失败"。
+   */
+  onIdleAborted?: (sessionId: string, idleSeconds: number) => void;
   onStatus?: (sessionId: string, status: string) => void;
   onSession?: (sessionId: string, agentSessionId: string) => void;
   onSkills?: (agentType: string, skills: Array<{ name: string; description: string; category?: string; dirPath?: string; entryPath?: string }>) => void;

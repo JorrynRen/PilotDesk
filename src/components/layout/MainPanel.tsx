@@ -15,7 +15,7 @@ import { useAgentEvent } from '../../hooks/useAgentEvent';
 import { useAgentRegistry } from '../../hooks/useAgentRegistry';
 import { usePendingInputStore } from '../../stores/pendingInputStore';
 import { useSessionDraftStore } from '../../stores/sessionDraftStore';
-import { showToast } from '../../utils/toast';
+import { showToast, showLiveToastOnce } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import { useGeneratingStore } from '../../stores/generatingStore';
 import { useAgentStreamStore, appendReasoningStep, appendToolStartStep, appendToolResultStep, appendFileDiffStep, appendSystemStep, appendApprovalStep, resolveApprovalStep, appendIterationLimitStep, resolveIterationLimitStep } from '../../stores/agentStreamStore';
@@ -137,16 +137,23 @@ const initialState: MainPanelState = {
 const STREAM_IDLE_TIMEOUT_MS = 180_000;
 
 /**
- * ACP 回合的静默判定阈值（显著放宽）。
+ * ACP 回合的静默兜底阈值（仅"后端信号也没来"时的最后一道网）。
  *
- * ACP 回合的**权威结束信号是 `session/prompt` 的响应**（后端已按回合级超时等待，
- * 见 `transport/acp.rs` 的 `TURN_TIMEOUT`）。而 ACP 回合中"工具调用之间的长 LLM 推理"
- * 属正常静默——实测（hermes-agent v0.17.0）单步推理/工具间隙约 10s，慢供应商 + 大上下文
- * 下会更久。沿用 180s 会把**仍在运行的活回合**误杀：现场表现为"复杂任务跑了几分钟后被
- * 判超时，且日志里始终没有回合结束响应"。所以 ACP 只用一个远宽于此的兜底网，
- * 真正的结束由后端信号决定。
+ * 权威判定已移到**后端**（`transport/acp.rs` 的活性看门狗：无在途工具时 900s 静默即
+ * 主动 `session/cancel` 并给出 `agent-idle-aborted` 明确终态）。本值刻意取得**高于**
+ * 后端阈值，让后端先判、前端只消费它的终态——前端自造判定既看不到工具在途状态、
+ * 也**无法把取消真正送达对端**（此前 900s 现场文案说了"已停止本轮"，而 hermes 侧
+ * 日志里根本没有收到 `session/cancel`，进程一直挂到后端 1800s 超时才被回收）。
  */
-const ACP_IDLE_TIMEOUT_MS = 900_000;
+const ACP_IDLE_TIMEOUT_MS = 960_000;
+
+/**
+ * ACP 下"对端长时间无回传"的**提示**阈值（只提示，不终止）。
+ *
+ * 后端同样在 180s 打 WARN 日志，但日志用户看不到；这里弹一条 Toast 让用户知道
+ * "不是卡在 UI，而是对端确实没回传"。有工具在途 / 等用户决策时不算静默（同后端口径）。
+ */
+const ACP_IDLE_NOTICE_MS = 180_000;
 
 /** 发起静默取消后，等后端 agent-cancelled 回执的兜底时长；超时则前端自行收尾 */
 const CANCEL_FALLBACK_MS = 15_000;
@@ -158,9 +165,21 @@ const CANCEL_FALLBACK_MS = 15_000;
  */
 function idleTimeoutNotice(transport?: string): string {
   if (transport === 'acp') {
-    return `⏱ 长时间无响应：已停止本轮（超过 ${ACP_IDLE_TIMEOUT_MS / 1000} 秒没有任何进展）。对端 Agent 长时间没有回传，可能仍在执行工具调用或推理。可重试，或检查该 Agent 的运行状态。`;
+    return `⏱ 长时间无响应：已停止本轮（后端与前端都没有收到任何回传，超过 ${Math.round(
+      ACP_IDLE_TIMEOUT_MS / 60_000,
+    )} 分钟）。对端 Agent 可能已失活，可重试，或检查该 Agent 的运行状态。`;
   }
   return `⏱ 长时间无响应：已停止本轮（超过 ${STREAM_IDLE_TIMEOUT_MS / 1000} 秒没有任何进展）。请重试或检查 API 提供商状态。`;
+}
+
+/**
+ * 后端判定"对端已停止回传"并终止本轮时的说明（`agent-idle-aborted`）。
+ *
+ * 与"超时""用户停止"区分开：这不是等得不够久，而是**对端确实不再回传**
+ * （且判定时无工具在途、无人待确认），故文案要指向 Agent 本身而不是 API 提供商。
+ */
+function idleAbortedNotice(idleSeconds: number): string {
+  return `⚠ 对端已停止回传：已终止本轮（后端在 ${idleSeconds} 秒内没有收到任何回传，且当时没有工具在途、也没有等待你的确认）。可重试，或检查该 Agent 的运行状态。`;
 }
 
 /**
@@ -547,6 +566,8 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
   const genStartTimesRef = useRef<Record<string, number>>({});
   /** 已发起"静默取消"的会话 → 发起时间戳；等后端 agent-cancelled 收尾，超时则前端自行收尾 */
   const idleCancelRef = useRef<Record<string, number>>({});
+  /** 已就"对端长时间无回传"提示过的会话 → true（恢复活动后清掉，可再次提示） */
+  const idleNoticeRef = useRef<Record<string, boolean>>({});
   /**
    * 会话 → 本组件**本次开始观察它"生成中"**的时刻。
    * 用于给静默看门狗兜底：重入一个后端仍在跑、但本组件毫不知情的会话时，
@@ -606,6 +627,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     doneSessionIdsRef.current.add(sessionId);
     delete genStartTimesRef.current[sessionId];
     delete idleCancelRef.current[sessionId];
+    delete idleNoticeRef.current[sessionId];
     dispatch({ type: 'GENERATION_DONE', sessionId, fallbackContent });
   }, []);
 
@@ -616,6 +638,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     const idleRequested = idleCancelRef.current[sessionId] !== undefined;
     delete genStartTimesRef.current[sessionId];
     delete idleCancelRef.current[sessionId];
+    delete idleNoticeRef.current[sessionId];
     if (idleRequested) {
       dispatch({
         type: 'GENERATION_DONE',
@@ -631,6 +654,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     console.log('[MainPanel] onError received:', sessionId, error);
     delete genStartTimesRef.current[sessionId];
     delete idleCancelRef.current[sessionId];
+    delete idleNoticeRef.current[sessionId];
     // 只有当前可见会话的错误才弹 Toast
     if (sessionId === currentSessionId) {
       showToast(`错误: ${error}`, 'error');
@@ -644,6 +668,27 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
       type: 'GENERATION_DONE',
       sessionId,
       systemMessage: `请求失败: ${error}`,
+    });
+  }, [currentSessionId]);
+
+  /**
+   * 后端判定"对端已停止回传"并终止本轮（`agent-idle-aborted`）。
+   *
+   * 走 `GENERATION_DONE`（而非 `GENERATION_ERROR`）：已累积的 streamingContent 与
+   * thinkingChains 会先被保存为 assistant 消息，再追加上这条明确原因的 system 消息——
+   * 与错误路径同理，直接 `GENERATION_ERROR` 会先清状态、把思考链丢掉。
+   */
+  const onIdleAborted = useCallback((sessionId: string, idleSeconds: number) => {
+    delete genStartTimesRef.current[sessionId];
+    delete idleCancelRef.current[sessionId];
+    delete idleNoticeRef.current[sessionId];
+    if (sessionId === currentSessionId) {
+      showToast(idleAbortedNotice(idleSeconds), 'warning');
+    }
+    dispatch({
+      type: 'GENERATION_DONE',
+      sessionId,
+      systemMessage: idleAbortedNotice(idleSeconds),
     });
   }, [currentSessionId]);
 
@@ -803,7 +848,7 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
     stopGeneration,
     createAgentSession,
     respondToConfirmation,
-  } = useAgentEvent({ onChunk, onDone, onCancelled, onError, onSession, onApprovalRequired, onApprovalResolved, onIterationLimit, onIterationLimitResolved, onToolStart, onToolResult, onToolProgress, onFileDiff, onSystemStep, onReasoning, onConfirmationRequest });
+  } = useAgentEvent({ onChunk, onDone, onCancelled, onError, onIdleAborted, onSession, onApprovalRequired, onApprovalResolved, onIterationLimit, onIterationLimitResolved, onToolStart, onToolResult, onToolProgress, onFileDiff, onSystemStep, onReasoning, onConfirmationRequest });
 
   // ── Layout effect: atomically persist completed streaming content + system notification ──
   // assistant 正文与思维链的落库已上移到 agentStreamStore（事件总线在收到 done/cancelled 时
@@ -900,6 +945,11 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
       const now = Date.now();
       const streams = useAgentStreamStore.getState().streams;
       const approvals = useApprovalStore.getState();
+      /** 是否在等用户决策（审批卡 / 迭代上限卡 / ask_user 确认块）——等待期间静默属正常 */
+      const isAwaitingUser = (sid: string): boolean =>
+        (approvals.items[sid] ?? []).some((item) => item.approved === undefined)
+        || (approvals.iterationLimits[sid] ?? []).some((item) => item.decision === undefined)
+        || confirmation?.sessionId === sid;
       for (const sid of generatingIds) {
         const requestedAt = idleCancelRef.current[sid];
         if (requestedAt !== undefined) {
@@ -925,16 +975,32 @@ export function MainPanel({ style }: { style?: React.CSSProperties } = {}) {
         );
         // 本组件既没有本轮起点、也没有任何事件记录（如别处发起的运行）：无从判断，不动它
         if (lastActivity === 0) continue;
+        const isAcp = transportOfSession(sid) === 'acp';
         // 阈值按接入方式分支：ACP 的结束点由后端回合信号决定，静默只作兜底（见 ACP_IDLE_TIMEOUT_MS）。
-        const idleLimit =
-          transportOfSession(sid) === 'acp' ? ACP_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
-        if (now - lastActivity <= idleLimit) continue;
+        const idleLimit = isAcp ? ACP_IDLE_TIMEOUT_MS : STREAM_IDLE_TIMEOUT_MS;
+        const silentMs = now - lastActivity;
+        if (silentMs <= idleLimit) {
+          // 静默已恢复（回到提示阈值以内）→ 清掉提示标记，下次静默可再提示一次
+          if (silentMs <= ACP_IDLE_NOTICE_MS) delete idleNoticeRef.current[sid];
+          // ACP 下先就"长时间无回传"提示一次（只提示，不终止）
+          if (
+            isAcp
+            && silentMs > ACP_IDLE_NOTICE_MS
+            && !hasRunningTool(streams[sid])
+            && !isAwaitingUser(sid)
+            && !idleNoticeRef.current[sid]
+          ) {
+            idleNoticeRef.current[sid] = true;
+            showLiveToastOnce(
+              `acp-idle-notice:${sid}:${genStartTimesRef.current[sid] ?? 0}`,
+              `⚠ 对端 Agent 已 ${Math.round(silentMs / 1000)} 秒没有任何回传（无工具在途、未等待你的确认）。后端监测中，超过 900 秒将终止本轮。`,
+              'warning',
+            );
+          }
+          continue;
+        }
         if (hasRunningTool(streams[sid])) continue;
-        const awaitingUser =
-          (approvals.items[sid] ?? []).some((item) => item.approved === undefined)
-          || (approvals.iterationLimits[sid] ?? []).some((item) => item.decision === undefined)
-          || confirmation?.sessionId === sid;
-        if (awaitingUser) continue;
+        if (isAwaitingUser(sid)) continue;
 
         console.warn(
           `[MainPanel] 流式静默 ${Math.round((now - lastActivity) / 1000)}s 无任何事件，取消本轮:`,

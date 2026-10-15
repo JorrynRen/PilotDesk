@@ -9,7 +9,7 @@ import { useNotificationStore } from '../stores/notificationStore';
  *
  * 背景：`useAgentEvent` 旧实现每个 hook 实例都各自 `listen('agent-*')` 一次，
  * MainPanel / App / SessionList / SkillBrowser 等多处并发使用时同一后端事件被重复
- * 注册/派发（重复状态刷新、多余开销）。本总线把 12 类 agent-* 事件收敛为：
+ * 注册/派发（重复状态刷新、多余开销）。本总线把 13 类 agent-* 事件收敛为：
  *   注册一次（首次订阅时惰性启动，进程生命周期内不注销）→ 广播给所有订阅者。
  * 订阅者各自持有最新的 handlers 引用（get() 闭包），组件卸载即退订，互不干扰。
  *
@@ -22,6 +22,11 @@ export interface AgentBusHandlers {
   /** 运行被取消（用户点"停止生成"）：已产出的正文已在总线层落库，组件只需收尾自己视图。 */
   onCancelled?: (sessionId: string, content?: string) => void;
   onError?: (sessionId: string, error: string) => void;
+  /**
+   * 对端失活（后端看门狗判定"连续无回传"后主动终止）。
+   * 与 onError 分开：这是**明确的终态原因**，不是笼统的"请求失败"。
+   */
+  onIdleAborted?: (sessionId: string, idleSeconds: number) => void;
   onSession?: (sessionId: string, agentSessionId: string) => void;
   onApprovalRequired?: (sessionId: string, callId: string, toolName: string, toolArgs: string, riskDescription: string) => void;
   onApprovalResolved?: (sessionId: string, callId: string, toolName: string, approved: boolean, timedOut: boolean, risk: string) => void;
@@ -52,7 +57,7 @@ const subscribers = new Set<Subscriber>();
 let started = false;
 
 /** 终态事件：记录它们会让已结束的会话留下"刚有活动"的痕迹，故不打活动时间戳。 */
-const TERMINAL_METHODS: ReadonlySet<string> = new Set(['onDone', 'onCancelled', 'onError']);
+const TERMINAL_METHODS: ReadonlySet<string> = new Set(['onDone', 'onCancelled', 'onError', 'onIdleAborted']);
 
 /** 取事件所属会话：除 onConfirmationRequest 是单对象载荷外，其余第一个参数都是 sessionId。 */
 function eventSessionId(method: keyof AgentBusHandlers, args: unknown[]): string | undefined {
@@ -109,6 +114,12 @@ function ensureStarted(): void {
       // 但不写"未收到响应"提示：失败提示由组件按 agent-error 写入，避免两条系统消息。
       useAgentStreamStore.getState().finishRun(event.payload.sessionId, undefined, false);
       dispatch('onError', event.payload.sessionId, event.payload.error);
+    }),
+    listen<{ sessionId: string; idleSeconds: number }>('agent-idle-aborted', (event) => {
+      // 后端判定"对端已停止回传"并终止：与失败一样收尾落库（已产出的内容不丢），
+      // 但不写"未收到响应"提示——终止原因由 MainPanel 按 onIdleAborted 写入。
+      useAgentStreamStore.getState().finishRun(event.payload.sessionId, undefined, false);
+      dispatch('onIdleAborted', event.payload.sessionId, event.payload.idleSeconds);
     }),
     listen<{ sessionId: string; agentSessionId: string }>('agent-session', (event) => {
       dispatch('onSession', event.payload.sessionId, event.payload.agentSessionId);

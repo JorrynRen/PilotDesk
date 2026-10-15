@@ -14,9 +14,9 @@
 //! 本仓库已有先例（Codex `mcp-server` 被 App Server 取代），协议会变。
 
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
@@ -39,6 +39,54 @@ pub const ACP_PROTOCOL_VERSION: u32 = 1;
 /// "长时间无响应：已停止本轮"。回合时长 ≈ 任务时长，故与后端
 /// `AGENT_LOOP_TIMEOUT_SECS`(1800) 对齐；控制面（initialize / session-new）仍用 30s。
 pub const TURN_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// 静默巡检粒度（看门狗每 5s 检查一次对端是否还在回传）。
+const IDLE_POLL: Duration = Duration::from_secs(5);
+
+/// "对端已静默 N 秒"的**提示**阈值（只打日志，不终止、不误报）。
+///
+/// 取 180s：无在途工具时，单次 LLM 请求的**实测**上限远低于此
+/// （本轮实测 47.6s；重试退避 2.37s），而任何真实工具执行都有工具在途
+/// （见 `IdleState`，此时**不计静默**）。
+const IDLE_NOTICE: Duration = Duration::from_secs(180);
+
+/// "对端失活"的**终止**阈值：无在途工具、未等待用户决策，却连续静默 900s
+/// → 判对端已失活，主动发 `session/cancel` 并按终止收尾。
+///
+/// 为什么不沿用 `TURN_TIMEOUT`(1800s)：那是"整轮任务"的上限，用它收尾会让用户
+/// 在对端早已失活的情况下多等 15 分钟，且最终只拿到一条"超时"文案。
+/// 900s 高于所有可能的合法静默（无工具在途时唯一合法来源就是 LLM 请求，
+/// 而 `HERMES_API_TIMEOUT` 兜底 1800s 只在**挂死**时才可能触及）。
+const IDLE_ABORT: Duration = Duration::from_secs(900);
+
+/// 看门狗读取的活性状态：判定"这段静默是否**合法**"。
+///
+/// 两个计数器都来自协议事件本身（而非猜测）：ACP 下工具**开始**与**结果**都是
+/// 显式上报的（`tool_call` / `tool_call_update`），只要看到开始而未见结果，
+/// 就说明工具仍在执行——此时对端静默是正常的，**绝不能**按静默终止。
+#[derive(Default)]
+struct IdleState {
+    /// 已上报开始、尚未上报结果的工具数（`tool_call` +1 / `tool_call_update` 终态 -1）
+    in_flight_tools: AtomicUsize,
+    /// 正在等待用户决策的请求数（审批闸门）——等用户天然的"静默"不是对端故障
+    awaiting_user: AtomicUsize,
+}
+
+impl IdleState {
+    /// 当前静默是否**可豁免**（有工具在途或正在等用户决策）。
+    fn exempt(&self) -> bool {
+        self.in_flight_tools.load(Ordering::Relaxed) > 0
+            || self.awaiting_user.load(Ordering::Relaxed) > 0
+    }
+
+    fn dec(counter: &AtomicUsize) {
+        // 事件可能重复/乱序（对端行为不受我们控制），计数只做**饱和**递减，
+        // 绝不回绕成天文数字（否则一次误减会让看门狗永久失效）。
+        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+            Some(v.saturating_sub(1))
+        });
+    }
+}
 
 /// ACP 方法名（客户端 → 对端）。
 pub mod method {
@@ -361,6 +409,8 @@ pub struct AcpSession {
     /// `prompt` 等待期间轮询它——置位即主动结束等待并发 `session/cancel`，
     /// 让"停止生成"能即时打断 ACP 回合（否则只能干等到回合自然结束或回合超时）。
     abort: Arc<AtomicBool>,
+    /// 活跃度看门狗的状态（与 `session/update` / 权限处理器共享）
+    idle: Arc<IdleState>,
 }
 
 impl AcpSession {
@@ -373,6 +423,7 @@ impl AcpSession {
             caps: Capabilities::default(),
             text_buf: Arc::new(Mutex::new(String::new())),
             abort: Arc::new(AtomicBool::new(false)),
+            idle: Arc::new(IdleState::default()),
         }
     }
 
@@ -490,10 +541,21 @@ impl AgentSession for AcpSession {
         let tx_update = evt_tx.clone();
         let sid_update = self.session_id.clone();
         let text_buf = Arc::clone(&self.text_buf);
+        let idle_update = Arc::clone(&self.idle);
         peer.on(
             peer_method::SESSION_UPDATE,
             Arc::new(move |_peer, _id, params| {
                 for ev in project_session_update(&sid_update, &params) {
+                    // 在途工具计数：工具执行期间对端静默是**正常**的（见 IdleState）
+                    match &ev {
+                        UnifiedAgentEvent::ToolStart { .. } => {
+                            idle_update.in_flight_tools.fetch_add(1, Ordering::Relaxed);
+                        }
+                        UnifiedAgentEvent::ToolResult { .. } => {
+                            IdleState::dec(&idle_update.in_flight_tools);
+                        }
+                        _ => {}
+                    }
                     if let UnifiedAgentEvent::Chunk { content, .. } = &ev {
                         if let Ok(mut buf) = text_buf.lock() {
                             buf.push_str(content);
@@ -510,6 +572,7 @@ impl AgentSession for AcpSession {
         let tx_perm = evt_tx.clone();
         let sid_perm = self.session_id.clone();
         let gate_perm = conn.approvals.clone();
+        let idle_perm = Arc::clone(&self.idle);
         peer.on(
             peer_method::SESSION_REQUEST_PERMISSION,
             Arc::new(move |peer, id, params| {
@@ -538,6 +601,12 @@ impl AgentSession for AcpSession {
                 }
 
                 let peer = peer.clone();
+                // 等用户决策期间**豁免**静默判定：用户可能几分钟后才点，这不算对端故障
+                let awaiting = gate.is_some();
+                let idle_gate = Arc::clone(&idle_perm);
+                if awaiting {
+                    idle_gate.awaiting_user.fetch_add(1, Ordering::Relaxed);
+                }
                 tokio::spawn(async move {
                     let allowed = match gate {
                         Some(g) => tokio::time::timeout(
@@ -551,6 +620,9 @@ impl AgentSession for AcpSession {
                             false
                         }
                     };
+                    if awaiting {
+                        IdleState::dec(&idle_gate.awaiting_user);
+                    }
                     if let Some(id) = id {
                         peer.respond(id, Ok(permission_response(&options, allowed)))
                             .await;
@@ -638,6 +710,47 @@ impl AgentSession for AcpSession {
         // 否则该等待最长会挂到 TURN_TIMEOUT(1800s)，用户点了停止也没有任何反应。
         let abort = Arc::clone(&self.abort);
         let sid_cancel = sid.clone();
+
+        // 后端**权威**活性看门狗：判定"对端是否还在回传"的依据只有一条——
+        // 对端最近一次真正写入 stdout 的时刻（`JsonRpcPeer::last_activity`）。
+        // 前端此前自造的 900s 兜底只是猜测（且它只关前端视图、从未把取消送达对端），
+        // 这里改为在**协议层**判定并真取消，前端只消费后端给的终态。
+        let turn_start = Instant::now();
+        let idle_watch = {
+            let peer_watch = JsonRpcPeer::clone(peer);
+            let idle_state = Arc::clone(&self.idle);
+            let sid_watch = sid.clone();
+            async move {
+                let mut noticed = false;
+                loop {
+                    tokio::time::sleep(IDLE_POLL).await;
+                    // 有工具在途 / 正在等用户决策 → 这段静默是合法的，不计时
+                    if idle_state.exempt() {
+                        noticed = false;
+                        continue;
+                    }
+                    // 基线取「对端最近回传」与「本轮请求发出」两者中较晚者：
+                    // 本轮请求发出后尚未收到任何回包时，静默应从发出时刻算起。
+                    let idle_secs = peer_watch
+                        .last_activity()
+                        .max(turn_start)
+                        .elapsed()
+                        .as_secs();
+                    if !noticed && idle_secs >= IDLE_NOTICE.as_secs() {
+                        noticed = true;
+                        log::warn!(
+                            "[acp] 对端已静默 {}s（无在途工具、未等用户决策）：session={}",
+                            idle_secs,
+                            sid_watch
+                        );
+                    }
+                    if idle_secs >= IDLE_ABORT.as_secs() {
+                        return idle_secs;
+                    }
+                }
+            }
+        };
+
         let outcome = tokio::select! {
             r = peer.request_with_timeout(
                 method::SESSION_PROMPT,
@@ -653,10 +766,30 @@ impl AgentSession for AcpSession {
                 // 先按协议取消（让对端终止其内部工具），再按"已取消"返回；
                 // run_transport_session 的取消分支随后会 close 对端并上报 agent-cancelled。
                 log::info!("[acp] 收到取消信号，发送 session/cancel：session={}", sid_cancel);
-                let _ = peer
+                if let Err(e) = peer
                     .notify(method::SESSION_CANCEL, json!({ "sessionId": sid_cancel }))
-                    .await;
+                    .await
+                {
+                    log::warn!("[acp] session/cancel 未送达对端：err={}", e);
+                }
                 return Err(AgentError::Cancelled);
+            }
+            idle_secs = idle_watch => {
+                // 对端已失活：先按协议取消（尽力让对端收尾），再以**明确的终态**返回，
+                // 由调用方上报 `agent-idle-aborted`（而不是伪装成超时/普通错误）。
+                log::warn!(
+                    "[acp] 对端失活：静默 {}s 超过阈值 {}s，发送 session/cancel 并终止本轮：session={}",
+                    idle_secs,
+                    IDLE_ABORT.as_secs(),
+                    sid_cancel
+                );
+                if let Err(e) = peer
+                    .notify(method::SESSION_CANCEL, json!({ "sessionId": sid_cancel }))
+                    .await
+                {
+                    log::warn!("[acp] session/cancel 未送达对端：err={}", e);
+                }
+                return Err(AgentError::IdleAborted { idle_secs });
             }
         };
         let resp = outcome.map_err(|e| {

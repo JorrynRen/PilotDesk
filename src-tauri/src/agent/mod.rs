@@ -1082,7 +1082,9 @@ pub async fn run_transport_session(
     agent_session_id: Option<&str>,
     approvals: Option<std::sync::Arc<dyn crate::agent::transport::ApprovalGate>>,
 ) -> Result<(), String> {
-    use crate::agent::transport::{build_session, AgentConn, PromptInput, UnifiedAgentEvent};
+    use crate::agent::transport::{
+        build_session, AgentConn, AgentError, PromptInput, UnifiedAgentEvent,
+    };
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let Some(mut session) = build_session(descriptor.transport, None) else {
@@ -1233,13 +1235,15 @@ pub async fn run_transport_session(
             .is_some_and(|t| t.load(Ordering::Relaxed));
 
     if cancelled {
-        // 取消后必须关闭对端：否则进程变成孤儿，继续往**已结束的回合**发流式事件，
-        // 前端会看到"停止后仍在输出"，静默看门狗还会再补一次超时收尾。
-        let _ = session.close(&handle).await;
+        // 先上报终态、再关闭对端：`agent-cancelled` 是前端"思考中 → 已停止"的唯一信号，
+        // 必须排在可能阻塞的 `close()` 之前，否则对端回收慢会让 UI 卡在"生成中"。
         let _ = app.emit(
             "agent-cancelled",
             serde_json::json!({ "sessionId": session_id }),
         );
+        // 取消后必须关闭对端：否则进程变成孤儿，继续往**已结束的回合**发流式事件，
+        // 前端会看到"停止后仍在输出"，静默看门狗还会再补一次超时收尾。
+        let _ = session.close(&handle).await;
         return Ok(());
     }
 
@@ -1257,19 +1261,42 @@ pub async fn run_transport_session(
             Ok(())
         }
         Err(e) => {
-            log::warn!(
-                "[Agent/run_transport_session] 回合结束(错误)：session={} err={}",
-                session_id,
-                e
-            );
+            // 对端失活（后端看门狗判定）与普通错误分开上报：前者是**明确终态**，
+            // 不该再补一条"请求失败"（两条互相矛盾的收尾文案）。
+            let idle_secs = match &e {
+                AgentError::IdleAborted { idle_secs } => Some(*idle_secs),
+                _ => None,
+            };
+            match idle_secs {
+                Some(secs) => {
+                    log::warn!(
+                        "[Agent/run_transport_session] 回合结束(对端失活)：session={} 静默={}s",
+                        session_id,
+                        secs
+                    );
+                    // 同上：终态事件先于 `close()`
+                    let _ = app.emit(
+                        "agent-idle-aborted",
+                        serde_json::json!({ "sessionId": session_id, "idleSeconds": secs }),
+                    );
+                }
+                None => {
+                    log::warn!(
+                        "[Agent/run_transport_session] 回合结束(错误)：session={} err={}",
+                        session_id,
+                        e
+                    );
+                    // 同上：终态事件先于 `close()`
+                    let _ = app.emit(
+                        "agent-error",
+                        serde_json::json!({ "sessionId": session_id, "error": format!("{}", e) }),
+                    );
+                }
+            }
             // 错误路径同样必须关闭对端：本轮已判死，但孤儿进程仍持有 stdout，
             // 会持续向已结束的回合推送事件（现场表现："报错后仍继续"）。
             let _ = session.close(&handle).await;
             // 与既有 CLI 口径一致：错误已上报，不再向调用方冒泡
-            let _ = app.emit(
-                "agent-error",
-                serde_json::json!({ "sessionId": session_id, "error": format!("{}", e) }),
-            );
             Ok(())
         }
     }

@@ -85,6 +85,11 @@ pub enum UnifiedAgentEvent {
     Done { session_id: String },
     /// 已取消 → `agent-cancelled`
     Cancelled { session_id: String },
+    /// 对端失活被终止 → `agent-idle-aborted`（**明确终态**：不是超时、不是普通失败）
+    IdleAborted {
+        session_id: String,
+        idle_secs: u64,
+    },
     /// 失败 → `agent-error`
     Error { session_id: String, error: String },
 }
@@ -297,6 +302,11 @@ pub enum AgentError {
     Cancelled,
     /// 超时
     Timeout(String),
+    /// 对端失活：连续静默超过阈值（无在途工具、未等待用户决策），已主动取消并终止本轮。
+    ///
+    /// 与 `Timeout` 区分开：这不是"我们等得不够久"，而是"对端已停止回传"，
+    /// 上层据此给出**明确**的终态（`agent-idle-aborted`），而不是笼统的"请求失败"。
+    IdleAborted { idle_secs: u64 },
 }
 
 impl std::fmt::Display for AgentError {
@@ -315,6 +325,9 @@ impl std::fmt::Display for AgentError {
             Self::Unsupported(m) => write!(f, "不支持的操作：{}", m),
             Self::Cancelled => write!(f, "已取消"),
             Self::Timeout(m) => write!(f, "超时：{}", m),
+            Self::IdleAborted { idle_secs } => {
+                write!(f, "对端已停止回传（静默 {}s）", idle_secs)
+            }
         }
     }
 }

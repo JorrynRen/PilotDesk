@@ -2319,6 +2319,71 @@ fn compute_diff(old: &str, new: &str) -> String {
     out
 }
 
+/// 初始化后端日志：**同时**写 stdout 与 `<配置根>/logs/agent.log`。
+///
+/// 为什么必须落盘：此前日志只走 stdout，Windows release 构建是
+/// `windows_subsystem = "windows"`，**根本没有可见终端**；一旦出现问题（如
+/// "回合结束响应是否到达"这类诊断打点），现场就无从取证。落盘后可直接翻文件对照时间线。
+///
+/// 仍是 `env_logger`（不引入 `tauri-plugin-log`）：避免两个 logger 争抢
+/// `log::set_logger`（后者在前者 init 之后无法接管），也免去随之而来的 capability 配置。
+pub fn init_logging() {
+    let mut builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    builder.format_timestamp_millis();
+
+    let mut log_path = None;
+    if let Some((path, file)) = open_log_file() {
+        builder.target(env_logger::Target::Pipe(Box::new(TeeStdout { file })));
+        log_path = Some(path);
+    }
+    builder.init();
+
+    match log_path {
+        Some(p) => log::info!("[log] 日志同时落盘：{}", p.display()),
+        None => log::warn!("[log] 日志落盘失败：仅输出到 stdout"),
+    }
+}
+
+/// 打开日志文件（`<配置根>/logs/agent.log`），超过 5MB 先滚动一份 `.prev`。
+fn open_log_file() -> Option<(std::path::PathBuf, std::fs::File)> {
+    let dir = crate::utils::paths::app_root_dir().join("logs");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+    let path = dir.join("agent.log");
+    // 简单滚动：保留上一份即可满足"复现后翻上次现场"的需求，不做完整轮转
+    if std::fs::metadata(&path).map(|m| m.len() > 5 * 1024 * 1024).unwrap_or(false) {
+        let _ = std::fs::rename(&path, dir.join("agent.log.prev"));
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()
+        .map(|f| (path, f))
+}
+
+/// 日志写入端：stderr/stdout 与文件各写一份。
+struct TeeStdout {
+    file: std::fs::File,
+}
+
+impl std::io::Write for TeeStdout {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        // stdout 写失败**不能**连累落盘：release 构建下 stdout 句柄可能无效，
+        // 届时正是最需要日志的时候。
+        let _ = std::io::stdout().write_all(buf);
+        self.file.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stdout().flush();
+        self.file.flush()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 进程启动时清除 Python 环境变量干扰

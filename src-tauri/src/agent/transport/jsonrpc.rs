@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -42,6 +42,11 @@ struct Inner {
     /// method → 入站处理器
     handlers: StdMutex<HashMap<String, PeerHandler>>,
     child: Mutex<Child>,
+    /// 对端最近一次回传报文（读到任意一行即刷新）的时刻。
+    ///
+    /// 供上层看门狗判定"对端是否仍在活动"：同一轮里对端会持续推 `session/update`，
+    /// 该时刻长期不推进即表示对端真的静默，而不是客户端漏读。
+    last_activity: StdMutex<Instant>,
 }
 
 /// 请求 future 被丢弃（任务被取消/提前结束）时，把对应的 pending 项一并移除。
@@ -81,6 +86,7 @@ impl JsonRpcPeer {
             pending: Mutex::new(HashMap::new()),
             handlers: StdMutex::new(HashMap::new()),
             child: Mutex::new(child),
+            last_activity: StdMutex::new(Instant::now()),
         });
         let peer = Self {
             inner: Arc::clone(&inner),
@@ -95,6 +101,10 @@ impl JsonRpcPeer {
                     Ok(Some(line)) => {
                         if line.trim().is_empty() {
                             continue;
+                        }
+                        // 任何一行入站报文都算"对端在活动"（含通知/请求/响应）
+                        if let Ok(mut t) = reader.inner.last_activity.lock() {
+                            *t = Instant::now();
                         }
                         match serde_json::from_str::<Value>(&line) {
                             Ok(v) => reader.dispatch(v).await,
@@ -186,10 +196,27 @@ impl JsonRpcPeer {
         }
     }
 
+    /// 对端最近一次回传报文的时刻（读循环每读到一行即刷新）。
+    pub fn last_activity(&self) -> Instant {
+        self.inner
+            .last_activity
+            .lock()
+            .map(|t| *t)
+            // 锁中毒时返回"现在"，即偏向"仍然活跃"——绝不因内部错误误判对端静默而终止会话
+            .unwrap_or_else(|_| Instant::now())
+    }
+
     /// 发送通知（无 id、不等响应）。
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), String> {
-        self.write(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
-            .await
+        let r = self
+            .write(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
+            .await;
+        // 通知的写失败**必须可见**：调用方多为"取消/收尾"路径（如 session/cancel），
+        // 以前被 `let _ =` 吞掉，会让"取消根本没送达对端"这一事实在日志里彻底消失。
+        if let Err(e) = &r {
+            log::warn!("[jsonrpc] 通知写入失败：method={} err={}", method, e);
+        }
+        r
     }
 
     /// 回写某条入站请求的响应。
