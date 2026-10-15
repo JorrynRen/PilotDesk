@@ -44,6 +44,31 @@ struct Inner {
     child: Mutex<Child>,
 }
 
+/// 请求 future 被丢弃（任务被取消/提前结束）时，把对应的 pending 项一并移除。
+///
+/// 不这么做就会留下一个"等待方已消失、却仍登记在 pending 里"的条目：对端迟到的
+/// 响应会被 `dispatch` 按 id 命中并 `tx.send`，而该 `send` 失败被 `let _ =` 吞掉——
+/// 现场表现是"响应其实到了，但日志里既不出现『收到回合结束响应』也不出现任何告警"，
+/// 与"对端从未回传"完全无法区分。移除后，迟到响应会走 `收到无主响应` 分支，可见。
+struct PendingCleanup {
+    inner: Arc<Inner>,
+    id: i64,
+}
+
+impl Drop for PendingCleanup {
+    fn drop(&mut self) {
+        let inner = Arc::clone(&self.inner);
+        let id = self.id;
+        // Drop 内不能 await，交给后台任务移除。即便与响应分发存在竞态也无害：
+        // 分发侧 `tx.send` 失败会打 warn，两条路径都可观测。
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                inner.pending.lock().await.remove(&id);
+            });
+        }
+    }
+}
+
 impl JsonRpcPeer {
     /// 接管一个已 `spawn` 的子进程，并启动后台读循环。
     pub fn new(mut child: Child) -> Result<Self, String> {
@@ -135,12 +160,18 @@ impl JsonRpcPeer {
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
+        // 守卫：本 future 被丢弃（任务取消）时也移除 pending，避免留下"无主的等待位"
+        let _cleanup = PendingCleanup {
+            inner: Arc::clone(&self.inner),
+            id,
+        };
 
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         if let Err(e) = self.write(&req).await {
             self.inner.pending.lock().await.remove(&id);
             return Err(e);
         }
+        log::debug!("[jsonrpc] 已发出请求 id={} method={}", id, method);
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(r)) => r,
@@ -195,7 +226,20 @@ impl JsonRpcPeer {
                             } else {
                                 Ok(v.get("result").cloned().unwrap_or(Value::Null))
                             };
-                            let _ = tx.send(res);
+                            let is_err = res.is_err();
+                            if tx.send(res).is_err() {
+                                // 这条以前被 `let _ =` 吞掉：响应确实到了客户端，
+                                // 但等待方（回合 future）已不在——现场与"对端没回传"无法区分。
+                                log::warn!(
+                                    "[jsonrpc] 响应已到达但等待方已消失（id={}）——该轮询问已不再等待",
+                                    k
+                                );
+                            } else if is_err {
+                                log::warn!("[jsonrpc] 已把对端错误回给等待方：id={}", k);
+                            } else {
+                                // 诊断打点：响应到达并成功唤醒等待方（对应 [acp] 那条"收到"）
+                                log::info!("[jsonrpc] 响应到达并唤醒等待方：id={}", k);
+                            }
                         } else {
                             // 无主响应：要么是超时/取消后迟到的响应，要么是对端 id 不匹配。
                             // 必须打日志——否则"回合结束响应被丢弃"完全看不见。
