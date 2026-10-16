@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { Globe, Plus, X, Settings2, ExternalLink, AlertTriangle, Search, LayoutGrid } from 'lucide-react';
@@ -62,7 +62,8 @@ function subtitleOf(url: string): string {
  * - 每个标签右上角的关闭角标（悬停 / 聚焦该标签时显现，触屏常显）：**关闭 = 卸载其 iframe**
  *   并把激活态回落门户页，但标签按钮**保留在顶栏** —— 关闭不是"让标签消失"，只是取消它的
  *   激活 / 加载状态，再次点击即重新加载；配置始终保留（删除配置在「设置 → 门户标签」里做）。
- * - 离开 custom 模式会清空 LRU 窗口（卸载全部 iframe）：下次进门户是干净的默认页，不预加载任何标签。
+ * - 已挂载的 iframe 跨视图常驻：切换主视图（会话 / 终端 / 群聊…）不卸载 iframe，
+ *   只有用户手动关闭标签才卸载。
  */
 export function CustomTabHost() {
   const { tabs, activeTabId, setActiveTab } = useCustomTabsStore();
@@ -101,16 +102,9 @@ export function CustomTabHost() {
   // 门户页分组（组顺序 = 组内最小 order；未分组恒排最后）
   const portalGroups = useMemo(() => groupCustomTabs(portalFiltered), [portalFiltered]);
 
-  // 离开自定义模式：清空 LRU 窗口（卸载全部标签 iframe）。
-  // 目的是让「下次打开门户」回到干净的默认页 —— 不预加载任何标签，只有用户点选后才加载。
-  const prevViewRef = useRef(viewMode);
-  useEffect(() => {
-    const prev = prevViewRef.current;
-    prevViewRef.current = viewMode;
-    if (prev === 'custom' && viewMode !== 'custom') {
-      setActivatedIds([]);
-    }
-  }, [viewMode]);
+  // 已挂载的 iframe 跨视图常驻：切换主视图（会话 / 终端 / 群聊…）**不卸载** iframe，
+  // 只有用户手动关闭标签（closeTab）才卸载。原「离开 custom 模式清空 LRU 窗口」的行为已移除 ——
+  // 门户标签的语义是常驻，切走再回来应保留页面状态，而不是被重置成干净默认页。
 
   /**
    * custom 模式的**默认落点是门户页**：当前没有「有效」激活标签时（null，或指向已被删除的残留 id）回落到门户。
