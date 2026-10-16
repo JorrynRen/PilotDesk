@@ -497,12 +497,13 @@ function AgentForm({ form, onChange, onSubmit, onCancel, saving, mode }: {
 
   // ACP 预置：命令 + 默认参数。选中即预填，**仍可编辑覆盖**（预填 ≠ 锁死）。
   // 依据：hermes 的 `hermes acp` 已真机实测；gemini 的 `--acp` 见官方文档；
-  //      claude/codex 用社区 ACP 适配器（claude-code-acp / @agentclientprotocol/codex-acp，
-  //      codex-acp 是 stdio ACP server，官方推荐以 npx 启动）。参数不猜，改动请附来源。
+  //      claude/codex 均以上游官方包、官方推荐的 npx 形态启动（本机 ACP initialize 实测可通）：
+  //      @agentclientprotocol/claude-agent-acp（旧 @zed-industries/claude-code-acp 已弃用改名）、
+  //      @agentclientprotocol/codex-acp。参数不猜，改动请附来源。
   const ACP_PRESETS: Array<{ label: string; command: string; args: string }> = [
     { label: 'Hermes', command: 'hermes', args: 'acp' },
     { label: 'Gemini CLI', command: 'gemini', args: '--acp' },
-    { label: 'Claude Code', command: 'claude-code-acp', args: '' },
+    { label: 'Claude Code', command: 'npx', args: '-y @agentclientprotocol/claude-agent-acp' },
     { label: 'Codex', command: 'npx', args: '-y @agentclientprotocol/codex-acp' },
   ];
   const connSetPreset = (command: string, args: string) => {

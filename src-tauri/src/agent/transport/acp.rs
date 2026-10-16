@@ -37,8 +37,16 @@ pub const ACP_PROTOCOL_VERSION: u32 = 1;
 /// 迟到的响应按 id 找不到接收端 → 静默丢弃），回合结束信号永久丢失，
 /// 表现为"任务已完成却仍在等输出"，最终由前端静默看门狗以 180s 误报
 /// "长时间无响应：已停止本轮"。回合时长 ≈ 任务时长，故与后端
-/// `AGENT_LOOP_TIMEOUT_SECS`(1800) 对齐；控制面（initialize / session-new）仍用 30s。
+/// `AGENT_LOOP_TIMEOUT_SECS`(1800) 对齐；控制面见 `HANDSHAKE_TIMEOUT`。
 pub const TURN_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// 控制面（`initialize` / `session/new` / `session/load`）的等待上限。
+///
+/// **不能沿用 `jsonrpc` 的 30s 默认值**：npx 形态的 ACP 适配器
+/// （如 `npx -y @agentclientprotocol/claude-agent-acp`）首次运行要下载整包及其依赖，
+/// 本机实测冷启动 139.8s、预热后 14.6s —— 30s 判死会让这类适配器**首次接入必然失败**，
+/// 且报错停在 `initialize 超时（30s）`，把对端真正的失败原因（写在 stderr 里）一并掩盖。
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// 静默巡检粒度（看门狗每 5s 检查一次对端是否还在回传）。
 const IDLE_POLL: Duration = Duration::from_secs(5);
@@ -633,7 +641,7 @@ impl AgentSession for AcpSession {
 
         // ── 3) initialize 握手 ──
         let _init = peer
-            .request(
+            .request_with_timeout(
                 method::INITIALIZE,
                 json!({
                     "protocolVersion": ACP_PROTOCOL_VERSION,
@@ -641,6 +649,7 @@ impl AgentSession for AcpSession {
                         "fs": { "readTextFile": false, "writeTextFile": false }
                     }
                 }),
+                HANDSHAKE_TIMEOUT,
             )
             .await
             .map_err(|e| with_peer_stderr(e, &stderr_text))?;
@@ -651,9 +660,13 @@ impl AgentSession for AcpSession {
             Some(rid) => {
                 let mut p = new_params.clone();
                 p["sessionId"] = json!(rid);
-                peer.request(method::SESSION_LOAD, p).await
+                peer.request_with_timeout(method::SESSION_LOAD, p, HANDSHAKE_TIMEOUT)
+                    .await
             }
-            None => peer.request(method::SESSION_NEW, new_params).await,
+            None => {
+                peer.request_with_timeout(method::SESSION_NEW, new_params, HANDSHAKE_TIMEOUT)
+                    .await
+            }
         }
         .map_err(|e| with_peer_stderr(e, &stderr_text))?;
 
