@@ -591,37 +591,25 @@ function TaskDetail(props: {
         </div>
 
         {!editingProps ? (
-          <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-            <div>创建者：{memberLabel(task.creatorId)}</div>
-            <div>负责人：{memberLabel(task.assigneeId)}</div>
-            <div>优先级：{PRIORITY_LABEL[task.priority] ?? task.priority}</div>
-            <div>截止：{task.dueDate ? toDateInput(task.dueDate) : '未设置'}</div>
-            <div>
-              参与者：
-              {task.collaborators.length
-                ? task.collaborators.map((id) => memberLabel(id)).join('、')
-                : '无'}
-            </div>
-            <div className="flex items-start gap-1">
-              <span className="shrink-0">前置依赖：</span>
-              {task.blockedBy.length === 0 ? (
-                <span style={{ color: 'var(--text-tertiary)' }}>无</span>
-              ) : (
-                <span className="flex flex-col gap-0.5">
-                  {task.blockedBy.map((id) => {
-                    const dep = tasks.find((t) => t.id === id);
-                    return (
-                      <span key={id}>
-                        {dep?.title ?? id}
-                        {dep && (
-                          <span style={{ color: STATUS_COLOR[dep.status] }}>（{STATUS_LABEL[dep.status]}）</span>
-                        )}
-                      </span>
-                    );
-                  })}
-                </span>
-              )}
-            </div>
+          // 平铺单行，用「·」分隔，避免占多行
+          <div className="text-[11px] leading-5" style={{ color: 'var(--text-secondary)' }}>
+            {[
+              `创建者：${memberLabel(task.creatorId)}`,
+              `负责人：${memberLabel(task.assigneeId)}`,
+              `优先级：${PRIORITY_LABEL[task.priority] ?? task.priority}`,
+              `截止：${task.dueDate ? toDateInput(task.dueDate) : '未设置'}`,
+              `参与者：${task.collaborators.length ? task.collaborators.map((id) => memberLabel(id)).join('、') : '无'}`,
+              `前置依赖：${
+                task.blockedBy.length
+                  ? task.blockedBy
+                    .map((id) => {
+                      const dep = tasks.find((t) => t.id === id);
+                      return dep ? `${dep.title}（${STATUS_LABEL[dep.status]}）` : id;
+                    })
+                    .join('、')
+                  : '无'
+              }`,
+            ].join(' · ')}
           </div>
         ) : (
           <>
