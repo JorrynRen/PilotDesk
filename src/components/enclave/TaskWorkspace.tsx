@@ -582,16 +582,17 @@ function TaskDetail(props: {
     await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked);
   };
 
-  /** 添加汇报交付物：还没有草稿时先落一份草稿，再挂文件 */
+  /** 添加汇报交付物：退回态先转草稿；还没有草稿时先落一份草稿，再挂文件 */
   const addDeliverable = async (reportId?: string) => {
     const st = useEnclaveTaskStore.getState();
+    const target = reportId ? st.reports.find((r) => r.id === reportId) : null;
     let rid = reportId;
-    if (!rid) {
+    if (!rid || (target && target.status !== 'draft')) {
       const ok = await st.saveReportDraft(orgId, task.id, reportText);
       if (!ok) return;
       rid = useEnclaveTaskStore
         .getState()
-        .reports.find((r) => r.status === 'draft' || r.status === 'returned')?.id;
+        .reports.find((r) => r.status === 'draft')?.id;
       if (!rid) return;
     }
     const picked = await openDialog({ multiple: false, directory: false });
@@ -1239,6 +1240,17 @@ function TaskDetail(props: {
                     {memberLabel(r.reporterId)} · {toDateInput(r.updatedAt)}
                   </span>
                   <div className="flex-1" />
+                  {r.status === 'returned' && canReport && (
+                    <button
+                      onClick={() =>
+                        void useEnclaveTaskStore.getState().saveReportDraft(orgId, task.id, r.content)
+                      }
+                      className="px-1.5 py-0.5 rounded"
+                      style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                    >
+                      继续修改
+                    </button>
+                  )}
                   {r.status === 'submitted' && canStatus && (
                     <>
                       <button
@@ -1292,11 +1304,10 @@ function TaskDetail(props: {
                     {r.content}
                   </div>
                 )}
-                {/* 交付物：随这份汇报提交；退回后可增删，提交后锁定 */}
+                {/* 交付物：草稿可增删；退回 / 提交 / 确认后锁定 */}
                 {(() => {
                   const deliverables = files.filter((f) => f.reportId === r.id);
-                  const canEditDeliverables =
-                    canReport && (r.status === 'draft' || r.status === 'returned');
+                  const canEditDeliverables = canReport && r.status === 'draft';
                   if (deliverables.length === 0 && !canEditDeliverables) return null;
                   return (
                     <div className="flex flex-col gap-1">
@@ -1311,6 +1322,9 @@ function TaskDetail(props: {
                           >
                             添加
                           </button>
+                        )}
+                        {r.status === 'returned' && canReport && (
+                          <span>已退回：交付物已锁定，继续修改后可调整</span>
                         )}
                       </div>
                       {deliverables.map((f) => (

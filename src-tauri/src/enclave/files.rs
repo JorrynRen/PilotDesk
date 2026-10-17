@@ -344,7 +344,10 @@ fn attach_file_inner(
             .optional()
             .map_err(|e| format!("查询完成汇报失败：{}", e))?;
         match status.as_deref() {
-            Some("draft") | Some("returned") => {}
+            Some("draft") => {}
+            Some("returned") => {
+                return Err("汇报已退回：请先「继续修改」转为草稿后再调整交付物".to_string())
+            }
             Some(_) => return Err("汇报已提交，不能再增删交付物".to_string()),
             None => return Err("完成汇报不存在或不属于该任务".to_string()),
         }
@@ -535,7 +538,10 @@ pub fn detach_file(
             .optional()
             .map_err(|e| format!("查询完成汇报失败：{}", e))?;
         match status.as_deref() {
-            Some("draft") | Some("returned") => {}
+            Some("draft") => {}
+            Some("returned") => {
+                return Err("汇报已退回：请先「继续修改」转为草稿后再调整交付物".to_string())
+            }
             Some(_) => return Err("汇报已提交，不能删除交付物".to_string()),
             None => return Err("完成汇报不存在或不属于该任务".to_string()),
         }
