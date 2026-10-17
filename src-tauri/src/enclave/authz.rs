@@ -58,7 +58,7 @@ pub enum Action {
     PolicyWrite,
     HostTransfer,
     EmergencySet,
-    /// 修改团队文件根目录（仅 owner；物理落点变更，风险等级同策略）
+    /// 修改本机团队文件根目录（仅 owner；物理落点变更，风险等级同策略）
     FileRootWrite,
 }
 

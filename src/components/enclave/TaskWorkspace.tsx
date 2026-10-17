@@ -101,7 +101,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
-  // 团队文件根：**全局设置**，与具体组织无关
+  // 本机团队文件根目录：**全局设置**，与具体组织无关
   const [rootOpen, setRootOpen] = useState(false);
   const [rootView, setRootView] = useState<TeamFilesRootView | null>(null);
   const [rootBusy, setRootBusy] = useState(false);
@@ -217,9 +217,9 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
             color: 'var(--text-secondary)',
             border: '1px solid var(--border)',
           }}
-          title="团队文件根：全局设置（与具体团队无关）"
+          title="本机团队文件根目录：仅影响本机的存放位置（全局设置）"
         >
-          <FolderOpen size={12} /> 文件根
+          <FolderOpen size={12} /> 本机文件根
         </button>
         {props.onOpenOrg && (
           <button
@@ -249,7 +249,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
         </button>
       </div>
 
-      {/* 团队文件根（全局设置，与具体团队无关） */}
+      {/* 本机团队文件根目录（全局设置，仅影响本机存放位置） */}
       {rootOpen && (
         <div
           className="shrink-0 px-3 py-2 flex flex-col gap-1"
@@ -257,10 +257,10 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
         >
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-              团队文件根（全局）
+              本机团队文件根目录（全局）
             </span>
             <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-              与具体团队无关；所有团队共用此基础目录
+              仅影响本机；所有团队的本地文件共用此基础目录
             </span>
             <div className="flex-1" />
             <button
@@ -268,8 +268,8 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
                 const picked = await openDialog({ directory: true, multiple: false });
                 if (typeof picked !== 'string') return;
                 const ok = await confirmDialog({
-                  title: '更改团队文件根目录',
-                  message: `团队文件将从当前位置迁移到：\n${picked}\n\n迁移会逐个文件做 sha256 校验，失败会自动回滚。是否继续？`,
+                  title: '更改本机团队文件根目录',
+                  message: `本机团队文件将从当前位置迁移到：\n${picked}\n\n迁移会逐个文件做 sha256 校验，失败会自动回滚。是否继续？`,
                   confirmText: '开始迁移',
                 });
                 if (!ok) return;
@@ -277,7 +277,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
                 try {
                   const next = await invoke<TeamFilesRootView>('enclave_files_root_set', { path: picked });
                   setRootView(next);
-                  showToast('团队文件根已更新', 'success');
+                  showToast('本机团队文件根目录已更新', 'success');
                 } catch (e) {
                   const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e);
                   showToast(`更改失败：${msg}`, 'error');
@@ -299,11 +299,11 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
             </button>
           </div>
           <div className="text-[11px] font-mono break-all" style={{ color: 'var(--text-tertiary)' }}>
-            {rootView?.base ?? '读取中…'}
+            本机基础目录：{rootView?.base ?? '读取中…'}
           </div>
           {rootView && (
             <div className="text-[10px] font-mono break-all" style={{ color: 'var(--text-tertiary)' }}>
-              实际存放：{rootView.root}（其下按组织分子目录）
+              本机实际存放：{rootView.root}（其下按组织分子目录）
             </div>
           )}
           <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>

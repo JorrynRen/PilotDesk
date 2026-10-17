@@ -15,7 +15,7 @@ const ACTION_LABEL: Record<string, string> = {
   'policy.allow_cloud_model': '数据出境策略',
   'host.emergency': '主机应急开关',
   'host.transfer': '主机转移',
-  'files.root': '团队文件根',
+  'files.root': '本机团队文件根目录',
 };
 
 function formatTime(unixSec: number): string {
@@ -44,7 +44,7 @@ function formatDetail(action: string, detail: string): string {
   if (obj && typeof obj.from === 'string' && typeof obj.to === 'string') {
     // 历史留痕可能带 Windows 扩展长度前缀（`\\?\` / `\\?\UNC\`），展示时统一剥掉
     const clean = (p: string) => p.replace(/^\\\\\?\\UNC\\/, '\\\\').replace(/^\\\\\?\\/, '');
-    return `基础目录：${clean(obj.from)} → ${clean(obj.to)}`;
+    return `本机基础目录：${clean(obj.from)} → ${clean(obj.to)}`;
   }
   if (obj && typeof obj.from === 'boolean' && typeof obj.to === 'boolean') {
     // `host.emergency` 落库的是 `disabled`（true = 关闭），展示口径要翻转成「对外服务 开/关」

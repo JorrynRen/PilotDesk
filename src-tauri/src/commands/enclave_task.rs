@@ -368,9 +368,9 @@ pub fn enclave_file_abs_path(
         .with_conn(|c| files::file_abs_path(c, &org_id, &file_id))
 }
 
-/// 团队文件根视图（§13）。
+/// 本机团队文件根目录视图（§13）。
 ///
-/// `base` = 用户选择的基础目录；`root` = 实际文件根（`<base>/enclave/files`）。
+/// `base` = 用户选择的基础目录；`root` = 本机实际文件根（`<base>/enclave/files`）。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamFilesRootView {
@@ -404,7 +404,7 @@ pub fn enclave_files_root_get(
     })
 }
 
-/// 设置团队文件基础目录（**全局设置**，与具体组织无关；仅主机 owner）：
+/// 设置本机团队文件根目录的基础目录（**全局设置**，与具体组织无关；仅主机 owner）：
 /// 校验 → 搬迁校验 → 落库 → 审计（审计挂在主机所属的第一个组织下）。
 #[tauri::command]
 pub fn enclave_files_root_set(
@@ -428,7 +428,7 @@ pub fn enclave_files_root_set(
         let host_org = org_ids
             .into_iter()
             .find(|id| matches!(role_for_org(c, id), Ok(Some(Role::Owner))))
-            .ok_or_else(|| "仅组织所有者（主机）可修改团队文件根".to_string())?;
+            .ok_or_else(|| "仅组织所有者（主机）可修改本机团队文件根目录".to_string())?;
 
         let before = files::resolve_team_base(c)?;
         let new_base = files::validate_base(c, &path)?;

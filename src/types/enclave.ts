@@ -224,7 +224,7 @@ export interface FileAssetView {
   absPath: string;
 }
 
-/** 团队文件根（`enclave_files_root_get/set`） */
+/** 本机团队文件根目录（`enclave_files_root_get/set`，全局设置，与具体团队无关） */
 export interface TeamFilesRootView {
   /** 用户选择的基础目录 */
   base: string;

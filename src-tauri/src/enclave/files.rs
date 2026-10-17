@@ -1,7 +1,7 @@
 //! 飞地文件资产：落盘、去重、与任务关联。
 //!
-//! **存储布局（§13 架构决策）**：`<团队文件根>/<orgId>/`，与个人知识库完全独立。
-//! 团队文件根默认 `app_root/enclave/files`，可由 owner 改为本地固定盘绝对路径
+//! **存储布局（§13 架构决策）**：`<本机团队文件根目录>/<orgId>/`，与个人知识库完全独立。
+//! 本机团队文件根目录默认 `app_root/enclave/files`，可由 owner 改为本地固定盘绝对路径
 //! （存 `enclave_settings.team_files_root`，随库迁移）。
 //!
 //! 文件按 **sha256** 命名（`<sha8>-<原文件名>`）实现组织内去重；`file_assets.file_path`
@@ -43,7 +43,7 @@ pub fn resolve_team_base(conn: &Connection) -> Result<PathBuf, String> {
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| format!("读取团队文件根失败：{}", e))?;
+        .map_err(|e| format!("读取本机团队文件根失败：{}", e))?;
     Ok(custom
         .map(|s| normalize_path(&s))
         .filter(|s| !s.is_empty())
@@ -77,7 +77,7 @@ pub fn org_dir(conn: &Connection, org_id: &str) -> Result<PathBuf, String> {
     let dir = root.join(org_id);
     std::fs::create_dir_all(&dir).map_err(|e| {
         format!(
-            "团队文件根不可用（{}）：{}。请检查磁盘是否在线或调整文件根目录。",
+            "本机团队文件根不可用（{}）：{}。请检查磁盘是否在线或调整本机团队文件根目录。",
             dir.display(),
             e
         )
@@ -110,7 +110,7 @@ fn canonical_normalized(p: &Path) -> PathBuf {
 pub fn validate_base(conn: &Connection, raw: &str) -> Result<PathBuf, String> {
     let normalized = normalize_path(raw);
     if normalized.trim().is_empty() {
-        return Err("请填写团队文件根目录".to_string());
+        return Err("请填写本机团队文件根目录".to_string());
     }
     if normalized.starts_with("\\\\") || normalized.starts_with("//") {
         return Err("不支持网络路径（UNC）：团队数据必须落在本机固定盘".to_string());
@@ -215,7 +215,7 @@ fn save_base(conn: &Connection, base: &Path) -> Result<(), String> {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
         params![TEAM_FILES_ROOT_KEY, base.to_string_lossy(), now],
     )
-    .map_err(|e| format!("保存团队文件根失败：{}", e))?;
+    .map_err(|e| format!("保存本机团队文件根失败：{}", e))?;
     Ok(())
 }
 
