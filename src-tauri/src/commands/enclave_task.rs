@@ -239,9 +239,12 @@ pub fn enclave_file_abs_path(
 }
 
 /// 团队文件根视图（§13）。
+///
+/// `base` = 用户选择的基础目录；`root` = 实际文件根（`<base>/enclave/files`）。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamFilesRootView {
+    pub base: String,
     pub root: String,
     pub custom: bool,
     pub available: bool,
@@ -252,6 +255,7 @@ pub fn enclave_files_root_get(
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TeamFilesRootView, String> {
     state.store.with_conn(|c| {
+        let base = files::resolve_team_base(c)?;
         let root = files::resolve_team_files_root(c)?;
         let custom = c
             .query_row(
@@ -262,6 +266,7 @@ pub fn enclave_files_root_get(
             .is_ok();
         let available = std::fs::create_dir_all(&root).is_ok();
         Ok(TeamFilesRootView {
+            base: base.to_string_lossy().to_string(),
             root: root.to_string_lossy().to_string(),
             custom,
             available,
@@ -269,7 +274,7 @@ pub fn enclave_files_root_get(
     })
 }
 
-/// 设置团队文件根（仅 owner）：校验 → 搬迁校验 → 落库 → 审计。
+/// 设置团队文件基础目录（仅 owner）：校验 → 搬迁校验 → 落库 → 审计。
 #[tauri::command]
 pub fn enclave_files_root_set(
     org_id: String,
@@ -279,9 +284,9 @@ pub fn enclave_files_root_set(
     use crate::enclave::authz::{authorize, Action};
     state.store.with_conn(|c| {
         let actor = authorize(c, &org_id, Action::FileRootWrite)?;
-        let before = files::resolve_team_files_root(c)?;
-        let new_root = files::validate_root(c, &path)?;
-        files::set_root(c, &new_root)?;
+        let before = files::resolve_team_base(c)?;
+        let new_base = files::validate_base(c, &path)?;
+        files::set_base(c, &new_base)?;
         crate::enclave::org::audit(
             c,
             &org_id,
@@ -289,12 +294,14 @@ pub fn enclave_files_root_set(
             "files.root",
             &serde_json::json!({
                 "from": before.to_string_lossy(),
-                "to": new_root.to_string_lossy()
+                "to": new_base.to_string_lossy()
             })
             .to_string(),
         )?;
+        let root = files::resolve_team_files_root(c)?;
         Ok(TeamFilesRootView {
-            root: new_root.to_string_lossy().to_string(),
+            base: new_base.to_string_lossy().to_string(),
+            root: root.to_string_lossy().to_string(),
             custom: true,
             available: true,
         })

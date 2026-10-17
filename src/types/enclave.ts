@@ -226,6 +226,9 @@ export interface FileAssetView {
 
 /** 团队文件根（`enclave_files_root_get/set`） */
 export interface TeamFilesRootView {
+  /** 用户选择的基础目录 */
+  base: string;
+  /** 实际文件根：`<基础目录>/enclave/files` */
   root: string;
   custom: boolean;
   available: boolean;

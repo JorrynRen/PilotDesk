@@ -13,16 +13,29 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-/// `enclave_settings` 中保存团队文件根的键。
+/// `enclave_settings` 中保存团队文件**基础目录**的键。
+///
+/// 语义：用户选的是基础目录，实际文件根 = `<基础目录>/enclave/files`（与默认布局一致）。
 pub const TEAM_FILES_ROOT_KEY: &str = "team_files_root";
 
-/// 默认团队文件根（`app_root/enclave/files`）。
-pub fn default_root() -> PathBuf {
-    crate::utils::paths::enclave_files_dir()
+/// 默认基础目录（应用根目录）：其下同样是 `enclave/files`。
+pub fn default_base() -> PathBuf {
+    crate::utils::paths::app_root_dir()
 }
 
-/// 读团队文件根；未设置则用默认值。
-pub fn resolve_team_files_root(conn: &Connection) -> Result<PathBuf, String> {
+/// 去掉 Windows 扩展长度前缀（`\\?\C:\...` / `\\?\UNC\srv\share`），并去除首尾引号。
+fn normalize_path(raw: &str) -> String {
+    let s = raw.trim().trim_matches('"');
+    let s = if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{}", rest)
+    } else {
+        s.to_string()
+    };
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+}
+
+/// 读团队文件**基础目录**；未设置则用应用根目录。
+pub fn resolve_team_base(conn: &Connection) -> Result<PathBuf, String> {
     let custom: Option<String> = conn
         .query_row(
             "SELECT value FROM enclave_settings WHERE key = ?1",
@@ -32,10 +45,28 @@ pub fn resolve_team_files_root(conn: &Connection) -> Result<PathBuf, String> {
         .optional()
         .map_err(|e| format!("读取团队文件根失败：{}", e))?;
     Ok(custom
-        .map(|s| s.trim().to_string())
+        .map(|s| normalize_path(&s))
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(default_root))
+        .map(strip_effective_suffix)
+        .unwrap_or_else(default_base))
+}
+
+/// 兼容早期版本把「实际文件根」直接存进该键的情况：若以 `enclave/files` 结尾，回退到其父目录。
+fn strip_effective_suffix(p: PathBuf) -> PathBuf {
+    if p.ends_with(Path::new("enclave").join("files")) {
+        p.parent()
+            .and_then(|x| x.parent())
+            .map(|x| x.to_path_buf())
+            .unwrap_or(p)
+    } else {
+        p
+    }
+}
+
+/// 团队文件**实际根目录**：`<基础目录>/enclave/files`（与默认布局一致）。
+pub fn resolve_team_files_root(conn: &Connection) -> Result<PathBuf, String> {
+    Ok(resolve_team_base(conn)?.join("enclave").join("files"))
 }
 
 /// 本组织的文件目录（不存在则创建）。
@@ -59,18 +90,19 @@ fn paths_overlap(a: &Path, b: &Path) -> bool {
     a == b || a.starts_with(b) || b.starts_with(a)
 }
 
-/// 校验并创建新的团队文件根。
+/// 校验并创建新的团队文件**基础目录**（实际文件根 = `<基础目录>/enclave/files`）。
 ///
 /// 规则（§13）：绝对路径、拒绝 UNC/网络盘、不得与个人知识库根重叠、可创建。
-pub fn validate_root(conn: &Connection, raw: &str) -> Result<PathBuf, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+/// 兼容系统目录选择器返回的 `\\?\C:\...` 形式（自动去前缀）。
+pub fn validate_base(conn: &Connection, raw: &str) -> Result<PathBuf, String> {
+    let normalized = normalize_path(raw);
+    if normalized.trim().is_empty() {
         return Err("请填写团队文件根目录".to_string());
     }
-    if trimmed.starts_with("\\\\") || trimmed.starts_with("//") {
+    if normalized.starts_with("\\\\") || normalized.starts_with("//") {
         return Err("不支持网络路径（UNC）：团队数据必须落在本机固定盘".to_string());
     }
-    let p = PathBuf::from(trimmed);
+    let p = PathBuf::from(normalized.trim());
     if !p.is_absolute() {
         return Err("请填写绝对路径".to_string());
     }
@@ -78,9 +110,11 @@ pub fn validate_root(conn: &Connection, raw: &str) -> Result<PathBuf, String> {
         .map_err(|e| format!("目录不可用（{}）：{}", p.display(), e))?;
     let canonical = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
 
+    // 与个人知识库根比对：基础目录本身、以及其下的 enclave/files 都不能与个人库重叠
     let kb_root = crate::utils::paths::resolve_knowledge_root(conn);
     let kb_canonical = std::fs::canonicalize(&kb_root).unwrap_or(kb_root);
-    if paths_overlap(&canonical, &kb_canonical) {
+    let effective = canonical.join("enclave").join("files");
+    if paths_overlap(&canonical, &kb_canonical) || paths_overlap(&effective, &kb_canonical) {
         return Err(format!(
             "不能与个人知识库目录重叠（{}）",
             kb_canonical.display()
@@ -89,12 +123,14 @@ pub fn validate_root(conn: &Connection, raw: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-/// 设置团队文件根并**搬迁既有文件**（复制 → 逐文件 sha256 校验 → 切换 → 删旧）。
-pub fn set_root(conn: &Connection, new_root: &Path) -> Result<(), String> {
+/// 设置团队文件**基础目录**并搬迁既有文件（复制 → 逐文件 sha256 校验 → 切换 → 删旧）。
+pub fn set_base(conn: &Connection, new_base: &Path) -> Result<(), String> {
     let old_root = resolve_team_files_root(conn)?;
+    let new_root = new_base.join("enclave").join("files");
     let old_canonical = std::fs::canonicalize(&old_root).unwrap_or(old_root.clone());
-    if old_canonical == new_root {
-        save_root(conn, new_root)?;
+    let new_canonical = std::fs::canonicalize(&new_root).unwrap_or(new_root.clone());
+    if old_canonical == new_canonical {
+        save_base(conn, new_base)?;
         return Ok(());
     }
 
@@ -147,7 +183,7 @@ pub fn set_root(conn: &Connection, new_root: &Path) -> Result<(), String> {
         }
     }
 
-    save_root(conn, new_root)?;
+    save_base(conn, new_base)?;
 
     // 切换成功后才删旧目录（按组织整目录删，避免误伤）
     for org_id in touched_orgs {
@@ -159,12 +195,12 @@ pub fn set_root(conn: &Connection, new_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn save_root(conn: &Connection, root: &Path) -> Result<(), String> {
+fn save_base(conn: &Connection, base: &Path) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
     conn.execute(
         "INSERT INTO enclave_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        params![TEAM_FILES_ROOT_KEY, root.to_string_lossy(), now],
+        params![TEAM_FILES_ROOT_KEY, base.to_string_lossy(), now],
     )
     .map_err(|e| format!("保存团队文件根失败：{}", e))?;
     Ok(())
@@ -369,5 +405,36 @@ mod tests {
         assert_eq!(safe_file_name("/tmp/a/b/报告.pdf"), "报告.pdf");
         assert_eq!(safe_file_name("C:\\x\\y.docx"), "y.docx");
         assert_eq!(safe_file_name(""), "file");
+    }
+
+    /// 系统目录选择器返回的 `\\?\` 前缀必须去掉，否则会被当作 UNC 拒绝。
+    #[test]
+    fn normalize_strips_extended_prefix() {
+        assert_eq!(normalize_path(r"\\?\C:\Users\x"), r"C:\Users\x");
+        assert_eq!(normalize_path(r"\\?\UNC\srv\share"), r"\\srv\share");
+        assert_eq!(normalize_path("  \"C:\\a b\"  "), "C:\\a b");
+    }
+
+    /// 自定义基础目录下必须再补 `enclave/files`，不能直接用用户选的目录。
+    #[test]
+    fn custom_base_appends_enclave_files() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE enclave_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0);",
+        )
+        .unwrap();
+        // 未设置 → 应用根目录下的 enclave/files
+        let default_root = resolve_team_files_root(&conn).unwrap();
+        assert!(default_root.ends_with("enclave\\files") || default_root.ends_with("enclave/files"));
+
+        conn.execute(
+            "INSERT INTO enclave_settings (key, value, updated_at) VALUES (?1, ?2, 0)",
+            params![TEAM_FILES_ROOT_KEY, r"C:\TeamData"],
+        )
+        .unwrap();
+        let base = resolve_team_base(&conn).unwrap();
+        assert_eq!(base, PathBuf::from(r"C:\TeamData"));
+        let root = resolve_team_files_root(&conn).unwrap();
+        assert_eq!(root, PathBuf::from(r"C:\TeamData\enclave\files"));
     }
 }

@@ -318,10 +318,15 @@ export function OrgGovernanceSection() {
           </button>
         </div>
         <div className="mt-1 text-[11px] font-mono break-all" style={{ color: 'var(--text-tertiary)' }}>
-          {rootView?.root ?? '读取中…'}
+          {rootView?.base ?? '读取中…'}
         </div>
+        {rootView && (
+          <div className="text-[10px] mt-0.5 font-mono break-all" style={{ color: 'var(--text-tertiary)' }}>
+            实际存放：{rootView.root}
+          </div>
+        )}
         <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-          与个人知识库完全独立；每个组织一个子目录。仅支持本地固定盘，盘不可用时会拒绝写入而不是回退。
+          会在此目录下自动创建 enclave/files；与个人知识库完全独立，每个组织一个子目录。仅支持本地固定盘，盘不可用时会拒绝写入而不是回退。
         </div>
       </div>
 
