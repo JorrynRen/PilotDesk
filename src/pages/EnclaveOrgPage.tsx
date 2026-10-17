@@ -83,7 +83,7 @@ export function EnclaveOrgPage() {
         onOpenInspirations={() => navigate('/inspirations')}
       />
 
-      <div className="flex-1 min-h-0 px-2 py-2 flex flex-col gap-2 overflow-auto">
+      <div className="flex-1 min-h-0 px-2 pt-2 pb-0 flex flex-col gap-2 overflow-auto">
         {/* 顶部：组织选择 + 刷新 */}
         <div
           className="shrink-0 rounded-lg px-3 py-2 flex items-center gap-2 flex-wrap"
