@@ -19,6 +19,8 @@ pub const STATUS_IN_PROGRESS: &str = "in_progress";
 pub const STATUS_SUBMITTED: &str = "submitted";
 pub const STATUS_DONE: &str = "done";
 pub const STATUS_ARCHIVED: &str = "archived";
+/// 进行中可被创建者 / 负责人作废（放弃执行）；作废为终态，不再继续流转。
+pub const STATUS_CANCELLED: &str = "cancelled";
 
 /// 任务资源角色（由任务字段自动绑定，例外才走 `resource_roles`）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -101,15 +103,18 @@ pub fn can_transition(from: &str, to: &str, role: TaskRole) -> Result<(), String
         (STATUS_PENDING, STATUS_IN_PROGRESS) => owner,
         (STATUS_PENDING, STATUS_ARCHIVED) => creator,
         (STATUS_IN_PROGRESS, STATUS_PENDING) => owner,
+        // 作废：进行中放弃执行（创建者 / 负责人）
+        (STATUS_IN_PROGRESS, STATUS_CANCELLED) => owner,
         // 提交汇报（M4 联动 task_reports 四态）
         (STATUS_IN_PROGRESS, STATUS_SUBMITTED) => owner,
         (STATUS_IN_PROGRESS, STATUS_ARCHIVED) => creator,
         // 确认 / 退回
         (STATUS_SUBMITTED, STATUS_DONE) => owner,
         (STATUS_SUBMITTED, STATUS_IN_PROGRESS) => owner,
+        // 恢复汇报：已完成 / 已归档 → 进行中（补报后再提交；需要时再「放回待办」）
         (STATUS_DONE, STATUS_IN_PROGRESS) => owner,
+        (STATUS_ARCHIVED, STATUS_IN_PROGRESS) => owner,
         (STATUS_DONE, STATUS_ARCHIVED) => creator,
-        (STATUS_ARCHIVED, STATUS_PENDING) => creator,
         _ => false,
     };
     if ok {
@@ -130,6 +135,7 @@ pub fn status_label(s: &str) -> &'static str {
         STATUS_SUBMITTED => "待确认",
         STATUS_DONE => "已完成",
         STATUS_ARCHIVED => "已归档",
+        STATUS_CANCELLED => "已作废",
         _ => "未知",
     }
 }
@@ -691,6 +697,7 @@ pub fn set_status(
         STATUS_SUBMITTED,
         STATUS_DONE,
         STATUS_ARCHIVED,
+        STATUS_CANCELLED,
     ]
     .contains(&to)
     {
@@ -734,7 +741,8 @@ pub fn set_status(
     };
     let completed_at = if to == STATUS_DONE {
         Some(now)
-    } else if to == STATUS_PENDING {
+    } else if to == STATUS_PENDING || to == STATUS_IN_PROGRESS {
+        // 回到待办 / 进行中（含恢复汇报）都视为重新打开，清掉完成时间
         None
     } else {
         row.completed_at
@@ -887,9 +895,21 @@ mod tests {
         // 归档仅创建者
         assert!(can_transition(STATUS_DONE, STATUS_ARCHIVED, TaskRole::Creator).is_ok());
         assert!(can_transition(STATUS_DONE, STATUS_ARCHIVED, TaskRole::Assignee).is_err());
+        // 作废：进行中（创建者 / 负责人）
+        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_CANCELLED, TaskRole::Creator).is_ok());
+        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_CANCELLED, TaskRole::Assignee).is_ok());
+        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_CANCELLED, TaskRole::Collaborator).is_err());
+        // 作废为终态
+        assert!(can_transition(STATUS_CANCELLED, STATUS_IN_PROGRESS, TaskRole::Creator).is_err());
+        // 恢复汇报：已完成 / 已归档 → 进行中（创建者 / 负责人）
+        assert!(can_transition(STATUS_DONE, STATUS_IN_PROGRESS, TaskRole::Assignee).is_ok());
+        assert!(can_transition(STATUS_ARCHIVED, STATUS_IN_PROGRESS, TaskRole::Creator).is_ok());
+        assert!(can_transition(STATUS_ARCHIVED, STATUS_IN_PROGRESS, TaskRole::Collaborator).is_err());
         // 同态与非法跃迁
         assert!(can_transition(STATUS_DONE, STATUS_DONE, TaskRole::Creator).is_err());
         assert!(can_transition(STATUS_PENDING, STATUS_DONE, TaskRole::Creator).is_err());
+        // 恢复汇报后若需回到待办，走「进行中 → 待办」
+        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_PENDING, TaskRole::Assignee).is_ok());
     }
 
     /// 权限矩阵：描述/属性仅创建者与负责人；分配负责人仅创建者；汇报/附件含参与者。

@@ -116,8 +116,11 @@ fn ensure_status_owner(role: TaskRole) -> Result<(), String> {
 
 fn reject_closed_task(conn: &Connection, org_id: &str, task_id: &str) -> Result<(), String> {
     let status = tasks::task_status(conn, org_id, task_id)?;
-    if status == tasks::STATUS_DONE || status == tasks::STATUS_ARCHIVED {
-        return Err("任务已完成或归档，不能再修改汇报".to_string());
+    if status == tasks::STATUS_DONE
+        || status == tasks::STATUS_ARCHIVED
+        || status == tasks::STATUS_CANCELLED
+    {
+        return Err("任务已完成、归档或作废，不能再修改汇报".to_string());
     }
     Ok(())
 }
@@ -297,6 +300,46 @@ pub fn return_report(
     )
     .map_err(|e| format!("记录退回原因失败：{}", e))?;
     load_report(conn, task_id, report_id)
+}
+
+/// 恢复汇报：把最近一份「已确认」的汇报退回可编辑状态。
+///
+/// 用于「恢复汇报」——已完成 / 已归档任务重新进入进行中，作者补充正文或交付物后重新提交。
+/// 同时清空沉淀标记，使再次确认时能把补充后的内容更新进组织知识库。
+pub fn reopen_confirmed_report(
+    conn: &Connection,
+    task_id: &str,
+    actor: &str,
+) -> Result<(), String> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM task_reports
+             WHERE task_id = ?1 AND status = 'confirmed'
+             ORDER BY confirmed_at DESC, created_at DESC LIMIT 1",
+            params![task_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("查询已确认汇报失败：{}", e))?;
+    let Some(id) = id else {
+        return Ok(()); // 没有已确认汇报（如从待办直接归档的任务）→ 无需恢复
+    };
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "UPDATE task_reports
+         SET status = 'returned', confirmed_by = NULL, confirmed_at = NULL,
+             sedimented_at = NULL, sediment_error = NULL, updated_at = ?2
+         WHERE id = ?1",
+        params![id, now],
+    )
+    .map_err(|e| format!("恢复汇报失败：{}", e))?;
+    conn.execute(
+        "INSERT INTO report_feedback (id, report_id, author_id, action, content, created_at)
+         VALUES (?1, ?2, ?3, 'reopen', '', ?4)",
+        params![crate::utils::new_id(), id, actor, now],
+    )
+    .map_err(|e| format!("记录恢复留痕失败：{}", e))?;
+    Ok(())
 }
 
 #[derive(Serialize)]

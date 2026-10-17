@@ -83,6 +83,15 @@ pub fn enclave_task_set_status(
         if current == tasks::STATUS_SUBMITTED {
             return Err("待确认任务请通过完成汇报的「确认完成 / 退回」处理".to_string());
         }
+        // 恢复汇报：已完成 / 已归档 → 进行中时，把最近一份已确认汇报退回可编辑，
+        // 供补充正文 / 交付物后重新提交（再次确认时会把补充内容更新进知识库）。
+        if status == tasks::STATUS_IN_PROGRESS
+            && (current == tasks::STATUS_DONE || current == tasks::STATUS_ARCHIVED)
+        {
+            let role = tasks::actor_task_role(c, &org_id, &task_id, &actor)?;
+            tasks::can_transition(&current, &status, role)?;
+            crate::enclave::reports::reopen_confirmed_report(c, &task_id, &actor)?;
+        }
         tasks::set_status(c, &org_id, &actor, &task_id, &status)
     })
 }
@@ -339,7 +348,6 @@ pub fn enclave_file_upload(
     task_id: String,
     src_path: String,
     report_id: Option<String>,
-    progress_id: Option<String>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<FileAssetView, String> {
     state.store.with_conn(|c| {
@@ -351,7 +359,6 @@ pub fn enclave_file_upload(
             &task_id,
             &src_path,
             report_id.as_deref(),
-            progress_id.as_deref(),
         )
     })
 }

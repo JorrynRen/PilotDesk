@@ -27,6 +27,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   submitted: '待确认',
   done: '已完成',
   archived: '已归档',
+  cancelled: '已作废',
 };
 
 const STATUS_COLOR: Record<TaskStatus, string> = {
@@ -35,6 +36,7 @@ const STATUS_COLOR: Record<TaskStatus, string> = {
   submitted: 'var(--status-warning, #d08700)',
   done: 'var(--status-success, #2f9e44)',
   archived: 'var(--text-tertiary)',
+  cancelled: 'var(--status-danger)',
 };
 
 const PRIORITY_LABEL: Record<string, string> = {
@@ -50,13 +52,17 @@ const PRIORITY_LABEL: Record<string, string> = {
  */
 const TRANSITIONS: Record<TaskStatus, { to: TaskStatus; label: string }[]> = {
   pending: [{ to: 'in_progress', label: '开始' }],
-  in_progress: [{ to: 'pending', label: '放回待办' }],
+  in_progress: [
+    { to: 'pending', label: '放回待办' },
+    { to: 'cancelled', label: '作废' },
+  ],
   submitted: [],
   done: [
     { to: 'archived', label: '归档' },
-    { to: 'in_progress', label: '重新打开' },
+    { to: 'in_progress', label: '恢复汇报' },
   ],
-  archived: [{ to: 'pending', label: '恢复待办' }],
+  archived: [{ to: 'in_progress', label: '恢复汇报' }],
+  cancelled: [],
 };
 
 function toDateInput(unixSec: number | null): string {
@@ -558,6 +564,15 @@ function TaskDetail(props: {
   }, [editable, seededReportId]);
 
   const change = async (status: TaskStatus) => {
+    if (status === 'cancelled') {
+      const ok = await confirmDialog({
+        title: '作废任务',
+        message:
+          '作废后任务终止，不能再提交过程记录或完成汇报；已沉淀进知识库的历史产出不受影响。\n\n是否继续？',
+        confirmText: '确认作废',
+      });
+      if (!ok) return;
+    }
     await useEnclaveTaskStore.getState().setStatus(orgId, task.id, status);
   };
 
@@ -565,12 +580,6 @@ function TaskDetail(props: {
     const picked = await openDialog({ multiple: false, directory: false });
     if (typeof picked !== 'string') return;
     await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked);
-  };
-
-  const uploadProgressFile = async (progressId: string) => {
-    const picked = await openDialog({ multiple: false, directory: false });
-    if (typeof picked !== 'string') return;
-    await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked, { progressId });
   };
 
   /** 添加汇报交付物：还没有草稿时先落一份草稿，再挂文件 */
@@ -1107,16 +1116,6 @@ function TaskDetail(props: {
             <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
               <span>{memberLabel(p.authorId)}</span>
               <span>{formatDateTime(p.createdAt)}</span>
-              <div className="flex-1" />
-              {canUpload && !progress.locked && (
-                <button
-                  onClick={() => void uploadProgressFile(p.id)}
-                  className="px-1.5 py-0.5 rounded"
-                  style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-                >
-                  添加附件
-                </button>
-              )}
             </div>
             <div className="text-[11px] whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
               {p.content}
@@ -1163,7 +1162,7 @@ function TaskDetail(props: {
             存在未完成的前置任务，暂不能开始 / 提交
           </div>
         )}
-        {canReport && !lockedReport && !blocked && task.status !== 'done' && task.status !== 'archived' && (
+        {canReport && !lockedReport && !blocked && task.status !== 'done' && task.status !== 'archived' && task.status !== 'cancelled' && (
           <>
             <textarea
               className="search-input w-full"

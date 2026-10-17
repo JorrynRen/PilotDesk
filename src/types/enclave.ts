@@ -122,7 +122,7 @@ export interface EmergencyView {
 // ── M3：任务 ────────────────────────────────────────────────────
 
 /** 任务状态 */
-export type TaskStatus = 'pending' | 'in_progress' | 'submitted' | 'done' | 'archived';
+export type TaskStatus = 'pending' | 'in_progress' | 'submitted' | 'done' | 'archived' | 'cancelled';
 
 /** 任务视图（`enclave_task_*`）；`effectiveActions` 是按钮渲染的唯一来源 */
 export interface TaskView {

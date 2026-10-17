@@ -52,8 +52,11 @@ fn lock_state(conn: &Connection, task_id: &str) -> Result<(bool, Option<String>)
         .optional()
         .map_err(|e| format!("查询任务失败：{}", e))?
         .ok_or_else(|| "任务不存在".to_string())?;
-    if status == tasks::STATUS_DONE || status == tasks::STATUS_ARCHIVED {
-        return Ok((true, Some("任务已完成或归档，不能再添加过程记录".to_string())));
+    if status == tasks::STATUS_DONE
+        || status == tasks::STATUS_ARCHIVED
+        || status == tasks::STATUS_CANCELLED
+    {
+        return Ok((true, Some("任务已完成、归档或作废，不能再添加过程记录".to_string())));
     }
     if final_report_submitted(conn, task_id)? {
         return Ok((
@@ -137,14 +140,13 @@ pub fn add_progress(
     .map_err(|e| format!("保存过程记录失败：{}", e))?;
 
     for src in attachments {
-        crate::enclave::files::attach_file(
+        crate::enclave::files::attach_progress_file(
             conn,
             org_id,
             actor,
             task_id,
             src,
-            None,
-            Some(&id),
+            &id,
         )?;
     }
 

@@ -263,9 +263,10 @@ pub struct FileAssetView {
     pub progress_id: Option<String>,
 }
 
-/// 把本机文件挂到任务上（内容按 sha256 去重，同一内容在组织内只落一份）。
+/// 把本机文件挂到任务或完成汇报上（内容按 sha256 去重，同一内容在组织内只落一份）。
 ///
-/// `progress_id`：关联到某条过程记录（进度说明）；`report_id`：关联到完成汇报。
+/// `report_id`：关联到完成汇报（仅草稿/退回状态可挂）。
+/// 过程记录附件**只能随记录一次性提交**，不走这里（见 [`attach_progress_file`]）。
 pub fn attach_file(
     conn: &Connection,
     org_id: &str,
@@ -273,12 +274,48 @@ pub fn attach_file(
     task_id: &str,
     src_path: &str,
     report_id: Option<&str>,
+) -> Result<FileAssetView, String> {
+    attach_file_inner(conn, org_id, actor, task_id, src_path, report_id, None, false)
+}
+
+/// 过程记录创建时随记录写入附件（内部入口，提交后不可再调用）。
+pub(crate) fn attach_progress_file(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+    src_path: &str,
+    progress_id: &str,
+) -> Result<FileAssetView, String> {
+    attach_file_inner(
+        conn,
+        org_id,
+        actor,
+        task_id,
+        src_path,
+        None,
+        Some(progress_id),
+        true,
+    )
+}
+
+fn attach_file_inner(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+    src_path: &str,
+    report_id: Option<&str>,
     progress_id: Option<&str>,
+    allow_progress: bool,
 ) -> Result<FileAssetView, String> {
     // 任务必须存在且属于本组织；只有参与者（创建者/负责人/协作者）可上传
     let role = crate::enclave::tasks::actor_task_role(conn, org_id, task_id, actor)?;
     if !crate::enclave::tasks::is_participant(role) {
         return Err("只有任务创建者、负责人或参与者可以上传附件".to_string());
+    }
+    if progress_id.is_some() && !allow_progress {
+        return Err("过程记录提交后不可再补充附件，请在新建记录时一并提交".to_string());
     }
     if report_id.is_some() && progress_id.is_some() {
         return Err("附件只能挂载到一处（任务资料 / 过程记录 / 完成汇报）".to_string());

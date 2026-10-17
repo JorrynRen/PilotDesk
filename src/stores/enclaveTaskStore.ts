@@ -48,7 +48,7 @@ interface EnclaveTaskState {
     orgId: string,
     taskId: string,
     srcPath: string,
-    scope?: { reportId?: string; progressId?: string },
+    scope?: { reportId?: string },
   ) => Promise<boolean>;
   /** 解除附件挂载（过程记录附件不可解除；原件无挂载后自动清理） */
   detachFile: (
@@ -249,7 +249,6 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
         taskId,
         srcPath,
         reportId: scope?.reportId ?? null,
-        progressId: scope?.progressId ?? null,
       });
       await get().loadExtras(orgId, taskId);
       set({ error: null });
