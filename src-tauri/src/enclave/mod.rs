@@ -12,6 +12,7 @@
 pub mod authz;
 pub mod db;
 pub mod files;
+pub mod knowledge;
 pub mod org;
 pub mod reports;
 pub mod snapshot;

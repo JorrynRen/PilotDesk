@@ -200,6 +200,75 @@ pub fn enclave_report_feedback_list(
 }
 
 // ════════════════════════════════════════════════════════════
+// M5：组织知识库
+// ════════════════════════════════════════════════════════════
+
+/// 组织成员才可读组织知识库（默认拒绝：无快照 → 拒绝）。
+fn ensure_kb_view(conn: &rusqlite::Connection, org_id: &str) -> Result<(), String> {
+    authz::role_for_org(conn, org_id)?.map(|_| ()).ok_or_else(|| {
+        "尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()
+    })
+}
+
+#[tauri::command]
+pub fn enclave_kb_list(
+    org_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::knowledge::KbView>, String> {
+    state.store.with_conn(|c| {
+        ensure_kb_view(c, &org_id)?;
+        crate::enclave::knowledge::list_kbs(c, &org_id)
+    })
+}
+
+#[tauri::command]
+pub fn enclave_kb_search(
+    org_id: String,
+    kb_id: Option<String>,
+    query: String,
+    limit: Option<i64>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::knowledge::KbEntryView>, String> {
+    state.store.with_conn(|c| {
+        ensure_kb_view(c, &org_id)?;
+        crate::enclave::knowledge::search_entries(
+            c,
+            &org_id,
+            kb_id.as_deref(),
+            &query,
+            limit.unwrap_or(50),
+        )
+    })
+}
+
+#[tauri::command]
+pub fn enclave_kb_entry_get(
+    org_id: String,
+    kb_id: String,
+    memory_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Option<crate::enclave::knowledge::KbEntryView>, String> {
+    state.store.with_conn(|c| {
+        ensure_kb_view(c, &org_id)?;
+        crate::enclave::knowledge::get_entry(c, &org_id, &kb_id, &memory_id)
+    })
+}
+
+/// 沉淀重试（确认成功但归档失败时使用）。
+#[tauri::command]
+pub fn enclave_task_sediment_retry(
+    org_id: String,
+    task_id: String,
+    report_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    state.store.with_conn(|c| {
+        let actor = authz::current_actor_id(c)?;
+        crate::enclave::knowledge::retry_sediment(c, &org_id, &task_id, &report_id, &actor)
+    })
+}
+
+// ════════════════════════════════════════════════════════════
 // M4：文件资产
 // ════════════════════════════════════════════════════════════
 
@@ -274,22 +343,38 @@ pub fn enclave_files_root_get(
     })
 }
 
-/// 设置团队文件基础目录（仅 owner）：校验 → 搬迁校验 → 落库 → 审计。
+/// 设置团队文件基础目录（**全局设置**，与具体组织无关；仅主机 owner）：
+/// 校验 → 搬迁校验 → 落库 → 审计（审计挂在主机所属的第一个组织下）。
 #[tauri::command]
 pub fn enclave_files_root_set(
-    org_id: String,
     path: String,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TeamFilesRootView, String> {
-    use crate::enclave::authz::{authorize, Action};
+    use crate::enclave::authz::{current_actor_id, role_for_org, Role};
     state.store.with_conn(|c| {
-        let actor = authorize(c, &org_id, Action::FileRootWrite)?;
+        let actor = current_actor_id(c)?;
+        // 全局目录属于主机：要求本机身份至少是一个组织的 owner
+        let org_ids: Vec<String> = {
+            let mut stmt = c
+                .prepare("SELECT org_id FROM org_snapshot ORDER BY org_id")
+                .map_err(|e| format!("读取组织快照失败：{}", e))?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| format!("读取组织快照失败：{}", e))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| format!("读取组织快照失败：{}", e))?
+        };
+        let host_org = org_ids
+            .into_iter()
+            .find(|id| matches!(role_for_org(c, id), Ok(Some(Role::Owner))))
+            .ok_or_else(|| "仅组织所有者（主机）可修改团队文件根".to_string())?;
+
         let before = files::resolve_team_base(c)?;
         let new_base = files::validate_base(c, &path)?;
         files::set_base(c, &new_base)?;
         crate::enclave::org::audit(
             c,
-            &org_id,
+            &host_org,
             &actor,
             "files.root",
             &serde_json::json!({

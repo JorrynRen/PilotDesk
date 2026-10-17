@@ -2769,6 +2769,10 @@ pub fn run() {
             commands::enclave_task::enclave_file_abs_path,
             commands::enclave_task::enclave_files_root_get,
             commands::enclave_task::enclave_files_root_set,
+            commands::enclave_task::enclave_kb_list,
+            commands::enclave_task::enclave_kb_search,
+            commands::enclave_task::enclave_kb_entry_get,
+            commands::enclave_task::enclave_task_sediment_retry,
         ])
         .setup(move |app| {
             // 初始化资源路径（应用根目录：Win %APPDATA%\PilotDesk / unix ~/.config/pilotdesk）

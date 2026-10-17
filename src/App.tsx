@@ -22,6 +22,7 @@ import { GroupChatPage } from './pages/GroupChatPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { EnclavePage } from './pages/EnclavePage';
 import { EnclaveOrgPage } from './pages/EnclaveOrgPage';
+import { EnclaveKbPage } from './pages/EnclaveKbPage';
 import { subscribeGroupChat, useGroupChatStore } from './stores/groupChatStore';
 import { subscribeNotifications } from './stores/notificationEvents';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
@@ -215,6 +216,8 @@ function App() {
       document.title = `${base} - 设置`;
     } else if (path === '/knowledge') {
       document.title = `${base} - 知识库`;
+    } else if (path === '/enclave/kb') {
+      document.title = `${base} - 团队知识库`;
     } else if (path === '/enclave/org') {
       document.title = `${base} - 组织与权限`;
     } else if (path === '/enclave') {
@@ -308,6 +311,8 @@ function App() {
         <Route path="/enclave" element={<EnclavePage />} />
         {/* 飞地「组织与权限」：只读展示组织与成员快照（从飞地空态卡片进入） */}
         <Route path="/enclave/org" element={<EnclaveOrgPage />} />
+        {/* 飞地团队知识库：任务产出自动沉淀，成员可检索 */}
+        <Route path="/enclave/kb" element={<EnclaveKbPage />} />
       </Routes>
     </TerminalProvider>
   );

@@ -5,14 +5,11 @@
  * 前端不做角色推断；`policy.write` / `emergency.set` 不在列表里就一律禁用。
  */
 
-import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import { ShieldAlert, ShieldCheck, Power, History, Loader2, FolderOpen } from 'lucide-react';
+import { useState } from 'react';
+import { ShieldAlert, ShieldCheck, Power, History, Loader2 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
-import type { TeamFilesRootView } from '../../types/enclave';
 
 const ACTION_LABEL: Record<string, string> = {
   'policy.allow_cloud_model': '数据出境策略',
@@ -136,12 +133,6 @@ export function OrgGovernanceSection() {
   const detail = useEnclaveOrgStore((s) => s.detail);
   const audit = useEnclaveOrgStore((s) => s.audit);
   const [busy, setBusy] = useState<'policy' | 'emergency' | null>(null);
-  const [rootView, setRootView] = useState<TeamFilesRootView | null>(null);
-  const [rootBusy, setRootBusy] = useState(false);
-
-  useEffect(() => {
-    void invoke<TeamFilesRootView>('enclave_files_root_get').then(setRootView).catch(() => {});
-  }, []);
 
   if (!activeOrgId) return null;
 
@@ -159,7 +150,6 @@ export function OrgGovernanceSection() {
 
   const canWritePolicy = !!caps?.actions.includes('policy.write');
   const canEmergency = !!caps?.actions.includes('emergency.set');
-  const canEditRoot = !!caps?.actions.includes('files.root.write');
   const allowCloud = !!policy?.allowCloudModel;
   const emergencyOn = !!emergency?.disabled;
 
@@ -266,73 +256,6 @@ export function OrgGovernanceSection() {
             仅组织所有者（owner）可操作
           </div>
         )}
-      </div>
-
-      {/* 团队文件根（§13） */}
-      <div
-        className="rounded-lg px-3 py-2"
-        style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
-      >
-        <div className="flex items-center gap-2">
-          <FolderOpen size={13} style={{ color: 'var(--text-tertiary)' }} />
-          <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-            团队文件根
-          </span>
-          {rootView && (
-            <span className="text-[11px]" style={{ color: rootView.available ? 'var(--text-tertiary)' : 'var(--status-danger)' }}>
-              {rootView.available ? (rootView.custom ? '自定义' : '默认') : '不可用'}
-            </span>
-          )}
-          <div className="flex-1" />
-          <button
-            onClick={async () => {
-              const picked = await openDialog({ directory: true, multiple: false });
-              if (typeof picked !== 'string') return;
-              const ok = await confirmDialog({
-                title: '更改团队文件根目录',
-                message: `团队文件将从当前位置迁移到：\n${picked}\n\n迁移会逐个文件做 sha256 校验，失败会自动回滚。是否继续？`,
-                confirmText: '开始迁移',
-              });
-              if (!ok) return;
-              setRootBusy(true);
-              try {
-                const next = await invoke<TeamFilesRootView>('enclave_files_root_set', {
-                  orgId: activeOrgId,
-                  path: picked,
-                });
-                setRootView(next);
-                showToast('团队文件根已更新', 'success');
-              } catch (e) {
-                showToast(`更改失败：${e instanceof Error ? e.message : String(e)}`, 'error');
-              } finally {
-                setRootBusy(false);
-              }
-            }}
-            disabled={!canEditRoot || rootBusy}
-            className="text-xs px-2 py-1 rounded flex items-center gap-1"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-              opacity: !canEditRoot || rootBusy ? 0.5 : 1,
-            }}
-            title={canEditRoot ? '' : '仅组织所有者可修改'}
-          >
-            {rootBusy ? <Loader2 size={11} className="animate-spin" /> : <FolderOpen size={11} />}
-            选择目录
-          </button>
-        </div>
-        <div className="mt-1 text-[11px] font-mono break-all" style={{ color: 'var(--text-tertiary)' }}>
-          {rootView?.base ?? '读取中…'}
-        </div>
-        {rootView && (
-          <div className="text-[10px] mt-0.5 font-mono break-all" style={{ color: 'var(--text-tertiary)' }}>
-            实际存放：{rootView.root}
-          </div>
-        )}
-        <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-          会在此目录下自动创建 enclave/files；与个人知识库完全独立，每个组织一个子目录。仅支持本地固定盘，盘不可用时会拒绝写入而不是回退。
-        </div>
       </div>
 
       {/* 审计流水 */}

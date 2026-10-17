@@ -240,7 +240,13 @@ pub fn confirm_report(
     )
     .map_err(|e| format!("记录确认留痕失败：{}", e))?;
 
-    // M5：在此调用 knowledge::sediment_task_output(conn, task, report)
+    // M5：确认即沉淀进组织知识库。沉淀是派生动作——失败**不回滚确认**，只记 sediment_error。
+    if let Err(e) =
+        crate::enclave::knowledge::sediment_task_output(conn, org_id, task_id, report_id, actor)
+    {
+        log::warn!("[Enclave] 产出沉淀失败（已记 sediment_error）：{}", e);
+    }
+
     load_report(conn, task_id, report_id)
 }
 

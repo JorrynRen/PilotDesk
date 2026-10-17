@@ -233,3 +233,31 @@ export interface TeamFilesRootView {
   custom: boolean;
   available: boolean;
 }
+
+// ── M5：组织知识库 ──────────────────────────────────────────────
+
+/** 组织知识库（每组织一个隐式库） */
+export interface KbView {
+  id: string;
+  name: string;
+  description: string;
+  /** 隐式库（任务产出自动归档地） */
+  isImplicit: boolean;
+  entryCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 组织知识条目 */
+export interface KbEntryView {
+  memoryId: string;
+  title: string;
+  content: string;
+  tags: string;
+  /** task_output / manual / ... */
+  origin: string;
+  /** 来源任务 id */
+  sourceRef: string;
+  addedBy: string;
+  addedAt: number;
+}

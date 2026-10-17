@@ -9,11 +9,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
-  Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight,
+  Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight, FolderOpen, Library,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
-import type { DepsPreview, MemberView, TaskStatus, TaskView } from '../../types/enclave';
+import { confirmDialog } from '../../stores/confirmStore';
+import { showToast } from '../../utils/toast';
+import type {
+  DepsPreview, MemberView, TaskStatus, TaskView, TeamFilesRootView,
+} from '../../types/enclave';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: '待办',
@@ -69,7 +73,7 @@ function fromDateInput(v: string): number | null {
   return Number.isFinite(t) ? Math.floor(t / 1000) : null;
 }
 
-export function TaskWorkspace(props: { onOpenOrg?: () => void }) {
+export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => void }) {
   const orgs = useEnclaveOrgStore((s) => s.orgs);
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
   const detail = useEnclaveOrgStore((s) => s.detail);
@@ -87,6 +91,16 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void }) {
   const [newDue, setNewDue] = useState('');
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  // 团队文件根：**全局设置**，与具体组织无关
+  const [rootOpen, setRootOpen] = useState(false);
+  const [rootView, setRootView] = useState<TeamFilesRootView | null>(null);
+  const [rootBusy, setRootBusy] = useState(false);
+
+  useEffect(() => {
+    if (!rootOpen || rootView) return;
+    void invoke<TeamFilesRootView>('enclave_files_root_get').then(setRootView).catch(() => {});
+  }, [rootOpen, rootView]);
 
   // 首次进入：拉组织（会自动选中并加载成员）
   useEffect(() => {
@@ -160,6 +174,31 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void }) {
         ))}
         <div className="flex-1" />
         {loading && <Loader2 size={12} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
+        {props.onOpenKb && (
+          <button
+            onClick={props.onOpenKb}
+            className="text-xs px-2 py-1 rounded flex items-center gap-1"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            <Library size={12} /> 团队知识库
+          </button>
+        )}
+        <button
+          onClick={() => setRootOpen((v) => !v)}
+          className="text-xs px-2 py-1 rounded flex items-center gap-1"
+          style={{
+            backgroundColor: rootOpen ? 'var(--bg-tertiary)' : 'transparent',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border)',
+          }}
+          title="团队文件根：全局设置（与具体团队无关）"
+        >
+          <FolderOpen size={12} /> 文件根
+        </button>
         {props.onOpenOrg && (
           <button
             onClick={props.onOpenOrg}
@@ -187,6 +226,69 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void }) {
           <Plus size={12} /> 新建任务
         </button>
       </div>
+
+      {/* 团队文件根（全局设置，与具体团队无关） */}
+      {rootOpen && (
+        <div
+          className="shrink-0 px-3 py-2 flex flex-col gap-1"
+          style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-side)' }}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+              团队文件根（全局）
+            </span>
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              与具体团队无关；所有团队共用此基础目录
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={async () => {
+                const picked = await openDialog({ directory: true, multiple: false });
+                if (typeof picked !== 'string') return;
+                const ok = await confirmDialog({
+                  title: '更改团队文件根目录',
+                  message: `团队文件将从当前位置迁移到：\n${picked}\n\n迁移会逐个文件做 sha256 校验，失败会自动回滚。是否继续？`,
+                  confirmText: '开始迁移',
+                });
+                if (!ok) return;
+                setRootBusy(true);
+                try {
+                  const next = await invoke<TeamFilesRootView>('enclave_files_root_set', { path: picked });
+                  setRootView(next);
+                  showToast('团队文件根已更新', 'success');
+                } catch (e) {
+                  const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e);
+                  showToast(`更改失败：${msg}`, 'error');
+                } finally {
+                  setRootBusy(false);
+                }
+              }}
+              disabled={rootBusy}
+              className="text-xs px-2 py-1 rounded flex items-center gap-1"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+                opacity: rootBusy ? 0.6 : 1,
+              }}
+            >
+              {rootBusy ? <Loader2 size={11} className="animate-spin" /> : <FolderOpen size={11} />}
+              选择目录
+            </button>
+          </div>
+          <div className="text-[11px] font-mono break-all" style={{ color: 'var(--text-tertiary)' }}>
+            {rootView?.base ?? '读取中…'}
+          </div>
+          {rootView && (
+            <div className="text-[10px] font-mono break-all" style={{ color: 'var(--text-tertiary)' }}>
+              实际存放：{rootView.root}（其下按组织分子目录）
+            </div>
+          )}
+          <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            会在此目录下自动创建 enclave/files；与个人知识库完全独立。仅支持本地固定盘，盘不可用时会拒绝写入而不是回退。
+          </div>
+        </div>
+      )}
 
       {/* 新建表单 */}
       {newOpen && (
@@ -615,8 +717,28 @@ function TaskDetail(props: {
                   </div>
                 )}
                 {r.status === 'confirmed' && (
-                  <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    {r.sedimentedAt ? '已沉淀进组织知识库' : '产出待归档（M5 接入）'}
+                  <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    <span>{r.sedimentedAt ? '已沉淀进组织知识库' : (r.sedimentError ? `归档失败：${r.sedimentError}` : '产出待归档')}</span>
+                    {!r.sedimentedAt && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await invoke('enclave_task_sediment_retry', {
+                              orgId,
+                              taskId: task.id,
+                              reportId: r.id,
+                            });
+                            await useEnclaveTaskStore.getState().loadExtras(orgId, task.id);
+                          } catch {
+                            // 错误会写入 sediment_error，列表刷新后可见
+                          }
+                        }}
+                        className="px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                      >
+                        重试归档
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
