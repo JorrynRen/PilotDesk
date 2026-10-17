@@ -58,6 +58,8 @@ pub enum Action {
     PolicyWrite,
     HostTransfer,
     EmergencySet,
+    /// 修改团队文件根目录（仅 owner；物理落点变更，风险等级同策略）
+    FileRootWrite,
 }
 
 impl Action {
@@ -78,6 +80,7 @@ impl Action {
             Action::PolicyWrite => "policy.write",
             Action::HostTransfer => "host.transfer",
             Action::EmergencySet => "emergency.set",
+            Action::FileRootWrite => "files.root.write",
         }
     }
 
@@ -98,6 +101,7 @@ impl Action {
             "policy.write" => Action::PolicyWrite,
             "host.transfer" => Action::HostTransfer,
             "emergency.set" => Action::EmergencySet,
+            "files.root.write" => Action::FileRootWrite,
             _ => return None,
         })
     }
@@ -110,6 +114,7 @@ impl Action {
             Action::PolicyWrite,
             Action::HostTransfer,
             Action::EmergencySet,
+            Action::FileRootWrite,
         ]
     }
 }
@@ -132,6 +137,8 @@ pub fn org_allows(role: Role, action: Action) -> bool {
         // 应急开关：按实施计划 M2「仅 owner」收紧（设计 §8.3 矩阵为 owner/admin，
         // 如需放开给 admin，只需在此处加 `| Role::Admin`）
         Action::EmergencySet => role == Role::Owner,
+        // 团队文件根目录：物理落点变更，仅 owner（§13）
+        Action::FileRootWrite => role == Role::Owner,
         // 其余资源级动作：单看组织层不足以放行 → 默认拒绝（M3 叠加资源级角色后再放开）
         _ => false,
     }

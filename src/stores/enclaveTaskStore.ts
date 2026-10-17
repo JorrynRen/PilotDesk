@@ -10,6 +10,8 @@ import { errorMessage } from '../utils/errorMessage';
 import type {
   CreateTaskInput,
   DepsPreview,
+  FileAssetView,
+  ReportView,
   TaskView,
   UpdateTaskInput,
 } from '../types/enclave';
@@ -19,6 +21,9 @@ interface EnclaveTaskState {
   activeTaskId: string | null;
   loading: boolean;
   error: string | null;
+  /** 当前选中任务的汇报与附件 */
+  reports: ReportView[];
+  files: FileAssetView[];
   loadTasks: (orgId: string) => Promise<void>;
   selectTask: (taskId: string | null) => void;
   createTask: (orgId: string, input: CreateTaskInput) => Promise<TaskView | null>;
@@ -26,6 +31,13 @@ interface EnclaveTaskState {
   setStatus: (orgId: string, taskId: string, status: string) => Promise<boolean>;
   previewDeps: (orgId: string, taskId: string, blockedBy: string[]) => Promise<DepsPreview | null>;
   setDeps: (orgId: string, taskId: string, blockedBy: string[]) => Promise<boolean>;
+  /** 拉当前任务的汇报与附件 */
+  loadExtras: (orgId: string, taskId: string) => Promise<void>;
+  saveReportDraft: (orgId: string, taskId: string, content: string) => Promise<boolean>;
+  submitReport: (orgId: string, taskId: string, content: string) => Promise<boolean>;
+  confirmReport: (orgId: string, taskId: string, reportId: string) => Promise<boolean>;
+  returnReport: (orgId: string, taskId: string, reportId: string, reason: string) => Promise<boolean>;
+  uploadFile: (orgId: string, taskId: string, srcPath: string) => Promise<boolean>;
 }
 
 /** 用返回的最新任务替换列表中的同 id 项。 */
@@ -42,6 +54,8 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   activeTaskId: null,
   loading: false,
   error: null,
+  reports: [],
+  files: [],
 
   loadTasks: async (orgId) => {
     set({ loading: true, error: null });
@@ -106,6 +120,77 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
     try {
       const task = await invoke<TaskView>('enclave_task_set_deps', { orgId, taskId, blockedBy });
       set((s) => ({ tasks: upsert(s.tasks, task), error: null }));
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  loadExtras: async (orgId, taskId) => {
+    const [reports, files] = await Promise.all([
+      invoke<ReportView[]>('enclave_report_list', { orgId, taskId }).catch(() => []),
+      invoke<FileAssetView[]>('enclave_task_file_list', { orgId, taskId }).catch(() => []),
+    ]);
+    set({ reports, files });
+  },
+
+  saveReportDraft: async (orgId, taskId, content) => {
+    try {
+      await invoke<ReportView>('enclave_report_save_draft', { orgId, taskId, content });
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  submitReport: async (orgId, taskId, content) => {
+    try {
+      await invoke<ReportView>('enclave_report_submit', { orgId, taskId, content });
+      await get().loadTasks(orgId);
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  confirmReport: async (orgId, taskId, reportId) => {
+    try {
+      await invoke<ReportView>('enclave_report_confirm', { orgId, taskId, reportId });
+      await get().loadTasks(orgId);
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  returnReport: async (orgId, taskId, reportId, reason) => {
+    try {
+      await invoke<ReportView>('enclave_report_return', { orgId, taskId, reportId, reason });
+      await get().loadTasks(orgId);
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  uploadFile: async (orgId, taskId, srcPath) => {
+    try {
+      await invoke<FileAssetView>('enclave_file_upload', { orgId, taskId, srcPath });
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
       return true;
     } catch (e) {
       set({ error: errorMessage(e) });

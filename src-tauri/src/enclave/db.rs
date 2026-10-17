@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 2;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 3;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS local_identity (
     email        TEXT NOT NULL DEFAULT '',
     nickname     TEXT NOT NULL DEFAULT '',
     synced_at    INTEGER NOT NULL DEFAULT 0
+);
+
+-- 飞地本机设置（随库走：主机转移后沿用）。当前键：team_files_root
+CREATE TABLE IF NOT EXISTS enclave_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL DEFAULT 0
 );
 
 -- 成员快照（只读，来自平台；成员消失置 seat_status='removed'，不物理删）

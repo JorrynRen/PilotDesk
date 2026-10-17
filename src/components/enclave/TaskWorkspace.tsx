@@ -6,6 +6,8 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight,
 } from 'lucide-react';
@@ -371,8 +373,57 @@ function TaskDetail(props: {
   const [desc, setDesc] = useState(task.description);
   const [saving, setSaving] = useState(false);
 
+  const reports = useEnclaveTaskStore((s) => s.reports);
+  const files = useEnclaveTaskStore((s) => s.files);
+  const caps = useEnclaveOrgStore((s) => s.caps);
+
+  // 汇报内容：取自己可编辑的草稿（draft / returned），否则空
+  const editable = useMemo(
+    () => reports.find((r) => r.status === 'draft' || r.status === 'returned') ?? null,
+    [reports],
+  );
+  const [reportText, setReportText] = useState('');
+  const [reportBusy, setReportBusy] = useState(false);
+  const [returningId, setReturningId] = useState<string | null>(null);
+  const [returnReason, setReturnReason] = useState('');
+
+  useEffect(() => {
+    void useEnclaveTaskStore.getState().loadExtras(orgId, task.id);
+  }, [orgId, task.id]);
+
+  // 草稿到达后填入编辑器（仅首次，避免覆盖用户正在输入的内容）
+  const [seededReportId, setSeededReportId] = useState<string | null>(null);
+  useEffect(() => {
+    if (editable && seededReportId !== editable.id) {
+      setSeededReportId(editable.id);
+      setReportText(editable.content);
+    }
+  }, [editable, seededReportId]);
+
+  // 确认/退回权限：管理视角（org owner/admin）或任务创建者
+  const isManager =
+    caps?.role === 'owner' ||
+    caps?.role === 'admin' ||
+    (!!caps?.identity && caps.identity.userId === task.creatorId);
+  const isAssignee = !!caps?.identity && caps.identity.userId === task.assigneeId;
+
   const change = async (status: TaskStatus) => {
     await useEnclaveTaskStore.getState().setStatus(orgId, task.id, status);
+  };
+
+  const uploadFile = async () => {
+    const picked = await openDialog({ multiple: false, directory: false });
+    if (typeof picked !== 'string') return;
+    await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked);
+  };
+
+  const openFile = async (fileId: string) => {
+    try {
+      const path = await invoke<string>('enclave_file_abs_path', { orgId, fileId });
+      await invoke('open_path', { path });
+    } catch {
+      // 单个文件打不开不影响列表；错误由 store 统一提示
+    }
   };
 
   return (
@@ -403,7 +454,7 @@ function TaskDetail(props: {
         <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>描述</span>
         <textarea
           className="search-input w-full"
-          style={{ minHeight: 160, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
+          style={{ minHeight: 120, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
           value={desc}
           disabled={!canEdit}
           onChange={(e) => setDesc(e.target.value)}
@@ -444,8 +495,166 @@ function TaskDetail(props: {
             {t.label}
           </button>
         ))}
-        {!canStatus && (
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>（无状态变更权限）</span>
+      </div>
+
+      {/* 完成汇报 */}
+      <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+        <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+          完成汇报
+        </span>
+        {(isAssignee || editable) && task.status !== 'done' && task.status !== 'archived' && (
+          <>
+            <textarea
+              className="search-input w-full"
+              style={{ minHeight: 90, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
+              placeholder="写清做了什么、产出在哪（确认后会沉淀进组织知识库）"
+              value={reportText}
+              onChange={(e) => setReportText(e.target.value)}
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  setReportBusy(true);
+                  await useEnclaveTaskStore.getState().saveReportDraft(orgId, task.id, reportText);
+                  setReportBusy(false);
+                }}
+                disabled={reportBusy}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                保存草稿
+              </button>
+              <button
+                onClick={async () => {
+                  setReportBusy(true);
+                  await useEnclaveTaskStore.getState().submitReport(orgId, task.id, reportText);
+                  setReportBusy(false);
+                }}
+                disabled={reportBusy || task.status !== 'in_progress'}
+                className="text-xs px-2 py-1 rounded"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity: reportBusy || task.status !== 'in_progress' ? 0.5 : 1,
+                }}
+                title={task.status !== 'in_progress' ? '请先把任务置为「进行中」' : ''}
+              >
+                提交汇报
+              </button>
+            </div>
+          </>
+        )}
+
+        {reports.length > 0 && (
+          <div className="flex flex-col gap-1">
+            {reports.map((r) => (
+              <div
+                key={r.id}
+                className="rounded px-2 py-1.5 flex flex-col gap-1"
+                style={{ backgroundColor: 'var(--bg-tertiary)' }}
+              >
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span style={{ color: STATUS_COLOR[r.status === 'confirmed' ? 'done' : r.status === 'returned' ? 'pending' : r.status === 'submitted' ? 'submitted' : 'pending'] }}>
+                    {r.status === 'draft' ? '草稿' : r.status === 'submitted' ? '已提交' : r.status === 'confirmed' ? '已确认' : '已退回'}
+                  </span>
+                  <span style={{ color: 'var(--text-tertiary)' }}>
+                    {memberLabel(r.reporterId)} · {toDateInput(r.updatedAt)}
+                  </span>
+                  <div className="flex-1" />
+                  {r.status === 'submitted' && isManager && (
+                    <>
+                      <button
+                        onClick={() => void useEnclaveTaskStore.getState().confirmReport(orgId, task.id, r.id)}
+                        className="px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                      >
+                        确认完成
+                      </button>
+                      <button
+                        onClick={() => { setReturningId(r.id); setReturnReason(''); }}
+                        className="px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                      >
+                        退回
+                      </button>
+                    </>
+                  )}
+                </div>
+                {returningId === r.id && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="search-input flex-1"
+                      style={{ backgroundColor: 'var(--bg-field)' }}
+                      placeholder="退回原因（记录在汇报留言里）"
+                      value={returnReason}
+                      onChange={(e) => setReturnReason(e.target.value)}
+                    />
+                    <button
+                      onClick={async () => {
+                        await useEnclaveTaskStore.getState().returnReport(orgId, task.id, r.id, returnReason);
+                        setReturningId(null);
+                        setReturnReason('');
+                      }}
+                      className="px-1.5 py-0.5 rounded text-[11px]"
+                      style={{ backgroundColor: 'var(--status-danger)', color: '#fff' }}
+                    >
+                      确认退回
+                    </button>
+                    <button
+                      onClick={() => setReturningId(null)}
+                      className="px-1.5 py-0.5 rounded text-[11px]"
+                      style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                )}
+                {r.content && (
+                  <div className="text-[11px] whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                    {r.content}
+                  </div>
+                )}
+                {r.status === 'confirmed' && (
+                  <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    {r.sedimentedAt ? '已沉淀进组织知识库' : '产出待归档（M5 接入）'}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 附件 */}
+      <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>附件</span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{files.length}</span>
+          <div className="flex-1" />
+          <button
+            onClick={() => void uploadFile()}
+            className="text-xs px-2 py-1 rounded"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          >
+            上传文件
+          </button>
+        </div>
+        {files.length === 0 ? (
+          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>暂无附件</div>
+        ) : (
+          files.map((f) => (
+            <div key={f.id} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+              <span className="truncate flex-1">{f.fileName}</span>
+              <span style={{ color: 'var(--text-tertiary)' }}>{Math.max(1, Math.round(f.fileSize / 1024))} KB</span>
+              <button
+                onClick={() => void openFile(f.id)}
+                className="px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                打开
+              </button>
+            </div>
+          ))
         )}
       </div>
     </div>

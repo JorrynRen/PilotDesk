@@ -177,3 +177,56 @@ export interface DepsPreview {
   newlyUnblockedIds: string[];
   error: string | null;
 }
+
+// ── M4：汇报与文件 ──────────────────────────────────────────────
+
+/** 汇报状态（四态） */
+export type ReportStatus = 'draft' | 'submitted' | 'confirmed' | 'returned';
+
+/** 完成汇报（`enclave_report_*`） */
+export interface ReportView {
+  id: string;
+  taskId: string;
+  reporterId: string;
+  content: string;
+  materials: string[];
+  deliverables: string[];
+  status: ReportStatus;
+  confirmedBy: string | null;
+  confirmedAt: number | null;
+  /** 产出沉淀时间（M5；null = 尚未沉淀） */
+  sedimentedAt: number | null;
+  sedimentError: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 汇报留言（确认 / 退回记录） */
+export interface FeedbackView {
+  id: string;
+  reportId: string;
+  authorId: string;
+  action: string;
+  content: string;
+  createdAt: number;
+}
+
+/** 任务附件 */
+export interface FileAssetView {
+  id: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  fileHash: string;
+  uploadedBy: string;
+  uploadedAt: number;
+  /** 绝对路径 */
+  absPath: string;
+}
+
+/** 团队文件根（`enclave_files_root_get/set`） */
+export interface TeamFilesRootView {
+  root: string;
+  custom: boolean;
+  available: boolean;
+}

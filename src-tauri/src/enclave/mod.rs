@@ -11,7 +11,9 @@
 
 pub mod authz;
 pub mod db;
+pub mod files;
 pub mod org;
+pub mod reports;
 pub mod snapshot;
 pub mod tasks;
 

@@ -764,6 +764,31 @@ pub fn set_deps(
     get_task(conn, org_id, task_id, actor)
 }
 
+/// 当前 actor 在该任务上的资源角色（供汇报域复用，避免重复实现绑定规则）。
+pub fn actor_task_role(
+    conn: &Connection,
+    org_id: &str,
+    task_id: &str,
+    actor: &str,
+) -> Result<TaskRole, String> {
+    let row = load_task(conn, org_id, task_id)?;
+    let org_role = require_org_role(conn, org_id)?;
+    Ok(resolve_task_role(
+        org_role,
+        actor,
+        &TaskActors {
+            creator_id: &row.creator_id,
+            assignee_id: row.assignee_id.as_deref(),
+            collaborators: &row.collaborators,
+        },
+    ))
+}
+
+/// 读任务当前状态（不存在/跨组织即报错）。
+pub fn task_status(conn: &Connection, org_id: &str, task_id: &str) -> Result<String, String> {
+    Ok(load_task(conn, org_id, task_id)?.status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
