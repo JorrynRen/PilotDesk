@@ -17,6 +17,8 @@ interface EnclaveKbState {
   query: string;
   loading: boolean;
   error: string | null;
+  /** 账号切换 / 退出：清空全部知识库缓存 */
+  reset: () => void;
   loadKbs: (orgId: string) => Promise<void>;
   selectKb: (orgId: string, kbId: string) => Promise<void>;
   search: (orgId: string, query: string) => Promise<void>;
@@ -31,6 +33,18 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   query: '',
   loading: false,
   error: null,
+
+  reset: () => {
+    set({
+      kbs: [],
+      activeKbId: '',
+      entries: [],
+      activeEntry: null,
+      query: '',
+      loading: false,
+      error: null,
+    });
+  },
 
   loadKbs: async (orgId) => {
     set({ loading: true, error: null });

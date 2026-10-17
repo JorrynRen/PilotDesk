@@ -177,16 +177,34 @@ pub fn current_actor_id(conn: &Connection) -> Result<String, String> {
 }
 
 /// 当前用户在指定组织中的角色（来自平台快照）；组织不存在 / 角色无法识别返回 `None`。
+///
+/// **身份绑定校验**：快照行必须由当前登录身份同步而来（`viewer_id = local_identity.user_id`）。
+/// 换账号后，上一个账号留下的 `my_role` 立即失效，避免沿用旧身份越权。
 pub fn role_for_org(conn: &Connection, org_id: &str) -> Result<Option<Role>, String> {
-    let raw: Option<String> = conn
+    let row: Option<(String, String)> = conn
         .query_row(
-            "SELECT my_role FROM org_snapshot WHERE org_id = ?1",
+            "SELECT my_role, viewer_id FROM org_snapshot WHERE org_id = ?1",
             params![org_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| format!("读取组织角色失败：{}", e))?;
-    Ok(raw.as_deref().and_then(Role::parse))
+    let Some((raw_role, viewer_id)) = row else {
+        return Ok(None);
+    };
+    let actor = conn
+        .query_row("SELECT user_id FROM local_identity LIMIT 1", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()
+        .map_err(|e| format!("读取本机登录身份失败：{}", e))?;
+    let Some(actor) = actor.filter(|s| !s.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if viewer_id.is_empty() || viewer_id != actor {
+        return Ok(None);
+    }
+    Ok(Role::parse(&raw_role))
 }
 
 /// 组织授权的最终入口：成功返回 `actor_id`（供审计），失败返回可直接展示的中文原因。

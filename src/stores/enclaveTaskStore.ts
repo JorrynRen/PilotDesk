@@ -29,6 +29,8 @@ interface EnclaveTaskState {
   reports: ReportView[];
   files: FileAssetView[];
   progress: ProgressList | null;
+  /** 账号切换 / 退出：清空全部任务缓存 */
+  reset: () => void;
   loadTasks: (orgId: string) => Promise<void>;
   selectTask: (taskId: string | null) => void;
   createTask: (orgId: string, input: CreateTaskInput) => Promise<TaskView | null>;
@@ -69,18 +71,35 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   /** 本轮是否成功用当前账号刷新过身份（失败则禁用一切写操作） */
   identityVerified: false,
 
+  reset: () => {
+    set({
+      tasks: [],
+      activeTaskId: null,
+      loading: false,
+      error: null,
+      reports: [],
+      files: [],
+      progress: null,
+      identityVerified: false,
+    });
+  },
+
   loadTasks: async (orgId) => {
-    // 先清空校验标记：身份刷新完成前不显示任何写入口
-    set({ loading: true, error: null, identityVerified: false });
-    // 先刷新身份：账号切换后快照轮询可能还没跑，旧身份会让权限判定失真
-    let identityVerified = false;
-    try {
-      await invoke('enclave_identity_refresh');
-      identityVerified = true;
-      // 身份落库后重拉组织能力，避免页面沿用旧的 caps.identity
-      await useEnclaveOrgStore.getState().loadGovernance(orgId);
-    } catch (e) {
-      set({ error: errorMessage(e) });
+    // 身份未校验（首次进入 / 换账号后）才联网刷新，避免每次拉任务都打一次 /me
+    let identityVerified = get().identityVerified;
+    if (!identityVerified) {
+      set({ loading: true, error: null, identityVerified: false });
+      // 账号切换后快照轮询可能还没跑，旧身份会让权限判定失真
+      try {
+        await invoke('enclave_identity_refresh');
+        identityVerified = true;
+        // 身份落库后重拉组织能力，避免页面沿用旧的 caps.identity
+        await useEnclaveOrgStore.getState().loadGovernance(orgId);
+      } catch (e) {
+        set({ error: errorMessage(e) });
+      }
+    } else {
+      set({ loading: true, error: null });
     }
     try {
       const tasks = await invoke<TaskView[]>('enclave_task_list', { orgId });

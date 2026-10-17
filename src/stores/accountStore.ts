@@ -11,6 +11,9 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openUrl } from '@tauri-apps/plugin-shell';
+import { useEnclaveOrgStore } from './enclaveOrgStore';
+import { useEnclaveTaskStore } from './enclaveTaskStore';
+import { useEnclaveKbStore } from './enclaveKbStore';
 
 /** 可打开的平台页面：升级会员 / 会员中心（账号设置）/ 组织页 */
 export type PlatformPage = 'upgrade' | 'portal' | 'organizations';
@@ -85,6 +88,28 @@ interface AccountStoreState {
  */
 let loginGeneration = 0;
 
+/**
+ * 清空飞地本地缓存（组织/任务/知识库）并重建身份。
+ *
+ * 换账号后必须**先清空再按新身份加载**：否则页面会继续展示上一个账号
+ * 同步下来的本机快照。后端同时用 `viewer_id` 绑定快照，双保险。
+ */
+function resetEnclaveCaches() {
+  useEnclaveOrgStore.getState().reset();
+  useEnclaveTaskStore.getState().reset();
+  useEnclaveKbStore.getState().reset();
+}
+
+async function reloadEnclaveForAccount() {
+  const org = useEnclaveOrgStore.getState();
+  if (!(await org.ensureIdentity())) return;
+  await useEnclaveOrgStore.getState().loadOrgs();
+  // 新账号首次登录本机：快照里还没有它的组织，主动拉一轮
+  if (useEnclaveOrgStore.getState().orgs.length === 0) {
+    await useEnclaveOrgStore.getState().refresh();
+  }
+}
+
 export const useAccountStore = create<AccountStoreState>((set, get) => ({
   loaded: false,
   account: null,
@@ -111,6 +136,9 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
       const account = await invoke<AccountInfo>('account_login_complete');
       if (generation !== loginGeneration) return; // 已被取消
       set({ account, loaded: true });
+      // 账号已切换：清空上一个账号的飞地缓存，再按新身份重建
+      resetEnclaveCaches();
+      void reloadEnclaveForAccount();
     } catch (e) {
       if (generation === loginGeneration) set({ error: errorMessage(e) });
     } finally {
@@ -126,6 +154,8 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
       if (generation === loginGeneration) set({ error: errorMessage(e) });
     }
     if (generation === loginGeneration) set({ account: null, loggingIn: false });
+    // 退出后不得继续展示本机团队数据（后端已清空 local_identity）
+    resetEnclaveCaches();
   },
 
   cancelLogin: () => {

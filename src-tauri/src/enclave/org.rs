@@ -18,6 +18,8 @@ pub struct OrgSnapshotRow {
     pub status: String,
     /// 当前登录用户在该组织中的角色（平台返回的 `role`，只读）
     pub my_role: String,
+    /// 该快照对应的登录身份（平台 `user.id`）：换账号后旧快照自动失效
+    pub viewer_id: String,
 }
 
 /// 成员快照的写入行（来自平台 `/organizations/:id/members`）。
@@ -87,8 +89,9 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
     let synced_at = chrono::Utc::now().timestamp();
     conn.execute(
         "INSERT INTO org_snapshot
-            (org_id, name, owner_user_id, plan_key, plan_expires_at, seats, member_count, status, my_role, synced_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            (org_id, name, owner_user_id, plan_key, plan_expires_at, seats, member_count, status,
+             my_role, viewer_id, synced_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(org_id) DO UPDATE SET
             name = excluded.name,
             owner_user_id = excluded.owner_user_id,
@@ -98,6 +101,7 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
             member_count = excluded.member_count,
             status = excluded.status,
             my_role = excluded.my_role,
+            viewer_id = excluded.viewer_id,
             synced_at = excluded.synced_at",
         params![
             row.org_id,
@@ -109,6 +113,7 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
             row.member_count,
             row.status,
             row.my_role,
+            row.viewer_id,
             synced_at
         ],
     )
@@ -184,13 +189,19 @@ fn map_org_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrgSnapshotView> {
     })
 }
 
-/// 列出本机快照中的全部组织（按名称排序）。
+/// 列出**当前登录身份**可用的组织快照（按名称排序）。
+///
+/// `viewer_id` 与 `local_identity` 不一致的旧快照一律不返回：换账号后，
+/// 上一个账号同步下来的组织/角色不得继续用于展示或授权。
 pub fn list_orgs(conn: &Connection) -> Result<Vec<OrgSnapshotView>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
                     seats, member_count, status, my_role, synced_at
-             FROM org_snapshot ORDER BY name",
+             FROM org_snapshot
+             WHERE viewer_id <> ''
+               AND viewer_id = (SELECT user_id FROM local_identity LIMIT 1)
+             ORDER BY name",
         )
         .map_err(|e| format!("查询组织快照失败：{}", e))?;
     let rows = stmt
@@ -210,7 +221,10 @@ pub fn org_detail(
         .query_row(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
                     seats, member_count, status, my_role, synced_at
-             FROM org_snapshot WHERE org_id = ?1",
+             FROM org_snapshot
+             WHERE org_id = ?1
+               AND viewer_id <> ''
+               AND viewer_id = (SELECT user_id FROM local_identity LIMIT 1)",
             params![org_id],
             map_org_row,
         )
@@ -531,12 +545,33 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, synced_at)
-             VALUES ('8', '测试组织', '1', ?1, 0)",
+            "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, synced_at)
+             VALUES ('8', '测试组织', '1', ?1, '1', 0)",
             params![role],
         )
         .unwrap();
         conn
+    }
+
+    /// 换账号后，上一个账号留下的组织快照必须失效（默认拒绝）。
+    #[test]
+    fn stale_viewer_is_denied() {
+        let conn = seeded("owner");
+        assert!(authorize(&conn, "8", Action::PolicyWrite).is_ok());
+
+        // 模拟切换账号：本机身份变为用户 2（快照 viewer 仍是用户 1）
+        conn.execute("DELETE FROM local_identity", []).unwrap();
+        conn.execute(
+            "INSERT INTO local_identity (user_id, email, nickname, synced_at)
+             VALUES ('2', 'b@b.c', '另一个', 0)",
+            [],
+        )
+        .unwrap();
+
+        assert!(authorize(&conn, "8", Action::PolicyWrite).is_err());
+        assert!(org_detail(&conn, "8").unwrap().is_none());
+        assert!(list_orgs(&conn).unwrap().is_empty());
+        assert!(crate::enclave::authz::role_for_org(&conn, "8").unwrap().is_none());
     }
 
     /// owner 可写策略，且变更必须留下一条审计。

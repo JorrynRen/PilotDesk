@@ -178,6 +178,8 @@ pub async fn run_snapshot_round(
             } else {
                 o.role.clone()
             },
+            // 快照绑定本次同步的登录身份：换账号后旧行自动失效
+            viewer_id: me.user.id.to_string(),
         });
         match fetch_members(o.id, &token).await {
             Ok(MemberFetch::Data(members)) => member_sets.push((o.id.to_string(), members)),

@@ -40,7 +40,10 @@ function formatDetail(action: string, detail: string): string {
   } catch {
     return detail || '-';
   }
-  const obj = parsed as { from?: unknown; to?: unknown } | null;
+  const obj = parsed as { from?: unknown; to?: unknown; redacted?: unknown } | null;
+  if (obj && obj.redacted === true) {
+    return '本机路径仅所有者可见';
+  }
   if (obj && typeof obj.from === 'string' && typeof obj.to === 'string') {
     // 历史留痕可能带 Windows 扩展长度前缀（`\\?\` / `\\?\UNC\`），展示时统一剥掉
     const clean = (p: string) => p.replace(/^\\\\\?\\UNC\\/, '\\\\').replace(/^\\\\\?\\/, '');
@@ -150,6 +153,8 @@ export function OrgGovernanceSection() {
 
   const canWritePolicy = !!caps?.actions.includes('policy.write');
   const canEmergency = !!caps?.actions.includes('emergency.set');
+  // 审计含主机本机路径等敏感信息：仅 owner / admin 可见（后端同样拒绝）
+  const canAudit = !!caps?.actions.includes('org.admin');
   const allowCloud = !!policy?.allowCloudModel;
   const emergencyOn = !!emergency?.disabled;
 
@@ -258,7 +263,8 @@ export function OrgGovernanceSection() {
         )}
       </div>
 
-      {/* 审计流水 */}
+      {/* 审计流水（仅 owner / admin；member 不渲染） */}
+      {canAudit && (
       <div
         className="rounded-lg flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
@@ -305,6 +311,7 @@ export function OrgGovernanceSection() {
           </table>
         </div>
       </div>
+      )}
     </div>
   );
 }

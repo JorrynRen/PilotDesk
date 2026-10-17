@@ -32,11 +32,17 @@ interface EnclaveOrgState {
   audit: AuditView[];
   loading: boolean;
   error: string | null;
+  /** 本轮是否已用当前账号刷新过本机身份（false 时不渲染本地团队数据） */
+  identityVerified: boolean;
   /** 最近一次治理快照成功同步时间（unix 秒，0 = 从未同步） */
   lastSnapshotAt: number;
   /** 最近一次刷新的结果（含成员列表拉取失败原因，供页面提示） */
   lastRefresh: SnapshotOutcome | null;
   loadOrgs: () => Promise<void>;
+  /** 用当前登录账号刷新本机身份；失败返回 false（默认拒绝） */
+  ensureIdentity: () => Promise<boolean>;
+  /** 账号切换 / 退出：清空全部本地团队缓存 */
+  reset: () => void;
   selectOrg: (id: string) => Promise<void>;
   refresh: () => Promise<void>;
   loadFreshness: () => Promise<void>;
@@ -58,8 +64,39 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   audit: [],
   loading: false,
   error: null,
+  identityVerified: false,
   lastSnapshotAt: 0,
   lastRefresh: null,
+
+  /** 用当前账号刷新本机登录身份（`/api/v1/me`）。失败视为未校验，隐藏一切本地团队数据。 */
+  ensureIdentity: async () => {
+    try {
+      await invoke('enclave_identity_refresh');
+      set({ identityVerified: true });
+      return true;
+    } catch (e) {
+      set({ identityVerified: false, error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  /** 账号切换 / 退出：清空全部本地团队缓存，避免沿用上一个账号的数据。 */
+  reset: () => {
+    set({
+      orgs: [],
+      activeOrgId: '',
+      detail: null,
+      caps: null,
+      policy: null,
+      emergency: null,
+      audit: [],
+      loading: false,
+      error: null,
+      identityVerified: false,
+      lastSnapshotAt: 0,
+      lastRefresh: null,
+    });
+  },
 
   /** 拉组织列表；默认选中首个（或保持原有选中项）。 */
   loadOrgs: async () => {

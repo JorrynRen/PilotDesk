@@ -5,6 +5,7 @@ import { TitleBar, StatusBar } from '../components/layout';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
 import { useEnclaveKbStore } from '../stores/enclaveKbStore';
+import { useAccountStore } from '../stores/accountStore';
 
 function formatTime(unixSec: number): string {
   if (!unixSec) return '-';
@@ -34,10 +35,23 @@ export function EnclaveKbPage() {
   const loading = useEnclaveKbStore((s) => s.loading);
   const error = useEnclaveKbStore((s) => s.error);
   const [keyword, setKeyword] = useState('');
+  // 登录账号变化 → 先校验新身份，再加载组织与知识库
+  const accountKey = useAccountStore((s) => s.account?.email ?? '');
 
   useEffect(() => {
-    void useEnclaveOrgStore.getState().loadOrgs();
-  }, []);
+    let cancelled = false;
+    void (async () => {
+      const st = useEnclaveOrgStore.getState();
+      if (!(await st.ensureIdentity()) || cancelled) return;
+      await st.loadOrgs();
+      if (cancelled) return;
+      const cur = useEnclaveOrgStore.getState();
+      if (cur.orgs.length === 0 && !cur.lastRefresh) await cur.refresh();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
 
   useEffect(() => {
     if (activeOrgId) void useEnclaveKbStore.getState().loadKbs(activeOrgId);

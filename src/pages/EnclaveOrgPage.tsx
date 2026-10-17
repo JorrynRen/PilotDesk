@@ -4,6 +4,7 @@ import { Building2, RefreshCw, Loader2, Users } from 'lucide-react';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
+import { useAccountStore } from '../stores/accountStore';
 import { OrgGovernanceSection } from '../components/enclave/OrgGovernancePanels';
 import type { MemberView } from '../types/enclave';
 
@@ -48,11 +49,25 @@ export function EnclaveOrgPage() {
   const loading = useEnclaveOrgStore((s) => s.loading);
   const error = useEnclaveOrgStore((s) => s.error);
   const lastRefresh = useEnclaveOrgStore((s) => s.lastRefresh);
+  // 登录账号变化 → 必须先校验新身份，再重新加载本机团队数据
+  const accountKey = useAccountStore((s) => s.account?.email ?? '');
 
   useEffect(() => {
-    void useEnclaveOrgStore.getState().loadOrgs();
-    void useEnclaveOrgStore.getState().loadFreshness();
-  }, []);
+    let cancelled = false;
+    void (async () => {
+      const st = useEnclaveOrgStore.getState();
+      if (!(await st.ensureIdentity()) || cancelled) return;
+      await st.loadOrgs();
+      if (cancelled) return;
+      const cur = useEnclaveOrgStore.getState();
+      // 本机还没有当前账号的组织快照（新账号 / 刚升级）→ 主动拉一轮
+      if (cur.orgs.length === 0 && !cur.lastRefresh) await cur.refresh();
+      await useEnclaveOrgStore.getState().loadFreshness();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
 
   // 顶栏组合菜单仍可切到其它模式：切模式后回到主布局（与知识库页同构）
   const handleModeChange = useCallback(

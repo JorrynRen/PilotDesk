@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
+import { useAccountStore } from '../../stores/accountStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import type {
@@ -111,10 +112,22 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
     void invoke<TeamFilesRootView>('enclave_files_root_get').then(setRootView).catch(() => {});
   }, [rootOpen, rootView]);
 
-  // 首次进入：拉组织（会自动选中并加载成员）
+  // 登录账号变化 → 先校验新身份，再拉组织（会自动选中并加载成员）
+  const accountKey = useAccountStore((s) => s.account?.email ?? '');
   useEffect(() => {
-    void useEnclaveOrgStore.getState().loadOrgs();
-  }, []);
+    let cancelled = false;
+    void (async () => {
+      const st = useEnclaveOrgStore.getState();
+      if (!(await st.ensureIdentity()) || cancelled) return;
+      await st.loadOrgs();
+      if (cancelled) return;
+      const cur = useEnclaveOrgStore.getState();
+      if (cur.orgs.length === 0 && !cur.lastRefresh) await cur.refresh();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
 
   // 组织变化 → 重拉任务
   useEffect(() => {

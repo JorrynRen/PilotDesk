@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 4;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 5;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS org_snapshot (
     member_count    INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL DEFAULT '',
     my_role         TEXT NOT NULL DEFAULT 'member', -- 当前登录用户在该组织中的角色（平台 role 字段，只读）
+    viewer_id       TEXT NOT NULL DEFAULT '',      -- 该快照对应的登录身份（user.id）：换账号后旧行自动失效
     synced_at       INTEGER NOT NULL DEFAULT 0
 );
 
@@ -368,6 +369,11 @@ impl EnclaveStore {
         // v3 → v4：过程记录附件
         if current < 4 {
             Self::ensure_column(conn, "task_files", "progress_id", "TEXT")?;
+        }
+        // v4 → v5：组织快照绑定登录身份（换账号后旧快照不得继续用于权限判定）。
+        // 存量行补列后 viewer_id = ''，在下一次快照同步前一律视为无效（默认拒绝）。
+        if current < 5 {
+            Self::ensure_column(conn, "org_snapshot", "viewer_id", "TEXT NOT NULL DEFAULT ''")?;
         }
 
         if current != ENCLAVE_SCHEMA_VERSION {

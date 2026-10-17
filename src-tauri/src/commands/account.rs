@@ -584,9 +584,12 @@ pub fn account_platform_base() -> String {
     platform::api_base().to_string()
 }
 
-/// 退出登录：先尽力吊销服务端令牌，再清本地
+/// 退出登录：先尽力吊销服务端令牌，再清本地（含飞地本机身份）。
 #[tauri::command]
-pub async fn account_logout(state: tauri::State<'_, crate::DbState>) -> Result<(), String> {
+pub async fn account_logout(
+    state: tauri::State<'_, crate::DbState>,
+    enclave: tauri::State<'_, std::sync::Arc<crate::enclave::EnclaveState>>,
+) -> Result<(), String> {
     let tokens = {
         let conn = state
             .get_conn()
@@ -609,5 +612,17 @@ pub async fn account_logout(state: tauri::State<'_, crate::DbState>) -> Result<(
     let conn = state
         .get_conn()
         .map_err(|e| format!("数据库连接失败：{}", e))?;
-    clear_tokens(&conn).map_err(String::from)
+    clear_tokens(&conn).map_err(String::from)?;
+    drop(conn);
+
+    // 飞地：清掉本机登录身份。组织/成员快照按 viewer 绑定失效，但身份必须显式清空，
+    // 否则退出后本地命令仍会以上一个账号的 actor 执行。
+    enclave
+        .store
+        .with_conn(|c| {
+            c.execute("DELETE FROM local_identity", [])
+                .map(|_| ())
+                .map_err(|e| format!("清理飞地登录身份失败：{}", e))
+        })?;
+    Ok(())
 }
