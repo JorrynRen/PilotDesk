@@ -120,6 +120,10 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
     try {
       const account = await invoke<AccountInfo | null>('account_status');
       set({ account, loaded: true, error: '' });
+      // 启动时把飞地本机身份对齐到当前账号（账号在别处切换过也不会沿用旧身份）
+      if (account && !useEnclaveOrgStore.getState().identityVerified) {
+        void useEnclaveOrgStore.getState().ensureIdentity();
+      }
     } catch (e) {
       // 平台不可达时按未登录处理：不打断本地功能
       set({ loaded: true, error: errorMessage(e) });
