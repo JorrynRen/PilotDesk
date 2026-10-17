@@ -117,10 +117,20 @@ export function OrgGovernanceSection() {
   const caps = useEnclaveOrgStore((s) => s.caps);
   const policy = useEnclaveOrgStore((s) => s.policy);
   const emergency = useEnclaveOrgStore((s) => s.emergency);
+  const detail = useEnclaveOrgStore((s) => s.detail);
   const audit = useEnclaveOrgStore((s) => s.audit);
   const [busy, setBusy] = useState<'policy' | 'emergency' | null>(null);
 
   if (!activeOrgId) return null;
+
+  // 操作人展示：优先本机登录身份，其次成员快照里的姓名 / 邮箱，最后才回落到平台用户 id
+  const actorName = (actorId: string): string => {
+    if (!actorId) return '-';
+    const me = caps?.identity;
+    if (me && me.userId === actorId) return me.nickname || me.email || actorId;
+    const m = detail?.members.find((x) => x.userId === actorId);
+    return m?.displayName || m?.email || actorId;
+  };
 
   const canWritePolicy = !!caps?.actions.includes('policy.write');
   const canEmergency = !!caps?.actions.includes('emergency.set');
@@ -264,7 +274,7 @@ export function OrgGovernanceSection() {
                 <tr key={a.id} style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                   <td className="px-3 py-1 whitespace-nowrap">{formatTime(a.createdAt)}</td>
                   <td className="px-3 py-1 whitespace-nowrap">{ACTION_LABEL[a.action] ?? a.action}</td>
-                  <td className="px-3 py-1 whitespace-nowrap">{a.actorId || '-'}</td>
+                  <td className="px-3 py-1 whitespace-nowrap">{actorName(a.actorId)}</td>
                   <td className="px-3 py-1 break-all">{formatDetail(a.action, a.detail)}</td>
                 </tr>
               ))}
