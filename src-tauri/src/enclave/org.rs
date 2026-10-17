@@ -514,3 +514,99 @@ pub fn list_audit(conn: &Connection, org_id: &str, limit: i64) -> Result<Vec<Aud
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("读取审计失败：{}", e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::enclave::authz::{authorize, Action};
+
+    /// 建一个内存库：本机登录身份 = 用户 1，组织 8 的角色由参数决定。
+    fn seeded(role: &str) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::enclave::db::ENCLAVE_SCHEMA_SQL).unwrap();
+        conn.execute(
+            "INSERT INTO local_identity (user_id, email, nickname, synced_at)
+             VALUES ('1', 'a@b.c', '测试', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, synced_at)
+             VALUES ('8', '测试组织', '1', ?1, 0)",
+            params![role],
+        )
+        .unwrap();
+        conn
+    }
+
+    /// owner 可写策略，且变更必须留下一条审计。
+    #[test]
+    fn owner_policy_write_audited() {
+        let conn = seeded("owner");
+        let actor = authorize(&conn, "8", Action::PolicyWrite).unwrap();
+        assert_eq!(actor, "1");
+
+        set_allow_cloud_model(&conn, "8", true, &actor).unwrap();
+        audit(
+            &conn,
+            "8",
+            &actor,
+            "policy.allow_cloud_model",
+            "{\"from\":false,\"to\":true}",
+        )
+        .unwrap();
+
+        let view = policy_view(&conn, "8").unwrap();
+        assert!(view.allow_cloud_model);
+        assert!(view.explicit);
+        assert_eq!(view.updated_by, "1");
+
+        let logs = list_audit(&conn, "8", 10).unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].action, "policy.allow_cloud_model");
+        assert_eq!(logs[0].actor_id, "1");
+    }
+
+    /// member 越权写策略：默认拒绝，且错误文案说明是角色不足。
+    #[test]
+    fn member_policy_write_denied() {
+        let conn = seeded("member");
+        let err = authorize(&conn, "8", Action::PolicyWrite).unwrap_err();
+        assert!(err.contains("无权"), "实际错误：{}", err);
+    }
+
+    /// 没有组织快照（未同步 / 组织不存在）→ 治理冻结，不得放行。
+    #[test]
+    fn missing_snapshot_freezes_governance() {
+        let conn = seeded("owner");
+        let err = authorize(&conn, "999", Action::EmergencySet).unwrap_err();
+        assert!(err.contains("冻结"), "实际错误：{}", err);
+    }
+
+    /// 应急开关读写往返 + 审计（语义：true = 对外服务关闭）。
+    #[test]
+    fn emergency_switch_roundtrip() {
+        let conn = seeded("owner");
+        let actor = authorize(&conn, "8", Action::EmergencySet).unwrap();
+        set_emergency(&conn, "8", true, &actor).unwrap();
+        // 与命令层一致：写表后经唯一审计入口留痕
+        audit(&conn, "8", &actor, "host.emergency", "{\"from\":false,\"to\":true}").unwrap();
+
+        let view = emergency_view(&conn, "8").unwrap();
+        assert!(view.disabled);
+        assert!(any_emergency_disabled(&conn).unwrap());
+
+        let logs = list_audit(&conn, "8", 10).unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].action, "host.emergency");
+    }
+
+    /// 未设置过策略时按默认「不允许」呈现（fail-safe）。
+    #[test]
+    fn policy_defaults_to_disallow() {
+        let conn = seeded("owner");
+        let view = policy_view(&conn, "8").unwrap();
+        assert!(!view.allow_cloud_model);
+        assert!(!view.explicit);
+    }
+}
