@@ -302,6 +302,14 @@ pub struct ToolEnv {
     pub file_history: Option<Arc<history::FileHistoryService>>,
     /// 权限规则（write_file 脚本内容/系统目录安全检查用；会话/群聊装配处注入）。
     pub permission_rules: Option<Arc<crate::api_agent::agent_loop::PermissionRules>>,
+    /// 飞地：团队知识库工具依赖（仅会话模式且出境闸门放行时注入）。
+    pub enclave_store: Option<Arc<crate::enclave::db::EnclaveStore>>,
+    /// 当前团队组织 id（一期取主机快照中的首个组织）。
+    pub enclave_org_id: Option<String>,
+    /// 出境闸门判定结果（装配期算一次；工具执行时仍会复核策略）。
+    pub enclave_team_knowledge_allowed: bool,
+    /// 会话所用 Provider 的信任域（工具执行复核用）。
+    pub enclave_trust_domain: crate::enclave::gate::TrustDomain,
 }
 
 /// 会话模式禁用清单（全量可用）。
@@ -628,6 +636,24 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
             env.session_id.clone(),
             pending.clone(),
         )));
+    }
+
+    // ── 飞地：团队知识库（只读；受数据出境闸门约束）──
+    if env.enclave_team_knowledge_allowed {
+        if let (Some(store), Some(org_id)) = (env.enclave_store.clone(), env.enclave_org_id.clone()) {
+            tools.push(Arc::new(crate::enclave::tools::SearchOrgKnowledgeTool::new(
+                store.clone(),
+                org_id.clone(),
+                env.enclave_trust_domain,
+            )));
+            tools.push(Arc::new(
+                crate::enclave::tools::ReadOrgKnowledgeEntryTool::new(
+                    store,
+                    org_id,
+                    env.enclave_trust_domain,
+                ),
+            ));
+        }
     }
 
     tools

@@ -126,6 +126,32 @@ fn parse_conn(conn_json: &str) -> ConnParams {
     }
 }
 
+/// Provider 信任域（出境闸门用）：`agents.conn.trustDomain` 显式标记优先，
+/// 否则按 `baseUrl` 启发式（回环 / 私网 / .local → `internal`）。
+pub fn provider_trust_domain(
+    conn: &rusqlite::Connection,
+    provider_id: &str,
+) -> crate::enclave::gate::TrustDomain {
+    use crate::enclave::gate::TrustDomain;
+    let raw: String = conn
+        .query_row(
+            "SELECT COALESCE(conn, '') FROM agents WHERE agent_type = ?1",
+            params![agent_type_of(provider_id)],
+            |r| r.get(0),
+        )
+        .unwrap_or_default();
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let explicit = value
+        .get("trustDomain")
+        .and_then(|x| x.as_str())
+        .and_then(TrustDomain::parse);
+    explicit.unwrap_or_else(|| {
+        let base = value.get("baseUrl").and_then(|x| x.as_str()).unwrap_or("");
+        TrustDomain::heuristic(base)
+    })
+}
+
 /// 由连接参数组装 `agents.conn` JSON（models 为对象数组 `[{name,note}]`）。
 fn build_conn_json(base_url: &str, api_format: &str, entries: &[(String, String)]) -> String {
     let models: Vec<serde_json::Value> = entries

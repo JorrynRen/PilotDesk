@@ -122,6 +122,11 @@ pub fn build_groupchat_tool_registry(
         permission_rules: Some(Arc::new(
             crate::commands::permission::load_rules(conn).unwrap_or_default(),
         )),
+        // 群聊不注入团队知识库工具（一期仅 API 会话可用）
+        enclave_store: None,
+        enclave_org_id: None,
+        enclave_team_knowledge_allowed: false,
+        enclave_trust_domain: crate::enclave::gate::TrustDomain::Cloud,
     };
 
     let mut registry = ToolRegistry::new();

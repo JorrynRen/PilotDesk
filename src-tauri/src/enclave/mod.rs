@@ -12,11 +12,13 @@
 pub mod authz;
 pub mod db;
 pub mod files;
+pub mod gate;
 pub mod knowledge;
 pub mod org;
 pub mod reports;
 pub mod snapshot;
 pub mod tasks;
+pub mod tools;
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;

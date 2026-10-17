@@ -77,6 +77,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
   const orgs = useEnclaveOrgStore((s) => s.orgs);
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
   const detail = useEnclaveOrgStore((s) => s.detail);
+  const policy = useEnclaveOrgStore((s) => s.policy);
 
   const tasks = useEnclaveTaskStore((s) => s.tasks);
   const activeTaskId = useEnclaveTaskStore((s) => s.activeTaskId);
@@ -173,6 +174,19 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
           </button>
         ))}
         <div className="flex-1" />
+        {/* 出境闸门常驻状态：默认关闭，Agent 能否检索团队知识库受此约束 */}
+        {activeOrgId && (
+          <span
+            className="text-[11px] px-1.5 py-0.5 rounded"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              color: policy?.allowCloudModel ? 'var(--status-danger)' : 'var(--text-tertiary)',
+            }}
+            title="团队数据发送至云端模型的开关（在「组织与权限」页修改）"
+          >
+            出境闸门：{policy?.allowCloudModel ? '允许' : '禁止'}
+          </span>
+        )}
         {loading && <Loader2 size={12} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
         {props.onOpenKb && (
           <button

@@ -1695,6 +1695,8 @@ async fn run_api_agent_body(
     // 模型能力查询与跨 provider 解析（闭包持有连接池；key 只在后端解析，绝不进 LLM 上下文）。
     let pool_for_providers = pool.clone();
     let session_pid = provider_id.clone();
+    // 供出境闸门在 closure 外使用（session_pid 会被 move 进 list_providers 闭包）
+    let session_pid_for_trust = session_pid.clone();
     let list_providers: Option<
         Arc<dyn Fn() -> Vec<crate::tools::ProviderModelInfo> + Send + Sync>,
     > = Some(Arc::new(move || {
@@ -1727,6 +1729,40 @@ async fn run_api_agent_body(
     // 本轮运行的工作目录 / 授权边界：工作流节点传产物目录（只对本轮生效，不改写会话行，
     // 所以「延续会话」也不会把被续会话的旧 cwd 带过来）；会话模式沿用会话行自己的 cwd。
     let effective_cwd = workspace_override.unwrap_or_else(|| session.cwd.clone());
+    // 飞地：数据出境闸门（装配期算一次；工具执行时还会复核策略）
+    // 一期取主机快照中的首个组织作为「当前团队」。
+    let (enclave_store, enclave_org_id, enclave_allowed, enclave_trust) = {
+        let state = app
+            .state::<std::sync::Arc<crate::enclave::EnclaveState>>();
+        let store = state.store.clone();
+        let trust =
+            crate::commands::api_provider::provider_trust_domain(&conn, &session_pid_for_trust);
+        let (org_id, allowed) = store
+            .with_conn(|c| {
+                let org: Option<String> = c
+                    .query_row(
+                        "SELECT org_id FROM org_snapshot ORDER BY org_id LIMIT 1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                let allowed = match &org {
+                    Some(id) => {
+                        let policy = crate::enclave::org::get_allow_cloud_model(c, id)?;
+                        crate::enclave::gate::team_content_injectable(
+                            trust,
+                            policy.unwrap_or(false),
+                            policy.is_some(),
+                        )
+                    }
+                    None => false,
+                };
+                Ok::<_, String>((org, allowed))
+            })
+            .unwrap_or((None, false));
+        (store, org_id, allowed, trust)
+    };
+
     let env = crate::tools::ToolEnv {
         cwd: effective_cwd.clone(),
         api_format: api_format.clone(),
@@ -1755,6 +1791,10 @@ async fn run_api_agent_body(
         pending: Some(pending_approvals.clone()),
         file_history,
         permission_rules: Some(std::sync::Arc::new(permission_rules.clone())),
+        enclave_store: Some(enclave_store),
+        enclave_org_id,
+        enclave_team_knowledge_allowed: enclave_allowed,
+        enclave_trust_domain: enclave_trust,
     };
     let ctx = crate::tools::BuildContext { env: &env, pool };
     let tool_registry = crate::tools::build_registry(&profile, &ctx).await?;
