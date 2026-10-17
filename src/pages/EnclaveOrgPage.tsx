@@ -4,6 +4,7 @@ import { Building2, RefreshCw, Loader2, Users } from 'lucide-react';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
+import { OrgGovernanceSection } from '../components/enclave/OrgGovernancePanels';
 import type { MemberView } from '../types/enclave';
 
 /** 治理快照新鲜度上限（秒）：超过即视为「可能过期」，与后端 SNAPSHOT_STALE_MAX_SECS 对齐。 */
@@ -165,6 +166,13 @@ export function EnclaveOrgPage() {
               </span>
               <span
                 className="text-[11px] px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                title="当前登录用户在该组织中的角色（来自平台，主机侧只读）"
+              >
+                我的角色：{roleLabel(org.myRole)}
+              </span>
+              <span
+                className="text-[11px] px-1.5 py-0.5 rounded"
                 style={{
                   backgroundColor: 'var(--bg-tertiary)',
                   color: freshnessText(org.syncedAt).includes('stale') || org.syncedAt <= 0
@@ -185,7 +193,7 @@ export function EnclaveOrgPage() {
 
         {/* 成员表 */}
         <div
-          className="flex-1 min-h-0 rounded-lg flex flex-col overflow-hidden"
+          className="shrink-0 rounded-lg flex flex-col overflow-hidden"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
           <div
@@ -205,7 +213,7 @@ export function EnclaveOrgPage() {
               </span>
             )}
           </div>
-          <div className="flex-1 min-h-0 overflow-auto">
+          <div className="max-h-[420px] overflow-auto">
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-tertiary)' }}>
@@ -250,8 +258,11 @@ export function EnclaveOrgPage() {
           </div>
         </div>
 
+        {/* M2 治理：数据出境闸门 / 主机应急 / 变更审计 */}
+        <OrgGovernanceSection />
+
         <div className="shrink-0 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          组织与成员数据来自平台，主机侧只读；策略开关、应急开关、审计流水、主机转移将在后续版本接入。
+          组织与成员数据来自平台，主机侧只读；成员管理、主机转移将在后续版本接入。
         </div>
       </div>
 

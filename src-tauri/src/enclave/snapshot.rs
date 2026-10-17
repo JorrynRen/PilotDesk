@@ -56,15 +56,21 @@ struct OrgsResp {
     organizations: Vec<OrgRow>,
 }
 
-/// 平台组织行（**与 org_share 的 `OrgRow` 同口径**；`MyOrg` 字段就是组织快照需要的数据）。
+/// 平台组织行（与 `/api/v1/organizations/mine` 的返回对齐）。
+///
+/// 注意字段名：平台返回 **`ownerId`**（数字）与本人在该组织的 **`role`**。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OrgRow {
     id: i64,
     #[serde(default)]
     name: String,
+    /// 本人席位状态（invited / active / removed）
     #[serde(default)]
     seat_status: String,
+    /// 本人在该组织中的角色（owner / admin / member）——授权器的唯一来源
+    #[serde(default)]
+    role: String,
     #[serde(default)]
     plan_key: String,
     #[serde(default)]
@@ -75,10 +81,24 @@ struct OrgRow {
     member_count: i64,
     #[serde(default)]
     status: String,
-    /// 平台 owner（即主机身份来源）。平台 `OrgRow` **当前无 owner 字段**，
-    /// 这里防御式兼容 `ownerUserId`；平台补齐前恒为 `None` → 落库为空字符串（详见下方注释）。
+    /// 平台 owner 的用户 id（即主机身份来源）
     #[serde(default)]
-    owner_user_id: Option<String>,
+    owner_id: Option<i64>,
+}
+
+/// 平台 `/api/v1/me` 响应：`{ user: PublicUser }`。
+#[derive(Deserialize)]
+struct MeResp {
+    user: MeUser,
+}
+
+#[derive(Deserialize)]
+struct MeUser {
+    id: i64,
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    nickname: String,
 }
 
 // ── 一轮同步 ────────────────────────────────────────────────────
@@ -92,6 +112,11 @@ pub async fn run_snapshot_round(
 ) -> Result<SnapshotOutcome, String> {
     let token = require_token(db).await?;
 
+    // 0) 本机登录身份（`/api/v1/me`）：授权器据此确定 actor，审计据此留痕。
+    let me: MeResp = platform::get_json_with_status("/api/v1/me", Some(&token))
+        .await
+        .map_err(|e| e.message)?;
+
     // 1) 我所属的组织：只保留 seatStatus=active 且 status=active 的组织。
     let resp: OrgsResp = platform::get_json_with_status("/api/v1/organizations/mine", Some(&token))
         .await
@@ -104,9 +129,10 @@ pub async fn run_snapshot_round(
 
     // 2) 逐组织拉成员（网络请求先行，await 全在同步块之外）。
     //
-    // 成员列表接口是**待对齐项**：缺失/报错时只记原因、跳过该组织的成员写入，
-    // **不拖垮整轮**（组织快照照常落库）。注意此时**绝不能**调 `upsert_member_snapshot`——
-    // 它会把这个组织的存量成员全部标记为 `removed`。
+    // 成员名单走 `GET /organizations/:id`（平台目前**没有** `/:id/members` 列表接口，
+    // 属待对齐项 §16.1）：该详情对 owner/admin 才返回 `members`，普通成员视角没有名单。
+    // 拿不到名单时只记原因、跳过该组织的成员写入，**不拖垮整轮**——
+    // 且此时**绝不能**调 `upsert_member_snapshot`（会把存量成员全部标成 `removed`）。
     let mut org_rows: Vec<OrgSnapshotRow> = Vec::with_capacity(orgs.len());
     let mut member_sets: Vec<(String, Vec<MemberSnapshotRow>)> = Vec::with_capacity(orgs.len());
     let mut member_error: Option<String> = None;
@@ -114,17 +140,28 @@ pub async fn run_snapshot_round(
         org_rows.push(OrgSnapshotRow {
             org_id: o.id.to_string(),
             name: o.name.clone(),
-            // 平台 ownerUserId 待补：当前为空字符串，M2 起用于确定主机身份。
-            owner_user_id: o.owner_user_id.clone().unwrap_or_default(),
+            // 平台 `ownerId` 即主机身份来源（owner = host）
+            owner_user_id: o.owner_id.map(|v| v.to_string()).unwrap_or_default(),
             plan_key: o.plan_key.clone(),
             plan_expires_at: o.plan_expires_at.clone(),
             seats: o.seats,
             member_count: o.member_count,
             status: o.status.clone(),
+            // 角色空串按最小权限处理（member），绝不默认 owner
+            my_role: if o.role.trim().is_empty() {
+                "member".to_string()
+            } else {
+                o.role.clone()
+            },
         });
-        let path = format!("/api/v1/organizations/{}/members", o.id);
-        match fetch_members(&path, &token).await {
-            Ok(members) => member_sets.push((o.id.to_string(), members)),
+        match fetch_members(o.id, &token).await {
+            Ok(MemberFetch::Data(members)) => member_sets.push((o.id.to_string(), members)),
+            Ok(MemberFetch::Unavailable(reason)) => {
+                log::debug!("[Enclave] 组织 {} 无成员名单：{}", o.id, reason);
+                if member_error.is_none() {
+                    member_error = Some(reason);
+                }
+            }
             Err(e) => {
                 log::debug!("[Enclave] 组织 {} 成员快照拉取失败：{}", o.id, e);
                 if member_error.is_none() {
@@ -139,6 +176,14 @@ pub async fn run_snapshot_round(
 
     // 3) 同步块：数据已全部到手，写库（闭包内绝不 await）。
     state.store.with_conn(|c| {
+        org::upsert_local_identity(
+            c,
+            &org::LocalIdentityRow {
+                user_id: me.user.id.to_string(),
+                email: me.user.email.clone(),
+                nickname: me.user.nickname.clone(),
+            },
+        )?;
         for r in &org_rows {
             org::upsert_org_snapshot(c, r)?;
         }
@@ -158,33 +203,36 @@ pub async fn run_snapshot_round(
     })
 }
 
-/// 拉某组织的成员列表，做**防御式解析**。
+/// 成员名单的拉取结果。
+enum MemberFetch {
+    /// 拿到名单（可能为空数组）。
+    Data(Vec<MemberSnapshotRow>),
+    /// 平台没有返回名单（当前登录者不是 owner/admin），附可读原因。
+    Unavailable(String),
+}
+
+/// 拉某组织的成员名单。
 ///
-/// **平台 members 接口尚未定稿**，响应体可能是 `{ members: [...] }`，也可能是裸数组 `[...]`；
-/// 因此这里先用 `serde_json::Value` 兼容两种形状，再由 [`parse_member`] 逐条宽松取值。
-async fn fetch_members(path: &str, token: &str) -> Result<Vec<MemberSnapshotRow>, String> {
-    let v: serde_json::Value = platform::get_json_with_status(path, Some(token))
+/// 平台**没有**独立的 `GET /organizations/:id/members`（待对齐项 §16.1），
+/// 但 `GET /organizations/:id` 对 owner/admin 会带上 `organization.members`，因此一期改走详情接口。
+async fn fetch_members(org_id: i64, token: &str) -> Result<MemberFetch, String> {
+    let path = format!("/api/v1/organizations/{}", org_id);
+    let v: serde_json::Value = platform::get_json_with_status(&path, Some(token))
         .await
         .map_err(|e| match e.status {
-            // 404：平台尚未提供该接口（待对齐项），给出可读原因而不是网关的「未注册的项目：api」
-            404 => "平台暂未提供成员列表接口（待平台补齐）".to_string(),
+            403 => "你不是该组织的有效成员（席位可能已失效）".to_string(),
             401 => "请先登录平台账号".to_string(),
             _ => e.message,
         })?;
-    let list = match &v {
-        serde_json::Value::Array(a) => a.clone(),
-        serde_json::Value::Object(o) => o
-            .get("members")
-            .and_then(|m| m.as_array())
-            .cloned()
-            .unwrap_or_default(),
-        // 其它形状（null / 数字等）一律视为空列表，不阻塞整轮同步。
-        _ => Vec::new(),
-    };
-    Ok(list
-        .iter()
-        .filter_map(parse_member)
-        .collect::<Vec<MemberSnapshotRow>>())
+    match v.get("organization").and_then(|o| o.get("members")) {
+        Some(serde_json::Value::Array(a)) => Ok(MemberFetch::Data(
+            a.iter().filter_map(parse_member).collect(),
+        )),
+        // 普通成员视角不下发名单：不算失败，只是「不可见」
+        _ => Ok(MemberFetch::Unavailable(
+            "仅 owner / admin 可查看成员名单，当前角色无此权限".to_string(),
+        )),
+    }
 }
 
 /// 把一条成员 JSON 宽松解析为 [`MemberSnapshotRow`]（缺失字段用默认值）。
@@ -201,7 +249,10 @@ fn parse_member(v: &serde_json::Value) -> Option<MemberSnapshotRow> {
     Some(MemberSnapshotRow {
         user_id,
         role: non_empty(value_str(v, "role").unwrap_or_default(), "member"),
-        display_name: value_str(v, "displayName").unwrap_or_default(),
+        // 平台成员视图用 `nickname`；兼容 `displayName`
+        display_name: value_str(v, "displayName")
+            .or_else(|| value_str(v, "nickname"))
+            .unwrap_or_default(),
         email: value_str(v, "email").unwrap_or_default(),
         seat_status: non_empty(value_str(v, "seatStatus").unwrap_or_default(), "active"),
     })

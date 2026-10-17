@@ -28,6 +28,8 @@ export interface OrgSnapshotView {
   /** 团队成员数 */
   memberCount: number;
   status: string;
+  /** 当前登录用户在该组织中的角色（owner / admin / member），前端据此做显隐 */
+  myRole: string;
   /** 本快照同步时间（unix 秒） */
   syncedAt: number;
 }
@@ -72,4 +74,47 @@ export interface SnapshotOutcome {
    * 平台成员列表接口属待对齐项：该接口缺失时组织快照照常写入，成员表留空并在此给出提示。
    */
   memberError?: string;
+}
+
+/** 本机登录身份快照（平台 /me） */
+export interface LocalIdentityView {
+  userId: string;
+  email: string;
+  nickname: string;
+  syncedAt: number;
+}
+
+/**
+ * 组织级能力视图（`enclave_org_caps`）。
+ *
+ * `actions` 是后端授权器算出的可执行动作，**前端只按它渲染治理按钮**（唯一来源）。
+ */
+export interface EnclaveOrgCaps {
+  orgId: string;
+  identity: LocalIdentityView | null;
+  /** owner / admin / member；未同步为 null */
+  role: string | null;
+  /** 可执行动作，如 "policy.write" / "emergency.set" / "org.admin" */
+  actions: string[];
+  snapshotFresh: boolean;
+  syncedAt: number;
+  disabled: boolean;
+}
+
+/** 数据出境总闸视图（`enclave_policy_get`） */
+export interface PolicyView {
+  orgId: string;
+  allowCloudModel: boolean;
+  updatedBy: string;
+  updatedAt: number;
+  /** 是否已显式设置过；false 表示按默认「不允许」 */
+  explicit: boolean;
+}
+
+/** 主机应急开关视图（`enclave_emergency_get`） */
+export interface EmergencyView {
+  orgId: string;
+  disabled: boolean;
+  updatedBy: string;
+  updatedAt: number;
 }

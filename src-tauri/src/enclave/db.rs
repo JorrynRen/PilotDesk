@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 1;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 2;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -28,13 +28,22 @@ pub const ENCLAVE_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS org_snapshot (
     org_id          TEXT PRIMARY KEY,
     name            TEXT NOT NULL DEFAULT '',
-    owner_user_id   TEXT NOT NULL DEFAULT '',   -- 平台 owner，即主机身份来源
+    owner_user_id   TEXT NOT NULL DEFAULT '',   -- 平台 owner（/organizations/mine 的 ownerId），即主机身份来源
     plan_key        TEXT NOT NULL DEFAULT '',
     plan_expires_at TEXT,
     seats           INTEGER NOT NULL DEFAULT 0,
     member_count    INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL DEFAULT '',
+    my_role         TEXT NOT NULL DEFAULT 'member', -- 当前登录用户在该组织中的角色（平台 role 字段，只读）
     synced_at       INTEGER NOT NULL DEFAULT 0
+);
+
+-- 本机登录身份快照（平台 /me）：授权器据此确定 actor，审计据此留痕。单行。
+CREATE TABLE IF NOT EXISTS local_identity (
+    user_id      TEXT PRIMARY KEY,
+    email        TEXT NOT NULL DEFAULT '',
+    nickname     TEXT NOT NULL DEFAULT '',
+    synced_at    INTEGER NOT NULL DEFAULT 0
 );
 
 -- 成员快照（只读，来自平台；成员消失置 seat_status='removed'，不物理删）
@@ -343,6 +352,12 @@ impl EnclaveStore {
         conn.execute_batch(ENCLAVE_SCHEMA_SQL)
             .map_err(|e| format!("初始化飞地表结构失败: {}", e))?;
 
+        // v1 → v2：存量库的 `org_snapshot` 加不了新列（CREATE TABLE IF NOT EXISTS 不会改已有表），
+        // 迁移期显式补列；新库建表语句里已含该列，这里会直接跳过。
+        if current < 2 {
+            Self::ensure_column(conn, "org_snapshot", "my_role", "TEXT NOT NULL DEFAULT 'member'")?;
+        }
+
         if current != ENCLAVE_SCHEMA_VERSION {
             conn.execute_batch(&format!("PRAGMA user_version = {}", ENCLAVE_SCHEMA_VERSION))
                 .map_err(|e| format!("写入飞地数据库版本号失败: {}", e))?;
@@ -364,9 +379,7 @@ impl EnclaveStore {
 
     /// 缺列则补列（SQLite 支持带默认值的 `ADD COLUMN`）。
     ///
-    /// 留作后续增量升级用：`ENCLAVE_SCHEMA_SQL` 里的 `CREATE TABLE IF NOT EXISTS`
-    /// 对**存量库**加不了新列，新列一律走这里。
-    #[allow(dead_code)]
+    /// 每次 `ENCLAVE_SCHEMA_VERSION` 递增时，在 [`Self::migrate`] 里对存量库调用。
     pub fn ensure_column(
         conn: &Connection,
         table: &str,

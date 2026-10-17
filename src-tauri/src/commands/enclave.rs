@@ -70,3 +70,150 @@ pub async fn enclave_snapshot_refresh(
 pub fn enclave_snapshot_freshness(state: State<'_, Arc<EnclaveState>>) -> i64 {
     state.last_snapshot_at()
 }
+
+// ════════════════════════════════════════════════════════════
+// M2：授权器 + 策略 / 应急 / 审计
+// ════════════════════════════════════════════════════════════
+
+/// 组织级能力视图：当前身份、角色、可执行动作，以及快照新鲜度与应急状态。
+///
+/// 前端**只按 `actions` 渲染治理按钮**（`effectiveActions` 是唯一来源）；默认拒绝时这里为空。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnclaveOrgCaps {
+    pub org_id: String,
+    /// 本机登录身份（未登录为 null）
+    pub identity: Option<crate::enclave::org::LocalIdentityView>,
+    /// 当前用户在该组织中的角色（owner / admin / member；未同步为 null）
+    pub role: Option<String>,
+    /// 可执行的组织级动作
+    pub actions: Vec<String>,
+    /// 治理快照是否新鲜（超过 `SNAPSHOT_STALE_MAX_SECS` 即 false）
+    pub snapshot_fresh: bool,
+    /// 快照同步时间（unix 秒）
+    pub synced_at: i64,
+    /// 飞地对外服务是否已临时关闭
+    pub disabled: bool,
+}
+
+#[tauri::command]
+pub fn enclave_org_caps(
+    org_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<EnclaveOrgCaps, String> {
+    let store = &state.store;
+    let now = chrono::Utc::now().timestamp();
+    store.with_conn(|c| {
+        let identity = crate::enclave::org::local_identity(c)?;
+        let role = crate::enclave::authz::role_for_org(c, &org_id)?.map(|r| r.as_str().to_string());
+        let actions = crate::enclave::authz::effective_actions_for_org(c, &org_id)?
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let synced_at: i64 = c
+            .query_row(
+                "SELECT synced_at FROM org_snapshot WHERE org_id = ?1",
+                rusqlite::params![org_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        Ok(EnclaveOrgCaps {
+            org_id: org_id.clone(),
+            identity,
+            role,
+            actions,
+            snapshot_fresh: synced_at > 0
+                && now.saturating_sub(synced_at) < crate::enclave::SNAPSHOT_STALE_MAX_SECS,
+            synced_at,
+            disabled: state.is_disabled(),
+        })
+    })
+}
+
+/// 读数据出境总闸（默认关闭）。
+#[tauri::command]
+pub fn enclave_policy_get(
+    org_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::org::PolicyView, String> {
+    state
+        .store
+        .with_conn(|c| crate::enclave::org::policy_view(c, &org_id))
+}
+
+/// 设置数据出境总闸（仅 owner）：写库 + 审计。
+///
+/// 语义：`true` = 允许把团队数据发送至云端模型。**本开关是主机本地策略**（随库走），
+/// 断网也可修改；但授权仍依据最近一次治理快照中的角色。
+#[tauri::command]
+pub fn enclave_policy_set(
+    org_id: String,
+    allow: bool,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::org::PolicyView, String> {
+    use crate::enclave::authz::{authorize, Action};
+    state.store.with_conn(|c| {
+        let actor = authorize(c, &org_id, Action::PolicyWrite)?;
+        let before = crate::enclave::org::get_allow_cloud_model(c, &org_id)?.unwrap_or(false);
+        crate::enclave::org::set_allow_cloud_model(c, &org_id, allow, &actor)?;
+        crate::enclave::org::audit(
+            c,
+            &org_id,
+            &actor,
+            "policy.allow_cloud_model",
+            &serde_json::json!({ "from": before, "to": allow }).to_string(),
+        )?;
+        crate::enclave::org::policy_view(c, &org_id)
+    })
+}
+
+/// 读主机应急开关。
+#[tauri::command]
+pub fn enclave_emergency_get(
+    org_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::org::EmergencyView, String> {
+    state
+        .store
+        .with_conn(|c| crate::enclave::org::emergency_view(c, &org_id))
+}
+
+/// 设置主机应急开关（仅 owner）：写库 + 审计 + 更新运行态。
+///
+/// 语义：`true` = **临时关闭飞地对外服务**；本机命令照常可用、断网可用、不改云端数据。
+#[tauri::command]
+pub fn enclave_emergency_set(
+    org_id: String,
+    disabled: bool,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::org::EmergencyView, String> {
+    use crate::enclave::authz::{authorize, Action};
+    let view = state.store.with_conn(|c| {
+        let actor = authorize(c, &org_id, Action::EmergencySet)?;
+        let before = crate::enclave::org::get_emergency(c, &org_id)?.unwrap_or(false);
+        crate::enclave::org::set_emergency(c, &org_id, disabled, &actor)?;
+        crate::enclave::org::audit(
+            c,
+            &org_id,
+            &actor,
+            "host.emergency",
+            &serde_json::json!({ "from": before, "to": disabled }).to_string(),
+        )?;
+        crate::enclave::org::emergency_view(c, &org_id)
+    })?;
+    state.set_disabled(view.disabled);
+    Ok(view)
+}
+
+/// 读策略 / 应急变更审计流水（按时间倒序）。
+#[tauri::command]
+pub fn enclave_audit_list(
+    org_id: String,
+    limit: Option<i64>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::org::AuditView>, String> {
+    let limit = limit.unwrap_or(50).clamp(1, 200);
+    state
+        .store
+        .with_conn(|c| crate::enclave::org::list_audit(c, &org_id, limit))
+}

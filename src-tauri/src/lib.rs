@@ -2410,6 +2410,12 @@ pub fn run() {
     );
     // EnclaveState 以 Arc 托管：后台快照循环与命令层共享同一份状态。
     let enclave_state = std::sync::Arc::new(enclave::EnclaveState::new(enclave_store));
+    // 应急开关随库走：启动时恢复运行态（任一组织处于「对外服务关闭」即视为关闭）
+    let enclave_disabled = enclave_state
+        .store
+        .with_conn(enclave::org::any_emergency_disabled)
+        .unwrap_or(false);
+    enclave_state.set_disabled(enclave_disabled);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -2739,6 +2745,12 @@ pub fn run() {
             commands::enclave::enclave_org_detail,
             commands::enclave::enclave_snapshot_refresh,
             commands::enclave::enclave_snapshot_freshness,
+            commands::enclave::enclave_org_caps,
+            commands::enclave::enclave_policy_get,
+            commands::enclave::enclave_policy_set,
+            commands::enclave::enclave_emergency_get,
+            commands::enclave::enclave_emergency_set,
+            commands::enclave::enclave_audit_list,
         ])
         .setup(move |app| {
             // 初始化资源路径（应用根目录：Win %APPDATA%\PilotDesk / unix ~/.config/pilotdesk）

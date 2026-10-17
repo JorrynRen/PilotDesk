@@ -16,6 +16,8 @@ pub struct OrgSnapshotRow {
     pub seats: i64,
     pub member_count: i64,
     pub status: String,
+    /// 当前登录用户在该组织中的角色（平台返回的 `role`，只读）
+    pub my_role: String,
 }
 
 /// 成员快照的写入行（来自平台 `/organizations/:id/members`）。
@@ -41,6 +43,8 @@ pub struct OrgSnapshotView {
     pub seats: i64,
     pub member_count: i64,
     pub status: String,
+    /// 当前登录用户在该组织中的角色（owner / admin / member），前端据此做显隐
+    pub my_role: String,
     pub synced_at: i64,
 }
 
@@ -83,8 +87,8 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
     let synced_at = chrono::Utc::now().timestamp();
     conn.execute(
         "INSERT INTO org_snapshot
-            (org_id, name, owner_user_id, plan_key, plan_expires_at, seats, member_count, status, synced_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            (org_id, name, owner_user_id, plan_key, plan_expires_at, seats, member_count, status, my_role, synced_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(org_id) DO UPDATE SET
             name = excluded.name,
             owner_user_id = excluded.owner_user_id,
@@ -93,6 +97,7 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
             seats = excluded.seats,
             member_count = excluded.member_count,
             status = excluded.status,
+            my_role = excluded.my_role,
             synced_at = excluded.synced_at",
         params![
             row.org_id,
@@ -103,6 +108,7 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
             row.seats,
             row.member_count,
             row.status,
+            row.my_role,
             synced_at
         ],
     )
@@ -173,7 +179,8 @@ fn map_org_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrgSnapshotView> {
         seats: r.get(5)?,
         member_count: r.get(6)?,
         status: r.get(7)?,
-        synced_at: r.get(8)?,
+        my_role: r.get(8)?,
+        synced_at: r.get(9)?,
     })
 }
 
@@ -182,7 +189,7 @@ pub fn list_orgs(conn: &Connection) -> Result<Vec<OrgSnapshotView>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
-                    seats, member_count, status, synced_at
+                    seats, member_count, status, my_role, synced_at
              FROM org_snapshot ORDER BY name",
         )
         .map_err(|e| format!("查询组织快照失败：{}", e))?;
@@ -202,7 +209,7 @@ pub fn org_detail(
     let org = conn
         .query_row(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
-                    seats, member_count, status, synced_at
+                    seats, member_count, status, my_role, synced_at
              FROM org_snapshot WHERE org_id = ?1",
             params![org_id],
             map_org_row,
@@ -254,10 +261,63 @@ pub fn latest_synced_at(conn: &Connection) -> Result<i64, String> {
     .map_err(|e| format!("读取组织快照时间失败：{}", e))
 }
 
+// ── 本机登录身份快照（平台 /me）────────────────────────────────
+
+/// 本机登录身份（单行）：授权器用它确定 actor，审计用它留痕。
+pub struct LocalIdentityRow {
+    pub user_id: String,
+    pub email: String,
+    pub nickname: String,
+}
+
+/// 覆盖写本机登录身份（平台只会有一个当前用户，旧行一律删掉）。
+pub fn upsert_local_identity(conn: &Connection, row: &LocalIdentityRow) -> Result<(), String> {
+    let synced_at = chrono::Utc::now().timestamp();
+    conn.execute("DELETE FROM local_identity WHERE user_id <> ?1", params![row.user_id])
+        .map_err(|e| format!("清理旧登录身份失败：{}", e))?;
+    conn.execute(
+        "INSERT INTO local_identity (user_id, email, nickname, synced_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(user_id) DO UPDATE SET
+            email = excluded.email,
+            nickname = excluded.nickname,
+            synced_at = excluded.synced_at",
+        params![row.user_id, row.email, row.nickname, synced_at],
+    )
+    .map_err(|e| format!("写入登录身份失败：{}", e))?;
+    Ok(())
+}
+
+/// 本机登录身份视图（未登录返回 `None`）。
+pub fn local_identity(conn: &Connection) -> Result<Option<LocalIdentityView>, String> {
+    conn.query_row(
+        "SELECT user_id, email, nickname, synced_at FROM local_identity LIMIT 1",
+        [],
+        |r| {
+            Ok(LocalIdentityView {
+                user_id: r.get(0)?,
+                email: r.get(1)?,
+                nickname: r.get(2)?,
+                synced_at: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("查询登录身份失败：{}", e))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalIdentityView {
+    pub user_id: String,
+    pub email: String,
+    pub nickname: String,
+    pub synced_at: i64,
+}
+
 // ── 主机本地策略 ────────────────────────────────────────────────
 
 /// 读「数据出境」总闸：`Some(bool)`；组织无策略行返回 `None`（视为默认不允许）。
-#[allow(dead_code)] // 后续里程碑（策略开关 UI）才会调用
 pub fn get_allow_cloud_model(conn: &Connection, org_id: &str) -> Result<Option<bool>, String> {
     conn.query_row(
         "SELECT allow_cloud_model FROM org_policy WHERE org_id = ?1",
@@ -270,7 +330,6 @@ pub fn get_allow_cloud_model(conn: &Connection, org_id: &str) -> Result<Option<b
 }
 
 /// 写「数据出境」总闸（无行则先 INSERT）。
-#[allow(dead_code)] // 后续里程碑（策略开关 UI）才会调用
 pub fn set_allow_cloud_model(
     conn: &Connection,
     org_id: &str,
@@ -292,7 +351,6 @@ pub fn set_allow_cloud_model(
 }
 
 /// 读主机应急开关：`Some(true)` = 飞地对外服务已临时关闭；无行返回 `None`（视为未关闭）。
-#[allow(dead_code)] // 后续里程碑（应急开关 UI）才会调用
 pub fn get_emergency(conn: &Connection, org_id: &str) -> Result<Option<bool>, String> {
     conn.query_row(
         "SELECT enclave_disabled FROM host_emergency WHERE org_id = ?1",
@@ -305,7 +363,6 @@ pub fn get_emergency(conn: &Connection, org_id: &str) -> Result<Option<bool>, St
 }
 
 /// 写主机应急开关（无行则先 INSERT）。
-#[allow(dead_code)] // 后续里程碑（应急开关 UI）才会调用
 pub fn set_emergency(
     conn: &Connection,
     org_id: &str,
@@ -326,11 +383,95 @@ pub fn set_emergency(
     Ok(())
 }
 
+/// 数据出境策略视图（供「组织与权限」页展示；缺行时按默认关闭返回）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyView {
+    pub org_id: String,
+    pub allow_cloud_model: bool,
+    pub updated_by: String,
+    pub updated_at: i64,
+    /// 是否已存在显式策略行（false = 从未设置过，按默认「不允许」）
+    pub explicit: bool,
+}
+
+pub fn policy_view(conn: &Connection, org_id: &str) -> Result<PolicyView, String> {
+    conn.query_row(
+        "SELECT allow_cloud_model, updated_by, updated_at FROM org_policy WHERE org_id = ?1",
+        params![org_id],
+        |r| {
+            Ok(PolicyView {
+                org_id: org_id.to_string(),
+                allow_cloud_model: r.get::<_, i64>(0)? != 0,
+                updated_by: r.get(1)?,
+                updated_at: r.get(2)?,
+                explicit: true,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("读取出云策略失败：{}", e))
+    .map(|o| {
+        o.unwrap_or(PolicyView {
+            org_id: org_id.to_string(),
+            allow_cloud_model: false,
+            updated_by: String::new(),
+            updated_at: 0,
+            explicit: false,
+        })
+    })
+}
+
+/// 主机应急开关视图（缺行按「未关闭」返回）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmergencyView {
+    pub org_id: String,
+    pub disabled: bool,
+    pub updated_by: String,
+    pub updated_at: i64,
+}
+
+pub fn emergency_view(conn: &Connection, org_id: &str) -> Result<EmergencyView, String> {
+    conn.query_row(
+        "SELECT enclave_disabled, updated_by, updated_at FROM host_emergency WHERE org_id = ?1",
+        params![org_id],
+        |r| {
+            Ok(EmergencyView {
+                org_id: org_id.to_string(),
+                disabled: r.get::<_, i64>(0)? != 0,
+                updated_by: r.get(1)?,
+                updated_at: r.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("读取应急开关失败：{}", e))
+    .map(|o| {
+        o.unwrap_or(EmergencyView {
+            org_id: org_id.to_string(),
+            disabled: false,
+            updated_by: String::new(),
+            updated_at: 0,
+        })
+    })
+}
+
+/// 任意组织是否处于「对外服务临时关闭」：用于启动时恢复运行态（应急开关随库走）。
+pub fn any_emergency_disabled(conn: &Connection) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT COALESCE(MAX(enclave_disabled), 0) FROM host_emergency",
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v != 0)
+    .map_err(|e| format!("读取应急开关失败：{}", e))
+}
+
 // ── 审计 ────────────────────────────────────────────────────────
 
 /// 写一条审计（**唯一写审计入口**）：策略 / 应急 / 转移变更一律经此落库，便于统一口径与扩展。
 /// `detail_json` 为结构化明细的 JSON 字符串（无明细传 `"{}"`）。
-#[allow(dead_code)] // 后续里程碑（策略 / 应急 / 转移）才会调用
 pub fn audit(
     conn: &Connection,
     org_id: &str,
@@ -350,7 +491,6 @@ pub fn audit(
 }
 
 /// 读某组织的审计流水（按 `created_at` 倒序，`limit` 条）。
-#[allow(dead_code)] // 后续里程碑（审计视图）才会调用
 pub fn list_audit(conn: &Connection, org_id: &str, limit: i64) -> Result<Vec<AuditView>, String> {
     let mut stmt = conn
         .prepare(

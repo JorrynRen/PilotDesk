@@ -9,6 +9,7 @@
 //!   任务/汇报/产出/文件**以主机为准**（本模块写入 `enclave.db`）。
 //! - **不缓存**：成员端不缓存团队数据（离线不可用），因此没有 `enclave_cache.db`。
 
+pub mod authz;
 pub mod db;
 pub mod org;
 pub mod snapshot;
@@ -53,5 +54,15 @@ impl EnclaveState {
     /// 最近一次治理快照成功同步时间（unix 秒，0 = 从未成功）。供命令层读新鲜度用。
     pub fn last_snapshot_at(&self) -> i64 {
         self.last_snapshot_at.load(Ordering::Relaxed)
+    }
+
+    /// 设置应急开关运行态（`true` = 飞地对外服务已临时关闭）。
+    pub fn set_disabled(&self, disabled: bool) {
+        self.disabled.store(disabled, Ordering::Relaxed);
+    }
+
+    /// 当前是否处于「飞地对外服务已临时关闭」（本机使用不受影响）。
+    pub fn is_disabled(&self) -> bool {
+        self.disabled.load(Ordering::Relaxed)
     }
 }
