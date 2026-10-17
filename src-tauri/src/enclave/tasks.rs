@@ -709,8 +709,9 @@ pub fn set_status(
     );
     can_transition(&row.status, to, role)?;
 
-    // 开始前检查前置依赖（archived 视作放行）
-    if to == STATUS_IN_PROGRESS {
+    // 前置依赖只在「待办 → 进行中」时检查；退回（submitted → in_progress）不该被依赖拦住，
+    // 否则有前置任务的子任务一旦提交汇报就永远退不回来。
+    if row.status == STATUS_PENDING && to == STATUS_IN_PROGRESS {
         let status_by_id = all_status(conn, org_id)?;
         if is_blocked(&row.blocked_by, &status_by_id) {
             let names: Vec<String> = row
