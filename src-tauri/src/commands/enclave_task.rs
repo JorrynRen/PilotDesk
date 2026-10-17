@@ -115,11 +115,19 @@ pub fn enclave_task_progress_add(
     org_id: String,
     task_id: String,
     content: String,
+    attachments: Vec<String>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::progress::ProgressView, String> {
     state.store.with_conn(|c| {
         let actor = authz::current_actor_id(c)?;
-        crate::enclave::progress::add_progress(c, &org_id, &actor, &task_id, &content)
+        crate::enclave::progress::add_progress(
+            c,
+            &org_id,
+            &actor,
+            &task_id,
+            &content,
+            &attachments,
+        )
     })
 }
 

@@ -40,8 +40,8 @@ interface EnclaveTaskState {
   confirmReport: (orgId: string, taskId: string, reportId: string) => Promise<boolean>;
   returnReport: (orgId: string, taskId: string, reportId: string, reason: string) => Promise<boolean>;
   uploadFile: (orgId: string, taskId: string, srcPath: string, progressId?: string) => Promise<boolean>;
-  /** 追加进度说明 */
-  addProgress: (orgId: string, taskId: string, content: string) => Promise<boolean>;
+  /** 追加进度说明（可同时挂载过程成果 / 支撑文件） */
+  addProgress: (orgId: string, taskId: string, content: string, attachments: string[]) => Promise<boolean>;
   /** 设置任务参与者 */
   setCollaborators: (orgId: string, taskId: string, collaborators: string[]) => Promise<boolean>;
 }
@@ -211,9 +211,9 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
     }
   },
 
-  addProgress: async (orgId, taskId, content) => {
+  addProgress: async (orgId, taskId, content, attachments) => {
     try {
-      await invoke('enclave_task_progress_add', { orgId, taskId, content });
+      await invoke('enclave_task_progress_add', { orgId, taskId, content, attachments });
       await get().loadExtras(orgId, taskId);
       set({ error: null });
       return true;

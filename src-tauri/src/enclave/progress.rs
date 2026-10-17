@@ -100,12 +100,16 @@ fn attachments_of(
 }
 
 /// 追加一条过程记录（创建者 / 负责人 / 参与者）。
+///
+/// `attachments` 为待挂载的本机文件绝对路径：入库时按 sha256 去重落盘，
+/// 并与这条记录绑定（过程成果 / 支撑文件）。
 pub fn add_progress(
     conn: &Connection,
     org_id: &str,
     actor: &str,
     task_id: &str,
     content: &str,
+    attachments: &[String],
 ) -> Result<ProgressView, String> {
     let role = tasks::actor_task_role(conn, org_id, task_id, actor)?;
     if !tasks::is_participant(role) {
@@ -129,12 +133,25 @@ pub fn add_progress(
         params![id, task_id, actor, content, now],
     )
     .map_err(|e| format!("保存过程记录失败：{}", e))?;
+
+    for src in attachments {
+        crate::enclave::files::attach_file(
+            conn,
+            org_id,
+            actor,
+            task_id,
+            src,
+            None,
+            Some(&id),
+        )?;
+    }
+
     Ok(ProgressView {
-        id,
+        id: id.clone(),
         task_id: task_id.to_string(),
         author_id: actor.to_string(),
         content: content.to_string(),
-        attachments: Vec::new(),
+        attachments: attachments_of(conn, org_id, task_id, &id)?,
         created_at: now,
     })
 }

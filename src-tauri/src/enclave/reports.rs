@@ -122,21 +122,30 @@ fn reject_closed_task(conn: &Connection, org_id: &str, task_id: &str) -> Result<
     Ok(())
 }
 
-/// 找该负责人最近一份「草稿 / 已退回」的汇报（用于继续编辑）。
-fn find_editable_report(
-    conn: &Connection,
-    task_id: &str,
-    reporter_id: &str,
-) -> Result<Option<String>, String> {
+/// 找该任务「草稿 / 已退回」的完成汇报（一个任务只有一份完成汇报，可继续编辑）。
+fn find_editable_report(conn: &Connection, task_id: &str) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT id FROM task_reports
-         WHERE task_id = ?1 AND reporter_id = ?2 AND status IN ('draft','returned')
+         WHERE task_id = ?1 AND status IN ('draft','returned')
          ORDER BY created_at DESC LIMIT 1",
-        params![task_id, reporter_id],
+        params![task_id],
         |r| r.get::<_, String>(0),
     )
     .optional()
     .map_err(|e| format!("查询汇报失败：{}", e))
+}
+
+/// 是否已有「已提交 / 已确认」的完成汇报（存在则不再允许提交）。
+fn has_submitted_report(conn: &Connection, task_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM task_reports WHERE task_id = ?1 AND status IN ('submitted','confirmed')
+         )",
+        params![task_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v != 0)
+    .map_err(|e| format!("查询汇报状态失败：{}", e))
 }
 
 /// 保存草稿（有可编辑草稿则覆盖，否则新建）。
@@ -152,12 +161,15 @@ pub fn save_draft(
     let role = tasks::actor_task_role(conn, org_id, task_id, actor)?;
     ensure_participant(role)?;
     reject_closed_task(conn, org_id, task_id)?;
+    if has_submitted_report(conn, task_id)? {
+        return Err("完成汇报已提交，不能再次提交或修改".to_string());
+    }
 
     let now = chrono::Utc::now().timestamp();
     let materials_json = serde_json::to_string(materials).unwrap_or_else(|_| "[]".into());
     let deliverables_json = serde_json::to_string(deliverables).unwrap_or_else(|_| "[]".into());
 
-    if let Some(id) = find_editable_report(conn, task_id, actor)? {
+    if let Some(id) = find_editable_report(conn, task_id)? {
         conn.execute(
             "UPDATE task_reports SET content=?3, materials=?4, deliverables=?5,
                     status='draft', updated_at=?6

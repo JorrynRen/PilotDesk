@@ -505,6 +505,8 @@ function TaskDetail(props: {
   const files = useEnclaveTaskStore((s) => s.files);
   const progress = useEnclaveTaskStore((s) => s.progress);
   const [progressText, setProgressText] = useState('');
+  const [composing, setComposing] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<string[]>([]);
 
   // 汇报内容：取自己可编辑的草稿（draft / returned），否则空
   const editable = useMemo(
@@ -512,6 +514,8 @@ function TaskDetail(props: {
     [reports],
   );
   const [reportText, setReportText] = useState('');
+  // 完成汇报只有一份：已提交 / 已确认后不再允许编辑或重复提交
+  const lockedReport = reports.find((r) => r.status === 'submitted' || r.status === 'confirmed') ?? null;
   const [reportBusy, setReportBusy] = useState(false);
   const [returningId, setReturningId] = useState<string | null>(null);
   const [returnReason, setReturnReason] = useState('');
@@ -543,6 +547,13 @@ function TaskDetail(props: {
     const picked = await openDialog({ multiple: false, directory: false });
     if (typeof picked !== 'string') return;
     await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked, progressId);
+  };
+
+  /** 选择过程记录的附件（提交时一并入库） */
+  const pickProgressFiles = async () => {
+    const picked = await openDialog({ multiple: true, directory: false });
+    const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
+    setPendingFiles((prev) => Array.from(new Set([...prev, ...list])));
   };
 
   const openFile = async (fileId: string) => {
@@ -885,30 +896,88 @@ function TaskDetail(props: {
           )}
         </div>
 
-        {canReport && !progress?.locked && (
-          <div className="flex items-start gap-2">
+        {/* 默认只展示列表；点「添加过程记录」才展开表单 */}
+        {canReport && !progress?.locked && !composing && (
+          <button
+            onClick={() => setComposing(true)}
+            className="self-start text-xs px-2 py-1 rounded flex items-center gap-1"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          >
+            <Plus size={12} /> 添加过程记录
+          </button>
+        )}
+
+        {canReport && !progress?.locked && composing && (
+          <div
+            className="flex flex-col gap-2 rounded p-2"
+            style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-field)' }}
+          >
             <textarea
-              className="search-input flex-1"
-              style={{ minHeight: 60, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
-              placeholder="记录本次进度：做了什么、遇到什么、下一步（可多次）"
+              className="search-input w-full"
+              style={{ minHeight: 70, backgroundColor: 'var(--bg-content)', resize: 'vertical' }}
+              placeholder="记录本次进度：做了什么、遇到什么、下一步（可多次提交）"
               value={progressText}
               onChange={(e) => setProgressText(e.target.value)}
+              autoFocus
             />
-            <button
-              onClick={async () => {
-                const ok = await useEnclaveTaskStore.getState().addProgress(orgId, task.id, progressText);
-                if (ok) setProgressText('');
-              }}
-              disabled={!progressText.trim()}
-              className="text-xs px-2 py-1 rounded"
-              style={{
-                backgroundColor: 'var(--accent)',
-                color: '#fff',
-                opacity: progressText.trim() ? 1 : 0.5,
-              }}
-            >
-              添加记录
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => void pickProgressFiles()}
+                className="text-[11px] px-2 py-0.5 rounded flex items-center gap-1"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                <Paperclip size={11} /> 选择附件
+              </button>
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                {pendingFiles.length ? `已选 ${pendingFiles.length} 个文件` : '可附过程成果 / 支撑文件'}
+              </span>
+            </div>
+            {pendingFiles.map((f) => (
+              <div key={f} className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                <span className="truncate flex-1">{f.split(/[\\/]/).pop() || f}</span>
+                <button
+                  onClick={() => setPendingFiles((prev) => prev.filter((x) => x !== f))}
+                  className="px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                >
+                  移除
+                </button>
+              </div>
+            ))}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  const ok = await useEnclaveTaskStore
+                    .getState()
+                    .addProgress(orgId, task.id, progressText, pendingFiles);
+                  if (ok) {
+                    setProgressText('');
+                    setPendingFiles([]);
+                    setComposing(false);
+                  }
+                }}
+                disabled={!progressText.trim()}
+                className="text-xs px-3 py-1 rounded"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity: progressText.trim() ? 1 : 0.5,
+                }}
+              >
+                提交
+              </button>
+              <button
+                onClick={() => {
+                  setProgressText('');
+                  setPendingFiles([]);
+                  setComposing(false);
+                }}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                取消
+              </button>
+            </div>
           </div>
         )}
 
@@ -965,7 +1034,14 @@ function TaskDetail(props: {
             完成汇报
           </span>
         </div>
-        {(canReport || editable) && task.status !== 'done' && task.status !== 'archived' && (
+        {lockedReport && (
+          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            {lockedReport.status === 'submitted'
+              ? '完成汇报已提交，等待创建者 / 负责人确认（不可重复提交）'
+              : '完成汇报已确认，任务已收敛'}
+          </div>
+        )}
+        {(canReport || editable) && !lockedReport && task.status !== 'done' && task.status !== 'archived' && (
           <>
             <textarea
               className="search-input w-full"
