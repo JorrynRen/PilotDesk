@@ -32,22 +32,33 @@ pub enum TaskRole {
     Watcher,
 }
 
-/// 资源级动作矩阵（默认拒绝）。组织层动作（OrgAdmin/PolicyWrite/…）不走这里。
+/// 资源级动作矩阵（默认拒绝）。
+///
+/// 口径（产品确认）：
+/// - 编辑（描述 / 优先级 / 截止）：仅**创建者 / 负责人**
+/// - 分配负责人：仅**创建者**
+/// - 状态流转：仅**创建者 / 负责人**
+/// - 汇报 / 附件：创建者、负责人、参与者（collaborators）
 pub fn task_allows(role: TaskRole, action: Action) -> bool {
     match action {
         Action::TaskView => true,
-        Action::TaskEdit => matches!(
+        Action::TaskEdit => matches!(role, TaskRole::Creator | TaskRole::Assignee),
+        Action::TaskAssign => role == TaskRole::Creator,
+        Action::TaskStatus => matches!(role, TaskRole::Creator | TaskRole::Assignee),
+        Action::ReportSubmit | Action::FileUpload => matches!(
             role,
-            TaskRole::Manager | TaskRole::Creator | TaskRole::Assignee | TaskRole::Collaborator
-        ),
-        Action::TaskAssign => matches!(role, TaskRole::Manager | TaskRole::Creator),
-        // 状态流转细到「从哪到哪」，这里只表示「具备改状态的资格」
-        Action::TaskStatus => matches!(
-            role,
-            TaskRole::Manager | TaskRole::Creator | TaskRole::Assignee
+            TaskRole::Creator | TaskRole::Assignee | TaskRole::Collaborator
         ),
         _ => false,
     }
+}
+
+/// 参与者 = 创建者、负责人、协作者（可提交汇报 / 上传附件 / 记录进度）。
+pub fn is_participant(role: TaskRole) -> bool {
+    matches!(
+        role,
+        TaskRole::Creator | TaskRole::Assignee | TaskRole::Collaborator
+    )
 }
 
 /// 任务中与「谁有资格」相关的字段快照。
@@ -75,28 +86,27 @@ pub fn resolve_task_role(org_role: Role, actor: &str, t: &TaskActors<'_>) -> Tas
 }
 
 /// 状态机：返回可读错误。`archived` 只作终态（可从任意非归档态归档）。
+///
+/// 权限：状态归属**创建者 / 负责人**；归档与恢复仅创建者。
 pub fn can_transition(from: &str, to: &str, role: TaskRole) -> Result<(), String> {
     if from == to {
         return Err(format!("任务已处于「{}」状态", status_label(to)));
     }
-    let manager = matches!(role, TaskRole::Manager | TaskRole::Creator);
+    let owner = matches!(role, TaskRole::Creator | TaskRole::Assignee);
+    let creator = role == TaskRole::Creator;
     let ok = match (from, to) {
-        (STATUS_PENDING, STATUS_IN_PROGRESS) => {
-            matches!(role, TaskRole::Assignee | TaskRole::Manager)
-        }
-        (STATUS_PENDING, STATUS_ARCHIVED) => manager,
-        (STATUS_IN_PROGRESS, STATUS_PENDING) => {
-            matches!(role, TaskRole::Assignee | TaskRole::Manager)
-        }
-        // 提交汇报（M4 会联动 task_reports）
-        (STATUS_IN_PROGRESS, STATUS_SUBMITTED) => role == TaskRole::Assignee,
-        (STATUS_IN_PROGRESS, STATUS_ARCHIVED) => manager,
-        // 确认 / 退回（M4 会联动汇报四态）
-        (STATUS_SUBMITTED, STATUS_DONE) => manager,
-        (STATUS_SUBMITTED, STATUS_IN_PROGRESS) => manager,
-        (STATUS_DONE, STATUS_IN_PROGRESS) => manager,
-        (STATUS_DONE, STATUS_ARCHIVED) => manager,
-        (STATUS_ARCHIVED, STATUS_PENDING) => manager,
+        (STATUS_PENDING, STATUS_IN_PROGRESS) => owner,
+        (STATUS_PENDING, STATUS_ARCHIVED) => creator,
+        (STATUS_IN_PROGRESS, STATUS_PENDING) => owner,
+        // 提交汇报（M4 联动 task_reports 四态）
+        (STATUS_IN_PROGRESS, STATUS_SUBMITTED) => owner,
+        (STATUS_IN_PROGRESS, STATUS_ARCHIVED) => creator,
+        // 确认 / 退回
+        (STATUS_SUBMITTED, STATUS_DONE) => owner,
+        (STATUS_SUBMITTED, STATUS_IN_PROGRESS) => owner,
+        (STATUS_DONE, STATUS_IN_PROGRESS) => owner,
+        (STATUS_DONE, STATUS_ARCHIVED) => creator,
+        (STATUS_ARCHIVED, STATUS_PENDING) => creator,
         _ => false,
     };
     if ok {
@@ -334,7 +344,13 @@ fn to_view(
     );
     let blocked = is_blocked(&r.blocked_by, status_by_id);
     let mut actions = vec![Action::TaskView.as_str().to_string()];
-    for a in [Action::TaskEdit, Action::TaskStatus, Action::TaskAssign] {
+    for a in [
+        Action::TaskEdit,
+        Action::TaskStatus,
+        Action::TaskAssign,
+        Action::ReportSubmit,
+        Action::FileUpload,
+    ] {
         if task_allows(role, a) {
             actions.push(a.as_str().to_string());
         }
@@ -764,6 +780,51 @@ pub fn set_deps(
     get_task(conn, org_id, task_id, actor)
 }
 
+/// 设置任务参与者（collaborators）：仅创建者 / 负责人；自动剔除创建者与负责人。
+pub fn set_collaborators(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+    collaborators: &[String],
+) -> Result<TaskView, String> {
+    let row = load_task(conn, org_id, task_id)?;
+    let org_role = require_org_role(conn, org_id)?;
+    let role = resolve_task_role(
+        org_role,
+        actor,
+        &TaskActors {
+            creator_id: &row.creator_id,
+            assignee_id: row.assignee_id.as_deref(),
+            collaborators: &row.collaborators,
+        },
+    );
+    if !matches!(role, TaskRole::Creator | TaskRole::Assignee) {
+        return Err("仅任务创建者或负责人可以添加参与者".to_string());
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for id in collaborators {
+        let id = id.trim();
+        if id.is_empty()
+            || id == row.creator_id
+            || row.assignee_id.as_deref() == Some(id)
+        {
+            continue;
+        }
+        if seen.insert(id.to_string()) {
+            out.push(id.to_string());
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "UPDATE org_tasks SET collaborators=?3, updated_at=?4 WHERE id=?1 AND org_id=?2",
+        params![task_id, org_id, ids_json(&out), now],
+    )
+    .map_err(|e| format!("保存参与者失败：{}", e))?;
+    get_task(conn, org_id, task_id, actor)
+}
+
 /// 当前 actor 在该任务上的资源角色（供汇报域复用，避免重复实现绑定规则）。
 pub fn actor_task_role(
     conn: &Connection,
@@ -799,20 +860,46 @@ mod tests {
 
     #[test]
     fn transition_matrix() {
-        // 待办 → 进行中：负责人 / 管理员可；旁观者不可
+        // 待办 → 进行中：创建者 / 负责人可；管理视角与非参与者不可
         assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Assignee).is_ok());
-        assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Manager).is_ok());
-        assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Watcher).is_err());
-        // 进行中 → 待确认：仅负责人
+        assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Creator).is_ok());
+        assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Manager).is_err());
+        assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Collaborator).is_err());
+        // 进行中 → 待确认
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Assignee).is_ok());
-        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Manager).is_err());
-        // 待确认 → 已完成 / 退回：仅管理视角
-        assert!(can_transition(STATUS_SUBMITTED, STATUS_DONE, TaskRole::Manager).is_ok());
-        assert!(can_transition(STATUS_SUBMITTED, STATUS_DONE, TaskRole::Assignee).is_err());
+        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Creator).is_ok());
+        // 待确认 → 已完成 / 退回
+        assert!(can_transition(STATUS_SUBMITTED, STATUS_DONE, TaskRole::Creator).is_ok());
+        assert!(can_transition(STATUS_SUBMITTED, STATUS_DONE, TaskRole::Assignee).is_ok());
+        assert!(can_transition(STATUS_SUBMITTED, STATUS_DONE, TaskRole::Collaborator).is_err());
         assert!(can_transition(STATUS_SUBMITTED, STATUS_IN_PROGRESS, TaskRole::Creator).is_ok());
+        // 归档仅创建者
+        assert!(can_transition(STATUS_DONE, STATUS_ARCHIVED, TaskRole::Creator).is_ok());
+        assert!(can_transition(STATUS_DONE, STATUS_ARCHIVED, TaskRole::Assignee).is_err());
         // 同态与非法跃迁
-        assert!(can_transition(STATUS_DONE, STATUS_DONE, TaskRole::Manager).is_err());
-        assert!(can_transition(STATUS_PENDING, STATUS_DONE, TaskRole::Manager).is_err());
+        assert!(can_transition(STATUS_DONE, STATUS_DONE, TaskRole::Creator).is_err());
+        assert!(can_transition(STATUS_PENDING, STATUS_DONE, TaskRole::Creator).is_err());
+    }
+
+    /// 权限矩阵：描述/属性仅创建者与负责人；分配负责人仅创建者；汇报/附件含参与者。
+    #[test]
+    fn task_action_matrix() {
+        for role in [TaskRole::Creator, TaskRole::Assignee] {
+            assert!(task_allows(role, Action::TaskEdit));
+            assert!(task_allows(role, Action::TaskStatus));
+        }
+        assert!(task_allows(TaskRole::Creator, Action::TaskAssign));
+        assert!(!task_allows(TaskRole::Assignee, Action::TaskAssign));
+        for role in [TaskRole::Manager, TaskRole::Collaborator, TaskRole::Watcher] {
+            assert!(!task_allows(role, Action::TaskEdit), "{:?} 不应能编辑", role);
+            assert!(!task_allows(role, Action::TaskStatus), "{:?} 不应能改状态", role);
+        }
+        for role in [TaskRole::Creator, TaskRole::Assignee, TaskRole::Collaborator] {
+            assert!(task_allows(role, Action::ReportSubmit));
+            assert!(task_allows(role, Action::FileUpload));
+        }
+        assert!(!task_allows(TaskRole::Watcher, Action::ReportSubmit));
+        assert!(!task_allows(TaskRole::Watcher, Action::FileUpload));
     }
 
     #[test]

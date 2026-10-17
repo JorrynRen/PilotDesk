@@ -261,3 +261,22 @@ export interface KbEntryView {
   addedBy: string;
   addedAt: number;
 }
+
+// ── 过程记录 ────────────────────────────────────────────────────
+
+/** 一条进度说明（可多次提交，独立留痕） */
+export interface ProgressView {
+  id: string;
+  taskId: string;
+  authorId: string;
+  content: string;
+  attachments: FileAssetView[];
+  createdAt: number;
+}
+
+/** 过程记录列表 + 锁定状态（提交完成汇报后锁定） */
+export interface ProgressList {
+  items: ProgressView[];
+  locked: boolean;
+  lockReason: string | null;
+}

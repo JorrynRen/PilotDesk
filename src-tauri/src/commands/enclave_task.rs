@@ -106,6 +106,50 @@ pub fn enclave_task_deps_preview(
 }
 
 // ════════════════════════════════════════════════════════════
+// 过程记录 / 参与者
+// ════════════════════════════════════════════════════════════
+
+/// 追加一条进度说明（创建者 / 负责人 / 参与者；提交完成汇报后锁定）。
+#[tauri::command]
+pub fn enclave_task_progress_add(
+    org_id: String,
+    task_id: String,
+    content: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::progress::ProgressView, String> {
+    state.store.with_conn(|c| {
+        let actor = authz::current_actor_id(c)?;
+        crate::enclave::progress::add_progress(c, &org_id, &actor, &task_id, &content)
+    })
+}
+
+/// 过程记录列表 + 锁定状态。
+#[tauri::command]
+pub fn enclave_task_progress_list(
+    org_id: String,
+    task_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::progress::ProgressList, String> {
+    state
+        .store
+        .with_conn(|c| crate::enclave::progress::list_progress(c, &org_id, &task_id))
+}
+
+/// 设置任务参与者（仅创建者 / 负责人）。
+#[tauri::command]
+pub fn enclave_task_set_collaborators(
+    org_id: String,
+    task_id: String,
+    collaborators: Vec<String>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TaskView, String> {
+    state.store.with_conn(|c| {
+        let actor = authz::current_actor_id(c)?;
+        tasks::set_collaborators(c, &org_id, &actor, &task_id, &collaborators)
+    })
+}
+
+// ════════════════════════════════════════════════════════════
 // M4：完成汇报
 // ════════════════════════════════════════════════════════════
 
@@ -278,11 +322,20 @@ pub fn enclave_file_upload(
     task_id: String,
     src_path: String,
     report_id: Option<String>,
+    progress_id: Option<String>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<FileAssetView, String> {
     state.store.with_conn(|c| {
         let actor = authz::current_actor_id(c)?;
-        files::attach_file(c, &org_id, &actor, &task_id, &src_path, report_id.as_deref())
+        files::attach_file(
+            c,
+            &org_id,
+            &actor,
+            &task_id,
+            &src_path,
+            report_id.as_deref(),
+            progress_id.as_deref(),
+        )
     })
 }
 

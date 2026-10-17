@@ -260,6 +260,8 @@ pub struct FileAssetView {
 }
 
 /// 把本机文件挂到任务上（内容按 sha256 去重，同一内容在组织内只落一份）。
+///
+/// `progress_id`：关联到某条过程记录（进度说明）；`report_id`：关联到完成汇报。
 pub fn attach_file(
     conn: &Connection,
     org_id: &str,
@@ -267,9 +269,27 @@ pub fn attach_file(
     task_id: &str,
     src_path: &str,
     report_id: Option<&str>,
+    progress_id: Option<&str>,
 ) -> Result<FileAssetView, String> {
-    // 任务必须存在且属于本组织（顺带校验资源可见性）
-    crate::enclave::tasks::task_status(conn, org_id, task_id)?;
+    // 任务必须存在且属于本组织；只有参与者（创建者/负责人/协作者）可上传
+    let role = crate::enclave::tasks::actor_task_role(conn, org_id, task_id, actor)?;
+    if !crate::enclave::tasks::is_participant(role) {
+        return Err("只有任务创建者、负责人或参与者可以上传附件".to_string());
+    }
+    if let Some(pid) = progress_id {
+        let ok: Option<String> = conn
+            .query_row(
+                "SELECT id FROM task_comments
+                 WHERE id = ?1 AND task_id = ?2 AND content_type = 'progress' AND deleted_at IS NULL",
+                params![pid, task_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询过程记录失败：{}", e))?;
+        if ok.is_none() {
+            return Err("过程记录不存在或不属于该任务".to_string());
+        }
+    }
 
     let src = PathBuf::from(src_path);
     let bytes = std::fs::read(&src)
@@ -326,15 +346,36 @@ pub fn attach_file(
 
     let now = chrono::Utc::now().timestamp();
     conn.execute(
-        "INSERT INTO task_files (task_id, file_id, report_id, uploaded_by, uploaded_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO task_files (task_id, file_id, report_id, progress_id, uploaded_by, uploaded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(task_id, file_id) DO UPDATE SET
             report_id = excluded.report_id,
+            progress_id = excluded.progress_id,
             uploaded_by = excluded.uploaded_by,
             uploaded_at = excluded.uploaded_at",
-        params![task_id, file_id, report_id, actor, now],
+        params![task_id, file_id, report_id, progress_id, actor, now],
     )
     .map_err(|e| format!("关联任务文件失败：{}", e))?;
+
+    // 过程记录：把文件 id 追加到该记录的 attachments（便于按记录展示）
+    if let Some(pid) = progress_id {
+        let raw: String = conn
+            .query_row(
+                "SELECT attachments FROM task_comments WHERE id = ?1",
+                params![pid],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| "[]".to_string());
+        let mut ids: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+        if !ids.iter().any(|x| x == &file_id) {
+            ids.push(file_id.clone());
+        }
+        conn.execute(
+            "UPDATE task_comments SET attachments = ?2, updated_at = ?3 WHERE id = ?1",
+            params![pid, serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()), now],
+        )
+        .map_err(|e| format!("更新过程记录附件失败：{}", e))?;
+    }
 
     Ok(FileAssetView {
         id: file_id,

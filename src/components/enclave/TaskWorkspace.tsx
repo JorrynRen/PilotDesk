@@ -73,6 +73,13 @@ function fromDateInput(v: string): number | null {
   return Number.isFinite(t) ? Math.floor(t / 1000) : null;
 }
 
+function formatDateTime(unixSec: number): string {
+  if (!unixSec) return '-';
+  const d = new Date(unixSec * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => void }) {
   const orgs = useEnclaveOrgStore((s) => s.orgs);
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
@@ -486,12 +493,17 @@ function TaskDetail(props: {
   const { orgId, task, memberLabel } = props;
   const canEdit = task.effectiveActions.includes('task.edit');
   const canStatus = task.effectiveActions.includes('task.status');
+  const canAssign = task.effectiveActions.includes('task.assign');
+  const canReport = task.effectiveActions.includes('report.submit');
+  const canUpload = task.effectiveActions.includes('file.upload');
   const [desc, setDesc] = useState(task.description);
+  const [editingDesc, setEditingDesc] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const reports = useEnclaveTaskStore((s) => s.reports);
   const files = useEnclaveTaskStore((s) => s.files);
-  const caps = useEnclaveOrgStore((s) => s.caps);
+  const progress = useEnclaveTaskStore((s) => s.progress);
+  const [progressText, setProgressText] = useState('');
 
   // 汇报内容：取自己可编辑的草稿（draft / returned），否则空
   const editable = useMemo(
@@ -516,13 +528,6 @@ function TaskDetail(props: {
     }
   }, [editable, seededReportId]);
 
-  // 确认/退回权限：管理视角（org owner/admin）或任务创建者
-  const isManager =
-    caps?.role === 'owner' ||
-    caps?.role === 'admin' ||
-    (!!caps?.identity && caps.identity.userId === task.creatorId);
-  const isAssignee = !!caps?.identity && caps.identity.userId === task.assigneeId;
-
   const change = async (status: TaskStatus) => {
     await useEnclaveTaskStore.getState().setStatus(orgId, task.id, status);
   };
@@ -531,6 +536,12 @@ function TaskDetail(props: {
     const picked = await openDialog({ multiple: false, directory: false });
     if (typeof picked !== 'string') return;
     await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked);
+  };
+
+  const uploadProgressFile = async (progressId: string) => {
+    const picked = await openDialog({ multiple: false, directory: false });
+    if (typeof picked !== 'string') return;
+    await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked, progressId);
   };
 
   const openFile = async (fileId: string) => {
@@ -567,27 +578,58 @@ function TaskDetail(props: {
       </div>
 
       <div className="flex flex-col gap-1">
-        <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>描述</span>
-        <textarea
-          className="search-input w-full"
-          style={{ minHeight: 120, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
-          value={desc}
-          disabled={!canEdit}
-          onChange={(e) => setDesc(e.target.value)}
-        />
-        {canEdit && desc !== task.description && (
-          <button
-            onClick={async () => {
-              setSaving(true);
-              await useEnclaveTaskStore.getState().updateTask(orgId, task.id, { description: desc });
-              setSaving(false);
-            }}
-            disabled={saving}
-            className="self-start text-xs px-2 py-1 rounded"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: saving ? 0.6 : 1 }}
+        <div className="flex items-center gap-2">
+          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>描述</span>
+          <div className="flex-1" />
+          {canEdit && !editingDesc && (
+            <button
+              onClick={() => { setDesc(task.description); setEditingDesc(true); }}
+              className="text-[11px] px-2 py-0.5 rounded"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            >
+              修改
+            </button>
+          )}
+        </div>
+        {editingDesc ? (
+          <>
+            <textarea
+              className="search-input w-full"
+              style={{ minHeight: 120, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+              autoFocus
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  setSaving(true);
+                  const ok = await useEnclaveTaskStore.getState().updateTask(orgId, task.id, { description: desc });
+                  setSaving(false);
+                  if (ok) setEditingDesc(false);
+                }}
+                disabled={saving}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: saving ? 0.6 : 1 }}
+              >
+                {saving ? '保存中…' : '保存'}
+              </button>
+              <button
+                onClick={() => setEditingDesc(false)}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                取消
+              </button>
+            </div>
+          </>
+        ) : (
+          <div
+            className="text-xs whitespace-pre-wrap leading-6"
+            style={{ color: task.description ? 'var(--text-secondary)' : 'var(--text-tertiary)' }}
           >
-            {saving ? '保存中…' : '保存描述'}
-          </button>
+            {task.description || '（无描述）'}
+          </div>
         )}
       </div>
 
@@ -613,12 +655,101 @@ function TaskDetail(props: {
         ))}
       </div>
 
+      {/* 过程记录（可多次；提交完成汇报后锁定） */}
+      <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            过程记录
+          </span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            {progress?.items.length ?? 0}
+          </span>
+          <div className="flex-1" />
+          {progress?.locked && (
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              {progress.lockReason}
+            </span>
+          )}
+        </div>
+
+        {canReport && !progress?.locked && (
+          <div className="flex items-start gap-2">
+            <textarea
+              className="search-input flex-1"
+              style={{ minHeight: 60, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
+              placeholder="记录本次进度：做了什么、遇到什么、下一步（可多次）"
+              value={progressText}
+              onChange={(e) => setProgressText(e.target.value)}
+            />
+            <button
+              onClick={async () => {
+                const ok = await useEnclaveTaskStore.getState().addProgress(orgId, task.id, progressText);
+                if (ok) setProgressText('');
+              }}
+              disabled={!progressText.trim()}
+              className="text-xs px-2 py-1 rounded"
+              style={{
+                backgroundColor: 'var(--accent)',
+                color: '#fff',
+                opacity: progressText.trim() ? 1 : 0.5,
+              }}
+            >
+              添加记录
+            </button>
+          </div>
+        )}
+
+        {progress?.items.map((p) => (
+          <div
+            key={p.id}
+            className="rounded px-2 py-1.5 flex flex-col gap-1"
+            style={{ backgroundColor: 'var(--bg-tertiary)' }}
+          >
+            <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              <span>{memberLabel(p.authorId)}</span>
+              <span>{formatDateTime(p.createdAt)}</span>
+              <div className="flex-1" />
+              {canUpload && !progress.locked && (
+                <button
+                  onClick={() => void uploadProgressFile(p.id)}
+                  className="px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                >
+                  添加附件
+                </button>
+              )}
+            </div>
+            <div className="text-[11px] whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+              {p.content}
+            </div>
+            {p.attachments.map((f) => (
+              <div key={f.id} className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                <span className="truncate flex-1">{f.fileName}</span>
+                <button
+                  onClick={() => void openFile(f.id)}
+                  className="px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                >
+                  打开
+                </button>
+              </div>
+            ))}
+          </div>
+        ))}
+
+        {(!progress || progress.items.length === 0) && (
+          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            还没有过程记录
+          </div>
+        )}
+      </div>
+
       {/* 完成汇报 */}
       <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
         <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
           完成汇报
         </span>
-        {(isAssignee || editable) && task.status !== 'done' && task.status !== 'archived' && (
+        {(canReport || editable) && task.status !== 'done' && task.status !== 'archived' && (
           <>
             <textarea
               className="search-input w-full"
@@ -677,7 +808,7 @@ function TaskDetail(props: {
                     {memberLabel(r.reporterId)} · {toDateInput(r.updatedAt)}
                   </span>
                   <div className="flex-1" />
-                  {r.status === 'submitted' && isManager && (
+                  {r.status === 'submitted' && canStatus && (
                     <>
                       <button
                         onClick={() => void useEnclaveTaskStore.getState().confirmReport(orgId, task.id, r.id)}
@@ -767,13 +898,15 @@ function TaskDetail(props: {
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>附件</span>
           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{files.length}</span>
           <div className="flex-1" />
-          <button
-            onClick={() => void uploadFile()}
-            className="text-xs px-2 py-1 rounded"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-          >
-            上传文件
-          </button>
+          {canUpload && (
+            <button
+              onClick={() => void uploadFile()}
+              className="text-xs px-2 py-1 rounded"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            >
+              上传文件
+            </button>
+          )}
         </div>
         {files.length === 0 ? (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>暂无附件</div>
@@ -810,8 +943,16 @@ function TaskSidePanel(props: {
   const [assignee, setAssignee] = useState(task.assigneeId ?? '');
   const [priority, setPriority] = useState(task.priority);
   const [due, setDue] = useState(toDateInput(task.dueDate));
+  const [collaborators, setCollaborators] = useState<string[]>(task.collaborators);
+  const [editingProps, setEditingProps] = useState(false);
   const [deps, setDeps] = useState<string[]>(task.blockedBy);
   const [preview, setPreview] = useState<DepsPreview | null>(null);
+
+  const memberName = (id: string | null): string => {
+    if (!id) return '未指派';
+    const m = members.find((x) => x.userId === id);
+    return m?.displayName || m?.email || id;
+  };
 
   const others = tasks.filter((t) => t.id !== task.id && t.parentTaskId === task.parentTaskId);
 
@@ -824,66 +965,148 @@ function TaskSidePanel(props: {
   return (
     <>
       <div className="flex flex-col gap-2">
-        <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>属性</span>
-        <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
-          负责人
-          <select
-            className="search-input"
-            style={{ backgroundColor: 'var(--bg-field)' }}
-            value={assignee}
-            disabled={!canAssign}
-            onChange={(e) => setAssignee(e.target.value)}
-          >
-            <option value="">未指派</option>
-            {members.filter((m) => m.seatStatus !== 'removed').map((m) => (
-              <option key={m.userId} value={m.userId}>{m.displayName || m.email}</option>
-            ))}
-          </select>
-        </label>
-        <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
-          优先级
-          <select
-            className="search-input"
-            style={{ backgroundColor: 'var(--bg-field)' }}
-            value={priority}
-            disabled={!canEdit}
-            onChange={(e) => setPriority(e.target.value)}
-          >
-            {Object.entries(PRIORITY_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
-          </select>
-        </label>
-        <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
-          截止日期
-          <input
-            type="date"
-            className="search-input"
-            style={{ backgroundColor: 'var(--bg-field)' }}
-            value={due}
-            disabled={!canEdit}
-            onChange={(e) => setDue(e.target.value)}
-          />
-        </label>
-        <button
-          onClick={async () => {
-            await useEnclaveTaskStore.getState().updateTask(orgId, task.id, {
-              assigneeId: assignee || null,
-              priority,
-              dueDate: fromDateInput(due),
-            });
-          }}
-          disabled={!canEdit && !canAssign}
-          className="text-xs px-2 py-1 rounded self-start"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border)',
-            opacity: canEdit || canAssign ? 1 : 0.5,
-          }}
-        >
-          保存属性
-        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>属性</span>
+          <div className="flex-1" />
+          {!editingProps && (canEdit || canAssign) && (
+            <button
+              onClick={() => setEditingProps(true)}
+              className="text-[11px] px-2 py-0.5 rounded"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            >
+              修改
+            </button>
+          )}
+        </div>
+
+        {!editingProps ? (
+          <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            <div>负责人：{memberName(task.assigneeId)}</div>
+            <div>优先级：{PRIORITY_LABEL[task.priority] ?? task.priority}</div>
+            <div>截止：{task.dueDate ? toDateInput(task.dueDate) : '未设置'}</div>
+            <div>
+              参与者：
+              {task.collaborators.length
+                ? task.collaborators.map((id) => memberName(id)).join('、')
+                : '无'}
+            </div>
+          </div>
+        ) : (
+          <>
+            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+              负责人
+              <select
+                className="search-input"
+                style={{ backgroundColor: 'var(--bg-field)' }}
+                value={assignee}
+                disabled={!canAssign}
+                onChange={(e) => setAssignee(e.target.value)}
+              >
+                <option value="">未指派</option>
+                {members.filter((m) => m.seatStatus !== 'removed').map((m) => (
+                  <option key={m.userId} value={m.userId}>{m.displayName || m.email}</option>
+                ))}
+              </select>
+              {!canAssign && (
+                <span className="text-[10px]">仅创建者可修改负责人</span>
+              )}
+            </label>
+            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+              优先级
+              <select
+                className="search-input"
+                style={{ backgroundColor: 'var(--bg-field)' }}
+                value={priority}
+                onChange={(e) => setPriority(e.target.value)}
+              >
+                {Object.entries(PRIORITY_LABEL).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+              截止日期
+              <input
+                type="date"
+                className="search-input"
+                style={{ backgroundColor: 'var(--bg-field)' }}
+                value={due}
+                onChange={(e) => setDue(e.target.value)}
+              />
+            </label>
+
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>参与者（可提交汇报 / 上传附件）</span>
+              <div className="max-h-[140px] overflow-auto rounded" style={{ border: '1px solid var(--border)' }}>
+                {members
+                  .filter((m) => m.seatStatus !== 'removed')
+                  .filter((m) => m.userId !== task.creatorId && m.userId !== task.assigneeId)
+                  .map((m) => (
+                    <label
+                      key={m.userId}
+                      className="flex items-center gap-2 px-2 py-1 text-[11px] cursor-pointer"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={collaborators.includes(m.userId)}
+                        onChange={() =>
+                          setCollaborators((prev) =>
+                            prev.includes(m.userId)
+                              ? prev.filter((x) => x !== m.userId)
+                              : [...prev, m.userId],
+                          )
+                        }
+                      />
+                      <span className="truncate">{m.displayName || m.email}</span>
+                    </label>
+                  ))}
+                {members.filter(
+                  (m) => m.seatStatus !== 'removed'
+                    && m.userId !== task.creatorId
+                    && m.userId !== task.assigneeId,
+                ).length === 0 && (
+                  <div className="px-2 py-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    没有可添加的成员
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  const ok = await useEnclaveTaskStore.getState().updateTask(orgId, task.id, {
+                    ...(canAssign ? { assigneeId: assignee || null } : {}),
+                    priority,
+                    dueDate: fromDateInput(due),
+                  });
+                  const ok2 = await useEnclaveTaskStore
+                    .getState()
+                    .setCollaborators(orgId, task.id, collaborators);
+                  if (ok && ok2) setEditingProps(false);
+                }}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                保存
+              </button>
+              <button
+                onClick={() => {
+                  setAssignee(task.assigneeId ?? '');
+                  setPriority(task.priority);
+                  setDue(toDateInput(task.dueDate));
+                  setCollaborators(task.collaborators);
+                  setEditingProps(false);
+                }}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                取消
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="flex flex-col gap-1">
@@ -931,23 +1154,20 @@ function TaskSidePanel(props: {
             环：{preview.cycleIds.join(' → ')}
           </div>
         ) : null}
-        <button
-          onClick={async () => {
-            const ok = await useEnclaveTaskStore.getState().setDeps(orgId, task.id, deps);
-            if (ok) setPreview(null);
-          }}
-          disabled={!canEdit}
-          className="text-xs px-2 py-1 rounded self-start"
-          style={{
-            backgroundColor: 'var(--accent)',
-            color: '#fff',
-            opacity: canEdit ? 1 : 0.5,
-          }}
-        >
-          保存依赖
-        </button>
+        {canEdit && (
+          <button
+            onClick={async () => {
+              const ok = await useEnclaveTaskStore.getState().setDeps(orgId, task.id, deps);
+              if (ok) setPreview(null);
+            }}
+            className="text-xs px-2 py-1 rounded self-start"
+            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+          >
+            保存依赖
+          </button>
+        )}
         {!canEdit && (
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>仅负责人 / 创建者 / 管理员可改</span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>仅创建者 / 负责人可改</span>
         )}
       </div>
     </>

@@ -11,6 +11,7 @@ import type {
   CreateTaskInput,
   DepsPreview,
   FileAssetView,
+  ProgressList,
   ReportView,
   TaskView,
   UpdateTaskInput,
@@ -21,9 +22,10 @@ interface EnclaveTaskState {
   activeTaskId: string | null;
   loading: boolean;
   error: string | null;
-  /** 当前选中任务的汇报与附件 */
+  /** 当前选中任务的汇报、附件与过程记录 */
   reports: ReportView[];
   files: FileAssetView[];
+  progress: ProgressList | null;
   loadTasks: (orgId: string) => Promise<void>;
   selectTask: (taskId: string | null) => void;
   createTask: (orgId: string, input: CreateTaskInput) => Promise<TaskView | null>;
@@ -37,7 +39,11 @@ interface EnclaveTaskState {
   submitReport: (orgId: string, taskId: string, content: string) => Promise<boolean>;
   confirmReport: (orgId: string, taskId: string, reportId: string) => Promise<boolean>;
   returnReport: (orgId: string, taskId: string, reportId: string, reason: string) => Promise<boolean>;
-  uploadFile: (orgId: string, taskId: string, srcPath: string) => Promise<boolean>;
+  uploadFile: (orgId: string, taskId: string, srcPath: string, progressId?: string) => Promise<boolean>;
+  /** 追加进度说明 */
+  addProgress: (orgId: string, taskId: string, content: string) => Promise<boolean>;
+  /** 设置任务参与者 */
+  setCollaborators: (orgId: string, taskId: string, collaborators: string[]) => Promise<boolean>;
 }
 
 /** 用返回的最新任务替换列表中的同 id 项。 */
@@ -56,6 +62,7 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   error: null,
   reports: [],
   files: [],
+  progress: null,
 
   loadTasks: async (orgId) => {
     set({ loading: true, error: null });
@@ -128,11 +135,12 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   },
 
   loadExtras: async (orgId, taskId) => {
-    const [reports, files] = await Promise.all([
+    const [reports, files, progress] = await Promise.all([
       invoke<ReportView[]>('enclave_report_list', { orgId, taskId }).catch(() => []),
       invoke<FileAssetView[]>('enclave_task_file_list', { orgId, taskId }).catch(() => []),
+      invoke<ProgressList>('enclave_task_progress_list', { orgId, taskId }).catch(() => null),
     ]);
-    set({ reports, files });
+    set({ reports, files, progress });
   },
 
   saveReportDraft: async (orgId, taskId, content) => {
@@ -186,11 +194,43 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
     }
   },
 
-  uploadFile: async (orgId, taskId, srcPath) => {
+  uploadFile: async (orgId, taskId, srcPath, progressId) => {
     try {
-      await invoke<FileAssetView>('enclave_file_upload', { orgId, taskId, srcPath });
+      await invoke<FileAssetView>('enclave_file_upload', {
+        orgId,
+        taskId,
+        srcPath,
+        progressId: progressId ?? null,
+      });
       await get().loadExtras(orgId, taskId);
       set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  addProgress: async (orgId, taskId, content) => {
+    try {
+      await invoke('enclave_task_progress_add', { orgId, taskId, content });
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  setCollaborators: async (orgId, taskId, collaborators) => {
+    try {
+      const task = await invoke<TaskView>('enclave_task_set_collaborators', {
+        orgId,
+        taskId,
+        collaborators,
+      });
+      set((s) => ({ tasks: upsert(s.tasks, task), error: null }));
       return true;
     } catch (e) {
       set({ error: errorMessage(e) });

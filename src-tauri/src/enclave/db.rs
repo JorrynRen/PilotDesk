@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 3;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 4;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS task_files (
     task_id     TEXT NOT NULL,
     file_id     TEXT NOT NULL,
     report_id   TEXT,
+    progress_id TEXT,                              -- 关联的过程记录（task_comments.id）
     uploaded_by TEXT NOT NULL DEFAULT '',
     uploaded_at INTEGER NOT NULL,
     PRIMARY KEY (task_id, file_id)
@@ -363,6 +364,10 @@ impl EnclaveStore {
         // 迁移期显式补列；新库建表语句里已含该列，这里会直接跳过。
         if current < 2 {
             Self::ensure_column(conn, "org_snapshot", "my_role", "TEXT NOT NULL DEFAULT 'member'")?;
+        }
+        // v3 → v4：过程记录附件
+        if current < 4 {
+            Self::ensure_column(conn, "task_files", "progress_id", "TEXT")?;
         }
 
         if current != ENCLAVE_SCHEMA_VERSION {

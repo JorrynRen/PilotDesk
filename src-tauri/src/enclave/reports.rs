@@ -97,19 +97,20 @@ fn load_report(conn: &Connection, task_id: &str, report_id: &str) -> Result<Repo
     .ok_or_else(|| "汇报不存在或不属于该任务".to_string())
 }
 
-fn ensure_assignee(role: TaskRole) -> Result<(), String> {
-    if role == TaskRole::Assignee {
+fn ensure_participant(role: TaskRole) -> Result<(), String> {
+    if tasks::is_participant(role) {
         Ok(())
     } else {
-        Err("只有任务负责人可以编写 / 提交汇报".to_string())
+        Err("只有任务创建者、负责人或参与者可以填写 / 提交汇报".to_string())
     }
 }
 
-fn ensure_manager(role: TaskRole) -> Result<(), String> {
-    if matches!(role, TaskRole::Manager | TaskRole::Creator) {
+/// 确认 / 退回跟「状态归属」一致：仅创建者与负责人。
+fn ensure_status_owner(role: TaskRole) -> Result<(), String> {
+    if matches!(role, TaskRole::Creator | TaskRole::Assignee) {
         Ok(())
     } else {
-        Err("当前角色无权确认或退回汇报".to_string())
+        Err("只有任务创建者或负责人可以确认 / 退回汇报".to_string())
     }
 }
 
@@ -149,7 +150,7 @@ pub fn save_draft(
     deliverables: &[String],
 ) -> Result<ReportView, String> {
     let role = tasks::actor_task_role(conn, org_id, task_id, actor)?;
-    ensure_assignee(role)?;
+    ensure_participant(role)?;
     reject_closed_task(conn, org_id, task_id)?;
 
     let now = chrono::Utc::now().timestamp();
@@ -218,7 +219,7 @@ pub fn confirm_report(
     report_id: &str,
 ) -> Result<ReportView, String> {
     let role = tasks::actor_task_role(conn, org_id, task_id, actor)?;
-    ensure_manager(role)?;
+    ensure_status_owner(role)?;
     let report = load_report(conn, task_id, report_id)?;
     if report.status != REPORT_SUBMITTED {
         return Err("只能确认「已提交」的汇报".to_string());
@@ -260,7 +261,7 @@ pub fn return_report(
     reason: &str,
 ) -> Result<ReportView, String> {
     let role = tasks::actor_task_role(conn, org_id, task_id, actor)?;
-    ensure_manager(role)?;
+    ensure_status_owner(role)?;
     let report = load_report(conn, task_id, report_id)?;
     if report.status != REPORT_SUBMITTED {
         return Err("只能退回「已提交」的汇报".to_string());
@@ -325,18 +326,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_assignee_can_submit() {
-        assert!(ensure_assignee(TaskRole::Assignee).is_ok());
-        for r in [TaskRole::Manager, TaskRole::Creator, TaskRole::Collaborator, TaskRole::Watcher] {
-            assert!(ensure_assignee(r).is_err(), "{:?} 不应能提交汇报", r);
-        }
+    fn only_participants_can_submit() {
+        assert!(ensure_participant(TaskRole::Creator).is_ok());
+        assert!(ensure_participant(TaskRole::Assignee).is_ok());
+        assert!(ensure_participant(TaskRole::Collaborator).is_ok());
+        assert!(ensure_participant(TaskRole::Watcher).is_err());
+        assert!(ensure_participant(TaskRole::Manager).is_err());
     }
 
     #[test]
-    fn only_manager_can_confirm() {
-        assert!(ensure_manager(TaskRole::Manager).is_ok());
-        assert!(ensure_manager(TaskRole::Creator).is_ok());
-        assert!(ensure_manager(TaskRole::Assignee).is_err());
-        assert!(ensure_manager(TaskRole::Watcher).is_err());
+    fn only_status_owners_can_confirm() {
+        assert!(ensure_status_owner(TaskRole::Creator).is_ok());
+        assert!(ensure_status_owner(TaskRole::Assignee).is_ok());
+        assert!(ensure_status_owner(TaskRole::Collaborator).is_err());
+        assert!(ensure_status_owner(TaskRole::Watcher).is_err());
+        assert!(ensure_status_owner(TaskRole::Manager).is_err());
     }
 }

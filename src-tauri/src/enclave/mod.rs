@@ -15,6 +15,7 @@ pub mod files;
 pub mod gate;
 pub mod knowledge;
 pub mod org;
+pub mod progress;
 pub mod reports;
 pub mod snapshot;
 pub mod tasks;
