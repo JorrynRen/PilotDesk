@@ -486,16 +486,18 @@ function TaskDetail(props: {
   // 权限按「当前登录身份 + 任务字段」本地复核（同时兼容快照未及时刷新）：
   // 非参与者不出现任何提交表单；创建者 / 负责人才能编辑与流转状态。
   const caps = useEnclaveOrgStore((s) => s.caps);
+  const identityVerified = useEnclaveTaskStore((s) => s.identityVerified);
   const me = caps?.identity?.userId ?? '';
   const isCreator = !!me && me === task.creatorId;
   const isAssignee = !!me && me === task.assigneeId;
   const isCollaborator = !!me && task.collaborators.includes(me);
   const isParticipant = isCreator || isAssignee || isCollaborator;
-  const canEdit = isCreator || isAssignee;
-  const canStatus = isCreator || isAssignee;
-  const canAssign = isCreator;
-  const canReport = isParticipant;
-  const canUpload = isParticipant;
+  // 身份未校验（刷新失败 / 账号刚切换）时一律不出现写入口，避免旧身份越权
+  const canEdit = identityVerified && (isCreator || isAssignee);
+  const canStatus = identityVerified && (isCreator || isAssignee);
+  const canAssign = identityVerified && isCreator;
+  const canReport = identityVerified && isParticipant;
+  const canUpload = identityVerified && isParticipant;
   const blocked = task.blocked;
   const taskError = useEnclaveTaskStore((s) => s.error);
   const [desc, setDesc] = useState(task.description);
@@ -600,6 +602,15 @@ function TaskDetail(props: {
           style={{ color: 'var(--status-danger)', backgroundColor: 'var(--bg-tertiary)' }}
         >
           {taskError}
+        </div>
+      )}
+
+      {!identityVerified && (
+        <div
+          className="text-[11px] px-2 py-1 rounded"
+          style={{ color: 'var(--status-danger)', backgroundColor: 'var(--bg-tertiary)' }}
+        >
+          身份未校验（刷新失败或账号刚切换），已暂时隐藏所有编辑与提交入口
         </div>
       )}
 

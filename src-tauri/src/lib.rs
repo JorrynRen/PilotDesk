@@ -2784,6 +2784,7 @@ pub fn run() {
             commands::enclave::enclave_org_list,
             commands::enclave::enclave_org_detail,
             commands::enclave::enclave_snapshot_refresh,
+            commands::enclave::enclave_identity_refresh,
             commands::enclave::enclave_snapshot_freshness,
             commands::enclave::enclave_org_caps,
             commands::enclave::enclave_policy_get,

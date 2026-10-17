@@ -103,6 +103,31 @@ struct MeUser {
 
 // ── 一轮同步 ────────────────────────────────────────────────────
 
+/// 只刷新「本机登录身份」（`/api/v1/me`），不拉组织与成员。
+///
+/// 账号切换后，快照轮询可能还没跑（默认 30 分钟一轮），若继续用旧身份判定 actor，
+/// 会让新账号继承上一个账号的任务权限。进入飞地时先调它，保证授权判定用的是当前账号。
+pub async fn refresh_local_identity(
+    db: &crate::DbState,
+    state: &EnclaveState,
+) -> Result<(), String> {
+    let token = require_token(db).await?;
+    let me: MeResp = platform::get_json_with_status("/api/v1/me", Some(&token))
+        .await
+        .map_err(|e| e.message)?;
+    state.store.with_conn(|c| {
+        org::upsert_local_identity(
+            c,
+            &org::LocalIdentityRow {
+                user_id: me.user.id.to_string(),
+                email: me.user.email.clone(),
+                nickname: me.user.nickname.clone(),
+            },
+        )
+    })?;
+    Ok(())
+}
+
 /// 执行一轮治理快照同步：拉组织与成员 → 只读落库。
 ///
 /// 未登录直接返回 `Err("请先登录平台账号")`（来自 [`require_token`]）。
@@ -131,7 +156,7 @@ pub async fn run_snapshot_round(
     //
     // 成员名单走 `GET /organizations/:id`（平台目前**没有** `/:id/members` 列表接口，
     // 属待对齐项 §16.1）：该详情对 owner/admin 才返回 `members`，普通成员视角没有名单。
-    // 拿不到名单时只记原因、跳过该组织的成员写入，**不拖垮整轮**——
+    // 拿不到名单时跳过该组织的成员写入（保留本地只读快照，成员均可查看），**不拖垮整轮**——
     // 且此时**绝不能**调 `upsert_member_snapshot`（会把存量成员全部标成 `removed`）。
     let mut org_rows: Vec<OrgSnapshotRow> = Vec::with_capacity(orgs.len());
     let mut member_sets: Vec<(String, Vec<MemberSnapshotRow>)> = Vec::with_capacity(orgs.len());
@@ -156,11 +181,9 @@ pub async fn run_snapshot_round(
         });
         match fetch_members(o.id, &token).await {
             Ok(MemberFetch::Data(members)) => member_sets.push((o.id.to_string(), members)),
-            Ok(MemberFetch::Unavailable(reason)) => {
-                log::debug!("[Enclave] 组织 {} 无成员名单：{}", o.id, reason);
-                if member_error.is_none() {
-                    member_error = Some(reason);
-                }
+            Ok(MemberFetch::NotIncluded) => {
+                // 普通成员视角平台不下发名单：保留存量只读快照，不视为错误。
+                log::debug!("[Enclave] 组织 {} 未返回成员名单，保留本地快照", o.id);
             }
             Err(e) => {
                 log::debug!("[Enclave] 组织 {} 成员快照拉取失败：{}", o.id, e);
@@ -207,8 +230,8 @@ pub async fn run_snapshot_round(
 enum MemberFetch {
     /// 拿到名单（可能为空数组）。
     Data(Vec<MemberSnapshotRow>),
-    /// 平台没有返回名单（当前登录者不是 owner/admin），附可读原因。
-    Unavailable(String),
+    /// 平台详情未下发名单（当前登录者是普通成员）：保留本地快照，不算失败。
+    NotIncluded,
 }
 
 /// 拉某组织的成员名单。
@@ -228,10 +251,8 @@ async fn fetch_members(org_id: i64, token: &str) -> Result<MemberFetch, String> 
         Some(serde_json::Value::Array(a)) => Ok(MemberFetch::Data(
             a.iter().filter_map(parse_member).collect(),
         )),
-        // 普通成员视角不下发名单：不算失败，只是「不可见」
-        _ => Ok(MemberFetch::Unavailable(
-            "仅 owner / admin 可查看成员名单，当前角色无此权限".to_string(),
-        )),
+        // 普通成员视角不下发名单：保留本地只读快照，成员均可查看，不视为错误
+        _ => Ok(MemberFetch::NotIncluded),
     }
 }
 

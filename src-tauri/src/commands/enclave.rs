@@ -65,6 +65,18 @@ pub async fn enclave_snapshot_refresh(
     crate::enclave::snapshot::run_snapshot_round(db.inner(), state.inner()).await
 }
 
+/// 只刷新本机登录身份（`/api/v1/me`）。
+///
+/// 账号切换后快照轮询可能尚未执行，若沿用旧身份会让新账号继承上一账号的任务权限；
+/// 前端进入飞地时先调此命令，再拉任务 / 能力。
+#[tauri::command]
+pub async fn enclave_identity_refresh(
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    crate::enclave::snapshot::refresh_local_identity(db.inner(), state.inner()).await
+}
+
 /// 最近一次治理快照成功同步时间（unix 秒，0 = 从未同步）：供前端判断是否 stale。
 #[tauri::command]
 pub fn enclave_snapshot_freshness(state: State<'_, Arc<EnclaveState>>) -> i64 {

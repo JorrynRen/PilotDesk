@@ -7,6 +7,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { errorMessage } from '../utils/errorMessage';
+import { useEnclaveOrgStore } from './enclaveOrgStore';
 import type {
   CreateTaskInput,
   DepsPreview,
@@ -22,6 +23,8 @@ interface EnclaveTaskState {
   activeTaskId: string | null;
   loading: boolean;
   error: string | null;
+  /** 本轮是否成功用当前账号刷新过身份（失败则禁用一切写操作） */
+  identityVerified: boolean;
   /** 当前选中任务的汇报、附件与过程记录 */
   reports: ReportView[];
   files: FileAssetView[];
@@ -63,9 +66,22 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   reports: [],
   files: [],
   progress: null,
+  /** 本轮是否成功用当前账号刷新过身份（失败则禁用一切写操作） */
+  identityVerified: false,
 
   loadTasks: async (orgId) => {
-    set({ loading: true, error: null });
+    // 先清空校验标记：身份刷新完成前不显示任何写入口
+    set({ loading: true, error: null, identityVerified: false });
+    // 先刷新身份：账号切换后快照轮询可能还没跑，旧身份会让权限判定失真
+    let identityVerified = false;
+    try {
+      await invoke('enclave_identity_refresh');
+      identityVerified = true;
+      // 身份落库后重拉组织能力，避免页面沿用旧的 caps.identity
+      await useEnclaveOrgStore.getState().loadGovernance(orgId);
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
     try {
       const tasks = await invoke<TaskView[]>('enclave_task_list', { orgId });
       const active = get().activeTaskId;
@@ -73,9 +89,10 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
         tasks,
         activeTaskId: active && tasks.some((t) => t.id === active) ? active : null,
         loading: false,
+        identityVerified,
       });
     } catch (e) {
-      set({ error: errorMessage(e), loading: false });
+      set({ error: errorMessage(e), loading: false, identityVerified });
     }
   },
 
