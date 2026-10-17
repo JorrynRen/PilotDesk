@@ -2751,6 +2751,13 @@ pub fn run() {
             commands::enclave::enclave_emergency_get,
             commands::enclave::enclave_emergency_set,
             commands::enclave::enclave_audit_list,
+            commands::enclave_task::enclave_task_list,
+            commands::enclave_task::enclave_task_get,
+            commands::enclave_task::enclave_task_create,
+            commands::enclave_task::enclave_task_update,
+            commands::enclave_task::enclave_task_set_status,
+            commands::enclave_task::enclave_task_set_deps,
+            commands::enclave_task::enclave_task_deps_preview,
         ])
         .setup(move |app| {
             // 初始化资源路径（应用根目录：Win %APPDATA%\PilotDesk / unix ~/.config/pilotdesk）

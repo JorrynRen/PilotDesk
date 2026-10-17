@@ -6,6 +6,7 @@ pub mod attachment;
 pub mod cloud_sync;
 pub mod dirindex;
 pub mod enclave;
+pub mod enclave_task;
 pub mod env;
 pub mod file_history;
 pub mod fs_util;

@@ -13,6 +13,7 @@ pub mod authz;
 pub mod db;
 pub mod org;
 pub mod snapshot;
+pub mod tasks;
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;

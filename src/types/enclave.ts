@@ -118,3 +118,62 @@ export interface EmergencyView {
   updatedBy: string;
   updatedAt: number;
 }
+
+// ── M3：任务 ────────────────────────────────────────────────────
+
+/** 任务状态 */
+export type TaskStatus = 'pending' | 'in_progress' | 'submitted' | 'done' | 'archived';
+
+/** 任务视图（`enclave_task_*`）；`effectiveActions` 是按钮渲染的唯一来源 */
+export interface TaskView {
+  id: string;
+  orgId: string;
+  parentTaskId: string | null;
+  title: string;
+  description: string;
+  creatorId: string;
+  assigneeId: string | null;
+  collaborators: string[];
+  status: TaskStatus;
+  priority: string;
+  dueDate: number | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  /** 前置任务 id（纯 AND 语义） */
+  blockedBy: string[];
+  visibility: string;
+  /** 是否被未完成的前置任务阻塞 */
+  blocked: boolean;
+  effectiveActions: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 新建任务入参 */
+export interface CreateTaskInput {
+  title: string;
+  description?: string;
+  parentTaskId?: string | null;
+  assigneeId?: string | null;
+  priority?: string;
+  dueDate?: number | null;
+  blockedBy?: string[];
+}
+
+/** 编辑任务入参（只传要改的字段） */
+export interface UpdateTaskInput {
+  title?: string;
+  description?: string;
+  assigneeId?: string | null;
+  collaborators?: string[];
+  priority?: string;
+  dueDate?: number | null;
+}
+
+/** 依赖变更预览 */
+export interface DepsPreview {
+  cycleIds: string[];
+  newlyBlockedIds: string[];
+  newlyUnblockedIds: string[];
+  error: string | null;
+}
