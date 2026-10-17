@@ -44,17 +44,14 @@ const PRIORITY_LABEL: Record<string, string> = {
   urgent: '紧急',
 };
 
-/** 每个状态可执行的流转（合法性最终由后端 `can_transition` 判定）。 */
+/** 每个状态可执行的流转（合法性最终由后端 `can_transition` 判定）。
+ *
+ * 「待确认」不在此列：它只由「完成汇报」驱动——提交汇报进入，确认/退回汇报离开。
+ */
 const TRANSITIONS: Record<TaskStatus, { to: TaskStatus; label: string }[]> = {
   pending: [{ to: 'in_progress', label: '开始' }],
-  in_progress: [
-    { to: 'submitted', label: '提交' },
-    { to: 'pending', label: '放回待办' },
-  ],
-  submitted: [
-    { to: 'done', label: '确认完成' },
-    { to: 'in_progress', label: '退回' },
-  ],
+  in_progress: [{ to: 'pending', label: '放回待办' }],
+  submitted: [],
   done: [
     { to: 'archived', label: '归档' },
     { to: 'in_progress', label: '重新打开' },
@@ -976,8 +973,8 @@ function TaskDetail(props: {
         )}
       </div>
 
-      {/* 状态操作：无权限角色整块不显示（标题右侧已有当前状态） */}
-      {canStatus && (
+      {/* 状态操作：无权限或无可用流转时整块不显示（待确认只由完成汇报驱动） */}
+      {canStatus && TRANSITIONS[task.status].length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           <Flag size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>状态操作</span>

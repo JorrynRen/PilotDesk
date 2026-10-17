@@ -74,6 +74,15 @@ pub fn enclave_task_set_status(
 ) -> Result<TaskView, String> {
     state.store.with_conn(|c| {
         let actor = authz::current_actor_id(c)?;
+        // 「待确认」是完成汇报驱动的中间态：进入只能靠提交汇报，离开只能靠确认/退回汇报。
+        // 状态操作不允许绕过汇报直接改，否则会出现「待确认但没有汇报」或「已完成但汇报未确认」。
+        let current = tasks::task_status(c, &org_id, &task_id)?;
+        if status == tasks::STATUS_SUBMITTED {
+            return Err("请通过「完成汇报 → 提交汇报」把任务推进到待确认".to_string());
+        }
+        if current == tasks::STATUS_SUBMITTED {
+            return Err("待确认任务请通过完成汇报的「确认完成 / 退回」处理".to_string());
+        }
         tasks::set_status(c, &org_id, &actor, &task_id, &status)
     })
 }
