@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight, FolderOpen, Library,
+  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
@@ -412,7 +413,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
           ))}
         </div>
 
-        {/* 中：详情 */}
+        {/* 中：详情（属性 / 依赖 / 过程记录 / 汇报都在这里，右侧不常驻面板） */}
         <div className="flex-1 min-w-0 overflow-auto">
           {!task && (
             <div className="h-full flex items-center justify-center text-xs" style={{ color: 'var(--text-tertiary)' }}>
@@ -420,25 +421,14 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
             </div>
           )}
           {task && activeOrgId && (
-            <TaskDetail key={task.id} orgId={activeOrgId} task={task} memberLabel={memberLabel} />
-          )}
-        </div>
-
-        {/* 右：属性 / 依赖 */}
-        <div
-          className="w-[300px] shrink-0 overflow-auto p-3 flex flex-col gap-3"
-          style={{ borderLeft: '1px solid var(--border)' }}
-        >
-          {task && activeOrgId ? (
-            <TaskSidePanel
+            <TaskDetail
               key={task.id}
               orgId={activeOrgId}
               task={task}
               tasks={tasks}
               members={members}
+              memberLabel={memberLabel}
             />
-          ) : (
-            <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>—</div>
           )}
         </div>
       </div>
@@ -488,9 +478,11 @@ function TaskNode(props: {
 function TaskDetail(props: {
   orgId: string;
   task: TaskView;
+  tasks: TaskView[];
+  members: MemberView[];
   memberLabel: (id: string | null) => string;
 }) {
-  const { orgId, task, memberLabel } = props;
+  const { orgId, task, tasks, members, memberLabel } = props;
   const canEdit = task.effectiveActions.includes('task.edit');
   const canStatus = task.effectiveActions.includes('task.status');
   const canAssign = task.effectiveActions.includes('task.assign');
@@ -499,6 +491,15 @@ function TaskDetail(props: {
   const [desc, setDesc] = useState(task.description);
   const [editingDesc, setEditingDesc] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // 属性 / 依赖：只读展示，点「修改」才出现编辑表单
+  const [editingProps, setEditingProps] = useState(false);
+  const [assignee, setAssignee] = useState(task.assigneeId ?? '');
+  const [priority, setPriority] = useState(task.priority);
+  const [due, setDue] = useState(toDateInput(task.dueDate));
+  const [collaborators, setCollaborators] = useState<string[]>(task.collaborators);
+  const [deps, setDeps] = useState<string[]>(task.blockedBy);
+  const [preview, setPreview] = useState<DepsPreview | null>(null);
 
   const reports = useEnclaveTaskStore((s) => s.reports);
   const files = useEnclaveTaskStore((s) => s.files);
@@ -572,14 +573,237 @@ function TaskDetail(props: {
         )}
       </div>
 
-      <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-        创建 {memberLabel(task.creatorId)} · 负责人 {memberLabel(task.assigneeId)}
-        {task.dueDate ? ` · 截止 ${toDateInput(task.dueDate)}` : ''}
+      {/* 任务信息（属性 + 依赖都直接展示；修改时才出现表单） */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-1.5">
+          <Info size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务信息</span>
+          <div className="flex-1" />
+          {!editingProps && (canEdit || canAssign) && (
+            <button
+              onClick={() => setEditingProps(true)}
+              className="text-[11px] px-2 py-0.5 rounded"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            >
+              修改
+            </button>
+          )}
+        </div>
+
+        {!editingProps ? (
+          <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            <div>创建者：{memberLabel(task.creatorId)}</div>
+            <div>负责人：{memberLabel(task.assigneeId)}</div>
+            <div>优先级：{PRIORITY_LABEL[task.priority] ?? task.priority}</div>
+            <div>截止：{task.dueDate ? toDateInput(task.dueDate) : '未设置'}</div>
+            <div>
+              参与者：
+              {task.collaborators.length
+                ? task.collaborators.map((id) => memberLabel(id)).join('、')
+                : '无'}
+            </div>
+            <div className="flex items-start gap-1">
+              <span className="shrink-0">前置依赖：</span>
+              {task.blockedBy.length === 0 ? (
+                <span style={{ color: 'var(--text-tertiary)' }}>无</span>
+              ) : (
+                <span className="flex flex-col gap-0.5">
+                  {task.blockedBy.map((id) => {
+                    const dep = tasks.find((t) => t.id === id);
+                    return (
+                      <span key={id}>
+                        {dep?.title ?? id}
+                        {dep && (
+                          <span style={{ color: STATUS_COLOR[dep.status] }}>（{STATUS_LABEL[dep.status]}）</span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+              负责人
+              <select
+                className="search-input"
+                style={{ backgroundColor: 'var(--bg-field)' }}
+                value={assignee}
+                disabled={!canAssign}
+                onChange={(e) => setAssignee(e.target.value)}
+              >
+                <option value="">未指派</option>
+                {members.filter((m) => m.seatStatus !== 'removed').map((m) => (
+                  <option key={m.userId} value={m.userId}>{m.displayName || m.email}</option>
+                ))}
+              </select>
+              {!canAssign && <span className="text-[10px]">仅创建者可修改负责人</span>}
+            </label>
+            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+              优先级
+              <select
+                className="search-input"
+                style={{ backgroundColor: 'var(--bg-field)' }}
+                value={priority}
+                onChange={(e) => setPriority(e.target.value)}
+              >
+                {Object.entries(PRIORITY_LABEL).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+              截止日期
+              <input
+                type="date"
+                className="search-input"
+                style={{ backgroundColor: 'var(--bg-field)' }}
+                value={due}
+                onChange={(e) => setDue(e.target.value)}
+              />
+            </label>
+
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                参与者（可提交汇报 / 上传附件）
+              </span>
+              <div className="max-h-[140px] overflow-auto rounded" style={{ border: '1px solid var(--border)' }}>
+                {members
+                  .filter((m) => m.seatStatus !== 'removed')
+                  .filter((m) => m.userId !== task.creatorId && m.userId !== task.assigneeId)
+                  .map((m) => (
+                    <label
+                      key={m.userId}
+                      className="flex items-center gap-2 px-2 py-1 text-[11px] cursor-pointer"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={collaborators.includes(m.userId)}
+                        onChange={() =>
+                          setCollaborators((prev) =>
+                            prev.includes(m.userId)
+                              ? prev.filter((x) => x !== m.userId)
+                              : [...prev, m.userId],
+                          )
+                        }
+                      />
+                      <span className="truncate">{m.displayName || m.email}</span>
+                    </label>
+                  ))}
+                {members.filter(
+                  (m) => m.seatStatus !== 'removed'
+                    && m.userId !== task.creatorId
+                    && m.userId !== task.assigneeId,
+                ).length === 0 && (
+                  <div className="px-2 py-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    没有可添加的成员
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] flex items-center gap-1" style={{ color: 'var(--text-tertiary)' }}>
+                <Link2 size={11} /> 前置依赖（全部完成才解锁）
+              </span>
+              <div className="max-h-[180px] overflow-auto rounded" style={{ border: '1px solid var(--border)' }}>
+                {tasks.filter((t) => t.id !== task.id && t.parentTaskId === task.parentTaskId).length === 0 && (
+                  <div className="px-2 py-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    同层没有其它任务
+                  </div>
+                )}
+                {tasks
+                  .filter((t) => t.id !== task.id && t.parentTaskId === task.parentTaskId)
+                  .map((t) => (
+                    <label
+                      key={t.id}
+                      className="flex items-center gap-2 px-2 py-1 text-[11px] cursor-pointer"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={deps.includes(t.id)}
+                        onChange={() => {
+                          const next = deps.includes(t.id)
+                            ? deps.filter((x) => x !== t.id)
+                            : [...deps, t.id];
+                          setDeps(next);
+                          void useEnclaveTaskStore
+                            .getState()
+                            .previewDeps(orgId, task.id, next)
+                            .then(setPreview);
+                        }}
+                      />
+                      <span className="truncate flex-1">{t.title}</span>
+                      <span style={{ color: STATUS_COLOR[t.status] }}>{STATUS_LABEL[t.status]}</span>
+                    </label>
+                  ))}
+              </div>
+              {preview && (
+                <div
+                  className="text-[10px] leading-4"
+                  style={{ color: preview.error ? 'var(--status-danger)' : 'var(--text-tertiary)' }}
+                >
+                  {preview.error
+                    ? preview.error
+                    : [
+                      preview.newlyBlockedIds.length ? '保存后将被阻塞' : '',
+                      preview.newlyUnblockedIds.length ? '保存后将解锁' : '',
+                    ].filter(Boolean).join(' · ') || '无影响'}
+                  {preview.cycleIds.length > 0 && `｜环：${preview.cycleIds.join(' → ')}`}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  const ok = await useEnclaveTaskStore.getState().updateTask(orgId, task.id, {
+                    ...(canAssign ? { assigneeId: assignee || null } : {}),
+                    priority,
+                    dueDate: fromDateInput(due),
+                  });
+                  const ok2 = await useEnclaveTaskStore
+                    .getState()
+                    .setCollaborators(orgId, task.id, collaborators);
+                  const ok3 = await useEnclaveTaskStore.getState().setDeps(orgId, task.id, deps);
+                  if (ok && ok2 && ok3) {
+                    setEditingProps(false);
+                    setPreview(null);
+                  }
+                }}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                保存
+              </button>
+              <button
+                onClick={() => {
+                  setAssignee(task.assigneeId ?? '');
+                  setPriority(task.priority);
+                  setDue(toDateInput(task.dueDate));
+                  setCollaborators(task.collaborators);
+                  setDeps(task.blockedBy);
+                  setPreview(null);
+                  setEditingProps(false);
+                }}
+                className="text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                取消
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
-          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>描述</span>
+          <FileText size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务描述</span>
           <div className="flex-1" />
           {canEdit && !editingDesc && (
             <button
@@ -633,31 +857,32 @@ function TaskDetail(props: {
         )}
       </div>
 
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>状态</span>
-        {TRANSITIONS[task.status].map((t) => (
-          <button
-            key={t.to}
-            onClick={() => void change(t.to)}
-            disabled={!canStatus}
-            className="text-xs px-2 py-1 rounded"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-              opacity: canStatus ? 1 : 0.5,
-              cursor: canStatus ? 'pointer' : 'not-allowed',
-            }}
-            title={canStatus ? '' : '当前角色无权变更状态'}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {/* 状态操作：无权限角色整块不显示（标题右侧已有当前状态） */}
+      {canStatus && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <Flag size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>状态操作</span>
+          {TRANSITIONS[task.status].map((t) => (
+            <button
+              key={t.to}
+              onClick={() => void change(t.to)}
+              className="text-xs px-2 py-1 rounded"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* 过程记录（可多次；提交完成汇报后锁定） */}
       <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="flex items-center gap-2">
+          <ListChecks size={12} style={{ color: 'var(--text-tertiary)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
             过程记录
           </span>
@@ -746,9 +971,12 @@ function TaskDetail(props: {
 
       {/* 完成汇报 */}
       <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
-        <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-          完成汇报
-        </span>
+        <div className="flex items-center gap-2">
+          <ClipboardCheck size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            完成汇报
+          </span>
+        </div>
         {(canReport || editable) && task.status !== 'done' && task.status !== 'archived' && (
           <>
             <textarea
@@ -895,6 +1123,7 @@ function TaskDetail(props: {
       {/* 附件 */}
       <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="flex items-center gap-2">
+          <Paperclip size={12} style={{ color: 'var(--text-tertiary)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>附件</span>
           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{files.length}</span>
           <div className="flex-1" />
@@ -927,249 +1156,5 @@ function TaskDetail(props: {
         )}
       </div>
     </div>
-  );
-}
-
-function TaskSidePanel(props: {
-  orgId: string;
-  task: TaskView;
-  tasks: TaskView[];
-  members: MemberView[];
-}) {
-  const { orgId, task, tasks, members } = props;
-  const canAssign = task.effectiveActions.includes('task.assign');
-  const canEdit = task.effectiveActions.includes('task.edit');
-
-  const [assignee, setAssignee] = useState(task.assigneeId ?? '');
-  const [priority, setPriority] = useState(task.priority);
-  const [due, setDue] = useState(toDateInput(task.dueDate));
-  const [collaborators, setCollaborators] = useState<string[]>(task.collaborators);
-  const [editingProps, setEditingProps] = useState(false);
-  const [deps, setDeps] = useState<string[]>(task.blockedBy);
-  const [preview, setPreview] = useState<DepsPreview | null>(null);
-
-  const memberName = (id: string | null): string => {
-    if (!id) return '未指派';
-    const m = members.find((x) => x.userId === id);
-    return m?.displayName || m?.email || id;
-  };
-
-  const others = tasks.filter((t) => t.id !== task.id && t.parentTaskId === task.parentTaskId);
-
-  const toggleDep = async (id: string) => {
-    const next = deps.includes(id) ? deps.filter((x) => x !== id) : [...deps, id];
-    setDeps(next);
-    setPreview(await useEnclaveTaskStore.getState().previewDeps(orgId, task.id, next));
-  };
-
-  return (
-    <>
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>属性</span>
-          <div className="flex-1" />
-          {!editingProps && (canEdit || canAssign) && (
-            <button
-              onClick={() => setEditingProps(true)}
-              className="text-[11px] px-2 py-0.5 rounded"
-              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-            >
-              修改
-            </button>
-          )}
-        </div>
-
-        {!editingProps ? (
-          <div className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-            <div>负责人：{memberName(task.assigneeId)}</div>
-            <div>优先级：{PRIORITY_LABEL[task.priority] ?? task.priority}</div>
-            <div>截止：{task.dueDate ? toDateInput(task.dueDate) : '未设置'}</div>
-            <div>
-              参与者：
-              {task.collaborators.length
-                ? task.collaborators.map((id) => memberName(id)).join('、')
-                : '无'}
-            </div>
-          </div>
-        ) : (
-          <>
-            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
-              负责人
-              <select
-                className="search-input"
-                style={{ backgroundColor: 'var(--bg-field)' }}
-                value={assignee}
-                disabled={!canAssign}
-                onChange={(e) => setAssignee(e.target.value)}
-              >
-                <option value="">未指派</option>
-                {members.filter((m) => m.seatStatus !== 'removed').map((m) => (
-                  <option key={m.userId} value={m.userId}>{m.displayName || m.email}</option>
-                ))}
-              </select>
-              {!canAssign && (
-                <span className="text-[10px]">仅创建者可修改负责人</span>
-              )}
-            </label>
-            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
-              优先级
-              <select
-                className="search-input"
-                style={{ backgroundColor: 'var(--bg-field)' }}
-                value={priority}
-                onChange={(e) => setPriority(e.target.value)}
-              >
-                {Object.entries(PRIORITY_LABEL).map(([k, v]) => (
-                  <option key={k} value={k}>{v}</option>
-                ))}
-              </select>
-            </label>
-            <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
-              截止日期
-              <input
-                type="date"
-                className="search-input"
-                style={{ backgroundColor: 'var(--bg-field)' }}
-                value={due}
-                onChange={(e) => setDue(e.target.value)}
-              />
-            </label>
-
-            <div className="flex flex-col gap-1">
-              <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>参与者（可提交汇报 / 上传附件）</span>
-              <div className="max-h-[140px] overflow-auto rounded" style={{ border: '1px solid var(--border)' }}>
-                {members
-                  .filter((m) => m.seatStatus !== 'removed')
-                  .filter((m) => m.userId !== task.creatorId && m.userId !== task.assigneeId)
-                  .map((m) => (
-                    <label
-                      key={m.userId}
-                      className="flex items-center gap-2 px-2 py-1 text-[11px] cursor-pointer"
-                      style={{ color: 'var(--text-secondary)' }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={collaborators.includes(m.userId)}
-                        onChange={() =>
-                          setCollaborators((prev) =>
-                            prev.includes(m.userId)
-                              ? prev.filter((x) => x !== m.userId)
-                              : [...prev, m.userId],
-                          )
-                        }
-                      />
-                      <span className="truncate">{m.displayName || m.email}</span>
-                    </label>
-                  ))}
-                {members.filter(
-                  (m) => m.seatStatus !== 'removed'
-                    && m.userId !== task.creatorId
-                    && m.userId !== task.assigneeId,
-                ).length === 0 && (
-                  <div className="px-2 py-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                    没有可添加的成员
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={async () => {
-                  const ok = await useEnclaveTaskStore.getState().updateTask(orgId, task.id, {
-                    ...(canAssign ? { assigneeId: assignee || null } : {}),
-                    priority,
-                    dueDate: fromDateInput(due),
-                  });
-                  const ok2 = await useEnclaveTaskStore
-                    .getState()
-                    .setCollaborators(orgId, task.id, collaborators);
-                  if (ok && ok2) setEditingProps(false);
-                }}
-                className="text-xs px-2 py-1 rounded"
-                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-              >
-                保存
-              </button>
-              <button
-                onClick={() => {
-                  setAssignee(task.assigneeId ?? '');
-                  setPriority(task.priority);
-                  setDue(toDateInput(task.dueDate));
-                  setCollaborators(task.collaborators);
-                  setEditingProps(false);
-                }}
-                className="text-xs px-2 py-1 rounded"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-              >
-                取消
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-1">
-        <span className="text-[11px] font-medium flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
-          <Link2 size={11} /> 前置依赖（全部完成才解锁）
-        </span>
-        <div className="max-h-[220px] overflow-auto rounded" style={{ border: '1px solid var(--border)' }}>
-          {others.length === 0 && (
-            <div className="px-2 py-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-              同层没有其它任务
-            </div>
-          )}
-          {others.map((t) => (
-            <label
-              key={t.id}
-              className="flex items-center gap-2 px-2 py-1 text-[11px] cursor-pointer"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              <input
-                type="checkbox"
-                checked={deps.includes(t.id)}
-                disabled={!canEdit}
-                onChange={() => void toggleDep(t.id)}
-              />
-              <span className="truncate flex-1">{t.title}</span>
-              <span style={{ color: STATUS_COLOR[t.status] }}>{STATUS_LABEL[t.status]}</span>
-            </label>
-          ))}
-        </div>
-        {preview && (
-          <div
-            className="text-[10px] leading-4"
-            style={{ color: preview.error ? 'var(--status-danger)' : 'var(--text-tertiary)' }}
-          >
-            {preview.error
-              ? preview.error
-              : [
-                preview.newlyBlockedIds.length ? '保存后将被阻塞' : '',
-                preview.newlyUnblockedIds.length ? '保存后将解锁' : '',
-              ].filter(Boolean).join(' · ') || '无影响'}
-          </div>
-        )}
-        {preview?.cycleIds.length ? (
-          <div className="text-[10px]" style={{ color: 'var(--status-danger)' }}>
-            环：{preview.cycleIds.join(' → ')}
-          </div>
-        ) : null}
-        {canEdit && (
-          <button
-            onClick={async () => {
-              const ok = await useEnclaveTaskStore.getState().setDeps(orgId, task.id, deps);
-              if (ok) setPreview(null);
-            }}
-            className="text-xs px-2 py-1 rounded self-start"
-            style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
-          >
-            保存依赖
-          </button>
-        )}
-        {!canEdit && (
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>仅创建者 / 负责人可改</span>
-        )}
-      </div>
-    </>
   );
 }
