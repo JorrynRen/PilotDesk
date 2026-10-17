@@ -70,7 +70,7 @@ export function EnclavePage() {
             飞地
           </div>
           <div className="text-xs text-center leading-5" style={{ color: 'var(--text-tertiary)' }}>
-            内网小团队协作工作台：任务与产出自动沉淀进组织知识库，Agent 可检索。
+            团队内网协作空间
           </div>
 
           {error && (

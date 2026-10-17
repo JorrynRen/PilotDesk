@@ -46,6 +46,7 @@ export function EnclaveOrgPage() {
   const detail = useEnclaveOrgStore((s) => s.detail);
   const loading = useEnclaveOrgStore((s) => s.loading);
   const error = useEnclaveOrgStore((s) => s.error);
+  const lastRefresh = useEnclaveOrgStore((s) => s.lastRefresh);
 
   useEffect(() => {
     void useEnclaveOrgStore.getState().loadOrgs();
@@ -63,6 +64,8 @@ export function EnclaveOrgPage() {
 
   const org = detail?.org ?? orgs.find((o) => o.orgId === activeOrgId) ?? null;
   const members: MemberView[] = detail?.members ?? [];
+  // 成员列表拉取失败的原因（平台成员接口属待对齐项）：只提示，不算整轮失败
+  const memberWarning = lastRefresh?.memberError ?? null;
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
@@ -196,6 +199,11 @@ export function EnclaveOrgPage() {
             <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
               {members.length}
             </span>
+            {memberWarning && (
+              <span className="text-[11px]" style={{ color: 'var(--status-danger)' }}>
+                {memberWarning}
+              </span>
+            )}
           </div>
           <div className="flex-1 min-h-0 overflow-auto">
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
@@ -231,9 +239,9 @@ export function EnclaveOrgPage() {
                     <td
                       colSpan={4}
                       className="px-3 py-4 text-center"
-                      style={{ color: 'var(--text-tertiary)' }}
+                      style={{ color: memberWarning ? 'var(--status-danger)' : 'var(--text-tertiary)' }}
                     >
-                      暂无成员数据（点击「刷新」从平台拉取）
+                      {memberWarning ?? '暂无成员数据（点击「刷新」从平台拉取）'}
                     </td>
                   </tr>
                 )}

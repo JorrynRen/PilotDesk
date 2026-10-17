@@ -18,6 +18,8 @@ interface EnclaveOrgState {
   error: string | null;
   /** 最近一次治理快照成功同步时间（unix 秒，0 = 从未同步） */
   lastSnapshotAt: number;
+  /** 最近一次刷新的结果（含成员列表拉取失败原因，供页面提示） */
+  lastRefresh: SnapshotOutcome | null;
   loadOrgs: () => Promise<void>;
   selectOrg: (id: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -31,6 +33,7 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   loading: false,
   error: null,
   lastSnapshotAt: 0,
+  lastRefresh: null,
 
   /** 拉组织列表；默认选中首个（或保持原有选中项）。 */
   loadOrgs: async () => {
@@ -67,7 +70,8 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   refresh: async () => {
     set({ loading: true, error: null });
     try {
-      await invoke<SnapshotOutcome>('enclave_snapshot_refresh', { orgId: null });
+      const outcome = await invoke<SnapshotOutcome>('enclave_snapshot_refresh', { orgId: null });
+      set({ lastRefresh: outcome });
     } catch (e) {
       set({ error: errorMessage(e), loading: false });
       return;

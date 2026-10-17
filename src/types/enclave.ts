@@ -66,4 +66,10 @@ export interface SnapshotOutcome {
   orgCount: number;
   memberCount: number;
   syncedAt: number;
+  /**
+   * 成员列表拉取失败的原因（仅首个；字段缺省表示全部成功）。
+   *
+   * 平台成员列表接口属待对齐项：该接口缺失时组织快照照常写入，成员表留空并在此给出提示。
+   */
+  memberError?: string;
 }

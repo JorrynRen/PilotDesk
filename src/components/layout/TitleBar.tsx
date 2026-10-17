@@ -172,7 +172,7 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         : t('titleBar.knowledge.title', '知识库：片段 / 文件知识 / 图谱'),
     },
     // 飞地：独立路由（/enclave），与知识库同为一等段
-    { key: 'enclave', icon: <Boxes size={11} />, label: t('titleBar.enclave', '飞地'), title: t('titleBar.enclave.title', '飞地：内网小团队的任务与产出（数据在主机）') },
+    { key: 'enclave', icon: <Boxes size={11} />, label: t('titleBar.enclave', '飞地'), title: t('titleBar.enclave.title', '飞地：团队内网协作空间') },
     { key: 'terminal', icon: <Terminal size={11} />, label: t('titleBar.terminal', '终端'), title: t('titleBar.terminal.title', '切换到终端模式') },
     // 「门户」段：固定段（不受平铺个数影响），点击进入门户页（按分组查看全部标签）
     { key: 'portal', icon: <LayoutGrid size={11} />, label: t('titleBar.portal', '门户'), title: t('titleBar.portal.title', '门户：按分组查看全部标签') },

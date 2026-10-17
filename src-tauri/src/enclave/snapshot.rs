@@ -41,6 +41,12 @@ pub struct SnapshotOutcome {
     pub member_count: usize,
     /// 本轮同步完成时间（unix 秒）。
     pub synced_at: i64,
+    /// 成员列表拉取失败的原因（仅首个；组织快照本身仍会正常写入）。
+    ///
+    /// 平台成员列表接口尚属待对齐项（见设计 §16.1），该接口缺失时**不应拖垮整轮同步**：
+    /// 组织信息照常落库，成员表留空并把这个原因透出给前端提示。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_error: Option<String>,
 }
 
 // ── 平台响应结构 ────────────────────────────────────────────────
@@ -97,8 +103,13 @@ pub async fn run_snapshot_round(
         .collect();
 
     // 2) 逐组织拉成员（网络请求先行，await 全在同步块之外）。
+    //
+    // 成员列表接口是**待对齐项**：缺失/报错时只记原因、跳过该组织的成员写入，
+    // **不拖垮整轮**（组织快照照常落库）。注意此时**绝不能**调 `upsert_member_snapshot`——
+    // 它会把这个组织的存量成员全部标记为 `removed`。
     let mut org_rows: Vec<OrgSnapshotRow> = Vec::with_capacity(orgs.len());
     let mut member_sets: Vec<(String, Vec<MemberSnapshotRow>)> = Vec::with_capacity(orgs.len());
+    let mut member_error: Option<String> = None;
     for o in &orgs {
         org_rows.push(OrgSnapshotRow {
             org_id: o.id.to_string(),
@@ -112,8 +123,15 @@ pub async fn run_snapshot_round(
             status: o.status.clone(),
         });
         let path = format!("/api/v1/organizations/{}/members", o.id);
-        let members = fetch_members(&path, &token).await?;
-        member_sets.push((o.id.to_string(), members));
+        match fetch_members(&path, &token).await {
+            Ok(members) => member_sets.push((o.id.to_string(), members)),
+            Err(e) => {
+                log::debug!("[Enclave] 组织 {} 成员快照拉取失败：{}", o.id, e);
+                if member_error.is_none() {
+                    member_error = Some(e);
+                }
+            }
+        }
     }
 
     let org_count = org_rows.len();
@@ -136,6 +154,7 @@ pub async fn run_snapshot_round(
         org_count,
         member_count,
         synced_at,
+        member_error,
     })
 }
 
@@ -146,7 +165,12 @@ pub async fn run_snapshot_round(
 async fn fetch_members(path: &str, token: &str) -> Result<Vec<MemberSnapshotRow>, String> {
     let v: serde_json::Value = platform::get_json_with_status(path, Some(token))
         .await
-        .map_err(|e| e.message)?;
+        .map_err(|e| match e.status {
+            // 404：平台尚未提供该接口（待对齐项），给出可读原因而不是网关的「未注册的项目：api」
+            404 => "平台暂未提供成员列表接口（待平台补齐）".to_string(),
+            401 => "请先登录平台账号".to_string(),
+            _ => e.message,
+        })?;
     let list = match &v {
         serde_json::Value::Array(a) => a.clone(),
         serde_json::Value::Object(o) => o
