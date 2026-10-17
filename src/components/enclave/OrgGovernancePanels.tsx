@@ -123,13 +123,16 @@ export function OrgGovernanceSection() {
 
   if (!activeOrgId) return null;
 
-  // 操作人展示：优先本机登录身份，其次成员快照里的姓名 / 邮箱，最后才回落到平台用户 id
-  const actorName = (actorId: string): string => {
+  // 操作人展示：姓名 + 邮箱（优先本机登录身份，其次成员快照），都没有才回落到平台用户 id
+  const actorLabel = (actorId: string): string => {
     if (!actorId) return '-';
+    const withEmail = (name: string, email: string): string =>
+      name && email ? `${name}（${email}）` : name || email || actorId;
     const me = caps?.identity;
-    if (me && me.userId === actorId) return me.nickname || me.email || actorId;
+    if (me && me.userId === actorId) return withEmail(me.nickname, me.email);
     const m = detail?.members.find((x) => x.userId === actorId);
-    return m?.displayName || m?.email || actorId;
+    if (m) return withEmail(m.displayName, m.email);
+    return actorId;
   };
 
   const canWritePolicy = !!caps?.actions.includes('policy.write');
@@ -274,7 +277,7 @@ export function OrgGovernanceSection() {
                 <tr key={a.id} style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                   <td className="px-3 py-1 whitespace-nowrap">{formatTime(a.createdAt)}</td>
                   <td className="px-3 py-1 whitespace-nowrap">{ACTION_LABEL[a.action] ?? a.action}</td>
-                  <td className="px-3 py-1 whitespace-nowrap">{actorName(a.actorId)}</td>
+                  <td className="px-3 py-1 whitespace-nowrap">{actorLabel(a.actorId)}</td>
                   <td className="px-3 py-1 break-all">{formatDetail(a.action, a.detail)}</td>
                 </tr>
               ))}
