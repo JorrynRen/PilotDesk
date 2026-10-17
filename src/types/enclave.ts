@@ -222,6 +222,10 @@ export interface FileAssetView {
   uploadedAt: number;
   /** 绝对路径 */
   absPath: string;
+  /** 挂载到完成汇报时非空 */
+  reportId?: string | null;
+  /** 挂载到过程记录时非空 */
+  progressId?: string | null;
 }
 
 /** 本机团队文件根目录（`enclave_files_root_get/set`，全局设置，与具体团队无关） */

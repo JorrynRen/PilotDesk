@@ -74,10 +74,10 @@ fn attachments_of(
     let mut stmt = conn
         .prepare(
             "SELECT f.id, f.file_name, f.file_type, f.file_size, f.file_hash, f.file_path,
-                    tf.uploaded_by, tf.uploaded_at
-             FROM task_files tf JOIN file_assets f ON f.id = tf.file_id
-             WHERE tf.task_id = ?1 AND tf.progress_id = ?2
-             ORDER BY tf.uploaded_at ASC",
+                    l.uploaded_by, l.uploaded_at
+             FROM task_file_links l JOIN file_assets f ON f.id = l.file_id
+             WHERE l.task_id = ?1 AND l.progress_id = ?2
+             ORDER BY l.uploaded_at ASC",
         )
         .map_err(|e| format!("查询进度附件失败：{}", e))?;
     let rows = stmt
@@ -92,6 +92,8 @@ fn attachments_of(
                 uploaded_by: r.get(6)?,
                 uploaded_at: r.get(7)?,
                 abs_path: dir.join(rel).to_string_lossy().to_string(),
+                report_id: None,
+                progress_id: Some(progress_id.to_string()),
             })
         })
         .map_err(|e| format!("查询进度附件失败：{}", e))?;

@@ -44,7 +44,19 @@ interface EnclaveTaskState {
   submitReport: (orgId: string, taskId: string, content: string) => Promise<boolean>;
   confirmReport: (orgId: string, taskId: string, reportId: string) => Promise<boolean>;
   returnReport: (orgId: string, taskId: string, reportId: string, reason: string) => Promise<boolean>;
-  uploadFile: (orgId: string, taskId: string, srcPath: string, progressId?: string) => Promise<boolean>;
+  uploadFile: (
+    orgId: string,
+    taskId: string,
+    srcPath: string,
+    scope?: { reportId?: string; progressId?: string },
+  ) => Promise<boolean>;
+  /** 解除附件挂载（过程记录附件不可解除；原件无挂载后自动清理） */
+  detachFile: (
+    orgId: string,
+    taskId: string,
+    fileId: string,
+    scope?: { reportId?: string; progressId?: string },
+  ) => Promise<boolean>;
   /** 追加进度说明（可同时挂载过程成果 / 支撑文件） */
   addProgress: (orgId: string, taskId: string, content: string, attachments: string[]) => Promise<boolean>;
   /** 设置任务参与者 */
@@ -230,13 +242,32 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
     }
   },
 
-  uploadFile: async (orgId, taskId, srcPath, progressId) => {
+  uploadFile: async (orgId, taskId, srcPath, scope) => {
     try {
       await invoke<FileAssetView>('enclave_file_upload', {
         orgId,
         taskId,
         srcPath,
-        progressId: progressId ?? null,
+        reportId: scope?.reportId ?? null,
+        progressId: scope?.progressId ?? null,
+      });
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  detachFile: async (orgId, taskId, fileId, scope) => {
+    try {
+      await invoke('enclave_file_detach', {
+        orgId,
+        taskId,
+        fileId,
+        reportId: scope?.reportId ?? null,
+        progressId: scope?.progressId ?? null,
       });
       await get().loadExtras(orgId, taskId);
       set({ error: null });

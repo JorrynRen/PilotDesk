@@ -257,6 +257,10 @@ pub struct FileAssetView {
     pub uploaded_at: i64,
     /// 绝对路径（供「打开/另存」直接使用）
     pub abs_path: String,
+    /// 挂载到完成汇报（`report_id`）时非空
+    pub report_id: Option<String>,
+    /// 挂载到过程记录（`progress_id`）时非空
+    pub progress_id: Option<String>,
 }
 
 /// 把本机文件挂到任务上（内容按 sha256 去重，同一内容在组织内只落一份）。
@@ -276,6 +280,9 @@ pub fn attach_file(
     if !crate::enclave::tasks::is_participant(role) {
         return Err("只有任务创建者、负责人或参与者可以上传附件".to_string());
     }
+    if report_id.is_some() && progress_id.is_some() {
+        return Err("附件只能挂载到一处（任务资料 / 过程记录 / 完成汇报）".to_string());
+    }
     if let Some(pid) = progress_id {
         let ok: Option<String> = conn
             .query_row(
@@ -288,6 +295,21 @@ pub fn attach_file(
             .map_err(|e| format!("查询过程记录失败：{}", e))?;
         if ok.is_none() {
             return Err("过程记录不存在或不属于该任务".to_string());
+        }
+    }
+    if let Some(rid) = report_id {
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM task_reports WHERE id = ?1 AND task_id = ?2",
+                params![rid, task_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询完成汇报失败：{}", e))?;
+        match status.as_deref() {
+            Some("draft") | Some("returned") => {}
+            Some(_) => return Err("汇报已提交，不能再增删交付物".to_string()),
+            None => return Err("完成汇报不存在或不属于该任务".to_string()),
         }
     }
 
@@ -345,15 +367,29 @@ pub fn attach_file(
     };
 
     let now = chrono::Utc::now().timestamp();
+    let scope = match (report_id, progress_id) {
+        (None, None) => "task".to_string(),
+        (Some(rid), None) => format!("report:{}", rid),
+        (None, Some(pid)) => format!("progress:{}", pid),
+        _ => unreachable!(), // 已在上面拒绝双重挂载
+    };
     conn.execute(
-        "INSERT INTO task_files (task_id, file_id, report_id, progress_id, uploaded_by, uploaded_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(task_id, file_id) DO UPDATE SET
-            report_id = excluded.report_id,
-            progress_id = excluded.progress_id,
+        "INSERT INTO task_file_links
+            (id, task_id, file_id, scope, report_id, progress_id, uploaded_by, uploaded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(task_id, file_id, scope) DO UPDATE SET
             uploaded_by = excluded.uploaded_by,
             uploaded_at = excluded.uploaded_at",
-        params![task_id, file_id, report_id, progress_id, actor, now],
+        params![
+            crate::utils::new_id(),
+            task_id,
+            file_id,
+            scope,
+            report_id,
+            progress_id,
+            actor,
+            now
+        ],
     )
     .map_err(|e| format!("关联任务文件失败：{}", e))?;
 
@@ -386,6 +422,8 @@ pub fn attach_file(
         uploaded_by: actor.to_string(),
         uploaded_at: now,
         abs_path: dir.join(rel_path).to_string_lossy().to_string(),
+        report_id: report_id.map(|s| s.to_string()),
+        progress_id: progress_id.map(|s| s.to_string()),
     })
 }
 
@@ -399,10 +437,10 @@ pub fn list_task_files(
     let mut stmt = conn
         .prepare(
             "SELECT f.id, f.file_name, f.file_type, f.file_size, f.file_hash, f.file_path,
-                    tf.uploaded_by, tf.uploaded_at
-             FROM task_files tf JOIN file_assets f ON f.id = tf.file_id
-             WHERE tf.task_id = ?1 AND f.owner_type='org' AND f.owner_id = ?2
-             ORDER BY tf.uploaded_at DESC",
+                    l.uploaded_by, l.uploaded_at, l.report_id, l.progress_id
+             FROM task_file_links l JOIN file_assets f ON f.id = l.file_id
+             WHERE l.task_id = ?1 AND f.owner_type='org' AND f.owner_id = ?2
+             ORDER BY l.uploaded_at DESC",
         )
         .map_err(|e| format!("查询任务文件失败：{}", e))?;
     let rows = stmt
@@ -417,11 +455,113 @@ pub fn list_task_files(
                 uploaded_by: r.get(6)?,
                 uploaded_at: r.get(7)?,
                 abs_path: dir.join(rel).to_string_lossy().to_string(),
+                report_id: r.get(8)?,
+                progress_id: r.get(9)?,
             })
         })
         .map_err(|e| format!("查询任务文件失败：{}", e))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("读取任务文件失败：{}", e))
+}
+
+/// 解除一条文件挂载（原件在「已无任何挂载」时才删除）。
+///
+/// 权限口径：
+/// - 过程记录附件：**不可解除**（过程留痕不可变）；
+/// - 汇报交付物：汇报须处于 draft / returned，且当前用户是任务参与者；
+/// - 任务资料：上传者本人，或任务创建者 / 负责人。
+pub fn detach_file(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+    file_id: &str,
+    report_id: Option<&str>,
+    progress_id: Option<&str>,
+) -> Result<(), String> {
+    let role = crate::enclave::tasks::actor_task_role(conn, org_id, task_id, actor)?;
+
+    if progress_id.is_some() {
+        return Err("过程记录附件不可删除（过程留痕不可变）".to_string());
+    }
+
+    let scope = if let Some(rid) = report_id {
+        if !crate::enclave::tasks::is_participant(role) {
+            return Err("只有任务创建者、负责人或参与者可以删除交付物".to_string());
+        }
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM task_reports WHERE id = ?1 AND task_id = ?2",
+                params![rid, task_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询完成汇报失败：{}", e))?;
+        match status.as_deref() {
+            Some("draft") | Some("returned") => {}
+            Some(_) => return Err("汇报已提交，不能删除交付物".to_string()),
+            None => return Err("完成汇报不存在或不属于该任务".to_string()),
+        }
+        format!("report:{}", rid)
+    } else {
+        // 任务资料：上传者本人或任务创建者 / 负责人
+        let uploaded_by: Option<String> = conn
+            .query_row(
+                "SELECT uploaded_by FROM task_file_links
+                 WHERE task_id = ?1 AND file_id = ?2 AND scope = 'task'",
+                params![task_id, file_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询文件挂载失败：{}", e))?;
+        let can = matches!(role, crate::enclave::tasks::TaskRole::Creator | crate::enclave::tasks::TaskRole::Assignee)
+            || uploaded_by.as_deref() == Some(actor);
+        if !can {
+            return Err("只有上传者、创建者或负责人可以删除任务资料".to_string());
+        }
+        "task".to_string()
+    };
+
+    let removed = conn
+        .execute(
+            "DELETE FROM task_file_links WHERE task_id = ?1 AND file_id = ?2 AND scope = ?3",
+            params![task_id, file_id, scope],
+        )
+        .map_err(|e| format!("解除文件挂载失败：{}", e))?;
+    if removed == 0 {
+        return Err("附件不存在或已解除".to_string());
+    }
+
+    // 全库已无挂载 → 删除资产行与物理文件（尽力而为，失败不阻塞解除）
+    let remaining: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_file_links WHERE file_id = ?1",
+            params![file_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("查询文件挂载失败：{}", e))?;
+    if remaining == 0 {
+        let rel: Option<String> = conn
+            .query_row(
+                "SELECT file_path FROM file_assets
+                 WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
+                params![file_id, org_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询文件资产失败：{}", e))?;
+        conn.execute(
+            "DELETE FROM file_assets WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
+            params![file_id, org_id],
+        )
+        .map_err(|e| format!("删除文件资产失败：{}", e))?;
+        if let Some(rel) = rel {
+            if let Ok(dir) = org_dir(conn, org_id) {
+                let _ = std::fs::remove_file(dir.join(rel));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 文件的绝对路径（供「打开」用）。

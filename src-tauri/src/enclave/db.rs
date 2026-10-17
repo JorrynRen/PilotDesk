@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 5;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 6;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -202,6 +202,23 @@ CREATE TABLE IF NOT EXISTS task_files (
     PRIMARY KEY (task_id, file_id)
 );
 
+-- 任务文件挂载（v6 起）：同一份原件可在同一任务内**多处挂载**
+-- scope = 'task'（任务资料） / 'progress:<进度记录id>' / 'report:<汇报id>'。
+-- task_files 仅作为 v5 及以前的历史表保留，不再读写。
+CREATE TABLE IF NOT EXISTS task_file_links (
+    id          TEXT PRIMARY KEY,
+    task_id     TEXT NOT NULL,
+    file_id     TEXT NOT NULL,
+    scope       TEXT NOT NULL,
+    report_id   TEXT,
+    progress_id TEXT,
+    uploaded_by TEXT NOT NULL DEFAULT '',
+    uploaded_at INTEGER NOT NULL,
+    UNIQUE (task_id, file_id, scope)
+);
+CREATE INDEX IF NOT EXISTS idx_task_file_links_task ON task_file_links(task_id, uploaded_at);
+CREATE INDEX IF NOT EXISTS idx_task_file_links_scope ON task_file_links(report_id, progress_id);
+
 -- ───────────────── 业务：组织知识库 ─────────────────
 -- 每组织一个隐式库（id = "kb-org-{orgId}"，is_implicit=1）：任务产出的归档地
 CREATE TABLE IF NOT EXISTS knowledge_bases (
@@ -374,6 +391,23 @@ impl EnclaveStore {
         // 存量行补列后 viewer_id = ''，在下一次快照同步前一律视为无效（默认拒绝）。
         if current < 5 {
             Self::ensure_column(conn, "org_snapshot", "viewer_id", "TEXT NOT NULL DEFAULT ''")?;
+        }
+        // v5 → v6：附件改为「挂载关系」表（同一原件可多处挂载）；迁移历史 task_files 行。
+        // task_files 保留不再读写，后续版本再视情况清理。
+        if current < 6 {
+            conn.execute_batch(
+                "INSERT OR IGNORE INTO task_file_links
+                    (id, task_id, file_id, scope, report_id, progress_id, uploaded_by, uploaded_at)
+                 SELECT lower(hex(randomblob(16))), task_id, file_id,
+                        CASE
+                          WHEN progress_id IS NOT NULL AND progress_id <> '' THEN 'progress:' || progress_id
+                          WHEN report_id IS NOT NULL AND report_id <> '' THEN 'report:' || report_id
+                          ELSE 'task'
+                        END,
+                        report_id, progress_id, uploaded_by, uploaded_at
+                 FROM task_files",
+            )
+            .map_err(|e| format!("迁移附件挂载关系失败: {}", e))?;
         }
 
         if current != ENCLAVE_SCHEMA_VERSION {

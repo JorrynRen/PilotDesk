@@ -348,6 +348,29 @@ pub fn enclave_file_upload(
 }
 
 #[tauri::command]
+pub fn enclave_file_detach(
+    org_id: String,
+    task_id: String,
+    file_id: String,
+    report_id: Option<String>,
+    progress_id: Option<String>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    state.store.with_conn(|c| {
+        let actor = authz::current_actor_id(c)?;
+        files::detach_file(
+            c,
+            &org_id,
+            &actor,
+            &task_id,
+            &file_id,
+            report_id.as_deref(),
+            progress_id.as_deref(),
+        )
+    })
+}
+
+#[tauri::command]
 pub fn enclave_task_file_list(
     org_id: String,
     task_id: String,

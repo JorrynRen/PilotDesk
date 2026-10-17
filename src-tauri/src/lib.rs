@@ -2809,6 +2809,7 @@ pub fn run() {
             commands::enclave_task::enclave_report_return,
             commands::enclave_task::enclave_report_feedback_list,
             commands::enclave_task::enclave_file_upload,
+            commands::enclave_task::enclave_file_detach,
             commands::enclave_task::enclave_task_file_list,
             commands::enclave_task::enclave_file_abs_path,
             commands::enclave_task::enclave_files_root_get,

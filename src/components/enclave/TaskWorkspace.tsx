@@ -529,6 +529,8 @@ function TaskDetail(props: {
   const reports = useEnclaveTaskStore((s) => s.reports);
   const files = useEnclaveTaskStore((s) => s.files);
   const progress = useEnclaveTaskStore((s) => s.progress);
+  /** 任务资料：不挂汇报、不挂过程记录的独立附件 */
+  const taskFiles = files.filter((f) => !f.reportId && !f.progressId);
   const [progressText, setProgressText] = useState('');
   const [composing, setComposing] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
@@ -571,7 +573,35 @@ function TaskDetail(props: {
   const uploadProgressFile = async (progressId: string) => {
     const picked = await openDialog({ multiple: false, directory: false });
     if (typeof picked !== 'string') return;
-    await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked, progressId);
+    await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked, { progressId });
+  };
+
+  /** 添加汇报交付物：还没有草稿时先落一份草稿，再挂文件 */
+  const addDeliverable = async (reportId?: string) => {
+    const st = useEnclaveTaskStore.getState();
+    let rid = reportId;
+    if (!rid) {
+      const ok = await st.saveReportDraft(orgId, task.id, reportText);
+      if (!ok) return;
+      rid = useEnclaveTaskStore
+        .getState()
+        .reports.find((r) => r.status === 'draft' || r.status === 'returned')?.id;
+      if (!rid) return;
+    }
+    const picked = await openDialog({ multiple: false, directory: false });
+    if (typeof picked !== 'string') return;
+    await useEnclaveTaskStore.getState().uploadFile(orgId, task.id, picked, { reportId: rid });
+  };
+
+  /** 解除任务资料挂载（汇报交付物走 reportId 分支） */
+  const removeTaskFile = async (fileId: string) => {
+    const ok = await confirmDialog({
+      title: '移除任务资料',
+      message: '仅解除该文件与任务的挂载；若已无其他挂载，原件会一并删除。是否继续？',
+      confirmText: '移除',
+    });
+    if (!ok) return;
+    await useEnclaveTaskStore.getState().detachFile(orgId, task.id, fileId);
   };
 
   /** 选择过程记录的附件（提交时一并入库） */
@@ -1100,6 +1130,15 @@ function TaskDetail(props: {
             />
             <div className="flex items-center gap-2">
               <button
+                onClick={() => void addDeliverable(editable?.id)}
+                disabled={reportBusy}
+                className="text-xs px-2 py-1 rounded flex items-center gap-1"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                <Paperclip size={11} /> 添加交付物
+              </button>
+              <div className="flex-1" />
+              <button
                 onClick={async () => {
                   setReportBusy(true);
                   await useEnclaveTaskStore.getState().saveReportDraft(orgId, task.id, reportText);
@@ -1201,6 +1240,55 @@ function TaskDetail(props: {
                     {r.content}
                   </div>
                 )}
+                {/* 交付物：随这份汇报提交；退回后可增删，提交后锁定 */}
+                {(() => {
+                  const deliverables = files.filter((f) => f.reportId === r.id);
+                  const canEditDeliverables =
+                    canReport && (r.status === 'draft' || r.status === 'returned');
+                  if (deliverables.length === 0 && !canEditDeliverables) return null;
+                  return (
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        <Paperclip size={10} />
+                        <span>交付物 {deliverables.length}</span>
+                        {canEditDeliverables && (
+                          <button
+                            onClick={() => void addDeliverable(r.id)}
+                            className="px-1.5 py-0.5 rounded"
+                            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                          >
+                            添加
+                          </button>
+                        )}
+                      </div>
+                      {deliverables.map((f) => (
+                        <div key={f.id} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                          <span className="truncate flex-1">{f.fileName}</span>
+                          <button
+                            onClick={() => void openFile(f.id)}
+                            className="px-1.5 py-0.5 rounded"
+                            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                          >
+                            打开
+                          </button>
+                          {canEditDeliverables && (
+                            <button
+                              onClick={() =>
+                                void useEnclaveTaskStore
+                                  .getState()
+                                  .detachFile(orgId, task.id, f.id, { reportId: r.id })
+                              }
+                              className="px-1.5 py-0.5 rounded"
+                              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
+                            >
+                              移除
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 {r.status === 'confirmed' && (
                   <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                     <span>{r.sedimentedAt ? '已沉淀进组织知识库' : (r.sedimentError ? `归档失败：${r.sedimentError}` : '产出待归档')}</span>
@@ -1232,12 +1320,12 @@ function TaskDetail(props: {
         )}
       </div>
 
-      {/* 附件 */}
+      {/* 任务资料（独立附件：不随汇报提交，也不属于某条过程记录） */}
       <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="flex items-center gap-2">
           <Paperclip size={12} style={{ color: 'var(--accent)' }} />
-          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>附件</span>
-          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{files.length}</span>
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务资料</span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{taskFiles.length}</span>
           <div className="flex-1" />
           {canUpload && (
             <button
@@ -1249,10 +1337,12 @@ function TaskDetail(props: {
             </button>
           )}
         </div>
-        {files.length === 0 ? (
-          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>暂无附件</div>
+        {taskFiles.length === 0 ? (
+          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            暂无任务资料（汇报交付物在完成汇报里，过程附件在过程记录里）
+          </div>
         ) : (
-          files.map((f) => (
+          taskFiles.map((f) => (
             <div key={f.id} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
               <span className="truncate flex-1">{f.fileName}</span>
               <span style={{ color: 'var(--text-tertiary)' }}>{Math.max(1, Math.round(f.fileSize / 1024))} KB</span>
@@ -1263,6 +1353,15 @@ function TaskDetail(props: {
               >
                 打开
               </button>
+              {canUpload && (
+                <button
+                  onClick={() => void removeTaskFile(f.id)}
+                  className="px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
+                >
+                  移除
+                </button>
+              )}
             </div>
           ))
         )}

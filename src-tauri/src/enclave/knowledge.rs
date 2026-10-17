@@ -297,11 +297,12 @@ fn do_sediment(
     )
     .map_err(|e| format!("写入组织知识库失败：{}", e))?;
 
-    // 附件引用同一份原文（不重复拷贝）
+    // 交付物引用同一份原文（不重复拷贝）；过程记录/任务资料不进入知识库归档
     conn.execute(
         "INSERT OR IGNORE INTO knowledge_base_files (knowledge_base_id, file_id, added_at)
-         SELECT ?1, file_id, ?2 FROM task_files WHERE task_id = ?3",
-        params![kb_id, now, task_id],
+         SELECT ?1, file_id, ?2 FROM task_file_links
+         WHERE task_id = ?3 AND report_id = ?4",
+        params![kb_id, now, task_id, report_id],
     )
     .map_err(|e| format!("关联知识库文件失败：{}", e))?;
 
