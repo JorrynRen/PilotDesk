@@ -483,11 +483,21 @@ function TaskDetail(props: {
   memberLabel: (id: string | null) => string;
 }) {
   const { orgId, task, tasks, members, memberLabel } = props;
-  const canEdit = task.effectiveActions.includes('task.edit');
-  const canStatus = task.effectiveActions.includes('task.status');
-  const canAssign = task.effectiveActions.includes('task.assign');
-  const canReport = task.effectiveActions.includes('report.submit');
-  const canUpload = task.effectiveActions.includes('file.upload');
+  // 权限按「当前登录身份 + 任务字段」本地复核（同时兼容快照未及时刷新）：
+  // 非参与者不出现任何提交表单；创建者 / 负责人才能编辑与流转状态。
+  const caps = useEnclaveOrgStore((s) => s.caps);
+  const me = caps?.identity?.userId ?? '';
+  const isCreator = !!me && me === task.creatorId;
+  const isAssignee = !!me && me === task.assigneeId;
+  const isCollaborator = !!me && task.collaborators.includes(me);
+  const isParticipant = isCreator || isAssignee || isCollaborator;
+  const canEdit = isCreator || isAssignee;
+  const canStatus = isCreator || isAssignee;
+  const canAssign = isCreator;
+  const canReport = isParticipant;
+  const canUpload = isParticipant;
+  const blocked = task.blocked;
+  const taskError = useEnclaveTaskStore((s) => s.error);
   const [desc, setDesc] = useState(task.description);
   const [editingDesc, setEditingDesc] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -583,6 +593,15 @@ function TaskDetail(props: {
           </span>
         )}
       </div>
+
+      {taskError && (
+        <div
+          className="text-[11px] px-2 py-1 rounded"
+          style={{ color: 'var(--status-danger)', backgroundColor: 'var(--bg-tertiary)' }}
+        >
+          {taskError}
+        </div>
+      )}
 
       {/* 任务信息（属性 + 依赖都直接展示；修改时才出现表单） */}
       <div className="flex flex-col gap-2">
@@ -896,8 +915,8 @@ function TaskDetail(props: {
           )}
         </div>
 
-        {/* 默认只展示列表；点「添加过程记录」才展开表单 */}
-        {canReport && !progress?.locked && !composing && (
+        {/* 默认只展示列表；点「添加过程记录」才展开表单（前置未完成时不允许记录） */}
+        {canReport && !blocked && !progress?.locked && !composing && (
           <button
             onClick={() => setComposing(true)}
             className="self-start text-xs px-2 py-1 rounded flex items-center gap-1"
@@ -907,7 +926,7 @@ function TaskDetail(props: {
           </button>
         )}
 
-        {canReport && !progress?.locked && composing && (
+        {canReport && !blocked && !progress?.locked && composing && (
           <div
             className="flex flex-col gap-2 rounded p-2"
             style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-field)' }}
@@ -1041,7 +1060,12 @@ function TaskDetail(props: {
               : '完成汇报已确认，任务已收敛'}
           </div>
         )}
-        {(canReport || editable) && !lockedReport && task.status !== 'done' && task.status !== 'archived' && (
+        {blocked && (
+          <div className="text-[11px]" style={{ color: 'var(--status-danger)' }}>
+            存在未完成的前置任务，暂不能开始 / 提交
+          </div>
+        )}
+        {canReport && !lockedReport && !blocked && task.status !== 'done' && task.status !== 'archived' && (
           <>
             <textarea
               className="search-input w-full"

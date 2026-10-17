@@ -854,6 +854,13 @@ pub fn task_status(conn: &Connection, org_id: &str, task_id: &str) -> Result<Str
     Ok(load_task(conn, org_id, task_id)?.status)
 }
 
+/// 任务当前是否被前置依赖阻塞（用于提交前复核）。
+pub fn blocked_now(conn: &Connection, org_id: &str, task_id: &str) -> Result<bool, String> {
+    let row = load_task(conn, org_id, task_id)?;
+    let status_by_id = all_status(conn, org_id)?;
+    Ok(is_blocked(&row.blocked_by, &status_by_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

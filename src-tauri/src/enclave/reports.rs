@@ -164,6 +164,10 @@ pub fn save_draft(
     if has_submitted_report(conn, task_id)? {
         return Err("完成汇报已提交，不能再次提交或修改".to_string());
     }
+    // 前置任务未完成时不允许提交（即便任务此前已被置为进行中）
+    if tasks::blocked_now(conn, org_id, task_id)? {
+        return Err("存在未完成的前置任务，暂不能提交完成汇报".to_string());
+    }
 
     let now = chrono::Utc::now().timestamp();
     let materials_json = serde_json::to_string(materials).unwrap_or_else(|_| "[]".into());
