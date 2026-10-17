@@ -90,6 +90,19 @@ fn paths_overlap(a: &Path, b: &Path) -> bool {
     a == b || a.starts_with(b) || b.starts_with(a)
 }
 
+/// `std::fs::canonicalize` 在 Windows 上会返回 `\\?\C:\...`（扩展长度前缀），
+/// 这里统一归一化后再用，避免把前缀写进设置 / 审计、也避免路径比较误判。
+fn canonical_normalized(p: &Path) -> PathBuf {
+    match std::fs::canonicalize(p) {
+        Ok(c) => {
+            let raw = c.to_string_lossy();
+            let clean = normalize_path(&raw);
+            PathBuf::from(clean)
+        }
+        Err(_) => p.to_path_buf(),
+    }
+}
+
 /// 校验并创建新的团队文件**基础目录**（实际文件根 = `<基础目录>/enclave/files`）。
 ///
 /// 规则（§13）：绝对路径、拒绝 UNC/网络盘、不得与个人知识库根重叠、可创建。
@@ -108,11 +121,11 @@ pub fn validate_base(conn: &Connection, raw: &str) -> Result<PathBuf, String> {
     }
     std::fs::create_dir_all(&p)
         .map_err(|e| format!("目录不可用（{}）：{}", p.display(), e))?;
-    let canonical = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+    let canonical = canonical_normalized(&p);
 
     // 与个人知识库根比对：基础目录本身、以及其下的 enclave/files 都不能与个人库重叠
     let kb_root = crate::utils::paths::resolve_knowledge_root(conn);
-    let kb_canonical = std::fs::canonicalize(&kb_root).unwrap_or(kb_root);
+    let kb_canonical = canonical_normalized(&kb_root);
     let effective = canonical.join("enclave").join("files");
     if paths_overlap(&canonical, &kb_canonical) || paths_overlap(&effective, &kb_canonical) {
         return Err(format!(
@@ -127,8 +140,8 @@ pub fn validate_base(conn: &Connection, raw: &str) -> Result<PathBuf, String> {
 pub fn set_base(conn: &Connection, new_base: &Path) -> Result<(), String> {
     let old_root = resolve_team_files_root(conn)?;
     let new_root = new_base.join("enclave").join("files");
-    let old_canonical = std::fs::canonicalize(&old_root).unwrap_or(old_root.clone());
-    let new_canonical = std::fs::canonicalize(&new_root).unwrap_or(new_root.clone());
+    let old_canonical = canonical_normalized(&old_root);
+    let new_canonical = canonical_normalized(&new_root);
     if old_canonical == new_canonical {
         save_base(conn, new_base)?;
         return Ok(());

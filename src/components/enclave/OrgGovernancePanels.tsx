@@ -31,9 +31,9 @@ function formatTime(unixSec: number): string {
 /**
  * 审计明细渲染：把后端留痕的结构化 JSON 翻成人话。
  *
- * 后端口径（见 `commands/enclave.rs`）：
- * - `policy.allow_cloud_model`：`{ from: bool, to: bool }`
- * - `host.emergency`：`{ from: bool, to: bool }`
+ * 后端口径（见 `commands/enclave*`）：
+ * - `policy.allow_cloud_model` / `host.emergency`：`{ from: bool, to: bool }`
+ * - `files.root`：`{ from: string, to: string }`（目录路径）
  * 解析失败时原样展示，避免把留痕藏起来。
  */
 function formatDetail(action: string, detail: string): string {
@@ -44,6 +44,11 @@ function formatDetail(action: string, detail: string): string {
     return detail || '-';
   }
   const obj = parsed as { from?: unknown; to?: unknown } | null;
+  if (obj && typeof obj.from === 'string' && typeof obj.to === 'string') {
+    // 历史留痕可能带 Windows 扩展长度前缀（`\\?\` / `\\?\UNC\`），展示时统一剥掉
+    const clean = (p: string) => p.replace(/^\\\\\?\\UNC\\/, '\\\\').replace(/^\\\\\?\\/, '');
+    return `基础目录：${clean(obj.from)} → ${clean(obj.to)}`;
+  }
   if (obj && typeof obj.from === 'boolean' && typeof obj.to === 'boolean') {
     // `host.emergency` 落库的是 `disabled`（true = 关闭），展示口径要翻转成「对外服务 开/关」
     if (action === 'host.emergency') {
