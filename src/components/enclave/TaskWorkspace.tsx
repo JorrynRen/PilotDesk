@@ -936,7 +936,10 @@ function TaskDetail(props: {
       </div>
 
       {/* 任务资料（描述之后：先看说明，再看支撑文件） */}
-      <div className="flex flex-col gap-2">
+      <div
+        className="flex flex-col gap-2 rounded-lg p-3"
+        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+      >
         <div className="flex items-center gap-2">
           <Paperclip size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务资料</span>
@@ -1005,7 +1008,10 @@ function TaskDetail(props: {
       )}
 
       {/* 过程记录（可多次；提交完成汇报后锁定） */}
-      <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+      <div
+        className="flex flex-col gap-2 rounded-lg p-3"
+        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+      >
         <div className="flex items-center gap-2">
           <ListChecks size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
@@ -1143,7 +1149,10 @@ function TaskDetail(props: {
       </div>
 
       {/* 完成汇报 */}
-      <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+      <div
+        className="flex flex-col gap-2 rounded-lg p-3"
+        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+      >
         <div className="flex items-center gap-2">
           <ClipboardCheck size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
