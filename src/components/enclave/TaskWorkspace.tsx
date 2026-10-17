@@ -166,7 +166,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
         className="shrink-0 h-9 px-3 flex items-center gap-2"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
-        <ListTree size={13} style={{ color: 'var(--text-tertiary)' }} />
+        <ListTree size={13} style={{ color: 'var(--accent)' }} />
         {orgs.map((o) => (
           <button
             key={o.orgId}
@@ -576,7 +576,7 @@ function TaskDetail(props: {
       {/* 任务信息（属性 + 依赖都直接展示；修改时才出现表单） */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-1.5">
-          <Info size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <Info size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务信息</span>
           <div className="flex-1" />
           {!editingProps && (canEdit || canAssign) && (
@@ -695,7 +695,7 @@ function TaskDetail(props: {
 
             <div className="flex flex-col gap-1">
               <span className="text-[11px] flex items-center gap-1" style={{ color: 'var(--text-tertiary)' }}>
-                <Link2 size={11} /> 前置依赖（全部完成才解锁）
+                <Link2 size={11} style={{ color: 'var(--accent)' }} /> 前置依赖（全部完成才解锁）
               </span>
               <div className="max-h-[180px] overflow-auto rounded" style={{ border: '1px solid var(--border)' }}>
                 {tasks.filter((t) => t.id !== task.id && t.parentTaskId === task.parentTaskId).length === 0 && (
@@ -790,7 +790,7 @@ function TaskDetail(props: {
 
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
-          <FileText size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <FileText size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务描述</span>
           <div className="flex-1" />
           {canEdit && !editingDesc && (
@@ -848,7 +848,7 @@ function TaskDetail(props: {
       {/* 状态操作：无权限角色整块不显示（标题右侧已有当前状态） */}
       {canStatus && (
         <div className="flex items-center gap-2 flex-wrap">
-          <Flag size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <Flag size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>状态操作</span>
           {TRANSITIONS[task.status].map((t) => (
             <button
@@ -870,7 +870,7 @@ function TaskDetail(props: {
       {/* 过程记录（可多次；提交完成汇报后锁定） */}
       <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="flex items-center gap-2">
-          <ListChecks size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <ListChecks size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
             过程记录
           </span>
@@ -960,7 +960,7 @@ function TaskDetail(props: {
       {/* 完成汇报 */}
       <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="flex items-center gap-2">
-          <ClipboardCheck size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <ClipboardCheck size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
             完成汇报
           </span>
@@ -1111,7 +1111,7 @@ function TaskDetail(props: {
       {/* 附件 */}
       <div className="flex flex-col gap-2 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
         <div className="flex items-center gap-2">
-          <Paperclip size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <Paperclip size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>附件</span>
           <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>{files.length}</span>
           <div className="flex-1" />

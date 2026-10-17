@@ -68,11 +68,11 @@ pub struct TaskActors<'a> {
     pub collaborators: &'a [String],
 }
 
-/// 按组织角色 + 任务字段解析资源角色（自动绑定优先，默认 watcher）。
+/// 按组织角色 + 任务字段解析资源角色。
+///
+/// **顺序很重要**：先绑定任务级身份（创建者 → 负责人 → 参与者），再退回组织管理视角。
+/// 否则 owner/admin 会被 `Manager` 短路，导致「创建者」拿不到编辑/改状态权限。
 pub fn resolve_task_role(org_role: Role, actor: &str, t: &TaskActors<'_>) -> TaskRole {
-    if matches!(org_role, Role::Owner | Role::Admin) {
-        return TaskRole::Manager;
-    }
     if t.creator_id == actor {
         return TaskRole::Creator;
     }
@@ -81,6 +81,9 @@ pub fn resolve_task_role(org_role: Role, actor: &str, t: &TaskActors<'_>) -> Tas
     }
     if t.collaborators.iter().any(|c| c == actor) {
         return TaskRole::Collaborator;
+    }
+    if matches!(org_role, Role::Owner | Role::Admin) {
+        return TaskRole::Manager;
     }
     TaskRole::Watcher
 }
@@ -900,6 +903,22 @@ mod tests {
         }
         assert!(!task_allows(TaskRole::Watcher, Action::ReportSubmit));
         assert!(!task_allows(TaskRole::Watcher, Action::FileUpload));
+    }
+
+    /// 组织 owner 身为任务创建者时，必须解析为 Creator（否则会丢编辑入口）。
+    #[test]
+    fn creator_takes_precedence_over_org_manager() {
+        let collaborators = Vec::new();
+        let actors = TaskActors {
+            creator_id: "1",
+            assignee_id: Some("2"),
+            collaborators: &collaborators,
+        };
+        assert_eq!(resolve_task_role(Role::Owner, "1", &actors), TaskRole::Creator);
+        assert_eq!(resolve_task_role(Role::Owner, "2", &actors), TaskRole::Assignee);
+        // 非任务相关人的 owner/admin 才是 Manager
+        assert_eq!(resolve_task_role(Role::Owner, "9", &actors), TaskRole::Manager);
+        assert_eq!(resolve_task_role(Role::Member, "9", &actors), TaskRole::Watcher);
     }
 
     #[test]
