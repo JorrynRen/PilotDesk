@@ -174,6 +174,7 @@ export function WorkflowEditorPage() {
         statusHint={statusHint}
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenEnclave={() => navigate('/enclave')}
         onOpenMarket={() => navigate('/market')}
         onOpenInspirations={() => navigate('/inspirations')} />
       <div className="flex-1 min-h-0 px-2">
@@ -200,6 +201,7 @@ export function WorkflowEditorPage() {
         statusHint={statusHint}
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenEnclave={() => navigate('/enclave')}
         onOpenMarket={() => navigate('/market')}
         onOpenInspirations={() => navigate('/inspirations')} />
       <div className="flex-1 min-h-0 px-2">
@@ -233,6 +235,7 @@ export function WorkflowEditorPage() {
         statusHint={statusHint}
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenEnclave={() => navigate('/enclave')}
         onOpenMarket={() => navigate('/market')}
         onOpenInspirations={() => navigate('/inspirations')}
       />

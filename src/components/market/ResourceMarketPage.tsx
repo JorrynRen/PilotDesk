@@ -93,6 +93,7 @@ export function ResourceMarketPage() {
         onOpenInspirations={() => navigate('/inspirations')}
         onOpenSettings={() => navigate('/settings')}
         onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenEnclave={() => navigate('/enclave')}
       />
       <div className="flex-1 min-h-0 px-2">
         <div className="h-full rounded-lg overflow-hidden flex flex-col" style={{ backgroundColor: 'var(--bg-content)' }}>

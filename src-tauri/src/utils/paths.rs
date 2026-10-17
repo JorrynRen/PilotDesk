@@ -54,6 +54,19 @@ pub fn db_path() -> PathBuf {
     app_root_dir().join("pilotdesk.db")
 }
 
+/// 飞地（Enclave）团队数据库文件路径。
+///
+/// 与 `pilotdesk.db` 同根（应用配置目录）但**物理独立**：团队业务数据不混入个人库，
+/// 也不会被个人侧的同步/备份带走（见设计 §6.1）。
+pub fn enclave_db_path() -> PathBuf {
+    app_root_dir().join("enclave.db")
+}
+
+/// 飞地文件资产目录：`<应用根>/enclave/files/`（任务附件与汇报成果的原文档）。
+pub fn enclave_files_dir() -> PathBuf {
+    app_root_dir().join("enclave").join("files")
+}
+
 /// 加密密钥文件路径
 pub fn encryption_key_path() -> PathBuf {
     app_root_dir().join(".key")

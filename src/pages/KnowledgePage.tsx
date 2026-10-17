@@ -108,6 +108,7 @@ export function KnowledgePage() {
         showBackButton={false}
         knowledgeOpen
         onOpenKnowledge={() => { /* 已在知识库页，无需动作 */ }}
+        onOpenEnclave={() => navigate('/enclave')}
         onOpenSettings={() => navigate('/settings')}
         onOpenMarket={() => navigate('/market')}
         onOpenInspirations={() => navigate('/inspirations')}

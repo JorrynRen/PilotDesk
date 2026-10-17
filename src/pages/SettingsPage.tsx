@@ -1941,6 +1941,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         settingsOpen
         onOpenSettings={() => { /* 已在设置页，无需动作 */ }}
         onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenEnclave={() => navigate('/enclave')}
         onOpenMarket={() => navigate('/market')}
         onOpenInspirations={() => navigate('/inspirations')}
       />

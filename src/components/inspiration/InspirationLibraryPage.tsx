@@ -208,6 +208,7 @@ export function InspirationLibraryPage() {
         onOpenInspirations={() => navigate('/')}
         onOpenMarket={() => navigate('/market')}
         onOpenKnowledge={() => navigate('/knowledge')}
+        onOpenEnclave={() => navigate('/enclave')}
         onOpenSettings={() => navigate('/settings')}
       />
 

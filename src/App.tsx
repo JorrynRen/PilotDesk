@@ -20,6 +20,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { WorkflowPage } from './pages/WorkflowPage';
 import { GroupChatPage } from './pages/GroupChatPage';
 import { KnowledgePage } from './pages/KnowledgePage';
+import { EnclavePage } from './pages/EnclavePage';
 import { subscribeGroupChat, useGroupChatStore } from './stores/groupChatStore';
 import { subscribeNotifications } from './stores/notificationEvents';
 import { WorkflowEditorPage } from './pages/WorkflowEditorPage';
@@ -93,6 +94,7 @@ function MainLayout() {
           onModeChange={setMode}
           onOpenSettings={() => navigate('/settings')}
           onOpenKnowledge={() => navigate('/knowledge')}
+          onOpenEnclave={() => navigate('/enclave')}
           onOpenMarket={() => navigate('/market')}
           onOpenInspirations={() => navigate('/inspirations')}
           onToggleRightPanel={rightPanelMode ? toggleRightPanel : undefined}
@@ -212,6 +214,8 @@ function App() {
       document.title = `${base} - 设置`;
     } else if (path === '/knowledge') {
       document.title = `${base} - 知识库`;
+    } else if (path === '/enclave') {
+      document.title = `${base} - 飞地`;
     } else {
       const currentSession = useSessionStore.getState().currentSessionId;
       const session = useSessionStore.getState().sessions.find((s) => s.id === currentSession);
@@ -297,6 +301,8 @@ function App() {
         <Route path="/settings" element={<SettingsPage onBack={() => window.history.back()} />} />
         {/* 知识库：独立路由（顶部组合菜单的「知识库」段进入） */}
         <Route path="/knowledge" element={<KnowledgePage />} />
+        {/* 飞地：独立路由（顶部组合菜单的「飞地」段进入） */}
+        <Route path="/enclave" element={<EnclavePage />} />
       </Routes>
     </TerminalProvider>
   );

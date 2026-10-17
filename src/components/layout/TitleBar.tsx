@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Settings, Bell, Library, Store, LayoutGrid, Lightbulb } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Minus, Square, X, Copy, ArrowLeft, Workflow, Terminal, MessageSquare, Users, Settings, Bell, Library, Store, LayoutGrid, Lightbulb, Boxes } from 'lucide-react';
 import type { ViewMode } from '../../TerminalManager';
 import { useCustomTabsStore, PORTAL_TAB_ID } from '../../stores/customTabsStore';
 import { useNotificationStore, countUnread } from '../../stores/notificationStore';
@@ -47,6 +47,15 @@ interface TitleBarProps {
   onOpenKnowledge?: () => void;
   /** 知识库页传 true：thumb 定位到「知识库」段 */
   knowledgeOpen?: boolean;
+  /**
+   * 飞地（独立路由 /enclave）：与知识库同为一等段（点击即跳 /enclave）。
+   *
+   * 飞地是「团队业务数据的入口」——任务/产出/组织知识库都在内网主机侧，
+   * 与知识库（个人知识资产）并列，故同样给一个常驻段而非收进右侧图标区。
+   */
+  onOpenEnclave?: () => void;
+  /** 飞地页传 true：thumb 定位到「飞地」段 */
+  enclaveOpen?: boolean;
   /** 资源市集（独立路由 /market）：入口固定放在右侧图标区（与指挥中心/通知中心同排） */
   onOpenMarket?: () => void;
   /** 资源市集页传 true：图标高亮 */
@@ -102,7 +111,7 @@ function StatusHintBadge({ hint }: { hint: StatusHint }) {
   );
 }
 
-export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen, onOpenKnowledge, knowledgeOpen, onOpenMarket, marketOpen, onOpenInspirations, inspirationsOpen, noActiveSegment }: TitleBarProps) {
+export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, rightPanelOpen, showBackButton, titleText, onBack, statusHint, onToggleTerminal, isTerminalOpen, mode, onModeChange, settingsOpen, onOpenKnowledge, knowledgeOpen, onOpenEnclave, enclaveOpen, onOpenMarket, marketOpen, onOpenInspirations, inspirationsOpen, noActiveSegment }: TitleBarProps) {
   const PanelIcon = rightPanelOpen ? PanelRightClose : PanelRightOpen;
   const { t } = useI18n();
   const customTabs = useCustomTabsStore((s) => s.tabs);
@@ -162,6 +171,8 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
         ? t('titleBar.knowledge.title.pending', `知识库（${kbPending} 条待核实）`, { count: kbPending })
         : t('titleBar.knowledge.title', '知识库：片段 / 文件知识 / 图谱'),
     },
+    // 飞地：独立路由（/enclave），与知识库同为一等段
+    { key: 'enclave', icon: <Boxes size={11} />, label: t('titleBar.enclave', '飞地'), title: t('titleBar.enclave.title', '飞地：内网小团队的任务与产出（数据在主机）') },
     { key: 'terminal', icon: <Terminal size={11} />, label: t('titleBar.terminal', '终端'), title: t('titleBar.terminal.title', '切换到终端模式') },
     // 「门户」段：固定段（不受平铺个数影响），点击进入门户页（按分组查看全部标签）
     { key: 'portal', icon: <LayoutGrid size={11} />, label: t('titleBar.portal', '门户'), title: t('titleBar.portal.title', '门户：按分组查看全部标签') },
@@ -206,13 +217,15 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
     ? null
     : knowledgeOpen
       ? 'knowledge'
-      : settingsOpen
-        ? 'settings'
-        : (mode === 'custom'
-          ? (activeCustomTabId === PORTAL_TAB_ID
-            ? 'portal'
-            : activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
-          : mode);
+      : enclaveOpen
+        ? 'enclave'
+        : settingsOpen
+          ? 'settings'
+          : (mode === 'custom'
+            ? (activeCustomTabId === PORTAL_TAB_ID
+              ? 'portal'
+              : activeCustomTabId ? `custom:${activeCustomTabId}` : 'custom')
+            : mode);
   const modeIndex = mode && activeSegmentKey ? segments.findIndex((s) => s.key === activeSegmentKey) : -1;
 
   // 组合开关 thumb 像素定位：按钮宽度自适应（左右内边距），按实际段位置滑动
@@ -445,6 +458,10 @@ export function TitleBar({ onOpenSettings, onOpenWorkflow, onToggleRightPanel, r
                     onClick={() => {
                       if (seg.key === 'knowledge') {
                         onOpenKnowledge?.();
+                        return;
+                      }
+                      if (seg.key === 'enclave') {
+                        onOpenEnclave?.();
                         return;
                       }
                       if (seg.key === 'settings') {

@@ -2,6 +2,7 @@ mod agent;
 mod api_agent;
 mod commands;
 mod db;
+mod enclave;
 mod eventlog;
 mod groupchat;
 mod plugin;
@@ -2401,6 +2402,13 @@ pub fn run() {
 
     let pool = init_db().expect("Failed to initialize database");
 
+    // 飞地（Enclave）团队数据库：与主库物理独立。打不开即报错 ——
+    // 团队资产不能被静默降级为「个人库可用但团队功能静默缺失」。
+    let enclave_store = std::sync::Arc::new(
+        enclave::db::EnclaveStore::open(&crate::utils::paths::enclave_db_path())
+            .expect("Failed to initialize enclave database"),
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -2413,6 +2421,7 @@ pub fn run() {
             commands::dirindex::handle_dirindex(request)
         })
         .manage(DbState { pool: pool.clone() })
+        .manage(enclave::EnclaveState::new(enclave_store))
         .manage(AsyncMutex::new(AgentManager::new()))
         .manage(PendingApprovals::new())
         .manage(groupchat::room::RoomRegistry::new())
@@ -2723,6 +2732,7 @@ pub fn run() {
             utils::market::workflow_market_index,
             utils::market::workflow_market_installs,
             utils::market::workflow_market_install,
+            commands::enclave::enclave_status,
         ])
         .setup(move |app| {
             // 初始化资源路径（应用根目录：Win %APPDATA%\PilotDesk / unix ~/.config/pilotdesk）
