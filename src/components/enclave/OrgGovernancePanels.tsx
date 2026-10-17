@@ -57,10 +57,11 @@ function SwitchRow(props: {
   busy: boolean;
   danger?: boolean;
   onToggle: () => void;
-  updatedBy?: string;
+  /** 已格式化的操作人（姓名 + 邮箱），由调用方解析，避免这里再碰用户 id */
+  updatedByLabel?: string;
   updatedAt?: number;
 }) {
-  const { title, desc, on, canEdit, busy, danger, onToggle, updatedBy, updatedAt } = props;
+  const { title, desc, on, canEdit, busy, danger, onToggle, updatedByLabel, updatedAt } = props;
   const onColor = danger ? 'var(--status-danger)' : 'var(--accent)';
   return (
     <div className="flex items-start gap-3 py-2">
@@ -83,9 +84,9 @@ function SwitchRow(props: {
           {desc}
         </div>
         {/* 注意用布尔判断：`updatedAt` 为 0 时直接 `(updatedBy || updatedAt) && …` 会把 0 渲染出来 */}
-        {!!(updatedBy || updatedAt) && (
+        {!!(updatedByLabel || updatedAt) && (
           <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
-            最近变更：{updatedBy || '-'} · {formatTime(updatedAt ?? 0)}
+            最近变更：{updatedByLabel || '-'} · {formatTime(updatedAt ?? 0)}
           </div>
         )}
       </div>
@@ -203,7 +204,7 @@ export function OrgGovernanceSection() {
           busy={busy === 'policy'}
           danger
           onToggle={() => void togglePolicy()}
-          updatedBy={policy?.updatedBy}
+          updatedByLabel={policy?.updatedBy ? actorLabel(policy.updatedBy) : ''}
           updatedAt={policy?.updatedAt}
         />
         {!canWritePolicy && (
@@ -235,7 +236,7 @@ export function OrgGovernanceSection() {
           busy={busy === 'emergency'}
           danger
           onToggle={() => void toggleEmergency()}
-          updatedBy={emergency?.updatedBy}
+          updatedByLabel={emergency?.updatedBy ? actorLabel(emergency.updatedBy) : ''}
           updatedAt={emergency?.updatedAt}
         />
         {!canEmergency && (
