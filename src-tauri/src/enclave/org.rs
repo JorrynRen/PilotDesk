@@ -174,6 +174,39 @@ pub fn upsert_member_snapshot(
 
 // ── 读取 ────────────────────────────────────────────────────────
 
+/// 用平台 `/me` 的最新资料刷新「本机登录用户」在各组织成员快照中的展示字段。
+///
+/// 普通成员视角平台不下发成员名单，但**自己的资料**始终可以从 `/me` 拿到；
+/// 这里只改 `display_name` / `email`，不动角色与席位（那两个只能由成员名单同步）。
+pub fn refresh_own_member_profile(
+    conn: &Connection,
+    user_id: &str,
+    display_name: &str,
+    email: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE member_snapshot SET display_name = ?2, email = ?3 WHERE user_id = ?1",
+        params![user_id, display_name, email],
+    )
+    .map_err(|e| format!("更新本机成员资料失败：{}", e))?;
+    Ok(())
+}
+
+/// 用平台 `/organizations/mine` 返回的角色刷新本机用户在成员快照中的角色。
+pub fn refresh_own_member_role(
+    conn: &Connection,
+    org_id: &str,
+    user_id: &str,
+    role: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE member_snapshot SET role = ?3 WHERE org_id = ?1 AND user_id = ?2",
+        params![org_id, user_id, role],
+    )
+    .map_err(|e| format!("更新本机成员角色失败：{}", e))?;
+    Ok(())
+}
+
 fn map_org_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrgSnapshotView> {
     Ok(OrgSnapshotView {
         org_id: r.get(0)?,
@@ -572,6 +605,32 @@ mod tests {
         assert!(org_detail(&conn, "8").unwrap().is_none());
         assert!(list_orgs(&conn).unwrap().is_empty());
         assert!(crate::enclave::authz::role_for_org(&conn, "8").unwrap().is_none());
+    }
+
+    /// 平台改过昵称/邮箱后，成员表里「自己那行」必须跟着更新，且不动角色。
+    #[test]
+    fn own_member_profile_refresh_keeps_role() {
+        let conn = seeded("member");
+        conn.execute(
+            "INSERT INTO member_snapshot
+                (org_id, user_id, role, display_name, email, seat_status, synced_at)
+             VALUES ('8', '1', 'member', '旧名字', 'old@b.c', 'active', 0)",
+            [],
+        )
+        .unwrap();
+
+        refresh_own_member_profile(&conn, "1", "新名字", "new@b.c").unwrap();
+        let (name, email, role): (String, String, String) = conn
+            .query_row(
+                "SELECT display_name, email, role FROM member_snapshot
+                 WHERE org_id='8' AND user_id='1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "新名字");
+        assert_eq!(email, "new@b.c");
+        assert_eq!(role, "member", "只更新资料，不得改角色");
     }
 
     /// owner 可写策略，且变更必须留下一条审计。

@@ -123,6 +123,13 @@ pub async fn refresh_local_identity(
                 email: me.user.email.clone(),
                 nickname: me.user.nickname.clone(),
             },
+        )?;
+        // 成员名单可能因角色拿不到，但自己的资料始终可更新
+        org::refresh_own_member_profile(
+            c,
+            &me.user.id.to_string(),
+            &me.user.nickname,
+            &me.user.email,
         )
     })?;
     Ok(())
@@ -214,6 +221,17 @@ pub async fn run_snapshot_round(
         }
         for (org_id, members) in &member_sets {
             org::upsert_member_snapshot(c, org_id, members)?;
+        }
+        // 本机登录用户：资料以 `/me` 为准、角色以 `/organizations/mine` 为准。
+        // 这样即使普通成员拿不到成员名单，自己那行也不会一直是旧昵称 / 旧邮箱。
+        org::refresh_own_member_profile(
+            c,
+            &me.user.id.to_string(),
+            &me.user.nickname,
+            &me.user.email,
+        )?;
+        for r in &org_rows {
+            org::refresh_own_member_role(c, &r.org_id, &me.user.id.to_string(), &r.my_role)?;
         }
         Ok(())
     })?;
