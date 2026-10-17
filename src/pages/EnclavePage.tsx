@@ -94,8 +94,20 @@ export function EnclavePage() {
             </div>
           )}
 
+          <button
+            onClick={() => navigate('/enclave/org')}
+            className="mt-1 text-xs px-3 py-1.5 rounded flex items-center gap-1"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            组织与权限
+          </button>
+
           <div className="text-[11px] text-center" style={{ color: 'var(--text-tertiary)' }}>
-            任务工作台与「组织与权限」将在后续版本接入
+            任务工作台将在后续版本接入
           </div>
         </div>
       </div>

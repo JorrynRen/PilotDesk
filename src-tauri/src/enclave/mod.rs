@@ -10,8 +10,10 @@
 //! - **不缓存**：成员端不缓存团队数据（离线不可用），因此没有 `enclave_cache.db`。
 
 pub mod db;
+pub mod org;
+pub mod snapshot;
 
-use std::sync::atomic::{AtomicBool, AtomicI64};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 
 use db::EnclaveStore;
@@ -46,5 +48,10 @@ impl EnclaveState {
             disabled: AtomicBool::new(false),
             last_snapshot_at: AtomicI64::new(0),
         }
+    }
+
+    /// 最近一次治理快照成功同步时间（unix 秒，0 = 从未成功）。供命令层读新鲜度用。
+    pub fn last_snapshot_at(&self) -> i64 {
+        self.last_snapshot_at.load(Ordering::Relaxed)
     }
 }

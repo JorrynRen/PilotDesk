@@ -24,7 +24,7 @@ use crate::commands::api_provider::{
     get_api_key, get_provider_format_and_models, list_api_providers, set_model_notes,
     upsert_api_provider, ApiProvider, CreateOrUpdateProvider,
 };
-use crate::commands::org_share::require_token;
+use crate::commands::org_common::require_token;
 use crate::utils::platform;
 
 /// 组织共享凭据的展示视图（掩码，**不含明文**）。

@@ -15,6 +15,7 @@ pub mod install_log;
 pub mod knowledge;
 pub mod mcp;
 pub mod memory;
+pub mod org_common;
 pub mod org_credentials;
 pub mod org_share;
 pub mod permission;

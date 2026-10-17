@@ -2408,6 +2408,8 @@ pub fn run() {
         enclave::db::EnclaveStore::open(&crate::utils::paths::enclave_db_path())
             .expect("Failed to initialize enclave database"),
     );
+    // EnclaveState 以 Arc 托管：后台快照循环与命令层共享同一份状态。
+    let enclave_state = std::sync::Arc::new(enclave::EnclaveState::new(enclave_store));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -2421,7 +2423,7 @@ pub fn run() {
             commands::dirindex::handle_dirindex(request)
         })
         .manage(DbState { pool: pool.clone() })
-        .manage(enclave::EnclaveState::new(enclave_store))
+        .manage(enclave_state.clone())
         .manage(AsyncMutex::new(AgentManager::new()))
         .manage(PendingApprovals::new())
         .manage(groupchat::room::RoomRegistry::new())
@@ -2733,6 +2735,10 @@ pub fn run() {
             utils::market::workflow_market_installs,
             utils::market::workflow_market_install,
             commands::enclave::enclave_status,
+            commands::enclave::enclave_org_list,
+            commands::enclave::enclave_org_detail,
+            commands::enclave::enclave_snapshot_refresh,
+            commands::enclave::enclave_snapshot_freshness,
         ])
         .setup(move |app| {
             // 初始化资源路径（应用根目录：Win %APPDATA%\PilotDesk / unix ~/.config/pilotdesk）
@@ -2804,6 +2810,15 @@ pub fn run() {
             let sync_pool = pool.clone();
             tauri::async_runtime::spawn(async move {
                 commands::cloud_sync::run_auto_sync_loop(DbState { pool: sync_pool }).await;
+            });
+
+            // 启动飞地治理快照后台任务（默认每 30 分钟一轮；成功即按主库设置间隔，
+            // 失败指数退避 30s→15min，失败只记日志——不阻塞 UI、不影响本地功能）
+            let snap_state = enclave_state.clone();
+            let snap_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                enclave::snapshot::run_auto_snapshot_loop(DbState { pool: snap_pool }, snap_state)
+                    .await;
             });
 
             log::info!("PilotDesk initialized successfully.");
