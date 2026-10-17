@@ -10,7 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight, FolderOpen, Library,
-  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag,
+  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
@@ -538,17 +538,28 @@ function TaskDetail(props: {
   const [composing, setComposing] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
 
-  // 汇报内容：取自己可编辑的草稿（draft / returned），否则空
-  const editable = useMemo(
-    () => reports.find((r) => r.status === 'draft' || r.status === 'returned') ?? null,
-    [reports],
-  );
+  const feedback = useEnclaveTaskStore((s) => s.feedback);
+  // 当前草稿（唯一可编辑）；已退回/已提交/已确认都只作为提交日志展示
+  const editable = useMemo(() => reports.find((r) => r.status === 'draft') ?? null, [reports]);
+  const logs = useMemo(() => reports.filter((r) => r.status !== 'draft'), [reports]);
   const [reportText, setReportText] = useState('');
-  // 完成汇报只有一份：已提交 / 已确认后不再允许编辑或重复提交
+  // 等待审核或已确认时不允许再编辑 / 提交
   const lockedReport = reports.find((r) => r.status === 'submitted' || r.status === 'confirmed') ?? null;
   const [reportBusy, setReportBusy] = useState(false);
   const [returningId, setReturningId] = useState<string | null>(null);
   const [returnReason, setReturnReason] = useState('');
+
+  /** 最近一次退回原因（用于编辑器顶部提示） */
+  const latestReturnReason = useMemo(() => {
+    const returned = logs.find((r) => r.status === 'returned');
+    if (!returned) return '';
+    const list = feedback[returned.id] ?? [];
+    return (
+      list
+        .filter((f) => f.action === 'return')
+        .slice(-1)[0]?.content ?? ''
+    );
+  }, [logs, feedback]);
 
   useEffect(() => {
     void useEnclaveTaskStore.getState().loadExtras(orgId, task.id);
@@ -1172,8 +1183,16 @@ function TaskDetail(props: {
             存在未完成的前置任务，暂不能开始 / 提交
           </div>
         )}
-        {canReport && !lockedReport && !blocked && task.status !== 'done' && task.status !== 'archived' && task.status !== 'cancelled' && (
+        {canReport && !lockedReport && !blocked && task.status !== 'done' && task.status !== 'archived' && task.status !== 'cancelled' && (editable || logs.length === 0) && (
           <>
+            {latestReturnReason && (
+              <div
+                className="text-[11px] px-2 py-1 rounded"
+                style={{ color: 'var(--status-danger)', backgroundColor: 'var(--bg-tertiary)' }}
+              >
+                上次退回原因：{latestReturnReason}
+              </div>
+            )}
             <textarea
               className="search-input w-full"
               style={{ minHeight: 90, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
@@ -1221,12 +1240,60 @@ function TaskDetail(props: {
                 提交汇报
               </button>
             </div>
+
+            {/* 当前草稿的交付物（与下方「汇报记录」分开） */}
+            {editable && (() => {
+              const deliverables = files.filter((f) => f.reportId === editable.id);
+              return (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                    <Paperclip size={10} />
+                    <span>本条交付物 {deliverables.length}</span>
+                  </div>
+                  {deliverables.map((f) => (
+                    <div key={f.id} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                      <span className="truncate flex-1">{f.fileName}</span>
+                      <button
+                        onClick={() => void openFile(f.id)}
+                        className="px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                      >
+                        打开
+                      </button>
+                      <button
+                        onClick={() =>
+                          void useEnclaveTaskStore
+                            .getState()
+                            .detachFile(orgId, task.id, f.id, { reportId: editable.id })
+                        }
+                        className="px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: 'var(--bg-field)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
+                      >
+                        移除
+                      </button>
+                    </div>
+                  ))}
+                  {deliverables.length === 0 && (
+                    <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      尚未添加交付物（点上方「添加交付物」）
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>
         )}
 
-        {reports.length > 0 && (
-          <div className="flex flex-col gap-1">
-            {reports.map((r) => (
+        {/* 汇报提交日志：只读留痕（含每次退回原因），与上方编辑区分离 */}
+        {logs.length > 0 && (
+          <div className="flex flex-col gap-2" style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+            <div className="flex items-center gap-2">
+              <History size={11} style={{ color: 'var(--text-tertiary)' }} />
+              <span className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
+                汇报记录（{logs.length}）
+              </span>
+            </div>
+            {logs.map((r) => (
               <div
                 key={r.id}
                 className="rounded px-2 py-1.5 flex flex-col gap-1"
@@ -1234,17 +1301,15 @@ function TaskDetail(props: {
               >
                 <div className="flex items-center gap-2 text-[11px]">
                   <span style={{ color: STATUS_COLOR[r.status === 'confirmed' ? 'done' : r.status === 'returned' ? 'pending' : r.status === 'submitted' ? 'submitted' : 'pending'] }}>
-                    {r.status === 'draft' ? '草稿' : r.status === 'submitted' ? '已提交' : r.status === 'confirmed' ? '已确认' : '已退回'}
+                    {r.status === 'submitted' ? '已提交' : r.status === 'confirmed' ? '已确认' : '已退回'}
                   </span>
                   <span style={{ color: 'var(--text-tertiary)' }}>
-                    {memberLabel(r.reporterId)} · {toDateInput(r.updatedAt)}
+                    {memberLabel(r.reporterId)} · {formatDateTime(r.updatedAt)}
                   </span>
                   <div className="flex-1" />
-                  {r.status === 'returned' && canReport && (
+                  {r.status === 'returned' && canReport && !lockedReport && task.status !== 'done' && task.status !== 'archived' && task.status !== 'cancelled' && (
                     <button
-                      onClick={() =>
-                        void useEnclaveTaskStore.getState().saveReportDraft(orgId, task.id, r.content)
-                      }
+                      onClick={() => void useEnclaveTaskStore.getState().reviseReport(orgId, task.id, r.id)}
                       className="px-1.5 py-0.5 rounded"
                       style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
                     >
@@ -1304,28 +1369,30 @@ function TaskDetail(props: {
                     {r.content}
                   </div>
                 )}
-                {/* 交付物：草稿可增删；退回 / 提交 / 确认后锁定 */}
+                {/* 退回原因（消费 report_feedback 的 return 记录） */}
+                {r.status === 'returned' && (() => {
+                  const reason = (feedback[r.id] ?? [])
+                    .filter((f) => f.action === 'return')
+                    .slice(-1)[0]?.content;
+                  if (!reason) return null;
+                  return (
+                    <div
+                      className="text-[10px] px-1.5 py-0.5 rounded"
+                      style={{ color: 'var(--status-danger)', backgroundColor: 'var(--bg-field)' }}
+                    >
+                      退回原因：{reason}
+                    </div>
+                  );
+                })()}
+                {/* 该次提交的交付物（只读留痕，增删在上方草稿区） */}
                 {(() => {
                   const deliverables = files.filter((f) => f.reportId === r.id);
-                  const canEditDeliverables = canReport && r.status === 'draft';
-                  if (deliverables.length === 0 && !canEditDeliverables) return null;
+                  if (deliverables.length === 0) return null;
                   return (
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                         <Paperclip size={10} />
                         <span>交付物 {deliverables.length}</span>
-                        {canEditDeliverables && (
-                          <button
-                            onClick={() => void addDeliverable(r.id)}
-                            className="px-1.5 py-0.5 rounded"
-                            style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-                          >
-                            添加
-                          </button>
-                        )}
-                        {r.status === 'returned' && canReport && (
-                          <span>已退回：交付物已锁定，继续修改后可调整</span>
-                        )}
                       </div>
                       {deliverables.map((f) => (
                         <div key={f.id} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
@@ -1337,19 +1404,6 @@ function TaskDetail(props: {
                           >
                             打开
                           </button>
-                          {canEditDeliverables && (
-                            <button
-                              onClick={() =>
-                                void useEnclaveTaskStore
-                                  .getState()
-                                  .detachFile(orgId, task.id, f.id, { reportId: r.id })
-                              }
-                              className="px-1.5 py-0.5 rounded"
-                              style={{ backgroundColor: 'var(--bg-field)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
-                            >
-                              移除
-                            </button>
-                          )}
                         </div>
                       ))}
                     </div>

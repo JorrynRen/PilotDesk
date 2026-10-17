@@ -11,6 +11,7 @@ import { useEnclaveOrgStore } from './enclaveOrgStore';
 import type {
   CreateTaskInput,
   DepsPreview,
+  FeedbackView,
   FileAssetView,
   ProgressList,
   ReportView,
@@ -29,6 +30,8 @@ interface EnclaveTaskState {
   reports: ReportView[];
   files: FileAssetView[];
   progress: ProgressList | null;
+  /** 汇报留言 / 退回原因（按 reportId 索引） */
+  feedback: Record<string, FeedbackView[]>;
   /** 账号切换 / 退出：清空全部任务缓存 */
   reset: () => void;
   loadTasks: (orgId: string) => Promise<void>;
@@ -41,6 +44,8 @@ interface EnclaveTaskState {
   /** 拉当前任务的汇报与附件 */
   loadExtras: (orgId: string, taskId: string) => Promise<void>;
   saveReportDraft: (orgId: string, taskId: string, content: string) => Promise<boolean>;
+  /** 基于「已退回」的汇报继续修改：新建草稿并复制正文与交付物，原记录保留为日志 */
+  reviseReport: (orgId: string, taskId: string, reportId: string) => Promise<ReportView | null>;
   submitReport: (orgId: string, taskId: string, content: string) => Promise<boolean>;
   confirmReport: (orgId: string, taskId: string, reportId: string) => Promise<boolean>;
   returnReport: (orgId: string, taskId: string, reportId: string, reason: string) => Promise<boolean>;
@@ -80,6 +85,7 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   reports: [],
   files: [],
   progress: null,
+  feedback: {},
   /** 本轮是否成功用当前账号刷新过身份（失败则禁用一切写操作） */
   identityVerified: false,
 
@@ -92,6 +98,7 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
       reports: [],
       files: [],
       progress: null,
+      feedback: {},
       identityVerified: false,
     });
   },
@@ -188,7 +195,21 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
       invoke<FileAssetView[]>('enclave_task_file_list', { orgId, taskId }).catch(() => []),
       invoke<ProgressList>('enclave_task_progress_list', { orgId, taskId }).catch(() => null),
     ]);
-    set({ reports, files, progress });
+    // 提交日志的退回原因 / 确认留言：按汇报逐条拉取（数量很少）
+    const logs = reports.filter((r) => r.status !== 'draft');
+    const pairs = await Promise.all(
+      logs.map(async (r) => {
+        try {
+          const list = await invoke<FeedbackView[]>('enclave_report_feedback_list', {
+            reportId: r.id,
+          });
+          return [r.id, list] as const;
+        } catch {
+          return [r.id, [] as FeedbackView[]] as const;
+        }
+      }),
+    );
+    set({ reports, files, progress, feedback: Object.fromEntries(pairs) });
   },
 
   saveReportDraft: async (orgId, taskId, content) => {
@@ -200,6 +221,18 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
     } catch (e) {
       set({ error: errorMessage(e) });
       return false;
+    }
+  },
+
+  reviseReport: async (orgId, taskId, reportId) => {
+    try {
+      const draft = await invoke<ReportView>('enclave_report_revise', { orgId, taskId, reportId });
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return draft;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
     }
   },
 

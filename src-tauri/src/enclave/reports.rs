@@ -125,11 +125,13 @@ fn reject_closed_task(conn: &Connection, org_id: &str, task_id: &str) -> Result<
     Ok(())
 }
 
-/// 找该任务「草稿 / 已退回」的完成汇报（一个任务只有一份完成汇报，可继续编辑）。
+/// 找该任务当前可编辑的草稿（一个任务同时只有一份草稿）。
+///
+/// 「已退回」的汇报不再复用：它作为提交日志保留，继续修改时会新建一份草稿。
 fn find_editable_report(conn: &Connection, task_id: &str) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT id FROM task_reports
-         WHERE task_id = ?1 AND status IN ('draft','returned')
+         WHERE task_id = ?1 AND status = 'draft'
          ORDER BY created_at DESC LIMIT 1",
         params![task_id],
         |r| r.get::<_, String>(0),
@@ -204,6 +206,68 @@ pub fn save_draft(
         ],
     )
     .map_err(|e| format!("创建汇报失败：{}", e))?;
+    load_report(conn, task_id, &id)
+}
+
+/// 基于一份「已退回」的汇报继续修改：新建草稿并复制正文与交付物挂载。
+///
+/// 原退回记录**保持不动**（作为提交日志留痕）；新草稿与原记录共用同一份原件，
+/// 只是新增一条 `report:<newId>` 挂载关系，避免用户重复上传。
+pub fn revise_report(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+    source_report_id: &str,
+) -> Result<ReportView, String> {
+    let role = tasks::actor_task_role(conn, org_id, task_id, actor)?;
+    ensure_participant(role)?;
+    reject_closed_task(conn, org_id, task_id)?;
+    if has_submitted_report(conn, task_id)? {
+        return Err("完成汇报已提交，不能再次修改".to_string());
+    }
+    if tasks::blocked_now(conn, org_id, task_id)? {
+        return Err("存在未完成的前置任务，暂不能继续修改汇报".to_string());
+    }
+    let source = load_report(conn, task_id, source_report_id)?;
+    if source.status != REPORT_RETURNED {
+        return Err("只能基于「已退回」的汇报继续修改".to_string());
+    }
+    if let Some(id) = find_editable_report(conn, task_id)? {
+        return Err(format!("已有草稿（{}），请直接编辑草稿", id));
+    }
+
+    let id = crate::utils::new_id();
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO task_reports
+            (id, task_id, reporter_id, content, materials, deliverables, status,
+             confirmed_by, confirmed_at, sedimented_at, sediment_error, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'draft', NULL, NULL, NULL, NULL, ?7, ?7)",
+        params![
+            id,
+            task_id,
+            actor,
+            source.content,
+            serde_json::to_string(&source.materials).unwrap_or_else(|_| "[]".into()),
+            serde_json::to_string(&source.deliverables).unwrap_or_else(|_| "[]".into()),
+            now
+        ],
+    )
+    .map_err(|e| format!("创建修改草稿失败：{}", e))?;
+
+    // 复制交付物挂载（同一 file_id，新 scope），不重复落盘
+    conn.execute(
+        "INSERT INTO task_file_links
+            (id, task_id, file_id, scope, report_id, progress_id, uploaded_by, uploaded_at)
+         SELECT lower(hex(randomblob(16))), l.task_id, l.file_id, 'report:' || ?2, ?2, NULL,
+                l.uploaded_by, l.uploaded_at
+         FROM task_file_links l
+         WHERE l.task_id = ?1 AND l.report_id = ?3",
+        params![task_id, id, source_report_id],
+    )
+    .map_err(|e| format!("复制交付物失败：{}", e))?;
+
     load_report(conn, task_id, &id)
 }
 

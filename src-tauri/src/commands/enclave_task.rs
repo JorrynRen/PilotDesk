@@ -234,6 +234,20 @@ pub fn enclave_report_submit(
     })
 }
 
+/// 基于「已退回」的汇报继续修改：新建草稿并复制正文与交付物挂载，原记录保留为日志。
+#[tauri::command]
+pub fn enclave_report_revise(
+    org_id: String,
+    task_id: String,
+    report_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<ReportView, String> {
+    state.store.with_conn(|c| {
+        let actor = authz::current_actor_id(c)?;
+        reports::revise_report(c, &org_id, &actor, &task_id, &report_id)
+    })
+}
+
 #[tauri::command]
 pub fn enclave_report_confirm(
     org_id: String,

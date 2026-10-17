@@ -278,10 +278,19 @@ fn do_sediment(
     }
 
     let kb_id = ensure_org_kb(conn, org_id, actor)?;
-    let memory_id = format!("task:{}:report:{}", task_id, report_id);
+    // 一个任务只保留一条产出条目：重新确认（恢复汇报后补报）时覆盖同一条，不产生多份
+    let memory_id = format!("task:{}", task_id);
     let now = chrono::Utc::now().timestamp();
     let title = format!("{} · 完成汇报", task_title);
     let tags = "任务产出";
+
+    // 清理旧口径（按汇报 id 生成的多条历史条目），避免同一任务重复沉淀
+    conn.execute(
+        "DELETE FROM knowledge_base_memories
+         WHERE knowledge_base_id = ?1 AND memory_id LIKE ?2",
+        params![kb_id, format!("task:{}:report:%", task_id)],
+    )
+    .map_err(|e| format!("清理历史产出条目失败：{}", e))?;
 
     conn.execute(
         "INSERT INTO knowledge_base_memories

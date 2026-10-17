@@ -98,6 +98,7 @@ pub fn can_transition(from: &str, to: &str, role: TaskRole) -> Result<(), String
         return Err(format!("任务已处于「{}」状态", status_label(to)));
     }
     let owner = matches!(role, TaskRole::Creator | TaskRole::Assignee);
+    let participant = owner || role == TaskRole::Collaborator;
     let creator = role == TaskRole::Creator;
     let ok = match (from, to) {
         (STATUS_PENDING, STATUS_IN_PROGRESS) => owner,
@@ -105,8 +106,8 @@ pub fn can_transition(from: &str, to: &str, role: TaskRole) -> Result<(), String
         (STATUS_IN_PROGRESS, STATUS_PENDING) => owner,
         // 作废：进行中放弃执行（创建者 / 负责人）
         (STATUS_IN_PROGRESS, STATUS_CANCELLED) => owner,
-        // 提交汇报（M4 联动 task_reports 四态）
-        (STATUS_IN_PROGRESS, STATUS_SUBMITTED) => owner,
+        // 提交汇报（M4 联动 task_reports 四态）：参与者（含协作者）都可提交
+        (STATUS_IN_PROGRESS, STATUS_SUBMITTED) => participant,
         (STATUS_IN_PROGRESS, STATUS_ARCHIVED) => creator,
         // 确认 / 退回
         (STATUS_SUBMITTED, STATUS_DONE) => owner,
@@ -884,9 +885,11 @@ mod tests {
         assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Creator).is_ok());
         assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Manager).is_err());
         assert!(can_transition(STATUS_PENDING, STATUS_IN_PROGRESS, TaskRole::Collaborator).is_err());
-        // 进行中 → 待确认
+        // 进行中 → 待确认：参与者（创建者 / 负责人 / 协作者）都可提交汇报
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Assignee).is_ok());
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Creator).is_ok());
+        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Collaborator).is_ok());
+        assert!(can_transition(STATUS_IN_PROGRESS, STATUS_SUBMITTED, TaskRole::Watcher).is_err());
         // 待确认 → 已完成 / 退回
         assert!(can_transition(STATUS_SUBMITTED, STATUS_DONE, TaskRole::Creator).is_ok());
         assert!(can_transition(STATUS_SUBMITTED, STATUS_DONE, TaskRole::Assignee).is_ok());
