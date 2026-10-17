@@ -260,10 +260,6 @@ export function EnclaveOrgPage() {
 
         {/* M2 治理：数据出境闸门 / 主机应急 / 变更审计 */}
         <OrgGovernanceSection />
-
-        <div className="shrink-0 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-          组织与成员数据来自平台，主机侧只读；成员管理、主机转移将在后续版本接入。
-        </div>
       </div>
 
       <StatusBar
