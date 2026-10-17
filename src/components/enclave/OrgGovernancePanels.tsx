@@ -41,9 +41,13 @@ function formatDetail(action: string, detail: string): string {
   }
   const obj = parsed as { from?: unknown; to?: unknown } | null;
   if (obj && typeof obj.from === 'boolean' && typeof obj.to === 'boolean') {
-    const label = action === 'host.emergency' ? '对外服务' : '团队数据出境';
-    const text = (v: boolean) => (v ? '开启' : '关闭');
-    return `${label}：${text(obj.from)} → ${text(obj.to)}`;
+    // `host.emergency` 落库的是 `disabled`（true = 关闭），展示口径要翻转成「对外服务 开/关」
+    if (action === 'host.emergency') {
+      const service = (disabled: boolean) => (disabled ? '关闭' : '开启');
+      return `对外服务：${service(obj.from)} → ${service(obj.to)}`;
+    }
+    const allow = (v: boolean) => (v ? '开启' : '关闭');
+    return `团队数据出境：${allow(obj.from)} → ${allow(obj.to)}`;
   }
   return detail || '-';
 }
@@ -62,7 +66,9 @@ function SwitchRow(props: {
   updatedAt?: number;
 }) {
   const { title, desc, on, canEdit, busy, danger, onToggle, updatedByLabel, updatedAt } = props;
-  const onColor = danger ? 'var(--status-danger)' : 'var(--accent)';
+  // `danger` = 当前状态本身是风险状态（如允许出境 / 对外服务已关闭），只影响状态色，不影响开关方向
+  const stateColor = danger ? 'var(--status-danger)' : on ? 'var(--accent)' : 'var(--text-tertiary)';
+  const buttonColor = on ? (danger ? 'var(--status-danger)' : 'var(--accent)') : 'var(--bg-tertiary)';
   return (
     <div className="flex items-start gap-3 py-2">
       <div className="flex-1 min-w-0">
@@ -74,7 +80,7 @@ function SwitchRow(props: {
             className="text-[10px] px-1.5 py-0.5 rounded"
             style={{
               backgroundColor: 'var(--bg-tertiary)',
-              color: on ? onColor : 'var(--text-tertiary)',
+              color: stateColor,
             }}
           >
             {on ? '已开启' : '已关闭'}
@@ -95,7 +101,7 @@ function SwitchRow(props: {
         disabled={!canEdit || busy}
         className="shrink-0 text-xs px-2.5 py-1 rounded flex items-center gap-1"
         style={{
-          backgroundColor: on ? onColor : 'var(--bg-tertiary)',
+          backgroundColor: on ? buttonColor : 'var(--bg-tertiary)',
           color: on ? '#fff' : 'var(--text-secondary)',
           border: '1px solid var(--border)',
           opacity: !canEdit || busy ? 0.5 : 1,
@@ -202,7 +208,7 @@ export function OrgGovernanceSection() {
           on={allowCloud}
           canEdit={canWritePolicy}
           busy={busy === 'policy'}
-          danger
+          danger={allowCloud}
           onToggle={() => void togglePolicy()}
           updatedByLabel={policy?.updatedBy ? actorLabel(policy.updatedBy) : ''}
           updatedAt={policy?.updatedAt}
@@ -229,12 +235,12 @@ export function OrgGovernanceSection() {
           </span>
         </div>
         <SwitchRow
-          title="临时关闭飞地对外服务"
-          desc="不按成员禁用；用于成员移除等治理滞后时立即阻断外部访问。纯本地、断网可用、不改云端数据，操作留痕。"
-          on={emergencyOn}
+          title="对外服务"
+          desc="开启时成员可连接本机；关闭后立即断开全部外部连接（成员端无法访问）。本机使用不受影响；纯本地、断网可用、不改云端数据，操作留痕。"
+          on={!emergencyOn}
           canEdit={canEmergency}
           busy={busy === 'emergency'}
-          danger
+          danger={emergencyOn}
           onToggle={() => void toggleEmergency()}
           updatedByLabel={emergency?.updatedBy ? actorLabel(emergency.updatedBy) : ''}
           updatedAt={emergency?.updatedAt}
