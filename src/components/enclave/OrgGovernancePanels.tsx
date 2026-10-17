@@ -24,6 +24,30 @@ function formatTime(unixSec: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/**
+ * 审计明细渲染：把后端留痕的结构化 JSON 翻成人话。
+ *
+ * 后端口径（见 `commands/enclave.rs`）：
+ * - `policy.allow_cloud_model`：`{ from: bool, to: bool }`
+ * - `host.emergency`：`{ from: bool, to: bool }`
+ * 解析失败时原样展示，避免把留痕藏起来。
+ */
+function formatDetail(action: string, detail: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(detail);
+  } catch {
+    return detail || '-';
+  }
+  const obj = parsed as { from?: unknown; to?: unknown } | null;
+  if (obj && typeof obj.from === 'boolean' && typeof obj.to === 'boolean') {
+    const label = action === 'host.emergency' ? '对外服务' : '团队数据出境';
+    const text = (v: boolean) => (v ? '开启' : '关闭');
+    return `${label}：${text(obj.from)} → ${text(obj.to)}`;
+  }
+  return detail || '-';
+}
+
 /** 一行开关：左侧标题 + 说明，右侧按钮（受 canEdit 控制）。 */
 function SwitchRow(props: {
   title: string;
@@ -58,7 +82,8 @@ function SwitchRow(props: {
         <div className="text-[11px] mt-1 leading-4" style={{ color: 'var(--text-tertiary)' }}>
           {desc}
         </div>
-        {(updatedBy || updatedAt) && (
+        {/* 注意用布尔判断：`updatedAt` 为 0 时直接 `(updatedBy || updatedAt) && …` 会把 0 渲染出来 */}
+        {!!(updatedBy || updatedAt) && (
           <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
             最近变更：{updatedBy || '-'} · {formatTime(updatedAt ?? 0)}
           </div>
@@ -240,7 +265,7 @@ export function OrgGovernanceSection() {
                   <td className="px-3 py-1 whitespace-nowrap">{formatTime(a.createdAt)}</td>
                   <td className="px-3 py-1 whitespace-nowrap">{ACTION_LABEL[a.action] ?? a.action}</td>
                   <td className="px-3 py-1 whitespace-nowrap">{a.actorId || '-'}</td>
-                  <td className="px-3 py-1 font-mono text-[10px] break-all">{a.detail}</td>
+                  <td className="px-3 py-1 break-all">{formatDetail(a.action, a.detail)}</td>
                 </tr>
               ))}
               {audit.length === 0 && (
