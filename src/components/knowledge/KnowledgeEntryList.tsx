@@ -10,7 +10,7 @@
 import { useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { Search, Pin, RotateCcw, Link2Off, FileText, Globe, Hammer, Scissors, ChevronRight, Save, Wand2, Copy, Download, Cloud } from 'lucide-react';
+import { Search, Pin, RotateCcw, Link2Off, FileText, Globe, Hammer, Scissors, ChevronRight, Save, Wand2, Copy, Download, Cloud, X } from 'lucide-react';
 import { Select } from '../common/Select';
 import { MetaEditor } from './KnowledgeFieldInputs';
 import { TagEditor } from './TagEditor';
@@ -138,6 +138,14 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
     } finally {
       setSaving(false);
     }
+  };
+
+  /** 取消：丢弃未保存的草稿并收起 —— 按钮在展开区底部，不必滚回顶部 */
+  const handleCancel = (e: KnowledgeEntry) => {
+    setDraftValue(e.value);
+    setDraftTags(e.tags);
+    setDraftMeta(e.meta);
+    setSelectedKey(null);
   };
 
   const handleRemove = async (e: KnowledgeEntry) => {
@@ -529,6 +537,15 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
                       >
                         <Copy size={11} />
                         复制
+                      </button>
+                      <button
+                        onClick={() => handleCancel(e)}
+                        className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                        style={{ color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+                        title="放弃未保存的改动并收起（不必滚回顶部）"
+                      >
+                        <X size={11} />
+                        取消
                       </button>
                       <button
                         onClick={() => void handleRemove(e)}

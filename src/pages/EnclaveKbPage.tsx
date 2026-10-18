@@ -187,6 +187,16 @@ export function EnclaveKbPage() {
     }
   };
 
+  /** 取消：丢弃未保存的草稿并收起 —— 按钮在展开区底部，不必滚回顶部 */
+  const cancelEdit = () => {
+    if (activeEntry) {
+      setDraftTitle(activeEntry.title);
+      setDraftContent(activeEntry.content);
+      setDraftTags(splitTags(activeEntry.tags));
+    }
+    useEnclaveKbStore.getState().openEntry(null);
+  };
+
   const removeEntry = async () => {
     if (!activeOrgId || !activeEntry) return;
     if (!window.confirm('从团队知识库移除该条目？任务中的交付物原件不会被删除。')) return;
@@ -567,6 +577,21 @@ export function EnclaveKbPage() {
                               >
                                 <Save size={11} />
                                 {saving ? '保存中…' : dirty ? '保存' : '已保存'}
+                              </button>
+                            )}
+                            {canEdit && (
+                              <button
+                                onClick={cancelEdit}
+                                className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                                style={{
+                                  color: 'var(--text-secondary)',
+                                  backgroundColor: 'var(--bg-field)',
+                                  border: '1px solid var(--border)',
+                                }}
+                                title="放弃未保存的改动并收起（不必滚回顶部）"
+                              >
+                                <X size={11} />
+                                取消
                               </button>
                             )}
                             {e.sourceRef && (
