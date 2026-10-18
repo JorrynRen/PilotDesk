@@ -135,6 +135,21 @@ fn reject_container(conn: &Connection, org_id: &str, task_id: &str) -> Result<()
     Ok(())
 }
 
+/// 未开始（待办）不允许填写 / 提交完成汇报：否则「开始」这一步就没有意义。
+fn require_in_progress(conn: &Connection, org_id: &str, task_id: &str) -> Result<(), String> {
+    let status = tasks::task_status(conn, org_id, task_id)?;
+    if status == tasks::STATUS_PENDING {
+        return Err("任务尚未开始，请先点「开始」再填写完成汇报".to_string());
+    }
+    if status != tasks::STATUS_IN_PROGRESS {
+        return Err(format!(
+            "当前状态（{}）下不能填写完成汇报",
+            tasks::status_label(&status)
+        ));
+    }
+    Ok(())
+}
+
 /// 找该任务当前可编辑的草稿（一个任务同时只有一份草稿）。
 ///
 /// 「已退回」的汇报不再复用：它作为提交日志保留，继续修改时会新建一份草稿。
@@ -177,6 +192,7 @@ pub fn save_draft(
     ensure_participant(role)?;
     reject_closed_task(conn, org_id, task_id)?;
     reject_container(conn, org_id, task_id)?;
+    require_in_progress(conn, org_id, task_id)?;
     if has_submitted_report(conn, task_id)? {
         return Err("完成汇报已提交，不能再次提交或修改".to_string());
     }
@@ -235,6 +251,7 @@ pub fn revise_report(
     ensure_participant(role)?;
     reject_closed_task(conn, org_id, task_id)?;
     reject_container(conn, org_id, task_id)?;
+    require_in_progress(conn, org_id, task_id)?;
     if has_submitted_report(conn, task_id)? {
         return Err("完成汇报已提交，不能再次修改".to_string());
     }

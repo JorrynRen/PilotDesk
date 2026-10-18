@@ -123,6 +123,18 @@ pub fn add_progress(
     if tasks::is_container(conn, org_id, task_id)? {
         return Err("该任务包含子任务，不记录过程记录；请在子任务中记录".to_string());
     }
+    // 未开始（待办）不允许记录过程：否则「开始」这一步就没有意义
+    let status = tasks::task_status(conn, org_id, task_id)?;
+    if status != tasks::STATUS_IN_PROGRESS {
+        return Err(if status == tasks::STATUS_PENDING {
+            "任务尚未开始，请先点「开始」再记录过程".to_string()
+        } else {
+            format!(
+                "当前状态（{}）下不能记录过程",
+                tasks::status_label(&status)
+            )
+        });
+    }
     let content = content.trim();
     if content.is_empty() {
         return Err("进度说明不能为空".to_string());

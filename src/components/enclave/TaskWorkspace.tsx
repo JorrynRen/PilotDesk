@@ -707,6 +707,8 @@ function TaskDetail(props: {
   const reports = useEnclaveTaskStore((s) => s.reports);
   const files = useEnclaveTaskStore((s) => s.files);
   const progress = useEnclaveTaskStore((s) => s.progress);
+  /** 只有「进行中」才能写过程记录 / 完成汇报：未开始时先走「开始」 */
+  const canWriteProgress = canReport && task.status === 'in_progress' && !blocked && !progress?.locked;
   /** 任务资料：不挂汇报、不挂过程记录的独立附件 */
   const taskFiles = files.filter((f) => !f.reportId && !f.progressId);
   const [progressText, setProgressText] = useState('');
@@ -1368,8 +1370,14 @@ function TaskDetail(props: {
           )}
         </div>
 
+        {canReport && task.status === 'pending' && (
+          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            任务尚未开始：点上方「开始」后才能记录过程。
+          </div>
+        )}
+
         {/* 默认只展示列表；点「添加过程记录」才展开表单（前置未完成时不允许记录） */}
-        {canReport && !blocked && !progress?.locked && !composing && (
+        {canWriteProgress && !composing && (
           <button
             onClick={() => setComposing(true)}
             className="self-start text-xs px-2 py-1 rounded flex items-center gap-1"
@@ -1379,7 +1387,7 @@ function TaskDetail(props: {
           </button>
         )}
 
-        {canReport && !isContainer && !blocked && !progress?.locked && composing && (
+        {canWriteProgress && composing && (
           <div
             className="flex flex-col gap-2 rounded p-2"
             style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-field)' }}
@@ -1516,12 +1524,17 @@ function TaskDetail(props: {
               : '完成汇报已确认，任务已收敛'}
           </div>
         )}
-        {!isContainer && blocked && (
+        {blocked && (
           <div className="text-[11px]" style={{ color: 'var(--status-danger)' }}>
             存在未完成的前置任务，暂不能开始 / 提交
           </div>
         )}
-        {canReport && !isContainer && !lockedReport && !blocked && task.status !== 'done' && task.status !== 'archived' && task.status !== 'cancelled' && (editable || logs.length === 0) && (
+        {canReport && task.status === 'pending' && (
+          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            任务尚未开始：点上方「开始」后才能填写完成汇报。
+          </div>
+        )}
+        {canReport && task.status === 'in_progress' && !lockedReport && !blocked && (editable || logs.length === 0) && (
           <>
             {latestReturnReason && (
               <div
@@ -1648,7 +1661,7 @@ function TaskDetail(props: {
                     {memberLabel(r.reporterId)} · {formatDateTime(r.updatedAt)}
                   </span>
                   <div className="flex-1" />
-                  {r.status === 'returned' && canReport && !lockedReport && task.status !== 'done' && task.status !== 'archived' && task.status !== 'cancelled' && (
+                  {r.status === 'returned' && canReport && !lockedReport && task.status === 'in_progress' && (
                     <button
                       onClick={() => void useEnclaveTaskStore.getState().reviseReport(orgId, task.id, r.id)}
                       className="px-1.5 py-0.5 rounded"
