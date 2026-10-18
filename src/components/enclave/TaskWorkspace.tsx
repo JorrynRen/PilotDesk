@@ -690,6 +690,8 @@ function TaskDetail(props: {
         ? '未开始'
         : STATUS_LABEL[task.status];
   const blocked = task.blocked;
+  /** 当前用户是否能自己把任务从待办推进到进行中（决定提示文案是「点开始」还是中性描述） */
+  const canStartNow = canStatus && !blocked;
   const taskError = useEnclaveTaskStore((s) => s.error);
   const [desc, setDesc] = useState(task.description);
   const [editingDesc, setEditingDesc] = useState(false);
@@ -1398,7 +1400,9 @@ function TaskDetail(props: {
 
         {canReport && task.status === 'pending' && (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            任务尚未开始：点上方「开始」后才能记录过程。
+            {canStartNow
+              ? '任务尚未开始：点上方「开始」后才能记录过程。'
+              : '任务尚未开始，开始后才能记录过程。'}
           </div>
         )}
 
@@ -1555,7 +1559,9 @@ function TaskDetail(props: {
         )}
         {canReport && task.status === 'pending' && (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            任务尚未开始：点上方「开始」后才能填写完成汇报。
+            {canStartNow
+              ? '任务尚未开始：点上方「开始」后才能填写完成汇报。'
+              : '任务尚未开始，开始后才能填写完成汇报。'}
           </div>
         )}
         {canReport && task.status === 'in_progress' && !lockedReport && !blocked && (editable || logs.length === 0) && (
