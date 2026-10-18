@@ -248,10 +248,27 @@ export interface KbView {
   /** 隐式库（任务产出自动归档地） */
   isImplicit: boolean;
   entryCount: number;
+  /** 库内交付物文件数（按文件去重） */
+  fileCount: number;
   /** 库内最近一次条目更新（0 = 还没有条目） */
   lastEntryAt: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/** 团队知识库「文件」页的一行（按文件去重） */
+export interface KbFileListView {
+  fileId: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  fileHash: string;
+  /** 被多少个知识条目引用 */
+  entryCount: number;
+  entryTitle: string;
+  /** 来源任务 id */
+  sourceRef: string;
+  addedAt: number;
 }
 
 /** 知识条目引用的交付物（同一份任务原件，不重复拷贝） */

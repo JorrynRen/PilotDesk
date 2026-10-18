@@ -392,6 +392,34 @@ pub fn enclave_kb_entry_remove(
     })
 }
 
+/// 修改知识库信息（名称 / 描述，owner / admin）。
+#[tauri::command]
+pub fn enclave_kb_update(
+    org_id: String,
+    kb_id: String,
+    name: String,
+    description: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::knowledge::KbView, String> {
+    state.store.with_conn(|c| {
+        authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+        crate::enclave::knowledge::update_kb(c, &org_id, &kb_id, &name, &description)
+    })
+}
+
+/// 知识库「文件」页：去重后的交付物列表（成员可读）。
+#[tauri::command]
+pub fn enclave_kb_file_list(
+    org_id: String,
+    kb_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::knowledge::KbFileListView>, String> {
+    state.store.with_conn(|c| {
+        ensure_kb_view(c, &org_id)?;
+        crate::enclave::knowledge::list_files(c, &org_id, &kb_id)
+    })
+}
+
 // ════════════════════════════════════════════════════════════
 // M4：文件资产
 // ════════════════════════════════════════════════════════════

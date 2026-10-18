@@ -12,6 +12,11 @@ import {
   AlertTriangle,
   ArrowUpRight,
   ChevronRight,
+  Files,
+  Sparkles,
+  Network,
+  FolderOpen,
+  Pencil,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar, StatusBar } from '../components/layout';
@@ -64,14 +69,24 @@ const ORIGIN_LABEL: Record<string, string> = {
   manual: '手工添加',
 };
 
+type KbTab = 'entries' | 'files' | 'ingest' | 'graph';
+
+const TABS: { key: KbTab; label: string; icon: typeof Search; enabled: boolean }[] = [
+  { key: 'entries', label: '知识', icon: Search, enabled: true },
+  { key: 'files', label: '文件', icon: Files, enabled: true },
+  { key: 'ingest', label: '投喂', icon: Sparkles, enabled: false },
+  { key: 'graph', label: '图谱', icon: Network, enabled: false },
+];
+
 /**
  * 飞地团队知识库 —— 独立路由 `/enclave/kb`。
  *
+ * 布局参照个人知识库：上部是知识库信息（owner / admin 可修改），
+ * 下部是「知识 / 文件 / 投喂 / 图谱」四个 tab。本期只实现知识与文件，
+ * 投喂与图谱留到下一阶段（tab 置灰）。
+ *
  * 数据来自主机 `enclave.db`：任务汇报「确认」后自动沉淀为条目；
  * 检索走 FTS5 trigram（≥3 字），短词退化为子串匹配。
- *
- * 展示方式与个人知识库一致：左侧选库，右侧**列表 + 展开行**（展开行即详情），
- * 不再单独占一栏详情面板；owner / admin 在展开行内直接改标题 / 正文 / 标签。
  */
 export function EnclaveKbPage() {
   const { viewMode, setMode } = useTerminal();
@@ -82,13 +97,21 @@ export function EnclaveKbPage() {
   const members = useEnclaveOrgStore((s) => s.detail?.members ?? []);
 
   const kbs = useEnclaveKbStore((s) => s.kbs);
+  const activeKbId = useEnclaveKbStore((s) => s.activeKbId);
   const entries = useEnclaveKbStore((s) => s.entries);
   const activeEntry = useEnclaveKbStore((s) => s.activeEntry);
+  const files = useEnclaveKbStore((s) => s.files);
   const query = useEnclaveKbStore((s) => s.query);
   const loading = useEnclaveKbStore((s) => s.loading);
   const error = useEnclaveKbStore((s) => s.error);
 
+  const [tab, setTab] = useState<KbTab>('entries');
   const [keyword, setKeyword] = useState('');
+  const [fileKeyword, setFileKeyword] = useState('');
+  // 知识库信息编辑（owner / admin）
+  const [editingKb, setEditingKb] = useState(false);
+  const [draftKbName, setDraftKbName] = useState('');
+  const [draftKbDesc, setDraftKbDesc] = useState('');
   // 展开行的草稿：正文 / 标签 / 标题一起保存（与个人知识库一致）
   const [draftTitle, setDraftTitle] = useState('');
   const [draftContent, setDraftContent] = useState('');
@@ -131,6 +154,11 @@ export function EnclaveKbPage() {
     setDraftTags(splitTags(activeEntry?.tags ?? ''));
   }, [activeEntry]);
 
+  // 切换组织 / 账号：退出信息编辑态
+  useEffect(() => {
+    setEditingKb(false);
+  }, [kb?.id, activeOrgId]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -150,6 +178,13 @@ export function EnclaveKbPage() {
     if (activeOrgId) void useEnclaveKbStore.getState().loadKbs(activeOrgId);
   }, [activeOrgId]);
 
+  // 「文件」tab 懒加载（条目页不需要先拉全量文件）
+  useEffect(() => {
+    if (tab === 'files' && activeOrgId && activeKbId) {
+      void useEnclaveKbStore.getState().loadFiles(activeOrgId, activeKbId);
+    }
+  }, [tab, activeOrgId, activeKbId]);
+
   const handleModeChange = useCallback(
     (mode: ViewMode) => {
       setMode(mode);
@@ -158,9 +193,9 @@ export function EnclaveKbPage() {
     [setMode, navigate],
   );
 
-  const runSearch = async () => {
+  const runSearch = async (value?: string) => {
     if (!activeOrgId) return;
-    await useEnclaveKbStore.getState().search(activeOrgId, keyword);
+    await useEnclaveKbStore.getState().search(activeOrgId, value ?? keyword);
   };
 
   const openFile = async (fileId: string) => {
@@ -171,6 +206,27 @@ export function EnclaveKbPage() {
     } catch {
       // 单个文件打不开不影响列表；错误由 store 统一提示
     }
+  };
+
+  const startEditKb = () => {
+    if (!kb) return;
+    setDraftKbName(kb.name);
+    setDraftKbDesc(kb.description);
+    setEditingKb(true);
+  };
+
+  const saveKb = async () => {
+    if (!activeOrgId || !kb) return;
+    const ok = await useEnclaveKbStore
+      .getState()
+      .updateKb(activeOrgId, kb.id, draftKbName, draftKbDesc);
+    if (ok) setEditingKb(false);
+  };
+
+  const cancelEditKb = () => {
+    setDraftKbName(kb?.name ?? '');
+    setDraftKbDesc(kb?.description ?? '');
+    setEditingKb(false);
   };
 
   const saveEntry = async () => {
@@ -221,6 +277,11 @@ export function EnclaveKbPage() {
       draftContent !== activeEntry.content ||
       joinTags(draftTags) !== joinTags(splitTags(activeEntry.tags)));
 
+  const visibleFiles = files.filter((f) => {
+    const q = fileKeyword.trim().toLowerCase();
+    return !q || f.fileName.toLowerCase().includes(q);
+  });
+
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
       <TitleBar
@@ -241,7 +302,7 @@ export function EnclaveKbPage() {
           className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
-          {/* 顶部：组织 + 搜索 */}
+          {/* 顶部：组织切换 */}
           <div
             className="shrink-0 h-9 px-3 flex items-center gap-2"
             style={{ borderBottom: '1px solid var(--border)' }}
@@ -262,78 +323,182 @@ export function EnclaveKbPage() {
               </button>
             ))}
             <div className="flex-1" />
-            <div className="relative w-[280px]">
-              <Search
-                size={12}
-                style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
-              />
-              <input
-                className="search-input w-full"
-                style={{ paddingLeft: 26, backgroundColor: 'var(--bg-field)' }}
-                placeholder="搜索标题 / 正文 / 标签 / 交付物（回车）"
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void runSearch(); }}
-              />
-              {keyword && (
-                <button
-                  onClick={() => setKeyword('')}
-                  style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
-                >
-                  <X size={12} />
-                </button>
-              )}
-            </div>
             {loading && <Loader2 size={12} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
           </div>
 
-          {/* 单一默认库：不再占一列做库列表，库信息收进内容区顶部一行 */}
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <div
-              className="shrink-0 px-4 pt-2.5 pb-2"
-              style={{ borderBottom: '1px solid var(--border)' }}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <Library size={12} style={{ color: 'var(--accent)' }} />
-                <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+          {/* 知识库信息（owner / admin 可修改） */}
+          <div
+            className="shrink-0 px-4 pt-2.5 pb-2"
+            style={{ borderBottom: '1px solid var(--border)' }}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Library size={12} style={{ color: 'var(--accent)' }} />
+              {editingKb ? (
+                <input
+                  className="search-input w-[280px] shrink-0"
+                  style={{ backgroundColor: 'var(--bg-field)' }}
+                  value={draftKbName}
+                  onChange={(e) => setDraftKbName(e.target.value)}
+                  placeholder="知识库名称"
+                  autoFocus
+                />
+              ) : (
+                <span className="text-sm font-medium truncate min-w-0" style={{ color: 'var(--text-primary)' }}>
                   {kb?.name ?? '团队知识库'}
                 </span>
-                <span
-                  className="text-[10px] shrink-0 whitespace-nowrap"
-                  style={{ color: 'var(--text-tertiary)' }}
-                >
-                  {kb?.entryCount ?? entries.length} 条知识
-                  {kb && kb.lastEntryAt > 0 && ` · 最近更新 ${formatTime(kb.lastEntryAt)}`}
-                </span>
-                <div className="flex-1" />
-                <span
-                  className="text-[10px] shrink-0 whitespace-nowrap"
-                  style={{ color: 'var(--text-tertiary)' }}
-                >
-                  任务汇报「确认完成」后自动沉淀 · 点击条目展开
-                </span>
-              </div>
-              <div
-                className="text-[11px] mt-1 truncate"
-                style={{ color: 'var(--text-secondary)' }}
-                title={kb?.description}
+              )}
+              <span
+                className="text-[10px] shrink-0 whitespace-nowrap"
+                style={{ color: 'var(--text-tertiary)' }}
               >
-                {kb?.description || '任务产出自动沉淀；团队共享'}
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto">
-              {entries.length === 0 && (
-                <div
-                  className="h-full flex flex-col items-center justify-center gap-2 text-xs"
-                  style={{ color: 'var(--text-tertiary)' }}
+                {kb?.entryCount ?? entries.length} 条知识
+                {' · '}
+                {kb?.fileCount ?? files.length} 个文件
+                {kb && kb.lastEntryAt > 0 && ` · 最近更新 ${formatTime(kb.lastEntryAt)}`}
+              </span>
+              <div className="flex-1" />
+              {canEdit && !editingKb && (
+                <button
+                  onClick={startEditKb}
+                  className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                  style={{
+                    color: 'var(--text-secondary)',
+                    backgroundColor: 'var(--bg-field)',
+                    border: '1px solid var(--border)',
+                  }}
+                  title="修改知识库名称与描述（owner / admin）"
                 >
-                  <Search size={18} />
-                  {query ? `没有匹配「${query}」的条目` : '还没有条目：任务汇报「确认完成」后会自动沉淀到这里'}
+                  <Pencil size={11} />
+                  编辑信息
+                </button>
+              )}
+              {editingKb && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => void saveKb()}
+                    className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                    style={{ backgroundColor: 'var(--accent)', color: '#fff', border: 'none' }}
+                  >
+                    <Save size={11} />
+                    保存
+                  </button>
+                  <button
+                    onClick={cancelEditKb}
+                    className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                    style={{
+                      color: 'var(--text-secondary)',
+                      backgroundColor: 'var(--bg-field)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <X size={11} />
+                    取消
+                  </button>
                 </div>
               )}
+            </div>
+            <div className="mt-1">
+              {editingKb ? (
+                <input
+                  className="search-input w-full"
+                  style={{ backgroundColor: 'var(--bg-field)' }}
+                  value={draftKbDesc}
+                  onChange={(e) => setDraftKbDesc(e.target.value)}
+                  placeholder="知识库描述"
+                />
+              ) : (
+                <div
+                  className="text-[11px] truncate"
+                  style={{ color: 'var(--text-secondary)' }}
+                  title={kb?.description}
+                >
+                  {kb?.description || '任务产出自动沉淀；团队共享'}
+                </div>
+              )}
+            </div>
+          </div>
 
-              {entries.map((e) => {
+          {/* tab：知识 / 文件 / 投喂 / 图谱 */}
+          <div className="shrink-0 px-3 flex items-center gap-1" style={{ borderBottom: '1px solid var(--border)' }}>
+            {TABS.map((t) => {
+              const active = tab === t.key;
+              const Icon = t.icon;
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => t.enabled && setTab(t.key)}
+                  disabled={!t.enabled}
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] transition-colors"
+                  style={{
+                    color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                    borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
+                    fontWeight: active ? 600 : 500,
+                    opacity: t.enabled ? 1 : 0.45,
+                    cursor: t.enabled ? 'pointer' : 'not-allowed',
+                  }}
+                  title={t.enabled ? t.label : `${t.label}（下一阶段实现）`}
+                >
+                  <Icon size={11} />
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 知识：条目列表（展开行即详情） */}
+          {tab === 'entries' && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <div
+                className="shrink-0 px-4 py-1.5 flex items-center gap-2"
+                style={{ borderBottom: '1px solid var(--border)' }}
+              >
+                <div className="relative w-[280px] shrink-0">
+                  <Search
+                    size={12}
+                    style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
+                  />
+                  <input
+                    className="search-input w-full"
+                    style={{ paddingLeft: 26, backgroundColor: 'var(--bg-field)' }}
+                    placeholder="搜索标题 / 正文 / 标签 / 交付物（回车）"
+                    value={keyword}
+                    onChange={(e) => setKeyword(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void runSearch(); }}
+                  />
+                  {keyword && (
+                    <button
+                      onClick={() => {
+                        setKeyword('');
+                        void runSearch('');
+                      }}
+                      style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
+                      title="清空搜索"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+                <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                  {entries.length} 条{query && ` · 匹配「${query}」`}
+                </span>
+                <div className="flex-1" />
+                <span className="text-[10px] shrink-0 whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
+                  汇报确认后自动沉淀 · 点击条目展开
+                </span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {entries.length === 0 && (
+                  <div
+                    className="h-full flex flex-col items-center justify-center gap-2 text-xs"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    <Search size={18} />
+                    {query ? `没有匹配「${query}」的条目` : '还没有条目：任务汇报「确认完成」后会自动沉淀到这里'}
+                  </div>
+                )}
+
+                {entries.map((e) => {
                   const open = activeEntry?.memoryId === e.memoryId;
                   const tags = splitTags(e.tags);
                   const taskTitle = metaStr(e, 'taskTitle');
@@ -633,6 +798,109 @@ export function EnclaveKbPage() {
                 })}
               </div>
             </div>
+          )}
+
+          {/* 文件：知识库全部交付物（参照个人知识库的文件页） */}
+          {tab === 'files' && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <div
+                className="shrink-0 px-4 py-1.5 flex items-center gap-2"
+                style={{ borderBottom: '1px solid var(--border)' }}
+              >
+                <div className="relative w-[280px] shrink-0">
+                  <Search
+                    size={12}
+                    style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
+                  />
+                  <input
+                    className="search-input w-full"
+                    style={{ paddingLeft: 26, backgroundColor: 'var(--bg-field)' }}
+                    placeholder="搜索文件名"
+                    value={fileKeyword}
+                    onChange={(e) => setFileKeyword(e.target.value)}
+                  />
+                  {fileKeyword && (
+                    <button
+                      onClick={() => setFileKeyword('')}
+                      style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
+                      title="清空搜索"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+                <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                  {fileKeyword.trim()
+                    ? `匹配 ${visibleFiles.length} / ${files.length} 个文件`
+                    : `共 ${files.length} 个文件`}
+                </span>
+                <div className="flex-1" />
+                <span className="text-[10px] shrink-0 whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
+                  与任务交付物是同一份原件 · 打开即查看
+                </span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {files.length === 0 && (
+                  <div
+                    className="h-full flex flex-col items-center justify-center gap-2 text-xs"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    <Files size={18} />
+                    还没有文件：任务汇报「确认完成」时上传的交付物会归档到这里
+                  </div>
+                )}
+                {files.length > 0 && visibleFiles.length === 0 && (
+                  <div
+                    className="flex flex-col items-center justify-center gap-2 py-10 text-xs"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    <Search size={18} />
+                    没有匹配「{fileKeyword.trim()}」的文件
+                  </div>
+                )}
+
+                {visibleFiles.map((f) => (
+                  <div
+                    key={f.fileId}
+                    className="px-4 py-2.5 flex items-center gap-3"
+                    style={{ borderBottom: '1px solid var(--border)' }}
+                  >
+                    <FileText size={14} className="shrink-0" style={{ color: 'var(--accent)' }} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }} title={f.fileName}>
+                        {f.fileName}
+                      </div>
+                      <div
+                        className="text-[10px] mt-0.5 truncate"
+                        style={{ color: 'var(--text-tertiary)' }}
+                        title={f.entryTitle || f.sourceRef}
+                      >
+                        {f.entryCount > 1
+                          ? `被 ${f.entryCount} 个知识条目引用`
+                          : `来源任务「${f.entryTitle || f.sourceRef}」`}
+                        {f.fileSize > 0 && ` · ${formatSize(f.fileSize)}`}
+                        {` · ${formatRelative(f.addedAt)}归档`}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => void openFile(f.fileId)}
+                      className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] shrink-0"
+                      style={{
+                        color: 'var(--text-secondary)',
+                        backgroundColor: 'var(--bg-field)',
+                        border: '1px solid var(--border)',
+                      }}
+                      title="打开文件"
+                    >
+                      <FolderOpen size={11} />
+                      打开
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="shrink-0 px-3 py-1 text-[11px]" style={{ color: 'var(--status-danger)', borderTop: '1px solid var(--border)' }}>

@@ -7,13 +7,15 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { errorMessage } from '../utils/errorMessage';
-import type { KbEntryView, KbView } from '../types/enclave';
+import type { KbEntryView, KbFileListView, KbView } from '../types/enclave';
 
 interface EnclaveKbState {
   kbs: KbView[];
   activeKbId: string;
   entries: KbEntryView[];
   activeEntry: KbEntryView | null;
+  /** 「文件」页：去重后的交付物 */
+  files: KbFileListView[];
   query: string;
   loading: boolean;
   error: string | null;
@@ -22,7 +24,10 @@ interface EnclaveKbState {
   loadKbs: (orgId: string) => Promise<void>;
   selectKb: (orgId: string, kbId: string) => Promise<void>;
   search: (orgId: string, query: string) => Promise<void>;
+  loadFiles: (orgId: string, kbId: string) => Promise<void>;
   openEntry: (entry: KbEntryView | null) => void;
+  /** 人工维护知识库信息（owner / admin） */
+  updateKb: (orgId: string, kbId: string, name: string, description: string) => Promise<boolean>;
   /** 人工编辑条目（owner / admin） */
   updateEntry: (
     orgId: string,
@@ -39,6 +44,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   activeKbId: '',
   entries: [],
   activeEntry: null,
+  files: [],
   query: '',
   loading: false,
   error: null,
@@ -49,6 +55,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       activeKbId: '',
       entries: [],
       activeEntry: null,
+      files: [],
       query: '',
       loading: false,
       error: null,
@@ -70,7 +77,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   },
 
   selectKb: async (orgId, kbId) => {
-    set({ activeKbId: kbId, activeEntry: null });
+    set({ activeKbId: kbId, activeEntry: null, files: [] });
     await get().search(orgId, get().query);
   },
 
@@ -98,7 +105,32 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
     }
   },
 
+  loadFiles: async (orgId, kbId) => {
+    set({ loading: true, error: null });
+    try {
+      const files = await invoke<KbFileListView[]>('enclave_kb_file_list', { orgId, kbId });
+      set({ files, loading: false });
+    } catch (e) {
+      set({ error: errorMessage(e), loading: false });
+    }
+  },
+
   openEntry: (entry) => set({ activeEntry: entry }),
+
+  updateKb: async (orgId, kbId, name, description) => {
+    set({ loading: true, error: null });
+    try {
+      const next = await invoke<KbView>('enclave_kb_update', { orgId, kbId, name, description });
+      set((s) => ({
+        kbs: s.kbs.map((k) => (k.id === kbId ? next : k)),
+        loading: false,
+      }));
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e), loading: false });
+      return false;
+    }
+  },
 
   updateEntry: async (orgId, kbId, memoryId, input) => {
     set({ loading: true, error: null });

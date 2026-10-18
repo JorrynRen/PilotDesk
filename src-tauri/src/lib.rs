@@ -2820,6 +2820,8 @@ pub fn run() {
             commands::enclave_task::enclave_kb_entry_get,
             commands::enclave_task::enclave_kb_entry_update,
             commands::enclave_task::enclave_kb_entry_remove,
+            commands::enclave_task::enclave_kb_update,
+            commands::enclave_task::enclave_kb_file_list,
             commands::enclave_task::enclave_task_sediment_retry,
         ])
         .setup(move |app| {

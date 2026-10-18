@@ -27,6 +27,8 @@ pub struct KbView {
     pub description: String,
     pub is_implicit: bool,
     pub entry_count: i64,
+    /// 库内交付物文件数（按 file_id 去重）
+    pub file_count: i64,
     /// 库内最近一次条目更新（无条目时为 0）
     pub last_entry_at: i64,
     pub created_at: i64,
@@ -102,14 +104,7 @@ pub fn ensure_org_kb(conn: &Connection, org_id: &str, actor: &str) -> Result<Str
         params![id, name, org_id, actor, now],
     )
     .map_err(|e| format!("创建组织知识库失败：{}", e))?;
-    // 组织改名后让知识库名称跟随（快照缺失时保留原名，避免退化成「组织 {id}」）
-    if snapshot_org_name(conn, org_id).is_some() {
-        conn.execute(
-            "UPDATE knowledge_bases SET name = ?2, updated_at = ?3 WHERE id = ?1 AND name <> ?2",
-            params![id, name, now],
-        )
-        .map_err(|e| format!("同步组织知识库名称失败：{}", e))?;
-    }
+    // 名称只在首次创建时取组织名；之后允许 owner / admin 人工修改，不再被组织名覆盖
     Ok(id)
 }
 
@@ -121,7 +116,11 @@ pub fn list_kbs(conn: &Connection, org_id: &str) -> Result<Vec<KbView>, String> 
             "SELECT kb.id, kb.name, kb.description, kb.is_implicit, kb.created_at, kb.updated_at,
                     (SELECT COUNT(*) FROM knowledge_base_memories m WHERE m.knowledge_base_id = kb.id),
                     (SELECT COALESCE(MAX(COALESCE(NULLIF(m.updated_at, 0), m.added_at)), 0)
-                     FROM knowledge_base_memories m WHERE m.knowledge_base_id = kb.id)
+                     FROM knowledge_base_memories m WHERE m.knowledge_base_id = kb.id),
+                    (SELECT COUNT(DISTINCT f.file_id)
+                     FROM knowledge_base_files f
+                     JOIN file_assets fa ON fa.id = f.file_id
+                     WHERE f.knowledge_base_id = kb.id)
              FROM knowledge_bases kb
              WHERE kb.owner_type = 'org' AND kb.owner_id = ?1
              ORDER BY kb.is_implicit DESC, kb.created_at ASC",
@@ -138,11 +137,97 @@ pub fn list_kbs(conn: &Connection, org_id: &str) -> Result<Vec<KbView>, String> 
                 updated_at: r.get(5)?,
                 entry_count: r.get(6)?,
                 last_entry_at: r.get(7)?,
+                file_count: r.get(8)?,
             })
         })
         .map_err(|e| format!("查询组织知识库失败：{}", e))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("读取组织知识库失败：{}", e))
+}
+
+/// 人工维护知识库信息（仅 owner / admin，授权在命令层）：名称 + 描述。
+pub fn update_kb(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    name: &str,
+    description: &str,
+) -> Result<KbView, String> {
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("知识库名称不能为空".to_string());
+    }
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "UPDATE knowledge_bases SET name = ?3, description = ?4, updated_at = ?5
+         WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
+        params![kb_id, org_id, name, description.trim(), now],
+    )
+    .map_err(|e| format!("保存知识库信息失败：{}", e))?;
+    list_kbs(conn, org_id)?
+        .into_iter()
+        .find(|k| k.id == kb_id)
+        .ok_or_else(|| "知识库不存在或不属于该组织".to_string())
+}
+
+/// 文件视图（团队知识库「文件」页）：去重后的交付物 + 归属条目信息。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KbFileListView {
+    pub file_id: String,
+    pub file_name: String,
+    pub file_type: String,
+    pub file_size: i64,
+    pub file_hash: String,
+    /// 该文件被多少个知识条目引用
+    pub entry_count: i64,
+    pub entry_title: String,
+    pub source_ref: String,
+    pub added_at: i64,
+}
+
+/// 团队知识库的全部交付物（按 file_id 去重）。
+pub fn list_files(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+) -> Result<Vec<KbFileListView>, String> {
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash,
+                    COUNT(*) AS entry_count,
+                    MIN(COALESCE(m.title, '')),
+                    MIN(COALESCE(m.source_ref, '')),
+                    MAX(kbf.added_at)
+             FROM knowledge_base_files kbf
+             JOIN file_assets fa ON fa.id = kbf.file_id
+             LEFT JOIN knowledge_base_memories m
+               ON m.knowledge_base_id = kbf.knowledge_base_id
+              AND m.memory_id = kbf.memory_id
+             WHERE kbf.knowledge_base_id = ?1
+             GROUP BY fa.id
+             ORDER BY MAX(kbf.added_at) DESC, fa.file_name",
+        )
+        .map_err(|e| format!("查询知识库文件失败：{}", e))?;
+    let rows = stmt
+        .query_map(params![kb_id], |r| {
+            Ok(KbFileListView {
+                file_id: r.get(0)?,
+                file_name: r.get(1)?,
+                file_type: r.get(2)?,
+                file_size: r.get(3)?,
+                file_hash: r.get(4)?,
+                entry_count: r.get(5)?,
+                entry_title: r.get(6)?,
+                source_ref: r.get(7)?,
+                added_at: r.get(8)?,
+            })
+        })
+        .map_err(|e| format!("查询知识库文件失败：{}", e))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取知识库文件失败：{}", e))
 }
 
 fn map_entry(r: &rusqlite::Row<'_>) -> rusqlite::Result<KbEntryView> {
