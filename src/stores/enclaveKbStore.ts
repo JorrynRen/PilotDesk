@@ -84,7 +84,15 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
         query,
         limit: 100,
       });
-      set({ entries, loading: false, error: null });
+      set((s) => ({
+        entries,
+        // 展开行跟随最新数据（检索 / 刷新后不能继续展示旧对象）
+        activeEntry: s.activeEntry
+          ? entries.find((e) => e.memoryId === s.activeEntry?.memoryId) ?? null
+          : null,
+        loading: false,
+        error: null,
+      }));
     } catch (e) {
       set({ error: errorMessage(e), loading: false });
     }
