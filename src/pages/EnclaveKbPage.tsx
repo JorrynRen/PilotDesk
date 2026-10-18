@@ -331,49 +331,39 @@ export function EnclaveKbPage() {
             className="shrink-0 px-4 pt-2.5 pb-2"
             style={{ borderBottom: '1px solid var(--border)' }}
           >
-            <div className="flex items-center gap-2 min-w-0">
-              <Library size={12} style={{ color: 'var(--accent)' }} />
-              {editingKb ? (
-                <input
-                  className="search-input w-[280px] shrink-0"
-                  style={{ backgroundColor: 'var(--bg-field)' }}
-                  value={draftKbName}
-                  onChange={(e) => setDraftKbName(e.target.value)}
-                  placeholder="知识库名称"
-                  autoFocus
-                />
-              ) : (
-                <span className="text-sm font-medium truncate min-w-0" style={{ color: 'var(--text-primary)' }}>
-                  {kb?.name ?? '团队知识库'}
-                </span>
-              )}
-              <span
-                className="text-[10px] shrink-0 whitespace-nowrap"
-                style={{ color: 'var(--text-tertiary)' }}
-              >
-                {kb?.entryCount ?? entries.length} 条知识
-                {' · '}
-                {kb?.fileCount ?? files.length} 个文件
-                {kb && kb.lastEntryAt > 0 && ` · 最近更新 ${formatTime(kb.lastEntryAt)}`}
-              </span>
-              <div className="flex-1" />
-              {canEdit && !editingKb && (
-                <button
-                  onClick={startEditKb}
-                  className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
-                  style={{
-                    color: 'var(--text-secondary)',
-                    backgroundColor: 'var(--bg-field)',
-                    border: '1px solid var(--border)',
-                  }}
-                  title="修改知识库名称与描述（owner / admin）"
-                >
-                  <Pencil size={11} />
-                  编辑信息
-                </button>
-              )}
-              {editingKb && (
-                <div className="flex items-center gap-1 shrink-0">
+            {editingKb ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-14 shrink-0 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                    名称
+                  </span>
+                  <input
+                    className="search-input flex-1"
+                    style={{ backgroundColor: 'var(--bg-field)' }}
+                    value={draftKbName}
+                    onChange={(e) => setDraftKbName(e.target.value)}
+                    placeholder="知识库名称"
+                    autoFocus
+                  />
+                </div>
+                <div className="flex items-start gap-2">
+                  <span
+                    className="w-14 shrink-0 text-[11px] leading-6"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    描述
+                  </span>
+                  <textarea
+                    className="search-input flex-1 resize-y"
+                    style={{ backgroundColor: 'var(--bg-field)', minHeight: 56, lineHeight: 1.8 }}
+                    rows={2}
+                    value={draftKbDesc}
+                    onChange={(e) => setDraftKbDesc(e.target.value)}
+                    placeholder="知识库描述（用途、收录范围等）"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-14 shrink-0" />
                   <button
                     onClick={() => void saveKb()}
                     className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
@@ -395,27 +385,49 @@ export function EnclaveKbPage() {
                     取消
                   </button>
                 </div>
-              )}
-            </div>
-            <div className="mt-1">
-              {editingKb ? (
-                <input
-                  className="search-input w-full"
-                  style={{ backgroundColor: 'var(--bg-field)' }}
-                  value={draftKbDesc}
-                  onChange={(e) => setDraftKbDesc(e.target.value)}
-                  placeholder="知识库描述"
-                />
-              ) : (
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 min-w-0">
+                  <Library size={12} style={{ color: 'var(--accent)' }} />
+                  <span className="text-sm font-medium truncate min-w-0" style={{ color: 'var(--text-primary)' }}>
+                    {kb?.name ?? '团队知识库'}
+                  </span>
+                  <span
+                    className="text-[10px] shrink-0 whitespace-nowrap"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    {kb?.entryCount ?? entries.length} 条知识
+                    {' · '}
+                    {kb?.fileCount ?? files.length} 个文件
+                    {kb && kb.lastEntryAt > 0 && ` · 最近更新 ${formatTime(kb.lastEntryAt)}`}
+                  </span>
+                  <div className="flex-1" />
+                  {canEdit && (
+                    <button
+                      onClick={startEditKb}
+                      className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                      style={{
+                        color: 'var(--text-secondary)',
+                        backgroundColor: 'var(--bg-field)',
+                        border: '1px solid var(--border)',
+                      }}
+                      title="修改知识库名称与描述（owner / admin）"
+                    >
+                      <Pencil size={11} />
+                      编辑信息
+                    </button>
+                  )}
+                </div>
                 <div
-                  className="text-[11px] truncate"
+                  className="text-[11px] mt-1 truncate"
                   style={{ color: 'var(--text-secondary)' }}
                   title={kb?.description}
                 >
                   {kb?.description || '任务产出自动沉淀；团队共享'}
                 </div>
-              )}
-            </div>
+              </>
+            )}
           </div>
 
           {/* tab：知识 / 文件 / 投喂 / 图谱 */}
