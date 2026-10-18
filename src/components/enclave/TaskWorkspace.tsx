@@ -921,8 +921,15 @@ function TaskDetail(props: {
   return (
     <div className="p-4 flex flex-col gap-4">
       {/* 任务信息区：标题行作为 fieldset 标题 */}
-      <fieldset className="m-0 min-w-0 p-0 flex flex-col gap-3" style={{ border: 'none' }}>
-        <legend className="w-full p-0 m-0">
+      <fieldset
+        className="m-0 min-w-0 p-0"
+        style={{
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '0 12px 12px',
+        }}
+      >
+        <legend className="px-1.5 m-0">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
           {task.title}
@@ -949,6 +956,7 @@ function TaskDetail(props: {
         )}
       </div>
         </legend>
+        <div className="flex flex-col gap-3">
 
       {/* 生命周期时间线：当前节点与全流程里程碑一眼可见 */}
       <div
@@ -1351,17 +1359,23 @@ function TaskDetail(props: {
           ))}
         </div>
       )}
+        </div>
       </fieldset>
 
       {/* 任务提交区：过程记录 + 完成汇报（汇总容器不渲染） */}
       {!isContainer && (
       <fieldset
-        className="m-0 min-w-0 p-0 pt-3 flex flex-col gap-3"
-        style={{ border: 'none', borderTop: '1px solid var(--border)' }}
+        className="m-0 min-w-0 p-0"
+        style={{
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '0 12px 12px',
+        }}
       >
-        <legend className="px-0 m-0 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+        <legend className="px-1.5 m-0 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
           提交任务
         </legend>
+        <div className="flex flex-col gap-3">
       <div
         className="flex flex-col gap-2 rounded-lg p-3"
         style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
@@ -1806,6 +1820,7 @@ function TaskDetail(props: {
           </div>
         )}
       </div>
+        </div>
       </fieldset>
       )}
     </div>
