@@ -804,33 +804,27 @@ pub fn create_task(
         if parent_row.parent_task_id.is_some() {
             return Err("只支持一层父子结构：父任务本身不能是子任务".to_string());
         }
-        if is_closed_status(&parent_row.status) {
+        // 归档 / 作废是终态；「已完成」允许拆分：父任务会转为汇总容器并重新进入进行中，
+        // 已有过程记录与完成汇报保留为只读历史。
+        if matches!(
+            parent_row.status.as_str(),
+            STATUS_ARCHIVED | STATUS_CANCELLED
+        ) {
             return Err(format!(
                 "父任务已{}，不能再添加子任务",
                 status_label(&parent_row.status)
             ));
         }
-        // 一旦父任务已经产出（汇报 / 过程记录），再挂子任务会让两套语义打架
-        let reports: i64 = conn
+        // 待确认的汇报正处于审核中：先确认或退回，避免拆分后汇报被永久挂起
+        let submitted: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM task_reports WHERE task_id = ?1",
+                "SELECT COUNT(*) FROM task_reports WHERE task_id = ?1 AND status = 'submitted'",
                 params![parent],
                 |r| r.get(0),
             )
             .map_err(|e| format!("查询父任务汇报失败：{}", e))?;
-        if reports > 0 {
-            return Err("父任务已有完成汇报，不能再拆分为汇总任务".to_string());
-        }
-        let progress: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM task_comments
-                 WHERE task_id = ?1 AND content_type = 'progress' AND deleted_at IS NULL",
-                params![parent],
-                |r| r.get(0),
-            )
-            .map_err(|e| format!("查询父任务过程记录失败：{}", e))?;
-        if progress > 0 {
-            return Err("父任务已有过程记录，不能再拆分为汇总任务".to_string());
+        if submitted > 0 {
+            return Err("父任务有待确认的完成汇报，请先确认或退回后再添加子任务".to_string());
         }
     }
     let deps = input.blocked_by.clone().unwrap_or_default();

@@ -199,6 +199,17 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
       setLocalError('请填写任务标题');
       return;
     }
+    const parent = newParentId ? tasks.find((t) => t.id === newParentId) : null;
+    if (parent?.status === 'done') {
+      const ok = await confirmDialog({
+        title: '拆分为汇总任务',
+        message:
+          `父任务「${parent.title}」已完成。添加子任务后它会转为汇总任务并重新进入进行中；`
+          + '已有的过程记录与完成汇报会保留为只读历史。\n\n是否继续？',
+        confirmText: '继续创建',
+      });
+      if (!ok) return;
+    }
     setCreating(true);
     setLocalError(null);
     const created = await useEnclaveTaskStore.getState().createTask(activeOrgId, {
@@ -404,10 +415,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
                 { value: '', label: '（顶层任务）' },
                 ...roots
                   .filter(
-                    (t) =>
-                      t.status !== 'done'
-                      && t.status !== 'archived'
-                      && t.status !== 'cancelled',
+                    (t) => t.status !== 'archived' && t.status !== 'cancelled',
                   )
                   .map((t) => ({ value: t.id, label: t.title })),
               ]}
@@ -709,8 +717,11 @@ function TaskDetail(props: {
   const reports = useEnclaveTaskStore((s) => s.reports);
   const files = useEnclaveTaskStore((s) => s.files);
   const progress = useEnclaveTaskStore((s) => s.progress);
-  /** 只有「进行中」才能写过程记录 / 完成汇报：未开始时先走「开始」 */
-  const canWriteProgress = canReport && task.status === 'in_progress' && !blocked && !progress?.locked;
+  /** 只有「进行中」才能写过程记录 / 完成汇报：未开始时先走「开始」；容器只读历史 */
+  const canWriteProgress =
+    canReport && !isContainer && task.status === 'in_progress' && !blocked && !progress?.locked;
+  /** 拆分转换后的容器：有历史执行记录就保留只读展示 */
+  const hasExecutionHistory = (progress?.items.length ?? 0) > 0 || reports.length > 0;
   /** 任务资料：不挂汇报、不挂过程记录的独立附件 */
   const taskFiles = files.filter((f) => !f.reportId && !f.progressId);
   const [progressText, setProgressText] = useState('');
@@ -721,6 +732,8 @@ function TaskDetail(props: {
   // 当前草稿（唯一可编辑）；已退回/已提交/已确认都只作为提交日志展示
   const editable = useMemo(() => reports.find((r) => r.status === 'draft') ?? null, [reports]);
   const logs = useMemo(() => reports.filter((r) => r.status !== 'draft'), [reports]);
+  /** 拆分转换后的容器：汇报区只读展示全部历史（含拆分前尚未提交的草稿） */
+  const historyReports = isContainer ? reports : logs;
   const [reportText, setReportText] = useState('');
   // 等待审核或已确认时不允许再编辑 / 提交
   const lockedReport = reports.find((r) => r.status === 'submitted' || r.status === 'confirmed') ?? null;
@@ -730,10 +743,11 @@ function TaskDetail(props: {
     const created = { key: 'created', label: '创建', at: task.createdAt };
     if (isContainer) {
       const children = tasks.filter((t) => t.parentTaskId === task.id);
-      const startedAt = children.reduce<number | null>(
-        (min, c) => (c.startedAt !== null && (min === null || c.startedAt < min) ? c.startedAt : min),
-        null,
+      // 拆分前执行过的容器：把父任务自己的开始时间也算进去
+      const startedCandidates = [task.startedAt, ...children.map((c) => c.startedAt)].filter(
+        (v): v is number => v !== null,
       );
+      const startedAt = startedCandidates.length > 0 ? Math.min(...startedCandidates) : null;
       if (task.status === 'cancelled') {
         return [
           created,
@@ -1317,7 +1331,9 @@ function TaskDetail(props: {
             汇总任务
           </span>
           <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            状态由 {task.childCount} 个子任务派生；自身不执行、不单独沉淀知识库
+            {hasExecutionHistory
+              ? `状态由 ${task.childCount} 个子任务派生；拆分前的执行记录已保留为只读历史`
+              : `状态由 ${task.childCount} 个子任务派生；自身不执行、不单独沉淀知识库`}
           </span>
           <div className="flex-1" />
           {task.status === 'submitted' && canStatus && (
@@ -1364,8 +1380,8 @@ function TaskDetail(props: {
         </div>
       </fieldset>
 
-      {/* 任务提交区：过程记录 + 完成汇报（汇总容器不渲染） */}
-      {!isContainer && (
+      {/* 提交任务区：普通任务可写；拆分后的容器只读展示历史记录 */}
+      {(!isContainer || hasExecutionHistory) && (
       <fieldset
         className="m-0 min-w-0 p-0"
         style={{
@@ -1375,9 +1391,10 @@ function TaskDetail(props: {
         }}
       >
         <legend className="px-1.5 m-0 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-          提交任务
+          {isContainer ? '历史执行记录' : '提交任务'}
         </legend>
         <div className="flex flex-col gap-3">
+      {(!isContainer || (progress?.items.length ?? 0) > 0) && (
       <div
         className="flex flex-col gap-2 rounded-lg p-3"
         style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
@@ -1533,8 +1550,10 @@ function TaskDetail(props: {
           </div>
         )}
       </div>
+      )}
 
-      {/* 完成汇报（汇总容器不单独汇报，直接不渲染） */}
+      {/* 完成汇报（普通任务可写；容器只读展示历史） */}
+      {(!isContainer || reports.length > 0) && (
       <div
         className="flex flex-col gap-2 rounded-lg p-3"
         style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
@@ -1545,26 +1564,26 @@ function TaskDetail(props: {
             完成汇报
           </span>
         </div>
-        {lockedReport && (
+        {!isContainer && lockedReport && (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {lockedReport.status === 'submitted'
               ? '完成汇报已提交，等待创建者 / 负责人确认（不可重复提交）'
               : '完成汇报已确认，任务已收敛'}
           </div>
         )}
-        {blocked && (
+        {!isContainer && blocked && (
           <div className="text-[11px]" style={{ color: 'var(--status-danger)' }}>
             存在未完成的前置任务，暂不能开始 / 提交
           </div>
         )}
-        {canReport && task.status === 'pending' && (
+        {!isContainer && canReport && task.status === 'pending' && (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {canStartNow
               ? '任务尚未开始：点上方「开始」后才能填写完成汇报。'
               : '任务尚未开始，开始后才能填写完成汇报。'}
           </div>
         )}
-        {canReport && task.status === 'in_progress' && !lockedReport && !blocked && (editable || logs.length === 0) && (
+        {!isContainer && canReport && task.status === 'in_progress' && !lockedReport && !blocked && (editable || logs.length === 0) && (
           <>
             {latestReturnReason && (
               <div
@@ -1669,15 +1688,15 @@ function TaskDetail(props: {
         )}
 
         {/* 汇报提交日志：只读留痕（含每次退回原因），与上方编辑区分离 */}
-        {logs.length > 0 && (
+        {historyReports.length > 0 && (
           <div className="flex flex-col gap-2" style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
             <div className="flex items-center gap-2">
               <History size={11} style={{ color: 'var(--accent)' }} />
               <span className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
-                汇报记录（{logs.length}）
+                汇报记录（{historyReports.length}）
               </span>
             </div>
-            {logs.map((r) => (
+            {historyReports.map((r) => (
               <div
                 key={r.id}
                 className="rounded px-2 py-1.5 flex flex-col gap-1"
@@ -1685,13 +1704,19 @@ function TaskDetail(props: {
               >
                 <div className="flex items-center gap-2 text-[11px]">
                   <span style={{ color: STATUS_COLOR[r.status === 'confirmed' ? 'done' : r.status === 'returned' ? 'pending' : r.status === 'submitted' ? 'submitted' : 'pending'] }}>
-                    {r.status === 'submitted' ? '已提交' : r.status === 'confirmed' ? '已确认' : '已退回'}
+                    {r.status === 'submitted'
+                      ? '已提交'
+                      : r.status === 'confirmed'
+                        ? '已确认'
+                        : r.status === 'returned'
+                          ? '已退回'
+                          : '草稿（未提交）'}
                   </span>
                   <span style={{ color: 'var(--text-tertiary)' }}>
                     {memberLabel(r.reporterId)} · {formatDateTime(r.updatedAt)}
                   </span>
                   <div className="flex-1" />
-                  {r.status === 'returned' && canReport && !lockedReport && task.status === 'in_progress' && (
+                  {r.status === 'returned' && !isContainer && canReport && !lockedReport && task.status === 'in_progress' && (
                     <button
                       onClick={() => void useEnclaveTaskStore.getState().reviseReport(orgId, task.id, r.id)}
                       className="px-1.5 py-0.5 rounded"
@@ -1700,7 +1725,7 @@ function TaskDetail(props: {
                       继续修改
                     </button>
                   )}
-                  {r.status === 'submitted' && canStatus && (
+                  {r.status === 'submitted' && !isContainer && canStatus && (
                     <>
                       <button
                         onClick={() => void useEnclaveTaskStore.getState().confirmReport(orgId, task.id, r.id)}
@@ -1826,6 +1851,7 @@ function TaskDetail(props: {
           </div>
         )}
       </div>
+      )}
         </div>
       </fieldset>
       )}
