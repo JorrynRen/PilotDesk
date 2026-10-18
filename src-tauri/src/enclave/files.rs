@@ -314,6 +314,11 @@ fn attach_file_inner(
     if !crate::enclave::tasks::is_participant(role) {
         return Err("只有任务创建者、负责人或参与者可以上传附件".to_string());
     }
+    if crate::enclave::tasks::is_closed_status(&crate::enclave::tasks::task_status(
+        conn, org_id, task_id,
+    )?) {
+        return Err("任务已完成、归档或作废，不能再调整附件".to_string());
+    }
     if progress_id.is_some() && !allow_progress {
         return Err("过程记录提交后不可再补充附件，请在新建记录时一并提交".to_string());
     }
@@ -520,6 +525,11 @@ pub fn detach_file(
     progress_id: Option<&str>,
 ) -> Result<(), String> {
     let role = crate::enclave::tasks::actor_task_role(conn, org_id, task_id, actor)?;
+    if crate::enclave::tasks::is_closed_status(&crate::enclave::tasks::task_status(
+        conn, org_id, task_id,
+    )?) {
+        return Err("任务已完成、归档或作废，不能再调整附件".to_string());
+    }
 
     if progress_id.is_some() {
         return Err("过程记录附件不可删除（过程留痕不可变）".to_string());

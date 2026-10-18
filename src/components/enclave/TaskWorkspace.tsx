@@ -104,6 +104,8 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
   const [newDue, setNewDue] = useState('');
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  /** 归档任务默认从任务树隐藏；打开后可见（只读） */
+  const [showArchived, setShowArchived] = useState(false);
 
   // 本机团队文件根目录：**全局设置**，与具体组织无关
   const [rootOpen, setRootOpen] = useState(false);
@@ -145,9 +147,30 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
     return m?.displayName || m?.email || id;
   };
 
-  const roots = useMemo(() => tasks.filter((t) => !t.parentTaskId), [tasks]);
-  const childrenOf = (id: string) => tasks.filter((t) => t.parentTaskId === id);
+  /** 归档 = 已完成任务收纳：默认不在任务树显示，可在上方开关中查看（只读） */
+  const visibleTasks = useMemo(
+    () => (showArchived ? tasks : tasks.filter((t) => t.status !== 'archived')),
+    [tasks, showArchived],
+  );
+  const roots = useMemo(() => visibleTasks.filter((t) => !t.parentTaskId), [visibleTasks]);
+  const childrenOf = (id: string) => visibleTasks.filter((t) => t.parentTaskId === id);
   const task = tasks.find((t) => t.id === activeTaskId) ?? null;
+
+  const toggleArchived = () => {
+    const next = !showArchived;
+    setShowArchived(next);
+    if (!next) {
+      const active = tasks.find((t) => t.id === activeTaskId);
+      if (active?.status === 'archived') useEnclaveTaskStore.getState().selectTask(null);
+    }
+  };
+
+  // 归档后若开关关闭，详情自动让位（避免树里看不到、右侧还开着）
+  useEffect(() => {
+    if (!showArchived && task?.status === 'archived') {
+      useEnclaveTaskStore.getState().selectTask(null);
+    }
+  }, [showArchived, task?.id, task?.status]);
 
   const submitCreate = async () => {
     if (!activeOrgId) return;
@@ -250,6 +273,18 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
             组织与权限
           </button>
         )}
+        <button
+          onClick={toggleArchived}
+          className="text-xs px-2 py-1 rounded"
+          style={{
+            backgroundColor: showArchived ? 'var(--bg-tertiary)' : 'transparent',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border)',
+          }}
+          title="归档任务默认从任务树隐藏；打开后可查看（只读）"
+        >
+          {showArchived ? '隐藏已归档' : '显示已归档'}
+        </button>
         <button
           onClick={() => setNewOpen((v) => !v)}
           disabled={!activeOrgId}
@@ -508,12 +543,14 @@ function TaskDetail(props: {
   const isAssignee = !!me && me === task.assigneeId;
   const isCollaborator = !!me && task.collaborators.includes(me);
   const isParticipant = isCreator || isAssignee || isCollaborator;
+  /** 已完成 / 已归档 / 已作废：内容只读（状态操作仍可归档、恢复汇报） */
+  const isClosed = task.status === 'done' || task.status === 'archived' || task.status === 'cancelled';
   // 身份未校验（刷新失败 / 账号刚切换）时一律不出现写入口，避免旧身份越权
-  const canEdit = identityVerified && (isCreator || isAssignee);
+  const canEdit = identityVerified && (isCreator || isAssignee) && !isClosed;
   const canStatus = identityVerified && (isCreator || isAssignee);
-  const canAssign = identityVerified && isCreator;
+  const canAssign = identityVerified && isCreator && !isClosed;
   const canReport = identityVerified && isParticipant;
-  const canUpload = identityVerified && isParticipant;
+  const canUpload = identityVerified && isParticipant && !isClosed;
   const blocked = task.blocked;
   const taskError = useEnclaveTaskStore((s) => s.error);
   const [desc, setDesc] = useState(task.description);
@@ -564,6 +601,14 @@ function TaskDetail(props: {
   useEffect(() => {
     void useEnclaveTaskStore.getState().loadExtras(orgId, task.id);
   }, [orgId, task.id]);
+
+  // 任务收敛（完成 / 归档 / 作废）后，收起可能仍打开的编辑态
+  useEffect(() => {
+    if (isClosed) {
+      setEditingProps(false);
+      setEditingDesc(false);
+    }
+  }, [isClosed]);
 
   // 草稿到达后填入编辑器（仅首次，避免覆盖用户正在输入的内容）
   const [seededReportId, setSeededReportId] = useState<string | null>(null);
@@ -1007,6 +1052,13 @@ function TaskDetail(props: {
               key={t.to}
               onClick={() => void change(t.to)}
               className="text-xs px-2 py-1 rounded"
+              title={
+                t.to === 'archived'
+                  ? '归档：从任务树隐藏并保持只读，可在「显示已归档」中查看'
+                  : t.to === 'in_progress' && (task.status === 'done' || task.status === 'archived')
+                    ? '恢复汇报：重新进入进行中，可补充正文 / 交付物后重新提交'
+                    : undefined
+              }
               style={{
                 backgroundColor: 'var(--bg-tertiary)',
                 color: 'var(--text-secondary)',

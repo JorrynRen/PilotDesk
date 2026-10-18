@@ -102,19 +102,18 @@ pub fn can_transition(from: &str, to: &str, role: TaskRole) -> Result<(), String
     let creator = role == TaskRole::Creator;
     let ok = match (from, to) {
         (STATUS_PENDING, STATUS_IN_PROGRESS) => owner,
-        (STATUS_PENDING, STATUS_ARCHIVED) => creator,
         (STATUS_IN_PROGRESS, STATUS_PENDING) => owner,
         // 作废：进行中放弃执行（创建者 / 负责人）
         (STATUS_IN_PROGRESS, STATUS_CANCELLED) => owner,
         // 提交汇报（M4 联动 task_reports 四态）：参与者（含协作者）都可提交
         (STATUS_IN_PROGRESS, STATUS_SUBMITTED) => participant,
-        (STATUS_IN_PROGRESS, STATUS_ARCHIVED) => creator,
         // 确认 / 退回
         (STATUS_SUBMITTED, STATUS_DONE) => owner,
         (STATUS_SUBMITTED, STATUS_IN_PROGRESS) => owner,
         // 恢复汇报：已完成 / 已归档 → 进行中（补报后再提交；需要时再「放回待办」）
         (STATUS_DONE, STATUS_IN_PROGRESS) => owner,
         (STATUS_ARCHIVED, STATUS_IN_PROGRESS) => owner,
+        // 归档只从「已完成」进入：收纳已收敛任务（列表默认隐藏、只读）
         (STATUS_DONE, STATUS_ARCHIVED) => creator,
         _ => false,
     };
@@ -139,6 +138,11 @@ pub fn status_label(s: &str) -> &'static str {
         STATUS_CANCELLED => "已作废",
         _ => "未知",
     }
+}
+
+/// 已完成 / 已归档 / 已作废：任务收敛，内容只读。
+pub fn is_closed_status(s: &str) -> bool {
+    s == STATUS_DONE || s == STATUS_ARCHIVED || s == STATUS_CANCELLED
 }
 
 // ── 视图结构 ────────────────────────────────────────────────────
@@ -611,6 +615,9 @@ pub fn update_task(
     input: &UpdateTaskInput,
 ) -> Result<TaskView, String> {
     let row = load_task(conn, org_id, task_id)?;
+    if is_closed_status(&row.status) {
+        return Err(format!("任务已{}，不能再修改", status_label(&row.status)));
+    }
     let org_role = require_org_role(conn, org_id)?;
     let role = resolve_task_role(
         org_role,
@@ -767,6 +774,9 @@ pub fn set_deps(
     deps: &[String],
 ) -> Result<TaskView, String> {
     let row = load_task(conn, org_id, task_id)?;
+    if is_closed_status(&row.status) {
+        return Err(format!("任务已{}，不能再修改依赖", status_label(&row.status)));
+    }
     let org_role = require_org_role(conn, org_id)?;
     let role = resolve_task_role(
         org_role,
@@ -802,6 +812,9 @@ pub fn set_collaborators(
     collaborators: &[String],
 ) -> Result<TaskView, String> {
     let row = load_task(conn, org_id, task_id)?;
+    if is_closed_status(&row.status) {
+        return Err(format!("任务已{}，不能再调整参与者", status_label(&row.status)));
+    }
     let org_role = require_org_role(conn, org_id)?;
     let role = resolve_task_role(
         org_role,
