@@ -599,6 +599,17 @@
   outline-offset: 1px;
 }
 
+/* 附件行：悬停高亮，避免在相邻行之间点错「打开」 */
+.attachment-row {
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  margin: 0 -4px;
+  transition: background-color 120ms ease;
+}
+.attachment-row:hover {
+  background-color: var(--bg-field);
+}
+
 /* ═══════════════════════════════════════════════════
    Global Button Reset
    ═══════════════════════════════════════════════════

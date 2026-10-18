@@ -104,8 +104,8 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
   const [newDue, setNewDue] = useState('');
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
-  /** 归档任务默认从任务树隐藏；打开后可见（只读） */
-  const [showArchived, setShowArchived] = useState(false);
+  /** 任务列表筛选：默认「活跃」= 不含已归档；也可按单一状态筛选 */
+  const [statusFilter, setStatusFilter] = useState<'active' | 'all' | TaskStatus>('active');
 
   // 本机团队文件根目录：**全局设置**，与具体组织无关
   const [rootOpen, setRootOpen] = useState(false);
@@ -147,30 +147,28 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
     return m?.displayName || m?.email || id;
   };
 
-  /** 归档 = 已完成任务收纳：默认不在任务树显示，可在上方开关中查看（只读） */
-  const visibleTasks = useMemo(
-    () => (showArchived ? tasks : tasks.filter((t) => t.status !== 'archived')),
-    [tasks, showArchived],
+  /** 任务树筛选：默认「活跃」= 不含已归档；也可只看某一状态（含已归档） */
+  const visibleTasks = useMemo(() => {
+    if (statusFilter === 'active') return tasks.filter((t) => t.status !== 'archived');
+    if (statusFilter === 'all') return tasks;
+    return tasks.filter((t) => t.status === statusFilter);
+  }, [tasks, statusFilter]);
+  const isFlatFilter = statusFilter !== 'active' && statusFilter !== 'all';
+  // 单状态筛选时扁平展示（否则父任务被过滤后会丢掉匹配的子任务）
+  const roots = useMemo(
+    () => (isFlatFilter ? visibleTasks : visibleTasks.filter((t) => !t.parentTaskId)),
+    [visibleTasks, isFlatFilter],
   );
-  const roots = useMemo(() => visibleTasks.filter((t) => !t.parentTaskId), [visibleTasks]);
-  const childrenOf = (id: string) => visibleTasks.filter((t) => t.parentTaskId === id);
+  const childrenOf = (id: string) =>
+    isFlatFilter ? [] : visibleTasks.filter((t) => t.parentTaskId === id);
   const task = tasks.find((t) => t.id === activeTaskId) ?? null;
 
-  const toggleArchived = () => {
-    const next = !showArchived;
-    setShowArchived(next);
-    if (!next) {
-      const active = tasks.find((t) => t.id === activeTaskId);
-      if (active?.status === 'archived') useEnclaveTaskStore.getState().selectTask(null);
-    }
-  };
-
-  // 归档后若开关关闭，详情自动让位（避免树里看不到、右侧还开着）
+  // 当前选中任务被筛选条件排除时，详情自动让位
   useEffect(() => {
-    if (!showArchived && task?.status === 'archived') {
+    if (task && !visibleTasks.some((t) => t.id === task.id)) {
       useEnclaveTaskStore.getState().selectTask(null);
     }
-  }, [showArchived, task?.id, task?.status]);
+  }, [visibleTasks, task?.id]);
 
   const submitCreate = async () => {
     if (!activeOrgId) return;
@@ -273,18 +271,6 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
             组织与权限
           </button>
         )}
-        <button
-          onClick={toggleArchived}
-          className="text-xs px-2 py-1 rounded"
-          style={{
-            backgroundColor: showArchived ? 'var(--bg-tertiary)' : 'transparent',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border)',
-          }}
-          title="归档任务默认从任务树隐藏；打开后可查看（只读）"
-        >
-          {showArchived ? '隐藏已归档' : '显示已归档'}
-        </button>
         <button
           onClick={() => setNewOpen((v) => !v)}
           disabled={!activeOrgId}
@@ -434,34 +420,58 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
       )}
 
       <div className="flex-1 min-h-0 flex overflow-hidden">
-        {/* 左：任务树 */}
+        {/* 左：任务树（顶部按状态筛选） */}
         <div
-          className="w-[280px] shrink-0 overflow-auto py-1"
+          className="w-[280px] shrink-0 flex flex-col overflow-hidden"
           style={{ borderRight: '1px solid var(--border)' }}
         >
-          {tasks.length === 0 && (
-            <div className="px-3 py-6 text-xs text-center" style={{ color: 'var(--text-tertiary)' }}>
-              还没有任务，点右上角「新建任务」
-            </div>
-          )}
-          {roots.map((root) => (
-            <div key={root.id}>
-              <TaskNode
-                task={root}
-                active={root.id === activeTaskId}
-                onClick={() => useEnclaveTaskStore.getState().selectTask(root.id)}
-              />
-              {childrenOf(root.id).map((child) => (
+          <div className="shrink-0 px-2 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as 'active' | 'all' | TaskStatus)}
+              className="w-full text-xs rounded px-2 py-1"
+              style={{
+                backgroundColor: 'var(--bg-field)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+              }}
+              title="按任务状态筛选"
+            >
+              <option value="active">活跃任务（不含已归档）</option>
+              <option value="all">全部状态</option>
+              <option value="pending">待办</option>
+              <option value="in_progress">进行中</option>
+              <option value="submitted">待确认</option>
+              <option value="done">已完成</option>
+              <option value="archived">已归档</option>
+              <option value="cancelled">已作废</option>
+            </select>
+          </div>
+          <div className="flex-1 overflow-auto py-1">
+            {roots.length === 0 && (
+              <div className="px-3 py-6 text-xs text-center" style={{ color: 'var(--text-tertiary)' }}>
+                {tasks.length === 0 ? '还没有任务，点右上角「新建任务」' : '没有符合筛选条件的任务'}
+              </div>
+            )}
+            {roots.map((root) => (
+              <div key={root.id}>
                 <TaskNode
-                  key={child.id}
-                  task={child}
-                  child
-                  active={child.id === activeTaskId}
-                  onClick={() => useEnclaveTaskStore.getState().selectTask(child.id)}
+                  task={root}
+                  active={root.id === activeTaskId}
+                  onClick={() => useEnclaveTaskStore.getState().selectTask(root.id)}
                 />
-              ))}
-            </div>
-          ))}
+                {childrenOf(root.id).map((child) => (
+                  <TaskNode
+                    key={child.id}
+                    task={child}
+                    child
+                    active={child.id === activeTaskId}
+                    onClick={() => useEnclaveTaskStore.getState().selectTask(child.id)}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* 中：详情（属性 / 依赖 / 过程记录 / 汇报都在这里，右侧不常驻面板） */}
@@ -1018,7 +1028,7 @@ function TaskDetail(props: {
           </div>
         ) : (
           taskFiles.map((f) => (
-            <div key={f.id} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            <div key={f.id} className="attachment-row flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
               <span className="truncate flex-1">{f.fileName}</span>
               <span style={{ color: 'var(--text-tertiary)' }}>{Math.max(1, Math.round(f.fileSize / 1024))} KB</span>
               <button
@@ -1196,7 +1206,7 @@ function TaskDetail(props: {
                 style={{ border: '1px dashed var(--border)' }}
               >
                 {p.attachments.map((f) => (
-                  <div key={f.id} className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                  <div key={f.id} className="attachment-row flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
                     <Paperclip size={9} style={{ color: 'var(--text-tertiary)' }} />
                     <span className="truncate flex-1">{f.fileName}</span>
                     <button
@@ -1314,7 +1324,7 @@ function TaskDetail(props: {
                     <span>本条交付物 {deliverables.length}</span>
                   </div>
                   {deliverables.map((f) => (
-                    <div key={f.id} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                    <div key={f.id} className="attachment-row flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                       <span className="truncate flex-1">{f.fileName}</span>
                       <button
                         onClick={() => void openFile(f.id)}
@@ -1461,7 +1471,7 @@ function TaskDetail(props: {
                         <span>交付物 {deliverables.length}</span>
                       </div>
                       {deliverables.map((f) => (
-                        <div key={f.id} className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        <div key={f.id} className="attachment-row flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                           <span className="truncate flex-1">{f.fileName}</span>
                           <button
                             onClick={() => void openFile(f.id)}
