@@ -521,6 +521,10 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
                   task={root}
                   active={root.id === activeTaskId}
                   onClick={() => useEnclaveTaskStore.getState().selectTask(root.id)}
+                  onAddChild={() => {
+                    setNewParentId(root.id);
+                    setNewOpen(true);
+                  }}
                 />
                 {childrenOf(root.id).map((child) => (
                   <TaskNode
@@ -570,12 +574,24 @@ function TaskNode(props: {
   active: boolean;
   child?: boolean;
   onClick: () => void;
+  /** 顶层任务行悬停时提供「添加子任务」快捷入口（预选父任务） */
+  onAddChild?: () => void;
 }) {
-  const { task, active, child, onClick } = props;
+  const { task, active, child, onClick, onAddChild } = props;
+  const canAddChild =
+    !child && !!onAddChild && task.status !== 'archived' && task.status !== 'cancelled';
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className="w-full text-left px-3 py-1.5 flex items-center gap-1.5"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className="group w-full text-left px-3 py-1.5 flex items-center gap-1.5 cursor-pointer"
       style={{
         backgroundColor: active ? 'var(--bg-tertiary)' : 'transparent',
         color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
@@ -593,6 +609,19 @@ function TaskNode(props: {
         style={{ backgroundColor: STATUS_COLOR[task.status] }}
       />
       <span className="text-xs truncate flex-1">{task.title}</span>
+      {canAddChild && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onAddChild?.();
+          }}
+          className="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          style={{ color: 'var(--text-tertiary)' }}
+          title="添加子任务"
+        >
+          <Plus size={11} />
+        </button>
+      )}
       {task.childCount > 0 && (
         <span
           className="shrink-0 flex items-center gap-0.5 text-[9px]"
@@ -604,7 +633,7 @@ function TaskNode(props: {
         </span>
       )}
       {task.blocked && <AlertTriangle size={11} style={{ color: 'var(--status-danger)' }} />}
-    </button>
+    </div>
   );
 }
 
