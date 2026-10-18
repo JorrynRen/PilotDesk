@@ -599,7 +599,9 @@
   outline-offset: 1px;
 }
 
-/* 附件行：悬停高亮，避免在相邻行之间点错「打开」 */
+/* 附件行：悬停高亮，避免在相邻行之间点错「打开」。
+   用主题色淡染，而不是 --bg-field：过程记录 / 汇报记录本身就在 --bg-tertiary 卡片里，
+   用 --bg-field 会与底色同值、看不出悬停。 */
 .attachment-row {
   border-radius: var(--radius-sm);
   padding: 2px 4px;
@@ -607,7 +609,7 @@
   transition: background-color 120ms ease;
 }
 .attachment-row:hover {
-  background-color: var(--bg-field);
+  background-color: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 /* ═══════════════════════════════════════════════════
