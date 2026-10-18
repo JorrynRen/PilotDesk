@@ -186,6 +186,9 @@ pub struct KbFileListView {
     pub memory_id: String,
     pub entry_title: String,
     pub source_ref: String,
+    /// 来源任务的负责人 / 优先级：供「按负责人 / 优先级」分组
+    pub assignee_id: String,
+    pub priority: String,
     pub added_at: i64,
 }
 
@@ -199,12 +202,14 @@ pub fn list_files(
     let mut stmt = conn
         .prepare(
             "SELECT fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash,
-                    kbf.memory_id, COALESCE(m.title, ''), COALESCE(m.source_ref, ''), kbf.added_at
+                    kbf.memory_id, COALESCE(m.title, ''), COALESCE(m.source_ref, ''), kbf.added_at,
+                    COALESCE(t.assignee_id, ''), COALESCE(t.priority, 'normal')
              FROM knowledge_base_files kbf
              JOIN file_assets fa ON fa.id = kbf.file_id
              LEFT JOIN knowledge_base_memories m
                ON m.knowledge_base_id = kbf.knowledge_base_id
               AND m.memory_id = kbf.memory_id
+             LEFT JOIN org_tasks t ON t.id = m.source_ref
              WHERE kbf.knowledge_base_id = ?1
              ORDER BY kbf.added_at DESC, fa.file_name",
         )
@@ -221,6 +226,8 @@ pub fn list_files(
                 entry_title: r.get(6)?,
                 source_ref: r.get(7)?,
                 added_at: r.get(8)?,
+                assignee_id: r.get(9)?,
+                priority: r.get(10)?,
             })
         })
         .map_err(|e| format!("查询知识库文件失败：{}", e))?;

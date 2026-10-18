@@ -22,6 +22,7 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar, StatusBar } from '../components/layout';
 import { TagEditor } from '../components/knowledge/TagEditor';
+import { Select } from '../components/common/Select';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
 import { useEnclaveKbStore } from '../stores/enclaveKbStore';
@@ -79,6 +80,28 @@ const ORIGIN_LABEL: Record<string, string> = {
 };
 
 type KbTab = 'entries' | 'files' | 'ingest' | 'graph';
+
+/** 文件目录树的分组维度：全部基于现有数据，不需要额外录入属性 */
+type FileGroupBy = 'entry' | 'assignee' | 'priority' | 'filetype' | 'month';
+
+const PRIORITY_LABEL: Record<string, string> = {
+  low: '低',
+  normal: '普通',
+  high: '高',
+  urgent: '紧急',
+};
+
+const PRIORITY_ORDER: Record<string, number> = {
+  urgent: 0,
+  high: 1,
+  normal: 2,
+  low: 3,
+};
+
+function fileExt(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i > 0 && i < name.length - 1 ? name.slice(i + 1).toLowerCase() : '';
+}
 
 /** 搜索框口径：与个人知识库一致（pd-field 容器 + 内部透明输入） */
 function SearchField({
@@ -154,7 +177,9 @@ export function EnclaveKbPage() {
   const [tab, setTab] = useState<KbTab>('entries');
   const [keyword, setKeyword] = useState('');
   const [fileKeyword, setFileKeyword] = useState('');
-  /** 文件目录树里被折叠的分组（按知识条目） */
+  /** 文件目录树的分组维度 */
+  const [fileGroupBy, setFileGroupBy] = useState<FileGroupBy>('entry');
+  /** 文件目录树里被折叠的分组 */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
   // 知识库信息编辑（owner / admin）
   const [editingKb, setEditingKb] = useState(false);
@@ -232,6 +257,11 @@ export function EnclaveKbPage() {
       void useEnclaveKbStore.getState().loadFiles(activeOrgId, activeKbId);
     }
   }, [tab, activeOrgId, activeKbId]);
+
+  // 切换分组维度后旧的折叠状态不再适用
+  useEffect(() => {
+    setCollapsedGroups([]);
+  }, [fileGroupBy]);
 
   const handleModeChange = useCallback(
     (mode: ViewMode) => {
@@ -325,7 +355,7 @@ export function EnclaveKbPage() {
       draftContent !== activeEntry.content ||
       joinTags(draftTags) !== joinTags(splitTags(activeEntry.tags)));
 
-  /** 文件页目录树：按知识条目分组（同一原件被多个条目引用时分别出现在各自目录下） */
+  /** 文件页目录树：按所选维度分组（默认按知识条目 / 来源任务） */
   const fileGroups = useMemo(() => {
     const q = fileKeyword.trim().toLowerCase();
     const map = new Map<
@@ -334,17 +364,55 @@ export function EnclaveKbPage() {
     >();
     for (const f of files) {
       if (q && !f.fileName.toLowerCase().includes(q)) continue;
-      const id = f.memoryId || f.sourceRef || '__orphan__';
+      let id: string;
+      let title: string;
+      switch (fileGroupBy) {
+        case 'assignee':
+          id = f.assigneeId || '__unassigned__';
+          title = f.assigneeId ? memberName(f.assigneeId) : '未指派';
+          break;
+        case 'priority': {
+          const p = f.priority || 'normal';
+          id = p;
+          title = `优先级：${PRIORITY_LABEL[p] ?? p}`;
+          break;
+        }
+        case 'filetype': {
+          const ext = fileExt(f.fileName);
+          id = ext || '__noext__';
+          title = ext ? `${ext.toUpperCase()} 文件` : '无扩展名';
+          break;
+        }
+        case 'month': {
+          const d = new Date(f.addedAt * 1000);
+          const m = d.getMonth() + 1;
+          id = `${d.getFullYear()}-${String(m).padStart(2, '0')}`;
+          title = `${d.getFullYear()} 年 ${m} 月`;
+          break;
+        }
+        default:
+          id = f.memoryId || f.sourceRef || '__orphan__';
+          title = f.entryTitle || f.sourceRef || '未关联条目';
+      }
       let g = map.get(id);
       if (!g) {
-        g = { id, title: f.entryTitle || f.sourceRef || '未关联条目', files: [], latest: 0 };
+        g = { id, title, files: [], latest: 0 };
         map.set(id, g);
       }
-      g.files.push(f);
+      // 换维度后同一份原件可能被多个条目引用而重复命中同一组，组内去重
+      if (!g.files.some((x) => x.fileId === f.fileId)) g.files.push(f);
       g.latest = Math.max(g.latest, f.addedAt);
     }
-    return [...map.values()].sort((a, b) => b.latest - a.latest);
-  }, [files, fileKeyword]);
+    const groups = [...map.values()];
+    groups.sort((a, b) => {
+      if (fileGroupBy === 'month') return b.id.localeCompare(a.id);
+      if (fileGroupBy === 'priority') {
+        return (PRIORITY_ORDER[a.id] ?? 9) - (PRIORITY_ORDER[b.id] ?? 9);
+      }
+      return b.latest - a.latest;
+    });
+    return groups;
+  }, [files, fileKeyword, fileGroupBy, members]);
 
   const matchedFileCount = useMemo(
     () => new Set(fileGroups.flatMap((g) => g.files.map((f) => f.fileId))).size,
@@ -878,6 +946,22 @@ export function EnclaveKbPage() {
                 className="shrink-0 px-4 py-1.5 flex items-center gap-2"
                 style={{ borderBottom: '1px solid var(--border)' }}
               >
+                <div className="w-[150px] shrink-0">
+                  <Select
+                    value={fileGroupBy}
+                    onChange={(v) => setFileGroupBy(v as FileGroupBy)}
+                    size="sm"
+                    className="w-full"
+                    options={[
+                      { value: 'entry', label: '按来源任务' },
+                      { value: 'assignee', label: '按负责人' },
+                      { value: 'priority', label: '按优先级' },
+                      { value: 'filetype', label: '按文件类型' },
+                      { value: 'month', label: '按归档月份' },
+                    ]}
+                    title="切换文件分组方式"
+                  />
+                </div>
                 <SearchField
                   value={fileKeyword}
                   onChange={setFileKeyword}
@@ -970,7 +1054,10 @@ export function EnclaveKbPage() {
                               >
                                 {f.fileName}
                               </div>
-                              <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                              <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                                {fileGroupBy !== 'entry' && (
+                                  <>来源任务「{f.entryTitle || f.sourceRef || '未知'}」 · </>
+                                )}
                                 {f.fileSize > 0 && `${formatSize(f.fileSize)} · `}
                                 {formatRelative(f.addedAt)}归档
                               </div>

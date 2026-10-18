@@ -268,6 +268,10 @@ export interface KbFileListView {
   entryTitle: string;
   /** 来源任务 id */
   sourceRef: string;
+  /** 来源任务负责人（供「按负责人」分组；空 = 未指派） */
+  assigneeId: string;
+  /** 来源任务优先级（low / normal / high / urgent） */
+  priority: string;
   addedAt: number;
 }
 
