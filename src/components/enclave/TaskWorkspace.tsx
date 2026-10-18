@@ -926,7 +926,7 @@ function TaskDetail(props: {
         style={{
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
-          padding: '0 12px 12px',
+          padding: '10px 12px 12px',
         }}
       >
         <legend className="px-1.5 m-0">
@@ -1369,7 +1369,7 @@ function TaskDetail(props: {
         style={{
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
-          padding: '0 12px 12px',
+          padding: '10px 12px 12px',
         }}
       >
         <legend className="px-1.5 m-0 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
