@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Library,
@@ -16,6 +16,7 @@ import {
   Sparkles,
   Network,
   FolderOpen,
+  Folder,
   Pencil,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
@@ -27,6 +28,14 @@ import { useEnclaveKbStore } from '../stores/enclaveKbStore';
 import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
 import { useAccountStore } from '../stores/accountStore';
 import type { KbEntryView } from '../types/enclave';
+
+/** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
+const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
+const FIELD_STYLE = {
+  backgroundColor: 'var(--bg-tertiary)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border)',
+} as const;
 
 function formatTime(unixSec: number): string {
   if (!unixSec) return '-';
@@ -71,6 +80,43 @@ const ORIGIN_LABEL: Record<string, string> = {
 
 type KbTab = 'entries' | 'files' | 'ingest' | 'graph';
 
+/** 搜索框口径：与个人知识库一致（pd-field 容器 + 内部透明输入） */
+function SearchField({
+  value,
+  onChange,
+  onEnter,
+  onClear,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onEnter?: () => void;
+  onClear: () => void;
+  placeholder: string;
+}) {
+  return (
+    <div
+      className="pd-field flex items-center gap-1.5 px-2 py-1 rounded-lg shrink-0 w-[280px]"
+      style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+    >
+      <Search size={12} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+      <input
+        className="flex-1 min-w-0 bg-transparent outline-none text-xs"
+        style={{ color: 'var(--text-primary)' }}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') onEnter?.(); }}
+        placeholder={placeholder}
+      />
+      {value && (
+        <button onClick={onClear} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} title="清空搜索">
+          <X size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 const TABS: { key: KbTab; label: string; icon: typeof Search; enabled: boolean }[] = [
   { key: 'entries', label: '知识', icon: Search, enabled: true },
   { key: 'files', label: '文件', icon: Files, enabled: true },
@@ -108,6 +154,8 @@ export function EnclaveKbPage() {
   const [tab, setTab] = useState<KbTab>('entries');
   const [keyword, setKeyword] = useState('');
   const [fileKeyword, setFileKeyword] = useState('');
+  /** 文件目录树里被折叠的分组（按知识条目） */
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
   // 知识库信息编辑（owner / admin）
   const [editingKb, setEditingKb] = useState(false);
   const [draftKbName, setDraftKbName] = useState('');
@@ -277,10 +325,37 @@ export function EnclaveKbPage() {
       draftContent !== activeEntry.content ||
       joinTags(draftTags) !== joinTags(splitTags(activeEntry.tags)));
 
-  const visibleFiles = files.filter((f) => {
+  /** 文件页目录树：按知识条目分组（同一原件被多个条目引用时分别出现在各自目录下） */
+  const fileGroups = useMemo(() => {
     const q = fileKeyword.trim().toLowerCase();
-    return !q || f.fileName.toLowerCase().includes(q);
-  });
+    const map = new Map<
+      string,
+      { id: string; title: string; files: typeof files; latest: number }
+    >();
+    for (const f of files) {
+      if (q && !f.fileName.toLowerCase().includes(q)) continue;
+      const id = f.memoryId || f.sourceRef || '__orphan__';
+      let g = map.get(id);
+      if (!g) {
+        g = { id, title: f.entryTitle || f.sourceRef || '未关联条目', files: [], latest: 0 };
+        map.set(id, g);
+      }
+      g.files.push(f);
+      g.latest = Math.max(g.latest, f.addedAt);
+    }
+    return [...map.values()].sort((a, b) => b.latest - a.latest);
+  }, [files, fileKeyword]);
+
+  const matchedFileCount = useMemo(
+    () => new Set(fileGroups.flatMap((g) => g.files.map((f) => f.fileId))).size,
+    [fileGroups],
+  );
+  const totalFileCount = kb?.fileCount ?? new Set(files.map((f) => f.fileId)).size;
+
+  const toggleGroup = (id: string) =>
+    setCollapsedGroups((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
 
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
@@ -338,8 +413,8 @@ export function EnclaveKbPage() {
                     名称
                   </span>
                   <input
-                    className="search-input flex-1"
-                    style={{ backgroundColor: 'var(--bg-field)' }}
+                    className={FIELD_CLASS + ' flex-1'}
+                    style={FIELD_STYLE}
                     value={draftKbName}
                     onChange={(e) => setDraftKbName(e.target.value)}
                     placeholder="知识库名称"
@@ -354,8 +429,8 @@ export function EnclaveKbPage() {
                     描述
                   </span>
                   <textarea
-                    className="search-input flex-1 resize-y"
-                    style={{ backgroundColor: 'var(--bg-field)', minHeight: 56, lineHeight: 1.8 }}
+                    className="flex-1 p-2.5 rounded-lg text-xs leading-relaxed outline-none resize-y"
+                    style={{ ...FIELD_STYLE, minHeight: 56 }}
                     rows={2}
                     value={draftKbDesc}
                     onChange={(e) => setDraftKbDesc(e.target.value)}
@@ -464,32 +539,16 @@ export function EnclaveKbPage() {
                 className="shrink-0 px-4 py-1.5 flex items-center gap-2"
                 style={{ borderBottom: '1px solid var(--border)' }}
               >
-                <div className="relative w-[280px] shrink-0">
-                  <Search
-                    size={12}
-                    style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
-                  />
-                  <input
-                    className="search-input w-full"
-                    style={{ paddingLeft: 26, backgroundColor: 'var(--bg-field)' }}
-                    placeholder="搜索标题 / 正文 / 标签 / 交付物（回车）"
-                    value={keyword}
-                    onChange={(e) => setKeyword(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') void runSearch(); }}
-                  />
-                  {keyword && (
-                    <button
-                      onClick={() => {
-                        setKeyword('');
-                        void runSearch('');
-                      }}
-                      style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
-                      title="清空搜索"
-                    >
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
+                <SearchField
+                  value={keyword}
+                  onChange={setKeyword}
+                  onEnter={() => void runSearch()}
+                  onClear={() => {
+                    setKeyword('');
+                    void runSearch('');
+                  }}
+                  placeholder="搜索标题 / 正文 / 标签 / 交付物（回车）"
+                />
                 <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
                   {entries.length} 条{query && ` · 匹配「${query}」`}
                 </span>
@@ -547,8 +606,8 @@ export function EnclaveKbPage() {
                           >
                             {open && canEdit ? (
                               <input
-                                className="search-input flex-1"
-                                style={{ backgroundColor: 'var(--bg-field)' }}
+                                className={FIELD_CLASS + ' flex-1'}
+                                style={FIELD_STYLE}
                                 value={draftTitle}
                                 onChange={(ev) => setDraftTitle(ev.target.value)}
                                 onClick={(ev) => ev.stopPropagation()}
@@ -819,32 +878,16 @@ export function EnclaveKbPage() {
                 className="shrink-0 px-4 py-1.5 flex items-center gap-2"
                 style={{ borderBottom: '1px solid var(--border)' }}
               >
-                <div className="relative w-[280px] shrink-0">
-                  <Search
-                    size={12}
-                    style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
-                  />
-                  <input
-                    className="search-input w-full"
-                    style={{ paddingLeft: 26, backgroundColor: 'var(--bg-field)' }}
-                    placeholder="搜索文件名"
-                    value={fileKeyword}
-                    onChange={(e) => setFileKeyword(e.target.value)}
-                  />
-                  {fileKeyword && (
-                    <button
-                      onClick={() => setFileKeyword('')}
-                      style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-tertiary)' }}
-                      title="清空搜索"
-                    >
-                      <X size={12} />
-                    </button>
-                  )}
-                </div>
+                <SearchField
+                  value={fileKeyword}
+                  onChange={setFileKeyword}
+                  onClear={() => setFileKeyword('')}
+                  placeholder="搜索文件名"
+                />
                 <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
                   {fileKeyword.trim()
-                    ? `匹配 ${visibleFiles.length} / ${files.length} 个文件`
-                    : `共 ${files.length} 个文件`}
+                    ? `匹配 ${matchedFileCount} / ${totalFileCount} 个文件`
+                    : `共 ${totalFileCount} 个文件`}
                 </span>
                 <div className="flex-1" />
                 <span className="text-[10px] shrink-0 whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
@@ -862,7 +905,7 @@ export function EnclaveKbPage() {
                     还没有文件：任务汇报「确认完成」时上传的交付物会归档到这里
                   </div>
                 )}
-                {files.length > 0 && visibleFiles.length === 0 && (
+                {files.length > 0 && fileGroups.length === 0 && (
                   <div
                     className="flex flex-col items-center justify-center gap-2 py-10 text-xs"
                     style={{ color: 'var(--text-tertiary)' }}
@@ -872,44 +915,84 @@ export function EnclaveKbPage() {
                   </div>
                 )}
 
-                {visibleFiles.map((f) => (
-                  <div
-                    key={f.fileId}
-                    className="px-4 py-2.5 flex items-center gap-3"
-                    style={{ borderBottom: '1px solid var(--border)' }}
-                  >
-                    <FileText size={14} className="shrink-0" style={{ color: 'var(--accent)' }} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs truncate" style={{ color: 'var(--text-primary)' }} title={f.fileName}>
-                        {f.fileName}
-                      </div>
-                      <div
-                        className="text-[10px] mt-0.5 truncate"
-                        style={{ color: 'var(--text-tertiary)' }}
-                        title={f.entryTitle || f.sourceRef}
+                {fileGroups.map((g) => {
+                  // 搜索时强制展开，避免命中文件被折叠目录藏起来
+                  const collapsed = !fileKeyword.trim() && collapsedGroups.includes(g.id);
+                  return (
+                    <div key={g.id}>
+                      <button
+                        onClick={() => toggleGroup(g.id)}
+                        className="w-full px-4 py-1.5 flex items-center gap-1.5 text-left transition-colors"
+                        style={{
+                          borderBottom: '1px solid var(--border)',
+                          backgroundColor: 'var(--bg-tertiary)',
+                        }}
+                        title={collapsed ? '展开这个目录' : '折叠这个目录'}
                       >
-                        {f.entryCount > 1
-                          ? `被 ${f.entryCount} 个知识条目引用`
-                          : `来源任务「${f.entryTitle || f.sourceRef}」`}
-                        {f.fileSize > 0 && ` · ${formatSize(f.fileSize)}`}
-                        {` · ${formatRelative(f.addedAt)}归档`}
-                      </div>
+                        <ChevronRight
+                          size={11}
+                          className="shrink-0 transition-transform"
+                          style={{
+                            color: 'var(--text-tertiary)',
+                            transform: collapsed ? 'none' : 'rotate(90deg)',
+                          }}
+                        />
+                        <Folder size={11} className="shrink-0" style={{ color: 'var(--accent)' }} />
+                        <span
+                          className="text-[11px] font-medium truncate min-w-0"
+                          style={{ color: 'var(--text-primary)' }}
+                        >
+                          {g.title}
+                        </span>
+                        <span className="shrink-0 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                          {new Set(g.files.map((f) => f.fileId)).size} 个文件
+                        </span>
+                      </button>
+
+                      {!collapsed &&
+                        g.files.map((f) => (
+                          <div
+                            key={`${g.id}:${f.fileId}`}
+                            className="py-2 pr-4 flex items-center gap-3"
+                            style={{
+                              borderBottom: '1px solid var(--border)',
+                              marginLeft: 22,
+                              borderLeft: '1px solid var(--border)',
+                              paddingLeft: 16,
+                            }}
+                          >
+                            <FileText size={13} className="shrink-0" style={{ color: 'var(--accent)' }} />
+                            <div className="flex-1 min-w-0">
+                              <div
+                                className="text-xs truncate"
+                                style={{ color: 'var(--text-primary)' }}
+                                title={f.fileName}
+                              >
+                                {f.fileName}
+                              </div>
+                              <div className="text-[10px] mt-0.5" style={{ color: 'var(--text-tertiary)' }}>
+                                {f.fileSize > 0 && `${formatSize(f.fileSize)} · `}
+                                {formatRelative(f.addedAt)}归档
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => void openFile(f.fileId)}
+                              className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] shrink-0"
+                              style={{
+                                color: 'var(--text-secondary)',
+                                backgroundColor: 'var(--bg-field)',
+                                border: '1px solid var(--border)',
+                              }}
+                              title="打开文件"
+                            >
+                              <FolderOpen size={11} />
+                              打开
+                            </button>
+                          </div>
+                        ))}
                     </div>
-                    <button
-                      onClick={() => void openFile(f.fileId)}
-                      className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] shrink-0"
-                      style={{
-                        color: 'var(--text-secondary)',
-                        backgroundColor: 'var(--bg-field)',
-                        border: '1px solid var(--border)',
-                      }}
-                      title="打开文件"
-                    >
-                      <FolderOpen size={11} />
-                      打开
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

@@ -17,9 +17,19 @@ import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
+import { Select } from '../common/Select';
 import type {
   DepsPreview, MemberView, TaskStatus, TaskView, TeamFilesRootView,
 } from '../../types/enclave';
+
+/** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
+const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
+const FIELD_STYLE = {
+  backgroundColor: 'var(--bg-tertiary)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border)',
+} as const;
+const TEXTAREA_CLASS = 'w-full p-3 rounded-lg text-xs leading-relaxed outline-none resize-y';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: '待办',
@@ -357,49 +367,46 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
         >
           <input
             autoFocus
-            className="search-input"
-            style={{ width: 240, backgroundColor: 'var(--bg-field)' }}
+            className={FIELD_CLASS}
+            style={{ ...FIELD_STYLE, width: 240 }}
             placeholder="任务标题"
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void submitCreate(); }}
           />
-          <select
-            className="search-input"
-            style={{ width: 150, backgroundColor: 'var(--bg-field)' }}
+          <Select
             value={newParentId}
-            onChange={(e) => setNewParentId(e.target.value)}
-          >
-            <option value="">（顶层任务）</option>
-            {roots.map((t) => (
-              <option key={t.id} value={t.id}>{t.title}</option>
-            ))}
-          </select>
-          <select
-            className="search-input"
-            style={{ width: 150, backgroundColor: 'var(--bg-field)' }}
+            onChange={setNewParentId}
+            style={{ width: 150, flexShrink: 0 }}
+            options={[
+              { value: '', label: '（顶层任务）' },
+              ...roots.map((t) => ({ value: t.id, label: t.title })),
+            ]}
+            title="父任务"
+          />
+          <Select
             value={newAssignee}
-            onChange={(e) => setNewAssignee(e.target.value)}
-          >
-            <option value="">未指派</option>
-            {members.filter((m) => m.seatStatus !== 'removed').map((m) => (
-              <option key={m.userId} value={m.userId}>{m.displayName || m.email}</option>
-            ))}
-          </select>
-          <select
-            className="search-input"
-            style={{ width: 90, backgroundColor: 'var(--bg-field)' }}
+            onChange={setNewAssignee}
+            style={{ width: 150, flexShrink: 0 }}
+            options={[
+              { value: '', label: '未指派' },
+              ...members
+                .filter((m) => m.seatStatus !== 'removed')
+                .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+            ]}
+            title="负责人"
+          />
+          <Select
             value={newPriority}
-            onChange={(e) => setNewPriority(e.target.value)}
-          >
-            {Object.entries(PRIORITY_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>{v}</option>
-            ))}
-          </select>
+            onChange={setNewPriority}
+            style={{ width: 90, flexShrink: 0 }}
+            options={Object.entries(PRIORITY_LABEL).map(([k, v]) => ({ value: k, label: v }))}
+            title="优先级"
+          />
           <input
             type="date"
-            className="search-input"
-            style={{ width: 140, backgroundColor: 'var(--bg-field)' }}
+            className={FIELD_CLASS}
+            style={{ ...FIELD_STYLE, width: 140 }}
             value={newDue}
             onChange={(e) => setNewDue(e.target.value)}
           />
@@ -426,26 +433,22 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
           style={{ borderRight: '1px solid var(--border)' }}
         >
           <div className="shrink-0 px-2 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
-            <select
+            <Select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as 'active' | 'all' | TaskStatus)}
-              className="w-full text-xs rounded px-2 py-1"
-              style={{
-                backgroundColor: 'var(--bg-field)',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border)',
-              }}
+              onChange={(v) => setStatusFilter(v as 'active' | 'all' | TaskStatus)}
+              className="w-full"
+              options={[
+                { value: 'active', label: '活跃任务（不含已归档）' },
+                { value: 'all', label: '全部状态' },
+                { value: 'pending', label: '待办' },
+                { value: 'in_progress', label: '进行中' },
+                { value: 'submitted', label: '待确认' },
+                { value: 'done', label: '已完成' },
+                { value: 'archived', label: '已归档' },
+                { value: 'cancelled', label: '已作废' },
+              ]}
               title="按任务状态筛选"
-            >
-              <option value="active">活跃任务（不含已归档）</option>
-              <option value="all">全部状态</option>
-              <option value="pending">待办</option>
-              <option value="in_progress">进行中</option>
-              <option value="submitted">待确认</option>
-              <option value="done">已完成</option>
-              <option value="archived">已归档</option>
-              <option value="cancelled">已作废</option>
-            </select>
+            />
           </div>
           <div className="flex-1 overflow-auto py-1">
             {roots.length === 0 && (
@@ -772,39 +775,35 @@ function TaskDetail(props: {
           <>
             <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
               负责人
-              <select
-                className="search-input"
-                style={{ backgroundColor: 'var(--bg-field)' }}
+              <Select
                 value={assignee}
+                onChange={setAssignee}
                 disabled={!canAssign}
-                onChange={(e) => setAssignee(e.target.value)}
-              >
-                <option value="">未指派</option>
-                {members.filter((m) => m.seatStatus !== 'removed').map((m) => (
-                  <option key={m.userId} value={m.userId}>{m.displayName || m.email}</option>
-                ))}
-              </select>
+                className="w-full"
+                options={[
+                  { value: '', label: '未指派' },
+                  ...members
+                    .filter((m) => m.seatStatus !== 'removed')
+                    .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+                ]}
+              />
               {!canAssign && <span className="text-[10px]">仅创建者可修改负责人</span>}
             </label>
             <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
               优先级
-              <select
-                className="search-input"
-                style={{ backgroundColor: 'var(--bg-field)' }}
+              <Select
                 value={priority}
-                onChange={(e) => setPriority(e.target.value)}
-              >
-                {Object.entries(PRIORITY_LABEL).map(([k, v]) => (
-                  <option key={k} value={k}>{v}</option>
-                ))}
-              </select>
+                onChange={setPriority}
+                className="w-full"
+                options={Object.entries(PRIORITY_LABEL).map(([k, v]) => ({ value: k, label: v }))}
+              />
             </label>
             <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
               截止日期
               <input
                 type="date"
-                className="search-input"
-                style={{ backgroundColor: 'var(--bg-field)' }}
+                className={FIELD_CLASS}
+                style={FIELD_STYLE}
                 value={due}
                 onChange={(e) => setDue(e.target.value)}
               />
@@ -963,8 +962,8 @@ function TaskDetail(props: {
         {editingDesc ? (
           <>
             <textarea
-              className="search-input w-full"
-              style={{ minHeight: 120, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
+              className={TEXTAREA_CLASS}
+              style={{ ...FIELD_STYLE, minHeight: 120 }}
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
               autoFocus
@@ -1119,8 +1118,8 @@ function TaskDetail(props: {
             style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-field)' }}
           >
             <textarea
-              className="search-input w-full"
-              style={{ minHeight: 70, backgroundColor: 'var(--bg-content)', resize: 'vertical' }}
+              className={TEXTAREA_CLASS}
+              style={{ ...FIELD_STYLE, minHeight: 70, backgroundColor: 'var(--bg-content)' }}
               placeholder="记录本次进度：做了什么、遇到什么、下一步（可多次提交）"
               value={progressText}
               onChange={(e) => setProgressText(e.target.value)}
@@ -1264,8 +1263,8 @@ function TaskDetail(props: {
               </div>
             )}
             <textarea
-              className="search-input w-full"
-              style={{ minHeight: 90, backgroundColor: 'var(--bg-field)', resize: 'vertical' }}
+              className={TEXTAREA_CLASS}
+              style={{ ...FIELD_STYLE, minHeight: 90 }}
               placeholder="写清做了什么、产出在哪（确认后会沉淀进组织知识库）"
               value={reportText}
               onChange={(e) => setReportText(e.target.value)}
@@ -1411,8 +1410,8 @@ function TaskDetail(props: {
                 {returningId === r.id && (
                   <div className="flex items-center gap-2">
                     <input
-                      className="search-input flex-1"
-                      style={{ backgroundColor: 'var(--bg-primary)' }}
+                      className="flex-1 px-2.5 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ ...FIELD_STYLE, backgroundColor: 'var(--bg-primary)' }}
                       placeholder="退回原因（记录在汇报留言里）"
                       value={returnReason}
                       onChange={(e) => setReturnReason(e.target.value)}

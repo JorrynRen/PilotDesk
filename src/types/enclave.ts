@@ -256,15 +256,15 @@ export interface KbView {
   updatedAt: number;
 }
 
-/** 团队知识库「文件」页的一行（按文件去重） */
+/** 团队知识库「文件」页的一行：某条目引用的一个交付物（同一原件可被多条引用） */
 export interface KbFileListView {
   fileId: string;
   fileName: string;
   fileType: string;
   fileSize: number;
   fileHash: string;
-  /** 被多少个知识条目引用 */
-  entryCount: number;
+  /** 所属知识条目 */
+  memoryId: string;
   entryTitle: string;
   /** 来源任务 id */
   sourceRef: string;

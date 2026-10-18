@@ -171,7 +171,10 @@ pub fn update_kb(
         .ok_or_else(|| "知识库不存在或不属于该组织".to_string())
 }
 
-/// 文件视图（团队知识库「文件」页）：去重后的交付物 + 归属条目信息。
+/// 文件视图（团队知识库「文件」页）：一行 = 某条目引用的一个交付物。
+///
+/// 同一份原件可能被多个条目引用，因此按 (memory_id, file_id) 展开；
+/// 前端据此按「来源任务 / 知识条目」建目录树。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KbFileListView {
@@ -180,14 +183,13 @@ pub struct KbFileListView {
     pub file_type: String,
     pub file_size: i64,
     pub file_hash: String,
-    /// 该文件被多少个知识条目引用
-    pub entry_count: i64,
+    pub memory_id: String,
     pub entry_title: String,
     pub source_ref: String,
     pub added_at: i64,
 }
 
-/// 团队知识库的全部交付物（按 file_id 去重）。
+/// 团队知识库的全部交付物（按条目展开，供前端建目录树）。
 pub fn list_files(
     conn: &Connection,
     org_id: &str,
@@ -197,18 +199,14 @@ pub fn list_files(
     let mut stmt = conn
         .prepare(
             "SELECT fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash,
-                    COUNT(*) AS entry_count,
-                    MIN(COALESCE(m.title, '')),
-                    MIN(COALESCE(m.source_ref, '')),
-                    MAX(kbf.added_at)
+                    kbf.memory_id, COALESCE(m.title, ''), COALESCE(m.source_ref, ''), kbf.added_at
              FROM knowledge_base_files kbf
              JOIN file_assets fa ON fa.id = kbf.file_id
              LEFT JOIN knowledge_base_memories m
                ON m.knowledge_base_id = kbf.knowledge_base_id
               AND m.memory_id = kbf.memory_id
              WHERE kbf.knowledge_base_id = ?1
-             GROUP BY fa.id
-             ORDER BY MAX(kbf.added_at) DESC, fa.file_name",
+             ORDER BY kbf.added_at DESC, fa.file_name",
         )
         .map_err(|e| format!("查询知识库文件失败：{}", e))?;
     let rows = stmt
@@ -219,7 +217,7 @@ pub fn list_files(
                 file_type: r.get(2)?,
                 file_size: r.get(3)?,
                 file_hash: r.get(4)?,
-                entry_count: r.get(5)?,
+                memory_id: r.get(5)?,
                 entry_title: r.get(6)?,
                 source_ref: r.get(7)?,
                 added_at: r.get(8)?,
