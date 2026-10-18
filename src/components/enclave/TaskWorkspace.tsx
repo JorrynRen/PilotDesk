@@ -1339,7 +1339,7 @@ function TaskDetail(props: {
                   <div className="flex items-center gap-2">
                     <input
                       className="search-input flex-1"
-                      style={{ backgroundColor: 'var(--bg-field)' }}
+                      style={{ backgroundColor: 'var(--bg-primary)' }}
                       placeholder="退回原因（记录在汇报留言里）"
                       value={returnReason}
                       onChange={(e) => setReturnReason(e.target.value)}
