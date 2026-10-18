@@ -196,14 +196,18 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
       dueDate: fromDateInput(newDue),
     });
     setCreating(false);
-    if (created) {
-      setNewOpen(false);
-      setNewTitle('');
-      setNewParentId('');
-      setNewAssignee('');
-      setNewDue('');
-      setNewPriority('normal');
-    }
+    if (created) cancelCreate();
+  };
+
+  /** 取消新建：清空草稿并收起，避免下次打开残留上次输入 */
+  const cancelCreate = () => {
+    setNewOpen(false);
+    setNewTitle('');
+    setNewParentId('');
+    setNewAssignee('');
+    setNewDue('');
+    setNewPriority('normal');
+    setLocalError(null);
   };
 
   return (
@@ -365,58 +369,85 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
           className="shrink-0 px-3 py-2 flex items-end gap-2 flex-wrap"
           style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-side)' }}
         >
-          <input
-            autoFocus
-            className={FIELD_CLASS}
-            style={{ ...FIELD_STYLE, width: 240 }}
-            placeholder="任务标题"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void submitCreate(); }}
-          />
-          <Select
-            value={newParentId}
-            onChange={setNewParentId}
-            style={{ width: 150, flexShrink: 0 }}
-            options={[
-              { value: '', label: '（顶层任务）' },
-              ...roots.map((t) => ({ value: t.id, label: t.title })),
-            ]}
-            title="父任务"
-          />
-          <Select
-            value={newAssignee}
-            onChange={setNewAssignee}
-            style={{ width: 150, flexShrink: 0 }}
-            options={[
-              { value: '', label: '未指派' },
-              ...members
-                .filter((m) => m.seatStatus !== 'removed')
-                .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
-            ]}
-            title="负责人"
-          />
-          <Select
-            value={newPriority}
-            onChange={setNewPriority}
-            style={{ width: 90, flexShrink: 0 }}
-            options={Object.entries(PRIORITY_LABEL).map(([k, v]) => ({ value: k, label: v }))}
-            title="优先级"
-          />
-          <input
-            type="date"
-            className={FIELD_CLASS}
-            style={{ ...FIELD_STYLE, width: 140 }}
-            value={newDue}
-            onChange={(e) => setNewDue(e.target.value)}
-          />
+          <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+            任务标题
+            <input
+              autoFocus
+              className={FIELD_CLASS}
+              style={{ ...FIELD_STYLE, width: 220 }}
+              placeholder="任务标题"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void submitCreate(); }}
+            />
+          </label>
+          <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+            <span>父任务</span>
+            <Select
+              value={newParentId}
+              onChange={setNewParentId}
+              style={{ width: 150, flexShrink: 0 }}
+              options={[
+                { value: '', label: '（顶层任务）' },
+                ...roots.map((t) => ({ value: t.id, label: t.title })),
+              ]}
+              title="父任务"
+            />
+          </div>
+          <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+            <span>负责人</span>
+            <Select
+              value={newAssignee}
+              onChange={setNewAssignee}
+              style={{ width: 150, flexShrink: 0 }}
+              options={[
+                { value: '', label: '未指派' },
+                ...members
+                  .filter((m) => m.seatStatus !== 'removed')
+                  .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+              ]}
+              title="负责人"
+            />
+          </div>
+          <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+            <span>优先级</span>
+            <Select
+              value={newPriority}
+              onChange={setNewPriority}
+              style={{ width: 90, flexShrink: 0 }}
+              options={Object.entries(PRIORITY_LABEL).map(([k, v]) => ({ value: k, label: v }))}
+              title="优先级"
+            />
+          </div>
+          <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+            截止日期
+            <input
+              type="date"
+              className={FIELD_CLASS}
+              style={{ ...FIELD_STYLE, width: 140 }}
+              value={newDue}
+              onChange={(e) => setNewDue(e.target.value)}
+            />
+          </label>
           <button
             onClick={() => void submitCreate()}
             disabled={creating}
-            className="text-xs px-3 py-1.5 rounded"
+            className="pd-btn text-xs px-3 py-1.5 rounded-lg"
             style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: creating ? 0.6 : 1 }}
           >
             {creating ? '创建中…' : '创建'}
+          </button>
+          <button
+            onClick={cancelCreate}
+            className="pd-btn text-xs px-3 py-1.5 rounded-lg"
+            style={{
+              color: 'var(--text-secondary)',
+              backgroundColor: 'var(--bg-tertiary)',
+              border: '1px solid var(--border)',
+            }}
+            title="放弃本次填写"
+          >
+            取消
           </button>
           {(localError || error) && (
             <span className="text-[11px]" style={{ color: 'var(--status-danger)' }}>
