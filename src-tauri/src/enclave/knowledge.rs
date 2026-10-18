@@ -27,6 +27,8 @@ pub struct KbView {
     pub description: String,
     pub is_implicit: bool,
     pub entry_count: i64,
+    /// 库内最近一次条目更新（无条目时为 0）
+    pub last_entry_at: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -117,7 +119,9 @@ pub fn list_kbs(conn: &Connection, org_id: &str) -> Result<Vec<KbView>, String> 
     let mut stmt = conn
         .prepare(
             "SELECT kb.id, kb.name, kb.description, kb.is_implicit, kb.created_at, kb.updated_at,
-                    (SELECT COUNT(*) FROM knowledge_base_memories m WHERE m.knowledge_base_id = kb.id)
+                    (SELECT COUNT(*) FROM knowledge_base_memories m WHERE m.knowledge_base_id = kb.id),
+                    (SELECT COALESCE(MAX(COALESCE(NULLIF(m.updated_at, 0), m.added_at)), 0)
+                     FROM knowledge_base_memories m WHERE m.knowledge_base_id = kb.id)
              FROM knowledge_bases kb
              WHERE kb.owner_type = 'org' AND kb.owner_id = ?1
              ORDER BY kb.is_implicit DESC, kb.created_at ASC",
@@ -133,6 +137,7 @@ pub fn list_kbs(conn: &Connection, org_id: &str) -> Result<Vec<KbView>, String> 
                 created_at: r.get(4)?,
                 updated_at: r.get(5)?,
                 entry_count: r.get(6)?,
+                last_entry_at: r.get(7)?,
             })
         })
         .map_err(|e| format!("查询组织知识库失败：{}", e))?;

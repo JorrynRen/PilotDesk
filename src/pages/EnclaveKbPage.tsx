@@ -100,6 +100,8 @@ export function EnclaveKbPage() {
 
   const myRole = orgs.find((o) => o.orgId === activeOrgId)?.myRole ?? '';
   const canEdit = myRole === 'owner' || myRole === 'admin';
+  /** 单一默认库：直接取列表里唯一的一项 */
+  const kb = kbs[0] ?? null;
 
   const memberName = (raw: unknown): string => {
     const id = typeof raw === 'string' ? raw : '';
@@ -288,20 +290,36 @@ export function EnclaveKbPage() {
           {/* 单一默认库：不再占一列做库列表，库信息收进内容区顶部一行 */}
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             <div
-              className="shrink-0 px-4 py-2 flex items-center gap-2"
+              className="shrink-0 px-4 pt-2.5 pb-2"
               style={{ borderBottom: '1px solid var(--border)' }}
             >
-              <Library size={12} style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                {kbs[0]?.name ?? '团队知识库'}
-              </span>
-              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                {kbs[0]?.entryCount ?? entries.length} 条知识
-              </span>
-              <div className="flex-1" />
-              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                任务汇报「确认完成」后自动沉淀 · 点击条目展开
-              </span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Library size={12} style={{ color: 'var(--accent)' }} />
+                <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                  {kb?.name ?? '团队知识库'}
+                </span>
+                <span
+                  className="text-[10px] shrink-0 whitespace-nowrap"
+                  style={{ color: 'var(--text-tertiary)' }}
+                >
+                  {kb?.entryCount ?? entries.length} 条知识
+                  {kb && kb.lastEntryAt > 0 && ` · 最近更新 ${formatTime(kb.lastEntryAt)}`}
+                </span>
+                <div className="flex-1" />
+                <span
+                  className="text-[10px] shrink-0 whitespace-nowrap"
+                  style={{ color: 'var(--text-tertiary)' }}
+                >
+                  任务汇报「确认完成」后自动沉淀 · 点击条目展开
+                </span>
+              </div>
+              <div
+                className="text-[11px] mt-1 truncate"
+                style={{ color: 'var(--text-secondary)' }}
+                title={kb?.description}
+              >
+                {kb?.description || '任务产出自动沉淀；团队共享'}
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto">

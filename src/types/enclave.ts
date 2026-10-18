@@ -248,6 +248,8 @@ export interface KbView {
   /** 隐式库（任务产出自动归档地） */
   isImplicit: boolean;
   entryCount: number;
+  /** 库内最近一次条目更新（0 = 还没有条目） */
+  lastEntryAt: number;
   createdAt: number;
   updatedAt: number;
 }
