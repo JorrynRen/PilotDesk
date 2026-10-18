@@ -600,6 +600,60 @@ function TaskNode(props: {
   );
 }
 
+interface Milestone {
+  key: string;
+  label: string;
+  /** null = 尚未达成 */
+  at: number | null;
+}
+
+/** 任务生命周期时间线：已达成的节点用主题色，未达成的留空。 */
+function TaskTimeline({ milestones }: { milestones: Milestone[] }) {
+  return (
+    <div className="flex items-start">
+      {milestones.map((m, i) => {
+        const reached = m.at !== null;
+        return (
+          <div key={m.key} className="flex-1 min-w-0 flex flex-col items-center relative">
+            {i > 0 && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: 4,
+                  right: '50%',
+                  width: '100%',
+                  height: 1,
+                  backgroundColor: reached ? 'var(--accent)' : 'var(--border)',
+                }}
+              />
+            )}
+            <span
+              className="rounded-full"
+              style={{
+                position: 'relative',
+                zIndex: 1,
+                width: 9,
+                height: 9,
+                backgroundColor: reached ? 'var(--accent)' : 'var(--bg-content)',
+                border: reached ? '1px solid var(--accent)' : '1px solid var(--border)',
+              }}
+            />
+            <span
+              className="text-[10px] mt-1.5 truncate max-w-full"
+              style={{ color: reached ? 'var(--text-primary)' : 'var(--text-tertiary)' }}
+            >
+              {m.label}
+            </span>
+            <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+              {m.at ? formatDateTime(m.at) : '—'}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function TaskDetail(props: {
   orgId: string;
   task: TaskView;
@@ -666,6 +720,68 @@ function TaskDetail(props: {
   const [reportText, setReportText] = useState('');
   // 等待审核或已确认时不允许再编辑 / 提交
   const lockedReport = reports.find((r) => r.status === 'submitted' || r.status === 'confirmed') ?? null;
+
+  /** 生命周期里程碑：容器看子任务，普通任务看汇报与完成时间 */
+  const milestones = useMemo<Milestone[]>(() => {
+    const created = { key: 'created', label: '创建', at: task.createdAt };
+    if (isContainer) {
+      const children = tasks.filter((t) => t.parentTaskId === task.id);
+      const startedAt = children.reduce<number | null>(
+        (min, c) => (c.startedAt !== null && (min === null || c.startedAt < min) ? c.startedAt : min),
+        null,
+      );
+      if (task.status === 'cancelled') {
+        return [
+          created,
+          { key: 'started', label: '子任务开始', at: startedAt },
+          { key: 'cancelled', label: '作废', at: task.updatedAt },
+        ];
+      }
+      const closedAt = children.reduce<number | null>(
+        (max, c) => (c.completedAt !== null && (max === null || c.completedAt > max) ? c.completedAt : max),
+        null,
+      );
+      const reachedConfirm =
+        task.status === 'submitted' || task.status === 'done' || task.status === 'archived';
+      return [
+        created,
+        { key: 'started', label: '子任务开始', at: startedAt },
+        { key: 'ready', label: '待汇总确认', at: reachedConfirm ? closedAt : null },
+        { key: 'done', label: '完成', at: task.completedAt },
+        {
+          key: 'archived',
+          label: '归档',
+          at: task.status === 'archived' ? task.updatedAt : null,
+        },
+      ];
+    }
+
+    if (task.status === 'cancelled') {
+      return [
+        created,
+        { key: 'started', label: '开始', at: task.startedAt },
+        { key: 'cancelled', label: '作废', at: task.updatedAt },
+      ];
+    }
+    const submitted =
+      logs.find((r) => r.status === 'submitted' || r.status === 'confirmed') ?? null;
+    return [
+      created,
+      { key: 'started', label: '开始', at: task.startedAt },
+      {
+        key: 'submitted',
+        label: '提交汇报',
+        at: submitted ? (submitted.confirmedAt ?? submitted.updatedAt) : null,
+      },
+      { key: 'done', label: '完成', at: task.completedAt },
+      {
+        key: 'archived',
+        label: '归档',
+        at: task.status === 'archived' ? task.updatedAt : null,
+      },
+    ];
+  }, [isContainer, task, tasks, logs]);
+
   const [reportBusy, setReportBusy] = useState(false);
   const [returningId, setReturningId] = useState<string | null>(null);
   const [returnReason, setReturnReason] = useState('');
@@ -826,6 +942,14 @@ function TaskDetail(props: {
             <AlertTriangle size={10} /> 被前置任务阻塞
           </span>
         )}
+      </div>
+
+      {/* 生命周期时间线：当前节点与全流程里程碑一眼可见 */}
+      <div
+        className="rounded-lg px-4 py-3"
+        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+      >
+        <TaskTimeline milestones={milestones} />
       </div>
 
       {taskError && (
@@ -1222,7 +1346,8 @@ function TaskDetail(props: {
         </div>
       )}
 
-      {/* 过程记录（可多次；提交完成汇报后锁定） */}
+      {/* 过程记录（汇总容器不渲染：过程属于子任务） */}
+      {!isContainer && (
       <div
         className="flex flex-col gap-2 rounded-lg p-3"
         style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
@@ -1243,14 +1368,8 @@ function TaskDetail(props: {
           )}
         </div>
 
-        {isContainer && (
-          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            该任务包含子任务，过程记录请在各子任务中填写。
-          </div>
-        )}
-
         {/* 默认只展示列表；点「添加过程记录」才展开表单（前置未完成时不允许记录） */}
-        {canReport && !isContainer && !blocked && !progress?.locked && !composing && (
+        {canReport && !blocked && !progress?.locked && !composing && (
           <button
             onClick={() => setComposing(true)}
             className="self-start text-xs px-2 py-1 rounded flex items-center gap-1"
@@ -1376,8 +1495,10 @@ function TaskDetail(props: {
           </div>
         )}
       </div>
+      )}
 
-      {/* 完成汇报 */}
+      {/* 完成汇报（汇总容器不单独汇报，直接不渲染） */}
+      {!isContainer && (
       <div
         className="flex flex-col gap-2 rounded-lg p-3"
         style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
@@ -1388,12 +1509,6 @@ function TaskDetail(props: {
             完成汇报
           </span>
         </div>
-        {isContainer && (
-          <div className="text-[11px] leading-5" style={{ color: 'var(--text-tertiary)' }}>
-            汇总任务不单独提交完成汇报：各子任务确认后产出分别沉淀进团队知识库；
-            子任务全部完成后，在上方「汇总任务」里做汇总确认。
-          </div>
-        )}
         {lockedReport && (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {lockedReport.status === 'submitted'
@@ -1668,6 +1783,7 @@ function TaskDetail(props: {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
