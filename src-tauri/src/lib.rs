@@ -2786,6 +2786,8 @@ pub fn run() {
             commands::enclave::enclave_snapshot_refresh,
             commands::enclave::enclave_identity_refresh,
             commands::enclave::enclave_snapshot_freshness,
+            commands::enclave::enclave_host_status,
+            commands::enclave::enclave_host_addr_set,
             commands::enclave::enclave_org_caps,
             commands::enclave::enclave_policy_get,
             commands::enclave::enclave_policy_set,
@@ -2904,6 +2906,12 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 enclave::snapshot::run_auto_snapshot_loop(DbState { pool: snap_pool }, snap_state)
                     .await;
+            });
+
+            // 启动飞地主机服务（M7）：owner 机器监听局域网 WebSocket，所有机器监听 UDP 发现
+            let host_state = enclave_state.clone();
+            tauri::async_runtime::spawn(async move {
+                enclave::host::run_host_loop(host_state).await;
             });
 
             log::info!("PilotDesk initialized successfully.");

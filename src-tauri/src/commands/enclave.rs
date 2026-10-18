@@ -83,6 +83,25 @@ pub fn enclave_snapshot_freshness(state: State<'_, Arc<EnclaveState>>) -> i64 {
     state.last_snapshot_at()
 }
 
+/// 主机服务状态（M7）：本机是主机还是成员、监听端口、发现到的主机。
+#[tauri::command]
+pub fn enclave_host_status(
+    org_id: Option<String>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::host::HostStatusView, String> {
+    crate::enclave::host::host_status(state.inner(), org_id.as_deref())
+}
+
+/// 成员端手动填写主机地址（`主机:端口`；留空清除，回到自动发现）。
+#[tauri::command]
+pub fn enclave_host_addr_set(
+    org_id: String,
+    addr: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    crate::enclave::host::set_manual_addr(state.inner(), &org_id, &addr)
+}
+
 // ════════════════════════════════════════════════════════════
 // M2：授权器 + 策略 / 应急 / 审计
 // ════════════════════════════════════════════════════════════

@@ -209,6 +209,41 @@ pub fn role_for_org(conn: &Connection, org_id: &str) -> Result<Option<Role>, Str
     Ok(Role::parse(&raw_role))
 }
 
+/// 主机侧：按**指定成员**解析其在组织中的角色（用于局域网连接的身份确认）。
+///
+/// 与 [`role_for_org`] 的区别：后者永远以本机 `local_identity` 为准；主机在处理成员端
+/// 远程请求时，actor 是连接方而不是本机登录用户，必须从只读快照里取该成员的角色。
+pub fn role_for_member(
+    conn: &Connection,
+    org_id: &str,
+    user_id: &str,
+) -> Result<Option<Role>, String> {
+    if user_id.trim().is_empty() {
+        return Ok(None);
+    }
+    let owner: Option<String> = conn
+        .query_row(
+            "SELECT owner_user_id FROM org_snapshot WHERE org_id = ?1",
+            params![org_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("读取组织所有者失败：{}", e))?;
+    if owner.as_deref() == Some(user_id) {
+        return Ok(Some(Role::Owner));
+    }
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT role FROM member_snapshot
+             WHERE org_id = ?1 AND user_id = ?2 AND seat_status <> 'removed'",
+            params![org_id, user_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("读取成员角色失败：{}", e))?;
+    Ok(raw.as_deref().and_then(Role::parse))
+}
+
 /// 组织授权的最终入口：成功返回 `actor_id`（供审计），失败返回可直接展示的中文原因。
 ///
 /// 拒绝文案区分两种情况（设计 §8.3 / §8.4）：

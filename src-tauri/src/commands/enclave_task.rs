@@ -13,15 +13,29 @@ use crate::enclave::tasks::{self, CreateTaskInput, DepsPreview, TaskView, Update
 use crate::enclave::EnclaveState;
 
 /// 任务列表（整组织，前端按 `parentTaskId` 组树）。
+///
+/// 主机（owner）走本地库；成员走局域网 WebSocket 实时拉取（M7，不缓存）。
 #[tauri::command]
-pub fn enclave_task_list(
+pub async fn enclave_task_list(
+    db: State<'_, crate::DbState>,
     org_id: String,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<TaskView>, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        tasks::list_tasks(c, &org_id, &actor)
-    })
+    let role = state
+        .store
+        .with_conn(|c| authz::role_for_org(c, &org_id))?;
+    match role {
+        Some(crate::enclave::authz::Role::Owner) => state.store.with_conn(|c| {
+            let actor = authz::current_actor_id(c)?;
+            tasks::list_tasks(c, &org_id, &actor)
+        }),
+        Some(_) => {
+            let data =
+                crate::enclave::host::fetch_task_list(state.inner(), db.inner(), &org_id).await?;
+            serde_json::from_value(data).map_err(|e| format!("解析主机任务列表失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
 }
 
 /// 单任务详情（含 `blocked` 与 `effectiveActions`）。

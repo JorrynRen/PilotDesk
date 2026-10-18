@@ -342,7 +342,7 @@ pub fn confirm_container(
 
 // ── 视图结构 ────────────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskView {
     pub id: String,
@@ -513,6 +513,18 @@ fn reconcile_containers(conn: &Connection, org_id: &str) -> Result<(), String> {
 /// 全量列出某组织任务（前端按 `parentTaskId` 组树）。
 pub fn list_tasks(conn: &Connection, org_id: &str, actor: &str) -> Result<Vec<TaskView>, String> {
     let org_role = require_org_role(conn, org_id)?;
+    list_tasks_with_role(conn, org_id, actor, org_role)
+}
+
+/// 主机侧远程请求：角色由连接方身份解析后传入。
+///
+/// 不能复用 [`list_tasks`]：它按本机 `local_identity` 解析角色，会把远程成员误判成主机 owner。
+pub fn list_tasks_with_role(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    org_role: Role,
+) -> Result<Vec<TaskView>, String> {
     // 先修正存量容器的派生状态（历史数据不会自动重算）
     reconcile_containers(conn, org_id)?;
     let mut stmt = conn

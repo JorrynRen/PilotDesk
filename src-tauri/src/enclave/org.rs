@@ -244,6 +244,26 @@ pub fn list_orgs(conn: &Connection) -> Result<Vec<OrgSnapshotView>, String> {
         .map_err(|e| format!("读取组织快照失败：{}", e))
 }
 
+/// 本机承担主机服务的组织：当前登录身份是 **owner** 的组织。
+///
+/// `owner = host`：只有 owner 的设备承载 `enclave.db` 与文件资产。
+pub fn host_org_ids(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT org_id FROM org_snapshot
+             WHERE my_role = 'owner'
+               AND viewer_id <> ''
+               AND viewer_id = (SELECT user_id FROM local_identity LIMIT 1)
+             ORDER BY org_id",
+        )
+        .map_err(|e| format!("查询主机组织失败：{}", e))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("查询主机组织失败：{}", e))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取主机组织失败：{}", e))
+}
+
 /// 取某组织详情（组织信息 + 成员列表）；不存在返回 `None`。
 /// 成员按角色排序：owner → admin → member（其余角色排最后）。
 pub fn org_detail(

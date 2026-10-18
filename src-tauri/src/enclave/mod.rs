@@ -13,6 +13,7 @@ pub mod authz;
 pub mod db;
 pub mod files;
 pub mod gate;
+pub mod host;
 pub mod knowledge;
 pub mod org;
 pub mod progress;
@@ -21,12 +22,13 @@ pub mod snapshot;
 pub mod tasks;
 pub mod tools;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use db::EnclaveStore;
 
-/// 主机服务默认监听端口（可在主库 `app_settings` 用 `enclave_host_port` 覆盖）。
+/// 主机服务默认监听端口（`enclave_settings.enclave_host_port` 或环境变量可覆盖）。
 pub const ENCLAVE_DEFAULT_PORT: u16 = 47820;
 
 /// 治理快照的新鲜度上限（秒）：超过即视为"可能过期"。
@@ -47,6 +49,10 @@ pub struct EnclaveState {
     pub disabled: AtomicBool,
     /// 最近一次治理快照成功同步时间（unix 秒，0 = 从未成功）。
     pub last_snapshot_at: AtomicI64,
+    /// 主机服务运行态（M7）。
+    pub host: host::HostRuntime,
+    /// 成员端发现到的主机（内存缓存，按 org_id；不落库）。
+    pub discovered: Mutex<HashMap<String, host::DiscoveredHost>>,
 }
 
 impl EnclaveState {
@@ -55,6 +61,8 @@ impl EnclaveState {
             store,
             disabled: AtomicBool::new(false),
             last_snapshot_at: AtomicI64::new(0),
+            host: host::HostRuntime::default(),
+            discovered: Mutex::new(HashMap::new()),
         }
     }
 
@@ -71,5 +79,13 @@ impl EnclaveState {
     /// 当前是否处于「飞地对外服务已临时关闭」（本机使用不受影响）。
     pub fn is_disabled(&self) -> bool {
         self.disabled.load(Ordering::Relaxed)
+    }
+
+    /// 取当前组织发现到的主机（顺带清理过期条目）。
+    pub fn discovered_host(&self, org_id: &str) -> Option<host::DiscoveredHost> {
+        let now = chrono::Utc::now().timestamp();
+        let mut map = self.discovered.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, d| now.saturating_sub(d.seen_at) <= host::DISCOVERY_TTL_SECS);
+        map.get(org_id).cloned()
     }
 }
