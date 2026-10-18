@@ -429,9 +429,33 @@ fn load_task(conn: &Connection, org_id: &str, task_id: &str) -> Result<TaskRow, 
     .ok_or_else(|| "任务不存在或不属于该组织".to_string())
 }
 
+/// 对齐存量汇总容器的状态。
+///
+/// 容器模型上线前就存在的父任务，库里存的是旧状态（例如子任务已在执行，父任务仍是「待办」）。
+/// 拉任务列表时做一次校正：只写真正有变化的行，避免历史数据长期停留在错误状态。
+fn reconcile_containers(conn: &Connection, org_id: &str) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT parent_task_id FROM org_tasks
+             WHERE org_id = ?1 AND parent_task_id IS NOT NULL",
+        )
+        .map_err(|e| format!("查询汇总任务失败：{}", e))?;
+    let parents: Vec<String> = stmt
+        .query_map(params![org_id], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("查询汇总任务失败：{}", e))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取汇总任务失败：{}", e))?;
+    for id in parents {
+        sync_container_status(conn, org_id, &id)?;
+    }
+    Ok(())
+}
+
 /// 全量列出某组织任务（前端按 `parentTaskId` 组树）。
 pub fn list_tasks(conn: &Connection, org_id: &str, actor: &str) -> Result<Vec<TaskView>, String> {
     let org_role = require_org_role(conn, org_id)?;
+    // 先修正存量容器的派生状态（历史数据不会自动重算）
+    reconcile_containers(conn, org_id)?;
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {} FROM org_tasks WHERE org_id = ?1 ORDER BY created_at ASC",

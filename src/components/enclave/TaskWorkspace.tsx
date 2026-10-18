@@ -629,7 +629,12 @@ function TaskDetail(props: {
   const isContainer = task.childCount > 0;
   const transitions = isContainer ? CONTAINER_TRANSITIONS[task.status] : TRANSITIONS[task.status];
   const statusText =
-    isContainer && task.status === 'submitted' ? '待汇总确认' : STATUS_LABEL[task.status];
+    isContainer && task.status === 'submitted'
+      ? '待汇总确认'
+      : isContainer && task.status === 'pending'
+        // 容器没有「开始」动作，「待办」容易被误读成可以执行 → 显示为未开始
+        ? '未开始'
+        : STATUS_LABEL[task.status];
   const blocked = task.blocked;
   const taskError = useEnclaveTaskStore((s) => s.error);
   const [desc, setDesc] = useState(task.description);
@@ -970,7 +975,9 @@ function TaskDetail(props: {
                         }}
                       />
                       <span className="truncate flex-1">{t.title}</span>
-                      <span style={{ color: STATUS_COLOR[t.status] }}>{STATUS_LABEL[t.status]}</span>
+                      <span style={{ color: STATUS_COLOR[t.status] }}>
+                        {t.childCount > 0 && t.status === 'pending' ? '未开始' : STATUS_LABEL[t.status]}
+                      </span>
                     </label>
                   ))}
               </div>
