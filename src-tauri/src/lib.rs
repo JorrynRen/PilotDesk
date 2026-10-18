@@ -2797,6 +2797,7 @@ pub fn run() {
             commands::enclave_task::enclave_task_create,
             commands::enclave_task::enclave_task_update,
             commands::enclave_task::enclave_task_set_status,
+            commands::enclave_task::enclave_task_container_confirm,
             commands::enclave_task::enclave_task_set_deps,
             commands::enclave_task::enclave_task_deps_preview,
             commands::enclave_task::enclave_task_progress_add,

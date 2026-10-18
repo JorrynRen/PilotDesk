@@ -39,6 +39,8 @@ interface EnclaveTaskState {
   createTask: (orgId: string, input: CreateTaskInput) => Promise<TaskView | null>;
   updateTask: (orgId: string, taskId: string, input: UpdateTaskInput) => Promise<boolean>;
   setStatus: (orgId: string, taskId: string, status: string) => Promise<boolean>;
+  /** 汇总确认：子任务全部收敛后，由创建者 / 负责人收口完成 */
+  confirmContainer: (orgId: string, taskId: string) => Promise<boolean>;
   previewDeps: (orgId: string, taskId: string, blockedBy: string[]) => Promise<DepsPreview | null>;
   setDeps: (orgId: string, taskId: string, blockedBy: string[]) => Promise<boolean>;
   /** 拉当前任务的汇报与附件 */
@@ -140,6 +142,8 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
     try {
       const task = await invoke<TaskView>('enclave_task_create', { orgId, input });
       set((s) => ({ tasks: upsert(s.tasks, task), activeTaskId: task.id, error: null }));
+      // 新增子任务会改变父容器的派生状态
+      if (task.parentTaskId) await get().loadTasks(orgId);
       return task;
     } catch (e) {
       set({ error: errorMessage(e) });
@@ -161,6 +165,19 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   setStatus: async (orgId, taskId, status) => {
     try {
       const task = await invoke<TaskView>('enclave_task_set_status', { orgId, taskId, status });
+      set((s) => ({ tasks: upsert(s.tasks, task), error: null }));
+      // 子任务状态变化会带动父容器派生状态，需重拉列表
+      if (task.parentTaskId) await get().loadTasks(orgId);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  confirmContainer: async (orgId, taskId) => {
+    try {
+      const task = await invoke<TaskView>('enclave_task_container_confirm', { orgId, taskId });
       set((s) => ({ tasks: upsert(s.tasks, task), error: null }));
       return true;
     } catch (e) {

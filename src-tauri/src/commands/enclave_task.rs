@@ -77,10 +77,33 @@ pub fn enclave_task_set_status(
         // 「待确认」是完成汇报驱动的中间态：进入只能靠提交汇报，离开只能靠确认/退回汇报。
         // 状态操作不允许绕过汇报直接改，否则会出现「待确认但没有汇报」或「已完成但汇报未确认」。
         let current = tasks::task_status(c, &org_id, &task_id)?;
+        // 汇总容器（有子任务）的状态由子任务派生，不接受手动开始 / 提交 / 放回待办 / 恢复
+        let container = tasks::is_container(c, &org_id, &task_id)?;
+        if container {
+            match status.as_str() {
+                tasks::STATUS_IN_PROGRESS => {
+                    return Err(
+                        "汇总任务的状态由子任务派生，不能手动恢复；请重新打开子任务".to_string(),
+                    )
+                }
+                tasks::STATUS_PENDING => {
+                    return Err(
+                        "汇总任务的状态由子任务派生，不能手动放回待办".to_string(),
+                    )
+                }
+                tasks::STATUS_DONE => {
+                    return Err("请在子任务全部完成后使用「汇总确认」".to_string())
+                }
+                _ => {}
+            }
+        }
         if status == tasks::STATUS_SUBMITTED {
             return Err("请通过「完成汇报 → 提交汇报」把任务推进到待确认".to_string());
         }
-        if current == tasks::STATUS_SUBMITTED {
+        // 汇总容器在「待汇总确认」时允许直接作废（放弃这批产出），其余仍走汇报流程
+        if current == tasks::STATUS_SUBMITTED
+            && !(container && status == tasks::STATUS_CANCELLED)
+        {
             return Err("待确认任务请通过完成汇报的「确认完成 / 退回」处理".to_string());
         }
         // 恢复汇报：已完成 / 已归档 → 进行中时，把最近一份已确认汇报退回可编辑，
@@ -93,6 +116,19 @@ pub fn enclave_task_set_status(
             crate::enclave::reports::reopen_confirmed_report(c, &org_id, &task_id, &actor)?;
         }
         tasks::set_status(c, &org_id, &actor, &task_id, &status)
+    })
+}
+
+/// 汇总确认：子任务全部收敛后，由创建者 / 负责人收口完成（容器不单独沉淀知识库）。
+#[tauri::command]
+pub fn enclave_task_container_confirm(
+    org_id: String,
+    task_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TaskView, String> {
+    state.store.with_conn(|c| {
+        let actor = authz::current_actor_id(c)?;
+        tasks::confirm_container(c, &org_id, &actor, &task_id)
     })
 }
 

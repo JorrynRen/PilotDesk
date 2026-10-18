@@ -125,6 +125,16 @@ fn reject_closed_task(conn: &Connection, org_id: &str, task_id: &str) -> Result<
     Ok(())
 }
 
+/// 汇总容器（有子任务）不单独填写 / 提交完成汇报：产出由子任务各自汇报。
+fn reject_container(conn: &Connection, org_id: &str, task_id: &str) -> Result<(), String> {
+    if tasks::is_container(conn, org_id, task_id)? {
+        return Err(
+            "该任务包含子任务，不单独填写完成汇报；请在子任务完成后做「汇总确认」".to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// 找该任务当前可编辑的草稿（一个任务同时只有一份草稿）。
 ///
 /// 「已退回」的汇报不再复用：它作为提交日志保留，继续修改时会新建一份草稿。
@@ -166,6 +176,7 @@ pub fn save_draft(
     let role = tasks::actor_task_role(conn, org_id, task_id, actor)?;
     ensure_participant(role)?;
     reject_closed_task(conn, org_id, task_id)?;
+    reject_container(conn, org_id, task_id)?;
     if has_submitted_report(conn, task_id)? {
         return Err("完成汇报已提交，不能再次提交或修改".to_string());
     }
@@ -223,6 +234,7 @@ pub fn revise_report(
     let role = tasks::actor_task_role(conn, org_id, task_id, actor)?;
     ensure_participant(role)?;
     reject_closed_task(conn, org_id, task_id)?;
+    reject_container(conn, org_id, task_id)?;
     if has_submitted_report(conn, task_id)? {
         return Err("完成汇报已提交，不能再次修改".to_string());
     }

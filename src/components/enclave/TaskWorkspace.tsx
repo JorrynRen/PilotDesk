@@ -75,6 +75,19 @@ const TRANSITIONS: Record<TaskStatus, { to: TaskStatus; label: string }[]> = {
   cancelled: [],
 };
 
+/**
+ * 汇总容器（有子任务）的可用状态操作：
+ * 自身不执行，只保留「作废」与「归档」；完成走「汇总确认」。
+ */
+const CONTAINER_TRANSITIONS: Record<TaskStatus, { to: TaskStatus; label: string }[]> = {
+  pending: [{ to: 'cancelled', label: '作废' }],
+  in_progress: [{ to: 'cancelled', label: '作废' }],
+  submitted: [{ to: 'cancelled', label: '作废' }],
+  done: [{ to: 'archived', label: '归档' }],
+  archived: [],
+  cancelled: [],
+};
+
 function toDateInput(unixSec: number | null): string {
   if (!unixSec) return '';
   const d = new Date(unixSec * 1000);
@@ -389,7 +402,14 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
               style={{ width: 150, flexShrink: 0 }}
               options={[
                 { value: '', label: '（顶层任务）' },
-                ...roots.map((t) => ({ value: t.id, label: t.title })),
+                ...roots
+                  .filter(
+                    (t) =>
+                      t.status !== 'done'
+                      && t.status !== 'archived'
+                      && t.status !== 'cancelled',
+                  )
+                  .map((t) => ({ value: t.id, label: t.title })),
               ]}
               title="父任务"
             />
@@ -473,7 +493,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
                 { value: 'all', label: '全部状态' },
                 { value: 'pending', label: '待办' },
                 { value: 'in_progress', label: '进行中' },
-                { value: 'submitted', label: '待确认' },
+                { value: 'submitted', label: '待确认 / 待汇总确认' },
                 { value: 'done', label: '已完成' },
                 { value: 'archived', label: '已归档' },
                 { value: 'cancelled', label: '已作废' },
@@ -565,6 +585,16 @@ function TaskNode(props: {
         style={{ backgroundColor: STATUS_COLOR[task.status] }}
       />
       <span className="text-xs truncate flex-1">{task.title}</span>
+      {task.childCount > 0 && (
+        <span
+          className="shrink-0 flex items-center gap-0.5 text-[9px]"
+          style={{ color: 'var(--text-tertiary)' }}
+          title={`汇总任务：${task.childCount} 个子任务`}
+        >
+          <ListTree size={10} />
+          {task.childCount}
+        </span>
+      )}
       {task.blocked && <AlertTriangle size={11} style={{ color: 'var(--status-danger)' }} />}
     </button>
   );
@@ -595,6 +625,11 @@ function TaskDetail(props: {
   const canAssign = identityVerified && isCreator && !isClosed;
   const canReport = identityVerified && isParticipant;
   const canUpload = identityVerified && isParticipant && !isClosed;
+  /** 有子任务 = 汇总容器：状态由子任务派生，自身不执行 */
+  const isContainer = task.childCount > 0;
+  const transitions = isContainer ? CONTAINER_TRANSITIONS[task.status] : TRANSITIONS[task.status];
+  const statusText =
+    isContainer && task.status === 'submitted' ? '待汇总确认' : STATUS_LABEL[task.status];
   const blocked = task.blocked;
   const taskError = useEnclaveTaskStore((s) => s.error);
   const [desc, setDesc] = useState(task.description);
@@ -676,6 +711,19 @@ function TaskDetail(props: {
     await useEnclaveTaskStore.getState().setStatus(orgId, task.id, status);
   };
 
+  /** 汇总确认：子任务全部收敛后收口完成（容器不单独沉淀知识库） */
+  const confirmContainer = async () => {
+    const ok = await confirmDialog({
+      title: '汇总确认',
+      message:
+        `将检查 ${task.childCount} 个子任务的完成情况，确认后该汇总任务完成。\n`
+        + '汇总任务不单独沉淀知识库，产出已由各子任务分别沉淀。',
+      confirmText: '确认完成',
+    });
+    if (!ok) return;
+    await useEnclaveTaskStore.getState().confirmContainer(orgId, task.id);
+  };
+
   const uploadFile = async () => {
     const picked = await openDialog({ multiple: false, directory: false });
     if (typeof picked !== 'string') return;
@@ -734,8 +782,17 @@ function TaskDetail(props: {
           {task.title}
         </span>
         <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: STATUS_COLOR[task.status] }}>
-          {STATUS_LABEL[task.status]}
+          {statusText}
         </span>
+        {isContainer && (
+          <span
+            className="text-[11px] px-1.5 py-0.5 rounded flex items-center gap-1"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
+            title="状态由子任务派生；汇总任务不单独执行、不单独沉淀知识库"
+          >
+            <ListTree size={10} /> 汇总 · {task.childCount} 个子任务
+          </span>
+        )}
         <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
           {PRIORITY_LABEL[task.priority] ?? task.priority}
         </span>
@@ -1082,12 +1139,39 @@ function TaskDetail(props: {
         )}
       </div>
 
+      {/* 汇总容器：状态由子任务派生，全部收敛后可汇总确认 */}
+      {isContainer && (
+        <div
+          className="flex items-center gap-2 flex-wrap rounded-lg p-3"
+          style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+        >
+          <ListTree size={12} style={{ color: 'var(--accent)' }} />
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            汇总任务
+          </span>
+          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            状态由 {task.childCount} 个子任务派生；自身不执行、不单独沉淀知识库
+          </span>
+          <div className="flex-1" />
+          {task.status === 'submitted' && canStatus && (
+            <button
+              onClick={() => void confirmContainer()}
+              className="pd-btn text-xs px-2.5 py-1 rounded-lg"
+              style={{ backgroundColor: 'var(--accent)', color: '#fff', border: 'none' }}
+              title="检查子任务产出后收口完成"
+            >
+              汇总确认
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 状态操作：无权限或无可用流转时整块不显示（待确认只由完成汇报驱动） */}
-      {canStatus && TRANSITIONS[task.status].length > 0 && (
+      {canStatus && transitions.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           <Flag size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>状态操作</span>
-          {TRANSITIONS[task.status].map((t) => (
+          {transitions.map((t) => (
             <button
               key={t.to}
               onClick={() => void change(t.to)}
@@ -1132,8 +1216,14 @@ function TaskDetail(props: {
           )}
         </div>
 
+        {isContainer && (
+          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            该任务包含子任务，过程记录请在各子任务中填写。
+          </div>
+        )}
+
         {/* 默认只展示列表；点「添加过程记录」才展开表单（前置未完成时不允许记录） */}
-        {canReport && !blocked && !progress?.locked && !composing && (
+        {canReport && !isContainer && !blocked && !progress?.locked && !composing && (
           <button
             onClick={() => setComposing(true)}
             className="self-start text-xs px-2 py-1 rounded flex items-center gap-1"
@@ -1143,7 +1233,7 @@ function TaskDetail(props: {
           </button>
         )}
 
-        {canReport && !blocked && !progress?.locked && composing && (
+        {canReport && !isContainer && !blocked && !progress?.locked && composing && (
           <div
             className="flex flex-col gap-2 rounded p-2"
             style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-field)' }}
@@ -1271,6 +1361,12 @@ function TaskDetail(props: {
             完成汇报
           </span>
         </div>
+        {isContainer && (
+          <div className="text-[11px] leading-5" style={{ color: 'var(--text-tertiary)' }}>
+            汇总任务不单独提交完成汇报：各子任务确认后产出分别沉淀进团队知识库；
+            子任务全部完成后，在上方「汇总任务」里做汇总确认。
+          </div>
+        )}
         {lockedReport && (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {lockedReport.status === 'submitted'
@@ -1278,12 +1374,12 @@ function TaskDetail(props: {
               : '完成汇报已确认，任务已收敛'}
           </div>
         )}
-        {blocked && (
+        {!isContainer && blocked && (
           <div className="text-[11px]" style={{ color: 'var(--status-danger)' }}>
             存在未完成的前置任务，暂不能开始 / 提交
           </div>
         )}
-        {canReport && !lockedReport && !blocked && task.status !== 'done' && task.status !== 'archived' && task.status !== 'cancelled' && (editable || logs.length === 0) && (
+        {canReport && !isContainer && !lockedReport && !blocked && task.status !== 'done' && task.status !== 'archived' && task.status !== 'cancelled' && (editable || logs.length === 0) && (
           <>
             {latestReturnReason && (
               <div

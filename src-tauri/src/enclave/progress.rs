@@ -120,6 +120,9 @@ pub fn add_progress(
     if !tasks::is_participant(role) {
         return Err("只有任务创建者、负责人或参与者可以记录进度".to_string());
     }
+    if tasks::is_container(conn, org_id, task_id)? {
+        return Err("该任务包含子任务，不记录过程记录；请在子任务中记录".to_string());
+    }
     let content = content.trim();
     if content.is_empty() {
         return Err("进度说明不能为空".to_string());

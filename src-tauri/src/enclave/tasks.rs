@@ -145,6 +145,142 @@ pub fn is_closed_status(s: &str) -> bool {
     s == STATUS_DONE || s == STATUS_ARCHIVED || s == STATUS_CANCELLED
 }
 
+// ── 汇总容器：有子任务的任务不再自己执行 ────────────────────────
+
+/// 子任务状态列表（只支持一层父子，因此不递归）。
+fn child_statuses(conn: &Connection, org_id: &str, parent_id: &str) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT status FROM org_tasks WHERE org_id = ?1 AND parent_task_id = ?2",
+        )
+        .map_err(|e| format!("查询子任务失败：{}", e))?;
+    let rows = stmt
+        .query_map(params![org_id, parent_id], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("查询子任务失败：{}", e))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取子任务失败：{}", e))
+}
+
+/// 是否有子任务（= 汇总容器）。
+pub fn is_container(conn: &Connection, org_id: &str, task_id: &str) -> Result<bool, String> {
+    Ok(!child_statuses(conn, org_id, task_id)?.is_empty())
+}
+
+/// 由子任务推导容器状态。
+///
+/// - 全部子任务收敛（完成 / 归档 / 作废）且有产出 → 待汇总确认；
+/// - 全部子任务都作废 → 回到待办（不伪造成完成）；
+/// - 全部子任务待办 → 待办；其余 → 进行中；
+/// - **已完成容器**只在子任务被重新打开时回退；归档 / 作废态不再自动变化。
+fn derived_container_status(current: &str, children: &[String]) -> Option<&'static str> {
+    if children.is_empty() {
+        return None;
+    }
+    let closed = |s: &str| matches!(s, STATUS_DONE | STATUS_ARCHIVED | STATUS_CANCELLED);
+    let any_output = children
+        .iter()
+        .any(|s| matches!(s.as_str(), STATUS_DONE | STATUS_ARCHIVED));
+    let all_closed = children.iter().all(|s| closed(s));
+
+    if current == STATUS_DONE {
+        return if all_closed && any_output {
+            None
+        } else {
+            Some(STATUS_IN_PROGRESS)
+        };
+    }
+    if current == STATUS_ARCHIVED || current == STATUS_CANCELLED {
+        return None;
+    }
+
+    let target = if all_closed {
+        if any_output {
+            STATUS_SUBMITTED
+        } else {
+            STATUS_PENDING
+        }
+    } else if children.iter().all(|s| s == STATUS_PENDING) {
+        STATUS_PENDING
+    } else {
+        STATUS_IN_PROGRESS
+    };
+    if target == current {
+        None
+    } else {
+        Some(target)
+    }
+}
+
+/// 重新计算容器状态并落库（派生动作，不走状态机）。
+fn sync_container_status(conn: &Connection, org_id: &str, parent_id: &str) -> Result<(), String> {
+    let parent = load_task(conn, org_id, parent_id)?;
+    let children = child_statuses(conn, org_id, parent_id)?;
+    let Some(target) = derived_container_status(&parent.status, &children) else {
+        return Ok(());
+    };
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "UPDATE org_tasks SET status = ?3, completed_at = NULL, updated_at = ?4
+         WHERE id = ?1 AND org_id = ?2",
+        params![parent_id, org_id, target, now],
+    )
+    .map_err(|e| format!("更新汇总任务状态失败：{}", e))?;
+    Ok(())
+}
+
+/// 子任务状态变化后，同步其父容器的派生状态。
+pub fn sync_parent_container(
+    conn: &Connection,
+    org_id: &str,
+    task_id: &str,
+) -> Result<(), String> {
+    let row = load_task(conn, org_id, task_id)?;
+    if let Some(parent) = row.parent_task_id.as_deref() {
+        sync_container_status(conn, org_id, parent)?;
+    }
+    Ok(())
+}
+
+/// 汇总确认：子任务全部收敛后，由创建者 / 负责人收口完成。
+///
+/// 容器没有自己的完成汇报，也不沉淀知识库——产出已经由子任务各自沉淀。
+pub fn confirm_container(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+) -> Result<TaskView, String> {
+    let row = load_task(conn, org_id, task_id)?;
+    let children = child_statuses(conn, org_id, task_id)?;
+    if children.is_empty() {
+        return Err("该任务没有子任务，请通过完成汇报确认完成".to_string());
+    }
+    if row.status != STATUS_SUBMITTED {
+        return Err("子任务尚未全部完成，暂不能汇总确认".to_string());
+    }
+    let org_role = require_org_role(conn, org_id)?;
+    let role = resolve_task_role(
+        org_role,
+        actor,
+        &TaskActors {
+            creator_id: &row.creator_id,
+            assignee_id: row.assignee_id.as_deref(),
+            collaborators: &row.collaborators,
+        },
+    );
+    if !matches!(role, TaskRole::Creator | TaskRole::Assignee) {
+        return Err("只有任务创建者或负责人可以汇总确认".to_string());
+    }
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "UPDATE org_tasks SET status = ?3, completed_at = ?4, updated_at = ?4
+         WHERE id = ?1 AND org_id = ?2",
+        params![task_id, org_id, STATUS_DONE, now],
+    )
+    .map_err(|e| format!("汇总确认失败：{}", e))?;
+    get_task(conn, org_id, task_id, actor)
+}
+
 // ── 视图结构 ────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -167,6 +303,8 @@ pub struct TaskView {
     pub visibility: String,
     /// 当前是否被前置任务阻塞（archived 视作已放行）
     pub blocked: bool,
+    /// 子任务数量：> 0 表示这是一个「汇总容器」（状态由子任务派生，自身不执行）
+    pub child_count: i64,
     /// 前端渲染按钮的唯一来源
     pub effective_actions: Vec<String>,
     pub created_at: i64,
@@ -310,10 +448,20 @@ pub fn list_tasks(conn: &Connection, org_id: &str, actor: &str) -> Result<Vec<Ta
         .iter()
         .map(|r| (r.id.clone(), r.status.clone()))
         .collect();
+    // 子任务数量：> 0 即汇总容器（一层父子，直接按 parent_task_id 计数）
+    let mut child_counts: HashMap<String, i64> = HashMap::new();
+    for r in &rows {
+        if let Some(parent) = r.parent_task_id.as_deref() {
+            *child_counts.entry(parent.to_string()).or_insert(0) += 1;
+        }
+    }
 
     Ok(rows
         .iter()
-        .map(|r| to_view(org_role, actor, r, &status_by_id))
+        .map(|r| {
+            let child_count = *child_counts.get(&r.id).unwrap_or(&0);
+            to_view(org_role, actor, r, &status_by_id, child_count)
+        })
         .collect())
 }
 
@@ -326,7 +474,8 @@ pub fn get_task(
     let org_role = require_org_role(conn, org_id)?;
     let row = load_task(conn, org_id, task_id)?;
     let status_by_id = all_status(conn, org_id)?;
-    Ok(to_view(org_role, actor, &row, &status_by_id))
+    let child_count = child_statuses(conn, org_id, task_id)?.len() as i64;
+    Ok(to_view(org_role, actor, &row, &status_by_id, child_count))
 }
 
 fn all_status(conn: &Connection, org_id: &str) -> Result<HashMap<String, String>, String> {
@@ -346,6 +495,7 @@ fn to_view(
     actor: &str,
     r: &TaskRow,
     status_by_id: &HashMap<String, String>,
+    child_count: i64,
 ) -> TaskView {
     let role = resolve_task_role(
         org_role,
@@ -386,6 +536,7 @@ fn to_view(
         blocked_by: r.blocked_by.clone(),
         visibility: r.visibility.clone(),
         blocked,
+        child_count,
         effective_actions: actions,
         created_at: r.created_at,
         updated_at: r.updated_at,
@@ -570,6 +721,34 @@ pub fn create_task(
         if parent_row.parent_task_id.is_some() {
             return Err("只支持一层父子结构：父任务本身不能是子任务".to_string());
         }
+        if is_closed_status(&parent_row.status) {
+            return Err(format!(
+                "父任务已{}，不能再添加子任务",
+                status_label(&parent_row.status)
+            ));
+        }
+        // 一旦父任务已经产出（汇报 / 过程记录），再挂子任务会让两套语义打架
+        let reports: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_reports WHERE task_id = ?1",
+                params![parent],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("查询父任务汇报失败：{}", e))?;
+        if reports > 0 {
+            return Err("父任务已有完成汇报，不能再拆分为汇总任务".to_string());
+        }
+        let progress: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_comments
+                 WHERE task_id = ?1 AND content_type = 'progress' AND deleted_at IS NULL",
+                params![parent],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("查询父任务过程记录失败：{}", e))?;
+        if progress > 0 {
+            return Err("父任务已有过程记录，不能再拆分为汇总任务".to_string());
+        }
     }
     let deps = input.blocked_by.clone().unwrap_or_default();
     let task_id = crate::utils::new_id();
@@ -601,6 +780,11 @@ pub fn create_task(
         ],
     )
     .map_err(|e| format!("创建任务失败：{}", e))?;
+
+    // 新增子任务会改变父任务的容器状态（例如：新挂一个待办子任务 → 容器回到进行中）
+    if let Some(parent) = input.parent_task_id.as_deref().filter(|s| !s.is_empty()) {
+        sync_container_status(conn, org_id, parent)?;
+    }
 
     let _ = org_role;
     get_task(conn, org_id, &task_id, actor)
@@ -722,7 +906,28 @@ pub fn set_status(
             collaborators: &row.collaborators,
         },
     );
-    can_transition(&row.status, to, role)?;
+    // 汇总容器（有子任务）：自身不执行，状态由子任务派生。
+    // 唯一允许的人工流转是「作废」与「归档」。
+    let container = !child_statuses(conn, org_id, task_id)?.is_empty();
+    if container {
+        let owner = matches!(role, TaskRole::Creator | TaskRole::Assignee);
+        let creator = role == TaskRole::Creator;
+        let ok = match (row.status.as_str(), to) {
+            (STATUS_PENDING, STATUS_CANCELLED) => owner,
+            (STATUS_IN_PROGRESS, STATUS_CANCELLED) => owner,
+            (STATUS_SUBMITTED, STATUS_CANCELLED) => owner,
+            (STATUS_DONE, STATUS_ARCHIVED) => creator,
+            _ => false,
+        };
+        if !ok {
+            return Err(
+                "汇总任务的状态由子任务派生：不能手动开始 / 提交 / 恢复；完成请用「汇总确认」"
+                    .to_string(),
+            );
+        }
+    } else {
+        can_transition(&row.status, to, role)?;
+    }
 
     // 前置依赖只在「待办 → 进行中」时检查；退回（submitted → in_progress）不该被依赖拦住，
     // 否则有前置任务的子任务一旦提交汇报就永远退不回来。
@@ -768,6 +973,8 @@ pub fn set_status(
             log::warn!("[Enclave] 作废任务撤下知识条目失败：{}", e);
         }
     }
+    // 子任务状态变化 → 父容器状态派生
+    sync_parent_container(conn, org_id, task_id)?;
     get_task(conn, org_id, task_id, actor)
 }
 
@@ -932,6 +1139,46 @@ mod tests {
         assert!(can_transition(STATUS_PENDING, STATUS_DONE, TaskRole::Creator).is_err());
         // 恢复汇报后若需回到待办，走「进行中 → 待办」
         assert!(can_transition(STATUS_IN_PROGRESS, STATUS_PENDING, TaskRole::Assignee).is_ok());
+    }
+
+    /// 汇总容器：状态完全由子任务派生，且已完成的容器只在子任务重开时回退。
+    #[test]
+    fn container_status_is_derived_from_children() {
+        let c = |v: &[&str]| ids(v);
+        assert_eq!(
+            derived_container_status(STATUS_PENDING, &c(&[STATUS_PENDING])),
+            None
+        );
+        assert_eq!(
+            derived_container_status(STATUS_PENDING, &c(&[STATUS_IN_PROGRESS])),
+            Some(STATUS_IN_PROGRESS)
+        );
+        assert_eq!(
+            derived_container_status(STATUS_IN_PROGRESS, &c(&[STATUS_DONE, STATUS_ARCHIVED])),
+            Some(STATUS_SUBMITTED)
+        );
+        assert_eq!(
+            derived_container_status(STATUS_DONE, &c(&[STATUS_DONE, STATUS_DONE])),
+            None
+        );
+        assert_eq!(
+            derived_container_status(STATUS_DONE, &c(&[STATUS_DONE, STATUS_IN_PROGRESS])),
+            Some(STATUS_IN_PROGRESS)
+        );
+        // 全部子任务作废：不伪造成完成，回到待办
+        assert_eq!(
+            derived_container_status(STATUS_SUBMITTED, &c(&[STATUS_CANCELLED])),
+            Some(STATUS_PENDING)
+        );
+        // 归档 / 作废的容器不再自动变化
+        assert_eq!(
+            derived_container_status(STATUS_ARCHIVED, &c(&[STATUS_IN_PROGRESS])),
+            None
+        );
+        assert_eq!(
+            derived_container_status(STATUS_CANCELLED, &c(&[STATUS_DONE])),
+            None
+        );
     }
 
     /// 权限矩阵：描述/属性仅创建者与负责人；分配负责人仅创建者；汇报/附件含参与者。

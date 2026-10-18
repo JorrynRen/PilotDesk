@@ -144,6 +144,8 @@ export interface TaskView {
   visibility: string;
   /** 是否被未完成的前置任务阻塞 */
   blocked: boolean;
+  /** 子任务数量：> 0 表示汇总容器（状态由子任务派生） */
+  childCount: number;
   effectiveActions: string[];
   createdAt: number;
   updatedAt: number;
