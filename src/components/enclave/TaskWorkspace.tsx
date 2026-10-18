@@ -1138,18 +1138,26 @@ function TaskDetail(props: {
             <div className="text-[11px] whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
               {p.content}
             </div>
-            {p.attachments.map((f) => (
-              <div key={f.id} className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                <span className="truncate flex-1">{f.fileName}</span>
-                <button
-                  onClick={() => void openFile(f.id)}
-                  className="px-1.5 py-0.5 rounded"
-                  style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-                >
-                  打开
-                </button>
+            {p.attachments.length > 0 && (
+              <div
+                className="flex flex-col gap-1 rounded-md px-2 py-1.5"
+                style={{ border: '1px dashed var(--border)' }}
+              >
+                {p.attachments.map((f) => (
+                  <div key={f.id} className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                    <Paperclip size={9} style={{ color: 'var(--text-tertiary)' }} />
+                    <span className="truncate flex-1">{f.fileName}</span>
+                    <button
+                      onClick={() => void openFile(f.id)}
+                      className="px-1.5 py-0.5 rounded"
+                      style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                    >
+                      打开
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         ))}
 
@@ -1245,7 +1253,10 @@ function TaskDetail(props: {
             {editable && (() => {
               const deliverables = files.filter((f) => f.reportId === editable.id);
               return (
-                <div className="flex flex-col gap-1">
+                <div
+                  className="flex flex-col gap-1 rounded-md px-2 py-1.5"
+                  style={{ border: '1px dashed var(--border)' }}
+                >
                   <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                     <Paperclip size={10} />
                     <span>本条交付物 {deliverables.length}</span>
@@ -1288,7 +1299,7 @@ function TaskDetail(props: {
         {logs.length > 0 && (
           <div className="flex flex-col gap-2" style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
             <div className="flex items-center gap-2">
-              <History size={11} style={{ color: 'var(--text-tertiary)' }} />
+              <History size={11} style={{ color: 'var(--accent)' }} />
               <span className="text-[10px] font-medium" style={{ color: 'var(--text-tertiary)' }}>
                 汇报记录（{logs.length}）
               </span>
@@ -1389,7 +1400,10 @@ function TaskDetail(props: {
                   const deliverables = files.filter((f) => f.reportId === r.id);
                   if (deliverables.length === 0) return null;
                   return (
-                    <div className="flex flex-col gap-1">
+                    <div
+                      className="flex flex-col gap-1 rounded-md px-2 py-1.5"
+                      style={{ border: '1px dashed var(--border)' }}
+                    >
                       <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
                         <Paperclip size={10} />
                         <span>交付物 {deliverables.length}</span>
