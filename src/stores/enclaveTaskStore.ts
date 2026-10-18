@@ -166,8 +166,8 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
     try {
       const task = await invoke<TaskView>('enclave_task_set_status', { orgId, taskId, status });
       set((s) => ({ tasks: upsert(s.tasks, task), error: null }));
-      // 子任务状态变化会带动父容器派生状态，需重拉列表
-      if (task.parentTaskId) await get().loadTasks(orgId);
+      // 子任务变化会带动父容器状态；容器作废/归档会级联子树 → 整体重拉
+      if (task.parentTaskId || task.childCount > 0) await get().loadTasks(orgId);
       return true;
     } catch (e) {
       set({ error: errorMessage(e) });

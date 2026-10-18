@@ -147,18 +147,28 @@ pub fn is_closed_status(s: &str) -> bool {
 
 // ── 汇总容器：有子任务的任务不再自己执行 ────────────────────────
 
-/// 子任务状态列表（只支持一层父子，因此不递归）。
-fn child_statuses(conn: &Connection, org_id: &str, parent_id: &str) -> Result<Vec<String>, String> {
+/// 子任务 id + 状态（只支持一层父子，因此不递归）。
+fn child_rows(conn: &Connection, org_id: &str, parent_id: &str) -> Result<Vec<(String, String)>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT status FROM org_tasks WHERE org_id = ?1 AND parent_task_id = ?2",
+            "SELECT id, status FROM org_tasks WHERE org_id = ?1 AND parent_task_id = ?2",
         )
         .map_err(|e| format!("查询子任务失败：{}", e))?;
     let rows = stmt
-        .query_map(params![org_id, parent_id], |r| r.get::<_, String>(0))
+        .query_map(params![org_id, parent_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
         .map_err(|e| format!("查询子任务失败：{}", e))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("读取子任务失败：{}", e))
+}
+
+/// 子任务状态列表（只支持一层父子，因此不递归）。
+fn child_statuses(conn: &Connection, org_id: &str, parent_id: &str) -> Result<Vec<String>, String> {
+    Ok(child_rows(conn, org_id, parent_id)?
+        .into_iter()
+        .map(|(_, status)| status)
+        .collect())
 }
 
 /// 是否有子任务（= 汇总容器）。
@@ -237,6 +247,55 @@ pub fn sync_parent_container(
     let row = load_task(conn, org_id, task_id)?;
     if let Some(parent) = row.parent_task_id.as_deref() {
         sync_container_status(conn, org_id, parent)?;
+    }
+    Ok(())
+}
+
+/// 容器作废：级联作废未收敛的子任务（待办 / 进行中 / 待确认）。
+///
+/// 已完成 / 已归档的子任务保留原状 —— 它们已经产出的成果与知识库沉淀不追溯删除。
+fn cascade_cancel_children(
+    conn: &Connection,
+    org_id: &str,
+    parent_id: &str,
+) -> Result<(), String> {
+    let now = chrono::Utc::now().timestamp();
+    for (id, status) in child_rows(conn, org_id, parent_id)? {
+        if matches!(
+            status.as_str(),
+            STATUS_DONE | STATUS_ARCHIVED | STATUS_CANCELLED
+        ) {
+            continue;
+        }
+        conn.execute(
+            "UPDATE org_tasks SET status = ?3, updated_at = ?4 WHERE id = ?1 AND org_id = ?2",
+            params![id, org_id, STATUS_CANCELLED, now],
+        )
+        .map_err(|e| format!("级联作废子任务失败：{}", e))?;
+        // 子任务可能曾确认过产出、恢复汇报后又被放弃：一并撤下它的知识条目
+        if let Err(e) = crate::enclave::knowledge::withdraw_task_output(conn, org_id, &id) {
+            log::warn!("[Enclave] 级联作废时撤下知识条目失败：{}", e);
+        }
+    }
+    Ok(())
+}
+
+/// 容器归档：把已完成的子任务一并归档（已归档 / 已作废的不变）。
+fn cascade_archive_children(
+    conn: &Connection,
+    org_id: &str,
+    parent_id: &str,
+) -> Result<(), String> {
+    let now = chrono::Utc::now().timestamp();
+    for (id, status) in child_rows(conn, org_id, parent_id)? {
+        if status != STATUS_DONE {
+            continue;
+        }
+        conn.execute(
+            "UPDATE org_tasks SET status = ?3, updated_at = ?4 WHERE id = ?1 AND org_id = ?2",
+            params![id, org_id, STATUS_ARCHIVED, now],
+        )
+        .map_err(|e| format!("级联归档子任务失败：{}", e))?;
     }
     Ok(())
 }
@@ -991,6 +1050,14 @@ pub fn set_status(
         params![task_id, org_id, to, started_at, completed_at, now],
     )
     .map_err(|e| format!("更新任务状态失败：{}", e))?;
+    // 汇总容器的收口动作要带动子树：作废放弃未完成项，归档收起已完成项
+    if container {
+        match to {
+            STATUS_CANCELLED => cascade_cancel_children(conn, org_id, task_id)?,
+            STATUS_ARCHIVED => cascade_archive_children(conn, org_id, task_id)?,
+            _ => {}
+        }
+    }
     // 作废 = 该任务的产出不再算数：从团队知识库撤下条目（派生动作，失败不阻塞作废）
     if to == STATUS_CANCELLED {
         if let Err(e) = crate::enclave::knowledge::withdraw_task_output(conn, org_id, task_id) {

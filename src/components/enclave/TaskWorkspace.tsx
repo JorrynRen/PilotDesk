@@ -705,11 +705,31 @@ function TaskDetail(props: {
 
   const change = async (status: TaskStatus) => {
     if (status === 'cancelled') {
+      const unfinishedChildren = isContainer
+        ? tasks.filter(
+            (t) =>
+              t.parentTaskId === task.id
+              && t.status !== 'done'
+              && t.status !== 'archived'
+              && t.status !== 'cancelled',
+          ).length
+        : 0;
       const ok = await confirmDialog({
         title: '作废任务',
-        message:
-          '作废后任务终止，不能再提交过程记录或完成汇报；已沉淀进知识库的历史产出不受影响。\n\n是否继续？',
+        message: isContainer
+          ? `作废后将放弃整个汇总任务：其中 ${unfinishedChildren} 个未完成子任务（待办 / 进行中 / 待确认）会一并作废；已完成子任务的产出与知识库沉淀保留。\n\n是否继续？`
+          : '作废后任务终止，不能再提交过程记录或完成汇报；已沉淀进知识库的历史产出不受影响。\n\n是否继续？',
         confirmText: '确认作废',
+      });
+      if (!ok) return;
+    }
+    if (status === 'archived' && isContainer) {
+      const ok = await confirmDialog({
+        title: '归档汇总任务',
+        message:
+          `归档后整棵子树会从「活跃任务」中收起：${task.childCount} 个子任务里已完成的会一并归档；`
+          + '数据与知识库不受影响。',
+        confirmText: '确认归档',
       });
       if (!ok) return;
     }
