@@ -762,6 +762,12 @@ pub fn set_status(
         params![task_id, org_id, to, started_at, completed_at, now],
     )
     .map_err(|e| format!("更新任务状态失败：{}", e))?;
+    // 作废 = 该任务的产出不再算数：从团队知识库撤下条目（派生动作，失败不阻塞作废）
+    if to == STATUS_CANCELLED {
+        if let Err(e) = crate::enclave::knowledge::withdraw_task_output(conn, org_id, task_id) {
+            log::warn!("[Enclave] 作废任务撤下知识条目失败：{}", e);
+        }
+    }
     get_task(conn, org_id, task_id, actor)
 }
 

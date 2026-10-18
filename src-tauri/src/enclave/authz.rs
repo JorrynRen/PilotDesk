@@ -139,6 +139,8 @@ pub fn org_allows(role: Role, action: Action) -> bool {
         Action::EmergencySet => role == Role::Owner,
         // 团队文件根目录：物理落点变更，仅 owner（§13）
         Action::FileRootWrite => role == Role::Owner,
+        // 团队知识库条目的人工编辑 / 移除：owner / admin（成员只读）
+        Action::KbEdit => matches!(role, Role::Owner | Role::Admin),
         // 其余资源级动作：单看组织层不足以放行 → 默认拒绝（M3 叠加资源级角色后再放开）
         _ => false,
     }
@@ -252,7 +254,6 @@ mod tests {
                 Action::ReportSubmit,
                 Action::ReportConfirm,
                 Action::FileUpload,
-                Action::KbEdit,
                 Action::KbManage,
             ] {
                 assert!(
@@ -282,6 +283,11 @@ mod tests {
         assert!(org_allows(Role::Owner, Action::OrgAdmin));
         assert!(org_allows(Role::Admin, Action::OrgAdmin));
         assert!(!org_allows(Role::Member, Action::OrgAdmin));
+
+        // 知识条目人工维护：owner / admin 可编辑，成员只读
+        assert!(org_allows(Role::Owner, Action::KbEdit));
+        assert!(org_allows(Role::Admin, Action::KbEdit));
+        assert!(!org_allows(Role::Member, Action::KbEdit));
     }
 
     /// effective_actions 必须与 org_allows 一致（前端按钮的唯一来源）。

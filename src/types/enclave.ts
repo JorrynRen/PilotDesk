@@ -252,6 +252,15 @@ export interface KbView {
   updatedAt: number;
 }
 
+/** 知识条目引用的交付物（同一份任务原件，不重复拷贝） */
+export interface KbFileView {
+  fileId: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  fileHash: string;
+}
+
 /** 组织知识条目 */
 export interface KbEntryView {
   memoryId: string;
@@ -262,8 +271,17 @@ export interface KbEntryView {
   origin: string;
   /** 来源任务 id */
   sourceRef: string;
+  /** 溯源：reportId / taskTitle / assigneeId / completedAt / confirmedBy / confirmedAt / revision / editedBy / editedAt */
+  metadata: Record<string, unknown>;
   addedBy: string;
+  /** 首次沉淀时间 */
   addedAt: number;
+  /** 最近一次覆盖时间 */
+  updatedAt: number;
+  /** 来源任务已恢复汇报，等待重新确认 */
+  stale: boolean;
+  /** 该条目自己的交付物 */
+  files: KbFileView[];
 }
 
 // ── 过程记录 ────────────────────────────────────────────────────

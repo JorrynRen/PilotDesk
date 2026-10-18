@@ -90,7 +90,7 @@ pub fn enclave_task_set_status(
         {
             let role = tasks::actor_task_role(c, &org_id, &task_id, &actor)?;
             tasks::can_transition(&current, &status, role)?;
-            crate::enclave::reports::reopen_confirmed_report(c, &task_id, &actor)?;
+            crate::enclave::reports::reopen_confirmed_report(c, &org_id, &task_id, &actor)?;
         }
         tasks::set_status(c, &org_id, &actor, &task_id, &status)
     })
@@ -349,6 +349,46 @@ pub fn enclave_task_sediment_retry(
     state.store.with_conn(|c| {
         let actor = authz::current_actor_id(c)?;
         crate::enclave::knowledge::retry_sediment(c, &org_id, &task_id, &report_id, &actor)
+    })
+}
+
+/// 人工编辑知识条目（owner / admin）：标题、正文、标签。
+#[tauri::command]
+pub fn enclave_kb_entry_update(
+    org_id: String,
+    kb_id: String,
+    memory_id: String,
+    title: String,
+    content: String,
+    tags: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::knowledge::KbEntryView, String> {
+    state.store.with_conn(|c| {
+        let actor = authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+        crate::enclave::knowledge::update_entry(
+            c,
+            &org_id,
+            &kb_id,
+            &memory_id,
+            &title,
+            &content,
+            &tags,
+            &actor,
+        )
+    })
+}
+
+/// 移除知识条目（owner / admin）。
+#[tauri::command]
+pub fn enclave_kb_entry_remove(
+    org_id: String,
+    kb_id: String,
+    memory_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    state.store.with_conn(|c| {
+        let _actor = authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+        crate::enclave::knowledge::remove_entry(c, &org_id, &kb_id, &memory_id)
     })
 }
 

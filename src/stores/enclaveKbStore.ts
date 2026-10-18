@@ -23,6 +23,15 @@ interface EnclaveKbState {
   selectKb: (orgId: string, kbId: string) => Promise<void>;
   search: (orgId: string, query: string) => Promise<void>;
   openEntry: (entry: KbEntryView | null) => void;
+  /** 人工编辑条目（owner / admin） */
+  updateEntry: (
+    orgId: string,
+    kbId: string,
+    memoryId: string,
+    input: { title: string; content: string; tags: string },
+  ) => Promise<boolean>;
+  /** 移除条目（owner / admin）；交付物原件仍保留在任务中 */
+  removeEntry: (orgId: string, kbId: string, memoryId: string) => Promise<boolean>;
 }
 
 export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
@@ -82,4 +91,45 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   },
 
   openEntry: (entry) => set({ activeEntry: entry }),
+
+  updateEntry: async (orgId, kbId, memoryId, input) => {
+    set({ loading: true, error: null });
+    try {
+      const next = await invoke<KbEntryView>('enclave_kb_entry_update', {
+        orgId,
+        kbId,
+        memoryId,
+        title: input.title,
+        content: input.content,
+        tags: input.tags,
+      });
+      set((s) => ({
+        entries: s.entries.map((e) => (e.memoryId === memoryId ? next : e)),
+        activeEntry: s.activeEntry?.memoryId === memoryId ? next : s.activeEntry,
+        loading: false,
+      }));
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e), loading: false });
+      return false;
+    }
+  },
+
+  removeEntry: async (orgId, kbId, memoryId) => {
+    set({ error: null });
+    try {
+      await invoke('enclave_kb_entry_remove', { orgId, kbId, memoryId });
+      set((s) => ({
+        entries: s.entries.filter((e) => e.memoryId !== memoryId),
+        activeEntry: s.activeEntry?.memoryId === memoryId ? null : s.activeEntry,
+        kbs: s.kbs.map((k) =>
+          k.id === kbId ? { ...k, entryCount: Math.max(0, k.entryCount - 1) } : k,
+        ),
+      }));
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
 }));

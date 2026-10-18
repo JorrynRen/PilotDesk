@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 6;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 7;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
 -- 组织知识条目（正文直接落库：团队知识在 enclave.db，不依赖个人 MEMORY.db）
 CREATE TABLE IF NOT EXISTS knowledge_base_memories (
     knowledge_base_id TEXT NOT NULL,
-    memory_id         TEXT NOT NULL,             -- 确定性主键（如 "task:{task_id}:report:{report_id}"）
+    memory_id         TEXT NOT NULL,             -- 确定性主键：一个任务一条（"task:{task_id}"）
     title             TEXT NOT NULL DEFAULT '',
     content           TEXT NOT NULL DEFAULT '',
     tags              TEXT NOT NULL DEFAULT '',
@@ -248,16 +248,21 @@ CREATE TABLE IF NOT EXISTS knowledge_base_memories (
     source_ref        TEXT NOT NULL DEFAULT '',  -- task_id
     metadata          TEXT NOT NULL DEFAULT '{}',
     added_by          TEXT NOT NULL DEFAULT '',
-    added_at          INTEGER NOT NULL,
+    added_at          INTEGER NOT NULL,          -- 首次沉淀时间
+    updated_at        INTEGER NOT NULL DEFAULT 0,-- 最近一次覆盖时间（0 = 存量行，读时回退 added_at）
+    stale             INTEGER NOT NULL DEFAULT 0,-- 1 = 来源任务已恢复汇报，等待重新确认
     PRIMARY KEY (knowledge_base_id, memory_id)
 );
 CREATE INDEX IF NOT EXISTS idx_kb_memories_source ON knowledge_base_memories(source_ref);
 
+-- 条目 ↔ 交付物：必须是「某条知识」的附件，而不是整个库的附件集合，
+-- 否则条目更新/撤下时无法定位该删哪些行（v7 起主键含 memory_id）。
 CREATE TABLE IF NOT EXISTS knowledge_base_files (
     knowledge_base_id TEXT NOT NULL,
+    memory_id         TEXT NOT NULL,
     file_id           TEXT NOT NULL,             -- 引用 file_assets 的同一原文，不重复拷贝
     added_at          INTEGER NOT NULL,
-    PRIMARY KEY (knowledge_base_id, file_id)
+    PRIMARY KEY (knowledge_base_id, memory_id, file_id)
 );
 
 -- ───────────────── 通知 / 资源级角色例外 ─────────────────
@@ -409,6 +414,55 @@ impl EnclaveStore {
             )
             .map_err(|e| format!("迁移附件挂载关系失败: {}", e))?;
         }
+        // v6 → v7：知识条目补齐「更新时间 / 待更新」；知识附件从「库级集合」改为「条目级」。
+        // 旧表主键只有 (库, 文件)，无法定位文件属于哪条知识 → 必须重建表并回填 memory_id。
+        if current < 7 {
+            Self::ensure_column(
+                conn,
+                "knowledge_base_memories",
+                "updated_at",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+            Self::ensure_column(
+                conn,
+                "knowledge_base_memories",
+                "stale",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+            if !Self::has_column(conn, "knowledge_base_files", "memory_id")? {
+                conn.execute_batch(
+                    "CREATE TABLE knowledge_base_files_v7 (
+                         knowledge_base_id TEXT NOT NULL,
+                         memory_id         TEXT NOT NULL,
+                         file_id           TEXT NOT NULL,
+                         added_at          INTEGER NOT NULL,
+                         PRIMARY KEY (knowledge_base_id, memory_id, file_id)
+                     );
+                     -- 回填：按「文件挂载到该任务某次汇报」反查所属知识条目；
+                     -- 查不到归属的旧行直接丢弃（它们是当前不可见、也无法维护的悬空引用）。
+                     INSERT INTO knowledge_base_files_v7
+                         (knowledge_base_id, memory_id, file_id, added_at)
+                     SELECT kbf.knowledge_base_id,
+                            COALESCE((
+                              SELECT m.memory_id
+                              FROM knowledge_base_memories m
+                              JOIN task_file_links l
+                                ON l.task_id = m.source_ref
+                               AND l.file_id = kbf.file_id
+                               AND l.report_id IS NOT NULL
+                              WHERE m.knowledge_base_id = kbf.knowledge_base_id
+                              LIMIT 1
+                            ), ''),
+                            kbf.file_id,
+                            kbf.added_at
+                     FROM knowledge_base_files kbf;
+                     DELETE FROM knowledge_base_files_v7 WHERE memory_id = '';
+                     DROP TABLE knowledge_base_files;
+                     ALTER TABLE knowledge_base_files_v7 RENAME TO knowledge_base_files;",
+                )
+                .map_err(|e| format!("迁移知识库附件归属失败: {}", e))?;
+            }
+        }
 
         if current != ENCLAVE_SCHEMA_VERSION {
             conn.execute_batch(&format!("PRAGMA user_version = {}", ENCLAVE_SCHEMA_VERSION))
@@ -438,14 +492,7 @@ impl EnclaveStore {
         column: &str,
         ddl: &str,
     ) -> Result<(), String> {
-        let mut stmt = conn
-            .prepare(&format!("PRAGMA table_info({})", table))
-            .map_err(|e| format!("读取表 {} 结构失败: {}", table, e))?;
-        let cols: Vec<String> = stmt
-            .query_map([], |r| r.get::<_, String>(1))
-            .map(|it| it.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default();
-        if cols.iter().any(|c| c == column) {
+        if Self::has_column(conn, table, column)? {
             return Ok(());
         }
         conn.execute(
@@ -454,6 +501,18 @@ impl EnclaveStore {
         )
         .map_err(|e| format!("为表 {} 补列 {} 失败: {}", table, column, e))?;
         Ok(())
+    }
+
+    /// 判断列是否存在（主键变更等需要「重建表」的迁移据此决定是否已执行）。
+    fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({})", table))
+            .map_err(|e| format!("读取表 {} 结构失败: {}", table, e))?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map(|it| it.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default();
+        Ok(cols.iter().any(|c| c == column))
     }
 
     /// 数据库文件路径。

@@ -603,6 +603,12 @@ pub fn detach_file(
             )
             .optional()
             .map_err(|e| format!("查询文件资产失败：{}", e))?;
+        // 原件已不存在 → 知识库里的引用一并清掉，避免留下打不开的死链
+        conn.execute(
+            "DELETE FROM knowledge_base_files WHERE file_id = ?1",
+            params![file_id],
+        )
+        .map_err(|e| format!("清理知识库文件引用失败：{}", e))?;
         conn.execute(
             "DELETE FROM file_assets WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
             params![file_id, org_id],

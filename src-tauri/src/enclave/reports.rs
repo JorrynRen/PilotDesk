@@ -372,6 +372,7 @@ pub fn return_report(
 /// 同时清空沉淀标记，使再次确认时能把补充后的内容更新进组织知识库。
 pub fn reopen_confirmed_report(
     conn: &Connection,
+    org_id: &str,
     task_id: &str,
     actor: &str,
 ) -> Result<(), String> {
@@ -403,6 +404,8 @@ pub fn reopen_confirmed_report(
         params![crate::utils::new_id(), id, actor, now],
     )
     .map_err(|e| format!("记录恢复留痕失败：{}", e))?;
+    // 知识条目仍在，但内容已不是「当前有效版本」：标记待更新，避免团队把旧版本当作最终产出
+    crate::enclave::knowledge::mark_task_output_stale(conn, org_id, task_id)?;
     Ok(())
 }
 
