@@ -919,7 +919,10 @@ function TaskDetail(props: {
   };
 
   return (
-    <div className="p-4 flex flex-col gap-3">
+    <div className="p-4 flex flex-col gap-4">
+      {/* 任务信息区：标题行作为 fieldset 标题 */}
+      <fieldset className="m-0 min-w-0 p-0 flex flex-col gap-3" style={{ border: 'none' }}>
+        <legend className="w-full p-0 m-0">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
           {task.title}
@@ -945,6 +948,7 @@ function TaskDetail(props: {
           </span>
         )}
       </div>
+        </legend>
 
       {/* 生命周期时间线：当前节点与全流程里程碑一眼可见 */}
       <div
@@ -1347,9 +1351,17 @@ function TaskDetail(props: {
           ))}
         </div>
       )}
+      </fieldset>
 
-      {/* 过程记录（汇总容器不渲染：过程属于子任务） */}
+      {/* 任务提交区：过程记录 + 完成汇报（汇总容器不渲染） */}
       {!isContainer && (
+      <fieldset
+        className="m-0 min-w-0 p-0 pt-3 flex flex-col gap-3"
+        style={{ border: 'none', borderTop: '1px solid var(--border)' }}
+      >
+        <legend className="px-0 m-0 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+          提交任务
+        </legend>
       <div
         className="flex flex-col gap-2 rounded-lg p-3"
         style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
@@ -1503,10 +1515,8 @@ function TaskDetail(props: {
           </div>
         )}
       </div>
-      )}
 
       {/* 完成汇报（汇总容器不单独汇报，直接不渲染） */}
-      {!isContainer && (
       <div
         className="flex flex-col gap-2 rounded-lg p-3"
         style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
@@ -1796,6 +1806,7 @@ function TaskDetail(props: {
           </div>
         )}
       </div>
+      </fieldset>
       )}
     </div>
   );
