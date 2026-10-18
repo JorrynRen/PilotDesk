@@ -82,7 +82,6 @@ export function EnclaveKbPage() {
   const members = useEnclaveOrgStore((s) => s.detail?.members ?? []);
 
   const kbs = useEnclaveKbStore((s) => s.kbs);
-  const activeKbId = useEnclaveKbStore((s) => s.activeKbId);
   const entries = useEnclaveKbStore((s) => s.entries);
   const activeEntry = useEnclaveKbStore((s) => s.activeEntry);
   const query = useEnclaveKbStore((s) => s.query);
@@ -246,7 +245,6 @@ export function EnclaveKbPage() {
             style={{ borderBottom: '1px solid var(--border)' }}
           >
             <Library size={13} style={{ color: 'var(--accent)' }} />
-            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>团队知识库</span>
             {orgs.map((o) => (
               <button
                 key={o.orgId}
@@ -287,52 +285,37 @@ export function EnclaveKbPage() {
             {loading && <Loader2 size={12} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
           </div>
 
-          <div className="flex-1 min-h-0 flex overflow-hidden">
-            {/* 左：知识库列表 */}
-            <div className="w-[240px] shrink-0 overflow-auto py-1" style={{ borderRight: '1px solid var(--border)' }}>
-              {kbs.length === 0 && (
-                <div className="px-3 py-4 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                  暂无知识库
-                </div>
-              )}
-              {kbs.map((kb) => (
-                <button
-                  key={kb.id}
-                  onClick={() => activeOrgId && void useEnclaveKbStore.getState().selectKb(activeOrgId, kb.id)}
-                  className="w-full text-left px-3 py-2 flex flex-col gap-0.5"
-                  style={{ backgroundColor: kb.id === activeKbId ? 'var(--bg-tertiary)' : 'transparent' }}
-                >
-                  <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{kb.name}</span>
-                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                    {kb.entryCount} 条 · {kb.isImplicit ? '自动归档' : '自定义'}
-                  </span>
-                </button>
-              ))}
+          {/* 单一默认库：不再占一列做库列表，库信息收进内容区顶部一行 */}
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div
+              className="shrink-0 px-4 py-2 flex items-center gap-2"
+              style={{ borderBottom: '1px solid var(--border)' }}
+            >
+              <Library size={12} style={{ color: 'var(--accent)' }} />
+              <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                {kbs[0]?.name ?? '团队知识库'}
+              </span>
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                {kbs[0]?.entryCount ?? entries.length} 条知识
+              </span>
+              <div className="flex-1" />
+              <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                任务汇报「确认完成」后自动沉淀 · 点击条目展开
+              </span>
             </div>
 
-            {/* 右：条目列表（展开行即详情，与个人知识库一致） */}
-            <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-              <div
-                className="shrink-0 px-4 py-1.5 flex items-center gap-2 text-[11px]"
-                style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
-              >
-                <span>{entries.length} 条知识</span>
-                <div className="flex-1" />
-                <span>任务汇报「确认完成」后自动沉淀 · 点击条目展开</span>
-              </div>
+            <div className="flex-1 overflow-y-auto">
+              {entries.length === 0 && (
+                <div
+                  className="h-full flex flex-col items-center justify-center gap-2 text-xs"
+                  style={{ color: 'var(--text-tertiary)' }}
+                >
+                  <Search size={18} />
+                  {query ? `没有匹配「${query}」的条目` : '还没有条目：任务汇报「确认完成」后会自动沉淀到这里'}
+                </div>
+              )}
 
-              <div className="flex-1 overflow-y-auto">
-                {entries.length === 0 && (
-                  <div
-                    className="h-full flex flex-col items-center justify-center gap-2 text-xs"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  >
-                    <Search size={18} />
-                    {query ? `没有匹配「${query}」的条目` : '还没有条目：任务汇报「确认完成」后会自动沉淀到这里'}
-                  </div>
-                )}
-
-                {entries.map((e) => {
+              {entries.map((e) => {
                   const open = activeEntry?.memoryId === e.memoryId;
                   const tags = splitTags(e.tags);
                   const taskTitle = metaStr(e, 'taskTitle');
@@ -632,7 +615,6 @@ export function EnclaveKbPage() {
                 })}
               </div>
             </div>
-          </div>
 
           {error && (
             <div className="shrink-0 px-3 py-1 text-[11px]" style={{ color: 'var(--status-danger)', borderTop: '1px solid var(--border)' }}>
