@@ -12,6 +12,7 @@ import type {
   AuditView,
   EmergencyView,
   EnclaveOrgCaps,
+  HostStatusView,
   OrgDetailView,
   OrgSnapshotView,
   PolicyView,
@@ -28,6 +29,8 @@ interface EnclaveOrgState {
   policy: PolicyView | null;
   /** 主机应急开关 */
   emergency: EmergencyView | null;
+  /** 主机服务 / 发现状态（成员端含手动地址） */
+  host: HostStatusView | null;
   /** 策略 / 应急变更审计流水 */
   audit: AuditView[];
   loading: boolean;
@@ -52,6 +55,10 @@ interface EnclaveOrgState {
   setPolicy: (id: string, allow: boolean) => Promise<boolean>;
   /** 设置主机应急开关；成功返回 true */
   setEmergency: (id: string, disabled: boolean) => Promise<boolean>;
+  /** 重拉主机服务 / 发现状态 */
+  loadHost: (id: string) => Promise<void>;
+  /** 成员端设置手动主机地址（留空 = 清除，回到自动发现）；成功返回 true */
+  setHostAddr: (id: string, addr: string) => Promise<boolean>;
 }
 
 export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
@@ -61,6 +68,7 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   caps: null,
   policy: null,
   emergency: null,
+  host: null,
   audit: [],
   loading: false,
   error: null,
@@ -89,6 +97,7 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
       caps: null,
       policy: null,
       emergency: null,
+      host: null,
       audit: [],
       loading: false,
       error: null,
@@ -154,15 +163,36 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
     }
   },
 
-  /** 拉组织能力 / 策略 / 应急 / 审计。单项失败不拖垮其它项。 */
+  /** 拉组织能力 / 策略 / 应急 / 审计 / 主机状态。单项失败不拖垮其它项。 */
   loadGovernance: async (id) => {
-    const [caps, policy, emergency, audit] = await Promise.all([
+    const [caps, policy, emergency, audit, host] = await Promise.all([
       invoke<EnclaveOrgCaps>('enclave_org_caps', { orgId: id }).catch(() => null),
       invoke<PolicyView>('enclave_policy_get', { orgId: id }).catch(() => null),
       invoke<EmergencyView>('enclave_emergency_get', { orgId: id }).catch(() => null),
       invoke<AuditView[]>('enclave_audit_list', { orgId: id, limit: 50 }).catch(() => []),
+      invoke<HostStatusView>('enclave_host_status', { orgId: id }).catch(() => null),
     ]);
-    set({ caps, policy, emergency, audit });
+    set({ caps, policy, emergency, audit, host });
+  },
+
+  loadHost: async (id) => {
+    try {
+      const host = await invoke<HostStatusView>('enclave_host_status', { orgId: id });
+      set({ host });
+    } catch {
+      // 状态读取失败不阻塞治理面板
+    }
+  },
+
+  setHostAddr: async (id, addr) => {
+    try {
+      await invoke('enclave_host_addr_set', { orgId: id, addr });
+      await get().loadHost(id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
   },
 
   setPolicy: async (id, allow) => {

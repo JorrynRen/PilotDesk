@@ -5,8 +5,8 @@
  * 前端不做角色推断；`policy.write` / `emergency.set` 不在列表里就一律禁用。
  */
 
-import { useState } from 'react';
-import { ShieldAlert, ShieldCheck, Power, History, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
@@ -121,6 +121,143 @@ function SwitchRow(props: {
         {busy ? <Loader2 size={11} className="animate-spin" /> : <Power size={11} />}
         {on ? '关闭' : '开启'}
       </button>
+    </div>
+  );
+}
+
+/**
+ * 主机与连接（M7）：主机侧展示对外服务的监听状态；成员侧展示发现结果与手动地址。
+ *
+ * 手动地址是成员**本机**设置，优先于 UDP 自动发现（局域网广播常被 Windows 防火墙拦截）。
+ */
+function HostConnectionCard({ orgId }: { orgId: string }) {
+  const host = useEnclaveOrgStore((s) => s.host);
+  const [addr, setAddr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // 组织切换 / 状态刷新后回填已保存的手动地址
+  useEffect(() => {
+    setAddr(host?.manualAddr ?? '');
+  }, [host?.manualAddr, orgId]);
+
+  const saveAddr = async () => {
+    setBusy(true);
+    const ok = await useEnclaveOrgStore.getState().setHostAddr(orgId, addr.trim());
+    setBusy(false);
+    if (ok) showToast(addr.trim() ? '已保存主机地址' : '已清除手动主机地址', 'success');
+  };
+
+  const refresh = async () => {
+    setRefreshing(true);
+    await useEnclaveOrgStore.getState().loadHost(orgId);
+    setRefreshing(false);
+  };
+
+  const roleText = host?.role === 'host' ? '本机是主机' : host?.role === 'member' ? '本机是成员' : '角色未确定';
+  const roleColor = host?.role === 'host' ? 'var(--accent)' : 'var(--text-tertiary)';
+
+  return (
+    <div
+      className="rounded-lg px-3 py-2"
+      style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+    >
+      <div className="flex items-center gap-2">
+        <Server size={13} style={{ color: roleColor }} />
+        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+          主机与连接
+        </span>
+        <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: roleColor }}>
+          {roleText}
+        </span>
+        <div className="flex-1" />
+        <button
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          className="text-[11px] px-1.5 py-0.5 rounded flex items-center gap-1"
+          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+        >
+          {refreshing ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+          刷新状态
+        </button>
+      </div>
+
+      {host?.role === 'host' && (
+        <div className="mt-2 flex flex-col gap-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          <div className="flex items-center gap-2">
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: host.running ? 'var(--status-success, var(--accent))' : 'var(--status-danger)',
+              }}
+            >
+              {host.running ? `服务运行中 · 端口 ${host.port}` : '服务未运行'}
+            </span>
+            <span>主机名 {host.hostName}</span>
+          </div>
+          {!host.running && (
+            <div style={{ color: host.lastError ? 'var(--status-danger)' : 'var(--text-tertiary)' }}>
+              {host.lastError ?? '仅当组织所有者（owner）登录本机时才启动对外服务'}
+            </div>
+          )}
+          <div>本机对外服务的组织：{host.servedOrgIds.length}</div>
+        </div>
+      )}
+
+      {host?.role === 'member' && (
+        <div className="mt-2 flex flex-col gap-1.5 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          <div>
+            自动发现：
+            {host.discoveredAddr
+              ? `${host.discoveredHostName || '主机'}（${host.discoveredAddr}）`
+              : '未发现（主机离线，或局域网 UDP 广播被防火墙拦截）'}
+          </div>
+          <div>
+            当前连接目标：
+            <span style={{ color: host.manualAddr || host.discoveredAddr ? 'var(--text-secondary)' : 'var(--status-danger)' }}>
+              {host.manualAddr ? `手动 · ${host.manualAddr}` : host.discoveredAddr ? `自动 · ${host.discoveredAddr}` : '无'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <input
+              value={addr}
+              onChange={(e) => setAddr(e.target.value)}
+              placeholder="手动填写主机地址，如 192.168.1.9:47820"
+              className="flex-1 h-7 px-2 rounded text-[11px] outline-none"
+              style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+            />
+            <button
+              onClick={() => void saveAddr()}
+              disabled={busy}
+              className="h-7 px-2 rounded text-[11px] flex items-center gap-1"
+              style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: busy ? 0.6 : 1 }}
+            >
+              {busy && <Loader2 size={10} className="animate-spin" />}
+              保存
+            </button>
+            {!!host.manualAddr && (
+              <button
+                onClick={() => {
+                  setAddr('');
+                  void useEnclaveOrgStore.getState().setHostAddr(orgId, '');
+                }}
+                className="h-7 px-2 rounded text-[11px]"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                清除
+              </button>
+            )}
+          </div>
+          <div>留空即回到自动发现；地址格式为「主机 IP:端口」。</div>
+        </div>
+      )}
+
+      {(!host || host.role === 'unknown') && (
+        <div className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          本机尚无该组织的治理快照；请先点上方「刷新」同步组织与成员。
+        </div>
+      )}
     </div>
   );
 }
@@ -262,6 +399,9 @@ export function OrgGovernanceSection() {
           </div>
         )}
       </div>
+
+      {/* 主机与连接（M7）：主机监听状态 / 成员发现与手动地址 */}
+      <HostConnectionCard orgId={activeOrgId} />
 
       {/* 审计流水（仅 owner / admin；member 不渲染） */}
       {canAudit && (

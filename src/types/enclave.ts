@@ -119,6 +119,24 @@ export interface EmergencyView {
   updatedAt: number;
 }
 
+/** 主机服务状态视图（`enclave_host_status`） */
+export interface HostStatusView {
+  /** host = 本机是组织 owner 并对外提供服务；member = 本机为成员，需连接主机 */
+  role: 'host' | 'member' | 'unknown';
+  running: boolean;
+  port: number;
+  hostName: string;
+  servedOrgIds: string[];
+  disabled: boolean;
+  lastError: string | null;
+  /** 成员端手动填写的主机地址（优先于自动发现） */
+  manualAddr: string | null;
+  /** 成员端 UDP 自动发现到的主机 */
+  discoveredAddr: string | null;
+  discoveredHostName: string | null;
+  discoveredSeenAt: number | null;
+}
+
 // ── M3：任务 ────────────────────────────────────────────────────
 
 /** 任务状态 */
