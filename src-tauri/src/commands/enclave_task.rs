@@ -217,6 +217,9 @@ pub async fn enclave_task_deps_preview(
 // ════════════════════════════════════════════════════════════
 
 /// 追加一条进度说明（创建者 / 负责人 / 参与者；提交完成汇报后锁定）。
+///
+/// 成员端先把附件上传到主机临时区，再以**令牌**随记录一次性提交；主机只接受令牌，
+/// 不接受客户端指定的任意本机路径。
 #[tauri::command]
 pub async fn enclave_task_progress_add(
     org_id: String,
@@ -226,29 +229,48 @@ pub async fn enclave_task_progress_add(
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::progress::ProgressView, String> {
-    let payload = json!({
-        "taskId": task_id.clone(),
-        "content": content.clone(),
-        "attachments": &attachments,
-    });
-    run_command(
-        state.inner(),
-        db.inner(),
-        &org_id,
-        "task.progress_add",
-        payload,
-        |c, actor| {
+    let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
+    match role {
+        Some(authz::Role::Owner) => state.store.with_conn(|c| {
+            let actor = authz::current_actor_id(c)?;
             crate::enclave::progress::add_progress(
                 c,
                 &org_id,
-                actor,
+                &actor,
                 &task_id,
                 &content,
                 &attachments,
             )
-        },
-    )
-    .await
+        }),
+        Some(_) => {
+            let mut tokens = Vec::with_capacity(attachments.len());
+            for path in &attachments {
+                tokens.push(
+                    crate::enclave::host::upload_temp_file(
+                        state.inner(),
+                        db.inner(),
+                        &org_id,
+                        path,
+                    )
+                    .await?,
+                );
+            }
+            let data = crate::enclave::host::call_host(
+                state.inner(),
+                db.inner(),
+                &org_id,
+                "task.progress_add",
+                json!({
+                    "taskId": task_id,
+                    "content": content,
+                    "attachments": tokens,
+                }),
+            )
+            .await?;
+            serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
 }
 
 /// 过程记录列表 + 锁定状态。

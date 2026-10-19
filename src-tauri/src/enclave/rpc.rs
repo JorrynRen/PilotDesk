@@ -116,15 +116,20 @@ pub fn dispatch(
         "task.progress_add" => {
             let task_id = req_str(payload, "taskId")?;
             let content = req_str(payload, "content")?;
-            let attachments = str_vec(payload, "attachments");
-            to_value(progress::add_progress(
-                conn,
-                org_id,
-                actor,
-                &task_id,
-                &content,
-                &attachments,
-            )?)
+            // 成员端传的是上传令牌（不是主机路径）：解析到本机临时文件，
+            // 禁止客户端直接指定任意路径（否则可借过程记录读取主机任意文件）。
+            let tokens = str_vec(payload, "attachments");
+            let mut paths = Vec::with_capacity(tokens.len());
+            for token in &tokens {
+                let path = super::host::resolve_upload_token(org_id, actor, token)?;
+                paths.push(path.to_string_lossy().to_string());
+            }
+            let result =
+                progress::add_progress(conn, org_id, actor, &task_id, &content, &paths);
+            for path in &paths {
+                let _ = std::fs::remove_file(path);
+            }
+            to_value(result?)
         }
         "task.progress_list" => {
             let task_id = req_str(payload, "taskId")?;

@@ -113,6 +113,9 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
   const detail = useEnclaveOrgStore((s) => s.detail);
   const policy = useEnclaveOrgStore((s) => s.policy);
+  const caps = useEnclaveOrgStore((s) => s.caps);
+  /** 本机团队文件根是主机本机设置：仅 owner 可见/可改 */
+  const canManageRoot = !!caps?.actions.includes('files.root.write');
 
   const tasks = useEnclaveTaskStore((s) => s.tasks);
   const activeTaskId = useEnclaveTaskStore((s) => s.activeTaskId);
@@ -284,18 +287,20 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
             <Library size={12} /> 团队知识库
           </button>
         )}
-        <button
-          onClick={() => setRootOpen((v) => !v)}
-          className="text-xs px-2 py-1 rounded flex items-center gap-1"
-          style={{
-            backgroundColor: rootOpen ? 'var(--bg-tertiary)' : 'transparent',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border)',
-          }}
-          title="本机团队文件根目录：仅影响本机的存放位置（全局设置）"
-        >
-          <FolderOpen size={12} /> 本机文件根
-        </button>
+        {canManageRoot && (
+          <button
+            onClick={() => setRootOpen((v) => !v)}
+            className="text-xs px-2 py-1 rounded flex items-center gap-1"
+            style={{
+              backgroundColor: rootOpen ? 'var(--bg-tertiary)' : 'transparent',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border)',
+            }}
+            title="本机团队文件根目录：仅影响本机的存放位置（全局设置）"
+          >
+            <FolderOpen size={12} /> 本机文件根
+          </button>
+        )}
         {props.onOpenOrg && (
           <button
             onClick={props.onOpenOrg}
@@ -325,7 +330,7 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
       </div>
 
       {/* 本机团队文件根目录（全局设置，仅影响本机存放位置） */}
-      {rootOpen && (
+      {canManageRoot && rootOpen && (
         <div
           className="shrink-0 px-3 py-2 flex flex-col gap-1"
           style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-side)' }}

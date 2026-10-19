@@ -259,6 +259,26 @@ fn upload_path(org_id: &str, user_id: &str, upload_id: &str) -> PathBuf {
         .join(format!("{}.part", safe_component(upload_id)))
 }
 
+/// 把上传令牌解析为本机临时文件（仅接受本组织 + 本成员名下的会话）。
+pub(crate) fn resolve_upload_token(
+    org_id: &str,
+    user_id: &str,
+    token: &str,
+) -> Result<PathBuf, String> {
+    if token.trim().is_empty()
+        || token.contains('/')
+        || token.contains('\\')
+        || token.contains("..")
+    {
+        return Err("附件上传令牌不合法".to_string());
+    }
+    let path = upload_path(org_id, user_id, token);
+    if !path.exists() {
+        return Err("附件上传会话不存在或已过期".to_string());
+    }
+    Ok(path)
+}
+
 fn file_cache_dir(org_id: &str) -> PathBuf {
     crate::utils::paths::app_root_dir()
         .join("enclave")
@@ -335,6 +355,57 @@ pub async fn upload_file(
         .await;
     session.close().await;
     result
+}
+
+/// 成员端上传一个「临时附件」（过程记录用）：成功返回上传令牌，不落文件资产。
+///
+/// 过程记录附件必须随记录一次性写入，因此先上传到主机临时区，再由
+/// `task.progress_add` 用令牌解析成本机路径。
+pub async fn upload_temp_file(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    src_path: &str,
+) -> Result<String, String> {
+    let bytes = std::fs::read(src_path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
+    if bytes.len() as u64 > UPLOAD_MAX_BYTES {
+        return Err("文件超过单文件大小上限".to_string());
+    }
+    let sha256 = transfer::hex_sha256(&bytes);
+
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let begin = session
+        .request("file.upload_begin", json!({ "orgId": org_id, "fileName": "attachment" }))
+        .await?;
+    let upload_id = begin["uploadId"].as_str().unwrap_or("").to_string();
+    if upload_id.is_empty() {
+        session.close().await;
+        return Err("主机未返回上传会话".to_string());
+    }
+    let mut offset = 0u64;
+    for chunk in bytes.chunks(transfer::LAN_CHUNK_MAX as usize) {
+        session
+            .request(
+                "file.upload_chunk",
+                json!({
+                    "orgId": org_id,
+                    "uploadId": upload_id,
+                    "offset": offset,
+                    "data": BASE64.encode(chunk),
+                }),
+            )
+            .await?;
+        offset += chunk.len() as u64;
+    }
+    let kept = session
+        .request(
+            "file.upload_keep",
+            json!({ "orgId": org_id, "uploadId": upload_id, "sha256": sha256 }),
+        )
+        .await;
+    session.close().await;
+    let kept = kept?;
+    Ok(kept["token"].as_str().unwrap_or("").to_string())
 }
 
 /// 成员端打开文件：下载到内容寻址缓存（`<sha8>-<名>`）并返回本地路径。
@@ -791,6 +862,17 @@ async fn handle_conn(
                 }
                 Err(e) => res_err(&req.id, &e),
             },
+            "file.upload_keep" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let upload_id = req.params["uploadId"].as_str().unwrap_or("").to_string();
+                    let sha256 = req.params["sha256"].as_str().unwrap_or("").to_string();
+                    match handle_upload_keep(org, &hello.user_id, &upload_id, &sha256) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
             "file.stat" => match org_param(&req, &hello) {
                 Ok(org) => {
                     let file_id = req.params["fileId"].as_str().unwrap_or("").to_string();
@@ -996,6 +1078,21 @@ fn handle_upload_finish(
     let _ = std::fs::remove_file(&path);
     let view = result?;
     serde_json::to_value(&view).map_err(|e| format!("序列化文件信息失败：{}", e))
+}
+
+fn handle_upload_keep(
+    org_id: &str,
+    user_id: &str,
+    upload_id: &str,
+    sha256: &str,
+) -> Result<Value, String> {
+    let path = resolve_upload_token(org_id, user_id, upload_id)?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取上传文件失败：{}", e))?;
+    if !sha256.is_empty() && transfer::hex_sha256(&bytes) != sha256 {
+        let _ = std::fs::remove_file(&path);
+        return Err("上传文件校验失败（哈希不一致）".to_string());
+    }
+    Ok(json!({ "token": upload_id }))
 }
 
 fn handle_file_stat(
@@ -1891,6 +1988,83 @@ mod tests {
             content
         );
         assert_eq!(fetched["data"]["eof"], true);
+
+        // 过程记录附件：先上传临时令牌，再随记录提交
+        let progress_content = b"progress note".to_vec();
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"p1","method":"file.upload_begin",
+                "params":{"orgId":"org1","fileName":"attachment"}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let pbegin = next_json(&mut rx).await.unwrap();
+        let pupload_id = pbegin["data"]["uploadId"].as_str().unwrap().to_string();
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"p2","method":"file.upload_chunk",
+                "params":{
+                    "orgId":"org1","uploadId":pupload_id,"offset":0,
+                    "data":BASE64.encode(&progress_content)
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(next_json(&mut rx).await.unwrap()["ok"], true);
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"p3","method":"file.upload_keep",
+                "params":{
+                    "orgId":"org1","uploadId":pupload_id,
+                    "sha256":transfer::hex_sha256(&progress_content)
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let kept = next_json(&mut rx).await.unwrap();
+        assert_eq!(kept["ok"], true);
+        let token = kept["data"]["token"].as_str().unwrap().to_string();
+
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"p4","method":"enclave.call",
+                "params":{
+                    "orgId":"org1","command":"task.progress_add",
+                    "payload":{"taskId":task_id,"content":"进度说明","attachments":[token]}
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let progress = next_json(&mut rx).await.unwrap();
+        assert_eq!(progress["ok"], true, "progress failed: {}", progress);
+        assert_eq!(progress["data"]["attachments"].as_array().unwrap().len(), 1);
+
+        // 安全：客户端不能直接指定主机路径当附件
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"p5","method":"enclave.call",
+                "params":{
+                    "orgId":"org1","command":"task.progress_add",
+                    "payload":{
+                        "taskId":task_id,"content":"恶意路径",
+                        "attachments":["C:\\Windows\\win.ini"]
+                    }
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let rejected = next_json(&mut rx).await.unwrap();
+        assert_eq!(rejected["ok"], false, "raw path must be rejected: {}", rejected);
 
         drop(tx);
         drop(rx);
