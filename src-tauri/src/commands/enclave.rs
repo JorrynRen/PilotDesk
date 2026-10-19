@@ -111,6 +111,94 @@ pub fn enclave_host_fp_reset(
     crate::enclave::host::reset_fingerprint(state.inner(), &org_id)
 }
 
+/// 将本机登记为该组织主机（仅 owner）：首次登记 / 同设备续登直接生效。
+///
+/// 若已被其他设备登记，返回明确错误；换机请走 `enclave_host_takeover`（先迁移数据）。
+#[tauri::command]
+pub async fn enclave_host_claim(
+    org_id: String,
+    takeover: Option<bool>,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::host::HostStatusView, String> {
+    let role = state
+        .store
+        .with_conn(|c| crate::enclave::authz::role_for_org(c, &org_id))?;
+    if role != Some(crate::enclave::authz::Role::Owner) {
+        return Err("仅组织所有者可登记主机".to_string());
+    }
+    let reg = crate::enclave::host::register_with_platform(
+        db.inner(),
+        state.inner(),
+        &org_id,
+        takeover.unwrap_or(false),
+    )
+    .await?;
+    let host = reg
+        .host
+        .ok_or_else(|| "平台未返回主机信息".to_string())?;
+    if !reg.claimed {
+        return Err(format!(
+            "该组织已由「{}」登记为主机；换机请使用「从旧主机接管」",
+            host.device_name
+        ));
+    }
+    crate::enclave::host::apply_host_info(state.inner(), &org_id, &host)?;
+    crate::enclave::host::host_status(state.inner(), Some(&org_id))
+}
+
+/// 从旧主机在线接管（同账号换机）：迁移数据 → 校验 → 导入 → 登记本机。
+#[tauri::command]
+pub async fn enclave_host_takeover(
+    org_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::host::HandoverOutcome, String> {
+    let role = state
+        .store
+        .with_conn(|c| crate::enclave::authz::role_for_org(c, &org_id))?;
+    if role != Some(crate::enclave::authz::Role::Owner) {
+        return Err("仅组织所有者可接管主机".to_string());
+    }
+    crate::enclave::host::takeover_from_host(state.inner(), db.inner(), &org_id).await
+}
+
+/// 强制接管（旧设备已丢失 / 不可修复）：不迁移数据，直接登记本机为空库主机。
+///
+/// 仅 owner 可用，必须输入组织 ID 二次确认；不可撤销。
+#[tauri::command]
+pub async fn enclave_host_takeover_force(
+    org_id: String,
+    confirmation: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::host::HostStatusView, String> {
+    if confirmation.trim() != org_id {
+        return Err("请输入组织 ID 以确认强制接管".to_string());
+    }
+    let role = state
+        .store
+        .with_conn(|c| crate::enclave::authz::role_for_org(c, &org_id))?;
+    if role != Some(crate::enclave::authz::Role::Owner) {
+        return Err("仅组织所有者可接管主机".to_string());
+    }
+    let reg = crate::enclave::host::register_with_platform(
+        db.inner(),
+        state.inner(),
+        &org_id,
+        true,
+    )
+    .await?;
+    let host = reg
+        .host
+        .ok_or_else(|| "平台未返回主机信息".to_string())?;
+    if !reg.claimed {
+        return Err("主机登记未生效".to_string());
+    }
+    crate::enclave::host::apply_host_info(state.inner(), &org_id, &host)?;
+    crate::enclave::host::host_status(state.inner(), Some(&org_id))
+}
+
 /// 本机文件缓存占用与上限（成员端打开/下载团队文件时产生）。
 #[tauri::command]
 pub fn enclave_cache_info(
@@ -251,15 +339,31 @@ pub fn enclave_policy_set(
     })
 }
 
-/// 读主机应急开关。
+/// 读主机应急开关。成员端以主机状态为准。
 #[tauri::command]
-pub fn enclave_emergency_get(
+pub async fn enclave_emergency_get(
     org_id: String,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::org::EmergencyView, String> {
-    state
+    let role = state
         .store
-        .with_conn(|c| crate::enclave::org::emergency_view(c, &org_id))
+        .with_conn(|c| crate::enclave::authz::role_for_org(c, &org_id))?;
+    match role {
+        Some(crate::enclave::authz::Role::Owner) => state
+            .store
+            .with_conn(|c| crate::enclave::org::emergency_view(c, &org_id)),
+        Some(_) => {
+            let data = crate::enclave::host::call_host_without_token(
+                state.inner(),
+                &org_id,
+                "emergency.get",
+                serde_json::json!({}),
+            )
+            .await?;
+            serde_json::from_value(data).map_err(|e| format!("解析主机应急状态失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
 }
 
 /// 设置主机应急开关（仅 owner）：写库 + 审计 + 更新运行态。

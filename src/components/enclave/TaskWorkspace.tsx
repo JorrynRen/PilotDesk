@@ -1867,9 +1867,12 @@ function TaskDetail(props: {
                               taskId: task.id,
                               reportId: r.id,
                             });
+                            showToast('已重新归档进组织知识库', 'success');
+                          } catch (e) {
+                            const msg = typeof e === 'string' ? e : e instanceof Error ? e.message : String(e);
+                            showToast(`重试归档失败：${msg}`, 'error');
+                          } finally {
                             await useEnclaveTaskStore.getState().loadExtras(orgId, task.id);
-                          } catch {
-                            // 错误会写入 sediment_error，列表刷新后可见
                           }
                         }}
                         className="px-1.5 py-0.5 rounded"

@@ -37,7 +37,7 @@ fn allowed_now(
 
 fn is_local_host(store: &EnclaveStore, org_id: &str) -> bool {
     store
-        .with_conn(org::host_org_ids)
+        .with_conn(|c| org::host_org_ids(c, &super::host::device_id()))
         .map(|ids| ids.iter().any(|o| o == org_id))
         .unwrap_or(false)
 }

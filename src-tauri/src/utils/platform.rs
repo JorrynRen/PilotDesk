@@ -121,6 +121,25 @@ pub async fn post_json_with_status<B: serde::Serialize, T: serde::de::Deserializ
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
+    send_json_with_status(req).await
+}
+
+/// PUT 一个 JSON 接口（可选 Bearer）；失败时保留 HTTP 状态码。
+pub async fn put_json_with_status<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+    path: &str,
+    body: &B,
+    token: Option<&str>,
+) -> Result<T, PlatformError> {
+    let mut req = http_client().put(format!("{}{}", api_base(), path)).json(body);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    send_json_with_status(req).await
+}
+
+async fn send_json_with_status<T: serde::de::DeserializeOwned>(
+    req: reqwest::RequestBuilder,
+) -> Result<T, PlatformError> {
     let resp = req.send().await.map_err(|e| PlatformError {
         status: 0,
         message: format!("请求平台失败：{}", e),

@@ -139,6 +139,19 @@ export interface HostStatusView {
   hostFingerprint: string | null;
   /** 成员端已固定的主机证书指纹（sha256 hex） */
   pinnedFingerprint: string | null;
+  /** 本机设备标识 */
+  deviceId: string;
+  /** 当前组织登记的主机设备 id（空 = 尚未登记） */
+  hostDeviceId: string | null;
+  /** 当前组织登记的主机设备名 */
+  hostDeviceName: string | null;
+}
+
+/** 同账号换机接管结果（`enclave_host_takeover`） */
+export interface HandoverOutcome {
+  orgId: string;
+  packageHash: string;
+  fileCount: number;
 }
 
 /** 本机文件缓存信息（`enclave_cache_info`） */

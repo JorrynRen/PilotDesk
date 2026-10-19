@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 7;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 8;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS org_snapshot (
     status          TEXT NOT NULL DEFAULT '',
     my_role         TEXT NOT NULL DEFAULT 'member', -- 当前登录用户在该组织中的角色（平台 role 字段，只读）
     viewer_id       TEXT NOT NULL DEFAULT '',      -- 该快照对应的登录身份（user.id）：换账号后旧行自动失效
+    host_device_id  TEXT NOT NULL DEFAULT '',      -- 平台登记的主机设备 id（空 = 尚未登记）
+    host_device_name TEXT NOT NULL DEFAULT '',     -- 主机设备名（展示用）
     synced_at       INTEGER NOT NULL DEFAULT 0
 );
 
@@ -462,6 +464,23 @@ impl EnclaveStore {
                 )
                 .map_err(|e| format!("迁移知识库附件归属失败: {}", e))?;
             }
+        }
+        // v7 → v8：组织快照记录「当前登记的主机设备」。
+        // 同一 owner 账号可能在多台设备登录；只有设备 id 与登记一致的本机才对外服务，
+        // 避免第二台设备用空库启动主机服务（见 host::device_id / org::host_org_ids）。
+        if current < 8 {
+            Self::ensure_column(
+                conn,
+                "org_snapshot",
+                "host_device_id",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
+            Self::ensure_column(
+                conn,
+                "org_snapshot",
+                "host_device_name",
+                "TEXT NOT NULL DEFAULT ''",
+            )?;
         }
 
         if current != ENCLAVE_SCHEMA_VERSION {

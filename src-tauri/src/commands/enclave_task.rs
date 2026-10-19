@@ -590,17 +590,28 @@ pub async fn enclave_kb_entry_get(
 }
 
 /// 沉淀重试（确认成功但归档失败时使用）。
+///
+/// 主机（owner）走本地库；成员转发到主机执行（知识条目只在主机侧）。
 #[tauri::command]
-pub fn enclave_task_sediment_retry(
+pub async fn enclave_task_sediment_retry(
     org_id: String,
     task_id: String,
     report_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<(), String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        crate::enclave::knowledge::retry_sediment(c, &org_id, &task_id, &report_id, &actor)
-    })
+    let payload = json!({ "taskId": task_id.clone(), "reportId": report_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.sediment_retry",
+        payload,
+        |c, actor| {
+            crate::enclave::knowledge::retry_sediment(c, &org_id, &task_id, &report_id, actor)
+        },
+    )
+    .await
 }
 
 /// 人工编辑知识条目（owner / admin）：标题、正文、标签。

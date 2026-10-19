@@ -13,6 +13,7 @@ import type {
   CacheInfoView,
   EmergencyView,
   EnclaveOrgCaps,
+  HandoverOutcome,
   HostStatusView,
   LanOfferOutcome,
   OrgDetailView,
@@ -74,6 +75,12 @@ interface EnclaveOrgState {
   setHostAddr: (id: string, addr: string) => Promise<boolean>;
   /** 清除成员端固定的主机证书指纹（主机重装/更换后使用） */
   resetHostFp: (id: string) => Promise<boolean>;
+  /** 将本机登记为该组织主机（仅 owner；首次登记/同设备续登） */
+  claimHost: (id: string) => Promise<boolean>;
+  /** 从旧主机在线接管（迁移数据 → 校验 → 导入 → 登记本机） */
+  takeoverHost: (id: string) => Promise<HandoverOutcome | null>;
+  /** 强制接管（旧设备不可用）：不迁移数据，直接登记本机 */
+  forceTakeoverHost: (id: string) => Promise<boolean>;
   /** 重拉本机文件缓存占用 */
   loadCache: () => Promise<void>;
   /** 调整本机文件缓存上限（MB）；成功返回 true */
@@ -96,6 +103,8 @@ interface EnclaveOrgState {
   loadLanPending: (orgId: string) => Promise<void>;
   /** 接受并自动完成局域网迁移（下载 → 校验 → 合并 → 主机确认） */
   acceptLanTransfer: (orgId: string, transferId: string) => Promise<TransferImportOutcome | null>;
+  /** 拒绝发给当前账号的局域网转移请求 */
+  rejectLanTransfer: (orgId: string, transferId: string) => Promise<boolean>;
 }
 
 export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
@@ -253,6 +262,40 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
     }
   },
 
+  claimHost: async (id) => {
+    try {
+      const host = await invoke<HostStatusView>('enclave_host_claim', { orgId: id });
+      set({ host, error: null });
+      await get().loadGovernance(id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  takeoverHost: async (id) => {
+    try {
+      const outcome = await invoke<HandoverOutcome>('enclave_host_takeover', { orgId: id });
+      await get().loadGovernance(id);
+      return outcome;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  forceTakeoverHost: async (id) => {
+    try {
+      await invoke('enclave_host_takeover_force', { orgId: id, confirmation: id });
+      await get().loadGovernance(id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
   loadCache: async () => {
     try {
       const cache = await invoke<CacheInfoView>('enclave_cache_info');
@@ -383,6 +426,17 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
     } catch (e) {
       set({ error: errorMessage(e) });
       return null;
+    }
+  },
+
+  rejectLanTransfer: async (orgId, transferId) => {
+    try {
+      await invoke('enclave_transfer_lan_reject', { orgId, transferId });
+      await Promise.all([get().loadTransfers(orgId), get().loadLanPending(orgId)]);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
     }
   },
 

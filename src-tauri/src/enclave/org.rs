@@ -20,6 +20,10 @@ pub struct OrgSnapshotRow {
     pub my_role: String,
     /// 该快照对应的登录身份（平台 `user.id`）：换账号后旧快照自动失效
     pub viewer_id: String,
+    /// 平台登记的主机设备 id（空 = 尚未登记）
+    pub host_device_id: String,
+    /// 主机设备名（展示用）
+    pub host_device_name: String,
 }
 
 /// 成员快照的写入行（来自平台 `/organizations/:id/members`）。
@@ -47,6 +51,10 @@ pub struct OrgSnapshotView {
     pub status: String,
     /// 当前登录用户在该组织中的角色（owner / admin / member），前端据此做显隐
     pub my_role: String,
+    /// 平台登记的主机设备 id（空 = 尚未登记）
+    pub host_device_id: String,
+    /// 主机设备名（展示用）
+    pub host_device_name: String,
     pub synced_at: i64,
 }
 
@@ -90,8 +98,8 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
     conn.execute(
         "INSERT INTO org_snapshot
             (org_id, name, owner_user_id, plan_key, plan_expires_at, seats, member_count, status,
-             my_role, viewer_id, synced_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             my_role, viewer_id, host_device_id, host_device_name, synced_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(org_id) DO UPDATE SET
             name = excluded.name,
             owner_user_id = excluded.owner_user_id,
@@ -102,6 +110,8 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
             status = excluded.status,
             my_role = excluded.my_role,
             viewer_id = excluded.viewer_id,
+            host_device_id = excluded.host_device_id,
+            host_device_name = excluded.host_device_name,
             synced_at = excluded.synced_at",
         params![
             row.org_id,
@@ -114,6 +124,8 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
             row.status,
             row.my_role,
             row.viewer_id,
+            row.host_device_id,
+            row.host_device_name,
             synced_at
         ],
     )
@@ -218,7 +230,9 @@ fn map_org_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrgSnapshotView> {
         member_count: r.get(6)?,
         status: r.get(7)?,
         my_role: r.get(8)?,
-        synced_at: r.get(9)?,
+        host_device_id: r.get(9)?,
+        host_device_name: r.get(10)?,
+        synced_at: r.get(11)?,
     })
 }
 
@@ -230,7 +244,7 @@ pub fn list_orgs(conn: &Connection) -> Result<Vec<OrgSnapshotView>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
-                    seats, member_count, status, my_role, synced_at
+                    seats, member_count, status, my_role, host_device_id, host_device_name, synced_at
              FROM org_snapshot
              WHERE viewer_id <> ''
                AND viewer_id = (SELECT user_id FROM local_identity LIMIT 1)
@@ -244,24 +258,84 @@ pub fn list_orgs(conn: &Connection) -> Result<Vec<OrgSnapshotView>, String> {
         .map_err(|e| format!("读取组织快照失败：{}", e))
 }
 
-/// 本机承担主机服务的组织：当前登录身份是 **owner** 的组织。
+/// 本机承担主机服务的组织：当前登录身份是 **owner**，且平台登记的主机设备就是本机。
 ///
-/// `owner = host`：只有 owner 的设备承载 `enclave.db` 与文件资产。
-pub fn host_org_ids(conn: &Connection) -> Result<Vec<String>, String> {
+/// 只按角色判断会让同一账号的第二台设备也用空库对外服务；设备 id 是唯一锚点。
+pub fn host_org_ids(conn: &Connection, device_id: &str) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT org_id FROM org_snapshot
              WHERE my_role = 'owner'
                AND viewer_id <> ''
                AND viewer_id = (SELECT user_id FROM local_identity LIMIT 1)
+               AND host_device_id = ?1
              ORDER BY org_id",
         )
         .map_err(|e| format!("查询主机组织失败：{}", e))?;
     let rows = stmt
-        .query_map([], |r| r.get::<_, String>(0))
+        .query_map(params![device_id], |r| r.get::<_, String>(0))
         .map_err(|e| format!("查询主机组织失败：{}", e))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("读取主机组织失败：{}", e))
+}
+
+/// 某组织当前登记的主机设备（id, name）；无登记返回 `("", "")`。
+pub fn host_device_of(conn: &Connection, org_id: &str) -> Result<(String, String), String> {
+    conn.query_row(
+        "SELECT host_device_id, host_device_name FROM org_snapshot WHERE org_id = ?1",
+        params![org_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(|e| format!("读取主机登记失败：{}", e))?
+    .ok_or_else(|| "尚未同步该组织的治理快照".to_string())
+}
+
+/// 立即把本地快照的主机登记改为指定设备（用于认领/接管成功后不必等下一轮快照）。
+pub fn set_host_device(
+    conn: &Connection,
+    org_id: &str,
+    device_id: &str,
+    device_name: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE org_snapshot SET host_device_id = ?2, host_device_name = ?3 WHERE org_id = ?1",
+        params![org_id, device_id, device_name],
+    )
+    .map_err(|e| format!("更新主机登记失败：{}", e))?;
+    Ok(())
+}
+
+/// 本机是否已有该组织的团队业务数据（用于升级期判断「哪台设备是原主机」）。
+pub fn has_local_org_data(conn: &Connection, org_id: &str) -> Result<bool, String> {
+    let count: i64 = conn
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM org_tasks WHERE org_id = ?1)
+              + (SELECT COUNT(*) FROM file_assets WHERE owner_type = 'org' AND owner_id = ?1)
+              + (SELECT COUNT(*) FROM knowledge_base_memories
+                   WHERE knowledge_base_id IN
+                     (SELECT id FROM knowledge_bases WHERE owner_type = 'org' AND owner_id = ?1))",
+            params![org_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("统计本机团队数据失败：{}", e))?;
+    Ok(count > 0)
+}
+
+/// 云端 ownership 已转让后，把本机视角的角色降为 admin（与平台同口径）。
+///
+/// 主机服务据此在下一轮复核时停止对外监听；真正的角色仍以平台快照为准，
+/// 下一轮快照同步会再次覆盖该值。
+pub fn demote_after_transfer(conn: &Connection, org_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE org_snapshot SET my_role = 'admin'
+         WHERE org_id = ?1
+           AND viewer_id = (SELECT user_id FROM local_identity LIMIT 1)",
+        params![org_id],
+    )
+    .map_err(|e| format!("更新组织角色失败：{}", e))?;
+    Ok(())
 }
 
 /// 取某组织详情（组织信息 + 成员列表）；不存在返回 `None`。
@@ -273,7 +347,7 @@ pub fn org_detail(
     let org = conn
         .query_row(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
-                    seats, member_count, status, my_role, synced_at
+                    seats, member_count, status, my_role, host_device_id, host_device_name, synced_at
              FROM org_snapshot
              WHERE org_id = ?1
                AND viewer_id <> ''
@@ -490,7 +564,7 @@ pub fn policy_view(conn: &Connection, org_id: &str) -> Result<PolicyView, String
 }
 
 /// 主机应急开关视图（缺行按「未关闭」返回）。
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmergencyView {
     pub org_id: String,
@@ -625,6 +699,20 @@ mod tests {
         assert!(org_detail(&conn, "8").unwrap().is_none());
         assert!(list_orgs(&conn).unwrap().is_empty());
         assert!(crate::enclave::authz::role_for_org(&conn, "8").unwrap().is_none());
+    }
+
+    /// 主机判定必须同时满足 owner 与「登记设备就是本机」。
+    #[test]
+    fn host_org_ids_requires_registered_device() {
+        let conn = seeded("owner");
+        assert!(host_org_ids(&conn, "dev-a").unwrap().is_empty(), "未登记不得自认主机");
+        set_host_device(&conn, "8", "dev-a", "A").unwrap();
+        assert_eq!(host_org_ids(&conn, "dev-a").unwrap(), vec!["8".to_string()]);
+        assert!(host_org_ids(&conn, "dev-b").unwrap().is_empty(), "其他设备不得成为主机");
+        assert_eq!(
+            host_device_of(&conn, "8").unwrap(),
+            ("dev-a".to_string(), "A".to_string())
+        );
     }
 
     /// 平台改过昵称/邮箱后，成员表里「自己那行」必须跟着更新，且不动角色。

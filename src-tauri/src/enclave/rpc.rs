@@ -68,6 +68,7 @@ pub fn dispatch(
     match command {
         // ── 治理只读：成员端 Agent 工具 / 面板按主机策略复核出境闸门 ──
         "policy.get" => to_value(super::org::policy_view(conn, org_id)?),
+        "emergency.get" => to_value(super::org::emergency_view(conn, org_id)?),
 
         // ── 任务 ──────────────────────────────────────────────
         "task.get" => {
@@ -148,6 +149,13 @@ pub fn dispatch(
                 &task_id,
                 &collaborators,
             )?)
+        }
+        "task.sediment_retry" => {
+            let task_id = req_str(payload, "taskId")?;
+            let report_id = req_str(payload, "reportId")?;
+            ensure_report_in_org(conn, org_id, &report_id)?;
+            knowledge::retry_sediment(conn, org_id, &task_id, &report_id, actor)?;
+            Ok(Value::Null)
         }
 
         // ── 完成汇报 ──────────────────────────────────────────

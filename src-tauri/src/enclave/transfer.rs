@@ -219,6 +219,38 @@ pub fn advance(conn: &Connection, id: &str, to_phase: &str) -> Result<TransferVi
     get(conn, id)
 }
 
+/// 治理快照确认本机已成为组织 owner 时，把已校验的转入记录推进到 `completed`。
+///
+/// 云端 ownership 变更没有回调通道，因此以「快照里的 owner 已是当前账号」为生效依据；
+/// 单个记录推进失败不阻断快照写入（保留 `verified`，下一轮再试）。
+pub fn reconcile_incoming(
+    conn: &Connection,
+    org_id: &str,
+    user_id: &str,
+    owner_user_id: &str,
+) -> Result<(), String> {
+    if user_id.is_empty() || owner_user_id != user_id {
+        return Ok(());
+    }
+    let ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM host_transfer
+                 WHERE org_id = ?1 AND direction = ?2 AND phase = ?3",
+            )
+            .map_err(|e| format!("查询转入记录失败：{}", e))?;
+        let rows = stmt
+            .query_map(params![org_id, DIRECTION_IN, PHASE_VERIFIED], |r| r.get(0))
+            .map_err(|e| format!("查询转入记录失败：{}", e))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()
+            .map_err(|e| format!("读取转入记录失败：{}", e))?
+    };
+    for id in ids {
+        let _ = advance(conn, &id, PHASE_COMPLETED);
+    }
+    Ok(())
+}
+
 fn set_package_hash(conn: &Connection, id: &str, hash: &str) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
     conn.execute(
@@ -330,14 +362,14 @@ pub fn export_package(
     })
 }
 
-struct BuiltPackage {
-    envelope: Vec<u8>,
-    package_hash: String,
-    file_count: usize,
+pub(crate) struct BuiltPackage {
+    pub(crate) envelope: Vec<u8>,
+    pub(crate) package_hash: String,
+    pub(crate) file_count: usize,
 }
 
 /// 构建单组织的加密迁移包（数据库快照 + 文件资产 + manifest + AES-GCM）。
-fn build_package(
+pub(crate) fn build_package(
     conn: &Connection,
     org_id: &str,
     passphrase: &str,
@@ -690,7 +722,27 @@ fn member_request(
     if t.peer_device_id != user_id {
         return Err("该转移请求不属于当前账号".to_string());
     }
+    // 超时请求一律作废（防止旧页面直接调用 accept / chunk）
+    if chrono::Utc::now().timestamp().saturating_sub(t.created_at) > LAN_PENDING_TTL_SECS {
+        return Err("转移请求已过期，请让主机重新发起".to_string());
+    }
     Ok(t)
+}
+
+/// 受让人拒绝请求：`pending → rejected`，并清理迁移包与一次性口令。
+pub fn reject_for_member(
+    conn: &Connection,
+    transfer_id: &str,
+    org_id: &str,
+    user_id: &str,
+) -> Result<TransferView, String> {
+    let t = member_request(conn, transfer_id, org_id, user_id)?;
+    if t.phase != PHASE_PENDING {
+        return Err("该转移请求已被处理或已过期".to_string());
+    }
+    let view = advance(conn, transfer_id, PHASE_REJECTED)?;
+    cleanup_lan_artifacts(conn, transfer_id);
+    Ok(view)
 }
 
 /// 受让人接受请求：`pending → accepted`，返回一次性迁移口令。
@@ -967,6 +1019,74 @@ pub fn import_package(
     })
 }
 
+// ── 同账号换机接管：导入（不产生组织转让记录）────────────────────
+
+/// 设备接管导入：复用迁移包格式，但不建立 `host_transfer` 记录（ownership 未变）。
+///
+/// 已成功导入过的包（换机重试）按 `handover_imported:{orgId}` 标记识别，直接视为完成。
+pub(crate) fn import_handover_package(
+    conn: &Connection,
+    path: &str,
+    passphrase: &str,
+) -> Result<ImportOutcome, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("读取迁移包失败：{}", e))?;
+    let hash = hex_sha256(&raw);
+    match import_package(conn, path, passphrase) {
+        Ok(outcome) => {
+            // 接管不是组织转让：清掉自动产生的 in 记录，改写为接管标记
+            let _ = conn.execute(
+                "DELETE FROM host_transfer WHERE id = ?1",
+                params![outcome.transfer_id],
+            );
+            let now = chrono::Utc::now().timestamp();
+            conn.execute(
+                "INSERT OR REPLACE INTO enclave_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
+                params![
+                    format!("handover_imported:{}", outcome.org_id),
+                    outcome.package_hash,
+                    now
+                ],
+            )
+            .map_err(|e| format!("记录接管导入标记失败：{}", e))?;
+            let actor = authz::current_actor_id(conn).unwrap_or_default();
+            org::audit(
+                conn,
+                &outcome.org_id,
+                &actor,
+                "handover.import",
+                &json!({
+                    "packageHash": outcome.package_hash,
+                    "fileCount": outcome.file_count
+                })
+                .to_string(),
+            )?;
+            Ok(outcome)
+        }
+        Err(e) if e.contains("已有业务数据") => {
+            // 换机重试：上一轮已成功导入（标记与本次包哈希一致）→ 继续后续提交
+            let key: Option<String> = conn
+                .query_row(
+                    "SELECT key FROM enclave_settings
+                     WHERE key LIKE 'handover_imported:%' AND value = ?1",
+                    params![hash],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| format!("读取接管导入标记失败：{}", e))?;
+            if let Some(key) = key {
+                return Ok(ImportOutcome {
+                    transfer_id: String::new(),
+                    org_id: key.trim_start_matches("handover_imported:").to_string(),
+                    package_hash: hash,
+                    file_count: 0,
+                });
+            }
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 // ── 旧主机销毁 ──────────────────────────────────────────────────
 
 /// 销毁当前组织的全部团队数据（仅 `completed` 的转出记录可调用）。
@@ -1206,8 +1326,8 @@ mod tests {
                 )
                 .map_err(|e| e.to_string())?;
                 c.execute(
-                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id)
-                     VALUES (?1, 'Org', ?2, 'owner', ?2)",
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, host_device_id, host_device_name)
+                     VALUES (?1, 'Org', ?2, 'owner', ?2, 'test-device', 'TestDevice')",
                     params![org, actor],
                 )
                 .map_err(|e| e.to_string())?;
@@ -1273,6 +1393,58 @@ mod tests {
         assert!(can_advance(PHASE_MIGRATING, PHASE_COMPLETED).is_err());
         assert!(can_advance(PHASE_COMPLETED, PHASE_FAILED).is_err());
         assert!(can_advance(PHASE_FAILED, PHASE_COMPLETED).is_err());
+    }
+
+    #[test]
+    fn reconcile_incoming_requires_owner_snapshot() {
+        let host_dir = temp_dir("rec-host");
+        let recv_dir = temp_dir("rec-recv");
+        let host = open_store(&host_dir);
+        let recv = open_store(&recv_dir);
+        seed_host(&host, "org2", "1");
+        seed_member(&recv, "org2", "2");
+        seed_task_and_file(&host, "org2");
+
+        let out_path = host_dir.join("pkg.pdesk");
+        let exp = host
+            .with_conn(|c| export_package(c, "org2", Some(out_path.to_str().unwrap()), "pass-123456"))
+            .unwrap();
+        let imp = recv
+            .with_conn(|c| import_package(c, &exp.path, "pass-123456"))
+            .unwrap();
+
+        recv.with_conn(|c| {
+            // 快照里 owner 仍是别人：保持 verified，不提前生效
+            reconcile_incoming(c, "org2", "2", "9")?;
+            assert_eq!(get(c, &imp.transfer_id)?.phase, PHASE_VERIFIED);
+            // 快照确认本机成为 owner：转入记录自动 completed
+            reconcile_incoming(c, "org2", "2", "2")?;
+            assert_eq!(get(c, &imp.transfer_id)?.phase, PHASE_COMPLETED);
+            Ok(())
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&host_dir);
+        let _ = std::fs::remove_dir_all(&recv_dir);
+    }
+
+    #[test]
+    fn demote_after_transfer_stops_serving() {
+        let dir = temp_dir("demote");
+        let store = open_store(&dir);
+        seed_host(&store, "org3", "1");
+        store
+            .with_conn(|c| {
+                assert_eq!(
+                    org::host_org_ids(c, "test-device")?,
+                    vec!["org3".to_string()]
+                );
+                org::demote_after_transfer(c, "org3")?;
+                assert!(org::host_org_ids(c, "test-device")?.is_empty());
+                Ok(())
+            })
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

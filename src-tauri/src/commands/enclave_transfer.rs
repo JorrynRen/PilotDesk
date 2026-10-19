@@ -1,8 +1,8 @@
 //! 主机转移命令（M8）：状态查询 / 加密迁移包导出导入 / 状态推进 / 旧机销毁。
 //!
-//! 控制面（云端 `transfer.request / accept / complete`）的平台接口尚未提供，
-//! 本层先把**数据面 + 状态机**打通；`verified → completed` 由 owner 在完成云端
-//! 转让后显式推进（接口接入后改为后端自动调用）。
+//! 数据面与本地状态机在本层闭环；`verified → completed` 的云端生效由
+//! `enclave_transfer_advance` 在推进前调用平台组织转让接口完成（旧主机 owner 触发），
+//! 新主机则依据治理快照中「owner 已变更为本机」自动把转入记录推进到 `completed`。
 
 use std::sync::Arc;
 
@@ -48,15 +48,72 @@ pub fn enclave_transfer_import(
 }
 
 /// 推进转移状态（真值表见 `transfer::can_advance`）。
+///
+/// 推进到 `completed` 前先落实云端生效：
+/// - **转出（旧主机 owner）**：调用平台 `POST /organizations/:id/transfer` 完成 ownership 变更；
+/// - **接管（新主机）**：要求治理快照已显示本机为 owner（快照轮询也会自动推进，这里兜底）。
 #[tauri::command]
-pub fn enclave_transfer_advance(
+pub async fn enclave_transfer_advance(
     transfer_id: String,
     to_phase: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TransferView, String> {
-    state
+    let cur = state.store.with_conn(|c| transfer::get(c, &transfer_id))?;
+    if to_phase == transfer::PHASE_COMPLETED && cur.phase == transfer::PHASE_VERIFIED {
+        let role =
+            state
+                .store
+                .with_conn(|c| crate::enclave::authz::role_for_org(c, &cur.org_id))?;
+        if role != Some(crate::enclave::authz::Role::Owner) {
+            return Err("云端所有权尚未转移（本机还不是组织所有者），请先刷新治理快照".to_string());
+        }
+        if cur.direction == transfer::DIRECTION_OUT {
+            let to_user_id: i64 = cur
+                .peer_device_id
+                .trim()
+                .parse()
+                .map_err(|_| "转移记录缺少有效的受让人账号".to_string())?;
+            let token = crate::commands::org_common::require_token(db.inner()).await?;
+            let path = format!("/api/v1/organizations/{}/transfer", cur.org_id);
+            let transferred = crate::utils::platform::post_json_with_status::<_, serde_json::Value>(
+                &path,
+                &serde_json::json!({ "toUserId": to_user_id }),
+                Some(&token),
+            )
+            .await;
+            if let Err(e) = transferred {
+                // 幂等兜底：请求可能已在平台生效（超时后重试 / 网页端已转让），以详情中的 owner 为准
+                let detail_path = format!("/api/v1/organizations/{}", cur.org_id);
+                let already = crate::utils::platform::get_json_with_status::<serde_json::Value>(
+                    &detail_path,
+                    Some(&token),
+                )
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.get("organization")
+                        .and_then(|o| o.get("ownerId"))
+                        .and_then(|x| x.as_i64())
+                })
+                .map(|owner| owner == to_user_id)
+                .unwrap_or(false);
+                if !already {
+                    return Err(format!("云端组织转让失败：{}", e.message));
+                }
+            }
+        }
+    }
+    let view = state
         .store
-        .with_conn(|c| transfer::advance(c, &transfer_id, &to_phase))
+        .with_conn(|c| transfer::advance(c, &transfer_id, &to_phase))?;
+    if to_phase == transfer::PHASE_COMPLETED && cur.direction == transfer::DIRECTION_OUT {
+        // 旧主机：云端已转让，立即降级本地角色，主机服务下一轮复核时关闭监听
+        state
+            .store
+            .with_conn(|c| crate::enclave::org::demote_after_transfer(c, &cur.org_id))?;
+    }
+    Ok(view)
 }
 
 /// 销毁旧主机数据：仅 `completed` 的转出记录；需输入组织 ID 二次确认。
@@ -75,7 +132,7 @@ pub fn enclave_transfer_destroy(
         .with_conn(|c| transfer::destroy_org_data(c, &org_id, &transfer_id))
 }
 
-// ── 局域网自动迁移（数据面；云端所有权变更仍待平台接口）─────────
+// ── 局域网自动迁移（数据面 + 云端所有权变更）───────────────
 
 /// 发起局域网转移：生成迁移包与一次性口令，等待受让人确认。仅 owner。
 #[tauri::command]
@@ -98,6 +155,19 @@ pub async fn enclave_transfer_lan_pending(
 ) -> Result<Vec<TransferView>, String> {
     let data = host::fetch_pending_transfers(state.inner(), db.inner(), &org_id).await?;
     serde_json::from_value(data).map_err(|e| format!("解析转移请求失败：{}", e))
+}
+
+/// 拒绝局域网转移请求（受让人侧）：请求作废，旧主机继续权威。
+#[tauri::command]
+pub async fn enclave_transfer_lan_reject(
+    org_id: String,
+    transfer_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TransferView, String> {
+    let data =
+        host::reject_lan_transfer(state.inner(), db.inner(), &org_id, &transfer_id).await?;
+    serde_json::from_value(data).map_err(|e| format!("解析拒绝结果失败：{}", e))
 }
 
 /// 接受并自动完成局域网迁移：接受 → 分块下载 → 校验 → 合并 → 告知主机已校验。

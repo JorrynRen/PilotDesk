@@ -6,7 +6,8 @@
 //! 平台接口（`requireAuth`，Bearer）：
 //! ```text
 //! GET /api/v1/organizations/mine          → { organizations: [...] }（字段与 org_share 的 OrgRow 同口径）
-//! GET /api/v1/organizations/:id/members    → 成员列表（**接口未定稿，按防御式解析**）
+//! GET /api/v1/organizations/:id            → 组织详情；成员目录对全体在用成员可见
+//!                                            （已移除的历史成员仅 owner/admin 可见）
 //! ```
 //!
 //! 一条硬约束贯穿全文件：**网络请求全部做完拿到数据，再进 `with_conn` 同步块写库**；
@@ -84,6 +85,18 @@ struct OrgRow {
     /// 平台 owner 的用户 id（即主机身份来源）
     #[serde(default)]
     owner_id: Option<i64>,
+    /// 当前登记的组织主机（无登记为 null）
+    #[serde(default)]
+    host: Option<HostRow>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct HostRow {
+    #[serde(default)]
+    device_id: String,
+    #[serde(default)]
+    device_name: String,
 }
 
 /// 平台 `/api/v1/me` 响应：`{ user: PublicUser }`。
@@ -161,9 +174,9 @@ pub async fn run_snapshot_round(
 
     // 2) 逐组织拉成员（网络请求先行，await 全在同步块之外）。
     //
-    // 成员名单走 `GET /organizations/:id`（平台目前**没有** `/:id/members` 列表接口，
-    // 属待对齐项 §16.1）：该详情对 owner/admin 才返回 `members`，普通成员视角没有名单。
-    // 拿不到名单时跳过该组织的成员写入（保留本地只读快照，成员均可查看），**不拖垮整轮**——
+    // 成员名单随 `GET /organizations/:id` 下发：平台对所有在用成员返回目录
+    // （已移除的历史成员仅 owner/admin 可见）。老版本平台可能不下发名单，
+    // 此时跳过该组织的成员写入（保留本地只读快照），**不拖垮整轮**——
     // 且此时**绝不能**调 `upsert_member_snapshot`（会把存量成员全部标成 `removed`）。
     let mut org_rows: Vec<OrgSnapshotRow> = Vec::with_capacity(orgs.len());
     let mut member_sets: Vec<(String, Vec<MemberSnapshotRow>)> = Vec::with_capacity(orgs.len());
@@ -187,6 +200,13 @@ pub async fn run_snapshot_round(
             },
             // 快照绑定本次同步的登录身份：换账号后旧行自动失效
             viewer_id: me.user.id.to_string(),
+            // 平台登记的主机设备：空 = 尚未登记（需本机认领或从旧主机接管）
+            host_device_id: o.host.as_ref().map(|h| h.device_id.clone()).unwrap_or_default(),
+            host_device_name: o
+                .host
+                .as_ref()
+                .map(|h| h.device_name.clone())
+                .unwrap_or_default(),
         });
         match fetch_members(o.id, &token).await {
             Ok(MemberFetch::Data(members)) => member_sets.push((o.id.to_string(), members)),
@@ -232,9 +252,46 @@ pub async fn run_snapshot_round(
         )?;
         for r in &org_rows {
             org::refresh_own_member_role(c, &r.org_id, &me.user.id.to_string(), &r.my_role)?;
+            // 云端 ownership 变更后，本机的「转入」记录随之生效（无回调通道，以快照为准）
+            super::transfer::reconcile_incoming(
+                c,
+                &r.org_id,
+                &me.user.id.to_string(),
+                &r.owner_user_id,
+            )?;
         }
         Ok(())
     })?;
+
+    // 4) 升级兼容：老库没有主机登记时，由「本机已有团队数据」的设备自动认领。
+    //    空库的新设备**不自动认领**（避免空库对外服务），需用户在「主机与连接」里显式操作。
+    let mut claim_orgs = Vec::new();
+    state.store.with_conn(|c| {
+        for r in &org_rows {
+            if r.my_role == "owner"
+                && r.host_device_id.is_empty()
+                && org::has_local_org_data(c, &r.org_id)?
+            {
+                claim_orgs.push(r.org_id.clone());
+            }
+        }
+        Ok(())
+    })?;
+    for org_id in claim_orgs {
+        match super::host::register_with_platform(db, state, &org_id, false).await {
+            Ok(reg) => {
+                if let Some(h) = reg.host {
+                    let _ = super::host::apply_host_info(state, &org_id, &h);
+                }
+                log::info!(
+                    "[Enclave] 组织 {} 主机登记：claimed={}",
+                    org_id,
+                    reg.claimed
+                );
+            }
+            Err(e) => log::debug!("[Enclave] 组织 {} 主机登记失败：{}", org_id, e),
+        }
+    }
 
     let synced_at = chrono::Utc::now().timestamp();
     state.last_snapshot_at.store(synced_at, Ordering::Relaxed);
@@ -250,14 +307,14 @@ pub async fn run_snapshot_round(
 enum MemberFetch {
     /// 拿到名单（可能为空数组）。
     Data(Vec<MemberSnapshotRow>),
-    /// 平台详情未下发名单（当前登录者是普通成员）：保留本地快照，不算失败。
+    /// 平台详情未下发名单（老版本平台）：保留本地快照，不算失败。
     NotIncluded,
 }
 
 /// 拉某组织的成员名单。
 ///
-/// 平台**没有**独立的 `GET /organizations/:id/members`（待对齐项 §16.1），
-/// 但 `GET /organizations/:id` 对 owner/admin 会带上 `organization.members`，因此一期改走详情接口。
+/// 平台把成员目录随 `GET /organizations/:id` 下发，对所有在用成员可见
+/// （已移除的历史成员仅 owner/admin 可见），因此一期统一走详情接口。
 async fn fetch_members(org_id: i64, token: &str) -> Result<MemberFetch, String> {
     let path = format!("/api/v1/organizations/{}", org_id);
     let v: serde_json::Value = platform::get_json_with_status(&path, Some(token))

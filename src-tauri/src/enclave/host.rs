@@ -78,6 +78,53 @@ const UPLOAD_MAX_BYTES: u64 = 512 * 1024 * 1024;
 #[derive(Default)]
 pub struct HostRuntime {
     inner: Mutex<HostInner>,
+    /// 设备接管（同账号换机）运行态：迁移期间冻结写请求。
+    handover: Mutex<Option<HandoverRuntime>>,
+}
+
+/// 进行中的设备接管：新设备从本机拉取加密包，校验后再由平台登记为新主机。
+pub struct HandoverRuntime {
+    pub id: String,
+    pub org_id: String,
+    pub user_id: String,
+    /// 接管方设备 id（提交后写入本地快照，本机随即停服）
+    pub device_id: String,
+    /// 接管方设备名
+    pub device_name: String,
+    pub passphrase: String,
+    pub package_hash: String,
+    pub path: PathBuf,
+    pub prepared_at: i64,
+    pub verified: bool,
+}
+
+/// 接管迁移窗口：超时未提交即自动回滚（旧主机继续权威）。
+const HANDOVER_TTL_SECS: i64 = 10 * 60;
+/// 接管准备/分块下载的超时（大包可能较慢）。
+const HANDOVER_TIMEOUT: Duration = Duration::from_secs(600);
+
+impl HostRuntime {
+    fn handover_snapshot(&self) -> Option<(String, bool)> {
+        let g = self.handover.lock().unwrap_or_else(|e| e.into_inner());
+        g.as_ref().map(|h| (h.org_id.clone(), h.verified))
+    }
+
+    /// 是否因接管迁移而冻结该组织的写请求。
+    fn handover_frozen(&self, org_id: &str) -> bool {
+        self.handover
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|h| h.org_id == org_id)
+            .unwrap_or(false)
+    }
+
+    fn clear_handover(&self) -> Option<HandoverRuntime> {
+        self.handover
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
 }
 
 #[derive(Default)]
@@ -131,7 +178,18 @@ pub async fn run_host_loop(state: std::sync::Arc<EnclaveState>) {
     }
 
     let mut listener: Option<(TcpListener, tokio_rustls::TlsAcceptor)> = None;
+    // 定期复核「本机是否仍是主机」：云端所有权转让后旧主机必须停服
+    let mut last_role_check = std::time::Instant::now();
     loop {
+        if last_role_check.elapsed() >= Duration::from_secs(30) {
+            last_role_check = std::time::Instant::now();
+            expire_handover(&state);
+            if listener.is_some() && host_org_ids(&state).is_empty() {
+                listener = None;
+                state.host.mark_stopped(None);
+                log::info!("[enclave] 本机已不是任何组织的主机，停止对外服务");
+            }
+        }
         if listener.is_none() {
             if !host_org_ids(&state).is_empty() {
                 let port = configured_host_port(&state);
@@ -293,6 +351,20 @@ fn cache_root() -> PathBuf {
 
 fn uploads_root() -> PathBuf {
     crate::utils::paths::app_root_dir().join("enclave").join("uploads")
+}
+
+/// 设备接管迁移包的临时落点（与组织转让的 `transfer/` 分开）。
+fn handover_dir() -> PathBuf {
+    #[cfg(test)]
+    {
+        std::env::temp_dir().join("pilotdesk-enclave-handover-test")
+    }
+    #[cfg(not(test))]
+    {
+        crate::utils::paths::app_root_dir()
+            .join("enclave")
+            .join("handover")
+    }
 }
 
 /// 成员文件缓存默认上限（全机共享，按最近访问时间淘汰）。
@@ -587,6 +659,136 @@ pub async fn upload_temp_file(
     Ok(kept["token"].as_str().unwrap_or("").to_string())
 }
 
+/// 同账号换机接管结果（前端提示用）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoverOutcome {
+    pub org_id: String,
+    pub package_hash: String,
+    pub file_count: usize,
+}
+
+/// 从旧主机在线接管：拉取一致性快照 → 校验 → 导入 → 平台登记 → 通知旧机停服。
+///
+/// 只有全部成功后才登记本机；任一步失败，旧主机仍为权威源（不会出现空库主机）。
+pub async fn takeover_from_host(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+) -> Result<HandoverOutcome, String> {
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let prepared = session
+        .request_with_timeout(
+            "handover.prepare",
+            json!({ "orgId": org_id }),
+            HANDOVER_TIMEOUT,
+        )
+        .await;
+    let prepared = match prepared {
+        Ok(v) => v,
+        Err(e) => {
+            session.close().await;
+            return Err(e);
+        }
+    };
+    let handover_id = prepared["handoverId"].as_str().unwrap_or("").to_string();
+    let expected_hash = prepared["packageHash"].as_str().unwrap_or("").to_string();
+    let passphrase = prepared["passphrase"].as_str().unwrap_or("").to_string();
+    if handover_id.is_empty() || expected_hash.is_empty() || passphrase.is_empty() {
+        session.close().await;
+        return Err("旧主机未返回完整的接管信息".to_string());
+    }
+
+    let dest = std::env::temp_dir().join(format!("pilotdesk-handover-{}.pdesk", handover_id));
+    let download = download_handover_chunks(&mut session, org_id, &handover_id, &dest).await;
+    session.close().await;
+    if let Err(e) = download {
+        let _ = std::fs::remove_file(&dest);
+        return Err(e);
+    }
+
+    let actual_hash = transfer::hex_sha256(
+        &std::fs::read(&dest).map_err(|e| format!("读取接管迁移包失败：{}", e))?,
+    );
+    if actual_hash != expected_hash {
+        let _ = std::fs::remove_file(&dest);
+        return Err("接管迁移包校验失败（哈希不一致），已中止".to_string());
+    }
+
+    let imported = state
+        .store
+        .with_conn(|c| transfer::import_handover_package(c, dest.to_string_lossy().as_ref(), &passphrase));
+    let _ = std::fs::remove_file(&dest);
+    let imported = imported?;
+
+    // 数据已到本机且校验通过，才登记为主机
+    let reg = register_with_platform(db, state, org_id, true).await?;
+    let host = reg
+        .host
+        .ok_or_else(|| "平台未返回主机登记结果".to_string())?;
+    if !reg.claimed {
+        return Err(format!(
+            "主机登记未生效：当前主机仍为「{}」",
+            host.device_name
+        ));
+    }
+
+    // 通知旧主机提交（失败不影响新主机，旧主机会在下一轮快照后停服）
+    if let Ok(mut s) = HostSession::connect(state, db, org_id).await {
+        let _ = s
+            .request(
+                "handover.committed",
+                json!({ "orgId": org_id, "handoverId": handover_id }),
+            )
+            .await;
+        s.close().await;
+    }
+
+    apply_host_info(state, org_id, &host)?;
+    Ok(HandoverOutcome {
+        org_id: imported.org_id,
+        package_hash: imported.package_hash,
+        file_count: imported.file_count,
+    })
+}
+
+async fn download_handover_chunks(
+    session: &mut HostSession,
+    org_id: &str,
+    handover_id: &str,
+    dest: &Path,
+) -> Result<(), String> {
+    let mut file = std::fs::File::create(dest).map_err(|e| format!("创建接管临时文件失败：{}", e))?;
+    let mut offset = 0u64;
+    loop {
+        let chunk = session
+            .request_with_timeout(
+                "handover.chunk",
+                json!({
+                    "orgId": org_id,
+                    "handoverId": handover_id,
+                    "offset": offset,
+                    "len": transfer::LAN_CHUNK_MAX,
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        let data = BASE64
+            .decode(chunk["data"].as_str().unwrap_or(""))
+            .map_err(|e| format!("解码接管分块失败：{}", e))?;
+        file.write_all(&data)
+            .map_err(|e| format!("写入接管迁移包失败：{}", e))?;
+        offset += data.len() as u64;
+        if chunk["eof"].as_bool() == Some(true) {
+            break;
+        }
+        if data.is_empty() {
+            return Err("旧主机返回了空分块，接管中断".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// 成员端打开文件：下载到内容寻址缓存（`<sha8>-<名>`）并返回本地路径。
 pub async fn fetch_file_to_cache(
     state: &EnclaveState,
@@ -702,6 +904,24 @@ pub async fn fetch_pending_transfers(
     let mut session = HostSession::connect(state, db, org_id).await?;
     let data = session
         .request("transfer.pending", json!({ "orgId": org_id }))
+        .await;
+    session.close().await;
+    data
+}
+
+/// 拒绝转移请求（受让人侧）：请求作废，迁移包与口令由主机清理。
+pub async fn reject_lan_transfer(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    transfer_id: &str,
+) -> Result<Value, String> {
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let data = session
+        .request(
+            "transfer.reject",
+            json!({ "orgId": org_id, "transferId": transfer_id }),
+        )
         .await;
     session.close().await;
     data
@@ -869,6 +1089,8 @@ impl HostSession {
                     "orgId": org_id,
                     "userId": user_id,
                     "email": email,
+                    "deviceId": device_id(),
+                    "deviceName": host_name(),
                     "token": token,
                 })
                 .to_string(),
@@ -889,6 +1111,15 @@ impl HostSession {
     }
 
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.request_with_timeout(method, params, REQUEST_TIMEOUT).await
+    }
+
+    async fn request_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let id = crate::utils::new_id();
         let req = json!({
             "type": "req",
@@ -900,7 +1131,7 @@ impl HostSession {
             .send(Message::Text(req.to_string()))
             .await
             .map_err(|e| format!("发送请求失败：{}", e))?;
-        let reply = tokio::time::timeout(REQUEST_TIMEOUT, next_json(&mut self.rx))
+        let reply = tokio::time::timeout(timeout, next_json(&mut self.rx))
             .await
             .map_err(|_| "等待主机响应超时".to_string())??;
         if reply["ok"].as_bool() != Some(true) {
@@ -927,6 +1158,12 @@ struct HelloMsg {
     protocol: u32,
     org_id: String,
     user_id: String,
+    /// 设备标识（用于区分同一账号的多台设备，以及设备接管）
+    #[serde(default)]
+    device_id: String,
+    /// 设备名（展示用）
+    #[serde(default)]
+    device_name: String,
     #[serde(default)]
     token: String,
 }
@@ -975,6 +1212,11 @@ async fn handle_conn(
         .await;
         return;
     }
+    // 主机身份复核：云端所有权已转让的旧主机必须拒绝继续提供服务
+    if !host_org_ids(&state).iter().any(|o| o == &hello.org_id) {
+        let _ = send_json(&mut tx, &hello_err("本机已不是该组织的主机")).await;
+        return;
+    }
     if org_disabled(&state, &hello.org_id) && !peer.ip().is_loopback() {
         let _ = send_json(&mut tx, &hello_err("飞地对外服务已临时关闭")).await;
         return;
@@ -1013,8 +1255,100 @@ async fn handle_conn(
             let _ = send_json(&mut tx, &res_err(&req.id, "飞地对外服务已临时关闭")).await;
             break;
         }
+        // 设备接管迁移期间冻结写请求（只放行接管协议与只读命令）
+        if state.host.handover_frozen(&hello.org_id)
+            && !handover_allows(&req.method, &req.params)
+        {
+            let _ = send_json(
+                &mut tx,
+                &res_err(&req.id, "主机正在进行设备接管迁移，请稍候"),
+            )
+            .await;
+            continue;
+        }
         let reply = match req.method.as_str() {
             "ping" => res_ok(&req.id, json!({ "pong": true })),
+            "handover.prepare" => match org_param(&req, &hello) {
+                Ok(org) => match handle_handover_prepare(
+                    &state,
+                    org,
+                    &hello.user_id,
+                    &hello.device_id,
+                    &hello.device_name,
+                ) {
+                    Ok(v) => res_ok(&req.id, v),
+                    Err(e) => res_err(&req.id, &e),
+                },
+                Err(e) => res_err(&req.id, &e),
+            },
+            "handover.chunk" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let handover_id = req.params["handoverId"].as_str().unwrap_or("").to_string();
+                    let offset = req.params["offset"].as_u64().unwrap_or(0);
+                    let len = req.params["len"].as_u64().unwrap_or(transfer::LAN_CHUNK_MAX);
+                    match handle_handover_chunk(
+                        &state,
+                        &handover_id,
+                        org,
+                        &hello.user_id,
+                        &hello.device_id,
+                        offset,
+                        len,
+                    ) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
+            "handover.verified" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let handover_id = req.params["handoverId"].as_str().unwrap_or("").to_string();
+                    match handle_handover_verified(
+                        &state,
+                        &handover_id,
+                        org,
+                        &hello.user_id,
+                        &hello.device_id,
+                    ) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
+            "handover.committed" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let handover_id = req.params["handoverId"].as_str().unwrap_or("").to_string();
+                    match handle_handover_committed(
+                        &state,
+                        &handover_id,
+                        org,
+                        &hello.user_id,
+                        &hello.device_id,
+                    ) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
+            "handover.abort" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let handover_id = req.params["handoverId"].as_str().unwrap_or("").to_string();
+                    match handle_handover_abort(
+                        &state,
+                        &handover_id,
+                        org,
+                        &hello.user_id,
+                        &hello.device_id,
+                    ) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
             "task.list" => {
                 let req_org = req.params["orgId"].as_str().unwrap_or(hello.org_id.as_str());
                 if req_org != hello.org_id {
@@ -1122,6 +1456,15 @@ async fn handle_conn(
             "transfer.accept" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
                 (Ok(org), Some(id)) => {
                     match handle_transfer_accept(&state, org, id, &hello.user_id) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                _ => res_err(&req.id, "参数不完整"),
+            },
+            "transfer.reject" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
+                (Ok(org), Some(id)) => {
+                    match handle_transfer_reject(&state, org, id, &hello.user_id) {
                         Ok(v) => res_ok(&req.id, v),
                         Err(e) => res_err(&req.id, &e),
                     }
@@ -1362,6 +1705,259 @@ fn handle_file_fetch(
     })
 }
 
+// ── 设备接管（同账号换机）────────────────────────────────────────
+
+/// 发起设备接管：校验来者是同一组织的 owner 且来自另一台设备，
+/// 生成一致性加密包并冻结本组织的写请求，等待新设备下载/校验/提交。
+fn handle_handover_prepare(
+    state: &EnclaveState,
+    org_id: &str,
+    user_id: &str,
+    caller_device_id: &str,
+    caller_device_name: &str,
+) -> Result<Value, String> {
+    let role = state
+        .store
+        .with_conn(|c| authz::role_for_member(c, org_id, user_id))?;
+    if role != Some(Role::Owner) {
+        return Err("仅组织所有者可发起设备接管".to_string());
+    }
+    if caller_device_id.trim().is_empty() {
+        return Err("接管请求缺少设备标识".to_string());
+    }
+    if caller_device_id == device_id() {
+        return Err("本机已是该组织主机".to_string());
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    {
+        let mut g = state.host.handover.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(h) = g.as_ref() {
+            if now.saturating_sub(h.prepared_at) < HANDOVER_TTL_SECS {
+                return Err("已有进行中的设备接管，请稍候".to_string());
+            }
+            let old = g.take();
+            if let Some(old) = old {
+                let _ = std::fs::remove_file(&old.path);
+            }
+        }
+    }
+
+    // 一次性口令仅用于本次包加密；通过已认证通道返回给接管方
+    let passphrase = format!(
+        "{}{}",
+        crate::utils::new_id().replace('-', ""),
+        crate::utils::new_id().replace('-', "")
+    );
+    let built = state
+        .store
+        .with_conn(|c| transfer::build_package(c, org_id, &passphrase))?;
+    let id = crate::utils::new_id();
+    let dir = handover_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建接管目录失败：{}", e))?;
+    let path = dir.join(format!("{}.pdesk", id));
+    std::fs::write(&path, &built.envelope).map_err(|e| format!("写入接管迁移包失败：{}", e))?;
+
+    *state
+        .host
+        .handover
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(HandoverRuntime {
+        id: id.clone(),
+        org_id: org_id.to_string(),
+        user_id: user_id.to_string(),
+        device_id: caller_device_id.to_string(),
+        device_name: caller_device_name.to_string(),
+        passphrase: passphrase.clone(),
+        package_hash: built.package_hash.clone(),
+        path,
+        prepared_at: now,
+        verified: false,
+    });
+
+    Ok(json!({
+        "handoverId": id,
+        "orgId": org_id,
+        "packageHash": built.package_hash,
+        "size": built.envelope.len() as u64,
+        "fileCount": built.file_count,
+        "passphrase": passphrase,
+    }))
+}
+
+fn handover_match(
+    state: &EnclaveState,
+    handover_id: &str,
+    org_id: &str,
+    user_id: &str,
+    caller_device_id: &str,
+) -> Result<HandoverRuntime, String> {
+    let g = state.host.handover.lock().unwrap_or_else(|e| e.into_inner());
+    let h = g
+        .as_ref()
+        .ok_or_else(|| "没有进行中的设备接管".to_string())?;
+    if h.id != handover_id || h.org_id != org_id {
+        return Err("接管会话不匹配".to_string());
+    }
+    if h.user_id != user_id || h.device_id != caller_device_id {
+        return Err("接管会话不属于当前设备".to_string());
+    }
+    Ok(HandoverRuntime {
+        id: h.id.clone(),
+        org_id: h.org_id.clone(),
+        user_id: h.user_id.clone(),
+        device_id: h.device_id.clone(),
+        device_name: h.device_name.clone(),
+        passphrase: h.passphrase.clone(),
+        package_hash: h.package_hash.clone(),
+        path: h.path.clone(),
+        prepared_at: h.prepared_at,
+        verified: h.verified,
+    })
+}
+
+fn handle_handover_chunk(
+    state: &EnclaveState,
+    handover_id: &str,
+    org_id: &str,
+    user_id: &str,
+    caller_device_id: &str,
+    offset: u64,
+    len: u64,
+) -> Result<Value, String> {
+    let h = handover_match(state, handover_id, org_id, user_id, caller_device_id)?;
+    let total = std::fs::metadata(&h.path)
+        .map_err(|e| format!("接管迁移包不可用：{}", e))?
+        .len();
+    let offset = offset.min(total);
+    let want = len.min(transfer::LAN_CHUNK_MAX).min(total - offset);
+    let mut buf = vec![0u8; want as usize];
+    if want > 0 {
+        let mut f = std::fs::File::open(&h.path).map_err(|e| format!("读取接管迁移包失败：{}", e))?;
+        f.seek(SeekFrom::Start(offset))
+            .map_err(|e| format!("定位接管迁移包失败：{}", e))?;
+        f.read_exact(&mut buf)
+            .map_err(|e| format!("读取接管迁移包失败：{}", e))?;
+    }
+    Ok(json!({
+        "offset": offset,
+        "total": total,
+        "data": BASE64.encode(&buf),
+        "eof": offset + want >= total,
+    }))
+}
+
+fn handle_handover_verified(
+    state: &EnclaveState,
+    handover_id: &str,
+    org_id: &str,
+    user_id: &str,
+    caller_device_id: &str,
+) -> Result<Value, String> {
+    let mut g = state.host.handover.lock().unwrap_or_else(|e| e.into_inner());
+    let h = g
+        .as_mut()
+        .ok_or_else(|| "没有进行中的设备接管".to_string())?;
+    if h.id != handover_id || h.org_id != org_id {
+        return Err("接管会话不匹配".to_string());
+    }
+    if h.user_id != user_id || h.device_id != caller_device_id {
+        return Err("接管会话不属于当前设备".to_string());
+    }
+    h.verified = true;
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_handover_committed(
+    state: &EnclaveState,
+    handover_id: &str,
+    org_id: &str,
+    user_id: &str,
+    caller_device_id: &str,
+) -> Result<Value, String> {
+    let h = handover_match(state, handover_id, org_id, user_id, caller_device_id)?;
+    // 立即把本地快照的主机登记改为接管方：本机的握手复核随即拒绝外部连接
+    state.store.with_conn(|c| {
+        let name = if h.device_name.trim().is_empty() {
+            h.device_id.as_str()
+        } else {
+            h.device_name.as_str()
+        };
+        org::set_host_device(c, org_id, &h.device_id, name)
+    })?;
+    let cleared = state.host.clear_handover();
+    if let Some(done) = cleared {
+        let _ = std::fs::remove_file(&done.path);
+    }
+    state.store.with_conn(|c| {
+        org::audit(
+            c,
+            org_id,
+            user_id,
+            "handover.committed",
+            &json!({ "handoverId": handover_id, "toDeviceId": caller_device_id }).to_string(),
+        )
+    })?;
+    Ok(json!({ "ok": true }))
+}
+
+fn handle_handover_abort(
+    state: &EnclaveState,
+    handover_id: &str,
+    org_id: &str,
+    user_id: &str,
+    caller_device_id: &str,
+) -> Result<Value, String> {
+    let _ = handover_match(state, handover_id, org_id, user_id, caller_device_id)?;
+    if let Some(done) = state.host.clear_handover() {
+        let _ = std::fs::remove_file(&done.path);
+    }
+    Ok(json!({ "ok": true }))
+}
+
+/// 接管期间允许的只读命令（其余写操作一律拒绝，保证迁移包一致性）。
+fn handover_allows(method: &str, params: &Value) -> bool {
+    if method.starts_with("handover.") || method == "ping" {
+        return true;
+    }
+    let command = params["command"].as_str().unwrap_or("");
+    matches!(
+        method,
+        "task.list" | "file.stat" | "file.fetch"
+    ) || (method == "enclave.call"
+        && matches!(
+            command,
+            "task.get"
+                | "task.deps_preview"
+                | "task.progress_list"
+                | "report.list"
+                | "report.feedback_list"
+                | "file.task_list"
+                | "kb.list"
+                | "kb.search"
+                | "kb.entry_get"
+                | "kb.file_list"
+                | "policy.get"
+        ))
+}
+
+/// 清理超时未提交的接管会话（旧主机继续权威）。
+fn expire_handover(state: &EnclaveState) {
+    let now = chrono::Utc::now().timestamp();
+    let expired = {
+        let g = state.host.handover.lock().unwrap_or_else(|e| e.into_inner());
+        g.as_ref()
+            .map(|h| now.saturating_sub(h.prepared_at) > HANDOVER_TTL_SECS)
+            .unwrap_or(false)
+    };
+    if expired {
+        if let Some(h) = state.host.clear_handover() {
+            let _ = std::fs::remove_file(&h.path);
+            log::info!("[enclave] 设备接管超时，已回滚（组织 {}）", h.org_id);
+        }
+    }
+}
+
 fn org_param<'a>(req: &'a RequestMsg, hello: &'a HelloMsg) -> Result<&'a str, String> {
     let org = req.params["orgId"]
         .as_str()
@@ -1392,6 +1988,18 @@ fn handle_transfer_accept(
     state.store.with_conn(|c| {
         let info = transfer::accept_for_member(c, transfer_id, org_id, user_id)?;
         serde_json::to_value(&info).map_err(|e| format!("序列化接受结果失败：{}", e))
+    })
+}
+
+fn handle_transfer_reject(
+    state: &EnclaveState,
+    org_id: &str,
+    transfer_id: &str,
+    user_id: &str,
+) -> Result<Value, String> {
+    state.store.with_conn(|c| {
+        let view = transfer::reject_for_member(c, transfer_id, org_id, user_id)?;
+        serde_json::to_value(&view).map_err(|e| format!("序列化拒绝结果失败：{}", e))
     })
 }
 
@@ -1591,21 +2199,41 @@ pub struct HostStatusView {
     pub host_fingerprint: Option<String>,
     /// 成员端已固定的主机证书指纹（sha256 hex）
     pub pinned_fingerprint: Option<String>,
+    /// 本机设备标识
+    pub device_id: String,
+    /// 当前组织登记的主机设备 id（空 = 尚未登记）
+    pub host_device_id: Option<String>,
+    /// 当前组织登记的主机设备名
+    pub host_device_name: Option<String>,
 }
 
 pub fn host_status(
     state: &EnclaveState,
     org_id: Option<&str>,
 ) -> Result<HostStatusView, String> {
-    let served = state.store.with_conn(org::host_org_ids)?;
+    let my_device = device_id();
+    let served = state.store.with_conn(|c| org::host_org_ids(c, &my_device))?;
     let identity = state.store.with_conn(org::local_identity)?;
     let (running, port, last_error) = state.host.view();
-    let role = if !served.is_empty() {
+    let is_host_for_org = match org_id {
+        Some(o) => served.iter().any(|s| s == o),
+        None => !served.is_empty(),
+    };
+    let role = if is_host_for_org {
         "host"
     } else if identity.is_some() {
         "member"
     } else {
         "unknown"
+    };
+    let (host_device_id, host_device_name) = match org_id {
+        Some(o) => state
+            .store
+            .with_conn(|c| org::host_device_of(c, o))
+            .ok()
+            .map(|(id, name)| (Some(id).filter(|s| !s.is_empty()), Some(name)))
+            .unwrap_or((None, None)),
+        None => (None, None),
     };
     let discovered = org_id.and_then(|o| state.discovered_host(o));
     let pinned_fingerprint = org_id.and_then(|o| {
@@ -1635,6 +2263,9 @@ pub fn host_status(
         discovered_seen_at: discovered.map(|d| d.seen_at),
         host_fingerprint,
         pinned_fingerprint,
+        device_id: my_device,
+        host_device_id,
+        host_device_name,
     })
 }
 
@@ -1666,11 +2297,93 @@ fn host_name() -> String {
         .unwrap_or_else(|_| "PilotDesk-Host".to_string())
 }
 
+/// 平台返回的主机登记。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct HostInfo {
+    pub device_id: String,
+    pub device_name: String,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostRegistration {
+    /// true = 本次登记生效；false = 已被其他设备登记（`host` 为当前主机）
+    pub claimed: bool,
+    pub host: Option<HostInfo>,
+}
+
+/// 向平台登记本机为该组织主机（仅 owner）。`takeover=true` 用于换机接管。
+pub async fn register_with_platform(
+    db: &crate::DbState,
+    state: &EnclaveState,
+    org_id: &str,
+    takeover: bool,
+) -> Result<HostRegistration, String> {
+    let token = crate::commands::org_common::require_token(db).await?;
+    let path = format!("/api/v1/organizations/{}/host", org_id);
+    let body = json!({
+        "deviceId": device_id(),
+        "deviceName": host_name(),
+        "port": configured_host_port(state),
+        "takeover": takeover,
+    });
+    platform::put_json_with_status::<_, HostRegistration>(&path, &body, Some(&token))
+        .await
+        .map_err(|e| format!("登记主机失败：{}", e.message))
+}
+
+/// 把平台返回的主机信息写入本地快照（立即生效，无需等下一轮轮询）。
+pub fn apply_host_info(state: &EnclaveState, org_id: &str, info: &HostInfo) -> Result<(), String> {
+    state.store.with_conn(|c| {
+        org::set_host_device(c, org_id, &info.device_id, &info.device_name)
+    })
+}
+
 fn host_org_ids(state: &EnclaveState) -> Vec<String> {
     state
         .store
-        .with_conn(org::host_org_ids)
+        .with_conn(|c| org::host_org_ids(c, &device_id()))
         .unwrap_or_default()
+}
+
+/// 本机稳定设备标识：落应用目录（不随 `enclave.db` 迁移）。
+///
+/// 同一 owner 账号可能在多台设备登录；平台用设备 id 确定唯一主机。
+static DEVICE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn device_id() -> String {
+    // 测试环境固定设备 id：不读写真实应用目录，且与测试种子数据一致
+    #[cfg(test)]
+    {
+        "test-device".to_string()
+    }
+    #[cfg(not(test))]
+    {
+        DEVICE_ID
+            .get_or_init(|| {
+                let path = crate::utils::paths::app_root_dir()
+                    .join("enclave")
+                    .join("device_id");
+                if let Ok(raw) = std::fs::read_to_string(&path) {
+                    let trimmed = raw.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.to_string();
+                    }
+                }
+                let id = format!("dev-{}", crate::utils::new_id().replace('-', ""));
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&path, &id);
+                id
+            })
+            .clone()
+    }
 }
 
 fn org_disabled(state: &EnclaveState, org_id: &str) -> bool {
@@ -1817,8 +2530,8 @@ mod tests {
                 )
                 .map_err(|e| e.to_string())?;
                 c.execute(
-                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id)
-                     VALUES ('org1', 'Org', '1', 'owner', '1')",
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, host_device_id, host_device_name)
+                     VALUES ('org1', 'Org', '1', 'owner', '1', 'test-device', 'TestDevice')",
                     [],
                 )
                 .map_err(|e| e.to_string())?;
@@ -1888,6 +2601,155 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 设备接管协议：同账号另一台设备 prepare → 冻结写 → chunk → verified → committed。
+    #[tokio::test]
+    async fn handover_over_ws() {
+        let dir = std::env::temp_dir().join(format!(
+            "pilotdesk-enclave-handover-ws-{}",
+            crate::utils::new_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = std::sync::Arc::new(
+            super::super::db::EnclaveStore::open(&dir.join("enclave.db")).unwrap(),
+        );
+        store
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT INTO local_identity (user_id, email) VALUES ('1', 'owner@example.com')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, host_device_id, host_device_name)
+                     VALUES ('org1', 'Org', '1', 'owner', '1', 'test-device', 'TestDevice')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO member_snapshot (org_id, user_id, role, display_name)
+                     VALUES ('org1', '1', 'owner', 'Owner')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        let state = std::sync::Arc::new(EnclaveState::new(store));
+
+        let host_tls = tls::ensure_host_tls_in(&dir.join("tls")).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn({
+            let st = state.clone();
+            let acceptor = host_tls.acceptor.clone();
+            async move {
+                if let Ok((stream, peer)) = listener.accept().await {
+                    if let Ok(tls_stream) = acceptor.accept(stream).await {
+                        handle_conn(tls_stream, peer, st).await;
+                    }
+                }
+            }
+        });
+
+        let (ws, _) = tls::connect_pinned(
+            &format!("wss://127.0.0.1:{}", port),
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let (mut tx, mut rx) = ws.split();
+        tx.send(Message::Text(
+            json!({
+                "type": "hello", "protocol": PROTOCOL, "orgId": "org1",
+                "userId": "1", "deviceId": "new-device", "deviceName": "NewPC", "token": "",
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(next_json(&mut rx).await.unwrap()["type"], "hello_ok");
+
+        // prepare：生成接管包
+        tx.send(Message::Text(
+            json!({
+                "type": "req", "id": "h1", "method": "handover.prepare",
+                "params": { "orgId": "org1" },
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let prep = next_json(&mut rx).await.unwrap();
+        assert_eq!(prep["ok"], true, "prepare failed: {}", prep);
+        let handover_id = prep["data"]["handoverId"].as_str().unwrap().to_string();
+        assert!(!handover_id.is_empty());
+        assert!(prep["data"]["size"].as_u64().unwrap() > 0);
+
+        // 迁移期间写请求被冻结
+        tx.send(Message::Text(
+            json!({
+                "type": "req", "id": "w1", "method": "enclave.call",
+                "params": { "orgId": "org1", "command": "task.create", "payload": {} },
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let frozen = next_json(&mut rx).await.unwrap();
+        assert_eq!(frozen["ok"], false);
+        assert!(frozen["error"].as_str().unwrap().contains("设备接管"));
+
+        // 分块下载
+        tx.send(Message::Text(
+            json!({
+                "type": "req", "id": "c1", "method": "handover.chunk",
+                "params": { "orgId": "org1", "handoverId": handover_id, "offset": 0, "len": 1024 },
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let chunk = next_json(&mut rx).await.unwrap();
+        assert_eq!(chunk["ok"], true);
+        assert!(!chunk["data"]["data"].as_str().unwrap().is_empty());
+
+        let verified = |id: &str| {
+            json!({
+                "type": "req", "id": id, "method": "handover.verified",
+                "params": { "orgId": "org1", "handoverId": handover_id },
+            })
+            .to_string()
+        };
+        tx.send(Message::Text(verified("v1"))).await.unwrap();
+        assert_eq!(next_json(&mut rx).await.unwrap()["ok"], true);
+
+        // 提交：本地快照立即改登记，旧主机停服
+        tx.send(Message::Text(
+            json!({
+                "type": "req", "id": "m1", "method": "handover.committed",
+                "params": { "orgId": "org1", "handoverId": handover_id },
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(next_json(&mut rx).await.unwrap()["ok"], true);
+
+        let (device, name) = state
+            .store
+            .with_conn(|c| org::host_device_of(c, "org1"))
+            .unwrap();
+        assert_eq!(device, "new-device");
+        assert_eq!(name, "NewPC");
+        assert!(host_org_ids(&state).is_empty(), "旧主机不得继续对外服务");
+
+        drop(tx);
+        drop(rx);
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 局域网转移协议：pending → accept → package 分块 → verified。
     #[tokio::test]
     async fn lan_transfer_over_ws() {
@@ -1914,8 +2776,8 @@ mod tests {
                 )
                 .map_err(|e| e.to_string())?;
                 c.execute(
-                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id)
-                     VALUES ('org1', 'Org', '1', 'owner', '1')",
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, host_device_id, host_device_name)
+                     VALUES ('org1', 'Org', '1', 'owner', '1', 'test-device', 'TestDevice')",
                     [],
                 )
                 .map_err(|e| e.to_string())?;
@@ -2053,8 +2915,8 @@ mod tests {
                 )
                 .map_err(|e| e.to_string())?;
                 c.execute(
-                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id)
-                     VALUES ('org1', 'Org', '1', 'owner', '1')",
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, host_device_id, host_device_name)
+                     VALUES ('org1', 'Org', '1', 'owner', '1', 'test-device', 'TestDevice')",
                     [],
                 )
                 .map_err(|e| e.to_string())?;

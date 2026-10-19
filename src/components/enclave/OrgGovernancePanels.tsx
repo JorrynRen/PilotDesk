@@ -148,10 +148,12 @@ function SwitchRow(props: {
 function HostConnectionCard({ orgId }: { orgId: string }) {
   const host = useEnclaveOrgStore((s) => s.host);
   const cache = useEnclaveOrgStore((s) => s.cache);
+  const caps = useEnclaveOrgStore((s) => s.caps);
   const [addr, setAddr] = useState('');
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [limitMb, setLimitMb] = useState('');
+  const [hostBusy, setHostBusy] = useState<'' | 'claim' | 'takeover' | 'force'>('');
 
   // 组织切换 / 状态刷新后回填已保存的手动地址
   useEffect(() => {
@@ -174,6 +176,51 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
     setRefreshing(true);
     await useEnclaveOrgStore.getState().loadHost(orgId);
     setRefreshing(false);
+  };
+
+  const isOwner = caps?.role === 'owner';
+  const registeredHere = !!host?.hostDeviceId && host.hostDeviceId === host.deviceId;
+  const registeredElsewhere = !!host?.hostDeviceId && host.hostDeviceId !== host.deviceId;
+
+  const claimHost = async () => {
+    setHostBusy('claim');
+    if (await useEnclaveOrgStore.getState().claimHost(orgId)) {
+      showToast('本机已登记为该组织主机', 'success');
+    }
+    setHostBusy('');
+  };
+
+  const takeoverHost = async () => {
+    const ok = await confirmDialog({
+      title: '从旧主机接管',
+      message:
+        '将从当前主机拉取团队数据并逐文件校验，成功后本机成为唯一主机。\n'
+        + '请保持两台设备在同一局域网且旧主机在线；迁移期间旧主机会暂停写入。',
+      confirmText: '开始接管',
+    });
+    if (!ok) return;
+    setHostBusy('takeover');
+    const outcome = await useEnclaveOrgStore.getState().takeoverHost(orgId);
+    setHostBusy('');
+    if (outcome) {
+      showToast(`接管完成：${outcome.fileCount} 个文件已校验`, 'success');
+    }
+  };
+
+  const forceTakeoverHost = async () => {
+    const ok = await confirmDialog({
+      title: '强制接管（旧设备不可用）',
+      message:
+        '⚠ 不会迁移旧设备上的团队数据，本机将以空库成为该组织主机。\n'
+        + '仅在旧设备已损坏 / 丢失时使用，操作不可撤销；旧设备恢复上线后会停止服务。',
+      confirmText: '我已知晓，强制接管',
+    });
+    if (!ok) return;
+    setHostBusy('force');
+    if (await useEnclaveOrgStore.getState().forceTakeoverHost(orgId)) {
+      showToast('已强制接管为该组织主机', 'success');
+    }
+    setHostBusy('');
   };
 
   const roleText = host?.role === 'host' ? '本机是主机' : host?.role === 'member' ? '本机是成员' : '角色未确定';
@@ -203,6 +250,63 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
           刷新状态
         </button>
       </div>
+
+      {/* 主机设备登记：owner 在非登记设备上看到接管入口 */}
+      {isOwner && host && !registeredHere && (
+        <div
+          className="mt-2 rounded-md px-2 py-2 flex flex-col gap-1.5"
+          style={{
+            backgroundColor: 'var(--bg-tertiary)',
+            border: '1px solid ' + (registeredElsewhere ? 'var(--border)' : 'var(--accent)'),
+          }}
+        >
+          <div className="text-[11px]" style={{ color: registeredElsewhere ? 'var(--text-secondary)' : 'var(--accent)' }}>
+            {registeredElsewhere
+              ? `当前主机：${host.hostDeviceName || host.hostDeviceId}（另一台设备）`
+              : '本机尚未登记为该组织主机'}
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            {registeredElsewhere
+              ? '换机需要先把团队数据迁移到本机；旧设备已不可用时才可强制接管。'
+              : '登记后本机才会对外提供飞地服务；空库设备不会自动成为主机。'}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {!registeredElsewhere && (
+              <button
+                onClick={() => void claimHost()}
+                disabled={hostBusy !== ''}
+                className="h-7 px-2 rounded text-[11px] flex items-center gap-1"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: hostBusy ? 0.6 : 1 }}
+              >
+                {hostBusy === 'claim' && <Loader2 size={10} className="animate-spin" />}
+                将本机设为主机
+              </button>
+            )}
+            {registeredElsewhere && (
+              <>
+                <button
+                  onClick={() => void takeoverHost()}
+                  disabled={hostBusy !== ''}
+                  className="h-7 px-2 rounded text-[11px] flex items-center gap-1"
+                  style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: hostBusy ? 0.6 : 1 }}
+                >
+                  {hostBusy === 'takeover' && <Loader2 size={10} className="animate-spin" />}
+                  从旧主机接管（迁移数据）
+                </button>
+                <button
+                  onClick={() => void forceTakeoverHost()}
+                  disabled={hostBusy !== ''}
+                  className="h-7 px-2 rounded text-[11px] flex items-center gap-1"
+                  style={{ backgroundColor: 'var(--bg-side)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
+                >
+                  {hostBusy === 'force' && <Loader2 size={10} className="animate-spin" />}
+                  强制接管（旧设备不可用）
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {host?.role === 'host' && (
         <div className="mt-2 flex flex-col gap-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
@@ -241,6 +345,9 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
 
       {host?.role === 'member' && (
         <div className="mt-2 flex flex-col gap-1.5 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          {!isOwner && host.hostDeviceName && (
+            <div>登记主机：{host.hostDeviceName}</div>
+          )}
           <div>
             自动发现：
             {host.discoveredAddr
@@ -454,6 +561,7 @@ function TransferCard({ orgId }: { orgId: string }) {
   const [targetId, setTargetId] = useState('');
   const [offering, setOffering] = useState(false);
   const [accepting, setAccepting] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState<string | null>(null);
 
   const canTransfer = !!caps?.actions.includes('host.transfer');
   const isMember = !!caps && !canTransfer;
@@ -592,6 +700,20 @@ function TransferCard({ orgId }: { orgId: string }) {
     }
   };
 
+  /** 受让人拒绝本次转移请求 */
+  const rejectPending = async (t: TransferView) => {
+    const ok = await confirmDialog({
+      title: '拒绝主机转移',
+      message: '拒绝后本次请求作废，主机需重新发起。\n\n是否继续？',
+      confirmText: '拒绝',
+    });
+    if (!ok) return;
+    setRejecting(t.id);
+    const done = await useEnclaveOrgStore.getState().rejectLanTransfer(orgId, t.id);
+    setRejecting(null);
+    if (done) showToast('已拒绝本次转移请求', 'success');
+  };
+
   const markVerified = async (t: TransferView) => {
     const ok = await confirmDialog({
       title: '标记迁移已校验',
@@ -606,15 +728,15 @@ function TransferCard({ orgId }: { orgId: string }) {
 
   const markCompleted = async (t: TransferView) => {
     const ok = await confirmDialog({
-      title: '确认云端已生效',
+      title: '完成云端所有权转让',
       message:
-        '只有在平台已完成组织转让（ownership 已变更）后才能标记。\n'
-        + '标记后旧主机才允许销毁数据，且状态不可回退。',
-      confirmText: '云端已生效',
+        '将调用平台接口把组织所有权转让给受让人，并把本次迁移标记为「云端已生效」。\n'
+        + '此操作不可回退；完成后旧主机会停止对外服务，仅保留销毁旧数据的入口。',
+      confirmText: '确认转让',
     });
     if (!ok) return;
     if (await useEnclaveOrgStore.getState().advanceTransfer(t.id, 'completed')) {
-      showToast('已标记云端生效', 'success');
+      showToast('云端已生效，旧主机可销毁数据', 'success');
     }
   };
 
@@ -814,6 +936,20 @@ function TransferCard({ orgId }: { orgId: string }) {
               >
                 {accepting === t.id && <Loader2 size={10} className="animate-spin" />}
                 接受并迁移
+              </button>
+              <button
+                onClick={() => void rejectPending(t)}
+                disabled={rejecting === t.id || accepting === t.id}
+                className="h-6 px-2 rounded text-[10px] flex items-center gap-1"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--status-danger)',
+                  border: '1px solid var(--border)',
+                  opacity: rejecting === t.id ? 0.6 : 1,
+                }}
+              >
+                {rejecting === t.id && <Loader2 size={10} className="animate-spin" />}
+                拒绝
               </button>
             </div>
           ))}
