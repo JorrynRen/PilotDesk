@@ -666,6 +666,23 @@ pub fn destroy_org_data(conn: &Connection, org_id: &str, transfer_id: &str) -> R
         "transfer.data_destroyed",
         &json!({ "transferId": transfer_id }).to_string(),
     )?;
+
+    // 收尾：
+    // 1) 立即关闭本机对外服务（云端快照尚未刷新前，避免旧机继续以 owner 身份监听空数据）；
+    // 2) 清掉本组织的转移记录（审计已留痕，`host_transfer` 只保留进行中的本机流程）。
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO host_emergency (org_id, enclave_disabled, updated_by, updated_at)
+         VALUES (?1, 1, ?2, ?3)
+         ON CONFLICT(org_id) DO UPDATE SET
+            enclave_disabled = 1,
+            updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at",
+        params![org_id, actor, now],
+    )
+    .map_err(|e| format!("关闭旧主机对外服务失败：{}", e))?;
+    conn.execute("DELETE FROM host_transfer WHERE org_id = ?1", params![org_id])
+        .map_err(|e| format!("清理转移记录失败：{}", e))?;
     Ok(())
 }
 
@@ -989,6 +1006,19 @@ mod tests {
                     )
                     .unwrap();
                 assert_eq!(audited, 1);
+                // 收尾：对外服务关闭 + 转移记录清理
+                let disabled: i64 = c
+                    .query_row(
+                        "SELECT enclave_disabled FROM host_emergency WHERE org_id = 'org1'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(disabled, 1);
+                let records: i64 = c
+                    .query_row("SELECT COUNT(*) FROM host_transfer WHERE org_id = 'org1'", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(records, 0);
                 Ok(())
             })
             .unwrap();
