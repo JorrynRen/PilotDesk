@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{knowledge, progress, reports, tasks};
+use super::{files, knowledge, progress, reports, tasks};
 
 fn to_value<T: Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| format!("序列化主机响应失败：{}", e))
@@ -212,6 +212,33 @@ pub fn dispatch(
             let report_id = req_str(payload, "reportId")?;
             ensure_report_in_org(conn, org_id, &report_id)?;
             to_value(reports::list_feedback(conn, &report_id)?)
+        }
+
+        // ── 文件（成员端只下发元数据；打开走 file.stat / file.fetch）──
+        "file.task_list" => {
+            let task_id = req_str(payload, "taskId")?;
+            let mut list = files::list_task_files(conn, org_id, &task_id)?;
+            // 主机本地绝对路径不外泄；成员端需要时由 enclave_file_abs_path 下载
+            for f in &mut list {
+                f.abs_path.clear();
+            }
+            to_value(list)
+        }
+        "file.detach" => {
+            let task_id = req_str(payload, "taskId")?;
+            let file_id = req_str(payload, "fileId")?;
+            let report_id = opt_str(payload, "reportId");
+            let progress_id = opt_str(payload, "progressId");
+            files::detach_file(
+                conn,
+                org_id,
+                actor,
+                &task_id,
+                &file_id,
+                report_id.as_deref(),
+                progress_id.as_deref(),
+            )?;
+            Ok(Value::Null)
         }
 
         // ── 组织知识库（成员只读）─────────────────────────────

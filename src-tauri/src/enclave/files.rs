@@ -623,6 +623,71 @@ pub fn detach_file(
     Ok(())
 }
 
+/// 文件元信息（成员端 `file.stat` 用）。
+pub struct FileMetaView {
+    pub file_name: String,
+    pub file_hash: String,
+    pub file_size: i64,
+    pub abs_path: String,
+}
+
+/// 读取文件资产元信息（含主机本地绝对路径，仅主机内部使用）。
+pub fn file_meta(
+    conn: &Connection,
+    org_id: &str,
+    file_id: &str,
+) -> Result<FileMetaView, String> {
+    let row: Option<(String, String, i64, String)> = conn
+        .query_row(
+            "SELECT file_name, file_hash, file_size, file_path FROM file_assets
+             WHERE id=?1 AND owner_type='org' AND owner_id=?2",
+            params![file_id, org_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()
+        .map_err(|e| format!("查询文件失败：{}", e))?;
+    let (file_name, file_hash, file_size, rel) =
+        row.ok_or_else(|| "文件不存在或不属于该组织".to_string())?;
+    Ok(FileMetaView {
+        file_name,
+        file_hash,
+        file_size,
+        abs_path: org_dir(conn, org_id)?.join(rel).to_string_lossy().to_string(),
+    })
+}
+
+/// 用内存字节挂载文件（成员经局域网 WS 上传时使用）。
+///
+/// 复用 [`attach_file_inner`] 的全部校验与去重逻辑：先落一个临时文件（文件名保持原名，
+/// 以便保留扩展名），挂载完成后立即清理。
+pub fn attach_bytes(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+    file_name: &str,
+    bytes: &[u8],
+    report_id: Option<&str>,
+) -> Result<FileAssetView, String> {
+    let dir = std::env::temp_dir().join(format!("pilotdesk-upload-{}", crate::utils::new_id()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建上传临时目录失败：{}", e))?;
+    let safe = safe_file_name(file_name);
+    let path = dir.join(&safe);
+    std::fs::write(&path, bytes).map_err(|e| format!("写入上传临时文件失败：{}", e))?;
+    let result = attach_file_inner(
+        conn,
+        org_id,
+        actor,
+        task_id,
+        &path.to_string_lossy(),
+        report_id,
+        None,
+        false,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
 /// 文件的绝对路径（供「打开」用）。
 pub fn file_abs_path(
     conn: &Connection,

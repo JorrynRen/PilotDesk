@@ -664,68 +664,125 @@ pub async fn enclave_kb_file_list(
 // ════════════════════════════════════════════════════════════
 
 #[tauri::command]
-pub fn enclave_file_upload(
+pub async fn enclave_file_upload(
     org_id: String,
     task_id: String,
     src_path: String,
     report_id: Option<String>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<FileAssetView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        files::attach_file(
-            c,
-            &org_id,
-            &actor,
-            &task_id,
-            &src_path,
-            report_id.as_deref(),
-        )
-    })
+    let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
+    match role {
+        Some(authz::Role::Owner) => state.store.with_conn(|c| {
+            let actor = authz::current_actor_id(c)?;
+            files::attach_file(
+                c,
+                &org_id,
+                &actor,
+                &task_id,
+                &src_path,
+                report_id.as_deref(),
+            )
+        }),
+        Some(_) => {
+            let data = crate::enclave::host::upload_file(
+                state.inner(),
+                db.inner(),
+                &org_id,
+                &task_id,
+                &src_path,
+                report_id.as_deref(),
+            )
+            .await?;
+            serde_json::from_value(data).map_err(|e| format!("解析上传结果失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
 }
 
 #[tauri::command]
-pub fn enclave_file_detach(
+pub async fn enclave_file_detach(
     org_id: String,
     task_id: String,
     file_id: String,
     report_id: Option<String>,
     progress_id: Option<String>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<(), String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        files::detach_file(
-            c,
-            &org_id,
-            &actor,
-            &task_id,
-            &file_id,
-            report_id.as_deref(),
-            progress_id.as_deref(),
-        )
-    })
+    let payload = json!({
+        "taskId": task_id.clone(),
+        "fileId": file_id.clone(),
+        "reportId": &report_id,
+        "progressId": &progress_id,
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "file.detach",
+        payload,
+        |c, actor| {
+            files::detach_file(
+                c,
+                &org_id,
+                actor,
+                &task_id,
+                &file_id,
+                report_id.as_deref(),
+                progress_id.as_deref(),
+            )
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enclave_task_file_list(
+pub async fn enclave_task_file_list(
     org_id: String,
     task_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<FileAssetView>, String> {
-    state.store.with_conn(|c| files::list_task_files(c, &org_id, &task_id))
+    let payload = json!({ "taskId": task_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "file.task_list",
+        payload,
+        |c, _actor| files::list_task_files(c, &org_id, &task_id),
+    )
+    .await
 }
 
 /// 返回文件绝对路径，前端再调用既有的 `open_path` 打开。
+///
+/// 主机直接返回本地路径；成员先从主机下载到内容寻址缓存（sha256 校验后返回缓存路径）。
 #[tauri::command]
-pub fn enclave_file_abs_path(
+pub async fn enclave_file_abs_path(
     org_id: String,
     file_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<String, String> {
-    state
-        .store
-        .with_conn(|c| files::file_abs_path(c, &org_id, &file_id))
+    let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
+    match role {
+        Some(authz::Role::Owner) => state
+            .store
+            .with_conn(|c| files::file_abs_path(c, &org_id, &file_id)),
+        Some(_) => {
+            crate::enclave::host::fetch_file_to_cache(
+                state.inner(),
+                db.inner(),
+                &org_id,
+                &file_id,
+            )
+            .await
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
 }
 
 /// 本机团队文件根目录视图（§13）。

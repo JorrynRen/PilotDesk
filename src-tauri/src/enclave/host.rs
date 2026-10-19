@@ -17,8 +17,10 @@
 //! ← {"type":"res","id":"…","ok":false,"error":"…"}
 //! ```
 
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -33,7 +35,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 
 use super::authz::{self, Role};
 use super::org;
-use super::{rpc, tasks, tls, transfer, EnclaveState, ENCLAVE_DEFAULT_PORT};
+use super::{files, rpc, tasks, tls, transfer, EnclaveState, ENCLAVE_DEFAULT_PORT};
 use crate::utils::platform;
 
 /// 平台 `/api/v1/me` 的最小响应（只取身份 id 做一致性校验）。
@@ -66,6 +68,8 @@ const HOST_PORT_KEY: &str = "enclave_host_port";
 const HOST_ADDR_PREFIX: &str = "enclave_host_addr:";
 /// 成员端固定的主机证书指纹（TOFU；重置后下次连接重新记录）。
 const HOST_FP_PREFIX: &str = "enclave_host_fp:";
+/// 成员上传单个文件的大小上限（MVP：整文件读入内存后分块发送）。
+const UPLOAD_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 // ── 运行态 ──────────────────────────────────────────────────────
 
@@ -225,6 +229,191 @@ pub async fn call_host(
     };
     session.close().await;
     data
+}
+
+/// 只保留安全字符（用于上传临时目录 / 缓存文件名）。
+fn safe_component(raw: &str) -> String {
+    let s: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.trim().is_empty() {
+        "file".to_string()
+    } else {
+        s
+    }
+}
+
+fn upload_path(org_id: &str, user_id: &str, upload_id: &str) -> PathBuf {
+    crate::utils::paths::app_root_dir()
+        .join("enclave")
+        .join("uploads")
+        .join(safe_component(org_id))
+        .join(safe_component(user_id))
+        .join(format!("{}.part", safe_component(upload_id)))
+}
+
+fn file_cache_dir(org_id: &str) -> PathBuf {
+    crate::utils::paths::app_root_dir()
+        .join("enclave")
+        .join("cache")
+        .join(safe_component(org_id))
+}
+
+/// 成员端上传本地文件到主机（分块；返回主机侧的 `FileAssetView`）。
+pub async fn upload_file(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    task_id: &str,
+    src_path: &str,
+    report_id: Option<&str>,
+) -> Result<Value, String> {
+    let bytes = std::fs::read(src_path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
+    if bytes.len() as u64 > UPLOAD_MAX_BYTES {
+        return Err(format!(
+            "文件过大（{} MB），单文件上限 {} MB",
+            bytes.len() / 1024 / 1024,
+            UPLOAD_MAX_BYTES / 1024 / 1024
+        ));
+    }
+    let file_name = Path::new(src_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let sha256 = transfer::hex_sha256(&bytes);
+
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let begin = session
+        .request(
+            "file.upload_begin",
+            json!({ "orgId": org_id, "fileName": file_name }),
+        )
+        .await?;
+    let upload_id = begin["uploadId"].as_str().unwrap_or("").to_string();
+    if upload_id.is_empty() {
+        session.close().await;
+        return Err("主机未返回上传会话".to_string());
+    }
+
+    let mut offset = 0u64;
+    let chunk_size = transfer::LAN_CHUNK_MAX as usize;
+    for chunk in bytes.chunks(chunk_size) {
+        session
+            .request(
+                "file.upload_chunk",
+                json!({
+                    "orgId": org_id,
+                    "uploadId": upload_id,
+                    "offset": offset,
+                    "data": BASE64.encode(chunk),
+                }),
+            )
+            .await?;
+        offset += chunk.len() as u64;
+    }
+
+    let result = session
+        .request(
+            "file.upload_finish",
+            json!({
+                "orgId": org_id,
+                "uploadId": upload_id,
+                "taskId": task_id,
+                "reportId": report_id,
+                "fileName": file_name,
+                "sha256": sha256,
+            }),
+        )
+        .await;
+    session.close().await;
+    result
+}
+
+/// 成员端打开文件：下载到内容寻址缓存（`<sha8>-<名>`）并返回本地路径。
+pub async fn fetch_file_to_cache(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    file_id: &str,
+) -> Result<String, String> {
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let stat = session
+        .request("file.stat", json!({ "orgId": org_id, "fileId": file_id }))
+        .await?;
+    let file_name = stat["fileName"].as_str().unwrap_or("file").to_string();
+    let file_hash = stat["fileHash"].as_str().unwrap_or("").to_string();
+    let file_size = stat["fileSize"].as_u64().unwrap_or(0);
+
+    let dir = file_cache_dir(org_id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建文件缓存目录失败：{}", e))?;
+    let safe_name = safe_component(&file_name);
+    let target = dir.join(format!(
+        "{}-{}",
+        &file_hash[..8.min(file_hash.len())],
+        safe_name
+    ));
+
+    // 命中缓存：大小一致且哈希一致才复用
+    if target.exists() {
+        let cached = std::fs::read(&target).unwrap_or_default();
+        if cached.len() as u64 == file_size && transfer::hex_sha256(&cached) == file_hash {
+            session.close().await;
+            return Ok(target.to_string_lossy().to_string());
+        }
+    }
+
+    let part = target.with_extension("part");
+    let mut file = std::fs::File::create(&part).map_err(|e| format!("创建缓存文件失败：{}", e))?;
+    let mut offset = 0u64;
+    loop {
+        let chunk = session
+            .request(
+                "file.fetch",
+                json!({
+                    "orgId": org_id,
+                    "fileId": file_id,
+                    "offset": offset,
+                    "len": transfer::LAN_CHUNK_MAX,
+                }),
+            )
+            .await?;
+        let data = BASE64
+            .decode(chunk["data"].as_str().unwrap_or(""))
+            .map_err(|e| format!("解码文件分块失败：{}", e))?;
+        use std::io::Write;
+        file.write_all(&data)
+            .map_err(|e| format!("写入文件缓存失败：{}", e))?;
+        offset += data.len() as u64;
+        if chunk["eof"].as_bool() == Some(true) {
+            break;
+        }
+        if data.is_empty() {
+            let _ = std::fs::remove_file(&part);
+            session.close().await;
+            return Err("主机返回了空分块，下载中断".to_string());
+        }
+    }
+    drop(file);
+    session.close().await;
+
+    let downloaded = std::fs::read(&part).map_err(|e| format!("读取下载文件失败：{}", e))?;
+    if transfer::hex_sha256(&downloaded) != file_hash {
+        let _ = std::fs::remove_file(&part);
+        return Err("文件校验失败（哈希不一致），已丢弃".to_string());
+    }
+    if target.exists() {
+        let _ = std::fs::remove_file(&target);
+    }
+    std::fs::rename(&part, &target).map_err(|e| format!("保存文件缓存失败：{}", e))?;
+    Ok(target.to_string_lossy().to_string())
 }
 
 /// 拉取发给当前账号的转移请求（收到后由本地决定是否接受）。
@@ -560,6 +749,70 @@ async fn handle_conn(
                 }
                 Err(e) => res_err(&req.id, &e),
             },
+            "file.upload_begin" => match org_param(&req, &hello) {
+                Ok(org) => match handle_upload_begin(&state, org, &hello.user_id) {
+                    Ok(v) => res_ok(&req.id, v),
+                    Err(e) => res_err(&req.id, &e),
+                },
+                Err(e) => res_err(&req.id, &e),
+            },
+            "file.upload_chunk" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let upload_id = req.params["uploadId"].as_str().unwrap_or("").to_string();
+                    let offset = req.params["offset"].as_u64().unwrap_or(0);
+                    let data = req.params["data"].as_str().unwrap_or("").to_string();
+                    match handle_upload_chunk(org, &hello.user_id, &upload_id, offset, &data) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
+            "file.upload_finish" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let upload_id = req.params["uploadId"].as_str().unwrap_or("").to_string();
+                    let task_id = req.params["taskId"].as_str().unwrap_or("").to_string();
+                    let report_id = req.params["reportId"].as_str().map(str::to_string);
+                    let file_name = req.params["fileName"].as_str().unwrap_or("file").to_string();
+                    let sha256 = req.params["sha256"].as_str().unwrap_or("").to_string();
+                    match handle_upload_finish(
+                        &state,
+                        org,
+                        &hello.user_id,
+                        &upload_id,
+                        &task_id,
+                        report_id.as_deref(),
+                        &file_name,
+                        &sha256,
+                    ) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
+            "file.stat" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let file_id = req.params["fileId"].as_str().unwrap_or("").to_string();
+                    match handle_file_stat(&state, org, &hello.user_id, &file_id) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
+            "file.fetch" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let file_id = req.params["fileId"].as_str().unwrap_or("").to_string();
+                    let offset = req.params["offset"].as_u64().unwrap_or(0);
+                    let len = req.params["len"].as_u64().unwrap_or(transfer::LAN_CHUNK_MAX);
+                    match handle_file_fetch(&state, org, &hello.user_id, &file_id, offset, len) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
             "transfer.pending" => match org_param(&req, &hello) {
                 Ok(org) => match handle_transfer_pending(&state, org, &hello.user_id) {
                     Ok(v) => res_ok(&req.id, v),
@@ -653,6 +906,144 @@ fn handle_enclave_call(
         authz::role_for_member(c, org_id, user_id)?
             .ok_or_else(|| "当前账号不是该组织成员".to_string())?;
         rpc::dispatch(c, org_id, user_id, command, payload)
+    })
+}
+
+fn ensure_member(state: &EnclaveState, org_id: &str, user_id: &str) -> Result<(), String> {
+    state.store.with_conn(|c| {
+        authz::role_for_member(c, org_id, user_id)?
+            .map(|_| ())
+            .ok_or_else(|| "当前账号不是该组织成员".to_string())
+    })
+}
+
+fn handle_upload_begin(
+    state: &EnclaveState,
+    org_id: &str,
+    user_id: &str,
+) -> Result<Value, String> {
+    ensure_member(state, org_id, user_id)?;
+    let upload_id = crate::utils::new_id();
+    let path = upload_path(org_id, user_id, &upload_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建上传目录失败：{}", e))?;
+    }
+    std::fs::File::create(&path).map_err(|e| format!("创建上传临时文件失败：{}", e))?;
+    Ok(json!({ "uploadId": upload_id }))
+}
+
+fn handle_upload_chunk(
+    org_id: &str,
+    user_id: &str,
+    upload_id: &str,
+    offset: u64,
+    data: &str,
+) -> Result<Value, String> {
+    if upload_id.is_empty() {
+        return Err("缺少上传会话".to_string());
+    }
+    let bytes = BASE64
+        .decode(data)
+        .map_err(|e| format!("解码上传分块失败：{}", e))?;
+    let path = upload_path(org_id, user_id, upload_id);
+    let current = std::fs::metadata(&path)
+        .map_err(|_| "上传会话不存在或已过期".to_string())?
+        .len();
+    if offset != current {
+        return Err(format!(
+            "上传分块偏移不一致（期望 {}，收到 {}）",
+            current, offset
+        ));
+    }
+    if current + bytes.len() as u64 > UPLOAD_MAX_BYTES {
+        let _ = std::fs::remove_file(&path);
+        return Err("文件超过单文件大小上限".to_string());
+    }
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("打开上传临时文件失败：{}", e))?;
+    file.write_all(&bytes)
+        .map_err(|e| format!("写入上传分块失败：{}", e))?;
+    Ok(json!({ "size": current + bytes.len() as u64 }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_upload_finish(
+    state: &EnclaveState,
+    org_id: &str,
+    user_id: &str,
+    upload_id: &str,
+    task_id: &str,
+    report_id: Option<&str>,
+    file_name: &str,
+    sha256: &str,
+) -> Result<Value, String> {
+    ensure_member(state, org_id, user_id)?;
+    let path = upload_path(org_id, user_id, upload_id);
+    let bytes = std::fs::read(&path).map_err(|_| "上传会话不存在或已过期".to_string())?;
+    if bytes.len() as u64 > UPLOAD_MAX_BYTES {
+        let _ = std::fs::remove_file(&path);
+        return Err("文件超过单文件大小上限".to_string());
+    }
+    if !sha256.is_empty() && transfer::hex_sha256(&bytes) != sha256 {
+        let _ = std::fs::remove_file(&path);
+        return Err("上传文件校验失败（哈希不一致）".to_string());
+    }
+    let result = state.store.with_conn(|c| {
+        files::attach_bytes(c, org_id, user_id, task_id, file_name, &bytes, report_id)
+    });
+    let _ = std::fs::remove_file(&path);
+    let view = result?;
+    serde_json::to_value(&view).map_err(|e| format!("序列化文件信息失败：{}", e))
+}
+
+fn handle_file_stat(
+    state: &EnclaveState,
+    org_id: &str,
+    user_id: &str,
+    file_id: &str,
+) -> Result<Value, String> {
+    ensure_member(state, org_id, user_id)?;
+    state.store.with_conn(|c| {
+        let meta = files::file_meta(c, org_id, file_id)?;
+        Ok(json!({
+            "fileName": meta.file_name,
+            "fileHash": meta.file_hash,
+            "fileSize": meta.file_size,
+        }))
+    })
+}
+
+fn handle_file_fetch(
+    state: &EnclaveState,
+    org_id: &str,
+    user_id: &str,
+    file_id: &str,
+    offset: u64,
+    len: u64,
+) -> Result<Value, String> {
+    ensure_member(state, org_id, user_id)?;
+    state.store.with_conn(|c| {
+        let meta = files::file_meta(c, org_id, file_id)?;
+        let path = PathBuf::from(&meta.abs_path);
+        let total = std::fs::metadata(&path).map_err(|e| format!("文件不可用：{}", e))?.len();
+        let offset = offset.min(total);
+        let want = len.min(transfer::LAN_CHUNK_MAX).min(total - offset);
+        let mut buf = vec![0u8; want as usize];
+        if want > 0 {
+            let mut f = std::fs::File::open(&path).map_err(|e| format!("读取文件失败：{}", e))?;
+            f.seek(SeekFrom::Start(offset))
+                .map_err(|e| format!("定位文件失败：{}", e))?;
+            f.read_exact(&mut buf)
+                .map_err(|e| format!("读取文件失败：{}", e))?;
+        }
+        Ok(json!({
+            "offset": offset,
+            "total": total,
+            "data": BASE64.encode(&buf),
+            "eof": offset + want >= total,
+        }))
     })
 }
 
@@ -1409,6 +1800,97 @@ mod tests {
         let moved = next_json(&mut rx).await.unwrap();
         assert_eq!(moved["ok"], true, "set_status failed: {}", moved);
         assert_eq!(moved["data"]["status"], "in_progress");
+
+        // 成员上传文件：begin → chunk → finish
+        let content = b"hello world".to_vec();
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"u1","method":"file.upload_begin",
+                "params":{"orgId":"org1","fileName":"note.txt"}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let begin = next_json(&mut rx).await.unwrap();
+        assert_eq!(begin["ok"], true);
+        let upload_id = begin["data"]["uploadId"].as_str().unwrap().to_string();
+
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"u2","method":"file.upload_chunk",
+                "params":{
+                    "orgId":"org1","uploadId":upload_id,"offset":0,
+                    "data":BASE64.encode(&content)
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(next_json(&mut rx).await.unwrap()["ok"], true);
+
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"u3","method":"file.upload_finish",
+                "params":{
+                    "orgId":"org1","uploadId":upload_id,"taskId":task_id,
+                    "fileName":"note.txt","sha256":transfer::hex_sha256(&content)
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let finished = next_json(&mut rx).await.unwrap();
+        assert_eq!(finished["ok"], true, "upload failed: {}", finished);
+        let file_id = finished["data"]["id"].as_str().unwrap().to_string();
+
+        // 任务附件列表：成员拿不到主机本地路径
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"u4","method":"enclave.call",
+                "params":{"orgId":"org1","command":"file.task_list","payload":{"taskId":task_id}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let listed = next_json(&mut rx).await.unwrap();
+        assert_eq!(listed["ok"], true);
+        assert_eq!(listed["data"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["data"][0]["absPath"], "");
+
+        // 元信息 + 下载
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"u5","method":"file.stat",
+                "params":{"orgId":"org1","fileId":file_id}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let stat = next_json(&mut rx).await.unwrap();
+        assert_eq!(stat["ok"], true);
+        assert_eq!(stat["data"]["fileSize"], content.len());
+
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"u6","method":"file.fetch",
+                "params":{"orgId":"org1","fileId":file_id,"offset":0,"len":64}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let fetched = next_json(&mut rx).await.unwrap();
+        assert_eq!(fetched["ok"], true);
+        assert_eq!(
+            BASE64.decode(fetched["data"]["data"].as_str().unwrap()).unwrap(),
+            content
+        );
+        assert_eq!(fetched["data"]["eof"], true);
 
         drop(tx);
         drop(rx);
