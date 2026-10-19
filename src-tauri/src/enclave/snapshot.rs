@@ -232,6 +232,13 @@ pub async fn run_snapshot_round(
         )?;
         for r in &org_rows {
             org::refresh_own_member_role(c, &r.org_id, &me.user.id.to_string(), &r.my_role)?;
+            // 云端 ownership 变更后，本机的「转入」记录随之生效（无回调通道，以快照为准）
+            super::transfer::reconcile_incoming(
+                c,
+                &r.org_id,
+                &me.user.id.to_string(),
+                &r.owner_user_id,
+            )?;
         }
         Ok(())
     })?;

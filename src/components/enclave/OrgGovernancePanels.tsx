@@ -606,15 +606,15 @@ function TransferCard({ orgId }: { orgId: string }) {
 
   const markCompleted = async (t: TransferView) => {
     const ok = await confirmDialog({
-      title: '确认云端已生效',
+      title: '完成云端所有权转让',
       message:
-        '只有在平台已完成组织转让（ownership 已变更）后才能标记。\n'
-        + '标记后旧主机才允许销毁数据，且状态不可回退。',
-      confirmText: '云端已生效',
+        '将调用平台接口把组织所有权转让给受让人，并把本次迁移标记为「云端已生效」。\n'
+        + '此操作不可回退；完成后旧主机会停止对外服务，仅保留销毁旧数据的入口。',
+      confirmText: '确认转让',
     });
     if (!ok) return;
     if (await useEnclaveOrgStore.getState().advanceTransfer(t.id, 'completed')) {
-      showToast('已标记云端生效', 'success');
+      showToast('云端已生效，旧主机可销毁数据', 'success');
     }
   };
 

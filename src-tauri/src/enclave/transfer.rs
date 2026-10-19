@@ -219,6 +219,38 @@ pub fn advance(conn: &Connection, id: &str, to_phase: &str) -> Result<TransferVi
     get(conn, id)
 }
 
+/// 治理快照确认本机已成为组织 owner 时，把已校验的转入记录推进到 `completed`。
+///
+/// 云端 ownership 变更没有回调通道，因此以「快照里的 owner 已是当前账号」为生效依据；
+/// 单个记录推进失败不阻断快照写入（保留 `verified`，下一轮再试）。
+pub fn reconcile_incoming(
+    conn: &Connection,
+    org_id: &str,
+    user_id: &str,
+    owner_user_id: &str,
+) -> Result<(), String> {
+    if user_id.is_empty() || owner_user_id != user_id {
+        return Ok(());
+    }
+    let ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM host_transfer
+                 WHERE org_id = ?1 AND direction = ?2 AND phase = ?3",
+            )
+            .map_err(|e| format!("查询转入记录失败：{}", e))?;
+        let rows = stmt
+            .query_map(params![org_id, DIRECTION_IN, PHASE_VERIFIED], |r| r.get(0))
+            .map_err(|e| format!("查询转入记录失败：{}", e))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()
+            .map_err(|e| format!("读取转入记录失败：{}", e))?
+    };
+    for id in ids {
+        let _ = advance(conn, &id, PHASE_COMPLETED);
+    }
+    Ok(())
+}
+
 fn set_package_hash(conn: &Connection, id: &str, hash: &str) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
     conn.execute(
