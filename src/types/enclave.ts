@@ -179,6 +179,16 @@ export interface TransferImportOutcome {
   fileCount: number;
 }
 
+/** 局域网转移发起结果（`enclave_transfer_lan_offer`） */
+export interface LanOfferOutcome {
+  transferId: string;
+  orgId: string;
+  targetUserId: string;
+  packageHash: string;
+  size: number;
+  fileCount: number;
+}
+
 // ── M3：任务 ────────────────────────────────────────────────────
 
 /** 任务状态 */

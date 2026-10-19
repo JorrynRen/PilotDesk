@@ -21,6 +21,7 @@ const ACTION_LABEL: Record<string, string> = {
   'files.root': '本机团队文件根目录',
   'transfer.export': '主机转移 · 导出迁移包',
   'transfer.import': '主机转移 · 导入迁移包',
+  'transfer.offer': '主机转移 · 发起局域网转移',
   'transfer.accept': '主机转移 · 接收方接受',
   'transfer.verify': '主机转移 · 校验通过',
   'transfer.complete': '主机转移 · 云端生效',
@@ -323,14 +324,31 @@ async function copyText(text: string, label: string): Promise<void> {
 function TransferCard({ orgId }: { orgId: string }) {
   const transfers = useEnclaveOrgStore((s) => s.transfers);
   const caps = useEnclaveOrgStore((s) => s.caps);
+  const detail = useEnclaveOrgStore((s) => s.detail);
+  const lanPending = useEnclaveOrgStore((s) => s.lanPending);
+  const lanPendingError = useEnclaveOrgStore((s) => s.lanPendingError);
   const [pass, setPass] = useState('');
   const [outPath, setOutPath] = useState('');
   const [exported, setExported] = useState<TransferExportOutcome | null>(null);
   const [importPath, setImportPath] = useState('');
   const [importPass, setImportPass] = useState('');
   const [busy, setBusy] = useState<'export' | 'import' | null>(null);
+  const [targetId, setTargetId] = useState('');
+  const [offering, setOffering] = useState(false);
+  const [accepting, setAccepting] = useState<string | null>(null);
 
   const canTransfer = !!caps?.actions.includes('host.transfer');
+  const isMember = !!caps && !canTransfer;
+
+  // 成员端：进入卡片即拉一次待确认请求（失败只在本卡片提示，不影响其它面板）
+  useEffect(() => {
+    if (isMember) void useEnclaveOrgStore.getState().loadLanPending(orgId);
+  }, [orgId, isMember]);
+
+  const meId = caps?.identity?.userId ?? '';
+  const targets = (detail?.members ?? []).filter(
+    (m) => m.seatStatus !== 'removed' && m.userId !== meId && m.role !== 'owner',
+  );
 
   /** 选择导出位置（.pdesk） */
   const pickExportPath = async () => {
@@ -402,6 +420,55 @@ function TransferCard({ orgId }: { orgId: string }) {
       setImportPass('');
       showToast(
         `迁移包已导入并校验（${outcome.fileCount} 个文件）。云端完成转让后即可接管主机。`,
+        'success',
+      );
+    }
+  };
+
+  /** 发起局域网转移（owner 选受让人，生成迁移包等待对方确认） */
+  const startOffer = async () => {
+    if (!targetId) {
+      showToast('请选择受让人', 'error');
+      return;
+    }
+    const target = targets.find((t) => t.userId === targetId);
+    const ok = await confirmDialog({
+      title: '发起局域网转移',
+      message:
+        `将组织「${orgId}」转让给 ${target?.displayName || targetId}。\n`
+        + '本机会生成加密迁移包；对方在同一局域网确认后自动传输并校验。\n'
+        + '云端所有权变更仍需平台完成，旧机数据在云端生效前不会被销毁。\n\n是否继续？',
+      confirmText: '发起转移',
+    });
+    if (!ok) return;
+    setOffering(true);
+    const outcome = await useEnclaveOrgStore.getState().offerLanTransfer(orgId, targetId);
+    setOffering(false);
+    if (outcome) {
+      setTargetId('');
+      showToast(
+        `已生成转移请求（${formatBytes(outcome.size)}，${outcome.fileCount} 个文件），等待受让人确认`,
+        'success',
+      );
+    }
+  };
+
+  /** 受让人接受并自动迁移 */
+  const acceptPending = async (t: TransferView) => {
+    const ok = await confirmDialog({
+      title: '接受主机转移',
+      message:
+        '接受后将自动从主机下载并校验组织数据。\n'
+        + '迁移完成前请保持主机在线、飞地对外服务开启。\n\n是否继续？',
+      confirmText: '接受并迁移',
+    });
+    if (!ok) return;
+    setAccepting(t.id);
+    const outcome = await useEnclaveOrgStore.getState().acceptLanTransfer(orgId, t.id);
+    setAccepting(null);
+    if (outcome) {
+      showToast(
+        `迁移完成：已导入并校验 ${outcome.fileCount} 个文件。云端完成所有权转让后即可接管主机。`,
         'success',
       );
     }
@@ -496,7 +563,47 @@ function TransferCard({ orgId }: { orgId: string }) {
       {caps && canTransfer && (
         <div className="mt-2 flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-            我转出（旧主机）
+            局域网自动迁移
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select
+              value={targetId}
+              onChange={(e) => setTargetId(e.target.value)}
+              className="flex-1 min-w-0 h-7 px-2 rounded text-[11px] outline-none"
+              style={inputStyle}
+            >
+              <option value="">选择受让人（组织成员）</option>
+              {targets.map((m) => (
+                <option key={m.userId} value={m.userId}>
+                  {m.displayName || m.email || m.userId}
+                  {m.email && m.displayName ? `（${m.email}）` : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => void startOffer()}
+              disabled={!targetId || offering}
+              className="h-7 px-2 rounded text-[11px] flex items-center gap-1 shrink-0"
+              style={{
+                backgroundColor: 'var(--accent)',
+                color: '#fff',
+                opacity: !targetId || offering ? 0.5 : 1,
+              }}
+            >
+              {offering && <Loader2 size={10} className="animate-spin" />}
+              发起转移
+            </button>
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            受让人需与本机在同一局域网并已登录；对方确认后自动下载、校验并合并数据。
+          </div>
+        </div>
+      )}
+
+      {caps && canTransfer && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            线下迁移包（异地兜底）
           </div>
           <div className="flex items-center gap-1.5">
             <input
@@ -549,8 +656,55 @@ function TransferCard({ orgId }: { orgId: string }) {
 
       {caps && !canTransfer && (
         <div className="mt-2 flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+              待接收的转移请求
+            </span>
+            <button
+              onClick={() => void useEnclaveOrgStore.getState().loadLanPending(orgId)}
+              className="text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+            >
+              <RefreshCw size={10} />
+              刷新
+            </button>
+          </div>
+          {lanPendingError && (
+            <div className="text-[10px]" style={{ color: 'var(--status-danger)' }}>
+              {lanPendingError}
+            </div>
+          )}
+          {!lanPendingError && lanPending.length === 0 && (
+            <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              暂无待确认请求（主机发起后会出现在这里）
+            </div>
+          )}
+          {lanPending.map((t) => (
+            <div key={t.id} className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              <span className="px-1.5 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}>
+                待确认
+              </span>
+              <span>{formatTime(t.createdAt)}</span>
+              <span className="break-all">sha256 {t.packageHash.slice(0, 12)}…</span>
+              <div className="flex-1" />
+              <button
+                onClick={() => void acceptPending(t)}
+                disabled={accepting === t.id}
+                className="h-6 px-2 rounded text-[10px] flex items-center gap-1"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: accepting === t.id ? 0.6 : 1 }}
+              >
+                {accepting === t.id && <Loader2 size={10} className="animate-spin" />}
+                接受并迁移
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {caps && !canTransfer && (
+        <div className="mt-2 flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-            我接管（新主机）
+            线下迁移包（异地兜底）
           </div>
           <div className="flex items-center gap-1.5">
             <input

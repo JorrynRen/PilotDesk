@@ -13,6 +13,7 @@ import type {
   EmergencyView,
   EnclaveOrgCaps,
   HostStatusView,
+  LanOfferOutcome,
   OrgDetailView,
   OrgSnapshotView,
   PolicyView,
@@ -36,6 +37,10 @@ interface EnclaveOrgState {
   host: HostStatusView | null;
   /** 本机侧主机转移记录 */
   transfers: TransferView[];
+  /** 成员端：主机发给当前账号、待确认的转移请求 */
+  lanPending: TransferView[];
+  /** 拉取待确认请求失败原因（如未发现主机），仅卡片内提示 */
+  lanPendingError: string | null;
   /** 策略 / 应急变更审计流水 */
   audit: AuditView[];
   loading: boolean;
@@ -74,6 +79,12 @@ interface EnclaveOrgState {
   advanceTransfer: (transferId: string, phase: string) => Promise<boolean>;
   /** 销毁旧主机数据（仅 completed 的转出记录） */
   destroyTransfer: (transferId: string, orgId: string) => Promise<boolean>;
+  /** 发起局域网自动迁移（owner 选受让人；生成迁移包与一次性口令） */
+  offerLanTransfer: (orgId: string, targetUserId: string) => Promise<LanOfferOutcome | null>;
+  /** 拉取发给当前账号的转移请求（成员端，经主机 WS） */
+  loadLanPending: (orgId: string) => Promise<void>;
+  /** 接受并自动完成局域网迁移（下载 → 校验 → 合并 → 主机确认） */
+  acceptLanTransfer: (orgId: string, transferId: string) => Promise<TransferImportOutcome | null>;
 }
 
 export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
@@ -85,6 +96,8 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   emergency: null,
   host: null,
   transfers: [],
+  lanPending: [],
+  lanPendingError: null,
   audit: [],
   loading: false,
   error: null,
@@ -115,6 +128,8 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
       emergency: null,
       host: null,
       transfers: [],
+      lanPending: [],
+      lanPendingError: null,
       audit: [],
       loading: false,
       error: null,
@@ -275,6 +290,43 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
     } catch (e) {
       set({ error: errorMessage(e) });
       return false;
+    }
+  },
+
+  offerLanTransfer: async (orgId, targetUserId) => {
+    try {
+      const outcome = await invoke<LanOfferOutcome>('enclave_transfer_lan_offer', {
+        orgId,
+        targetUserId,
+      });
+      await get().loadTransfers(orgId);
+      return outcome;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  loadLanPending: async (orgId) => {
+    try {
+      const lanPending = await invoke<TransferView[]>('enclave_transfer_lan_pending', { orgId });
+      set({ lanPending, lanPendingError: null });
+    } catch (e) {
+      set({ lanPending: [], lanPendingError: errorMessage(e) });
+    }
+  },
+
+  acceptLanTransfer: async (orgId, transferId) => {
+    try {
+      const outcome = await invoke<TransferImportOutcome>('enclave_transfer_lan_accept', {
+        orgId,
+        transferId,
+      });
+      await Promise.all([get().loadTransfers(orgId), get().loadLanPending(orgId)]);
+      return outcome;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
     }
   },
 

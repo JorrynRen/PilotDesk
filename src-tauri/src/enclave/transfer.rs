@@ -15,6 +15,8 @@
 //! 明文是 JSON manifest：`{ schemaVersion, orgId, dbSha256, db(base64), files[] }`，
 //! 其中每个文件带 `path/sha256/size/data(base64)`。密钥 = PBKDF2-HMAC-SHA256(口令, salt)。
 
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::rand_core::RngCore;
@@ -90,7 +92,7 @@ pub fn phase_label(phase: &str) -> &'static str {
 
 // ── 视图 / 记录 ────────────────────────────────────────────────
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferView {
     pub id: String,
@@ -169,6 +171,7 @@ fn insert_record(
     org_id: &str,
     direction: &str,
     phase: &str,
+    peer_device_id: &str,
     package_hash: &str,
 ) -> Result<String, String> {
     let id = crate::utils::new_id();
@@ -176,8 +179,8 @@ fn insert_record(
     conn.execute(
         "INSERT INTO host_transfer
             (id, org_id, direction, phase, peer_device_id, package_hash, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, '', ?5, ?6, ?6)",
-        params![id, org_id, direction, phase, package_hash, now],
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![id, org_id, direction, phase, peer_device_id, package_hash, now],
     )
     .map_err(|e| format!("写入转移记录失败：{}", e))?;
     Ok(id)
@@ -185,7 +188,7 @@ fn insert_record(
 
 /// 创建一条待接收方确认的转入记录（`pending`）。
 pub fn create_incoming(conn: &Connection, org_id: &str) -> Result<TransferView, String> {
-    let id = insert_record(conn, org_id, DIRECTION_IN, PHASE_PENDING, "")?;
+    let id = insert_record(conn, org_id, DIRECTION_IN, PHASE_PENDING, "", "")?;
     get(conn, &id)
 }
 
@@ -289,12 +292,63 @@ pub fn export_package(
     }
     let actor = authz::current_actor_id(conn)?;
 
-    let tmp_dir = std::env::temp_dir().join(format!("pilotdesk-transfer-{}", crate::utils::new_id()));
+    let built = build_package(conn, org_id, passphrase)?;
+
+    let path = resolve_export_path(out_path, org_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建导出目录失败：{}", e))?;
+    }
+    std::fs::write(&path, &built.envelope).map_err(|e| format!("写入迁移包失败：{}", e))?;
+
+    let transfer_id = insert_record(
+        conn,
+        org_id,
+        DIRECTION_OUT,
+        PHASE_MIGRATING,
+        "",
+        &built.package_hash,
+    )?;
+    org::audit(
+        conn,
+        org_id,
+        &actor,
+        "transfer.export",
+        &json!({
+            "transferId": transfer_id,
+            "packageHash": built.package_hash,
+            "fileCount": built.file_count
+        })
+        .to_string(),
+    )?;
+
+    Ok(ExportOutcome {
+        transfer_id,
+        path: path.to_string_lossy().to_string(),
+        package_hash: built.package_hash,
+        size: built.envelope.len() as u64,
+        file_count: built.file_count,
+    })
+}
+
+struct BuiltPackage {
+    envelope: Vec<u8>,
+    package_hash: String,
+    file_count: usize,
+}
+
+/// 构建单组织的加密迁移包（数据库快照 + 文件资产 + manifest + AES-GCM）。
+fn build_package(
+    conn: &Connection,
+    org_id: &str,
+    passphrase: &str,
+) -> Result<BuiltPackage, String> {
+    let tmp_dir =
+        std::env::temp_dir().join(format!("pilotdesk-transfer-{}", crate::utils::new_id()));
     std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("创建临时目录失败：{}", e))?;
     let tmp_db = tmp_dir.join("org.db");
 
-    let result = (|| -> Result<ExportOutcome, String> {
-        // 一致性快照（不阻塞当前连接上的读；WAL 模式下是事务快照）
+    let result = (|| -> Result<BuiltPackage, String> {
+        // 一致性快照（WAL 模式下是事务快照）
         conn.execute("VACUUM INTO ?1", params![tmp_db.to_string_lossy().to_string()])
             .map_err(|e| format!("生成数据库快照失败：{}", e))?;
 
@@ -368,29 +422,9 @@ pub fn export_package(
 
         let envelope = encrypt_envelope(&plaintext, passphrase)?;
         let package_hash = hex_sha256(&envelope);
-
-        let path = resolve_export_path(out_path, org_id);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("创建导出目录失败：{}", e))?;
-        }
-        std::fs::write(&path, &envelope).map_err(|e| format!("写入迁移包失败：{}", e))?;
-
-        let transfer_id =
-            insert_record(conn, org_id, DIRECTION_OUT, PHASE_MIGRATING, &package_hash)?;
-        org::audit(
-            conn,
-            org_id,
-            &actor,
-            "transfer.export",
-            &json!({ "transferId": transfer_id, "packageHash": package_hash, "fileCount": manifest.files.len() })
-                .to_string(),
-        )?;
-
-        Ok(ExportOutcome {
-            transfer_id,
-            path: path.to_string_lossy().to_string(),
+        Ok(BuiltPackage {
+            envelope,
             package_hash,
-            size: envelope.len() as u64,
             file_count: manifest.files.len(),
         })
     })();
@@ -419,6 +453,324 @@ fn resolve_export_path(out: Option<&str>, org_id: &str) -> PathBuf {
         }
         None => default_export_dir().join(default_name),
     }
+}
+
+// ── 局域网自动迁移（数据面；控制面待云端接口）──────────────────
+
+/// `enclave_settings` 中保存某次转移临时口令的键前缀。
+const TRANSFER_PASS_PREFIX: &str = "transfer_pass:";
+/// 局域网请求的保鲜期：超过即视为过期（设计建议 72h）。
+pub const LAN_PENDING_TTL_SECS: i64 = 72 * 3600;
+/// 单次分块上限（4 MiB，base64 后约 5.3 MiB，低于 WS 默认帧/消息上限）。
+pub const LAN_CHUNK_MAX: u64 = 4 * 1024 * 1024;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanOfferOutcome {
+    pub transfer_id: String,
+    pub org_id: String,
+    pub target_user_id: String,
+    pub package_hash: String,
+    pub size: u64,
+    pub file_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptInfo {
+    pub transfer_id: String,
+    pub org_id: String,
+    pub passphrase: String,
+    pub package_hash: String,
+    pub size: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageChunk {
+    pub offset: u64,
+    pub total: u64,
+    pub data: String,
+    pub eof: bool,
+}
+
+/// 主机端迁移包的落点（按转移 id 区分，完成/销毁后清理）。
+pub fn lan_package_path(id: &str) -> PathBuf {
+    default_export_dir().join(format!("lan-{}.pdesk", sanitize_component(id)))
+}
+
+fn get_setting(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM enclave_settings WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+fn cleanup_lan_artifacts(conn: &Connection, id: &str) {
+    let _ = std::fs::remove_file(lan_package_path(id));
+    let _ = conn.execute(
+        "DELETE FROM enclave_settings WHERE key = ?1",
+        params![format!("{}{}", TRANSFER_PASS_PREFIX, id)],
+    );
+}
+
+/// 作废该组织其它待确认请求（同一时间只允许一个进行中的受让请求）。
+fn expire_pending_offers(conn: &Connection, org_id: &str, _actor: &str) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id FROM host_transfer
+             WHERE org_id = ?1 AND direction = 'out' AND phase = ?2",
+        )
+        .map_err(|e| format!("查询待确认请求失败：{}", e))?;
+    let ids = stmt
+        .query_map(params![org_id, PHASE_PENDING], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("查询待确认请求失败：{}", e))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取待确认请求失败：{}", e))?;
+    for id in ids {
+        let _ = advance(conn, &id, PHASE_EXPIRED);
+        cleanup_lan_artifacts(conn, &id);
+    }
+    Ok(())
+}
+
+/// 待接收方确认的请求（只能看到发给自己的）。
+pub fn pending_for(
+    conn: &Connection,
+    org_id: &str,
+    user_id: &str,
+) -> Result<Vec<TransferView>, String> {
+    // 惰性过期：超过 72h 的请求直接作废并清理
+    let now = chrono::Utc::now().timestamp();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, created_at FROM host_transfer
+             WHERE org_id = ?1 AND direction = 'out' AND phase = ?2 AND peer_device_id = ?3",
+        )
+        .map_err(|e| format!("查询待确认请求失败：{}", e))?;
+    let stale = stmt
+        .query_map(params![org_id, PHASE_PENDING, user_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })
+        .map_err(|e| format!("查询待确认请求失败：{}", e))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取待确认请求失败：{}", e))?;
+    for (id, created_at) in stale {
+        if now.saturating_sub(created_at) > LAN_PENDING_TTL_SECS {
+            let _ = advance(conn, &id, PHASE_EXPIRED);
+            cleanup_lan_artifacts(conn, &id);
+        }
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, org_id, direction, phase, peer_device_id, package_hash, created_at, updated_at
+             FROM host_transfer
+             WHERE org_id = ?1 AND direction = 'out' AND phase = ?2 AND peer_device_id = ?3
+             ORDER BY created_at DESC",
+        )
+        .map_err(|e| format!("查询待确认请求失败：{}", e))?;
+    let rows = stmt
+        .query_map(params![org_id, PHASE_PENDING, user_id], |r| row_to_view(r))
+        .map_err(|e| format!("查询待确认请求失败：{}", e))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取待确认请求失败：{}", e))
+}
+
+/// 发起局域网转移：生成迁移包与一次性口令，等待受让人确认。仅 owner。
+pub fn create_lan_offer(
+    conn: &Connection,
+    org_id: &str,
+    target_user_id: &str,
+) -> Result<LanOfferOutcome, String> {
+    let target = target_user_id.trim();
+    if target.is_empty() {
+        return Err("请选择受让人".to_string());
+    }
+    let role = authz::role_for_org(conn, org_id)?
+        .ok_or_else(|| "尚未同步该组织的治理快照，无法发起转移".to_string())?;
+    if role != Role::Owner {
+        return Err("仅组织所有者（owner）可发起主机转移".to_string());
+    }
+    let actor = authz::current_actor_id(conn)?;
+    if target == actor {
+        return Err("不能把组织转让给自己".to_string());
+    }
+    let target_role = authz::role_for_member(conn, org_id, target)?
+        .ok_or_else(|| "受让人不是该组织的有效成员".to_string())?;
+    if target_role == Role::Owner {
+        return Err("受让人已经是组织所有者".to_string());
+    }
+
+    expire_pending_offers(conn, org_id, &actor)?;
+
+    // 一次性口令：仅用于迁移包加密；受让人确认后由主机通过已认证通道下发
+    let passphrase = format!(
+        "{}{}",
+        crate::utils::new_id().replace('-', ""),
+        crate::utils::new_id().replace('-', "")
+    );
+    let built = build_package(conn, org_id, &passphrase)?;
+    let transfer_id = insert_record(
+        conn,
+        org_id,
+        DIRECTION_OUT,
+        PHASE_PENDING,
+        target,
+        &built.package_hash,
+    )?;
+    let path = lan_package_path(&transfer_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建迁移目录失败：{}", e))?;
+    }
+    if let Err(e) = std::fs::write(&path, &built.envelope) {
+        let _ = conn.execute(
+            "DELETE FROM host_transfer WHERE id = ?1",
+            params![transfer_id],
+        );
+        return Err(format!("写入迁移包失败：{}", e));
+    }
+    if let Err(e) = conn.execute(
+        "INSERT INTO enclave_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![
+            format!("{}{}", TRANSFER_PASS_PREFIX, transfer_id),
+            passphrase,
+            chrono::Utc::now().timestamp()
+        ],
+    ) {
+        cleanup_lan_artifacts(conn, &transfer_id);
+        let _ = conn.execute(
+            "DELETE FROM host_transfer WHERE id = ?1",
+            params![transfer_id],
+        );
+        return Err(format!("保存迁移口令失败：{}", e));
+    }
+    org::audit(
+        conn,
+        org_id,
+        &actor,
+        "transfer.offer",
+        &json!({
+            "transferId": transfer_id,
+            "targetUserId": target,
+            "packageHash": built.package_hash,
+            "fileCount": built.file_count
+        })
+        .to_string(),
+    )?;
+
+    Ok(LanOfferOutcome {
+        transfer_id,
+        org_id: org_id.to_string(),
+        target_user_id: target.to_string(),
+        package_hash: built.package_hash,
+        size: built.envelope.len() as u64,
+        file_count: built.file_count,
+    })
+}
+
+fn member_request(
+    conn: &Connection,
+    transfer_id: &str,
+    org_id: &str,
+    user_id: &str,
+) -> Result<TransferView, String> {
+    let t = get(conn, transfer_id)?;
+    if t.org_id != org_id {
+        return Err("转移请求与组织不匹配".to_string());
+    }
+    if t.direction != DIRECTION_OUT {
+        return Err("该转移记录不是来自旧主机".to_string());
+    }
+    if t.peer_device_id != user_id {
+        return Err("该转移请求不属于当前账号".to_string());
+    }
+    Ok(t)
+}
+
+/// 受让人接受请求：`pending → accepted`，返回一次性迁移口令。
+pub fn accept_for_member(
+    conn: &Connection,
+    transfer_id: &str,
+    org_id: &str,
+    user_id: &str,
+) -> Result<AcceptInfo, String> {
+    let t = member_request(conn, transfer_id, org_id, user_id)?;
+    if t.phase != PHASE_PENDING {
+        return Err("该转移请求已被处理或已过期".to_string());
+    }
+    let passphrase = get_setting(conn, &format!("{}{}", TRANSFER_PASS_PREFIX, transfer_id))
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "主机未找到本次迁移的口令".to_string())?;
+    let path = lan_package_path(transfer_id);
+    let size = std::fs::metadata(&path)
+        .map_err(|e| format!("主机迁移包不可用：{}", e))?
+        .len();
+    advance(conn, transfer_id, PHASE_ACCEPTED)?;
+    Ok(AcceptInfo {
+        transfer_id: transfer_id.to_string(),
+        org_id: org_id.to_string(),
+        passphrase,
+        package_hash: t.package_hash,
+        size,
+    })
+}
+
+/// 读取迁移包分块（首块把状态推进到 `migrating`）。
+pub fn read_package_chunk(
+    conn: &Connection,
+    transfer_id: &str,
+    org_id: &str,
+    user_id: &str,
+    offset: u64,
+    len: u64,
+) -> Result<PackageChunk, String> {
+    let t = member_request(conn, transfer_id, org_id, user_id)?;
+    if !matches!(t.phase.as_str(), PHASE_ACCEPTED | PHASE_MIGRATING) {
+        return Err("迁移尚未开始或已结束".to_string());
+    }
+    if t.phase == PHASE_ACCEPTED {
+        advance(conn, transfer_id, PHASE_MIGRATING)?;
+    }
+    let path = lan_package_path(transfer_id);
+    let total = std::fs::metadata(&path)
+        .map_err(|e| format!("主机迁移包不可用：{}", e))?
+        .len();
+    let offset = offset.min(total);
+    let want = len.min(LAN_CHUNK_MAX).min(total - offset);
+    let mut buf = vec![0u8; want as usize];
+    if want > 0 {
+        let mut f = File::open(&path).map_err(|e| format!("读取迁移包失败：{}", e))?;
+        f.seek(SeekFrom::Start(offset))
+            .map_err(|e| format!("定位迁移包失败：{}", e))?;
+        f.read_exact(&mut buf)
+            .map_err(|e| format!("读取迁移包失败：{}", e))?;
+    }
+    Ok(PackageChunk {
+        offset,
+        total,
+        data: BASE64.encode(&buf),
+        eof: offset + want >= total,
+    })
+}
+
+/// 受让人校验完成：`migrating → verified`。
+pub fn mark_member_verified(
+    conn: &Connection,
+    transfer_id: &str,
+    org_id: &str,
+    user_id: &str,
+) -> Result<TransferView, String> {
+    let t = member_request(conn, transfer_id, org_id, user_id)?;
+    if t.phase != PHASE_MIGRATING {
+        return Err("迁移尚未开始或已校验".to_string());
+    }
+    advance(conn, transfer_id, PHASE_VERIFIED)
 }
 
 /// 把快照裁剪为「单组织 + 忽略治理/本机设置」。
@@ -592,7 +944,7 @@ pub fn import_package(
     copy_result?;
 
     // 接收方记录：pending → accepted → migrating → verified
-    let transfer_id = insert_record(conn, &org_id, DIRECTION_IN, PHASE_PENDING, "")?;
+    let transfer_id = insert_record(conn, &org_id, DIRECTION_IN, PHASE_PENDING, "", "")?;
     let package_hash = hex_sha256(&raw);
     set_package_hash(conn, &transfer_id, &package_hash)?;
     advance(conn, &transfer_id, PHASE_ACCEPTED)?;
@@ -632,6 +984,18 @@ pub fn destroy_org_data(conn: &Connection, org_id: &str, transfer_id: &str) -> R
         return Err("云端尚未生效（completed），不能销毁旧主机数据".to_string());
     }
     let actor = authz::current_actor_id(conn)?;
+
+    // 局域网迁移包按转移 id 落盘：销毁前先记下，数据删完后一并清理
+    let lan_ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM host_transfer WHERE org_id = ?1")
+            .map_err(|e| format!("查询转移记录失败：{}", e))?;
+        let rows = stmt
+            .query_map(params![org_id], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("查询转移记录失败：{}", e))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| format!("读取转移记录失败：{}", e))?
+    };
 
     let dir = files::resolve_team_files_root(conn)?.join(org_id);
     if dir.exists() {
@@ -683,12 +1047,15 @@ pub fn destroy_org_data(conn: &Connection, org_id: &str, transfer_id: &str) -> R
     .map_err(|e| format!("关闭旧主机对外服务失败：{}", e))?;
     conn.execute("DELETE FROM host_transfer WHERE org_id = ?1", params![org_id])
         .map_err(|e| format!("清理转移记录失败：{}", e))?;
+    for id in lan_ids {
+        cleanup_lan_artifacts(conn, &id);
+    }
     Ok(())
 }
 
 // ── 加密 / KDF ─────────────────────────────────────────────────
 
-fn hex_sha256(bytes: &[u8]) -> String {
+pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
@@ -962,6 +1329,72 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&host_dir);
         let _ = std::fs::remove_dir_all(&recv_dir);
+    }
+
+    #[test]
+    fn lan_offer_migration_flow() {
+        let dir = temp_dir("lan");
+        let store = open_store(&dir);
+        seed_host(&store, "org1", "1");
+        seed_task_and_file(&store, "org1");
+        store
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT INTO member_snapshot (org_id, user_id, role, display_name)
+                     VALUES ('org1', '2', 'member', 'Member')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+
+        let offer = store
+            .with_conn(|c| create_lan_offer(c, "org1", "2"))
+            .unwrap();
+        assert!(lan_package_path(&offer.transfer_id).exists());
+
+        store
+            .with_conn(|c| {
+                let pending = pending_for(c, "org1", "2")?;
+                assert_eq!(pending.len(), 1);
+                assert_eq!(pending[0].phase, PHASE_PENDING);
+                // 其它成员看不到该请求
+                assert!(pending_for(c, "org1", "3")?.is_empty());
+
+                let info = accept_for_member(c, &offer.transfer_id, "org1", "2")?;
+                assert!(info.passphrase.len() >= 8);
+                assert_eq!(get(c, &offer.transfer_id)?.phase, PHASE_ACCEPTED);
+
+                // 分块读取（每块 1KB），拼接后大小与包一致
+                let mut offset = 0u64;
+                let total = loop {
+                    let chunk = read_package_chunk(
+                        c,
+                        &offer.transfer_id,
+                        "org1",
+                        "2",
+                        offset,
+                        1024,
+                    )?;
+                    offset += BASE64
+                        .decode(chunk.data)
+                        .map_err(|e| e.to_string())?
+                        .len() as u64;
+                    if chunk.eof {
+                        break chunk.total;
+                    }
+                };
+                assert_eq!(offset, total);
+                assert_eq!(get(c, &offer.transfer_id)?.phase, PHASE_MIGRATING);
+
+                let v = mark_member_verified(c, &offer.transfer_id, "org1", "2")?;
+                assert_eq!(v.phase, PHASE_VERIFIED);
+                Ok(())
+            })
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -18,9 +18,12 @@
 //! ```
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -30,7 +33,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 
 use super::authz::{self, Role};
 use super::org;
-use super::{tasks, EnclaveState, ENCLAVE_DEFAULT_PORT};
+use super::{tasks, transfer, EnclaveState, ENCLAVE_DEFAULT_PORT};
 use crate::utils::platform;
 
 /// 平台 `/api/v1/me` 的最小响应（只取身份 id 做一致性校验）。
@@ -170,79 +173,208 @@ pub async fn fetch_task_list(
     db: &crate::DbState,
     org_id: &str,
 ) -> Result<Value, String> {
-    let addr = resolve_host(state, org_id).ok_or_else(|| {
-        "未发现主机：请确认主机在线且与本机在同一局域网；仍失败时可在「组织与权限」填写主机地址"
-            .to_string()
-    })?;
-    let (user_id, email) = state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        let email = c
-            .query_row("SELECT email FROM local_identity LIMIT 1", [], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()
-            .map_err(|e| format!("读取本机身份失败：{}", e))?
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let data = session
+        .request("task.list", json!({ "orgId": org_id }))
+        .await;
+    session.close().await;
+    data
+}
+
+/// 拉取发给当前账号的转移请求（收到后由本地决定是否接受）。
+pub async fn fetch_pending_transfers(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+) -> Result<Value, String> {
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let data = session
+        .request("transfer.pending", json!({ "orgId": org_id }))
+        .await;
+    session.close().await;
+    data
+}
+
+/// 接受转移请求（返回一次性迁移口令与包哈希）。
+pub async fn accept_lan_transfer(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    transfer_id: &str,
+) -> Result<Value, String> {
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let data = session
+        .request(
+            "transfer.accept",
+            json!({ "orgId": org_id, "transferId": transfer_id }),
+        )
+        .await;
+    session.close().await;
+    data
+}
+
+/// 分块下载主机迁移包到 `dest`，返回文件 sha256。
+pub async fn download_lan_package(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    transfer_id: &str,
+    dest: &Path,
+) -> Result<String, String> {
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let mut file = std::fs::File::create(dest).map_err(|e| format!("创建临时迁移包失败：{}", e))?;
+    let mut offset = 0u64;
+    loop {
+        let chunk = session
+            .request(
+                "transfer.package",
+                json!({
+                    "orgId": org_id,
+                    "transferId": transfer_id,
+                    "offset": offset,
+                    "len": transfer::LAN_CHUNK_MAX,
+                }),
+            )
+            .await?;
+        let data = BASE64
+            .decode(chunk["data"].as_str().unwrap_or(""))
+            .map_err(|e| format!("解码迁移分块失败：{}", e))?;
+        use std::io::Write;
+        file.write_all(&data)
+            .map_err(|e| format!("写入迁移包失败：{}", e))?;
+        offset += data.len() as u64;
+        if chunk["eof"].as_bool() == Some(true) {
+            break;
+        }
+        if data.is_empty() {
+            return Err("主机返回了空分块，迁移中断".to_string());
+        }
+    }
+    drop(file);
+    session.close().await;
+    let bytes = std::fs::read(dest).map_err(|e| format!("读取迁移包失败：{}", e))?;
+    Ok(transfer::hex_sha256(&bytes))
+}
+
+/// 告知主机：受让人已完成校验（`migrating → verified`）。
+pub async fn confirm_lan_verified(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    transfer_id: &str,
+) -> Result<(), String> {
+    let mut session = HostSession::connect(state, db, org_id).await?;
+    let result = session
+        .request(
+            "transfer.verified",
+            json!({ "orgId": org_id, "transferId": transfer_id }),
+        )
+        .await;
+    session.close().await;
+    result.map(|_| ())
+}
+
+// ── 成员端主机会话 ─────────────────────────────────────────────
+
+type WsStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+type WsTx = futures::stream::SplitSink<WsStream, Message>;
+type WsRx = futures::stream::SplitStream<WsStream>;
+
+/// 已完成 `hello` 握手的主机连接：后续 `request` 复用同一连接（一次迁移多次分块）。
+struct HostSession {
+    tx: WsTx,
+    rx: WsRx,
+}
+
+impl HostSession {
+    async fn connect(
+        state: &EnclaveState,
+        db: &crate::DbState,
+        org_id: &str,
+    ) -> Result<Self, String> {
+        let addr = resolve_host(state, org_id).ok_or_else(|| {
+            "未发现主机：请确认主机在线且与本机在同一局域网；仍失败时可在「组织与权限」填写主机地址"
+                .to_string()
+        })?;
+        let (user_id, email) = state.store.with_conn(|c| {
+            let actor = authz::current_actor_id(c)?;
+            let email = c
+                .query_row("SELECT email FROM local_identity LIMIT 1", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .optional()
+                .map_err(|e| format!("读取本机身份失败：{}", e))?
+                .unwrap_or_default();
+            Ok((actor, email))
+        })?;
+        let token = crate::commands::org_common::require_token(db)
+            .await
             .unwrap_or_default();
-        Ok((actor, email))
-    })?;
-    let token = crate::commands::org_common::require_token(db)
-        .await
-        .unwrap_or_default();
 
-    let url = format!("ws://{}", addr);
-    let (ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url.as_str()))
-        .await
-        .map_err(|_| format!("连接主机 {} 超时", addr))?
-        .map_err(|e| format!("连接主机 {} 失败：{}", addr, e))?;
-    let (mut tx, mut rx) = ws.split();
+        let url = format!("ws://{}", addr);
+        let (ws, _) =
+            tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url.as_str()))
+                .await
+                .map_err(|_| format!("连接主机 {} 超时", addr))?
+                .map_err(|e| format!("连接主机 {} 失败：{}", addr, e))?;
+        let (tx, rx) = ws.split();
+        let mut session = Self { tx, rx };
 
-    let hello = json!({
-        "type": "hello",
-        "protocol": PROTOCOL,
-        "orgId": org_id,
-        "userId": user_id,
-        "email": email,
-        "token": token,
-    });
-    tx.send(Message::Text(hello.to_string()))
-        .await
-        .map_err(|e| format!("发送握手失败：{}", e))?;
-    let hello_reply = tokio::time::timeout(HELLO_TIMEOUT, next_json(&mut rx))
-        .await
-        .map_err(|_| "等待主机握手超时".to_string())??;
-    match hello_reply["type"].as_str() {
-        Some("hello_ok") => {}
-        Some("hello_err") => {
-            return Err(hello_reply["message"]
+        session
+            .tx
+            .send(Message::Text(
+                json!({
+                    "type": "hello",
+                    "protocol": PROTOCOL,
+                    "orgId": org_id,
+                    "userId": user_id,
+                    "email": email,
+                    "token": token,
+                })
+                .to_string(),
+            ))
+            .await
+            .map_err(|e| format!("发送握手失败：{}", e))?;
+        let hello_reply = tokio::time::timeout(HELLO_TIMEOUT, next_json(&mut session.rx))
+            .await
+            .map_err(|_| "等待主机握手超时".to_string())??;
+        match hello_reply["type"].as_str() {
+            Some("hello_ok") => Ok(session),
+            Some("hello_err") => Err(hello_reply["message"]
                 .as_str()
                 .unwrap_or("主机拒绝了连接")
-                .to_string())
+                .to_string()),
+            _ => Err("主机返回了无法识别的握手响应".to_string()),
         }
-        _ => return Err("主机返回了无法识别的握手响应".to_string()),
     }
 
-    let id = crate::utils::new_id();
-    let req = json!({
-        "type": "req",
-        "id": id,
-        "method": "task.list",
-        "params": { "orgId": org_id },
-    });
-    tx.send(Message::Text(req.to_string()))
-        .await
-        .map_err(|e| format!("发送请求失败：{}", e))?;
-    let reply = tokio::time::timeout(REQUEST_TIMEOUT, next_json(&mut rx))
-        .await
-        .map_err(|_| "等待主机响应超时".to_string())??;
-
-    let _ = tx.send(Message::Close(None)).await;
-    if reply["ok"].as_bool() != Some(true) {
-        return Err(reply["error"]
-            .as_str()
-            .unwrap_or("主机返回了错误")
-            .to_string());
+    async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = crate::utils::new_id();
+        let req = json!({
+            "type": "req",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        self.tx
+            .send(Message::Text(req.to_string()))
+            .await
+            .map_err(|e| format!("发送请求失败：{}", e))?;
+        let reply = tokio::time::timeout(REQUEST_TIMEOUT, next_json(&mut self.rx))
+            .await
+            .map_err(|_| "等待主机响应超时".to_string())??;
+        if reply["ok"].as_bool() != Some(true) {
+            return Err(reply["error"]
+                .as_str()
+                .unwrap_or("主机返回了错误")
+                .to_string());
+        }
+        Ok(reply["data"].clone())
     }
-    Ok(reply["data"].clone())
+
+    async fn close(mut self) {
+        let _ = self.tx.send(Message::Close(None)).await;
+    }
 }
 
 // ── 连接处理 ────────────────────────────────────────────────────
@@ -350,6 +482,42 @@ async fn handle_conn(stream: TcpStream, peer: SocketAddr, state: std::sync::Arc<
                     }
                 }
             }
+            "transfer.pending" => match org_param(&req, &hello) {
+                Ok(org) => match handle_transfer_pending(&state, org, &hello.user_id) {
+                    Ok(v) => res_ok(&req.id, v),
+                    Err(e) => res_err(&req.id, &e),
+                },
+                Err(e) => res_err(&req.id, &e),
+            },
+            "transfer.accept" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
+                (Ok(org), Some(id)) => {
+                    match handle_transfer_accept(&state, org, id, &hello.user_id) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                _ => res_err(&req.id, "参数不完整"),
+            },
+            "transfer.package" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
+                (Ok(org), Some(id)) => {
+                    let offset = req.params["offset"].as_u64().unwrap_or(0);
+                    let len = req.params["len"].as_u64().unwrap_or(transfer::LAN_CHUNK_MAX);
+                    match handle_transfer_package(&state, org, id, &hello.user_id, offset, len) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                _ => res_err(&req.id, "参数不完整"),
+            },
+            "transfer.verified" => match (org_param(&req, &hello), req.params["transferId"].as_str()) {
+                (Ok(org), Some(id)) => {
+                    match handle_transfer_verified(&state, org, id, &hello.user_id) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                _ => res_err(&req.id, "参数不完整"),
+            },
             other => res_err(&req.id, &format!("未知方法：{}", other)),
         };
         if send_json(&mut tx, &reply).await.is_err() {
@@ -392,6 +560,65 @@ fn handle_task_list(state: &EnclaveState, org_id: &str, user_id: &str) -> Result
             .ok_or_else(|| "当前账号不是该组织成员".to_string())?;
         let list = tasks::list_tasks_with_role(c, org_id, user_id, role)?;
         serde_json::to_value(&list).map_err(|e| format!("序列化任务失败：{}", e))
+    })
+}
+
+fn org_param<'a>(req: &'a RequestMsg, hello: &'a HelloMsg) -> Result<&'a str, String> {
+    let org = req.params["orgId"]
+        .as_str()
+        .unwrap_or(hello.org_id.as_str());
+    if org != hello.org_id {
+        return Err("不能跨组织访问".to_string());
+    }
+    Ok(org)
+}
+
+fn handle_transfer_pending(
+    state: &EnclaveState,
+    org_id: &str,
+    user_id: &str,
+) -> Result<Value, String> {
+    state.store.with_conn(|c| {
+        let list = transfer::pending_for(c, org_id, user_id)?;
+        serde_json::to_value(&list).map_err(|e| format!("序列化转移请求失败：{}", e))
+    })
+}
+
+fn handle_transfer_accept(
+    state: &EnclaveState,
+    org_id: &str,
+    transfer_id: &str,
+    user_id: &str,
+) -> Result<Value, String> {
+    state.store.with_conn(|c| {
+        let info = transfer::accept_for_member(c, transfer_id, org_id, user_id)?;
+        serde_json::to_value(&info).map_err(|e| format!("序列化接受结果失败：{}", e))
+    })
+}
+
+fn handle_transfer_package(
+    state: &EnclaveState,
+    org_id: &str,
+    transfer_id: &str,
+    user_id: &str,
+    offset: u64,
+    len: u64,
+) -> Result<Value, String> {
+    state.store.with_conn(|c| {
+        let chunk = transfer::read_package_chunk(c, transfer_id, org_id, user_id, offset, len)?;
+        serde_json::to_value(&chunk).map_err(|e| format!("序列化迁移分块失败：{}", e))
+    })
+}
+
+fn handle_transfer_verified(
+    state: &EnclaveState,
+    org_id: &str,
+    transfer_id: &str,
+    user_id: &str,
+) -> Result<Value, String> {
+    state.store.with_conn(|c| {
+        let view = transfer::mark_member_verified(c, transfer_id, org_id, user_id)?;
+        serde_json::to_value(&view).map_err(|e| format!("序列化转移状态失败：{}", e))
     })
 }
 
