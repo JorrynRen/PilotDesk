@@ -264,6 +264,21 @@ pub fn host_org_ids(conn: &Connection) -> Result<Vec<String>, String> {
         .map_err(|e| format!("读取主机组织失败：{}", e))
 }
 
+/// 云端 ownership 已转让后，把本机视角的角色降为 admin（与平台同口径）。
+///
+/// 主机服务据此在下一轮复核时停止对外监听；真正的角色仍以平台快照为准，
+/// 下一轮快照同步会再次覆盖该值。
+pub fn demote_after_transfer(conn: &Connection, org_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE org_snapshot SET my_role = 'admin'
+         WHERE org_id = ?1
+           AND viewer_id = (SELECT user_id FROM local_identity LIMIT 1)",
+        params![org_id],
+    )
+    .map_err(|e| format!("更新组织角色失败：{}", e))?;
+    Ok(())
+}
+
 /// 取某组织详情（组织信息 + 成员列表）；不存在返回 `None`。
 /// 成员按角色排序：owner → admin → member（其余角色排最后）。
 pub fn org_detail(

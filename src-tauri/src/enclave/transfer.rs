@@ -1308,6 +1308,55 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_incoming_requires_owner_snapshot() {
+        let host_dir = temp_dir("rec-host");
+        let recv_dir = temp_dir("rec-recv");
+        let host = open_store(&host_dir);
+        let recv = open_store(&recv_dir);
+        seed_host(&host, "org2", "1");
+        seed_member(&recv, "org2", "2");
+        seed_task_and_file(&host, "org2");
+
+        let out_path = host_dir.join("pkg.pdesk");
+        let exp = host
+            .with_conn(|c| export_package(c, "org2", Some(out_path.to_str().unwrap()), "pass-123456"))
+            .unwrap();
+        let imp = recv
+            .with_conn(|c| import_package(c, &exp.path, "pass-123456"))
+            .unwrap();
+
+        recv.with_conn(|c| {
+            // 快照里 owner 仍是别人：保持 verified，不提前生效
+            reconcile_incoming(c, "org2", "2", "9")?;
+            assert_eq!(get(c, &imp.transfer_id)?.phase, PHASE_VERIFIED);
+            // 快照确认本机成为 owner：转入记录自动 completed
+            reconcile_incoming(c, "org2", "2", "2")?;
+            assert_eq!(get(c, &imp.transfer_id)?.phase, PHASE_COMPLETED);
+            Ok(())
+        })
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&host_dir);
+        let _ = std::fs::remove_dir_all(&recv_dir);
+    }
+
+    #[test]
+    fn demote_after_transfer_stops_serving() {
+        let dir = temp_dir("demote");
+        let store = open_store(&dir);
+        seed_host(&store, "org3", "1");
+        store
+            .with_conn(|c| {
+                assert_eq!(org::host_org_ids(c)?, vec!["org3".to_string()]);
+                org::demote_after_transfer(c, "org3")?;
+                assert!(org::host_org_ids(c)?.is_empty());
+                Ok(())
+            })
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn export_import_roundtrip_and_tamper() {
         let host_dir = temp_dir("host");
         let recv_dir = temp_dir("recv");

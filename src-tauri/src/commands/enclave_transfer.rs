@@ -104,9 +104,16 @@ pub async fn enclave_transfer_advance(
             }
         }
     }
-    state
+    let view = state
         .store
-        .with_conn(|c| transfer::advance(c, &transfer_id, &to_phase))
+        .with_conn(|c| transfer::advance(c, &transfer_id, &to_phase))?;
+    if to_phase == transfer::PHASE_COMPLETED && cur.direction == transfer::DIRECTION_OUT {
+        // 旧主机：云端已转让，立即降级本地角色，主机服务下一轮复核时关闭监听
+        state
+            .store
+            .with_conn(|c| crate::enclave::org::demote_after_transfer(c, &cur.org_id))?;
+    }
+    Ok(view)
 }
 
 /// 销毁旧主机数据：仅 `completed` 的转出记录；需输入组织 ID 二次确认。

@@ -131,7 +131,17 @@ pub async fn run_host_loop(state: std::sync::Arc<EnclaveState>) {
     }
 
     let mut listener: Option<(TcpListener, tokio_rustls::TlsAcceptor)> = None;
+    // 定期复核「本机是否仍是主机」：云端所有权转让后旧主机必须停服
+    let mut last_role_check = std::time::Instant::now();
     loop {
+        if last_role_check.elapsed() >= Duration::from_secs(30) {
+            last_role_check = std::time::Instant::now();
+            if listener.is_some() && host_org_ids(&state).is_empty() {
+                listener = None;
+                state.host.mark_stopped(None);
+                log::info!("[enclave] 本机已不是任何组织的主机，停止对外服务");
+            }
+        }
         if listener.is_none() {
             if !host_org_ids(&state).is_empty() {
                 let port = configured_host_port(&state);
@@ -973,6 +983,11 @@ async fn handle_conn(
             )),
         )
         .await;
+        return;
+    }
+    // 主机身份复核：云端所有权已转让的旧主机必须拒绝继续提供服务
+    if !host_org_ids(&state).iter().any(|o| o == &hello.org_id) {
+        let _ = send_json(&mut tx, &hello_err("本机已不是该组织的主机")).await;
         return;
     }
     if org_disabled(&state, &hello.org_id) && !peer.ip().is_loopback() {
