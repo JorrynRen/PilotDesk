@@ -304,6 +304,8 @@ pub struct ToolEnv {
     pub permission_rules: Option<Arc<crate::api_agent::agent_loop::PermissionRules>>,
     /// 飞地：团队知识库工具依赖（仅会话模式且出境闸门放行时注入）。
     pub enclave_store: Option<Arc<crate::enclave::db::EnclaveStore>>,
+    /// 飞地运行态：成员端工具需要经局域网 WS 转发到主机（主机本机为空转本地）。
+    pub enclave_state: Option<Arc<crate::enclave::EnclaveState>>,
     /// 当前团队组织 id（一期取主机快照中的首个组织）。
     pub enclave_org_id: Option<String>,
     /// 出境闸门判定结果（装配期算一次；工具执行时仍会复核策略）。
@@ -645,12 +647,14 @@ pub fn default_tools(env: &ToolEnv) -> Vec<Arc<dyn ToolHandler>> {
                 store.clone(),
                 org_id.clone(),
                 env.enclave_trust_domain,
+                env.enclave_state.clone(),
             )));
             tools.push(Arc::new(
                 crate::enclave::tools::ReadOrgKnowledgeEntryTool::new(
                     store,
                     org_id,
                     env.enclave_trust_domain,
+                    env.enclave_state.clone(),
                 ),
             ));
         }

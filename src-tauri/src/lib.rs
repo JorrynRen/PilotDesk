@@ -1731,9 +1731,10 @@ async fn run_api_agent_body(
     let effective_cwd = workspace_override.unwrap_or_else(|| session.cwd.clone());
     // 飞地：数据出境闸门（装配期算一次；工具执行时还会复核策略）
     // 一期取主机快照中的首个组织作为「当前团队」。
-    let (enclave_store, enclave_org_id, enclave_allowed, enclave_trust) = {
+    let (enclave_state, enclave_store, enclave_org_id, enclave_allowed, enclave_trust) = {
         let state = app
             .state::<std::sync::Arc<crate::enclave::EnclaveState>>();
+        let state = (*state).clone();
         let store = state.store.clone();
         let trust =
             crate::commands::api_provider::provider_trust_domain(&conn, &session_pid_for_trust);
@@ -1760,9 +1761,8 @@ async fn run_api_agent_body(
                 Ok::<_, String>((org, allowed))
             })
             .unwrap_or((None, false));
-        (store, org_id, allowed, trust)
+        (state, store, org_id, allowed, trust)
     };
-
     let env = crate::tools::ToolEnv {
         cwd: effective_cwd.clone(),
         api_format: api_format.clone(),
@@ -1792,6 +1792,7 @@ async fn run_api_agent_body(
         file_history,
         permission_rules: Some(std::sync::Arc::new(permission_rules.clone())),
         enclave_store: Some(enclave_store),
+        enclave_state: Some(enclave_state),
         enclave_org_id,
         enclave_team_knowledge_allowed: enclave_allowed,
         enclave_trust_domain: enclave_trust,

@@ -101,6 +101,7 @@ pub fn build_tool_catalog(
         permission_rules: None,
         // 工具预览/查询场景不注入团队知识库工具（仅真实会话按闸门注入）
         enclave_store: None,
+        enclave_state: None,
         enclave_org_id: None,
         enclave_team_knowledge_allowed: false,
         enclave_trust_domain: crate::enclave::gate::TrustDomain::Cloud,

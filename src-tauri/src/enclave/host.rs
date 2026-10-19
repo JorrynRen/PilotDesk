@@ -576,6 +576,24 @@ pub async fn fetch_file_to_cache(
     Ok(target.to_string_lossy().to_string())
 }
 
+/// 主机知识库工具（成员端）转发：不带平台 token，主机退回成员快照校验。
+pub async fn call_host_without_token(
+    state: &EnclaveState,
+    org_id: &str,
+    command: &str,
+    payload: Value,
+) -> Result<Value, String> {
+    let mut session = HostSession::connect_with_db(state, None, org_id).await?;
+    let data = session
+        .request(
+            "enclave.call",
+            json!({ "orgId": org_id, "command": command, "payload": payload }),
+        )
+        .await;
+    session.close().await;
+    data
+}
+
 /// 拉取发给当前账号的转移请求（收到后由本地决定是否接受）。
 pub async fn fetch_pending_transfers(
     state: &EnclaveState,
@@ -687,6 +705,14 @@ impl HostSession {
         db: &crate::DbState,
         org_id: &str,
     ) -> Result<Self, String> {
+        Self::connect_with_db(state, Some(db), org_id).await
+    }
+
+    async fn connect_with_db(
+        state: &EnclaveState,
+        db: Option<&crate::DbState>,
+        org_id: &str,
+    ) -> Result<Self, String> {
         let addr = resolve_host(state, org_id).ok_or_else(|| {
             "未发现主机：请确认主机在线且与本机在同一局域网；仍失败时可在「组织与权限」填写主机地址"
                 .to_string()
@@ -702,9 +728,12 @@ impl HostSession {
                 .unwrap_or_default();
             Ok((actor, email))
         })?;
-        let token = crate::commands::org_common::require_token(db)
-            .await
-            .unwrap_or_default();
+        let token = match db {
+            Some(db) => crate::commands::org_common::require_token(db)
+                .await
+                .unwrap_or_default(),
+            None => String::new(),
+        };
 
         let url = format!("wss://{}", addr);
         // 首次连接 TOFU 记录指纹；之后必须一致（防冒充 / 防主机悄悄换证书）
@@ -1975,6 +2004,31 @@ mod tests {
         .unwrap();
         assert_eq!(next_json(&mut rx).await.unwrap()["type"], "hello_ok");
 
+        // 预置一条团队知识（供成员端 Agent 工具经主机检索）
+        state
+            .store
+            .with_conn(|c| {
+                let now = chrono::Utc::now().timestamp();
+                c.execute(
+                    "INSERT INTO knowledge_bases
+                        (id, name, scope, owner_type, owner_id, is_implicit, created_at, updated_at)
+                     VALUES ('kb-org-org1', '团队库', 'org', 'org', 'org1', 1, ?1, ?1)",
+                    params![now],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO knowledge_base_memories
+                        (knowledge_base_id, memory_id, title, content, tags, origin,
+                         source_ref, added_by, added_at, updated_at)
+                     VALUES ('kb-org-org1', 'task:t1', '任务产出', '团队知识内容', 'tag',
+                             'task_output', 't1', '1', ?1, ?1)",
+                    params![now],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+
         // 成员建任务：creatorId 必须是成员 2，而不是主机身份 1
         tx.send(Message::Text(
             json!({
@@ -2191,6 +2245,38 @@ mod tests {
         .unwrap();
         let rejected = next_json(&mut rx).await.unwrap();
         assert_eq!(rejected["ok"], false, "raw path must be rejected: {}", rejected);
+
+        // 治理只读：成员端 Agent 工具向主机复核策略
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"k0","method":"enclave.call",
+                "params":{"orgId":"org1","command":"policy.get","payload":{}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let policy = next_json(&mut rx).await.unwrap();
+        assert_eq!(policy["ok"], true);
+        assert_eq!(policy["data"]["explicit"], false);
+
+        // 知识库检索（成员端 Agent 工具同款 RPC）
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"k1","method":"enclave.call",
+                "params":{
+                    "orgId":"org1","command":"kb.search",
+                    "payload":{"query":"团队知识","limit":10}
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let found = next_json(&mut rx).await.unwrap();
+        assert_eq!(found["ok"], true, "kb.search failed: {}", found);
+        assert_eq!(found["data"].as_array().unwrap().len(), 1);
+        assert_eq!(found["data"][0]["memoryId"], "task:t1");
 
         drop(tx);
         drop(rx);
