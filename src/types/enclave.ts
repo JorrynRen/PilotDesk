@@ -137,6 +137,48 @@ export interface HostStatusView {
   discoveredSeenAt: number | null;
 }
 
+// ── M8：主机转移 ────────────────────────────────────────────────
+
+/** 转移状态：verified 必须早于 completed（云端生效） */
+export type TransferPhase =
+  | 'pending'
+  | 'accepted'
+  | 'migrating'
+  | 'verified'
+  | 'completed'
+  | 'rejected'
+  | 'expired'
+  | 'failed';
+
+/** 本机侧转移记录（`enclave_transfer_list`） */
+export interface TransferView {
+  id: string;
+  orgId: string;
+  /** out = 旧主机转出；in = 新主机接管 */
+  direction: 'out' | 'in';
+  phase: TransferPhase;
+  phaseLabel: string;
+  peerDeviceId: string;
+  packageHash: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TransferExportOutcome {
+  transferId: string;
+  path: string;
+  packageHash: string;
+  size: number;
+  fileCount: number;
+}
+
+export interface TransferImportOutcome {
+  transferId: string;
+  orgId: string;
+  packageHash: string;
+  fileCount: number;
+}
+
 // ── M3：任务 ────────────────────────────────────────────────────
 
 /** 任务状态 */

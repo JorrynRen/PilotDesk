@@ -21,6 +21,7 @@ pub mod reports;
 pub mod snapshot;
 pub mod tasks;
 pub mod tools;
+pub mod transfer;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};

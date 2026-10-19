@@ -17,6 +17,9 @@ import type {
   OrgSnapshotView,
   PolicyView,
   SnapshotOutcome,
+  TransferExportOutcome,
+  TransferImportOutcome,
+  TransferView,
 } from '../types/enclave';
 
 interface EnclaveOrgState {
@@ -31,6 +34,8 @@ interface EnclaveOrgState {
   emergency: EmergencyView | null;
   /** 主机服务 / 发现状态（成员端含手动地址） */
   host: HostStatusView | null;
+  /** 本机侧主机转移记录 */
+  transfers: TransferView[];
   /** 策略 / 应急变更审计流水 */
   audit: AuditView[];
   loading: boolean;
@@ -59,6 +64,16 @@ interface EnclaveOrgState {
   loadHost: (id: string) => Promise<void>;
   /** 成员端设置手动主机地址（留空 = 清除，回到自动发现）；成功返回 true */
   setHostAddr: (id: string, addr: string) => Promise<boolean>;
+  /** 重拉转移记录 */
+  loadTransfers: (id: string) => Promise<void>;
+  /** 导出线下加密迁移包（仅 owner） */
+  exportTransfer: (id: string, passphrase: string, outPath?: string) => Promise<TransferExportOutcome | null>;
+  /** 导入加密迁移包（接收方为组织成员） */
+  importTransfer: (path: string, passphrase: string) => Promise<TransferImportOutcome | null>;
+  /** 推进转移状态 */
+  advanceTransfer: (transferId: string, phase: string) => Promise<boolean>;
+  /** 销毁旧主机数据（仅 completed 的转出记录） */
+  destroyTransfer: (transferId: string, orgId: string) => Promise<boolean>;
 }
 
 export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
@@ -69,6 +84,7 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   policy: null,
   emergency: null,
   host: null,
+  transfers: [],
   audit: [],
   loading: false,
   error: null,
@@ -98,6 +114,7 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
       policy: null,
       emergency: null,
       host: null,
+      transfers: [],
       audit: [],
       loading: false,
       error: null,
@@ -165,14 +182,15 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
 
   /** 拉组织能力 / 策略 / 应急 / 审计 / 主机状态。单项失败不拖垮其它项。 */
   loadGovernance: async (id) => {
-    const [caps, policy, emergency, audit, host] = await Promise.all([
+    const [caps, policy, emergency, audit, host, transfers] = await Promise.all([
       invoke<EnclaveOrgCaps>('enclave_org_caps', { orgId: id }).catch(() => null),
       invoke<PolicyView>('enclave_policy_get', { orgId: id }).catch(() => null),
       invoke<EmergencyView>('enclave_emergency_get', { orgId: id }).catch(() => null),
       invoke<AuditView[]>('enclave_audit_list', { orgId: id, limit: 50 }).catch(() => []),
       invoke<HostStatusView>('enclave_host_status', { orgId: id }).catch(() => null),
+      invoke<TransferView[]>('enclave_transfer_list', { orgId: id }).catch(() => []),
     ]);
-    set({ caps, policy, emergency, audit, host });
+    set({ caps, policy, emergency, audit, host, transfers });
   },
 
   loadHost: async (id) => {
@@ -188,6 +206,71 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
     try {
       await invoke('enclave_host_addr_set', { orgId: id, addr });
       await get().loadHost(id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  loadTransfers: async (id) => {
+    try {
+      const transfers = await invoke<TransferView[]>('enclave_transfer_list', { orgId: id });
+      set({ transfers });
+    } catch {
+      // 记录读取失败不阻塞治理面板
+    }
+  },
+
+  exportTransfer: async (id, passphrase, outPath) => {
+    try {
+      const outcome = await invoke<TransferExportOutcome>('enclave_transfer_export', {
+        orgId: id,
+        passphrase,
+        outPath: outPath?.trim() ? outPath.trim() : null,
+      });
+      await get().loadTransfers(id);
+      return outcome;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  importTransfer: async (path, passphrase) => {
+    try {
+      const outcome = await invoke<TransferImportOutcome>('enclave_transfer_import', {
+        path: path.trim(),
+        passphrase,
+      });
+      // 包内组织可能不是当前选中组织：按返回值刷新对应列表，并补一次组织列表
+      await get().loadTransfers(outcome.orgId);
+      return outcome;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  advanceTransfer: async (transferId, phase) => {
+    try {
+      await invoke<TransferView>('enclave_transfer_advance', { transferId, toPhase: phase });
+      await get().loadTransfers(get().activeOrgId);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  destroyTransfer: async (transferId, orgId) => {
+    try {
+      await invoke('enclave_transfer_destroy', {
+        transferId,
+        orgId,
+        confirmation: orgId,
+      });
+      await get().loadTransfers(orgId);
       return true;
     } catch (e) {
       set({ error: errorMessage(e) });

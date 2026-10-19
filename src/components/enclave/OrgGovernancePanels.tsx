@@ -6,16 +6,24 @@
  */
 
 import { useEffect, useState } from 'react';
-import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw } from 'lucide-react';
+import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
+import type { TransferExportOutcome, TransferPhase, TransferView } from '../../types/enclave';
 
 const ACTION_LABEL: Record<string, string> = {
   'policy.allow_cloud_model': '数据出境策略',
   'host.emergency': '主机应急开关',
   'host.transfer': '主机转移',
   'files.root': '本机团队文件根目录',
+  'transfer.export': '主机转移 · 导出迁移包',
+  'transfer.import': '主机转移 · 导入迁移包',
+  'transfer.accept': '主机转移 · 接收方接受',
+  'transfer.verify': '主机转移 · 校验通过',
+  'transfer.complete': '主机转移 · 云端生效',
+  'transfer.fail': '主机转移 · 失败',
+  'transfer.data_destroyed': '主机转移 · 旧机数据销毁',
 };
 
 function formatTime(unixSec: number): string {
@@ -43,6 +51,10 @@ function formatDetail(action: string, detail: string): string {
   const obj = parsed as { from?: unknown; to?: unknown; redacted?: unknown } | null;
   if (obj && obj.redacted === true) {
     return '本机路径仅所有者可见';
+  }
+  // 转移状态流转：from / to 是 phase 字符串，不是路径
+  if (action.startsWith('transfer.') && obj && typeof obj.from === 'string' && typeof obj.to === 'string') {
+    return `状态：${obj.from} → ${obj.to}`;
   }
   if (obj && typeof obj.from === 'string' && typeof obj.to === 'string') {
     // 历史留痕可能带 Windows 扩展长度前缀（`\\?\` / `\\?\UNC\`），展示时统一剥掉
@@ -262,6 +274,263 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
   );
 }
 
+const PHASE_COLOR: Record<TransferPhase, string> = {
+  pending: 'var(--text-secondary)',
+  accepted: 'var(--text-secondary)',
+  migrating: 'var(--accent)',
+  verified: 'var(--accent)',
+  completed: 'var(--status-success, var(--accent))',
+  rejected: 'var(--status-danger)',
+  expired: 'var(--text-tertiary)',
+  failed: 'var(--status-danger)',
+};
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * 主机转移（M8）：线下加密迁移包导出/导入 + 状态推进 + 旧机销毁。
+ *
+ * 口径（设计 §8.7）：数据面只走内网/线下介质，不经云；`verified` 必须早于
+ * `completed`（云端 ownership 生效），之后旧主机才允许销毁数据。
+ */
+function TransferCard({ orgId }: { orgId: string }) {
+  const transfers = useEnclaveOrgStore((s) => s.transfers);
+  const caps = useEnclaveOrgStore((s) => s.caps);
+  const [pass, setPass] = useState('');
+  const [outPath, setOutPath] = useState('');
+  const [exported, setExported] = useState<TransferExportOutcome | null>(null);
+  const [importPath, setImportPath] = useState('');
+  const [importPass, setImportPass] = useState('');
+  const [busy, setBusy] = useState<'export' | 'import' | null>(null);
+
+  const canTransfer = !!caps?.actions.includes('host.transfer');
+
+  const doExport = async () => {
+    if (pass.trim().length < 8) {
+      showToast('迁移包口令至少 8 位', 'error');
+      return;
+    }
+    setBusy('export');
+    const outcome = await useEnclaveOrgStore.getState().exportTransfer(orgId, pass.trim(), outPath);
+    setBusy(null);
+    if (outcome) {
+      setExported(outcome);
+      showToast(`迁移包已导出（${formatBytes(outcome.size)}，${outcome.fileCount} 个文件）`, 'success');
+    }
+  };
+
+  const doImport = async () => {
+    if (!importPath.trim()) {
+      showToast('请填写迁移包路径', 'error');
+      return;
+    }
+    if (importPass.trim().length < 8) {
+      showToast('迁移包口令至少 8 位', 'error');
+      return;
+    }
+    setBusy('import');
+    const outcome = await useEnclaveOrgStore.getState().importTransfer(importPath.trim(), importPass.trim());
+    setBusy(null);
+    if (outcome) {
+      setImportPath('');
+      setImportPass('');
+      showToast(
+        `迁移包已导入并校验（${outcome.fileCount} 个文件）。云端完成转让后即可接管主机。`,
+        'success',
+      );
+    }
+  };
+
+  const markVerified = async (t: TransferView) => {
+    const ok = await confirmDialog({
+      title: '标记迁移已校验',
+      message: '请先在新主机确认迁移包已导入且校验通过。标记后进入「已校验」，等待云端完成 ownership 转让。',
+      confirmText: '已在新机校验',
+    });
+    if (!ok) return;
+    if (await useEnclaveOrgStore.getState().advanceTransfer(t.id, 'verified')) {
+      showToast('已标记为已校验', 'success');
+    }
+  };
+
+  const markCompleted = async (t: TransferView) => {
+    const ok = await confirmDialog({
+      title: '确认云端已生效',
+      message:
+        '只有在平台已完成组织转让（ownership 已变更）后才能标记。\n'
+        + '标记后旧主机才允许销毁数据，且状态不可回退。',
+      confirmText: '云端已生效',
+    });
+    if (!ok) return;
+    if (await useEnclaveOrgStore.getState().advanceTransfer(t.id, 'completed')) {
+      showToast('已标记云端生效', 'success');
+    }
+  };
+
+  const destroyOld = async (t: TransferView) => {
+    const ok = await confirmDialog({
+      title: '销毁旧主机团队数据',
+      message:
+        `将删除本机组织「${orgId}」的全部团队数据（数据库记录与文件），不可恢复。\n`
+        + '请确认新主机已接管且云端已生效。',
+      confirmText: '确认销毁',
+    });
+    if (!ok) return;
+    if (await useEnclaveOrgStore.getState().destroyTransfer(t.id, orgId)) {
+      showToast('旧主机数据已销毁', 'success');
+    }
+  };
+
+  const actionButton = (label: string, onClick: () => void, danger = false) => (
+    <button
+      onClick={onClick}
+      className="text-[10px] px-1.5 py-0.5 rounded"
+      style={{
+        backgroundColor: 'var(--bg-tertiary)',
+        color: danger ? 'var(--status-danger)' : 'var(--text-secondary)',
+        border: '1px solid var(--border)',
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  const inputStyle = {
+    backgroundColor: 'var(--bg-side)',
+    border: '1px solid var(--border)',
+    color: 'var(--text-primary)',
+  } as const;
+
+  return (
+    <div
+      className="rounded-lg px-3 py-2"
+      style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+    >
+      <div className="flex items-center gap-2">
+        <ArrowLeftRight size={13} style={{ color: 'var(--text-tertiary)' }} />
+        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+          主机转移
+        </span>
+        <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          数据只走内网或线下介质，不经云
+        </span>
+      </div>
+      <div className="mt-1 text-[10px] leading-4" style={{ color: 'var(--text-tertiary)' }}>
+        顺序：导出/导入并校验（verified）→ 云端完成所有权转让（completed）→ 旧主机销毁数据。
+        未校验不得生效；云端未生效不得销毁。
+      </div>
+
+      {/* 转出：仅 owner */}
+      {canTransfer && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            我转出（旧主机）
+          </div>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="password"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              placeholder="迁移包口令（至少 8 位，线下另行告知接收方）"
+              className="flex-1 h-7 px-2 rounded text-[11px] outline-none"
+              style={inputStyle}
+            />
+            <input
+              value={outPath}
+              onChange={(e) => setOutPath(e.target.value)}
+              placeholder="导出路径（留空用默认目录）"
+              className="w-[200px] h-7 px-2 rounded text-[11px] outline-none"
+              style={inputStyle}
+            />
+            <button
+              onClick={() => void doExport()}
+              disabled={busy === 'export'}
+              className="h-7 px-2 rounded text-[11px] flex items-center gap-1"
+              style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: busy === 'export' ? 0.6 : 1 }}
+            >
+              {busy === 'export' && <Loader2 size={10} className="animate-spin" />}
+              导出迁移包
+            </button>
+          </div>
+          {exported && (
+            <div className="text-[10px] break-all" style={{ color: 'var(--text-tertiary)' }}>
+              已导出：{exported.path}（sha256 {exported.packageHash.slice(0, 16)}…）
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 接管：组织成员均可导入 */}
+      <div className="mt-2 flex flex-col gap-1.5">
+        <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+          我接管（新主机）
+        </div>
+        <div className="flex items-center gap-1.5">
+          <input
+            value={importPath}
+            onChange={(e) => setImportPath(e.target.value)}
+            placeholder="迁移包完整路径（.pdesk）"
+            className="flex-1 h-7 px-2 rounded text-[11px] outline-none"
+            style={inputStyle}
+          />
+          <input
+            type="password"
+            value={importPass}
+            onChange={(e) => setImportPass(e.target.value)}
+            placeholder="迁移包口令"
+            className="w-[160px] h-7 px-2 rounded text-[11px] outline-none"
+            style={inputStyle}
+          />
+          <button
+            onClick={() => void doImport()}
+            disabled={busy === 'import'}
+            className="h-7 px-2 rounded text-[11px] flex items-center gap-1"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)', opacity: busy === 'import' ? 0.6 : 1 }}
+          >
+            {busy === 'import' && <Loader2 size={10} className="animate-spin" />}
+            导入并校验
+          </button>
+        </div>
+        <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+          导入成功后记录为「已校验」；待云端完成所有权转让后才会成为主机。
+        </div>
+      </div>
+
+      {/* 记录 */}
+      {transfers.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1">
+          {transfers.slice(0, 5).map((t) => (
+            <div key={t.id} className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              <span
+                className="px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: PHASE_COLOR[t.phase] }}
+              >
+                {t.direction === 'out' ? '转出' : '接管'} · {t.phaseLabel}
+              </span>
+              <span>{formatTime(t.createdAt)}</span>
+              {t.packageHash && <span className="break-all">sha256 {t.packageHash.slice(0, 12)}…</span>}
+              <div className="flex-1" />
+              {canTransfer && t.direction === 'out' && t.phase === 'migrating'
+                && actionButton('标记已校验', () => void markVerified(t))}
+              {canTransfer && t.direction === 'out' && t.phase === 'verified'
+                && actionButton('标记云端已生效', () => void markCompleted(t))}
+              {canTransfer && t.direction === 'out' && t.phase === 'completed'
+                && actionButton('销毁旧机数据', () => void destroyOld(t), true)}
+              {t.direction === 'in' && t.phase === 'verified' && (
+                <span>等待云端完成所有权转让</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * 治理区块：出境闸门 + 应急开关 + 审计流水。需先选中组织。
  */
@@ -402,6 +671,9 @@ export function OrgGovernanceSection() {
 
       {/* 主机与连接（M7）：主机监听状态 / 成员发现与手动地址 */}
       <HostConnectionCard orgId={activeOrgId} />
+
+      {/* 主机转移（M8）：迁移包导出导入 + 状态推进 + 旧机销毁 */}
+      <TransferCard orgId={activeOrgId} />
 
       {/* 审计流水（仅 owner / admin；member 不渲染） */}
       {canAudit && (
