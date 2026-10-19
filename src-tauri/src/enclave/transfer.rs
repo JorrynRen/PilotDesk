@@ -1394,6 +1394,7 @@ mod tests {
             })
             .unwrap();
 
+        let _ = std::fs::remove_file(lan_package_path(&offer.transfer_id));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1003,4 +1003,136 @@ mod tests {
         drop(state);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// 局域网转移协议：pending → accept → package 分块 → verified。
+    #[tokio::test]
+    async fn lan_transfer_over_ws() {
+        let dir = std::env::temp_dir().join(format!(
+            "pilotdesk-enclave-lan-test-{}",
+            crate::utils::new_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = std::sync::Arc::new(
+            super::super::db::EnclaveStore::open(&dir.join("enclave.db")).unwrap(),
+        );
+        store
+            .with_conn(|c| {
+                // 测试隔离：团队文件根指向临时目录
+                c.execute(
+                    "INSERT OR REPLACE INTO enclave_settings (key, value, updated_at)
+                     VALUES ('team_files_root', ?1, 0)",
+                    params![dir.to_string_lossy().to_string()],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO local_identity (user_id, email) VALUES ('1', 'host@example.com')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id)
+                     VALUES ('org1', 'Org', '1', 'owner', '1')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO member_snapshot (org_id, user_id, role, display_name)
+                     VALUES ('org1', '2', 'member', 'Member')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        let state = std::sync::Arc::new(EnclaveState::new(store));
+        let offer = state
+            .store
+            .with_conn(|c| transfer::create_lan_offer(c, "org1", "2"))
+            .unwrap();
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn({
+            let st = state.clone();
+            async move {
+                if let Ok((stream, peer)) = listener.accept().await {
+                    handle_conn(stream, peer, st).await;
+                }
+            }
+        });
+
+        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}", port))
+            .await
+            .unwrap();
+        let (mut tx, mut rx) = ws.split();
+        tx.send(Message::Text(
+            json!({
+                "type": "hello", "protocol": PROTOCOL,
+                "orgId": "org1", "userId": "2", "token": "",
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(next_json(&mut rx).await.unwrap()["type"], "hello_ok");
+
+        // pending：只能看到发给自己的请求
+        tx.send(Message::Text(
+            json!({"type":"req","id":"p1","method":"transfer.pending","params":{"orgId":"org1"}})
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+        let pending = next_json(&mut rx).await.unwrap();
+        assert_eq!(pending["ok"], true);
+        assert_eq!(pending["data"].as_array().unwrap().len(), 1);
+
+        // accept：返回一次性口令
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"p2","method":"transfer.accept",
+                "params":{"orgId":"org1","transferId":offer.transfer_id}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let accepted = next_json(&mut rx).await.unwrap();
+        assert_eq!(accepted["ok"], true);
+        assert!(!accepted["data"]["passphrase"].as_str().unwrap().is_empty());
+
+        // package：按块读取，首块把状态推进到 migrating
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"p3","method":"transfer.package",
+                "params":{"orgId":"org1","transferId":offer.transfer_id,"offset":0,"len":1024}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let chunk = next_json(&mut rx).await.unwrap();
+        assert_eq!(chunk["ok"], true);
+        assert!(!chunk["data"]["data"].as_str().unwrap().is_empty());
+
+        // verified：主机侧记录推进到 verified
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"p4","method":"transfer.verified",
+                "params":{"orgId":"org1","transferId":offer.transfer_id}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let verified = next_json(&mut rx).await.unwrap();
+        assert_eq!(verified["ok"], true);
+        assert_eq!(verified["data"]["phase"], "verified");
+
+        let _ = std::fs::remove_file(transfer::lan_package_path(&offer.transfer_id));
+        drop(tx);
+        drop(rx);
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
