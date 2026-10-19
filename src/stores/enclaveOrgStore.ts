@@ -69,6 +69,8 @@ interface EnclaveOrgState {
   loadHost: (id: string) => Promise<void>;
   /** 成员端设置手动主机地址（留空 = 清除，回到自动发现）；成功返回 true */
   setHostAddr: (id: string, addr: string) => Promise<boolean>;
+  /** 清除成员端固定的主机证书指纹（主机重装/更换后使用） */
+  resetHostFp: (id: string) => Promise<boolean>;
   /** 重拉转移记录 */
   loadTransfers: (id: string) => Promise<void>;
   /** 导出线下加密迁移包（仅 owner） */
@@ -220,6 +222,17 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   setHostAddr: async (id, addr) => {
     try {
       await invoke('enclave_host_addr_set', { orgId: id, addr });
+      await get().loadHost(id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  resetHostFp: async (id) => {
+    try {
+      await invoke('enclave_host_fp_reset', { orgId: id });
       await get().loadHost(id);
       return true;
     } catch (e) {

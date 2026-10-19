@@ -135,6 +135,10 @@ export interface HostStatusView {
   discoveredAddr: string | null;
   discoveredHostName: string | null;
   discoveredSeenAt: number | null;
+  /** 本机作为主机时的证书指纹（sha256 hex） */
+  hostFingerprint: string | null;
+  /** 成员端已固定的主机证书指纹（sha256 hex） */
+  pinnedFingerprint: string | null;
 }
 
 // ── M8：主机转移 ────────────────────────────────────────────────

@@ -2788,6 +2788,7 @@ pub fn run() {
             commands::enclave::enclave_snapshot_freshness,
             commands::enclave::enclave_host_status,
             commands::enclave::enclave_host_addr_set,
+            commands::enclave::enclave_host_fp_reset,
             commands::enclave::enclave_org_caps,
             commands::enclave::enclave_policy_get,
             commands::enclave::enclave_policy_set,

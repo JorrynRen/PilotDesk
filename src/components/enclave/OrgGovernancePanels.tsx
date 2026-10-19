@@ -217,6 +217,18 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
             </div>
           )}
           <div>本机对外服务的组织：{host.servedOrgIds.length}</div>
+          {host.hostFingerprint && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span>证书指纹：{host.hostFingerprint.slice(0, 16)}…</span>
+              <button
+                onClick={() => void copyText(host.hostFingerprint ?? '', '证书指纹')}
+                className="text-[10px] px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                复制
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -233,6 +245,35 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
             <span style={{ color: host.manualAddr || host.discoveredAddr ? 'var(--text-secondary)' : 'var(--status-danger)' }}>
               {host.manualAddr ? `手动 · ${host.manualAddr}` : host.discoveredAddr ? `自动 · ${host.discoveredAddr}` : '无'}
             </span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span>
+              主机指纹：
+              {host.pinnedFingerprint
+                ? `${host.pinnedFingerprint.slice(0, 16)}…`
+                : '尚未固定（首次连接时自动记录）'}
+            </span>
+            {host.pinnedFingerprint && (
+              <button
+                onClick={async () => {
+                  const ok = await confirmDialog({
+                    title: '重置主机证书指纹',
+                    message:
+                      '仅在主机重装或更换设备后使用。\n'
+                      + '重置后下次连接会重新记录新主机指纹；请确认新主机可信，避免把数据交给冒充者。',
+                    confirmText: '确认重置',
+                  });
+                  if (!ok) return;
+                  if (await useEnclaveOrgStore.getState().resetHostFp(orgId)) {
+                    showToast('已重置主机指纹，下次连接将重新记录', 'success');
+                  }
+                }}
+                className="text-[10px] px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
+              >
+                重置指纹
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-1.5">
             <input

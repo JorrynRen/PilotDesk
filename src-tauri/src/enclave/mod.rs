@@ -20,6 +20,7 @@ pub mod progress;
 pub mod reports;
 pub mod snapshot;
 pub mod tasks;
+pub mod tls;
 pub mod tools;
 pub mod transfer;
 

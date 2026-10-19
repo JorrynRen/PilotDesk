@@ -102,6 +102,15 @@ pub fn enclave_host_addr_set(
     crate::enclave::host::set_manual_addr(state.inner(), &org_id, &addr)
 }
 
+/// 清除成员端固定的主机证书指纹（主机重装 / 更换主机后使用）。
+#[tauri::command]
+pub fn enclave_host_fp_reset(
+    org_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    crate::enclave::host::reset_fingerprint(state.inner(), &org_id)
+}
+
 // ════════════════════════════════════════════════════════════
 // M2：授权器 + 策略 / 应急 / 审计
 // ════════════════════════════════════════════════════════════

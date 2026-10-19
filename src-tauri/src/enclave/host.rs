@@ -33,7 +33,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 
 use super::authz::{self, Role};
 use super::org;
-use super::{tasks, transfer, EnclaveState, ENCLAVE_DEFAULT_PORT};
+use super::{tasks, tls, transfer, EnclaveState, ENCLAVE_DEFAULT_PORT};
 use crate::utils::platform;
 
 /// 平台 `/api/v1/me` 的最小响应（只取身份 id 做一致性校验）。
@@ -64,6 +64,8 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 
 const HOST_PORT_KEY: &str = "enclave_host_port";
 const HOST_ADDR_PREFIX: &str = "enclave_host_addr:";
+/// 成员端固定的主机证书指纹（TOFU；重置后下次连接重新记录）。
+const HOST_FP_PREFIX: &str = "enclave_host_fp:";
 
 // ── 运行态 ──────────────────────────────────────────────────────
 
@@ -123,17 +125,27 @@ pub async fn run_host_loop(state: std::sync::Arc<EnclaveState>) {
         tokio::spawn(async move { beacon_loop(st).await });
     }
 
-    let mut listener: Option<TcpListener> = None;
+    let mut listener: Option<(TcpListener, tokio_rustls::TlsAcceptor)> = None;
     loop {
         if listener.is_none() {
             if !host_org_ids(&state).is_empty() {
                 let port = configured_host_port(&state);
                 match TcpListener::bind(("0.0.0.0", port)).await {
-                    Ok(l) => {
-                        state.host.mark_running(port);
-                        log::info!("[enclave] 主机服务已监听 0.0.0.0:{}", port);
-                        listener = Some(l);
-                    }
+                    Ok(l) => match tls::ensure_host_tls() {
+                        Ok(host_tls) => {
+                            state.host.mark_running(port);
+                            log::info!(
+                                "[enclave] 主机服务已监听 wss://0.0.0.0:{}（指纹 {}…）",
+                                port,
+                                host_tls.fingerprint.chars().take(16).collect::<String>()
+                            );
+                            listener = Some((l, host_tls.acceptor));
+                        }
+                        Err(e) => {
+                            state.host.mark_stopped(Some(e.clone()));
+                            log::warn!("[enclave] 主机 TLS 初始化失败：{}", e);
+                        }
+                    },
                     Err(e) => {
                         state.host.mark_stopped(Some(format!("监听端口 {} 失败：{}", port, e)));
                         log::warn!("[enclave] 主机服务监听失败（{}）：{}", port, e);
@@ -143,12 +155,22 @@ pub async fn run_host_loop(state: std::sync::Arc<EnclaveState>) {
         }
 
         match listener.as_ref() {
-            Some(l) => {
+            Some((l, acceptor)) => {
                 let mut accept_failed = false;
                 match tokio::time::timeout(Duration::from_secs(5), l.accept()).await {
                     Ok(Ok((stream, peer))) => {
                         let st = state.clone();
-                        tokio::spawn(async move { handle_conn(stream, peer, st).await });
+                        let acceptor = acceptor.clone();
+                        tokio::spawn(async move {
+                            match acceptor.accept(stream).await {
+                                Ok(tls_stream) => handle_conn(tls_stream, peer, st).await,
+                                Err(e) => log::warn!(
+                                    "[enclave] 与 {} 的 TLS 握手失败：{}",
+                                    peer,
+                                    e
+                                ),
+                            }
+                        });
                     }
                     Ok(Err(e)) => {
                         state
@@ -311,12 +333,29 @@ impl HostSession {
             .await
             .unwrap_or_default();
 
-        let url = format!("ws://{}", addr);
-        let (ws, _) =
-            tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url.as_str()))
-                .await
-                .map_err(|_| format!("连接主机 {} 超时", addr))?
-                .map_err(|e| format!("连接主机 {} 失败：{}", addr, e))?;
+        let url = format!("wss://{}", addr);
+        // 首次连接 TOFU 记录指纹；之后必须一致（防冒充 / 防主机悄悄换证书）
+        let pin_key = format!("{}{}", HOST_FP_PREFIX, org_id);
+        let expected = state
+            .store
+            .with_conn(|c| Ok(get_setting(c, &pin_key)))?;
+        let (ws, fingerprint) =
+            tls::connect_pinned(&url, expected.as_deref(), CONNECT_TIMEOUT).await?;
+        if expected
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            let _ = state
+                .store
+                .with_conn(|c| put_setting(c, &pin_key, &fingerprint));
+            log::info!(
+                "[enclave] 已固定主机 {} 的证书指纹：{}…",
+                addr,
+                fingerprint.chars().take(16).collect::<String>()
+            );
+        }
         let (tx, rx) = ws.split();
         let mut session = Self { tx, rx };
 
@@ -402,7 +441,11 @@ struct RequestMsg {
     params: Value,
 }
 
-async fn handle_conn(stream: TcpStream, peer: SocketAddr, state: std::sync::Arc<EnclaveState>) {
+async fn handle_conn(
+    stream: tokio_rustls::server::TlsStream<TcpStream>,
+    peer: SocketAddr,
+    state: std::sync::Arc<EnclaveState>,
+) {
     let ws = match tokio_tungstenite::accept_async(stream).await {
         Ok(ws) => ws,
         Err(_) => return,
@@ -651,6 +694,7 @@ async fn beacon_loop(state: std::sync::Arc<EnclaveState>) {
                 "orgIds": orgs,
                 "port": port,
                 "hostName": host_name(),
+                "tls": true,
             })
             .to_string();
             let target = ("255.255.255.255", configured_discovery_port());
@@ -710,6 +754,22 @@ async fn discovery_listen(state: std::sync::Arc<EnclaveState>) {
 
 // ── 设置 / 状态 ────────────────────────────────────────────────
 
+/// 清除成员端固定的主机证书指纹（主机重装 / 更换主机后使用）。
+pub fn reset_fingerprint(state: &EnclaveState, org_id: &str) -> Result<(), String> {
+    state
+        .store
+        .with_conn(|c| clear_fingerprint(c, org_id))
+}
+
+fn clear_fingerprint(conn: &Connection, org_id: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM enclave_settings WHERE key = ?1",
+        params![format!("{}{}", HOST_FP_PREFIX, org_id)],
+    )
+    .map_err(|e| format!("清除主机指纹失败：{}", e))?;
+    Ok(())
+}
+
 /// 成员端手动填写主机地址（留空表示清除，回到自动发现）。
 pub fn set_manual_addr(state: &EnclaveState, org_id: &str, addr: &str) -> Result<(), String> {
     let key = format!("{}{}", HOST_ADDR_PREFIX, org_id);
@@ -722,7 +782,8 @@ pub fn set_manual_addr(state: &EnclaveState, org_id: &str, addr: &str) -> Result
         return state.store.with_conn(|c| {
             c.execute("DELETE FROM enclave_settings WHERE key = ?1", params![key])
                 .map_err(|e| format!("清除主机地址失败：{}", e))?;
-            Ok(())
+            // 地址清除后，旧指纹也不再适用（重新发现时重新 TOFU）
+            clear_fingerprint(c, org_id)
         });
     }
     let (host, port) = raw
@@ -733,7 +794,11 @@ pub fn set_manual_addr(state: &EnclaveState, org_id: &str, addr: &str) -> Result
     }
     port.parse::<u16>()
         .map_err(|_| "主机端口不是有效数字".to_string())?;
-    state.store.with_conn(|c| put_setting(c, &key, raw))
+    state.store.with_conn(|c| {
+        put_setting(c, &key, raw)?;
+        // 换了地址可能换了主机：清掉旧指纹，下次连接重新 TOFU
+        clear_fingerprint(c, org_id)
+    })
 }
 
 pub fn manual_addr(state: &EnclaveState, org_id: &str) -> Option<String> {
@@ -766,6 +831,10 @@ pub struct HostStatusView {
     pub discovered_addr: Option<String>,
     pub discovered_host_name: Option<String>,
     pub discovered_seen_at: Option<i64>,
+    /// 本机作为主机时的证书指纹（sha256 hex）
+    pub host_fingerprint: Option<String>,
+    /// 成员端已固定的主机证书指纹（sha256 hex）
+    pub pinned_fingerprint: Option<String>,
 }
 
 pub fn host_status(
@@ -783,6 +852,19 @@ pub fn host_status(
         "unknown"
     };
     let discovered = org_id.and_then(|o| state.discovered_host(o));
+    let pinned_fingerprint = org_id.and_then(|o| {
+        state
+            .store
+            .with_conn(|c| Ok(get_setting(c, &format!("{}{}", HOST_FP_PREFIX, o))))
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+    });
+    let host_fingerprint = if !served.is_empty() {
+        tls::host_fingerprint().ok()
+    } else {
+        None
+    };
     Ok(HostStatusView {
         role: role.to_string(),
         running,
@@ -795,6 +877,8 @@ pub fn host_status(
         discovered_addr: discovered.as_ref().map(|d| d.addr.clone()),
         discovered_host_name: discovered.as_ref().map(|d| d.host_name.clone()),
         discovered_seen_at: discovered.map(|d| d.seen_at),
+        host_fingerprint,
+        pinned_fingerprint,
     })
 }
 
@@ -957,20 +1041,28 @@ mod tests {
             .unwrap();
         let state = std::sync::Arc::new(EnclaveState::new(store));
 
+        let host_tls = tls::ensure_host_tls_in(&dir.join("tls")).unwrap();
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn({
             let st = state.clone();
+            let acceptor = host_tls.acceptor.clone();
             async move {
                 if let Ok((stream, peer)) = listener.accept().await {
-                    handle_conn(stream, peer, st).await;
+                    if let Ok(tls_stream) = acceptor.accept(stream).await {
+                        handle_conn(tls_stream, peer, st).await;
+                    }
                 }
             }
         });
 
-        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}", port))
-            .await
-            .unwrap();
+        let (ws, _) = tls::connect_pinned(
+            &format!("wss://127.0.0.1:{}", port),
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         let (mut tx, mut rx) = ws.split();
         tx.send(Message::Text(
             json!({
@@ -1052,18 +1144,26 @@ mod tests {
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
+        let host_tls = tls::ensure_host_tls_in(&dir.join("tls")).unwrap();
         tokio::spawn({
             let st = state.clone();
+            let acceptor = host_tls.acceptor.clone();
             async move {
                 if let Ok((stream, peer)) = listener.accept().await {
-                    handle_conn(stream, peer, st).await;
+                    if let Ok(tls_stream) = acceptor.accept(stream).await {
+                        handle_conn(tls_stream, peer, st).await;
+                    }
                 }
             }
         });
 
-        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}", port))
-            .await
-            .unwrap();
+        let (ws, _) = tls::connect_pinned(
+            &format!("wss://127.0.0.1:{}", port),
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
         let (mut tx, mut rx) = ws.split();
         tx.send(Message::Text(
             json!({
