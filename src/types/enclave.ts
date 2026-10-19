@@ -141,6 +141,18 @@ export interface HostStatusView {
   pinnedFingerprint: string | null;
 }
 
+/** 本机文件缓存信息（`enclave_cache_info`） */
+export interface CacheInfoView {
+  /** 缓存目录绝对路径 */
+  dir: string;
+  /** 当前占用字节数 */
+  usedBytes: number;
+  /** 上限字节数（默认 2 GB） */
+  maxBytes: number;
+  /** 缓存文件数 */
+  fileCount: number;
+}
+
 // ── M8：主机转移 ────────────────────────────────────────────────
 
 /** 转移状态：verified 必须早于 completed（云端生效） */

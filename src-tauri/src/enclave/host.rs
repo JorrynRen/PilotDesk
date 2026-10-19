@@ -30,6 +30,7 @@ use futures::{SinkExt, StreamExt};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
@@ -294,12 +295,83 @@ fn uploads_root() -> PathBuf {
     crate::utils::paths::app_root_dir().join("enclave").join("uploads")
 }
 
-/// 成员文件缓存上限（全机共享，按最近访问时间淘汰）。
+/// 成员文件缓存默认上限（全机共享，按最近访问时间淘汰）。
 const CACHE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// 缓存上限设置键（本机全局，不随组织区分）。
+const CACHE_MAX_KEY: &str = "enclave_cache_max_bytes";
+/// 自定义上限的可用区间：256 MB ~ 100 GB。
+const CACHE_LIMIT_MIN: u64 = 256 * 1024 * 1024;
+const CACHE_LIMIT_MAX: u64 = 100 * 1024 * 1024 * 1024;
 /// 淘汰目标：降到上限的 90%，避免频繁触发。
 const CACHE_TARGET_RATIO: f64 = 0.9;
 /// 上传临时文件保鲜期（秒）：异常中断的上传不长期占用磁盘。
 const UPLOAD_STALE_SECS: u64 = 24 * 3600;
+
+/// 流式计算文件 SHA-256（分块读取，不整文件入内存）。
+fn file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("读取文件失败：{}", e))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| format!("读取文件失败：{}", e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect())
+}
+
+/// 当前生效的缓存上限（未设置时用默认值）。
+fn cache_limit(conn: &Connection) -> u64 {
+    get_setting(conn, CACHE_MAX_KEY)
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(CACHE_MAX_BYTES)
+}
+
+/// 本机文件缓存的占用与上限（供「组织与权限」页展示 / 调整）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheInfoView {
+    pub dir: String,
+    pub used_bytes: u64,
+    pub max_bytes: u64,
+    pub file_count: usize,
+}
+
+/// 统计缓存占用；目录不存在时返回 0。
+pub fn cache_info(conn: &Connection) -> CacheInfoView {
+    let root = cache_root();
+    let mut files = Vec::new();
+    collect_files(&root, &mut files);
+    CacheInfoView {
+        dir: root.to_string_lossy().to_string(),
+        used_bytes: files.iter().map(|(_, size, _)| *size).sum(),
+        max_bytes: cache_limit(conn),
+        file_count: files.len(),
+    }
+}
+
+/// 调整缓存上限（按区间夹取），并立即执行一次淘汰。
+pub fn set_cache_limit(conn: &Connection, max_bytes: u64) -> Result<CacheInfoView, String> {
+    let clamped = max_bytes.clamp(CACHE_LIMIT_MIN, CACHE_LIMIT_MAX);
+    put_setting(conn, CACHE_MAX_KEY, &clamped.to_string())?;
+    enforce_cache_limit(&cache_root(), clamped)?;
+    Ok(cache_info(conn))
+}
+
+/// 清空本机文件缓存（不影响主机数据）。
+pub fn clear_cache(conn: &Connection) -> Result<CacheInfoView, String> {
+    let root = cache_root();
+    if root.exists() {
+        std::fs::remove_dir_all(&root).map_err(|e| format!("清空文件缓存失败：{}", e))?;
+    }
+    Ok(cache_info(conn))
+}
 
 fn touch_cache_entry(path: &Path) {
     // 用 mtime 记录「最近访问」，作为 LRU 依据（Windows 默认不更新 atime）
@@ -372,7 +444,50 @@ fn cleanup_stale_uploads() {
     }
 }
 
-/// 成员端上传本地文件到主机（分块；返回主机侧的 `FileAssetView`）。
+/// 流式发送本地文件：边读边算 SHA-256，内存占用不超过一个分块。
+///
+/// 返回 `(sha256, 实际发送字节数)`；读盘与网络发送交错进行，不会整文件入内存。
+async fn send_file_stream(
+    session: &mut HostSession,
+    org_id: &str,
+    upload_id: &str,
+    path: &Path,
+) -> Result<(String, u64), String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; transfer::LAN_CHUNK_MAX as usize];
+    let mut offset = 0u64;
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("读取待上传文件失败：{}", e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        session
+            .request(
+                "file.upload_chunk",
+                json!({
+                    "orgId": org_id,
+                    "uploadId": upload_id,
+                    "offset": offset,
+                    "data": BASE64.encode(&buf[..n]),
+                }),
+            )
+            .await?;
+        offset += n as u64;
+    }
+    let sha256 = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+    Ok((sha256, offset))
+}
+
+/// 成员端上传本地文件到主机（流式分块；返回主机侧的 `FileAssetView`）。
 pub async fn upload_file(
     state: &EnclaveState,
     db: &crate::DbState,
@@ -381,11 +496,11 @@ pub async fn upload_file(
     src_path: &str,
     report_id: Option<&str>,
 ) -> Result<Value, String> {
-    let bytes = std::fs::read(src_path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
-    if bytes.len() as u64 > UPLOAD_MAX_BYTES {
+    let meta = std::fs::metadata(src_path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
+    if meta.len() > UPLOAD_MAX_BYTES {
         return Err(format!(
             "文件过大（{} MB），单文件上限 {} MB",
-            bytes.len() / 1024 / 1024,
+            meta.len() / 1024 / 1024,
             UPLOAD_MAX_BYTES / 1024 / 1024
         ));
     }
@@ -394,7 +509,6 @@ pub async fn upload_file(
         .and_then(|s| s.to_str())
         .unwrap_or("file")
         .to_string();
-    let sha256 = transfer::hex_sha256(&bytes);
 
     let mut session = HostSession::connect(state, db, org_id).await?;
     let begin = session
@@ -409,36 +523,25 @@ pub async fn upload_file(
         return Err("主机未返回上传会话".to_string());
     }
 
-    let mut offset = 0u64;
-    let chunk_size = transfer::LAN_CHUNK_MAX as usize;
-    for chunk in bytes.chunks(chunk_size) {
-        session
-            .request(
-                "file.upload_chunk",
-                json!({
-                    "orgId": org_id,
-                    "uploadId": upload_id,
-                    "offset": offset,
-                    "data": BASE64.encode(chunk),
-                }),
-            )
-            .await?;
-        offset += chunk.len() as u64;
-    }
-
-    let result = session
-        .request(
-            "file.upload_finish",
-            json!({
-                "orgId": org_id,
-                "uploadId": upload_id,
-                "taskId": task_id,
-                "reportId": report_id,
-                "fileName": file_name,
-                "sha256": sha256,
-            }),
-        )
-        .await;
+    let sent = send_file_stream(&mut session, org_id, &upload_id, Path::new(src_path)).await;
+    let result = match sent {
+        Ok((sha256, _size)) => {
+            session
+                .request(
+                    "file.upload_finish",
+                    json!({
+                        "orgId": org_id,
+                        "uploadId": upload_id,
+                        "taskId": task_id,
+                        "reportId": report_id,
+                        "fileName": file_name,
+                        "sha256": sha256,
+                    }),
+                )
+                .await
+        }
+        Err(e) => Err(e),
+    };
     session.close().await;
     result
 }
@@ -453,11 +556,10 @@ pub async fn upload_temp_file(
     org_id: &str,
     src_path: &str,
 ) -> Result<String, String> {
-    let bytes = std::fs::read(src_path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
-    if bytes.len() as u64 > UPLOAD_MAX_BYTES {
+    let meta = std::fs::metadata(src_path).map_err(|e| format!("读取待上传文件失败：{}", e))?;
+    if meta.len() > UPLOAD_MAX_BYTES {
         return Err("文件超过单文件大小上限".to_string());
     }
-    let sha256 = transfer::hex_sha256(&bytes);
 
     let mut session = HostSession::connect(state, db, org_id).await?;
     let begin = session
@@ -468,27 +570,18 @@ pub async fn upload_temp_file(
         session.close().await;
         return Err("主机未返回上传会话".to_string());
     }
-    let mut offset = 0u64;
-    for chunk in bytes.chunks(transfer::LAN_CHUNK_MAX as usize) {
-        session
-            .request(
-                "file.upload_chunk",
-                json!({
-                    "orgId": org_id,
-                    "uploadId": upload_id,
-                    "offset": offset,
-                    "data": BASE64.encode(chunk),
-                }),
-            )
-            .await?;
-        offset += chunk.len() as u64;
-    }
-    let kept = session
-        .request(
-            "file.upload_keep",
-            json!({ "orgId": org_id, "uploadId": upload_id, "sha256": sha256 }),
-        )
-        .await;
+    let sent = send_file_stream(&mut session, org_id, &upload_id, Path::new(src_path)).await;
+    let kept = match sent {
+        Ok((sha256, _size)) => {
+            session
+                .request(
+                    "file.upload_keep",
+                    json!({ "orgId": org_id, "uploadId": upload_id, "sha256": sha256 }),
+                )
+                .await
+        }
+        Err(e) => Err(e),
+    };
     session.close().await;
     let kept = kept?;
     Ok(kept["token"].as_str().unwrap_or("").to_string())
@@ -518,10 +611,12 @@ pub async fn fetch_file_to_cache(
         safe_name
     ));
 
-    // 命中缓存：大小一致且哈希一致才复用
+    // 命中缓存：大小一致且哈希一致才复用（哈希流式计算，避免大文件整读入内存）
     if target.exists() {
-        let cached = std::fs::read(&target).unwrap_or_default();
-        if cached.len() as u64 == file_size && transfer::hex_sha256(&cached) == file_hash {
+        let size_ok = std::fs::metadata(&target)
+            .map(|m| m.len() == file_size)
+            .unwrap_or(false);
+        if size_ok && file_sha256(&target).map(|h| h == file_hash).unwrap_or(false) {
             touch_cache_entry(&target);
             session.close().await;
             return Ok(target.to_string_lossy().to_string());
@@ -562,8 +657,8 @@ pub async fn fetch_file_to_cache(
     drop(file);
     session.close().await;
 
-    let downloaded = std::fs::read(&part).map_err(|e| format!("读取下载文件失败：{}", e))?;
-    if transfer::hex_sha256(&downloaded) != file_hash {
+    let downloaded_hash = file_sha256(&part)?;
+    if downloaded_hash != file_hash {
         let _ = std::fs::remove_file(&part);
         return Err("文件校验失败（哈希不一致），已丢弃".to_string());
     }
@@ -572,7 +667,11 @@ pub async fn fetch_file_to_cache(
     }
     std::fs::rename(&part, &target).map_err(|e| format!("保存文件缓存失败：{}", e))?;
     touch_cache_entry(&target);
-    let _ = enforce_cache_limit(&cache_root(), CACHE_MAX_BYTES);
+    let limit = state
+        .store
+        .with_conn(|c| Ok(cache_limit(c)))
+        .unwrap_or(CACHE_MAX_BYTES);
+    let _ = enforce_cache_limit(&cache_root(), limit);
     Ok(target.to_string_lossy().to_string())
 }
 

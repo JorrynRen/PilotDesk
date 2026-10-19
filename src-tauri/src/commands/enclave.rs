@@ -111,6 +111,34 @@ pub fn enclave_host_fp_reset(
     crate::enclave::host::reset_fingerprint(state.inner(), &org_id)
 }
 
+/// 本机文件缓存占用与上限（成员端打开/下载团队文件时产生）。
+#[tauri::command]
+pub fn enclave_cache_info(
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::host::CacheInfoView, String> {
+    state.store.with_conn(|c| Ok(crate::enclave::host::cache_info(c)))
+}
+
+/// 调整本机文件缓存上限（单位 MB；后端按 256 MB ~ 100 GB 夹取并立即淘汰）。
+#[tauri::command]
+pub fn enclave_cache_set_limit(
+    max_mb: u64,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::host::CacheInfoView, String> {
+    let bytes = max_mb.saturating_mul(1024 * 1024);
+    state
+        .store
+        .with_conn(|c| crate::enclave::host::set_cache_limit(c, bytes))
+}
+
+/// 清空本机文件缓存（不影响主机上的团队数据）。
+#[tauri::command]
+pub fn enclave_cache_clear(
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::host::CacheInfoView, String> {
+    state.store.with_conn(crate::enclave::host::clear_cache)
+}
+
 // ════════════════════════════════════════════════════════════
 // M2：授权器 + 策略 / 应急 / 审计
 // ════════════════════════════════════════════════════════════

@@ -147,14 +147,21 @@ function SwitchRow(props: {
  */
 function HostConnectionCard({ orgId }: { orgId: string }) {
   const host = useEnclaveOrgStore((s) => s.host);
+  const cache = useEnclaveOrgStore((s) => s.cache);
   const [addr, setAddr] = useState('');
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [limitMb, setLimitMb] = useState('');
 
   // 组织切换 / 状态刷新后回填已保存的手动地址
   useEffect(() => {
     setAddr(host?.manualAddr ?? '');
   }, [host?.manualAddr, orgId]);
+
+  // 缓存上限回填（仅在服务端值变化时覆盖输入框）
+  useEffect(() => {
+    if (cache) setLimitMb(String(Math.round(cache.maxBytes / 1024 / 1024)));
+  }, [cache?.maxBytes]);
 
   const saveAddr = async () => {
     setBusy(true);
@@ -306,6 +313,75 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
             )}
           </div>
           <div>留空即回到自动发现；地址格式为「主机 IP:端口」。</div>
+
+          <div
+            className="mt-1 pt-2 flex flex-col gap-1.5"
+            style={{ borderTop: '1px dashed var(--border)' }}
+          >
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span>
+                本机文件缓存：
+                {cache
+                  ? `${formatBytes(cache.usedBytes)} / ${formatBytes(cache.maxBytes)} · ${cache.fileCount} 个文件`
+                  : '读取中…'}
+              </span>
+              <button
+                onClick={() => void useEnclaveOrgStore.getState().loadCache()}
+                className="text-[10px] px-1.5 py-0.5 rounded"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+              >
+                刷新
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span>上限</span>
+              <input
+                type="number"
+                min={256}
+                value={limitMb}
+                onChange={(e) => setLimitMb(e.target.value)}
+                className="w-20 h-7 px-2 rounded text-[11px] outline-none"
+                style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+              />
+              <span>MB</span>
+              <button
+                onClick={async () => {
+                  const mb = Number(limitMb);
+                  if (!Number.isFinite(mb) || mb < 256) {
+                    showToast('缓存上限至少 256 MB', 'error');
+                    return;
+                  }
+                  if (await useEnclaveOrgStore.getState().setCacheLimit(Math.round(mb))) {
+                    showToast('已更新缓存上限', 'success');
+                  }
+                }}
+                className="h-7 px-2 rounded text-[11px]"
+                style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                保存
+              </button>
+              <button
+                onClick={async () => {
+                  const ok = await confirmDialog({
+                    title: '清空本机文件缓存',
+                    message:
+                      '仅删除本机已下载的团队文件副本，不影响主机上的数据。\n'
+                      + '需要时再次打开文件会重新下载。是否继续？',
+                    confirmText: '确认清空',
+                  });
+                  if (!ok) return;
+                  if (await useEnclaveOrgStore.getState().clearCache()) {
+                    showToast('已清空本机文件缓存', 'success');
+                  }
+                }}
+                className="h-7 px-2 rounded text-[11px]"
+                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
+              >
+                清空缓存
+              </button>
+            </div>
+            <div>仅影响本机下载缓存（按最近访问自动淘汰），不改变主机上的团队数据。</div>
+          </div>
         </div>
       )}
 
@@ -332,7 +408,8 @@ const PHASE_COLOR: Record<TransferPhase, string> = {
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 /** 生成迁移包口令：去掉易混淆字符（0/O、1/l/I），24 位足够线下转述。 */

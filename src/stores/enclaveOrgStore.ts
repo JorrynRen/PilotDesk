@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { errorMessage } from '../utils/errorMessage';
 import type {
   AuditView,
+  CacheInfoView,
   EmergencyView,
   EnclaveOrgCaps,
   HostStatusView,
@@ -35,6 +36,8 @@ interface EnclaveOrgState {
   emergency: EmergencyView | null;
   /** 主机服务 / 发现状态（成员端含手动地址） */
   host: HostStatusView | null;
+  /** 本机文件缓存占用与上限（成员端打开/下载团队文件时产生） */
+  cache: CacheInfoView | null;
   /** 本机侧主机转移记录 */
   transfers: TransferView[];
   /** 成员端：主机发给当前账号、待确认的转移请求 */
@@ -71,6 +74,12 @@ interface EnclaveOrgState {
   setHostAddr: (id: string, addr: string) => Promise<boolean>;
   /** 清除成员端固定的主机证书指纹（主机重装/更换后使用） */
   resetHostFp: (id: string) => Promise<boolean>;
+  /** 重拉本机文件缓存占用 */
+  loadCache: () => Promise<void>;
+  /** 调整本机文件缓存上限（MB）；成功返回 true */
+  setCacheLimit: (maxMb: number) => Promise<boolean>;
+  /** 清空本机文件缓存；成功返回 true */
+  clearCache: () => Promise<boolean>;
   /** 重拉转移记录 */
   loadTransfers: (id: string) => Promise<void>;
   /** 导出线下加密迁移包（仅 owner） */
@@ -97,6 +106,7 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   policy: null,
   emergency: null,
   host: null,
+  cache: null,
   transfers: [],
   lanPending: [],
   lanPendingError: null,
@@ -129,6 +139,7 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
       policy: null,
       emergency: null,
       host: null,
+      cache: null,
       transfers: [],
       lanPending: [],
       lanPendingError: null,
@@ -199,15 +210,16 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
 
   /** 拉组织能力 / 策略 / 应急 / 审计 / 主机状态。单项失败不拖垮其它项。 */
   loadGovernance: async (id) => {
-    const [caps, policy, emergency, audit, host, transfers] = await Promise.all([
+    const [caps, policy, emergency, audit, host, transfers, cache] = await Promise.all([
       invoke<EnclaveOrgCaps>('enclave_org_caps', { orgId: id }).catch(() => null),
       invoke<PolicyView>('enclave_policy_get', { orgId: id }).catch(() => null),
       invoke<EmergencyView>('enclave_emergency_get', { orgId: id }).catch(() => null),
       invoke<AuditView[]>('enclave_audit_list', { orgId: id, limit: 50 }).catch(() => []),
       invoke<HostStatusView>('enclave_host_status', { orgId: id }).catch(() => null),
       invoke<TransferView[]>('enclave_transfer_list', { orgId: id }).catch(() => []),
+      invoke<CacheInfoView>('enclave_cache_info').catch(() => null),
     ]);
-    set({ caps, policy, emergency, audit, host, transfers });
+    set({ caps, policy, emergency, audit, host, transfers, cache });
   },
 
   loadHost: async (id) => {
@@ -234,6 +246,37 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
     try {
       await invoke('enclave_host_fp_reset', { orgId: id });
       await get().loadHost(id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  loadCache: async () => {
+    try {
+      const cache = await invoke<CacheInfoView>('enclave_cache_info');
+      set({ cache });
+    } catch {
+      // 缓存统计失败不阻塞治理面板
+    }
+  },
+
+  setCacheLimit: async (maxMb) => {
+    try {
+      const cache = await invoke<CacheInfoView>('enclave_cache_set_limit', { maxMb });
+      set({ cache, error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  clearCache: async () => {
+    try {
+      const cache = await invoke<CacheInfoView>('enclave_cache_clear');
+      set({ cache, error: null });
       return true;
     } catch (e) {
       set({ error: errorMessage(e) });
