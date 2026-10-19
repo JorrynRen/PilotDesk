@@ -549,8 +549,9 @@ function TransferCard({ orgId }: { orgId: string }) {
         </span>
       </div>
       <div className="mt-1 text-[10px] leading-4" style={{ color: 'var(--text-tertiary)' }}>
-        顺序：导出/导入并校验（verified）→ 云端完成所有权转让（completed）→ 旧主机销毁数据。
-        未校验不得生效；云端未生效不得销毁。
+        两种方式任选其一：方式① 局域网自动迁移（同一局域网）；方式② 线下加密迁移包（异地 / 需人工搬运介质）。
+        顺序均为：校验通过（verified）→ 云端完成所有权转让（completed）→ 旧主机销毁数据；
+        未校验不得生效，云端未生效不得销毁。
       </div>
 
       {/* 转出 / 接管互斥：owner = 主机 → 转出；成员 → 接管 */}
@@ -563,7 +564,7 @@ function TransferCard({ orgId }: { orgId: string }) {
       {caps && canTransfer && (
         <div className="mt-2 flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-            局域网自动迁移
+            方式① 局域网自动迁移
           </div>
           <div className="flex items-center gap-1.5">
             <select
@@ -603,7 +604,7 @@ function TransferCard({ orgId }: { orgId: string }) {
       {caps && canTransfer && (
         <div className="mt-2 flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-            线下迁移包（异地兜底）
+            方式② 线下加密迁移包（异地兜底）
           </div>
           <div className="flex items-center gap-1.5">
             <input
@@ -658,7 +659,7 @@ function TransferCard({ orgId }: { orgId: string }) {
         <div className="mt-2 flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-              待接收的转移请求
+              方式① 局域网自动迁移 · 待接收请求
             </span>
             <button
               onClick={() => void useEnclaveOrgStore.getState().loadLanPending(orgId)}
@@ -704,7 +705,7 @@ function TransferCard({ orgId }: { orgId: string }) {
       {caps && !canTransfer && (
         <div className="mt-2 flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-            线下迁移包（异地兜底）
+            方式② 线下加密迁移包（异地兜底）
           </div>
           <div className="flex items-center gap-1.5">
             <input
