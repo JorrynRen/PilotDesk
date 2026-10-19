@@ -66,14 +66,8 @@ pub fn dispatch(
     payload: &Value,
 ) -> Result<Value, String> {
     match command {
-        // ── 治理只读：成员端 Agent 工具按主机策略复核出境闸门 ──
-        "policy.get" => {
-            let policy = super::org::get_allow_cloud_model(conn, org_id)?;
-            Ok(serde_json::json!({
-                "allowCloudModel": policy.unwrap_or(false),
-                "explicit": policy.is_some(),
-            }))
-        }
+        // ── 治理只读：成员端 Agent 工具 / 面板按主机策略复核出境闸门 ──
+        "policy.get" => to_value(super::org::policy_view(conn, org_id)?),
 
         // ── 任务 ──────────────────────────────────────────────
         "task.get" => {

@@ -2259,6 +2259,7 @@ mod tests {
         let policy = next_json(&mut rx).await.unwrap();
         assert_eq!(policy["ok"], true);
         assert_eq!(policy["data"]["explicit"], false);
+        assert_eq!(policy["data"]["allowCloudModel"], false);
 
         // 知识库检索（成员端 Agent 工具同款 RPC）
         tx.send(Message::Text(

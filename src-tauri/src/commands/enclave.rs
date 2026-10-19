@@ -170,15 +170,31 @@ pub fn enclave_org_caps(
     })
 }
 
-/// 读数据出境总闸（默认关闭）。
+/// 读数据出境总闸（默认关闭）。成员端以主机策略为准。
 #[tauri::command]
-pub fn enclave_policy_get(
+pub async fn enclave_policy_get(
     org_id: String,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::org::PolicyView, String> {
-    state
+    let role = state
         .store
-        .with_conn(|c| crate::enclave::org::policy_view(c, &org_id))
+        .with_conn(|c| crate::enclave::authz::role_for_org(c, &org_id))?;
+    match role {
+        Some(crate::enclave::authz::Role::Owner) => state
+            .store
+            .with_conn(|c| crate::enclave::org::policy_view(c, &org_id)),
+        Some(_) => {
+            let data = crate::enclave::host::call_host_without_token(
+                state.inner(),
+                &org_id,
+                "policy.get",
+                serde_json::json!({}),
+            )
+            .await?;
+            serde_json::from_value(data).map_err(|e| format!("解析主机策略失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
 }
 
 /// 设置数据出境总闸（仅 owner）：写库 + 审计。

@@ -4,7 +4,7 @@
 //! [`crate::enclave::db::EnclaveStore::with_conn`] 的同步块内调用（闭包内绝不 await）。
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 组织快照的写入行（来自平台 `/organizations/mine`，字段与 `org_snapshot` 表对齐）。
 pub struct OrgSnapshotRow {
@@ -451,7 +451,7 @@ pub fn set_emergency(
 }
 
 /// 数据出境策略视图（供「组织与权限」页展示；缺行时按默认关闭返回）。
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyView {
     pub org_id: String,
