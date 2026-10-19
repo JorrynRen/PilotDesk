@@ -4,12 +4,12 @@
 //! 不再允许追加过程记录（设计口径：完成汇报是终态交付）。
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::enclave::files::FileAssetView;
 use crate::enclave::tasks;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressView {
     pub id: String,
@@ -21,7 +21,7 @@ pub struct ProgressView {
 }
 
 /// 过程记录列表 + 锁定状态（前端据此禁用输入框）。
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressList {
     pub items: Vec<ProgressView>,

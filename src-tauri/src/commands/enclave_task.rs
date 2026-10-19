@@ -4,6 +4,10 @@
 
 use std::sync::Arc;
 
+use rusqlite::Connection;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use serde_json::json;
 use tauri::State;
 
 use crate::enclave::authz;
@@ -11,6 +15,36 @@ use crate::enclave::files::{self, FileAssetView};
 use crate::enclave::reports::{self, FeedbackView, ReportView};
 use crate::enclave::tasks::{self, CreateTaskInput, DepsPreview, TaskView, UpdateTaskInput};
 use crate::enclave::EnclaveState;
+
+/// 成员端命令转发：owner 走本地库，成员经主机 WS 执行同一套领域逻辑。
+///
+/// `local` 闭包必须使用传入的 `actor`（成员 user id），不要自己读 `local_identity`。
+async fn run_command<T, F>(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    command: &str,
+    payload: serde_json::Value,
+    local: F,
+) -> Result<T, String>
+where
+    T: Serialize + DeserializeOwned,
+    F: FnOnce(&Connection, &str) -> Result<T, String>,
+{
+    let role = state.store.with_conn(|c| authz::role_for_org(c, org_id))?;
+    match role {
+        Some(authz::Role::Owner) => state.store.with_conn(|c| {
+            let actor = authz::current_actor_id(c)?;
+            local(c, &actor)
+        }),
+        Some(_) => {
+            let data =
+                crate::enclave::host::call_host(state, db, org_id, command, payload).await?;
+            serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
+}
 
 /// 任务列表（整组织，前端按 `parentTaskId` 组树）。
 ///
@@ -21,156 +55,161 @@ pub async fn enclave_task_list(
     org_id: String,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<TaskView>, String> {
-    let role = state
-        .store
-        .with_conn(|c| authz::role_for_org(c, &org_id))?;
-    match role {
-        Some(crate::enclave::authz::Role::Owner) => state.store.with_conn(|c| {
-            let actor = authz::current_actor_id(c)?;
-            tasks::list_tasks(c, &org_id, &actor)
-        }),
-        Some(_) => {
-            let data =
-                crate::enclave::host::fetch_task_list(state.inner(), db.inner(), &org_id).await?;
-            serde_json::from_value(data).map_err(|e| format!("解析主机任务列表失败：{}", e))
-        }
-        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
-    }
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.list",
+        json!({}),
+        |c, actor| tasks::list_tasks(c, &org_id, actor),
+    )
+    .await
 }
 
 /// 单任务详情（含 `blocked` 与 `effectiveActions`）。
 #[tauri::command]
-pub fn enclave_task_get(
+pub async fn enclave_task_get(
     org_id: String,
     task_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TaskView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        tasks::get_task(c, &org_id, &task_id, &actor)
-    })
+    let payload = json!({ "taskId": task_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.get",
+        payload,
+        |c, actor| tasks::get_task(c, &org_id, &task_id, actor),
+    )
+    .await
 }
 
 /// 新建任务 / 子任务。
 #[tauri::command]
-pub fn enclave_task_create(
+pub async fn enclave_task_create(
     org_id: String,
     input: CreateTaskInput,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TaskView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        tasks::create_task(c, &org_id, &actor, &input)
-    })
+    let input_value =
+        serde_json::to_value(&input).map_err(|e| format!("任务参数序列化失败：{}", e))?;
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.create",
+        json!({ "input": input_value }),
+        |c, actor| tasks::create_task(c, &org_id, actor, &input),
+    )
+    .await
 }
 
 /// 编辑任务字段。
 #[tauri::command]
-pub fn enclave_task_update(
+pub async fn enclave_task_update(
     org_id: String,
     task_id: String,
     input: UpdateTaskInput,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TaskView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        tasks::update_task(c, &org_id, &actor, &task_id, &input)
-    })
+    let input_value =
+        serde_json::to_value(&input).map_err(|e| format!("任务参数序列化失败：{}", e))?;
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.update",
+        json!({ "taskId": task_id.clone(), "input": input_value }),
+        |c, actor| tasks::update_task(c, &org_id, actor, &task_id, &input),
+    )
+    .await
 }
 
 /// 状态流转（状态机 + 前置依赖校验）。
 #[tauri::command]
-pub fn enclave_task_set_status(
+pub async fn enclave_task_set_status(
     org_id: String,
     task_id: String,
     status: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TaskView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        // 「待确认」是完成汇报驱动的中间态：进入只能靠提交汇报，离开只能靠确认/退回汇报。
-        // 状态操作不允许绕过汇报直接改，否则会出现「待确认但没有汇报」或「已完成但汇报未确认」。
-        let current = tasks::task_status(c, &org_id, &task_id)?;
-        // 汇总容器（有子任务）的状态由子任务派生，不接受手动开始 / 提交 / 放回待办 / 恢复
-        let container = tasks::is_container(c, &org_id, &task_id)?;
-        if container {
-            match status.as_str() {
-                tasks::STATUS_IN_PROGRESS => {
-                    return Err(
-                        "汇总任务的状态由子任务派生，不能手动恢复；请重新打开子任务".to_string(),
-                    )
-                }
-                tasks::STATUS_PENDING => {
-                    return Err(
-                        "汇总任务的状态由子任务派生，不能手动放回待办".to_string(),
-                    )
-                }
-                tasks::STATUS_DONE => {
-                    return Err("请在子任务全部完成后使用「汇总确认」".to_string())
-                }
-                _ => {}
-            }
-        }
-        if status == tasks::STATUS_SUBMITTED {
-            return Err("请通过「完成汇报 → 提交汇报」把任务推进到待确认".to_string());
-        }
-        // 汇总容器在「待汇总确认」时允许直接作废（放弃这批产出），其余仍走汇报流程
-        if current == tasks::STATUS_SUBMITTED
-            && !(container && status == tasks::STATUS_CANCELLED)
-        {
-            return Err("待确认任务请通过完成汇报的「确认完成 / 退回」处理".to_string());
-        }
-        // 恢复汇报：已完成 / 已归档 → 进行中时，把最近一份已确认汇报退回可编辑，
-        // 供补充正文 / 交付物后重新提交（再次确认时会把补充内容更新进知识库）。
-        if status == tasks::STATUS_IN_PROGRESS
-            && (current == tasks::STATUS_DONE || current == tasks::STATUS_ARCHIVED)
-        {
-            let role = tasks::actor_task_role(c, &org_id, &task_id, &actor)?;
-            tasks::can_transition(&current, &status, role)?;
-            crate::enclave::reports::reopen_confirmed_report(c, &org_id, &task_id, &actor)?;
-        }
-        tasks::set_status(c, &org_id, &actor, &task_id, &status)
-    })
+    let payload = json!({ "taskId": task_id.clone(), "status": status.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.set_status",
+        payload,
+        |c, actor| tasks::set_status_checked(c, &org_id, actor, &task_id, &status),
+    )
+    .await
 }
 
 /// 汇总确认：子任务全部收敛后，由创建者 / 负责人收口完成（容器不单独沉淀知识库）。
 #[tauri::command]
-pub fn enclave_task_container_confirm(
+pub async fn enclave_task_container_confirm(
     org_id: String,
     task_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TaskView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        tasks::confirm_container(c, &org_id, &actor, &task_id)
-    })
+    let payload = json!({ "taskId": task_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.container_confirm",
+        payload,
+        |c, actor| tasks::confirm_container(c, &org_id, actor, &task_id),
+    )
+    .await
 }
 
 /// 设置前置依赖（纯 AND；DFS 环检测）。
 #[tauri::command]
-pub fn enclave_task_set_deps(
+pub async fn enclave_task_set_deps(
     org_id: String,
     task_id: String,
     blocked_by: Vec<String>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TaskView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        tasks::set_deps(c, &org_id, &actor, &task_id, &blocked_by)
-    })
+    let payload = json!({ "taskId": task_id.clone(), "blockedBy": &blocked_by });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.set_deps",
+        payload,
+        |c, actor| tasks::set_deps(c, &org_id, actor, &task_id, &blocked_by),
+    )
+    .await
 }
 
 /// 依赖变更预览：先看影响（成环 / 新阻塞 / 新解锁），再确认保存。
 #[tauri::command]
-pub fn enclave_task_deps_preview(
+pub async fn enclave_task_deps_preview(
     org_id: String,
     task_id: String,
     blocked_by: Vec<String>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<DepsPreview, String> {
-    state
-        .store
-        .with_conn(|c| tasks::deps_preview(c, &org_id, &task_id, &blocked_by))
+    let payload = json!({ "taskId": task_id.clone(), "blockedBy": &blocked_by });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.deps_preview",
+        payload,
+        |c, _actor| tasks::deps_preview(c, &org_id, &task_id, &blocked_by),
+    )
+    .await
 }
 
 // ════════════════════════════════════════════════════════════
@@ -179,50 +218,81 @@ pub fn enclave_task_deps_preview(
 
 /// 追加一条进度说明（创建者 / 负责人 / 参与者；提交完成汇报后锁定）。
 #[tauri::command]
-pub fn enclave_task_progress_add(
+pub async fn enclave_task_progress_add(
     org_id: String,
     task_id: String,
     content: String,
     attachments: Vec<String>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::progress::ProgressView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        crate::enclave::progress::add_progress(
-            c,
-            &org_id,
-            &actor,
-            &task_id,
-            &content,
-            &attachments,
-        )
-    })
+    let payload = json!({
+        "taskId": task_id.clone(),
+        "content": content.clone(),
+        "attachments": &attachments,
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.progress_add",
+        payload,
+        |c, actor| {
+            crate::enclave::progress::add_progress(
+                c,
+                &org_id,
+                actor,
+                &task_id,
+                &content,
+                &attachments,
+            )
+        },
+    )
+    .await
 }
 
 /// 过程记录列表 + 锁定状态。
 #[tauri::command]
-pub fn enclave_task_progress_list(
+pub async fn enclave_task_progress_list(
     org_id: String,
     task_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::progress::ProgressList, String> {
-    state
-        .store
-        .with_conn(|c| crate::enclave::progress::list_progress(c, &org_id, &task_id))
+    let payload = json!({ "taskId": task_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.progress_list",
+        payload,
+        |c, _actor| crate::enclave::progress::list_progress(c, &org_id, &task_id),
+    )
+    .await
 }
 
 /// 设置任务参与者（仅创建者 / 负责人）。
 #[tauri::command]
-pub fn enclave_task_set_collaborators(
+pub async fn enclave_task_set_collaborators(
     org_id: String,
     task_id: String,
     collaborators: Vec<String>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TaskView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        tasks::set_collaborators(c, &org_id, &actor, &task_id, &collaborators)
-    })
+    let payload = json!({
+        "taskId": task_id.clone(),
+        "collaborators": &collaborators,
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.set_collaborators",
+        payload,
+        |c, actor| tasks::set_collaborators(c, &org_id, actor, &task_id, &collaborators),
+    )
+    .await
 }
 
 // ════════════════════════════════════════════════════════════
@@ -230,107 +300,183 @@ pub fn enclave_task_set_collaborators(
 // ════════════════════════════════════════════════════════════
 
 #[tauri::command]
-pub fn enclave_report_list(
+pub async fn enclave_report_list(
     org_id: String,
     task_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<ReportView>, String> {
-    state.store.with_conn(|c| reports::list_reports(c, &org_id, &task_id))
+    let payload = json!({ "taskId": task_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "report.list",
+        payload,
+        |c, _actor| reports::list_reports(c, &org_id, &task_id),
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enclave_report_save_draft(
+pub async fn enclave_report_save_draft(
     org_id: String,
     task_id: String,
     content: String,
     materials: Option<Vec<String>>,
     deliverables: Option<Vec<String>>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<ReportView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        reports::save_draft(
-            c,
-            &org_id,
-            &actor,
-            &task_id,
-            &content,
-            &materials.unwrap_or_default(),
-            &deliverables.unwrap_or_default(),
-        )
-    })
+    let payload = json!({
+        "taskId": task_id.clone(),
+        "content": content.clone(),
+        "materials": &materials,
+        "deliverables": &deliverables,
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "report.save_draft",
+        payload,
+        |c, actor| {
+            reports::save_draft(
+                c,
+                &org_id,
+                actor,
+                &task_id,
+                &content,
+                &materials.unwrap_or_default(),
+                &deliverables.unwrap_or_default(),
+            )
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enclave_report_submit(
+pub async fn enclave_report_submit(
     org_id: String,
     task_id: String,
     content: String,
     materials: Option<Vec<String>>,
     deliverables: Option<Vec<String>>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<ReportView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        reports::submit_report(
-            c,
-            &org_id,
-            &actor,
-            &task_id,
-            &content,
-            &materials.unwrap_or_default(),
-            &deliverables.unwrap_or_default(),
-        )
-    })
+    let payload = json!({
+        "taskId": task_id.clone(),
+        "content": content.clone(),
+        "materials": &materials,
+        "deliverables": &deliverables,
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "report.submit",
+        payload,
+        |c, actor| {
+            reports::submit_report(
+                c,
+                &org_id,
+                actor,
+                &task_id,
+                &content,
+                &materials.unwrap_or_default(),
+                &deliverables.unwrap_or_default(),
+            )
+        },
+    )
+    .await
 }
 
 /// 基于「已退回」的汇报继续修改：新建草稿并复制正文与交付物挂载，原记录保留为日志。
 #[tauri::command]
-pub fn enclave_report_revise(
+pub async fn enclave_report_revise(
     org_id: String,
     task_id: String,
     report_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<ReportView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        reports::revise_report(c, &org_id, &actor, &task_id, &report_id)
-    })
+    let payload = json!({ "taskId": task_id.clone(), "reportId": report_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "report.revise",
+        payload,
+        |c, actor| reports::revise_report(c, &org_id, actor, &task_id, &report_id),
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enclave_report_confirm(
+pub async fn enclave_report_confirm(
     org_id: String,
     task_id: String,
     report_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<ReportView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        reports::confirm_report(c, &org_id, &actor, &task_id, &report_id)
-    })
+    let payload = json!({ "taskId": task_id.clone(), "reportId": report_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "report.confirm",
+        payload,
+        |c, actor| reports::confirm_report(c, &org_id, actor, &task_id, &report_id),
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enclave_report_return(
+pub async fn enclave_report_return(
     org_id: String,
     task_id: String,
     report_id: String,
     reason: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<ReportView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::current_actor_id(c)?;
-        reports::return_report(c, &org_id, &actor, &task_id, &report_id, &reason)
-    })
+    let payload = json!({
+        "taskId": task_id.clone(),
+        "reportId": report_id.clone(),
+        "reason": reason.clone(),
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "report.return",
+        payload,
+        |c, actor| {
+            reports::return_report(c, &org_id, actor, &task_id, &report_id, &reason)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enclave_report_feedback_list(
+pub async fn enclave_report_feedback_list(
+    org_id: String,
     report_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<FeedbackView>, String> {
-    state.store.with_conn(|c| reports::list_feedback(c, &report_id))
+    let payload = json!({ "reportId": report_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "report.feedback_list",
+        payload,
+        |c, _actor| reports::list_feedback(c, &report_id),
+    )
+    .await
 }
 
 // ════════════════════════════════════════════════════════════
@@ -345,47 +491,80 @@ fn ensure_kb_view(conn: &rusqlite::Connection, org_id: &str) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub fn enclave_kb_list(
+pub async fn enclave_kb_list(
     org_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<crate::enclave::knowledge::KbView>, String> {
-    state.store.with_conn(|c| {
-        ensure_kb_view(c, &org_id)?;
-        crate::enclave::knowledge::list_kbs(c, &org_id)
-    })
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.list",
+        json!({}),
+        |c, _actor| {
+            ensure_kb_view(c, &org_id)?;
+            crate::enclave::knowledge::list_kbs(c, &org_id)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enclave_kb_search(
+pub async fn enclave_kb_search(
     org_id: String,
     kb_id: Option<String>,
     query: String,
     limit: Option<i64>,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<crate::enclave::knowledge::KbEntryView>, String> {
-    state.store.with_conn(|c| {
-        ensure_kb_view(c, &org_id)?;
-        crate::enclave::knowledge::search_entries(
-            c,
-            &org_id,
-            kb_id.as_deref(),
-            &query,
-            limit.unwrap_or(50),
-        )
-    })
+    let payload = json!({
+        "kbId": &kb_id,
+        "query": query.clone(),
+        "limit": limit,
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.search",
+        payload,
+        |c, _actor| {
+            ensure_kb_view(c, &org_id)?;
+            crate::enclave::knowledge::search_entries(
+                c,
+                &org_id,
+                kb_id.as_deref(),
+                &query,
+                limit.unwrap_or(50),
+            )
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn enclave_kb_entry_get(
+pub async fn enclave_kb_entry_get(
     org_id: String,
     kb_id: String,
     memory_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Option<crate::enclave::knowledge::KbEntryView>, String> {
-    state.store.with_conn(|c| {
-        ensure_kb_view(c, &org_id)?;
-        crate::enclave::knowledge::get_entry(c, &org_id, &kb_id, &memory_id)
-    })
+    let payload = json!({ "kbId": kb_id.clone(), "memoryId": memory_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.entry_get",
+        payload,
+        |c, _actor| {
+            ensure_kb_view(c, &org_id)?;
+            crate::enclave::knowledge::get_entry(c, &org_id, &kb_id, &memory_id)
+        },
+    )
+    .await
 }
 
 /// 沉淀重试（确认成功但归档失败时使用）。
@@ -459,15 +638,25 @@ pub fn enclave_kb_update(
 
 /// 知识库「文件」页：去重后的交付物列表（成员可读）。
 #[tauri::command]
-pub fn enclave_kb_file_list(
+pub async fn enclave_kb_file_list(
     org_id: String,
     kb_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<crate::enclave::knowledge::KbFileListView>, String> {
-    state.store.with_conn(|c| {
-        ensure_kb_view(c, &org_id)?;
-        crate::enclave::knowledge::list_files(c, &org_id, &kb_id)
-    })
+    let payload = json!({ "kbId": kb_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.file_list",
+        payload,
+        |c, _actor| {
+            ensure_kb_view(c, &org_id)?;
+            crate::enclave::knowledge::list_files(c, &org_id, &kb_id)
+        },
+    )
+    .await
 }
 
 // ════════════════════════════════════════════════════════════

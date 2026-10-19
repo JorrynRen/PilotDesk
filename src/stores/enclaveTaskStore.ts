@@ -218,6 +218,7 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
       logs.map(async (r) => {
         try {
           const list = await invoke<FeedbackView[]>('enclave_report_feedback_list', {
+            orgId,
             reportId: r.id,
           });
           return [r.id, list] as const;

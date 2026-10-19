@@ -15,11 +15,11 @@
 use std::collections::HashMap;
 
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::enclave::tasks;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KbView {
     pub id: String,
@@ -36,7 +36,7 @@ pub struct KbView {
 }
 
 /// 知识条目引用的交付物（同一份 `file_assets` 原件，不重复拷贝）。
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KbFileView {
     pub file_id: String,
@@ -46,7 +46,7 @@ pub struct KbFileView {
     pub file_hash: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KbEntryView {
     pub memory_id: String,
@@ -175,7 +175,7 @@ pub fn update_kb(
 ///
 /// 同一份原件可能被多个条目引用，因此按 (memory_id, file_id) 展开；
 /// 前端据此按「来源任务 / 知识条目」建目录树。
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KbFileListView {
     pub file_id: String,

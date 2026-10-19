@@ -18,6 +18,7 @@ pub mod knowledge;
 pub mod org;
 pub mod progress;
 pub mod reports;
+pub mod rpc;
 pub mod snapshot;
 pub mod tasks;
 pub mod tls;

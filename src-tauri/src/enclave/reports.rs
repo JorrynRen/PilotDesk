@@ -8,7 +8,7 @@
 //! 权限：草稿/提交仅**负责人**；确认/退回为**管理视角**（manager/creator）。
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::enclave::tasks::{self, TaskRole};
 
@@ -17,7 +17,7 @@ pub const REPORT_SUBMITTED: &str = "submitted";
 pub const REPORT_CONFIRMED: &str = "confirmed";
 pub const REPORT_RETURNED: &str = "returned";
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportView {
     pub id: String,
@@ -438,7 +438,7 @@ pub fn reopen_confirmed_report(
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeedbackView {
     pub id: String,

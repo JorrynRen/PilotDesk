@@ -33,7 +33,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 
 use super::authz::{self, Role};
 use super::org;
-use super::{tasks, tls, transfer, EnclaveState, ENCLAVE_DEFAULT_PORT};
+use super::{rpc, tasks, tls, transfer, EnclaveState, ENCLAVE_DEFAULT_PORT};
 use crate::utils::platform;
 
 /// 平台 `/api/v1/me` 的最小响应（只取身份 id 做一致性校验）。
@@ -195,10 +195,34 @@ pub async fn fetch_task_list(
     db: &crate::DbState,
     org_id: &str,
 ) -> Result<Value, String> {
+    call_host(state, db, org_id, "task.list", json!({})).await
+}
+
+/// 把成员端命令转发到主机执行（主机侧统一按成员身份授权）。
+pub async fn call_host(
+    state: &EnclaveState,
+    db: &crate::DbState,
+    org_id: &str,
+    command: &str,
+    payload: Value,
+) -> Result<Value, String> {
+    // task.list 由主机侧专用方法处理；其余走通用分发器
+    let method = if command == "task.list" {
+        "task.list".to_string()
+    } else {
+        "enclave.call".to_string()
+    };
     let mut session = HostSession::connect(state, db, org_id).await?;
-    let data = session
-        .request("task.list", json!({ "orgId": org_id }))
-        .await;
+    let data = if method == "task.list" {
+        session.request("task.list", json!({ "orgId": org_id })).await
+    } else {
+        session
+            .request(
+                "enclave.call",
+                json!({ "orgId": org_id, "command": command, "payload": payload }),
+            )
+            .await
+    };
     session.close().await;
     data
 }
@@ -525,6 +549,17 @@ async fn handle_conn(
                     }
                 }
             }
+            "enclave.call" => match org_param(&req, &hello) {
+                Ok(org) => {
+                    let command = req.params["command"].as_str().unwrap_or("").to_string();
+                    let payload = req.params.get("payload").cloned().unwrap_or(json!({}));
+                    match handle_enclave_call(&state, org, &hello.user_id, &command, &payload) {
+                        Ok(v) => res_ok(&req.id, v),
+                        Err(e) => res_err(&req.id, &e),
+                    }
+                }
+                Err(e) => res_err(&req.id, &e),
+            },
             "transfer.pending" => match org_param(&req, &hello) {
                 Ok(org) => match handle_transfer_pending(&state, org, &hello.user_id) {
                     Ok(v) => res_ok(&req.id, v),
@@ -603,6 +638,21 @@ fn handle_task_list(state: &EnclaveState, org_id: &str, user_id: &str) -> Result
             .ok_or_else(|| "当前账号不是该组织成员".to_string())?;
         let list = tasks::list_tasks_with_role(c, org_id, user_id, role)?;
         serde_json::to_value(&list).map_err(|e| format!("序列化任务失败：{}", e))
+    })
+}
+
+fn handle_enclave_call(
+    state: &EnclaveState,
+    org_id: &str,
+    user_id: &str,
+    command: &str,
+    payload: &Value,
+) -> Result<Value, String> {
+    state.store.with_conn(|c| {
+        // 每次转发都重新确认成员身份（连接期间可能被移出组织）
+        authz::role_for_member(c, org_id, user_id)?
+            .ok_or_else(|| "当前账号不是该组织成员".to_string())?;
+        rpc::dispatch(c, org_id, user_id, command, payload)
     })
 }
 
@@ -1230,6 +1280,136 @@ mod tests {
         assert_eq!(verified["data"]["phase"], "verified");
 
         let _ = std::fs::remove_file(transfer::lan_package_path(&offer.transfer_id));
+        drop(tx);
+        drop(rx);
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 通用命令转发：成员经 `enclave.call` 建任务 / 查详情 / 改状态，actor 归属成员。
+    #[tokio::test]
+    async fn member_rpc_over_ws() {
+        let dir = std::env::temp_dir().join(format!(
+            "pilotdesk-enclave-rpc-test-{}",
+            crate::utils::new_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = std::sync::Arc::new(
+            super::super::db::EnclaveStore::open(&dir.join("enclave.db")).unwrap(),
+        );
+        store
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT OR REPLACE INTO enclave_settings (key, value, updated_at)
+                     VALUES ('team_files_root', ?1, 0)",
+                    params![dir.to_string_lossy().to_string()],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO local_identity (user_id, email) VALUES ('1', 'host@example.com')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id)
+                     VALUES ('org1', 'Org', '1', 'owner', '1')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO member_snapshot (org_id, user_id, role, display_name)
+                     VALUES ('org1', '2', 'member', 'Member')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        let state = std::sync::Arc::new(EnclaveState::new(store));
+
+        let host_tls = tls::ensure_host_tls_in(&dir.join("tls")).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn({
+            let st = state.clone();
+            let acceptor = host_tls.acceptor.clone();
+            async move {
+                if let Ok((stream, peer)) = listener.accept().await {
+                    if let Ok(tls_stream) = acceptor.accept(stream).await {
+                        handle_conn(tls_stream, peer, st).await;
+                    }
+                }
+            }
+        });
+
+        let (ws, _) = tls::connect_pinned(
+            &format!("wss://127.0.0.1:{}", port),
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        let (mut tx, mut rx) = ws.split();
+        tx.send(Message::Text(
+            json!({
+                "type": "hello", "protocol": PROTOCOL,
+                "orgId": "org1", "userId": "2", "token": "",
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(next_json(&mut rx).await.unwrap()["type"], "hello_ok");
+
+        // 成员建任务：creatorId 必须是成员 2，而不是主机身份 1
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"c1","method":"enclave.call",
+                "params":{
+                    "orgId":"org1","command":"task.create",
+                    "payload":{"input":{"title":"成员创建的任务"}}
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let created = next_json(&mut rx).await.unwrap();
+        assert_eq!(created["ok"], true, "create failed: {}", created);
+        let task_id = created["data"]["id"].as_str().unwrap().to_string();
+        assert_eq!(created["data"]["creatorId"], "2");
+
+        // 查详情
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"c2","method":"enclave.call",
+                "params":{"orgId":"org1","command":"task.get","payload":{"taskId":task_id}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let got = next_json(&mut rx).await.unwrap();
+        assert_eq!(got["ok"], true);
+        assert_eq!(got["data"]["title"], "成员创建的任务");
+
+        // 改状态：待办 → 进行中
+        tx.send(Message::Text(
+            json!({
+                "type":"req","id":"c3","method":"enclave.call",
+                "params":{
+                    "orgId":"org1","command":"task.set_status",
+                    "payload":{"taskId":task_id,"status":"in_progress"}
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let moved = next_json(&mut rx).await.unwrap();
+        assert_eq!(moved["ok"], true, "set_status failed: {}", moved);
+        assert_eq!(moved["data"]["status"], "in_progress");
+
         drop(tx);
         drop(rx);
         drop(state);

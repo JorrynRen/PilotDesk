@@ -370,7 +370,7 @@ pub struct TaskView {
     pub updated_at: i64,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTaskInput {
     pub title: String,
@@ -388,7 +388,7 @@ pub struct CreateTaskInput {
     pub blocked_by: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateTaskInput {
     #[serde(default)]
@@ -406,7 +406,7 @@ pub struct UpdateTaskInput {
 }
 
 /// 依赖变更预览：先给出影响，再由用户确认保存。
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DepsPreview {
     /// 命中环的任务 id 序列（空 = 无环）
@@ -962,6 +962,49 @@ pub fn update_task(
     )
     .map_err(|e| format!("更新任务失败：{}", e))?;
     get_task(conn, org_id, task_id, actor)
+}
+
+/// 状态流转（命令层 / 主机 RPC 共用）：先做入口守卫，再交给 [`set_status`]。
+///
+/// - 「待确认」只能由完成汇报驱动，不能直接改成该状态；
+/// - 汇总容器不接受手动开始 / 放回待办 / 直接完成（完成走「汇总确认」）；
+/// - 已完成 / 已归档 → 进行中视为恢复汇报，需同步把最近一次已确认汇报退回可编辑。
+pub fn set_status_checked(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+    status: &str,
+) -> Result<TaskView, String> {
+    let current = task_status(conn, org_id, task_id)?;
+    let container = is_container(conn, org_id, task_id)?;
+    if container {
+        match status {
+            STATUS_IN_PROGRESS => {
+                return Err(
+                    "汇总任务的状态由子任务派生，不能手动恢复；请重新打开子任务".to_string(),
+                )
+            }
+            STATUS_PENDING => {
+                return Err("汇总任务的状态由子任务派生，不能手动放回待办".to_string())
+            }
+            STATUS_DONE => return Err("请在子任务全部完成后使用「汇总确认」".to_string()),
+            _ => {}
+        }
+    }
+    if status == STATUS_SUBMITTED {
+        return Err("请通过「完成汇报 → 提交汇报」把任务推进到待确认".to_string());
+    }
+    // 汇总容器在「待汇总确认」时允许直接作废（放弃这批产出），其余仍走汇报流程
+    if current == STATUS_SUBMITTED && !(container && status == STATUS_CANCELLED) {
+        return Err("待确认任务请通过完成汇报的「确认完成 / 退回」处理".to_string());
+    }
+    if status == STATUS_IN_PROGRESS && (current == STATUS_DONE || current == STATUS_ARCHIVED) {
+        let role = actor_task_role(conn, org_id, task_id, actor)?;
+        can_transition(&current, status, role)?;
+        crate::enclave::reports::reopen_confirmed_report(conn, org_id, task_id, actor)?;
+    }
+    set_status(conn, org_id, actor, task_id, status)
 }
 
 /// 状态流转（含 `started_at` / `completed_at` 联动；提交/确认在 M4 接汇报后补联动）。

@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// `enclave_settings` 中保存团队文件**基础目录**的键。
@@ -245,7 +245,7 @@ fn safe_file_name(raw: &str) -> String {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileAssetView {
     pub id: String,
