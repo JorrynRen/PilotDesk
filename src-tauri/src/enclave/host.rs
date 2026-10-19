@@ -22,7 +22,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -286,6 +286,92 @@ fn file_cache_dir(org_id: &str) -> PathBuf {
         .join(safe_component(org_id))
 }
 
+fn cache_root() -> PathBuf {
+    crate::utils::paths::app_root_dir().join("enclave").join("cache")
+}
+
+fn uploads_root() -> PathBuf {
+    crate::utils::paths::app_root_dir().join("enclave").join("uploads")
+}
+
+/// 成员文件缓存上限（全机共享，按最近访问时间淘汰）。
+const CACHE_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// 淘汰目标：降到上限的 90%，避免频繁触发。
+const CACHE_TARGET_RATIO: f64 = 0.9;
+/// 上传临时文件保鲜期（秒）：异常中断的上传不长期占用磁盘。
+const UPLOAD_STALE_SECS: u64 = 24 * 3600;
+
+fn touch_cache_entry(path: &Path) {
+    // 用 mtime 记录「最近访问」，作为 LRU 依据（Windows 默认不更新 atime）
+    if let Ok(file) = OpenOptions::new().write(true).open(path) {
+        let _ = file.set_modified(SystemTime::now());
+    }
+}
+
+fn mtime_secs(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn collect_files(dir: &Path, out: &mut Vec<(PathBuf, u64, u64)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => collect_files(&path, out),
+            Ok(t) if t.is_file() => {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                out.push((path.clone(), size, mtime_secs(&path)));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 把缓存总量压到上限以内：按 mtime 从旧到新删除，直到降到 90%。
+fn enforce_cache_limit(root: &Path, max_bytes: u64) -> Result<(), String> {
+    let mut files = Vec::new();
+    collect_files(root, &mut files);
+    let mut total: u64 = files.iter().map(|(_, size, _)| *size).sum();
+    if total <= max_bytes {
+        return Ok(());
+    }
+    files.sort_by_key(|(_, _, mtime)| *mtime);
+    let target = (max_bytes as f64 * CACHE_TARGET_RATIO) as u64;
+    for (path, size, _) in files {
+        if total <= target {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+        }
+    }
+    Ok(())
+}
+
+/// 清理异常中断留下的上传临时文件（超过 24h）。
+fn cleanup_stale_uploads() {
+    let mut files = Vec::new();
+    collect_files(&uploads_root(), &mut files);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for (path, _, mtime) in files {
+        if path.extension().and_then(|e| e.to_str()) == Some("part")
+            && now.saturating_sub(mtime) > UPLOAD_STALE_SECS
+        {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// 成员端上传本地文件到主机（分块；返回主机侧的 `FileAssetView`）。
 pub async fn upload_file(
     state: &EnclaveState,
@@ -436,6 +522,7 @@ pub async fn fetch_file_to_cache(
     if target.exists() {
         let cached = std::fs::read(&target).unwrap_or_default();
         if cached.len() as u64 == file_size && transfer::hex_sha256(&cached) == file_hash {
+            touch_cache_entry(&target);
             session.close().await;
             return Ok(target.to_string_lossy().to_string());
         }
@@ -484,6 +571,8 @@ pub async fn fetch_file_to_cache(
         let _ = std::fs::remove_file(&target);
     }
     std::fs::rename(&part, &target).map_err(|e| format!("保存文件缓存失败：{}", e))?;
+    touch_cache_entry(&target);
+    let _ = enforce_cache_limit(&cache_root(), CACHE_MAX_BYTES);
     Ok(target.to_string_lossy().to_string())
 }
 
@@ -1005,6 +1094,7 @@ fn handle_upload_begin(
     user_id: &str,
 ) -> Result<Value, String> {
     ensure_member(state, org_id, user_id)?;
+    cleanup_stale_uploads();
     let upload_id = crate::utils::new_id();
     let path = upload_path(org_id, user_id, &upload_id);
     if let Some(parent) = path.parent() {
@@ -1542,6 +1632,42 @@ mod tests {
     #[test]
     fn discovery_ttl_is_positive() {
         assert!(DISCOVERY_TTL_SECS > 0);
+    }
+
+    /// 缓存上限：按最近访问时间淘汰，淘汰后总量不高于目标值。
+    #[test]
+    fn cache_eviction_evicts_oldest() {
+        let dir = std::env::temp_dir().join(format!(
+            "pilotdesk-enclave-cache-test-{}",
+            crate::utils::new_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = SystemTime::now();
+        let make = |name: &str, age_secs: u64| {
+            let path = dir.join(name);
+            std::fs::write(&path, [0u8; 4]).unwrap();
+            let file = OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_modified(now - Duration::from_secs(age_secs)).unwrap();
+            path
+        };
+        let a = make("a.bin", 3 * 3600);
+        let b = make("b.bin", 2 * 3600);
+        let c = make("c.bin", 3600);
+
+        // 总量 12 字节，上限 8 → 目标 7：淘汰 a、b，保留 c
+        enforce_cache_limit(&dir, 8).unwrap();
+        assert!(!a.exists(), "最旧的 a 应被淘汰");
+        assert!(!b.exists(), "次旧的 b 应被淘汰");
+        assert!(c.exists(), "最新的 c 应保留");
+
+        let remaining: u64 = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+            .sum();
+        assert!(remaining <= 7);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 协议级联调：成员端握手（快照模式）→ `task.list` 往返。
