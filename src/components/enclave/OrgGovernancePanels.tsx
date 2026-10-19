@@ -7,9 +7,11 @@
 
 import { useEffect, useState } from 'react';
 import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw, ArrowLeftRight } from 'lucide-react';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
+import { errorMessage } from '../../utils/errorMessage';
 import type { TransferExportOutcome, TransferPhase, TransferView } from '../../types/enclave';
 
 const ACTION_LABEL: Record<string, string> = {
@@ -291,6 +293,27 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** 生成迁移包口令：去掉易混淆字符（0/O、1/l/I），24 位足够线下转述。 */
+function randomPassphrase(len = 24): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+}
+
+async function copyText(text: string, label: string): Promise<void> {
+  if (!text) {
+    showToast(`请先填写${label}`, 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`${label}已复制`, 'success');
+  } catch (e) {
+    showToast(`复制失败：${errorMessage(e)}`, 'error');
+  }
+}
+
 /**
  * 主机转移（M8）：线下加密迁移包导出/导入 + 状态推进 + 旧机销毁。
  *
@@ -308,6 +331,45 @@ function TransferCard({ orgId }: { orgId: string }) {
   const [busy, setBusy] = useState<'export' | 'import' | null>(null);
 
   const canTransfer = !!caps?.actions.includes('host.transfer');
+
+  /** 选择导出位置（.pdesk） */
+  const pickExportPath = async () => {
+    try {
+      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const picked = await saveDialog({
+        title: '选择迁移包导出位置',
+        defaultPath: `enclave-${orgId}-${stamp}.pdesk`,
+        filters: [{ name: '飞地迁移包', extensions: ['pdesk'] }],
+      });
+      if (typeof picked === 'string' && picked) setOutPath(picked);
+    } catch (e) {
+      showToast(`选择导出位置失败：${errorMessage(e)}`, 'error');
+    }
+  };
+
+  /** 选择待导入的迁移包 */
+  const pickImportPath = async () => {
+    try {
+      const picked = await openDialog({
+        title: '选择飞地迁移包',
+        multiple: false,
+        filters: [{ name: '飞地迁移包', extensions: ['pdesk'] }],
+      });
+      const path = Array.isArray(picked) ? picked[0] : picked;
+      if (typeof path === 'string' && path) setImportPath(path);
+    } catch (e) {
+      showToast(`选择迁移包失败：${errorMessage(e)}`, 'error');
+    }
+  };
+
+  const pastePassphrase = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text.trim()) setImportPass(text.trim());
+    } catch (e) {
+      showToast(`读取剪贴板失败：${errorMessage(e)}`, 'error');
+    }
+  };
 
   const doExport = async () => {
     if (pass.trim().length < 8) {
@@ -424,81 +486,115 @@ function TransferCard({ orgId }: { orgId: string }) {
         未校验不得生效；云端未生效不得销毁。
       </div>
 
-      {/* 转出：仅 owner */}
-      {canTransfer && (
+      {/* 转出 / 接管互斥：owner = 主机 → 转出；成员 → 接管 */}
+      {!caps && (
+        <div className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          治理信息尚未加载，暂不能发起或接收转移。
+        </div>
+      )}
+
+      {caps && canTransfer && (
         <div className="mt-2 flex flex-col gap-1.5">
           <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
             我转出（旧主机）
           </div>
           <div className="flex items-center gap-1.5">
             <input
+              readOnly
+              value={outPath}
+              placeholder="迁移包导出位置（留空用默认目录，可点右侧选择）"
+              className="flex-1 min-w-0 h-7 px-2 rounded text-[11px] outline-none"
+              style={inputStyle}
+            />
+            <button onClick={() => void pickExportPath()} className="h-7 px-2 rounded text-[11px] shrink-0"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+              选择
+            </button>
+            <input
               type="password"
               value={pass}
               onChange={(e) => setPass(e.target.value)}
-              placeholder="迁移包口令（至少 8 位，线下另行告知接收方）"
-              className="flex-1 h-7 px-2 rounded text-[11px] outline-none"
+              placeholder="迁移包口令（至少 8 位）"
+              className="w-[180px] h-7 px-2 rounded text-[11px] outline-none"
               style={inputStyle}
             />
-            <input
-              value={outPath}
-              onChange={(e) => setOutPath(e.target.value)}
-              placeholder="导出路径（留空用默认目录）"
-              className="w-[200px] h-7 px-2 rounded text-[11px] outline-none"
-              style={inputStyle}
-            />
+            <button onClick={() => setPass(randomPassphrase())} className="h-7 px-2 rounded text-[11px] shrink-0"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+              生成
+            </button>
+            <button onClick={() => void copyText(pass, '口令')} className="h-7 px-2 rounded text-[11px] shrink-0"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+              复制
+            </button>
             <button
               onClick={() => void doExport()}
               disabled={busy === 'export'}
-              className="h-7 px-2 rounded text-[11px] flex items-center gap-1"
+              className="h-7 px-2 rounded text-[11px] flex items-center gap-1 shrink-0"
               style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: busy === 'export' ? 0.6 : 1 }}
             >
               {busy === 'export' && <Loader2 size={10} className="animate-spin" />}
               导出迁移包
             </button>
           </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            口令不随包传输，请通过线下或另一条可信渠道告知接收方。
+          </div>
           {exported && (
             <div className="text-[10px] break-all" style={{ color: 'var(--text-tertiary)' }}>
-              已导出：{exported.path}（sha256 {exported.packageHash.slice(0, 16)}…）
+              已导出：{exported.path}（sha256 {exported.packageHash.slice(0, 16)}…，{formatBytes(exported.size)}）
             </div>
           )}
         </div>
       )}
 
-      {/* 接管：组织成员均可导入 */}
-      <div className="mt-2 flex flex-col gap-1.5">
-        <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-          我接管（新主机）
+      {caps && !canTransfer && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            我接管（新主机）
+          </div>
+          <div className="flex items-center gap-1.5">
+            <input
+              readOnly
+              value={importPath}
+              placeholder="迁移包路径（点击右侧选择）"
+              className="flex-1 min-w-0 h-7 px-2 rounded text-[11px] outline-none"
+              style={inputStyle}
+            />
+            <button onClick={() => void pickImportPath()} className="h-7 px-2 rounded text-[11px] shrink-0"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+              选择
+            </button>
+            <input
+              type="password"
+              value={importPass}
+              onChange={(e) => setImportPass(e.target.value)}
+              placeholder="迁移包口令"
+              className="w-[180px] h-7 px-2 rounded text-[11px] outline-none"
+              style={inputStyle}
+            />
+            <button onClick={() => void pastePassphrase()} className="h-7 px-2 rounded text-[11px] shrink-0"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+              粘贴
+            </button>
+            <button onClick={() => void copyText(importPass, '口令')} className="h-7 px-2 rounded text-[11px] shrink-0"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+              复制
+            </button>
+            <button
+              onClick={() => void doImport()}
+              disabled={busy === 'import'}
+              className="h-7 px-2 rounded text-[11px] flex items-center gap-1 shrink-0"
+              style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: busy === 'import' ? 0.6 : 1 }}
+            >
+              {busy === 'import' && <Loader2 size={10} className="animate-spin" />}
+              导入并校验
+            </button>
+          </div>
+          <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            导入成功后记录为「已校验」；待云端完成所有权转让后才会成为主机。
+          </div>
         </div>
-        <div className="flex items-center gap-1.5">
-          <input
-            value={importPath}
-            onChange={(e) => setImportPath(e.target.value)}
-            placeholder="迁移包完整路径（.pdesk）"
-            className="flex-1 h-7 px-2 rounded text-[11px] outline-none"
-            style={inputStyle}
-          />
-          <input
-            type="password"
-            value={importPass}
-            onChange={(e) => setImportPass(e.target.value)}
-            placeholder="迁移包口令"
-            className="w-[160px] h-7 px-2 rounded text-[11px] outline-none"
-            style={inputStyle}
-          />
-          <button
-            onClick={() => void doImport()}
-            disabled={busy === 'import'}
-            className="h-7 px-2 rounded text-[11px] flex items-center gap-1"
-            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)', opacity: busy === 'import' ? 0.6 : 1 }}
-          >
-            {busy === 'import' && <Loader2 size={10} className="animate-spin" />}
-            导入并校验
-          </button>
-        </div>
-        <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-          导入成功后记录为「已校验」；待云端完成所有权转让后才会成为主机。
-        </div>
-      </div>
+      )}
 
       {/* 记录 */}
       {transfers.length > 0 && (
