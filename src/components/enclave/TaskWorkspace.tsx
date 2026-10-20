@@ -748,6 +748,8 @@ function TaskDetail(props: {
   const progress = useEnclaveTaskStore((s) => s.progress);
   // 沟通层：任务讨论（与过程记录分开，任何非终态都可讨论）
   const comments = useEnclaveTaskStore((s) => s.comments);
+  /** 详情分组：概览 / 协作 / 交付，避免单列承载全部内容 */
+  const [detailTab, setDetailTab] = useState<'overview' | 'collab' | 'delivery'>('overview');
   const [commentText, setCommentText] = useState('');
   const [replyTo, setReplyTo] = useState<TaskCommentView | null>(null);
   const [mentionIds, setMentionIds] = useState<string[]>([]);
@@ -1067,6 +1069,38 @@ function TaskDetail(props: {
         </div>
       )}
 
+      {/* 详情分组：概览 / 协作 / 交付 */}
+      <div className="flex items-center gap-1.5">
+        {([
+          { key: 'overview', label: '概览' },
+          { key: 'collab', label: '协作', count: comments.length + (progress?.items.length ?? 0) },
+          { key: 'delivery', label: '交付', count: reports.length },
+        ] as const).map((t) => {
+          const on = detailTab === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setDetailTab(t.key)}
+              className="text-[11px] px-2.5 py-1 rounded-lg flex items-center gap-1"
+              style={{
+                backgroundColor: on ? 'var(--bg-tertiary)' : 'transparent',
+                color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
+                border: `1px solid ${on ? 'var(--border)' : 'transparent'}`,
+              }}
+            >
+              {t.label}
+              {'count' in t && t.count > 0 && (
+                <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+                  {t.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {detailTab === 'overview' && (
+        <>
       {/* 任务信息（属性 + 依赖都直接展示；修改时才出现表单） */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-1.5">
@@ -1387,6 +1421,11 @@ function TaskDetail(props: {
         )}
       </div>
 
+        </>
+      )}
+
+      {detailTab === 'collab' && (
+        <>
       {/* 沟通层：任务讨论（支持回复与 @ 提及；归档 / 作废后只读） */}
       <div
         className="rounded-lg p-3 flex flex-col gap-2"
@@ -1548,7 +1587,11 @@ function TaskDetail(props: {
           )
         )}
       </div>
+        </>
+      )}
 
+      {detailTab === 'overview' && (
+        <>
       {/* 汇总容器：状态由子任务派生，全部收敛后可汇总确认 */}
       {isContainer && (
         <div
@@ -1606,11 +1649,13 @@ function TaskDetail(props: {
           ))}
         </div>
       )}
+        </>
+      )}
         </div>
       </fieldset>
 
       {/* 提交任务区：普通任务可写；拆分后的容器只读展示历史记录 */}
-      {(!isContainer || hasExecutionHistory) && (
+      {detailTab === 'collab' && (!isContainer || hasExecutionHistory) && (
       <fieldset
         className="m-0 min-w-0 p-0"
         style={{
@@ -1620,7 +1665,7 @@ function TaskDetail(props: {
         }}
       >
         <legend className="px-1.5 m-0 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-          {isContainer ? '历史执行记录' : '提交任务'}
+          {isContainer ? '历史过程记录' : '过程记录'}
         </legend>
         <div className="flex flex-col gap-3">
       {(!isContainer || (progress?.items.length ?? 0) > 0) && (
@@ -1780,9 +1825,12 @@ function TaskDetail(props: {
         )}
       </div>
       )}
+        </div>
+      </fieldset>
+      )}
 
       {/* 完成汇报（普通任务可写；容器只读展示历史） */}
-      {(!isContainer || reports.length > 0) && (
+      {detailTab === 'delivery' && (!isContainer || reports.length > 0) && (
       <div
         className="flex flex-col gap-2 rounded-lg p-3"
         style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
@@ -2083,9 +2131,6 @@ function TaskDetail(props: {
           </div>
         )}
       </div>
-      )}
-        </div>
-      </fieldset>
       )}
     </div>
   );

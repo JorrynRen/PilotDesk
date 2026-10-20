@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users } from 'lucide-react';
 import { TitleBar, StatusBar } from '../components/layout';
@@ -11,6 +11,17 @@ import type { MemberView } from '../types/enclave';
 
 /** 治理快照新鲜度上限（秒）：超过即视为「可能过期」，与后端 SNAPSHOT_STALE_MAX_SECS 对齐。 */
 const SNAPSHOT_STALE_MAX_SECS = 600;
+
+/** 成员列表每页条数 */
+const MEMBER_PAGE_SIZE = 10;
+
+type OrgTab = 'basic' | 'host' | 'security';
+
+const ORG_TABS: { key: OrgTab; label: string }[] = [
+  { key: 'basic', label: '基本信息与成员' },
+  { key: 'host', label: '主机与连接' },
+  { key: 'security', label: '安全与审计' },
+];
 
 const ROLE_LABEL: Record<string, string> = {
   owner: '所有者',
@@ -81,6 +92,17 @@ export function EnclaveOrgPage() {
 
   const org = detail?.org ?? orgs.find((o) => o.orgId === activeOrgId) ?? null;
   const members: MemberView[] = detail?.members ?? [];
+  const [orgTab, setOrgTab] = useState<OrgTab>('basic');
+  const [memberPage, setMemberPage] = useState(0);
+  const memberPages = Math.max(1, Math.ceil(members.length / MEMBER_PAGE_SIZE));
+  const currentMemberPage = Math.min(memberPage, memberPages - 1);
+  const pagedMembers = members.slice(
+    currentMemberPage * MEMBER_PAGE_SIZE,
+    (currentMemberPage + 1) * MEMBER_PAGE_SIZE,
+  );
+  useEffect(() => {
+    setMemberPage(0);
+  }, [activeOrgId]);
   // 成员列表拉取失败的原因（平台成员接口属待对齐项）：只提示，不算整轮失败
   const memberWarning = lastRefresh?.memberError ?? null;
 
@@ -114,6 +136,27 @@ export function EnclaveOrgPage() {
           <EnclaveNavBar active="org" onRefresh={refreshOrg} refreshing={loading} />
         </div>
 
+        {/* 页内分组：把 8 个板块收敛为 3 组，避免单页过长 */}
+        <div className="shrink-0 flex items-center gap-1.5 pt-2">
+          {ORG_TABS.map((t) => {
+            const on = orgTab === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setOrgTab(t.key)}
+                className="text-xs px-2.5 py-1 rounded-lg"
+                style={{
+                  backgroundColor: on ? 'var(--bg-tertiary)' : 'transparent',
+                  color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  border: `1px solid ${on ? 'var(--border)' : 'transparent'}`,
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+
         <div className="flex-1 min-h-0 pt-2 pb-0 flex flex-col gap-2 overflow-auto">
         {error && (
           <div className="text-xs" style={{ color: 'var(--status-danger)' }}>
@@ -121,6 +164,8 @@ export function EnclaveOrgPage() {
           </div>
         )}
 
+        {orgTab === 'basic' && (
+          <>
         {/* 组织信息卡 */}
         {org && (
           <div
@@ -206,7 +251,7 @@ export function EnclaveOrgPage() {
                 </tr>
               </thead>
               <tbody>
-                {members.map((m) => {
+                {pagedMembers.map((m) => {
                   const removed = m.seatStatus === 'removed';
                   return (
                     <tr
@@ -238,10 +283,51 @@ export function EnclaveOrgPage() {
               </tbody>
             </table>
           </div>
+          <div
+            className="shrink-0 h-8 px-3 flex items-center gap-2 text-[10px]"
+            style={{ borderTop: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
+          >
+            <span>
+              {members.length === 0
+                ? '0'
+                : `${currentMemberPage * MEMBER_PAGE_SIZE + 1}-${Math.min(
+                    (currentMemberPage + 1) * MEMBER_PAGE_SIZE,
+                    members.length,
+                  )}`}{' '}
+              / {members.length}
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={() => setMemberPage(currentMemberPage - 1)}
+              disabled={currentMemberPage <= 0}
+              className="px-2 py-0.5 rounded"
+              style={{
+                border: '1px solid var(--border)',
+                color: 'var(--text-secondary)',
+                opacity: currentMemberPage <= 0 ? 0.4 : 1,
+              }}
+            >
+              上一页
+            </button>
+            <button
+              onClick={() => setMemberPage(currentMemberPage + 1)}
+              disabled={currentMemberPage >= memberPages - 1}
+              className="px-2 py-0.5 rounded"
+              style={{
+                border: '1px solid var(--border)',
+                color: 'var(--text-secondary)',
+                opacity: currentMemberPage >= memberPages - 1 ? 0.4 : 1,
+              }}
+            >
+              下一页
+            </button>
+          </div>
         </div>
+          </>
+        )}
 
-        {/* M2 治理：数据出境闸门 / 主机应急 / 变更审计 */}
-        <OrgGovernanceSection />
+        {orgTab === 'host' && <OrgGovernanceSection section="host" />}
+        {orgTab === 'security' && <OrgGovernanceSection section="security" />}
         </div>
       </div>
 

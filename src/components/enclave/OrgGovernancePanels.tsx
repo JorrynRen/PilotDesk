@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { Select } from '../common/Select';
-import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
+import { useEnclaveOrgStore, AUDIT_PAGE_SIZE } from '../../stores/enclaveOrgStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
@@ -1187,16 +1187,26 @@ function BackupCard() {
   );
 }
 
-export function OrgGovernanceSection() {
+export function OrgGovernanceSection({
+  section = 'all',
+}: {
+  /** all = 兼容旧布局；host = 主机与连接；security = 安全与审计 */
+  section?: 'all' | 'host' | 'security';
+}) {
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
   const caps = useEnclaveOrgStore((s) => s.caps);
   const policy = useEnclaveOrgStore((s) => s.policy);
   const emergency = useEnclaveOrgStore((s) => s.emergency);
   const detail = useEnclaveOrgStore((s) => s.detail);
   const audit = useEnclaveOrgStore((s) => s.audit);
+  const auditOffset = useEnclaveOrgStore((s) => s.auditOffset);
+  const auditHasMore = useEnclaveOrgStore((s) => s.auditHasMore);
   const [busy, setBusy] = useState<'policy' | 'emergency' | null>(null);
 
   if (!activeOrgId) return null;
+
+  const showSecurity = section !== 'host';
+  const showHost = section !== 'security';
 
   // 操作人展示：姓名 + 邮箱（优先本机登录身份，其次成员快照），都没有才回落到平台用户 id
   const actorLabel = (actorId: string): string => {
@@ -1254,6 +1264,8 @@ export function OrgGovernanceSection() {
 
   return (
     <div className="shrink-0 flex flex-col gap-2">
+      {showSecurity && (
+        <>
       {/* 数据出境总闸 */}
       <div
         className="rounded-lg px-3 py-2"
@@ -1321,7 +1333,11 @@ export function OrgGovernanceSection() {
           </div>
         )}
       </div>
+        </>
+      )}
 
+      {showHost && (
+        <>
       {/* 主机与连接（M7）：主机监听状态 / 成员发现与手动地址 */}
       <HostConnectionCard orgId={activeOrgId} />
 
@@ -1330,9 +1346,11 @@ export function OrgGovernanceSection() {
 
       {/* 主机转移（M8）：迁移包导出导入 + 状态推进 + 旧机销毁 */}
       <TransferCard orgId={activeOrgId} />
+        </>
+      )}
 
       {/* 审计流水（仅 owner / admin；member 不渲染） */}
-      {canAudit && (
+      {showSecurity && canAudit && (
       <div
         className="rounded-lg flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
@@ -1377,6 +1395,45 @@ export function OrgGovernanceSection() {
               )}
             </tbody>
           </table>
+        </div>
+        <div
+          className="shrink-0 h-8 px-3 flex items-center gap-2 text-[10px]"
+          style={{ borderTop: '1px solid var(--border)', color: 'var(--text-tertiary)' }}
+        >
+          <span>第 {Math.floor(auditOffset / AUDIT_PAGE_SIZE) + 1} 页</span>
+          <div className="flex-1" />
+          <button
+            onClick={() =>
+              void useEnclaveOrgStore
+                .getState()
+                .loadAudit(activeOrgId, Math.max(0, auditOffset - AUDIT_PAGE_SIZE))
+            }
+            disabled={auditOffset <= 0}
+            className="px-2 py-0.5 rounded"
+            style={{
+              border: '1px solid var(--border)',
+              color: 'var(--text-secondary)',
+              opacity: auditOffset <= 0 ? 0.4 : 1,
+            }}
+          >
+            上一页
+          </button>
+          <button
+            onClick={() =>
+              void useEnclaveOrgStore
+                .getState()
+                .loadAudit(activeOrgId, auditOffset + AUDIT_PAGE_SIZE)
+            }
+            disabled={!auditHasMore}
+            className="px-2 py-0.5 rounded"
+            style={{
+              border: '1px solid var(--border)',
+              color: 'var(--text-secondary)',
+              opacity: !auditHasMore ? 0.4 : 1,
+            }}
+          >
+            下一页
+          </button>
         </div>
       </div>
       )}

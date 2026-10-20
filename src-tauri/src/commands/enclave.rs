@@ -478,11 +478,13 @@ pub async fn enclave_backup_now(
 pub fn enclave_audit_list(
     org_id: String,
     limit: Option<i64>,
+    offset: Option<i64>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<crate::enclave::org::AuditView>, String> {
     use crate::enclave::authz::{self, Action, Role};
 
     let limit = limit.unwrap_or(50).clamp(1, 200);
+    let offset = offset.unwrap_or(0).max(0);
     state.store.with_conn(|c| {
         let role = authz::role_for_org(c, &org_id)?.ok_or_else(|| {
             "尚未同步该组织的治理快照，请先在「组织与权限」页点击刷新".to_string()
@@ -490,7 +492,7 @@ pub fn enclave_audit_list(
         if !authz::org_allows(role, Action::OrgAdmin) {
             return Err("仅组织所有者或管理员可查看变更审计".to_string());
         }
-        let mut rows = crate::enclave::org::list_audit(c, &org_id, limit)?;
+        let mut rows = crate::enclave::org::list_audit(c, &org_id, limit, offset)?;
         if role != Role::Owner {
             for row in &mut rows {
                 if row.action == "files.root" {

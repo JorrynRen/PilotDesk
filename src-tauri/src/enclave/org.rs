@@ -688,16 +688,21 @@ pub fn audit(
 }
 
 /// 读某组织的审计流水（按 `created_at` 倒序，`limit` 条）。
-pub fn list_audit(conn: &Connection, org_id: &str, limit: i64) -> Result<Vec<AuditView>, String> {
+pub fn list_audit(
+    conn: &Connection,
+    org_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AuditView>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, org_id, actor_id, action, detail, created_at
              FROM policy_audit WHERE org_id = ?1
-             ORDER BY created_at DESC LIMIT ?2",
+             ORDER BY created_at DESC, id DESC LIMIT ?2 OFFSET ?3",
         )
         .map_err(|e| format!("查询审计失败：{}", e))?;
     let rows = stmt
-        .query_map(params![org_id, limit], |r| {
+        .query_map(params![org_id, limit, offset.max(0)], |r| {
             Ok(AuditView {
                 id: r.get(0)?,
                 org_id: r.get(1)?,
@@ -819,7 +824,7 @@ mod tests {
         assert!(view.explicit);
         assert_eq!(view.updated_by, "1");
 
-        let logs = list_audit(&conn, "8", 10).unwrap();
+        let logs = list_audit(&conn, "8", 10, 0).unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].action, "policy.allow_cloud_model");
         assert_eq!(logs[0].actor_id, "1");
@@ -854,9 +859,24 @@ mod tests {
         assert!(view.disabled);
         assert!(any_emergency_disabled(&conn).unwrap());
 
-        let logs = list_audit(&conn, "8", 10).unwrap();
+        let logs = list_audit(&conn, "8", 10, 0).unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].action, "host.emergency");
+    }
+
+    /// 审计按 limit/offset 翻页：第二页与第一页不重复。
+    #[test]
+    fn audit_pagination_offset() {
+        let conn = seeded("owner");
+        let actor = authorize(&conn, "8", Action::EmergencySet).unwrap();
+        for i in 0..3 {
+            audit(&conn, "8", &actor, "host.emergency", &format!("{{\"n\":{}}}", i)).unwrap();
+        }
+        let page1 = list_audit(&conn, "8", 2, 0).unwrap();
+        let page2 = list_audit(&conn, "8", 2, 2).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page2.len(), 1);
+        assert!(page1.iter().all(|a| a.id != page2[0].id));
     }
 
     /// 未设置过策略时按默认「不允许」呈现（fail-safe）。

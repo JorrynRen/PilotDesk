@@ -28,6 +28,9 @@ import type {
   TransferView,
 } from '../types/enclave';
 
+/** 变更审计每页条数（与成员列表一致，避免长表） */
+export const AUDIT_PAGE_SIZE = 10;
+
 interface EnclaveOrgState {
   orgs: OrgSnapshotView[];
   activeOrgId: string;
@@ -50,6 +53,9 @@ interface EnclaveOrgState {
   lanPendingError: string | null;
   /** 策略 / 应急变更审计流水 */
   audit: AuditView[];
+  /** 审计分页：当前偏移与是否还有下一页 */
+  auditOffset: number;
+  auditHasMore: boolean;
   /** 站内通知（当前组织；成员端经主机转发读取） */
   notifications: NotificationView[];
   /** 主机自动备份状态（本机设置） */
@@ -72,6 +78,8 @@ interface EnclaveOrgState {
   loadFreshness: () => Promise<void>;
   /** 拉组织能力 / 策略 / 应急 / 审计（切换组织时调用） */
   loadGovernance: (id: string) => Promise<void>;
+  /** 审计翻页（offset 为起始条数） */
+  loadAudit: (id: string, offset: number) => Promise<void>;
   /** 设置数据出境总闸；成功返回 true */
   setPolicy: (id: string, allow: boolean) => Promise<boolean>;
   /** 设置主机应急开关；成功返回 true */
@@ -137,6 +145,8 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   lanPending: [],
   lanPendingError: null,
   audit: [],
+  auditOffset: 0,
+  auditHasMore: false,
   notifications: [],
   backup: null,
   loading: false,
@@ -172,6 +182,8 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
       lanPending: [],
       lanPendingError: null,
       audit: [],
+      auditOffset: 0,
+      auditHasMore: false,
       notifications: [],
       backup: null,
       loading: false,
@@ -244,12 +256,45 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
       invoke<EnclaveOrgCaps>('enclave_org_caps', { orgId: id }).catch(() => null),
       invoke<PolicyView>('enclave_policy_get', { orgId: id }).catch(() => null),
       invoke<EmergencyView>('enclave_emergency_get', { orgId: id }).catch(() => null),
-      invoke<AuditView[]>('enclave_audit_list', { orgId: id, limit: 50 }).catch(() => []),
+      invoke<AuditView[]>('enclave_audit_list', {
+        orgId: id,
+        limit: AUDIT_PAGE_SIZE,
+        offset: 0,
+      }).catch(() => []),
       invoke<HostStatusView>('enclave_host_status', { orgId: id }).catch(() => null),
       invoke<TransferView[]>('enclave_transfer_list', { orgId: id }).catch(() => []),
       invoke<CacheInfoView>('enclave_cache_info').catch(() => null),
     ]);
-    set({ caps, policy, emergency, audit, host, transfers, cache });
+    set({
+      caps,
+      policy,
+      emergency,
+      audit,
+      auditOffset: 0,
+      auditHasMore: audit.length >= AUDIT_PAGE_SIZE,
+      host,
+      transfers,
+      cache,
+    });
+  },
+
+  loadAudit: async (id, offset) => {
+    const nextOffset = Math.max(0, offset);
+    try {
+      const audit = await invoke<AuditView[]>('enclave_audit_list', {
+        orgId: id,
+        limit: AUDIT_PAGE_SIZE,
+        offset: nextOffset,
+      });
+      set({
+        audit,
+        auditOffset: nextOffset,
+        auditHasMore: audit.length >= AUDIT_PAGE_SIZE,
+        error: null,
+      });
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
   },
 
   loadHost: async (id) => {
