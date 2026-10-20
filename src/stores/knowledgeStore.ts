@@ -34,6 +34,10 @@ import {
   type KnowledgeMeta,
   type KnowledgeRelation,
   type IngestOutcome,
+  type IngestCapability,
+  type IngestQueueItem,
+  type IngestQueueRunOutcome,
+  type CandidateAddOutcome,
 } from '../types/knowledge';
 
 export type KnowledgeTab = 'entries' | 'files' | 'ingest' | 'graph';
@@ -164,6 +168,18 @@ interface KnowledgeState {
   /** 投喂进行中（片段 / 文件 / 网页 / 云文档 / AI 生成共用）。
    *  投喂会调模型、可能分批调用长文档，必须有可见反馈，否则用户以为没在执行。 */
   ingestBusy: { kind: 'snippet' | 'file' | 'url' | 'cloud' | 'ai'; label: string; step: string } | null;
+  /** 当前加工能力（本地/云端/none）；断网或未配置模型时投喂仍可用，只是进「待整理」 */
+  ingestCapability: IngestCapability | null;
+  /** 当前库的「待整理」队列 */
+  ingestQueue: IngestQueueItem[];
+  loadIngestCapability: () => Promise<void>;
+  loadIngestQueue: () => Promise<void>;
+  /** 立即消费待整理队列（模型不可用时直接返回 stopped） */
+  runIngestQueue: () => Promise<IngestQueueRunOutcome | null>;
+  retryIngestItem: (id: string) => Promise<void>;
+  dropIngestItem: (id: string) => Promise<void>;
+  /** 手工整理（仅片段）：不经模型，按原文放进「待确认」 */
+  manualIngest: (id: string) => Promise<void>;
   /** AI 整理进行中（文件行上的手动补整理）：界面据此显示进度 */
   enriching: { index: number; total: number; name: string } | null;
   /** 单个原文的 AI 补整理（投喂时 AI 未生效、或想重新打标时的补救入口） */
@@ -204,6 +220,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
   expandEpoch: 0,
   ingestBusy: null,
   enriching: null,
+  ingestCapability: null,
+  ingestQueue: [],
 
   loadBases: async () => {
     try {
@@ -271,6 +289,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     } finally {
       set({ loading: false });
     }
+    // 待整理队列按库过滤，切库要跟着换（失败静默）
+    void get().loadIngestQueue();
   },
 
   setTab: (tab) => set({ activeTab: tab }),
@@ -419,6 +439,74 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     }
   },
 
+  loadIngestCapability: async () => {
+    try {
+      const cap = await invoke<IngestCapability>('kb_ingest_capability');
+      set({ ingestCapability: cap });
+    } catch {
+      // 能力探测失败不影响投喂本身：界面会退回「未知」，仍可提交（进待整理）
+    }
+  },
+
+  loadIngestQueue: async () => {
+    try {
+      const items = await invoke<IngestQueueItem[]>('kb_ingest_queue_list', {
+        kbId: get().activeBaseId || null,
+        limit: 100,
+      });
+      set({ ingestQueue: items });
+    } catch {
+      // 静默：队列面板为空即可
+    }
+  },
+
+  runIngestQueue: async () => {
+    try {
+      const out = await invoke<IngestQueueRunOutcome>('kb_ingest_queue_run', { limit: 10 });
+      await get().loadIngestQueue();
+      void get().loadIngestCapability();
+      if (out.done > 0) showToast(`已整理 ${out.done} 条`, 'success');
+      else if (out.stopped) showToast('当前没有可用模型，内容仍保留在待整理里', 'info');
+      else if (out.failed > 0) showToast(`有 ${out.failed} 条整理失败，可稍后重试`, 'error');
+      return out;
+    } catch (e) {
+      showToast(`整理失败：${errorMessage(e)}`, 'error');
+      return null;
+    }
+  },
+
+  retryIngestItem: async (id) => {
+    try {
+      await invoke('kb_ingest_queue_retry', { id });
+      await get().loadIngestQueue();
+      await get().runIngestQueue();
+    } catch (e) {
+      showToast(`重试失败：${errorMessage(e)}`, 'error');
+    }
+  },
+
+  dropIngestItem: async (id) => {
+    try {
+      await invoke('kb_ingest_queue_drop', { id });
+      await get().loadIngestQueue();
+      void get().loadIngestCapability();
+    } catch (e) {
+      showToast(`移除失败：${errorMessage(e)}`, 'error');
+    }
+  },
+
+  manualIngest: async (id) => {
+    try {
+      await invoke('kb_ingest_manual', { id });
+      await get().loadIngestQueue();
+      const kbId = get().activeBaseId;
+      if (kbId) void get().selectBase(kbId);
+      showToast('已按原文放入「待确认」，可继续编辑后采纳', 'success');
+    } catch (e) {
+      showToast(`手工入库失败：${errorMessage(e)}`, 'error');
+    }
+  },
+
   addCandidates: async ({ key, value, baseIds, origin, sourceRef }) => {
     set({
       ingestBusy: {
@@ -427,9 +515,10 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
         step: key || '标题由 AI 生成',
       },
     });
+    let queued = 0;
     try {
       for (const baseId of baseIds) {
-        await invoke('kb_add_candidate', {
+        const out = await invoke<CandidateAddOutcome>('kb_add_candidate', {
           kbId: baseId,
           key,
           value,
@@ -439,6 +528,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
           sourceRef: sourceRef ?? '',
           reason: origin === 'work' ? '本轮会话沉淀' : '手动投喂片段',
         });
+        if (out?.queued) queued += 1;
       }
     } catch (e) {
       showToast(`提交失败: ${errorMessage(e)}`, 'error');
@@ -446,7 +536,13 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     } finally {
       set({ ingestBusy: null });
     }
-    showToast(`已提交 ${baseIds.length} 个目标，整理结果在「待确认」里`, 'success');
+    if (queued > 0) {
+      showToast(`已入库 ${queued} 个目标，等待模型整理（去「待整理」查看）`, 'info');
+      void get().loadIngestQueue();
+      void get().loadIngestCapability();
+    } else {
+      showToast(`已提交 ${baseIds.length} 个目标，整理结果在「待确认」里`, 'success');
+    }
     // 刷新**放在提示之后且不等**：写入已经成功，"页面什么时候看到"与"这次提交成不成功"无关。
     // 之前 `await` 它，等于让调用方（沉淀弹窗）的「整理中…」一直挂到整库刷新跑完 ——
     // 工作流运行时主库连接紧张、或库很大时，看着就是"卡死"，其实早已写完（见 digestConversation 同条注释）。
@@ -528,6 +624,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     const chunks = files.reduce((n, o) => n + o.chunks, 0);
     const reused = files.filter((o) => o.reused).length;
     const unsupported = files.filter((o) => o.status === 'unsupported').length;
+    const queuedCount = files.filter((o) => o.queued).length;
     const truncated = files.some((o) => o.truncated);
     // AI 相关的提醒（未走 AI 分组 / AI 没能取名）必须**逐条说出来**：
     // 这里曾经只报第一条，剩下的同类问题全被吞掉 —— 用户看到的是"勾了开关没生效"。
@@ -537,6 +634,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       opts.asMarkdown ? '已按 markdown 整理入库' : '',
       reused > 0 ? `${reused} 个内容已存在（只加了关联）` : '',
       unsupported > 0 ? `${unsupported} 个格式暂不支持抽取正文` : '',
+      queuedCount > 0 ? `${queuedCount} 个等待模型整理（原文已入库，不产生机械切片）` : '',
       truncated ? '条目数超过上限已截断' : '',
       errors.length > 0 ? `${errors.length} 个失败` : '',
     ].filter(Boolean);
@@ -551,9 +649,15 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     }
     if (notes.length > 0) showToast(notes.join('；'), 'info');
     showToast(
-      `已入库 ${files.length} 个文件、${chunks} 条知识${extra.length ? `（${extra.join('；')}）` : ''}`,
-      unsupported > 0 || errors.length > 0 || notes.length > 0 ? 'info' : 'success',
+      queuedCount > 0
+        ? `已入库 ${files.length} 个文件，其中 ${queuedCount} 个等待模型整理${extra.length ? `（${extra.join('；')}）` : ''}`
+        : `已入库 ${files.length} 个文件、${chunks} 条知识${extra.length ? `（${extra.join('；')}）` : ''}`,
+      unsupported > 0 || errors.length > 0 || notes.length > 0 || queuedCount > 0 ? 'info' : 'success',
     );
+    if (queuedCount > 0) {
+      void get().loadIngestQueue();
+      void get().loadIngestCapability();
+    }
     await get().loadBases();
     set({ activeTab: 'files' });
   },
@@ -581,6 +685,14 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       return;
     }
     const first = outcomes[0];
+    if (first.queued) {
+      showToast(`已抓取「${first.fileName}」并入库原文，等待模型整理（去「待整理」查看）`, 'info');
+      void get().loadIngestQueue();
+      void get().loadIngestCapability();
+      await get().loadBases();
+      set({ activeTab: 'files' });
+      return;
+    }
     const extra = [
       first.reused ? '该页面已在库中，只加了关联' : '',
       first.truncated ? '条目数超过上限已截断' : '',
@@ -639,10 +751,12 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     const files = [...uniq.values()];
     const chunks = files.reduce((n, o) => n + o.chunks, 0);
     const reused = files.filter((o) => o.reused).length;
+    const queuedCount = files.filter((o) => o.queued).length;
     const truncated = files.some((o) => o.truncated);
     const notes = [...new Set(files.map((o) => o.aiNote).filter(Boolean))];
     const extra = [
       reused > 0 ? `${reused} 篇内容已存在（只加了关联）` : '',
+      queuedCount > 0 ? `${queuedCount} 篇等待模型整理` : '',
       truncated ? '条目数超过上限已截断' : '',
       errors.length > 0 ? `${errors.length} 篇失败` : '',
     ].filter(Boolean);
@@ -656,9 +770,15 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     }
     if (notes.length > 0) showToast(notes.join('；'), 'info');
     showToast(
-      `已从云文档入库 ${files.length} 篇、${chunks} 条知识${extra.length ? `（${extra.join('；')}）` : ''}`,
-      errors.length > 0 || notes.length > 0 ? 'info' : 'success',
+      queuedCount > 0
+        ? `已从云文档入库 ${files.length} 篇，其中 ${queuedCount} 篇等待模型整理${extra.length ? `（${extra.join('；')}）` : ''}`
+        : `已从云文档入库 ${files.length} 篇、${chunks} 条知识${extra.length ? `（${extra.join('；')}）` : ''}`,
+      errors.length > 0 || notes.length > 0 || queuedCount > 0 ? 'info' : 'success',
     );
+    if (queuedCount > 0) {
+      void get().loadIngestQueue();
+      void get().loadIngestCapability();
+    }
     await get().loadBases();
     set({ activeTab: 'files' });
   },

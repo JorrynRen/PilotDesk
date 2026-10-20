@@ -2568,6 +2568,13 @@ pub fn run() {
             commands::knowledge::kb_unlink_files,
             commands::knowledge::kb_ingest_file,
             commands::knowledge::kb_ingest_url,
+            commands::knowledge::kb_ingest_capability,
+            commands::knowledge::kb_ingest_queue_list,
+            commands::knowledge::kb_ingest_queue_count,
+            commands::knowledge::kb_ingest_queue_run,
+            commands::knowledge::kb_ingest_queue_retry,
+            commands::knowledge::kb_ingest_queue_drop,
+            commands::knowledge::kb_ingest_manual,
             commands::knowledge::kb_cloud_accounts_list,
             commands::knowledge::kb_cloud_account_add,
             commands::knowledge::kb_cloud_account_remove,
@@ -2850,6 +2857,14 @@ pub fn run() {
             commands::enclave_task::enclave_kb_entry_remove,
             commands::enclave_task::enclave_kb_update,
             commands::enclave_task::enclave_kb_file_list,
+            commands::enclave_task::enclave_kb_ingest_capability,
+            commands::enclave_task::enclave_kb_ingest_snippet,
+            commands::enclave_task::enclave_kb_ingest_url,
+            commands::enclave_task::enclave_kb_queue_list,
+            commands::enclave_task::enclave_kb_queue_run,
+            commands::enclave_task::enclave_kb_queue_retry,
+            commands::enclave_task::enclave_kb_queue_drop,
+            commands::enclave_task::enclave_kb_ingest_manual,
             commands::enclave_task::enclave_task_sediment_retry,
         ])
         .setup(move |app| {
@@ -2917,6 +2932,12 @@ pub fn run() {
                 commands::usage::run_auto_report_loop(DbState { pool: report_pool }).await;
             });
 
+            // 启动知识库「待整理」后台消费（每 2 分钟检查一次；只有排队非空且有可用模型时才真正执行）
+            let kbq_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                commands::knowledge::run_ingest_queue_loop(DbState { pool: kbq_pool }).await;
+            });
+
             // 启动云同步后台任务（每 10 分钟一次；仅「开关开启 + 已登录 + 有能力」时真正执行，
             // 其余静默跳过，失败只记日志——不影响离线可用）
             let sync_pool = pool.clone();
@@ -2937,6 +2958,13 @@ pub fn run() {
             let host_state = enclave_state.clone();
             tauri::async_runtime::spawn(async move {
                 enclave::host::run_host_loop(host_state).await;
+            });
+
+            // 启动飞地知识库「待整理」后台消费（仅主机执行；能力不可用时只空转）
+            let kbq_state = enclave_state.clone();
+            let kbq_db = DbState { pool: pool.clone() };
+            tauri::async_runtime::spawn(async move {
+                commands::enclave_task::run_enclave_kb_queue_loop(kbq_db, kbq_state).await;
             });
 
             log::info!("PilotDesk initialized successfully.");

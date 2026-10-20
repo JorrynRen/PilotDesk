@@ -986,3 +986,649 @@ pub fn enclave_files_root_set(
         })
     })
 }
+
+// ════════════════════════════════════════════════════════════
+// 组织知识库：人工投喂与「待整理」队列
+// ════════════════════════════════════════════════════════════
+
+use std::time::Duration;
+
+use crate::enclave::knowledge::{IngestEntryInput, KbIngestQueueView};
+
+/// 团队库加工能力（主机算、成员读缓存）。
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamIngestCapability {
+    /// none | local | cloud
+    pub can_process: String,
+    pub provider_name: String,
+    pub model: String,
+    pub trust_domain: String,
+    pub reason: String,
+    pub pending: i64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamIngestOutcome {
+    pub queued: bool,
+    pub queue_id: String,
+    pub entries: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamQueueRunOutcome {
+    pub done: usize,
+    pub failed: usize,
+    pub stopped: bool,
+    pub remaining: i64,
+}
+
+fn empty_capability(reason: &str, pending: i64) -> TeamIngestCapability {
+    TeamIngestCapability {
+        can_process: "none".into(),
+        provider_name: String::new(),
+        model: String::new(),
+        trust_domain: String::new(),
+        reason: reason.to_string(),
+        pending,
+    }
+}
+
+/// 主机侧计算加工能力：Provider 档位 + 组织出境闸门。
+fn compute_team_capability(
+    db: &crate::DbState,
+    state: &EnclaveState,
+    org_id: &str,
+) -> TeamIngestCapability {
+    let pending = state
+        .store
+        .with_conn(|c| Ok(crate::enclave::knowledge::ingest_queue_pending(c, org_id)))
+        .unwrap_or(0);
+    let Ok(conn) = db.pool.get() else {
+        return empty_capability("无法访问主库", pending);
+    };
+    let model = match crate::api_agent::kb_llm::resolve_kb_model(&conn) {
+        Ok(m) => m,
+        Err(e) => return empty_capability(&e, pending),
+    };
+    let trust = crate::commands::api_provider::provider_trust_domain(&conn, &model.provider_id);
+    let is_internal = trust == crate::enclave::gate::TrustDomain::Internal;
+    if !is_internal {
+        let allow = state
+            .store
+            .with_conn(|c| crate::enclave::org::policy_view(c, org_id))
+            .map(|p| p.allow_cloud_model)
+            .unwrap_or(false);
+        if !allow {
+            return TeamIngestCapability {
+                can_process: "none".into(),
+                provider_name: model.provider_name,
+                model: model.model,
+                trust_domain: trust.as_str().into(),
+                reason: "组织出境闸门关闭：团队数据不得发送至云端模型".into(),
+                pending,
+            };
+        }
+    }
+    TeamIngestCapability {
+        can_process: if is_internal { "local".into() } else { "cloud".into() },
+        provider_name: model.provider_name,
+        model: model.model,
+        trust_domain: trust.as_str().into(),
+        reason: String::new(),
+        pending,
+    }
+}
+
+fn cache_team_capability(state: &EnclaveState, org_id: &str, cap: &TeamIngestCapability) {
+    let json = serde_json::to_string(cap).unwrap_or_default();
+    let _ = state.store.with_conn(|c| {
+        crate::enclave::knowledge::save_ingest_capability(c, org_id, &json)
+    });
+}
+
+#[tauri::command]
+pub async fn enclave_kb_ingest_capability(
+    org_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TeamIngestCapability, String> {
+    match state.store.with_conn(|c| authz::role_for_org(c, &org_id))? {
+        Some(authz::Role::Owner) => {
+            let cap = compute_team_capability(db.inner(), state.inner(), &org_id);
+            cache_team_capability(state.inner(), &org_id, &cap);
+            Ok(cap)
+        }
+        Some(_) => {
+            let cached = state.store.with_conn(|c| {
+                Ok(crate::enclave::knowledge::load_ingest_capability(c, &org_id))
+            })?;
+            let pending = state.store.with_conn(|c| {
+                Ok(crate::enclave::knowledge::ingest_queue_pending(c, &org_id))
+            })?;
+            let mut cap = cached
+                .and_then(|json| serde_json::from_str::<TeamIngestCapability>(&json).ok())
+                .unwrap_or_else(|| empty_capability("主机尚未上报加工能力", pending));
+            cap.pending = pending;
+            Ok(cap)
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn enclave_kb_queue_list(
+    org_id: String,
+    kb_id: Option<String>,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<KbIngestQueueView>, String> {
+    let payload = json!({ "kbId": kb_id });
+    let kb_for_query = kb_id.clone();
+    let org_for_query = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.queue.list",
+        payload,
+        move |c, _actor| {
+            crate::enclave::knowledge::list_ingest_queue(
+                c,
+                &org_for_query,
+                kb_for_query.as_deref(),
+            )
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn enclave_kb_queue_retry(
+    org_id: String,
+    queue_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    let payload = json!({ "queueId": queue_id });
+    let qid = queue_id.clone();
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.queue.retry",
+        payload,
+        move |c, _actor| crate::enclave::knowledge::retry_ingest(c, &org_for_write, &qid),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn enclave_kb_queue_drop(
+    org_id: String,
+    queue_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<bool, String> {
+    let payload = json!({ "queueId": queue_id });
+    let qid = queue_id.clone();
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.queue.drop",
+        payload,
+        move |c, _actor| crate::enclave::knowledge::drop_ingest(c, &org_for_write, &qid),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn enclave_kb_queue_run(
+    org_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TeamQueueRunOutcome, String> {
+    match state.store.with_conn(|c| authz::role_for_org(c, &org_id))? {
+        Some(authz::Role::Owner) => {
+            drain_team_queue(db.inner(), state.inner(), &org_id, 10).await
+        }
+        Some(_) => {
+            // 成员无法在本地执行（不缓存团队数据）：主机后台循环会接手
+            let remaining = state.store.with_conn(|c| {
+                Ok(crate::enclave::knowledge::ingest_queue_pending(c, &org_id))
+            })?;
+            Ok(TeamQueueRunOutcome {
+                done: 0,
+                failed: 0,
+                stopped: true,
+                remaining,
+            })
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
+}
+
+/// 手工整理：把一条「片段」不经模型直接写入组织库（之后可继续人工编辑）。
+#[tauri::command]
+pub async fn enclave_kb_ingest_manual(
+    org_id: String,
+    queue_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TeamIngestOutcome, String> {
+    let payload = json!({ "queueId": queue_id });
+    let qid = queue_id.clone();
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.ingest.manual",
+        payload,
+        move |c, actor| {
+            let rows =
+                crate::enclave::knowledge::list_ingest_queue(c, &org_for_write, None)?;
+            let row = rows
+                .into_iter()
+                .find(|r| r.id == qid)
+                .ok_or_else(|| "待整理记录不存在".to_string())?;
+            if row.kind != "snippet" {
+                return Err("只有「片段」支持不经模型直接入库；文件/网址请等模型整理".to_string());
+            }
+            let p: serde_json::Value =
+                serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
+            let text = p
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if text.trim().is_empty() {
+                return Err("片段内容为空".to_string());
+            }
+            let raw_title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if raw_title.trim().is_empty() {
+                crate::api_agent::knowledge::derive_title(&text)
+            } else {
+                raw_title.to_string()
+            };
+            let digest = &crate::api_agent::knowledge::sha256_hex(text.as_bytes())[..16];
+            let entries = vec![IngestEntryInput {
+                memory_id: format!("manual:{}", digest),
+                title,
+                content: text,
+                tags: String::new(),
+                metadata: "{}".into(),
+            }];
+            crate::enclave::knowledge::write_ingest_entries(
+                c,
+                &org_for_write,
+                &row.kb_id,
+                "manual",
+                &row.source_ref,
+                actor,
+                &entries,
+            )?;
+            crate::enclave::knowledge::finish_ingest(c, &row.id);
+            Ok(TeamIngestOutcome {
+                queued: false,
+                queue_id: row.id,
+                entries: 1,
+            })
+        },
+    )
+    .await
+}
+
+/// 片段投喂：片段是"用户已经拿到的文本"，入库不依赖模型；整理才依赖。
+#[tauri::command]
+pub async fn enclave_kb_ingest_snippet(
+    org_id: String,
+    kb_id: Option<String>,
+    title: String,
+    text: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TeamIngestOutcome, String> {
+    if text.trim().is_empty() {
+        return Err("片段内容为空".into());
+    }
+    let source_ref = format!(
+        "snippet:{}",
+        &crate::api_agent::knowledge::sha256_hex(text.as_bytes())[..16]
+    );
+    let payload = json!({ "title": title, "text": text });
+    let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
+    let kb = match kb_id {
+        Some(k) => k,
+        None => state.store.with_conn(|c| {
+            crate::enclave::knowledge::ensure_org_kb(c, &org_id, "")
+        })?,
+    };
+    match role {
+        Some(authz::Role::Owner) => {
+            let queue_id = state.store.with_conn(|c| {
+                crate::enclave::knowledge::enqueue_ingest(
+                    c,
+                    &org_id,
+                    &kb,
+                    "snippet",
+                    &source_ref,
+                    &payload.to_string(),
+                )
+            })?;
+            let run = drain_team_queue(db.inner(), state.inner(), &org_id, 1).await?;
+            Ok(TeamIngestOutcome {
+                queued: run.done == 0,
+                queue_id,
+                entries: run.done,
+            })
+        }
+        Some(_) => {
+            let data = crate::enclave::host::call_host(
+                state.inner(),
+                db.inner(),
+                &org_id,
+                "kb.ingest.snippet",
+                json!({ "kbId": kb, "sourceRef": source_ref, "payload": payload }),
+            )
+            .await?;
+            serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn enclave_kb_ingest_url(
+    org_id: String,
+    kb_id: Option<String>,
+    url: String,
+    name: Option<String>,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TeamIngestOutcome, String> {
+    let target = url.trim().to_string();
+    if !(target.starts_with("http://") || target.starts_with("https://")) {
+        return Err("只支持 http/https 地址".into());
+    }
+    let source_ref = format!(
+        "url:{}",
+        &crate::api_agent::knowledge::sha256_hex(target.as_bytes())[..16]
+    );
+    let payload = json!({ "url": target, "name": name });
+    let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
+    let kb = match kb_id {
+        Some(k) => k,
+        None => state.store.with_conn(|c| {
+            crate::enclave::knowledge::ensure_org_kb(c, &org_id, "")
+        })?,
+    };
+    match role {
+        Some(authz::Role::Owner) => {
+            let queue_id = state.store.with_conn(|c| {
+                crate::enclave::knowledge::enqueue_ingest(
+                    c,
+                    &org_id,
+                    &kb,
+                    "url",
+                    &source_ref,
+                    &payload.to_string(),
+                )
+            })?;
+            let run = drain_team_queue(db.inner(), state.inner(), &org_id, 1).await?;
+            Ok(TeamIngestOutcome {
+                queued: run.done == 0,
+                queue_id,
+                entries: run.done,
+            })
+        }
+        Some(_) => {
+            let data = crate::enclave::host::call_host(
+                state.inner(),
+                db.inner(),
+                &org_id,
+                "kb.ingest.url",
+                json!({ "kbId": kb, "sourceRef": source_ref, "payload": payload }),
+            )
+            .await?;
+            serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
+}
+
+/// 主机侧消费队列（单消费者，按入队顺序）。
+async fn drain_team_queue(
+    db: &crate::DbState,
+    state: &EnclaveState,
+    org_id: &str,
+    max: usize,
+) -> Result<TeamQueueRunOutcome, String> {
+    let _ = state.store.with_conn(|c| {
+        crate::enclave::knowledge::reset_running_ingest(c, org_id);
+        Ok(())
+    });
+    let cap = compute_team_capability(db, state, org_id);
+    if cap.can_process == "none" {
+        return Ok(TeamQueueRunOutcome {
+            done: 0,
+            failed: 0,
+            stopped: true,
+            remaining: cap.pending,
+        });
+    }
+    let mut done = 0usize;
+    let mut failed = 0usize;
+    let mut stopped = false;
+    for _ in 0..max {
+        let row = state.store.with_conn(|c| {
+            crate::enclave::knowledge::claim_next_ingest(c, org_id)
+        })?;
+        let Some(row) = row else { break };
+        match process_team_queue_row(db, state, org_id, &row).await {
+            Ok(n) => {
+                let _ = state.store.with_conn(|c| {
+                    crate::enclave::knowledge::finish_ingest(c, &row.id);
+                    Ok(())
+                });
+                done += n;
+            }
+            Err(e) => {
+                log::warn!("[Enclave][KB] 待整理失败（{} {}）：{}", row.kind, row.id, e);
+                let _ = state.store.with_conn(|c| {
+                    crate::enclave::knowledge::fail_ingest(c, &row.id, &e);
+                    Ok(())
+                });
+                failed += 1;
+                if e.contains("模型") || e.contains("Provider") || e.contains("闸门") {
+                    stopped = true;
+                    break;
+                }
+            }
+        }
+    }
+    let remaining = state.store.with_conn(|c| {
+        Ok(crate::enclave::knowledge::ingest_queue_pending(c, org_id))
+    })?;
+    Ok(TeamQueueRunOutcome {
+        done,
+        failed,
+        stopped,
+        remaining,
+    })
+}
+
+async fn process_team_queue_row(
+    db: &crate::DbState,
+    state: &EnclaveState,
+    org_id: &str,
+    row: &KbIngestQueueView,
+) -> Result<usize, String> {
+    let payload: serde_json::Value =
+        serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
+    let (kb_name, fields_json) = state.store.with_conn(|c| {
+        crate::enclave::knowledge::kb_meta(c, org_id, &row.kb_id)
+    })?;
+    let model = {
+        let conn = db.pool.get().map_err(|e| format!("取主库连接失败：{}", e))?;
+        crate::api_agent::kb_llm::resolve_kb_model(&conn).map_err(|e| format!("模型不可用：{}", e))?
+    };
+    let (trust, actor) = {
+        let conn = db.pool.get().map_err(|e| format!("取主库连接失败：{}", e))?;
+        let trust = crate::commands::api_provider::provider_trust_domain(&conn, &model.provider_id);
+        drop(conn);
+        let actor = state
+            .store
+            .with_conn(|c| authz::current_actor_id(c))
+            .unwrap_or_default();
+        (trust, actor)
+    };
+    if trust == crate::enclave::gate::TrustDomain::Cloud {
+        let allow = state
+            .store
+            .with_conn(|c| crate::enclave::org::policy_view(c, org_id))
+            .map(|p| p.allow_cloud_model)
+            .unwrap_or(false);
+        if !allow {
+            return Err("组织出境闸门关闭，团队数据不得发送至云端模型".into());
+        }
+    }
+
+    let entries: Vec<IngestEntryInput> = match row.kind.as_str() {
+        "snippet" => {
+            let text = payload
+                .get("text")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "待整理记录缺少片段正文".to_string())?;
+            let title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let draft = crate::api_agent::kb_llm::process_snippet(
+                &model,
+                text,
+                &kb_name,
+                &fields_json,
+                title,
+            )
+            .await
+            .map_err(|e| format!("模型整理未生效：{}", e))?;
+            let digest = &crate::api_agent::knowledge::sha256_hex(text.as_bytes())[..16];
+            vec![IngestEntryInput {
+                memory_id: format!("manual:{}", digest),
+                title: if draft.title.trim().is_empty() {
+                    crate::api_agent::knowledge::derive_title(text)
+                } else {
+                    draft.title
+                },
+                content: draft.content,
+                tags: draft.tags.join(","),
+                metadata: serde_json::to_string(&draft.meta).unwrap_or_else(|_| "{}".into()),
+            }]
+        }
+        "url" => {
+            let url = payload
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "待整理记录缺少网址".to_string())?;
+            let name = payload.get("name").and_then(|v| v.as_str());
+            let html = crate::commands::knowledge::load_page(url)
+                .await
+                .map_err(|e| format!("抓取网页失败：{}", e))?;
+            let page_title = name
+                .map(str::to_string)
+                .unwrap_or_else(|| crate::commands::knowledge::extract_title(&html, url));
+            let text = crate::tools::browser::html_to_markdown(&html);
+            if text.trim().is_empty() {
+                return Err("页面没有可提取的正文（可能是纯 JS 渲染的站点）".into());
+            }
+            let prep = crate::api_agent::knowledge::prepare_web(&page_title, &text)?;
+            let blocks = crate::api_agent::knowledge::merge_small_blocks(
+                &prep.text,
+                &prep.blocks,
+                crate::api_agent::knowledge::MIN_MODEL_BLOCK,
+            );
+            let block_texts: Vec<String> = blocks.iter().map(|b| b.text.clone()).collect();
+            let (doc_title, sections) = crate::api_agent::kb_llm::organize_page(
+                &model,
+                &block_texts,
+                &page_title,
+                &kb_name,
+                &fields_json,
+                url,
+            )
+            .await
+            .map_err(|e| format!("模型整理未生效：{}", e))?;
+            let digest = &crate::api_agent::knowledge::sha256_hex(prep.sha.as_bytes())[..16];
+            sections
+                .iter()
+                .enumerate()
+                .map(|(i, s)| IngestEntryInput {
+                    memory_id: format!("manual:{}:{}", digest, i),
+                    title: if s.title.trim().is_empty() {
+                        format!("{} · {}", doc_title, i + 1)
+                    } else {
+                        s.title.clone()
+                    },
+                    content: s.content.clone(),
+                    tags: s.tags.join(","),
+                    metadata: serde_json::to_string(&s.meta).unwrap_or_else(|_| "{}".into()),
+                })
+                .collect()
+        }
+        other => return Err(format!("不支持的待整理类型：{}", other)),
+    };
+
+    if let Ok(conn) = db.pool.get() {
+        crate::commands::knowledge::record_kb_usage_conn(
+            &conn,
+            &format!("enclave:{}", org_id),
+            &model,
+        );
+    }
+    let origin = if row.kind == "snippet" { "manual" } else { "url" };
+    state.store.with_conn(|c| {
+        crate::enclave::knowledge::write_ingest_entries(
+            c,
+            org_id,
+            &row.kb_id,
+            origin,
+            &row.source_ref,
+            &actor,
+            &entries,
+        )
+    })
+}
+
+/// 主机后台消费循环（只处理本机承载的组织）。
+pub async fn run_enclave_kb_queue_loop(db: crate::DbState, state: Arc<EnclaveState>) {
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    loop {
+        let hosts = state
+            .store
+            .with_conn(|c| {
+                crate::enclave::org::host_org_ids(c, &crate::enclave::host::device_id())
+            })
+            .unwrap_or_default();
+        for org_id in hosts {
+            let cap = compute_team_capability(&db, &state, &org_id);
+            cache_team_capability(&state, &org_id, &cap);
+            if cap.can_process != "none" && cap.pending > 0 {
+                match drain_team_queue(&db, &state, &org_id, 3).await {
+                    Ok(o) if o.done > 0 || o.failed > 0 => log::info!(
+                        "[Enclave][KB] 待整理消费（{}）：完成 {}，失败 {}，剩余 {}",
+                        org_id,
+                        o.done,
+                        o.failed,
+                        o.remaining
+                    ),
+                    Ok(_) => {}
+                    Err(e) => log::warn!("[Enclave][KB] 待整理消费异常（{}）：{}", org_id, e),
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(120)).await;
+    }
+}

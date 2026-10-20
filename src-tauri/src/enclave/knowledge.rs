@@ -751,6 +751,342 @@ pub fn retry_sediment(
     sediment_task_output(conn, org_id, task_id, report_id, actor)
 }
 
+/* ── 人工投喂与「待整理」队列 ──
+ *
+ * 口径与个人库一致：**入库永远可用，加工按能力降级**。
+ * 主机是唯一权威：成员端的投喂命令经 WS 转发到这里执行，队列也只有主机消费。
+ */
+
+/// 待整理队列的一行（主机权威）。
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct KbIngestQueueView {
+    pub id: String,
+    pub org_id: String,
+    pub kb_id: String,
+    /// snippet / url / file
+    pub kind: String,
+    pub source_ref: String,
+    pub payload: String,
+    /// pending / running / failed
+    pub status: String,
+    pub attempts: i64,
+    pub last_error: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+fn queue_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<KbIngestQueueView> {
+    Ok(KbIngestQueueView {
+        id: r.get(0)?,
+        org_id: r.get(1)?,
+        kb_id: r.get(2)?,
+        kind: r.get(3)?,
+        source_ref: r.get(4)?,
+        payload: r.get(5)?,
+        status: r.get(6)?,
+        attempts: r.get(7)?,
+        last_error: r.get(8)?,
+        created_at: r.get(9)?,
+        updated_at: r.get(10)?,
+    })
+}
+
+/// 组织成员即可贡献组织知识库（设计 §8.2：成员具备 KB Editor 能力）。
+pub fn ensure_kb_write(conn: &Connection, org_id: &str) -> Result<(), String> {
+    crate::enclave::authz::role_for_org(conn, org_id)?
+        .map(|_| ())
+        .ok_or_else(|| "尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string())
+}
+
+pub fn enqueue_ingest(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    kind: &str,
+    source_ref: &str,
+    payload: &str,
+) -> Result<String, String> {
+    ensure_kb_write(conn, org_id)?;
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    let now = chrono::Utc::now().timestamp();
+    let id = format!("kbq:{}", uuid::Uuid::new_v4());
+    conn.execute(
+        "INSERT INTO kb_ingest_queue
+            (id, org_id, kb_id, kind, source_ref, payload, status, attempts, last_error, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, '', ?7, ?7)
+         ON CONFLICT(org_id, kb_id, kind, source_ref) DO UPDATE SET
+            payload = excluded.payload,
+            updated_at = excluded.updated_at,
+            status = CASE WHEN kb_ingest_queue.status = 'failed' THEN 'pending'
+                          ELSE kb_ingest_queue.status END",
+        params![id, org_id, kb_id, kind, source_ref, payload, now],
+    )
+    .map_err(|e| format!("写入待整理队列失败：{}", e))?;
+    conn.query_row(
+        "SELECT id FROM kb_ingest_queue
+         WHERE org_id = ?1 AND kb_id = ?2 AND kind = ?3 AND source_ref = ?4",
+        params![org_id, kb_id, kind, source_ref],
+        |r| r.get(0),
+    )
+    .map_err(|e| format!("读取待整理队列失败：{}", e))
+}
+
+pub fn list_ingest_queue(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: Option<&str>,
+) -> Result<Vec<KbIngestQueueView>, String> {
+    ensure_kb_write(conn, org_id)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, org_id, kb_id, kind, source_ref, payload, status, attempts,
+                    last_error, created_at, updated_at
+             FROM kb_ingest_queue
+             WHERE org_id = ?1 AND (?2 IS NULL OR kb_id = ?2)
+             ORDER BY CASE status WHEN 'failed' THEN 1 WHEN 'pending' THEN 0 ELSE 2 END,
+                      created_at ASC
+             LIMIT 100",
+        )
+        .map_err(|e| format!("查询待整理队列失败：{}", e))?;
+    stmt.query_map(params![org_id, kb_id], queue_row)
+        .map(|rows| rows.flatten().collect())
+        .map_err(|e| format!("读取待整理队列失败：{}", e))
+}
+
+pub fn ingest_queue_pending(conn: &Connection, org_id: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM kb_ingest_queue
+         WHERE org_id = ?1 AND status IN ('pending', 'running')",
+        params![org_id],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
+
+/// 取一条待整理并标记 running（单消费者）。
+pub fn claim_next_ingest(
+    conn: &Connection,
+    org_id: &str,
+) -> Result<Option<KbIngestQueueView>, String> {
+    let row = conn
+        .query_row(
+            "SELECT id, org_id, kb_id, kind, source_ref, payload, status, attempts,
+                    last_error, created_at, updated_at
+             FROM kb_ingest_queue
+             WHERE org_id = ?1 AND status = 'pending'
+             ORDER BY created_at ASC LIMIT 1",
+            params![org_id],
+            queue_row,
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(row) = row else { return Ok(None) };
+    let changed = conn
+        .execute(
+            "UPDATE kb_ingest_queue SET status = 'running', updated_at = ?2
+             WHERE id = ?1 AND status = 'pending'",
+            params![row.id, chrono::Utc::now().timestamp()],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    Ok(Some(row))
+}
+
+pub fn finish_ingest(conn: &Connection, id: &str) {
+    let _ = conn.execute("DELETE FROM kb_ingest_queue WHERE id = ?1", params![id]);
+}
+
+pub fn fail_ingest(conn: &Connection, id: &str, error: &str) {
+    let _ = conn.execute(
+        "UPDATE kb_ingest_queue
+            SET attempts = attempts + 1,
+                last_error = ?2,
+                status = CASE WHEN attempts + 1 >= 5 THEN 'failed' ELSE 'pending' END,
+                updated_at = ?3
+          WHERE id = ?1",
+        params![id, error, chrono::Utc::now().timestamp()],
+    );
+}
+
+pub fn reset_running_ingest(conn: &Connection, org_id: &str) {
+    let _ = conn.execute(
+        "UPDATE kb_ingest_queue SET status = 'pending'
+         WHERE org_id = ?1 AND status = 'running'",
+        params![org_id],
+    );
+}
+
+pub fn retry_ingest(conn: &Connection, org_id: &str, id: &str) -> Result<(), String> {
+    ensure_kb_write(conn, org_id)?;
+    conn.execute(
+        "UPDATE kb_ingest_queue
+            SET status = 'pending', attempts = 0, last_error = '', updated_at = ?2
+          WHERE id = ?1 AND org_id = ?3",
+        params![id, chrono::Utc::now().timestamp(), org_id],
+    )
+    .map_err(|e| format!("重试失败：{}", e))?;
+    Ok(())
+}
+
+pub fn drop_ingest(conn: &Connection, org_id: &str, id: &str) -> Result<bool, String> {
+    ensure_kb_write(conn, org_id)?;
+    conn.execute(
+        "DELETE FROM kb_ingest_queue WHERE id = ?1 AND org_id = ?2",
+        params![id, org_id],
+    )
+    .map(|n| n > 0)
+    .map_err(|e| format!("移除失败：{}", e))
+}
+
+/// 一条待写入的投喂产物。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestEntryInput {
+    pub memory_id: String,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub tags: String,
+    /// 溯源元信息（模型给出的专属属性等），JSON 字符串
+    #[serde(default)]
+    pub metadata: String,
+}
+
+/// 把整理好的条目写入组织库（幂等：同来源重跑时先清旧条目）。
+pub fn write_ingest_entries(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    origin: &str,
+    source_ref: &str,
+    actor: &str,
+    entries: &[IngestEntryInput],
+) -> Result<usize, String> {
+    ensure_kb_write(conn, org_id)?;
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    let now = chrono::Utc::now().timestamp();
+    // 人工改过的条目锁定：重跑只清理"模型生成且未被人工编辑"的旧条目。
+    // `update_entry` 会写 editedBy / editedAt，这里以它作为锁定标记。
+    let mut stmt = conn
+        .prepare(
+            "SELECT memory_id FROM knowledge_base_memories
+             WHERE knowledge_base_id = ?1 AND origin = ?2 AND source_ref = ?3
+               AND metadata LIKE '%\"editedBy\"%'",
+        )
+        .map_err(|e| format!("读取人工编辑条目失败：{}", e))?;
+    let preserved: Vec<String> = stmt
+        .query_map(params![kb_id, origin, source_ref], |r| r.get(0))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default();
+    drop(stmt);
+
+    // 重跑幂等：先摘掉同来源的旧条目（只动该 origin，避免误伤任务产出）
+    conn.execute(
+        "DELETE FROM knowledge_base_files
+         WHERE knowledge_base_id = ?1 AND memory_id IN (
+             SELECT memory_id FROM knowledge_base_memories
+             WHERE knowledge_base_id = ?1 AND origin = ?2 AND source_ref = ?3
+               AND memory_id NOT IN (SELECT value FROM json_each(?4))
+         )",
+        params![
+            kb_id,
+            origin,
+            source_ref,
+            serde_json::to_string(&preserved).unwrap_or_else(|_| "[]".into())
+        ],
+    )
+    .map_err(|e| format!("清理旧投喂附件失败：{}", e))?;
+    conn.execute(
+        "DELETE FROM knowledge_base_memories
+         WHERE knowledge_base_id = ?1 AND origin = ?2 AND source_ref = ?3
+           AND memory_id NOT IN (SELECT value FROM json_each(?4))",
+        params![
+            kb_id,
+            origin,
+            source_ref,
+            serde_json::to_string(&preserved).unwrap_or_else(|_| "[]".into())
+        ],
+    )
+    .map_err(|e| format!("清理旧投喂条目失败：{}", e))?;
+
+    for e in entries {
+        if preserved.iter().any(|m| m == &e.memory_id) {
+            continue; // 人工编辑过的条目：重跑不覆盖
+        }
+        conn.execute(
+            "INSERT INTO knowledge_base_memories
+                (knowledge_base_id, memory_id, title, content, tags, origin, source_ref,
+                 metadata, added_by, added_at, updated_at, stale)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, 0)
+             ON CONFLICT(knowledge_base_id, memory_id) DO UPDATE SET
+                title = excluded.title,
+                content = excluded.content,
+                tags = excluded.tags,
+                metadata = excluded.metadata,
+                updated_at = excluded.updated_at,
+                stale = 0",
+            params![
+                kb_id,
+                e.memory_id,
+                e.title,
+                e.content,
+                e.tags,
+                origin,
+                source_ref,
+                if e.metadata.trim().is_empty() { "{}" } else { &e.metadata },
+                actor,
+                now
+            ],
+        )
+        .map_err(|e| format!("写入知识条目失败：{}", e))?;
+    }
+    Ok(entries.len())
+}
+
+/// 库名 + 专属属性 schema（投喂整理时喂给模型）。
+pub fn kb_meta(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(String, String), String> {
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    conn.query_row(
+        "SELECT name, field_schema FROM knowledge_bases WHERE id = ?1",
+        params![kb_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .map_err(|e| format!("读取知识库定义失败：{}", e))
+}
+
+/// 加工能力缓存：主机侧算好写进 `enclave_settings`，成员端读同一份（成员没有主库，无法自行解析 Provider）。
+pub fn save_ingest_capability(
+    conn: &Connection,
+    org_id: &str,
+    json: &str,
+) -> Result<(), String> {
+    let key = format!("kb_ingest_capability:{}", org_id);
+    conn.execute(
+        "INSERT INTO enclave_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![key, json, chrono::Utc::now().timestamp()],
+    )
+    .map_err(|e| format!("保存加工能力失败：{}", e))?;
+    Ok(())
+}
+
+pub fn load_ingest_capability(conn: &Connection, org_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM enclave_settings WHERE key = ?1",
+        params![format!("kb_ingest_capability:{}", org_id)],
+        |r| r.get(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

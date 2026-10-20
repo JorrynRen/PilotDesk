@@ -412,6 +412,46 @@ export interface KbView {
   updatedAt: number;
 }
 
+/** 团队库加工能力（主机算、成员读缓存） */
+export interface TeamIngestCapability {
+  canProcess: 'none' | 'local' | 'cloud';
+  providerName: string;
+  model: string;
+  trustDomain: string;
+  reason: string;
+  /** 待整理条数 */
+  pending: number;
+}
+
+/** 团队库「待整理」队列的一行 */
+export interface EnclaveKbQueueItem {
+  id: string;
+  orgId: string;
+  kbId: string;
+  /** snippet / url / file */
+  kind: string;
+  sourceRef: string;
+  payload: string;
+  status: 'pending' | 'running' | 'failed';
+  attempts: number;
+  lastError: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TeamIngestOutcome {
+  queued: boolean;
+  queueId: string;
+  entries: number;
+}
+
+export interface TeamQueueRunOutcome {
+  done: number;
+  failed: number;
+  stopped: boolean;
+  remaining: number;
+}
+
 /** 团队知识库「文件」页的一行：某条目引用的一个交付物（同一原件可被多条引用） */
 export interface KbFileListView {
   fileId: string;

@@ -29,14 +29,18 @@ fn store() -> Result<KnowledgeStore, AppError> {
 }
 
 /// 知识库文件根目录：由主库的 app_settings 决定（`knowledge-root` → 全局工作区/Knowledge → 应用根目录）
-fn knowledge_root(state: &State<'_, DbState>) -> Result<PathBuf, AppError> {
-    let conn = state.pool.get().map_err(AppError::from)?;
+fn knowledge_root_db(db: &DbState) -> Result<PathBuf, AppError> {
+    let conn = db.pool.get().map_err(AppError::from)?;
     Ok(paths::resolve_knowledge_root(&conn))
 }
 
+fn knowledge_root(state: &State<'_, DbState>) -> Result<PathBuf, AppError> {
+    knowledge_root_db(state.inner())
+}
+
 /// 投喂前的目录准备（根 + files/ + 标记文件）
-fn prepared_root(state: &State<'_, DbState>) -> Result<PathBuf, AppError> {
-    let root = knowledge_root(state)?;
+fn prepared_root_db(db: &DbState) -> Result<PathBuf, AppError> {
+    let root = knowledge_root_db(db)?;
     paths::ensure_knowledge_dirs(&root).map_err(AppError::Io)?;
     Ok(root)
 }
@@ -209,26 +213,70 @@ pub async fn kb_ingest_file(
     rename: Option<bool>,
     name: Option<String>,
 ) -> Result<IngestOutcome, String> {
-    let as_markdown = as_markdown.unwrap_or(false);
-    let rename = rename.unwrap_or(false);
-    let source = Path::new(&path);
+    ingest_file_impl(
+        state.inner(),
+        &kb_id,
+        &path,
+        as_markdown.unwrap_or(false),
+        rename.unwrap_or(false),
+        name.as_deref(),
+        true,
+    )
+    .await
+}
+
+/// 投喂的本体：命令层（用户主动投喂）与队列消费者共用。
+///
+/// `allow_queue` = 用户主动投喂时为 true —— 模型不可用/调用失败时，原文照样入库并排队；
+/// 队列消费者传 false —— 它只在模型可用时被调用，失败就该保留在队列里重试，
+/// **绝不能退化成机械切块**（那正是这次要消掉的低质产物）。
+async fn ingest_file_impl(
+    db: &DbState,
+    kb_id: &str,
+    path: &str,
+    as_markdown: bool,
+    rename: bool,
+    name: Option<&str>,
+    allow_queue: bool,
+) -> Result<IngestOutcome, String> {
+    let source = Path::new(path);
     let original = source
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("file")
         .to_string();
-    let root = prepared_root(&state)?;
+    let root = prepared_root_db(db)?;
     let mut prep = prepare_file(source, as_markdown)?;
     // 用户填的名字（关掉开关时一律忽略 —— 界面上输入框此时是禁用的，不会出现"填了却没生效"）
     let typed = if rename {
-        name.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        name.map(str::trim).filter(|s| !s.is_empty())
     } else {
         None
     };
+    // 模型不可用：只入库、不整理（不产生机械切片），等模型恢复后由队列转正
+    if allow_queue && !model_available_db(db) {
+        if as_markdown {
+            return Err(AppError::External(
+                "「存为 markdown 格式」需要模型整理，当前没有可用模型；请取消勾选后按原文件投喂（原文会先入库，模型可用后再自动整理）。"
+                    .into(),
+            )
+            .into());
+        }
+        if let Some(t) = typed {
+            prep.name = with_original_ext(t, &original);
+        }
+        let out = store()?.stage_prepared(&root, kb_id, prep, "", "file")?;
+        return queue_staged(
+            out,
+            kb_id,
+            "file",
+            serde_json::json!({ "path": path, "rename": rename, "name": typed }),
+        );
+    }
     // AI 只在"允许重命名、且用户自己没填"时才取名：用户意图优先
     let want_ai_name = rename && typed.is_none();
     let (plans, truncated, note) = if as_markdown {
-        match organize_document(&state, &kb_id, &prep, file_stem(&original), "").await {
+        match organize_document_db(db, kb_id, &prep, file_stem(&original), "").await {
             Ok(w) => {
                 // 整理成功 → 产物是 markdown，名字统一用 `.md`
                 let base = typed.unwrap_or(w.doc_title.trim());
@@ -251,7 +299,7 @@ pub async fn kb_ingest_file(
             }
         }
     } else {
-        match plan_ingest(&state, &kb_id, &prep, &original, want_ai_name).await {
+        match plan_ingest_db(db, kb_id, &prep, &original, want_ai_name).await {
             Ok((title, chunks, truncated)) => {
                 // 内容与格式都没变 → **保留原扩展名**（`制度.htm` 里装的仍是 HTML，
                 // 命名成 `.md` 只是让文件名说谎）
@@ -270,14 +318,53 @@ pub async fn kb_ingest_file(
                 (Some(chunks), truncated, note)
             }
             Err(e) => {
+                // 队列消费者：保持 pending 等下一轮，不能产出低质条目
+                if !allow_queue {
+                    return Err(e.to_string());
+                }
                 if let Some(t) = typed {
                     prep.name = with_original_ext(t, &original);
                 }
-                (None, false, e.to_string())
+                let out = store()?.stage_prepared(&root, kb_id, prep, "", "file")?;
+                let mut out = queue_staged(
+                    out,
+                    kb_id,
+                    "file",
+                    serde_json::json!({ "path": path, "rename": rename, "name": typed }),
+                )?;
+                out.ai_note = format!("模型整理未生效，已进入待整理：{}", e);
+                return Ok(out);
             }
         }
     };
-    store()?.ingest_prepared(&root, &kb_id, prep, "", "file", plans, truncated, &note)
+    store()?.ingest_prepared(&root, kb_id, prep, "", "file", plans, truncated, &note)
+}
+
+/// 当前是否有可用模型（能力探测的唯一后端口径）。
+fn model_available_db(db: &DbState) -> bool {
+    db.pool
+        .get()
+        .map(|conn| crate::api_agent::kb_llm::resolve_kb_model(&conn).is_ok())
+        .unwrap_or(false)
+}
+
+/// 把「只入库、未整理」的产物排进待整理队列。
+///
+/// 无法抽取正文的文件（`unsupported`）不排队：没有正文可整理，排队只会反复失败。
+fn queue_staged(
+    out: IngestOutcome,
+    kb_id: &str,
+    kind: &str,
+    payload: serde_json::Value,
+) -> Result<IngestOutcome, String> {
+    if out.status == "unsupported" {
+        let mut out = out;
+        out.queued = false;
+        out.ai_note = "格式暂不支持抽取正文，已保存原文".into();
+        return Ok(out);
+    }
+    store()?.enqueue_ingest(kb_id, kind, &out.rel_path, &payload.to_string())?;
+    Ok(out)
 }
 
 /// 文件名去扩展名（给模型当"这是篇什么"的线索；不用于落盘）
@@ -313,8 +400,8 @@ fn with_original_ext(name: &str, original: &str) -> String {
 ///
 /// 模型与字段定义必须在 await **之前**取好；拿不到模型、调用失败、输出不合规都算未生效 ——
 /// 用户的原文永远要能落库，AI 只是增益。
-async fn plan_ingest(
-    state: &State<'_, DbState>,
+async fn plan_ingest_db(
+    db: &DbState,
     kb_id: &str,
     prep: &IngestPrep,
     hint: &str,
@@ -323,7 +410,7 @@ async fn plan_ingest(
     if prep.blocks.is_empty() {
         return Ok((String::new(), Vec::new(), false)); // 没抽出正文（格式不支持等）：无需 AI，也不是失败
     }
-    let (model, base_name, fields_json) = enrich_context(state, kb_id)?;
+    let (model, base_name, fields_json) = enrich_context_db(db, kb_id)?;
     // 喂模型的是**合并过碎块**的那一份；切正文也按它算序号，两边必须是同一份（见 assemble_plans）
     let blocks = merge_small_blocks(&prep.text, &prep.blocks, MIN_MODEL_BLOCK);
     let block_texts: Vec<String> = blocks.iter().map(|b| b.text.clone()).collect();
@@ -338,7 +425,7 @@ async fn plan_ingest(
     .await
     .map_err(AppError::External);
     // 成败都记账（失败的调用也可能已计费）
-    record_kb_usage(state, kb_id, &model);
+    record_kb_usage_db(db, kb_id, &model);
     match planned {
         Ok((doc_title, plans)) => {
             let (chunks, truncated) = assemble_plans(prep, &blocks, &plans);
@@ -352,7 +439,7 @@ async fn plan_ingest(
             Ok((doc_title, chunks, truncated))
         }
         Err(e) => {
-            log::warn!("[KB] AI 分组未生效，降级为规则分块（{}）：{}", prep.name, e);
+            log::warn!("[KB] AI 分组未生效（{}）：{}", prep.name, e);
             Err(e)
         }
     }
@@ -378,7 +465,17 @@ pub async fn kb_ingest_url(
     url: String,
     name: Option<String>,
 ) -> Result<IngestOutcome, String> {
-    let root = prepared_root(&state)?;
+    ingest_url_impl(state.inner(), &kb_id, &url, name.as_deref(), true).await
+}
+
+async fn ingest_url_impl(
+    db: &DbState,
+    kb_id: &str,
+    url: &str,
+    name: Option<&str>,
+    allow_queue: bool,
+) -> Result<IngestOutcome, String> {
+    let root = prepared_root_db(db)?;
     let target = url.trim().to_string();
     if !(target.starts_with("http://") || target.starts_with("https://")) {
         return Err(AppError::InvalidInput("只支持 http/https 地址".into()).into());
@@ -388,7 +485,6 @@ pub async fn kb_ingest_url(
     let page_title = extract_title(&html, &target);
     // 用户填了就用用户的（用户意图优先）；没填先挂网页标题占位，AI 给出名字后再换掉
     let user_name = name
-        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| strip_doc_ext(s).to_string());
@@ -406,8 +502,18 @@ pub async fn kb_ingest_url(
     // 注意 `prep.text` / `prep.blocks` 仍是**本地提取出的原始 markdown**（AI 的输入），
     // 与 `write_bytes` 刻意不同 —— 它们只用于整理这一阶段，落库阶段不读 `text`
     let mut prep = prepare_web(user_name.as_deref().unwrap_or(&page_title), &text)?;
+    if allow_queue && !model_available_db(db) {
+        // 本地清洗过的 markdown 已经是"干净原文"：入库排队，等模型做标题/语义分块/标签
+        let out = store()?.stage_prepared(&root, kb_id, prep, &target, "url")?;
+        return queue_staged(
+            out,
+            kb_id,
+            "url",
+            serde_json::json!({ "url": target, "name": user_name }),
+        );
+    }
     let (plans, truncated, note) =
-        match organize_document(&state, &kb_id, &prep, &page_title, &target).await {
+        match organize_document_db(db, kb_id, &prep, &page_title, &target).await {
             Ok(w) => {
                 // 用户没指定名字 → 用 AI 给整篇取的名字（`prep.sha` 取自原文，不受改名影响）
                 if user_name.is_none() && !w.doc_title.trim().is_empty() {
@@ -416,10 +522,23 @@ pub async fn kb_ingest_url(
                 prep.write_bytes = w.doc.into_bytes();
                 (Some(w.chunks), w.truncated, String::new())
             }
-            // AI 未生效：落盘退回本地提取的 markdown（干净但未整理），条目走规则分块
-            Err(e) => (None, false, e.to_string()),
+            Err(e) => {
+                // 队列消费者：留在队列里重试；用户主动投喂：原文入库并排队
+                if !allow_queue {
+                    return Err(e.to_string());
+                }
+                let out = store()?.stage_prepared(&root, kb_id, prep, &target, "url")?;
+                let mut out = queue_staged(
+                    out,
+                    kb_id,
+                    "url",
+                    serde_json::json!({ "url": target, "name": user_name }),
+                )?;
+                out.ai_note = format!("模型整理未生效，已进入待整理：{}", e);
+                return Ok(out);
+            }
         };
-    store()?.ingest_prepared(&root, &kb_id, prep, &target, "url", plans, truncated, &note)
+    store()?.ingest_prepared(&root, kb_id, prep, &target, "url", plans, truncated, &note)
 }
 
 /* ── 云文档源（第一期：语雀） ──
@@ -627,14 +746,21 @@ pub fn kb_cloud_account_remove(state: State<'_, DbState>, id: String) -> Result<
 }
 
 /// 取出账号的平台与 Token。连接池 guard 在函数内释放，**不跨 await**。
+fn cloud_account_credentials_db(
+    db: &DbState,
+    account_id: &str,
+) -> Result<(cloud_doc::CloudSource, String), AppError> {
+    let conn = db.pool.get().map_err(AppError::from)?;
+    let account = cloud_account_find(&conn, account_id)?;
+    let source = cloud_doc::CloudSource::parse(&account.source).map_err(AppError::InvalidInput)?;
+    Ok((source, account.token))
+}
+
 fn cloud_account_credentials(
     state: &State<'_, DbState>,
     account_id: &str,
 ) -> Result<(cloud_doc::CloudSource, String), AppError> {
-    let conn = state.pool.get().map_err(AppError::from)?;
-    let account = cloud_account_find(&conn, account_id)?;
-    let source = cloud_doc::CloudSource::parse(&account.source).map_err(AppError::InvalidInput)?;
-    Ok((source, account.token))
+    cloud_account_credentials_db(state.inner(), account_id)
 }
 
 /// 列出某个账号可见的云文档知识库（个人 + 团队）
@@ -673,20 +799,48 @@ pub async fn kb_cloud_ingest_doc(
     doc_id: String,
     name: Option<String>,
 ) -> Result<IngestOutcome, String> {
-    let (source, token) = cloud_account_credentials(&state, &account_id)?;
+    cloud_ingest_doc_impl(
+        state.inner(),
+        &kb_id,
+        &account_id,
+        &namespace,
+        &doc_id,
+        name.as_deref(),
+        true,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cloud_ingest_doc_impl(
+    db: &DbState,
+    kb_id: &str,
+    account_id: &str,
+    namespace: &str,
+    doc_id: &str,
+    name: Option<&str>,
+    allow_queue: bool,
+) -> Result<IngestOutcome, String> {
+    let (source, token) = cloud_account_credentials_db(db, account_id)?;
     // 目录准备放在网络请求之前：失败早退时不会留下半成品目录
-    let root = prepared_root(&state)?;
-    let content = cloud_doc::fetch_doc(source, &token, &namespace, &doc_id).await?;
+    let root = prepared_root_db(db)?;
+    let content = cloud_doc::fetch_doc(source, &token, namespace, doc_id).await?;
     // 用户填了名字就用用户的（与网页投喂同一口径：用户意图优先）
     let user_name = name
-        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| strip_doc_ext(s).to_string());
     let title = user_name.clone().unwrap_or_else(|| content.title.clone());
     let mut prep = prepare_cloud(&title, &content.body)?;
+    let payload = serde_json::json!({
+        "accountId": account_id, "namespace": namespace, "docId": doc_id, "name": user_name,
+    });
+    if allow_queue && !model_available_db(db) {
+        let out = store()?.stage_prepared(&root, kb_id, prep, &content.url, "cloud")?;
+        return queue_staged(out, kb_id, "cloud", payload);
+    }
     let (plans, truncated, note) =
-        match organize_document(&state, &kb_id, &prep, &content.title, &content.url).await {
+        match organize_document_db(db, kb_id, &prep, &content.title, &content.url).await {
             Ok(w) => {
                 if user_name.is_none() && !w.doc_title.trim().is_empty() {
                     prep.name = web_file_name(&w.doc_title);
@@ -694,12 +848,19 @@ pub async fn kb_cloud_ingest_doc(
                 prep.write_bytes = w.doc.into_bytes();
                 (Some(w.chunks), w.truncated, String::new())
             }
-            // AI 未生效：落盘退回原文正文（未整理），条目走规则分块
-            Err(e) => (None, false, e.to_string()),
+            Err(e) => {
+                if !allow_queue {
+                    return Err(e.to_string());
+                }
+                let out = store()?.stage_prepared(&root, kb_id, prep, &content.url, "cloud")?;
+                let mut out = queue_staged(out, kb_id, "cloud", payload)?;
+                out.ai_note = format!("模型整理未生效，已进入待整理：{}", e);
+                return Ok(out);
+            }
         };
     store()?.ingest_prepared(
         &root,
-        &kb_id,
+        kb_id,
         prep,
         &content.url,
         "cloud",
@@ -764,8 +925,8 @@ struct OrganizedDoc {
 ///
 /// `page_title` 是给模型判断整篇讲什么的**线索**（网页标题 / 原文件名），不是最终名字。
 /// `Err` 是"未生效的原因"，由调用方降级为规则分块并如实回传。
-async fn organize_document(
-    state: &State<'_, DbState>,
+async fn organize_document_db(
+    db: &DbState,
     kb_id: &str,
     prep: &IngestPrep,
     page_title: &str,
@@ -774,7 +935,7 @@ async fn organize_document(
     if prep.blocks.is_empty() {
         return Err(AppError::InvalidInput("没有可整理的正文".into()));
     }
-    let (model, base_name, fields_json) = enrich_context(state, kb_id)?;
+    let (model, base_name, fields_json) = enrich_context_db(db, kb_id)?;
     // 与文件投喂同一条口径：碎块先合并再喂模型，否则块数一多就整篇降级
     let blocks = merge_small_blocks(&prep.text, &prep.blocks, MIN_MODEL_BLOCK);
     let block_texts: Vec<String> = blocks.iter().map(|b| b.text.clone()).collect();
@@ -789,7 +950,7 @@ async fn organize_document(
     .await
     .map_err(AppError::External);
     // 成败都记账（失败的调用也可能已计费）
-    record_kb_usage(state, kb_id, &model);
+    record_kb_usage_db(db, kb_id, &model);
     let (doc_title, sections) = organized?;
     log::info!(
         "[KB] AI 整理完成：{} 个块 → {} 条知识（文件名为「{}」，线索「{}」）",
@@ -911,7 +1072,7 @@ fn block_message(marker: &str) -> String {
 ///   - 普通结果**硬拦截**        → 直接报错：渲染也过不去，省下一次浏览器启动
 ///   - 普通结果软拦截 / 空壳，或普通请求本身失败 → 用浏览器渲染重试
 ///   - 渲染后仍被硬拦            → 报明确错误（并指路）
-async fn load_page(url: &str) -> Result<String, AppError> {
+pub(crate) async fn load_page(url: &str) -> Result<String, AppError> {
     let plain = fetch_page(url).await;
     match &plain {
         Ok((html, ctype)) => {
@@ -999,7 +1160,7 @@ async fn fetch_page(url: &str) -> Result<(String, String), AppError> {
 }
 
 /// 标题：优先 `<title>`，取不到就退回主机名（分块 key 与文件名都要用）
-fn extract_title(html: &str, url: &str) -> String {
+pub(crate) fn extract_title(html: &str, url: &str) -> String {
     if let Ok(sel) = scraper::Selector::parse("title") {
         let doc = scraper::Html::parse_document(html);
         if let Some(el) = doc.select(&sel).next() {
@@ -1541,11 +1702,11 @@ pub async fn kb_digest_conversation(
 /// 未指定时回落第一个可用提供商）；设置页的「当前生效」调的也是同一个函数，两边不会漂移。
 /// 这里把解析结果记一行日志：整理用了哪个模型必须能在运行记录里查到（`from_fallback` 尤其要标出来 ——
 /// 那是"我明明指定了却没生效"的唯一线索）。
-fn enrich_context(
-    state: &State<'_, DbState>,
+fn enrich_context_db(
+    db: &DbState,
     kb_id: &str,
 ) -> Result<(crate::api_agent::kb_llm::KbModel, String, String), AppError> {
-    let conn = state.pool.get().map_err(AppError::from)?;
+    let conn = db.pool.get().map_err(AppError::from)?;
     let model = crate::api_agent::kb_llm::resolve_kb_model(&conn).map_err(AppError::Config)?;
     let base = store()?
         .list_bases()
@@ -1565,6 +1726,13 @@ fn enrich_context(
     Ok((model, base.name, base.fields_json))
 }
 
+fn enrich_context(
+    state: &State<'_, DbState>,
+    kb_id: &str,
+) -> Result<(crate::api_agent::kb_llm::KbModel, String, String), AppError> {
+    enrich_context_db(state.inner(), kb_id)
+}
+
 /// 把本次知识库操作产生的模型用量落进 `api_usage_log`（归因键 `kb:{kb_id}`）。
 ///
 /// 与记忆意图路由 / 滚动摘要同一范式：**模块内只负责把用量交出来，落库由持有 conn 与归因键的上层做**
@@ -1576,20 +1744,28 @@ fn enrich_context(
 ///
 /// 归因粒度只到"知识库"这一层，**记不到"哪次会话触发的沉淀"**：`kb_*` 命令的入参里没有
 /// 会话/房间上下文（要更细就得让前端把 sessionId 一起传下来）。
-fn record_kb_usage(
-    state: &State<'_, DbState>,
+fn record_kb_usage_db(
+    db: &DbState,
     kb_id: &str,
     model: &crate::api_agent::kb_llm::KbModel,
 ) {
-    let Ok(conn) = state.pool.get() else {
+    let Ok(conn) = db.pool.get() else {
         log::warn!("[KB] 取不到连接，本次用量未记账");
         return;
     };
     record_kb_usage_conn(&conn, kb_id, model);
 }
 
+fn record_kb_usage(
+    state: &State<'_, DbState>,
+    kb_id: &str,
+    model: &crate::api_agent::kb_llm::KbModel,
+) {
+    record_kb_usage_db(state.inner(), kb_id, model);
+}
+
 /// 落库本体（吃 `&Connection`：轮末自动沉淀那边只有 `DbPool`，没有 `State`）。
-fn record_kb_usage_conn(
+pub(crate) fn record_kb_usage_conn(
     conn: &rusqlite::Connection,
     kb_id: &str,
     model: &crate::api_agent::kb_llm::KbModel,
@@ -1933,6 +2109,16 @@ fn merge_tags(user: &str, model: &[String]) -> String {
 
 /// 入队一条待确认候选。**投喂即整理**：默认先让模型给出标题/标签/专属属性，再落队列，
 /// 你在队列里核对修改后才入库；整理失败不阻断入库，只把原因写在候选的说明里。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateAddOutcome {
+    /// true = 已进「待整理」队列（模型不可用），当前还没有候选
+    pub queued: bool,
+    pub queue_id: String,
+    /// 已落候选时是候选 id；排队时为 0
+    pub candidate_id: i64,
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn kb_add_candidate(
@@ -1947,19 +2133,67 @@ pub async fn kb_add_candidate(
     reason: Option<String>,
     // 是否先做 AI 整理（默认开）
     enrich: Option<bool>,
-) -> Result<i64, String> {
-    let user_meta = meta_json.as_deref().unwrap_or("{}").to_string();
+) -> Result<CandidateAddOutcome, String> {
+    add_candidate_impl(
+        state.inner(),
+        &kb_id,
+        &key,
+        value,
+        meta_json.as_deref(),
+        tags.as_deref(),
+        origin.as_deref(),
+        source_ref.as_deref(),
+        reason.as_deref(),
+        enrich.unwrap_or(true),
+        true,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn add_candidate_impl(
+    db: &DbState,
+    kb_id: &str,
+    key: &str,
+    value: String,
+    meta_json: Option<&str>,
+    tags: Option<&str>,
+    origin: Option<&str>,
+    source_ref: Option<&str>,
+    reason: Option<&str>,
+    enrich: bool,
+    allow_queue: bool,
+) -> Result<CandidateAddOutcome, String> {
+    let user_meta = meta_json.unwrap_or("{}").to_string();
     let mut key = key.trim().to_string();
     let mut value = value;
-    let mut tags_str = tags.unwrap_or_default();
-    let mut reason_str = reason.unwrap_or_default();
+    let mut tags_str = tags.unwrap_or_default().to_string();
+    let mut reason_str = reason.unwrap_or_default().to_string();
     let mut meta_str = user_meta.clone();
     // 片段投喂是"用户自己粘的草稿"，允许 AI 结构化改写正文；其余来源（工作沉淀）只打标不改写
-    let is_snippet = origin.as_deref() == Some("snippet");
+    let is_snippet = origin == Some("snippet");
     let raw_snippet = value.clone();
 
-    if enrich.unwrap_or(true) {
-        let ctx = enrich_context(&state, &kb_id);
+    // 模型不可用：片段先入「待整理」，不产出标题靠猜、无标签的半成品候选
+    if allow_queue && enrich && is_snippet && !model_available_db(db) {
+        let dedupe = match source_ref.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) => s.to_string(),
+            None => crate::api_agent::knowledge::sha256_hex(value.as_bytes())[..16].to_string(),
+        };
+        let payload = serde_json::json!({
+            "key": key, "value": value, "metaJson": user_meta,
+            "tags": tags_str, "origin": origin, "sourceRef": source_ref, "reason": reason_str,
+        });
+        let queue_id = store()?.enqueue_ingest(kb_id, "snippet", &dedupe, &payload.to_string())?;
+        return Ok(CandidateAddOutcome {
+            queued: true,
+            queue_id,
+            candidate_id: 0,
+        });
+    }
+
+    if enrich {
+        let ctx = enrich_context_db(db, kb_id);
         match ctx {
             Ok((model, base_name, fields_json)) => {
                 if is_snippet {
@@ -2036,7 +2270,7 @@ pub async fn kb_add_candidate(
                     }
                 }
                 // 成败都记账（失败的调用也可能已计费）
-                record_kb_usage(&state, &kb_id, &model);
+                record_kb_usage_db(db, kb_id, &model);
             }
             Err(err) => {
                 log::warn!("[KB] 整理不可用: {}", err);
@@ -2054,16 +2288,306 @@ pub async fn kb_add_candidate(
         key = "未命名知识".to_string();
     }
 
-    store()?.add_candidate(
-        &kb_id,
+    let candidate_id = store()?.add_candidate(
+        kb_id,
         &key,
         &value,
         &meta_str,
         &tags_str,
-        origin.as_deref().unwrap_or(""),
-        source_ref.as_deref().unwrap_or(""),
+        origin.unwrap_or(""),
+        source_ref.unwrap_or(""),
         &reason_str,
-    )
+    )?;
+    Ok(CandidateAddOutcome {
+        queued: false,
+        queue_id: String::new(),
+        candidate_id,
+    })
+}
+
+/* ── 投喂能力与「待整理」队列 ──
+ *
+ * 口径：**入库永远可用，加工按能力降级**。
+ * - `canProcess = none`：原文照收（`stage_prepared`），不产出机械切片；
+ * - 模型恢复（配好本地模型 / 网络恢复）后，`kb_ingest_queue_run` 重跑同一条投喂链路转正。
+ * 个人库没有组织闸门，能力只看「有没有可用 Provider」。
+ */
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestCapabilityView {
+    /// none | local | cloud
+    pub can_process: String,
+    pub provider_name: String,
+    pub model: String,
+    /// internal | cloud（无模型时为空）
+    pub trust_domain: String,
+    /// 不可用原因（可用时为空）
+    pub reason: String,
+    /// 所有库里待整理的条数
+    pub pending: i64,
+}
+
+#[tauri::command]
+pub fn kb_ingest_capability(state: State<'_, DbState>) -> Result<IngestCapabilityView, String> {
+    Ok(ingest_capability_db(state.inner()))
+}
+
+fn ingest_capability_db(db: &DbState) -> IngestCapabilityView {
+    let mut view = IngestCapabilityView {
+        can_process: "none".into(),
+        provider_name: String::new(),
+        model: String::new(),
+        trust_domain: String::new(),
+        reason: String::new(),
+        pending: 0,
+    };
+    match db.pool.get() {
+        Ok(conn) => match crate::api_agent::kb_llm::resolve_kb_model(&conn) {
+            Ok(m) => {
+                let trust = crate::commands::api_provider::provider_trust_domain(&conn, &m.provider_id);
+                view.can_process = if trust == crate::enclave::gate::TrustDomain::Internal {
+                    "local".into()
+                } else {
+                    "cloud".into()
+                };
+                view.provider_name = m.provider_name;
+                view.model = m.model;
+                view.trust_domain = trust.as_str().into();
+            }
+            Err(e) => view.reason = e,
+        },
+        Err(e) => view.reason = format!("无法访问主库：{}", e),
+    }
+    view.pending = store().map(|s| s.ingest_queue_pending()).unwrap_or(0);
+    view
+}
+
+#[tauri::command]
+pub fn kb_ingest_queue_list(
+    kb_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::api_agent::knowledge::IngestQueueView>, String> {
+    Ok(store()?.list_ingest_queue(kb_id.as_deref(), limit.unwrap_or(100)))
+}
+
+#[tauri::command]
+pub fn kb_ingest_queue_count() -> Result<i64, String> {
+    Ok(store()?.ingest_queue_pending())
+}
+
+#[tauri::command]
+pub fn kb_ingest_queue_retry(id: String) -> Result<(), String> {
+    store()?.retry_ingest(&id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn kb_ingest_queue_drop(id: String) -> Result<bool, String> {
+    Ok(store()?.drop_ingest(&id))
+}
+
+/// 手工整理：把一条「片段」不经模型直接放进待确认（之后可在队列里继续编辑）。
+///
+/// 文件/网址不做手工整理：它们需要"取正文 + 分节"，手工切反而更差；
+/// 用户可以把原文粘成片段再提交。
+#[tauri::command]
+pub fn kb_ingest_manual(id: String) -> Result<CandidateAddOutcome, String> {
+    let st = store()?;
+    let row = st
+        .list_ingest_queue(None, 500)
+        .into_iter()
+        .find(|r| r.id == id)
+        .ok_or_else(|| "待整理记录不存在".to_string())?;
+    if row.kind != "snippet" {
+        return Err("只有「片段」支持不经模型直接入库；文件/网址请等模型整理".into());
+    }
+    let p: serde_json::Value =
+        serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
+    let value = p
+        .get("value")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if value.trim().is_empty() {
+        return Err("片段内容为空".into());
+    }
+    let mut key = p
+        .get("key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if key.is_empty() {
+        key = derive_title(&value);
+    }
+    let candidate_id = st.add_candidate(
+        &row.kb_id,
+        &key,
+        &value,
+        "{}",
+        "",
+        "snippet",
+        &row.source_ref,
+        "人工整理（未使用模型；可在「待确认」继续编辑）",
+    )?;
+    st.finish_ingest(&id);
+    Ok(CandidateAddOutcome {
+        queued: false,
+        queue_id: String::new(),
+        candidate_id,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestQueueRunOutcome {
+    pub done: usize,
+    pub failed: usize,
+    /// true = 因为模型不可用而提前停下（条目仍留在队列里，不算失败）
+    pub stopped: bool,
+    pub remaining: i64,
+}
+
+#[tauri::command]
+pub async fn kb_ingest_queue_run(
+    state: State<'_, DbState>,
+    limit: Option<usize>,
+) -> Result<IngestQueueRunOutcome, String> {
+    drain_ingest_queue(state.inner(), limit.unwrap_or(3)).await
+}
+
+/// 消费待整理队列（单消费者，按入队顺序）。
+///
+/// 模型不可用时**直接停**：不把队列烧成 failed，也不退化成机械切块。
+async fn drain_ingest_queue(db: &DbState, max: usize) -> Result<IngestQueueRunOutcome, String> {
+    let st = store()?;
+    // 上次进程遗留的 running 放回 pending（否则永远卡住）
+    st.reset_running_ingest();
+    let mut done = 0usize;
+    let mut failed = 0usize;
+    let mut stopped = false;
+    for _ in 0..max {
+        if !model_available_db(db) {
+            stopped = true;
+            break;
+        }
+        let Some(row) = st.claim_next_ingest()? else {
+            break;
+        };
+        match process_ingest_row(db, &row).await {
+            Ok(()) => {
+                st.finish_ingest(&row.id);
+                done += 1;
+            }
+            Err(e) => {
+                log::warn!("[KB] 待整理失败（{} {}）：{}", row.kind, row.id, e);
+                st.fail_ingest(&row.id, &e);
+                failed += 1;
+                if e.contains("模型") || e.contains("Provider") || e.contains("未配置") {
+                    stopped = true;
+                    break;
+                }
+            }
+        }
+    }
+    Ok(IngestQueueRunOutcome {
+        done,
+        failed,
+        stopped,
+        remaining: st.ingest_queue_pending(),
+    })
+}
+
+async fn process_ingest_row(
+    db: &DbState,
+    row: &crate::api_agent::knowledge::IngestQueueView,
+) -> Result<(), String> {
+    let p: serde_json::Value =
+        serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
+    let s = |key: &str| p.get(key).and_then(|v| v.as_str());
+    match row.kind.as_str() {
+        "file" => {
+            let path = s("path").ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
+            ingest_file_impl(
+                db,
+                &row.kb_id,
+                path,
+                false,
+                p.get("rename").and_then(|v| v.as_bool()).unwrap_or(false),
+                s("name"),
+                false,
+            )
+            .await
+            .map(|_| ())
+        }
+        "url" => {
+            let url = s("url").ok_or_else(|| "待整理记录缺少网址".to_string())?;
+            ingest_url_impl(db, &row.kb_id, url, s("name"), false)
+                .await
+                .map(|_| ())
+        }
+        "cloud" => {
+            cloud_ingest_doc_impl(
+                db,
+                &row.kb_id,
+                s("accountId").ok_or_else(|| "待整理记录缺少云文档账号".to_string())?,
+                s("namespace").unwrap_or(""),
+                s("docId").ok_or_else(|| "待整理记录缺少云文档 id".to_string())?,
+                s("name"),
+                false,
+            )
+            .await
+            .map(|_| ())
+        }
+        "snippet" => {
+            let value = s("value")
+                .ok_or_else(|| "待整理记录缺少片段正文".to_string())?
+                .to_string();
+            let key = s("key").unwrap_or("");
+            add_candidate_impl(
+                db,
+                &row.kb_id,
+                key,
+                value,
+                s("metaJson"),
+                s("tags"),
+                s("origin"),
+                s("sourceRef"),
+                s("reason"),
+                true,
+                false,
+            )
+            .await
+            .map(|_| ())
+        }
+        other => Err(format!("未知的待整理类型：{}", other)),
+    }
+}
+
+/// 后台消费待整理队列（启动时 + 每 2 分钟）。
+///
+/// 只在「有排队 + 有可用模型」时才真正跑，其余情况几乎零开销；
+/// 因此断网/没有本地模型时它只是空转，不会产生任何调用。
+pub async fn run_ingest_queue_loop(db: DbState) {
+    // 避开启动高峰（此时主库连接最紧张）
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    loop {
+        let pending = store().map(|s| s.ingest_queue_pending()).unwrap_or(0);
+        if pending > 0 && model_available_db(&db) {
+            match drain_ingest_queue(&db, 5).await {
+                Ok(o) if o.done > 0 || o.failed > 0 => log::info!(
+                    "[KB] 待整理消费：完成 {}，失败 {}，剩余 {}",
+                    o.done,
+                    o.failed,
+                    o.remaining
+                ),
+                Ok(_) => {}
+                Err(e) => log::warn!("[KB] 待整理消费异常：{}", e),
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(120)).await;
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

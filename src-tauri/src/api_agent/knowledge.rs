@@ -145,6 +145,24 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
         );
         CREATE INDEX IF NOT EXISTS idx_kb_candidates_kb ON kb_candidates(kb_id);
 
+        -- 投喂「待整理」队列：内容已经收进来了，但当前没有可用模型做结构化整理。
+        -- 与 kb_candidates 的区别：候选是「已整理、等人确认」，这里「未整理、没有条目」。
+        -- 进程内不需要额外锁：单条投喂在写库前先入队，消费者按 pending 顺序取。
+        CREATE TABLE IF NOT EXISTS kb_ingest_queue (
+            id TEXT PRIMARY KEY,
+            kb_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            source_ref TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(kb_id, kind, source_ref)
+        );
+        CREATE INDEX IF NOT EXISTS idx_kb_ingest_queue_status ON kb_ingest_queue(status, created_at);
+
         -- trigram：中文按任意子串命中。unicode61 会把整串汉字当成一个 token，中文等于搜不到。
         CREATE VIRTUAL TABLE IF NOT EXISTS kb_entry_fts USING fts5(key, value, tags, tokenize='trigram');
 
@@ -564,10 +582,48 @@ pub struct IngestOutcome {
     pub status: String,
     /// 分块数超过上限被截断
     pub truncated: bool,
+    /// true = 内容已入库，但还没有整理（等模型可用），当前没有知识条目
+    pub queued: bool,
     /// AI 相关的提醒（一切正常时为空串）：AI 分组未生效的原因、AI 没能取名等。
     /// 投喂是"AI 参与分块"的主路径，降级**必须是可见的**：否则用户以为内容是 AI 分的、
     /// 名字是 AI 取的，实际是规则切开 + 原名，看着就像功能没生效。
     pub ai_note: String,
+}
+
+/// 待整理队列的一行（前端展示 + 消费者内部使用）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestQueueView {
+    pub id: String,
+    pub kb_id: String,
+    /// snippet | file | url | cloud
+    pub kind: String,
+    pub source_ref: String,
+    /// JSON：重跑时要用的原始输入（路径 / 网址 / 账号文档 / 片段正文）
+    pub payload: String,
+    /// pending | running | failed
+    pub status: String,
+    pub attempts: i64,
+    pub last_error: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl IngestQueueView {
+    fn from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: r.get(0)?,
+            kb_id: r.get(1)?,
+            kind: r.get(2)?,
+            source_ref: r.get(3)?,
+            payload: r.get(4)?,
+            status: r.get(5)?,
+            attempts: r.get(6)?,
+            last_error: r.get(7)?,
+            created_at: r.get(8)?,
+            updated_at: r.get(9)?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1408,6 +1464,168 @@ impl KnowledgeStore {
         self.ingest_shared(root, kb_id, &prep, url, origin, chunks, truncated, &note)
     }
 
+    /// 只入库、不整理（模型不可用时的降级落点）。
+    ///
+    /// 产物：原文登记 + 与本库关联，**不写任何知识条目**（没有机械切片，也没有假标题）。
+    /// 状态记 `queued`，由 `kb_ingest_queue` 在模型可用后重跑同一条投喂链路转正。
+    pub fn stage_prepared(
+        &self,
+        root: &std::path::Path,
+        kb_id: &str,
+        prep: IngestPrep,
+        url: &str,
+        origin: &str,
+    ) -> Result<IngestOutcome, String> {
+        let mut out = self.ingest_shared(root, kb_id, &prep, url, origin, Vec::new(), false, "")?;
+        out.queued = true;
+        out.ai_note = "内容已入库，等待模型整理（整理前不产生知识条目）".to_string();
+        if out.chunks == 0 {
+            // 复用已有原文时不动它的状态：那份可能早就整理过了
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE kb_files SET extract_status = 'queued' WHERE id = ?1",
+                params![out.file_id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(out)
+    }
+
+    /* ── 待整理队列 ── */
+
+    /// 入队（幂等）：同一 kb + kind + source_ref 只会有一行。
+    /// 已存在的行会把 payload 刷新成最新一次投喂的意图（例如用户改了文件名）。
+    pub fn enqueue_ingest(
+        &self,
+        kb_id: &str,
+        kind: &str,
+        source_ref: &str,
+        payload: &str,
+    ) -> Result<String, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_secs();
+        let id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO kb_ingest_queue
+                (id, kb_id, kind, source_ref, payload, status, attempts, last_error, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, '', ?6, ?6)
+             ON CONFLICT(kb_id, kind, source_ref) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at,
+                -- 失败过的重新排队；pending/running/done 保持原状（不打断正在跑的）
+                status = CASE WHEN kb_ingest_queue.status = 'failed' THEN 'pending'
+                              ELSE kb_ingest_queue.status END",
+            params![id, kb_id, kind, source_ref, payload, now],
+        )
+        .map_err(|e| format!("写入待整理队列失败: {}", e))?;
+        conn.query_row(
+            "SELECT id FROM kb_ingest_queue WHERE kb_id = ?1 AND kind = ?2 AND source_ref = ?3",
+            params![kb_id, kind, source_ref],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("读取待整理队列失败: {}", e))
+    }
+
+    pub fn list_ingest_queue(&self, kb_id: Option<&str>, limit: usize) -> Vec<IngestQueueView> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT id, kb_id, kind, source_ref, payload, status, attempts, last_error, created_at, updated_at
+             FROM kb_ingest_queue
+             WHERE (?1 IS NULL OR kb_id = ?1)
+             ORDER BY CASE status WHEN 'failed' THEN 1 WHEN 'pending' THEN 0 ELSE 2 END, created_at ASC
+             LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(params![kb_id, limit as i64], IngestQueueView::from_row)
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn ingest_queue_pending(&self) -> i64 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM kb_ingest_queue WHERE status IN ('pending', 'running')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    }
+
+    /// 取一条待整理并标记 running（单消费者：取到就锁住，避免并发重复整理）。
+    pub fn claim_next_ingest(&self) -> Result<Option<IngestQueueView>, String> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT id, kb_id, kind, source_ref, payload, status, attempts, last_error, created_at, updated_at
+                 FROM kb_ingest_queue WHERE status = 'pending'
+                 ORDER BY created_at ASC LIMIT 1",
+                [],
+                IngestQueueView::from_row,
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(row) = row else { return Ok(None) };
+        let changed = conn
+            .execute(
+                "UPDATE kb_ingest_queue SET status = 'running', updated_at = ?2
+                 WHERE id = ?1 AND status = 'pending'",
+                params![row.id, now_secs()],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        Ok(Some(row))
+    }
+
+    pub fn finish_ingest(&self, id: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute("DELETE FROM kb_ingest_queue WHERE id = ?1", params![id]);
+    }
+
+    /// 失败：次数 +1，前 5 次留在 pending 等下一轮，超过则落 failed（等人工）。
+    pub fn fail_ingest(&self, id: &str, error: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE kb_ingest_queue
+                SET attempts = attempts + 1,
+                    last_error = ?2,
+                    status = CASE WHEN attempts + 1 >= 5 THEN 'failed' ELSE 'pending' END,
+                    updated_at = ?3
+              WHERE id = ?1",
+            params![id, error, now_secs()],
+        );
+    }
+
+    /// 进程重启时把遗留的 running 放回 pending（否则它们永远卡住）。
+    pub fn reset_running_ingest(&self) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE kb_ingest_queue SET status = 'pending' WHERE status = 'running'",
+            [],
+        );
+    }
+
+    pub fn drop_ingest(&self, id: &str) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM kb_ingest_queue WHERE id = ?1", params![id])
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    /// 把「待整理」重排回 pending（用户手动重试 / 修复配置后）。
+    pub fn retry_ingest(&self, id: &str) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE kb_ingest_queue
+                SET status = 'pending', attempts = 0, last_error = '', updated_at = ?2
+              WHERE id = ?1",
+            params![id, now_secs()],
+        );
+    }
+
     /// 文件/网页投喂的共同后半程：登记文件（按 sha 去重）→ 关联 → 写分块或补关联。
     ///
     /// `chunks` 已是"要落库的每条知识"（正文由调用方按原文区间切好）；没有 AI 时就是规则分块。
@@ -1490,8 +1708,33 @@ impl KnowledgeStore {
         .map_err(|e| format!("关联文件失败: {}", e))?;
 
         let chunk_count = if reused {
-            // 原文已在库里：不重复落盘、不重复抽取，只把已有分块关联到本库
-            relink_chunks(&tx, kb_id, &rel_path, now)?
+            // 原文已在库里：不重复落盘、不重复抽取，只把已有分块关联到本库。
+            // **但它可能还是一份「待整理」的原文（chunk_count = 0）** —— 模型恢复后重跑时，
+            // 必须把这次算出来的分块补写进去，否则会永远停在 0 块（队列条目永远清不掉）。
+            let mut n = relink_chunks(&tx, kb_id, &rel_path, now)?;
+            if n == 0 && !chunks.is_empty() {
+                let origin = if origin.is_empty() {
+                    if url.is_empty() { "file" } else { "url" }
+                } else {
+                    origin
+                };
+                n = write_planned_chunks(
+                    &tx,
+                    kb_id,
+                    &key_stem(file_name),
+                    file_name,
+                    &sha[..8],
+                    &rel_path,
+                    origin,
+                    &chunks,
+                )?;
+                tx.execute(
+                    "UPDATE kb_files SET chunk_count = ?2, extract_status = ?3 WHERE id = ?1",
+                    params![file_id, n as i64, status],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            n
         } else {
             // 调用方给了来源就用它；只给空串时才回落到"有 url 算网页、否则算文件"的老口径
             let origin = if origin.is_empty() {
@@ -1530,6 +1773,7 @@ impl KnowledgeStore {
             chunks: chunk_count,
             reused,
             status: status.to_string(),
+            queued: false,
             truncated,
             ai_note: ai_note.to_string(),
         })

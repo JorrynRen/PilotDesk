@@ -35,6 +35,8 @@ const STATUS_META: Record<KnowledgeFile['extractStatus'], { label: string; color
   pending: { label: '待抽取', color: '#F59E0B', icon: Loader2 },
   extracting: { label: '抽取中', color: '#3B82F6', icon: Loader2 },
   done: { label: '已抽取', color: '#10B981', icon: CheckCircle2 },
+  // 原文已登记，等模型可用后再整理（不产出机械切片）
+  queued: { label: '待整理（等待模型）', color: '#F59E0B', icon: Loader2 },
   // 原文已登记，但该格式暂不支持抽正文（内容不进检索）——是明确的边界，不是失败
   unsupported: { label: '未抽取（格式暂不支持）', color: '#9CA3AF', icon: FileQuestion },
   failed: { label: '抽取失败', color: '#EF4444', icon: AlertCircle },

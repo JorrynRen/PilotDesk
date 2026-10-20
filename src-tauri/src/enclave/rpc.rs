@@ -304,6 +304,126 @@ pub fn dispatch(
         }
 
         // ── 组织知识库（成员只读）─────────────────────────────
+        // ── 组织知识库：人工投喂与待整理队列 ──
+        // 主机侧只负责**入队**：模型整理需要主库里的 Provider 配置，由主机后台循环执行
+        // （成员端不缓存团队数据，也不该解析主机 Provider）。
+        "kb.ingest.capability" => {
+            let cached = knowledge::load_ingest_capability(conn, org_id);
+            let pending = knowledge::ingest_queue_pending(conn, org_id);
+            let mut cap: Value = cached
+                .and_then(|json| serde_json::from_str::<Value>(&json).ok())
+                .unwrap_or_else(|| {
+                    serde_json::json!({
+                        "canProcess": "none",
+                        "providerName": "",
+                        "model": "",
+                        "trustDomain": "",
+                        "reason": "主机尚未上报加工能力",
+                        "pending": pending,
+                    })
+                });
+            if let Some(obj) = cap.as_object_mut() {
+                obj.insert("pending".into(), Value::from(pending));
+            }
+            Ok(cap)
+        }
+        "kb.queue.list" => {
+            let kb_id = opt_str(payload, "kbId");
+            to_value(knowledge::list_ingest_queue(
+                conn,
+                org_id,
+                kb_id.as_deref(),
+            )?)
+        }
+        "kb.queue.retry" => {
+            let id = req_str(payload, "queueId")?;
+            knowledge::retry_ingest(conn, org_id, &id)?;
+            Ok(Value::Null)
+        }
+        "kb.queue.drop" => {
+            let id = req_str(payload, "queueId")?;
+            to_value(knowledge::drop_ingest(conn, org_id, &id)?)
+        }
+        "kb.ingest.snippet" | "kb.ingest.url" => {
+            let kb_id = req_str(payload, "kbId")?;
+            let source_ref = req_str(payload, "sourceRef")?;
+            let body = payload.get("payload").cloned().unwrap_or(Value::Null);
+            let kind = if command == "kb.ingest.snippet" { "snippet" } else { "url" };
+            let queue_id = knowledge::enqueue_ingest(
+                conn,
+                org_id,
+                &kb_id,
+                kind,
+                &source_ref,
+                &body.to_string(),
+            )?;
+            to_value(serde_json::json!({
+                "queued": true,
+                "queueId": queue_id,
+                "entries": 0,
+            }))
+        }
+        "kb.queue.run" => {
+            // 成员无法在本地执行；后台循环会接手
+            let pending = knowledge::ingest_queue_pending(conn, org_id);
+            to_value(serde_json::json!({
+                "done": 0,
+                "failed": 0,
+                "stopped": true,
+                "remaining": pending,
+            }))
+        }
+
+        "kb.ingest.manual" => {
+            let id = req_str(payload, "queueId")?;
+            let rows = knowledge::list_ingest_queue(conn, org_id, None)?;
+            let row = rows
+                .into_iter()
+                .find(|r| r.id == id)
+                .ok_or_else(|| "待整理记录不存在".to_string())?;
+            if row.kind != "snippet" {
+                return Err("只有「片段」支持不经模型直接入库".to_string());
+            }
+            let p: Value = serde_json::from_str(&row.payload).unwrap_or(Value::Null);
+            let text = p
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if text.trim().is_empty() {
+                return Err("片段内容为空".to_string());
+            }
+            let raw_title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if raw_title.trim().is_empty() {
+                crate::api_agent::knowledge::derive_title(&text)
+            } else {
+                raw_title.to_string()
+            };
+            let digest = &crate::api_agent::knowledge::sha256_hex(text.as_bytes())[..16];
+            let entries = vec![knowledge::IngestEntryInput {
+                memory_id: format!("manual:{}", digest),
+                title,
+                content: text,
+                tags: String::new(),
+                metadata: "{}".into(),
+            }];
+            knowledge::write_ingest_entries(
+                conn,
+                org_id,
+                &row.kb_id,
+                "manual",
+                &row.source_ref,
+                actor,
+                &entries,
+            )?;
+            knowledge::finish_ingest(conn, &row.id);
+            to_value(serde_json::json!({
+                "queued": false,
+                "queueId": row.id,
+                "entries": 1,
+            }))
+        }
+
         "kb.list" => to_value(knowledge::list_kbs(conn, org_id)?),
         "kb.search" => {
             let query = req_str(payload, "query")?;

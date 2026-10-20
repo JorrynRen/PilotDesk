@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Scissors, FileUp, Globe, Sparkles, Check, Trash2, FolderOpen, Loader2, Wand2, Cloud, Square } from 'lucide-react';
+import { Scissors, FileUp, Globe, Sparkles, Check, Trash2, FolderOpen, Loader2, Wand2, Cloud, Square, AlertTriangle, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -19,12 +19,14 @@ import { MetaEditor } from './KnowledgeFieldInputs';
 import { Select } from '../common/Select';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { useKnowledgeStore } from '../../stores/knowledgeStore';
 import {
   ORIGIN_LABEL,
   cloudSourceLabel,
   type CloudAccount,
   type CloudDoc,
   type CloudRepo,
+  type IngestQueueItem,
   type KnowledgeBase,
   type KnowledgeCandidate,
   type KnowledgeMeta,
@@ -126,6 +128,34 @@ export function KnowledgeIngest({
   const [cloudLoadingDocs, setCloudLoadingDocs] = useState(false);
 
   const panelRef = useRef<HTMLDivElement>(null);
+  /** 加工能力：none 时投喂不失败，只是进「待整理」 */
+  const capability = useKnowledgeStore((s) => s.ingestCapability);
+  const pending = useKnowledgeStore((s) => s.ingestQueue);
+  const modelBlocked = capability !== null && capability.canProcess === 'none';
+  const autoRanRef = useRef(false);
+
+  useEffect(() => {
+    const st = useKnowledgeStore.getState();
+    void st.loadIngestCapability();
+    void st.loadIngestQueue();
+  }, [base.id]);
+
+  // 进入页面时若已有可用的模型和积压，顺手清一轮（失败/不可用会被后端直接返回 stopped）
+  useEffect(() => {
+    if (autoRanRef.current) return;
+    if (!capability || capability.canProcess === 'none' || capability.pending === 0) return;
+    autoRanRef.current = true;
+    void useKnowledgeStore.getState().runIngestQueue();
+  }, [capability?.canProcess, capability?.pending]);
+
+  // 模型一消失就把这两个"需要加工"的开关复位：否则会提交一个必然被拒的组合
+  useEffect(() => {
+    if (modelBlocked) {
+      setAsMarkdown(false);
+      setRename(false);
+    }
+  }, [modelBlocked]);
+
   const targetBaseIds = [base.id, ...extraBaseIds];
 
   /** 拉某个账号的知识库列表。换账号时把下游（知识库 / 文档 / 勾选）一起清掉 ——
@@ -323,6 +353,7 @@ export function KnowledgeIngest({
 
   const canSubmit =
     !busy
+    && !(mode === 'ai' && modelBlocked)
     && (mode === 'snippet' ? Boolean(text.trim())
       : mode === 'url' ? Boolean(url.trim())
         : mode === 'ai' ? Boolean(topic.trim())
@@ -349,15 +380,20 @@ export function KnowledgeIngest({
           {(Object.keys(MODE_META) as Mode[]).map((m) => {
             const M = MODE_META[m];
             const active = mode === m;
+            const blocked = m === 'ai' && modelBlocked;
             return (
               <button
                 key={m}
                 onClick={() => setMode(m)}
+                disabled={blocked}
+                title={blocked ? 'AI 生成需要可用模型（本地或云端）' : undefined}
                 className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[11px] transition-colors"
                 style={{
                   backgroundColor: active ? 'var(--bg-primary)' : 'transparent',
                   color: active ? 'var(--accent)' : 'var(--text-secondary)',
                   fontWeight: active ? 600 : 500,
+                  opacity: blocked ? 0.45 : 1,
+                  cursor: blocked ? 'not-allowed' : 'pointer',
                 }}
               >
                 <M.icon size={11} />
@@ -366,6 +402,60 @@ export function KnowledgeIngest({
             );
           })}
         </div>
+
+        {/* 加工能力条：把"能不能整理"和"能不能投喂"分开讲清楚。
+            投喂永远可用；没有模型时只是原文入库并排队，不会产出机械切片。 */}
+        {capability && (
+          <div
+            className="shrink-0 flex items-start gap-2 px-2.5 py-2 rounded-lg text-[11px]"
+            style={{
+              backgroundColor: modelBlocked ? 'var(--status-warning-bg)' : 'var(--bg-tertiary)',
+              color: modelBlocked ? 'var(--status-warning)' : 'var(--text-secondary)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            {modelBlocked ? (
+              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            ) : (
+              <Sparkles size={12} className="mt-0.5 shrink-0" />
+            )}
+            <div className="min-w-0 flex-1">
+              {modelBlocked ? (
+                <>
+                  暂无可用模型：内容会先入库并进入「待整理」，不会生成机械切片；
+                  配好本地模型或恢复网络后自动整理。
+                </>
+              ) : (
+                <>
+                  加工能力：
+                  {capability.canProcess === 'local' ? '本地模型' : '云端模型'}
+                  {capability.model ? ` · ${capability.model}` : ''}
+                  {capability.providerName ? `（${capability.providerName}）` : ''}
+                </>
+              )}
+              {modelBlocked && capability.reason && (
+                <div className="mt-0.5 text-[10px] opacity-80 break-all">原因：{capability.reason}</div>
+              )}
+            </div>
+            {capability.pending > 0 && (
+              <button
+                onClick={() => void useKnowledgeStore.getState().runIngestQueue()}
+                disabled={modelBlocked}
+                className="pd-btn shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-[10px]"
+                style={{
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border)',
+                  color: modelBlocked ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                  opacity: modelBlocked ? 0.6 : 1,
+                }}
+                title={modelBlocked ? '模型可用后才会开始整理' : '立即整理「待整理」队列'}
+              >
+                <RefreshCw size={10} />
+                立即整理 {capability.pending}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* 投喂进行中：这是长任务（要调模型、长文档分批），必须有可见反馈 */}
         {busy && (
@@ -486,19 +576,25 @@ export function KnowledgeIngest({
               </>
             )}
 
-            {/* 两个加工开关：正交，2×2 都有意义 */}
+            {/* 两个加工开关：正交，2×2 都有意义；都需要模型，没有时禁用并说明 */}
             <div className="shrink-0 space-y-2 pt-1" style={{ borderTop: '1px solid var(--border)' }}>
               <Switch
                 checked={asMarkdown}
                 onChange={setAsMarkdown}
+                disabled={modelBlocked}
                 label="存为 markdown 格式"
-                hint="由 AI 整理内容并转成 .md 落盘（网页另存为的 HTML 最需要）"
+                hint={modelBlocked
+                  ? '需要模型整理，当前不可用；取消后可先按原文件入库待整理'
+                  : '由 AI 整理内容并转成 .md 落盘（网页另存为的 HTML 最需要）'}
               />
               <Switch
                 checked={rename}
                 onChange={setRename}
+                disabled={modelBlocked}
                 label="允许重命名"
-                hint="内容一字不动，仅更正文件名；行内留空则交给 AI 取名"
+                hint={modelBlocked
+                  ? '需要模型取名，当前不可用（可先入库，模型恢复后再整理）'
+                  : '内容一字不动，仅更正文件名；行内留空则交给 AI 取名'}
               />
             </div>
           </>
@@ -726,7 +822,11 @@ export function KnowledgeIngest({
           ) : (
             <>
               <Sparkles size={12} />
-              {mode === 'file' || mode === 'cloud' ? '提交入库' : '提交整理'}
+              {modelBlocked
+                ? '提交入库（待整理）'
+                : mode === 'file' || mode === 'cloud'
+                  ? '提交入库'
+                  : '提交整理'}
               {mode === 'file' && files.length > 0 ? `（${files.length}）` : ''}
               {mode === 'cloud' && cloudSelected.length > 0 ? `（${cloudSelected.length}）` : ''}
             </>
@@ -750,6 +850,107 @@ export function KnowledgeIngest({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* 待整理：内容已收，但还没有模型做结构化整理。
+              与下方「待确认」的区别：这里还没有知识条目，采纳与否无从谈起。 */}
+          {pending.length > 0 && (
+            <div
+              className="rounded-lg p-3"
+              style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+                  待整理
+                </span>
+                <span
+                  className="px-1.5 py-0.5 rounded-full text-[10px]"
+                  style={{ backgroundColor: 'var(--bg-field)', color: 'var(--text-secondary)' }}
+                >
+                  {pending.length}
+                </span>
+                <span className="text-[10px] min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                  原文已入库，模型可用后自动转成知识条目
+                </span>
+                <div className="flex-1" />
+                <button
+                  onClick={() => void useKnowledgeStore.getState().runIngestQueue()}
+                  disabled={modelBlocked}
+                  className="pd-btn shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-[10px]"
+                  style={{
+                    backgroundColor: 'var(--bg-primary)',
+                    border: '1px solid var(--border)',
+                    color: modelBlocked ? 'var(--text-tertiary)' : 'var(--text-primary)',
+                    opacity: modelBlocked ? 0.6 : 1,
+                  }}
+                >
+                  <RefreshCw size={9} />
+                  立即整理
+                </button>
+              </div>
+              <div className="space-y-1">
+                {pending.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center gap-2 px-2 py-1 rounded text-[11px]"
+                    style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+                  >
+                    <span
+                      className="shrink-0 px-1 rounded text-[9px]"
+                      style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                    >
+                      {KIND_LABEL[item.kind] ?? item.kind}
+                    </span>
+                    <span
+                      className="flex-1 min-w-0 truncate"
+                      style={{ color: 'var(--text-primary)' }}
+                      title={pendingTitle(item)}
+                    >
+                      {pendingTitle(item)}
+                    </span>
+                    {item.status === 'failed' ? (
+                      <span
+                        className="shrink-0 text-[10px]"
+                        style={{ color: 'var(--status-danger)' }}
+                        title={item.lastError}
+                      >
+                        失败{item.attempts > 1 ? ` ×${item.attempts}` : ''}
+                      </span>
+                    ) : (
+                      <span className="shrink-0 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        {item.status === 'running' ? '整理中' : '等待模型'}
+                      </span>
+                    )}
+                    {item.kind === 'snippet' && (
+                      <button
+                        className="shrink-0 text-[10px]"
+                        style={{ color: 'var(--text-secondary)' }}
+                        onClick={() => void useKnowledgeStore.getState().manualIngest(item.id)}
+                        title="不经模型，按原文放进「待确认」"
+                      >
+                        手工入库
+                      </button>
+                    )}
+                    <button
+                      className="shrink-0 text-[10px]"
+                      style={{ color: 'var(--accent)' }}
+                      onClick={() => void useKnowledgeStore.getState().retryIngestItem(item.id)}
+                      title="重试（模型可用时立即整理）"
+                    >
+                      重试
+                    </button>
+                    <button
+                      className="shrink-0"
+                      style={{ color: 'var(--text-tertiary)' }}
+                      onClick={() => void useKnowledgeStore.getState().dropIngestItem(item.id)}
+                      title="移出队列（原文仍保留在「文件」里）"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {candidates.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center gap-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
               <Check size={18} />
@@ -768,6 +969,31 @@ export function KnowledgeIngest({
 
 /* ────────────── 文件清单的两个小件 ────────────── */
 
+/** 待整理条目的类型标签 */
+const KIND_LABEL: Record<string, string> = {
+  snippet: '片段',
+  file: '文件',
+  url: '网址',
+  cloud: '云文档',
+};
+
+/** 待整理条目的展示名：从 payload 里取原始输入（不额外存冗余字段） */
+function pendingTitle(item: IngestQueueItem): string {
+  try {
+    const p = JSON.parse(item.payload) as Record<string, unknown>;
+    if (item.kind === 'file') {
+      const path = String(p.path ?? '');
+      return path.split(/[\\/]/).pop() || item.sourceRef;
+    }
+    if (item.kind === 'url') return String(p.url ?? item.sourceRef);
+    if (item.kind === 'cloud') return String(p.name ?? p.docId ?? item.sourceRef);
+    const text = String(p.value ?? p.key ?? '');
+    return text.slice(0, 40) || '片段';
+  } catch {
+    return item.sourceRef;
+  }
+}
+
 /**
  * 拆出文件名主体与扩展名（只按最后一段路径处理，纯展示用）。
  * 后缀本身由后端 `with_original_ext` 兜底 —— 用户写了别的后缀也以原文件格式为准。
@@ -782,22 +1008,28 @@ function splitName(path: string): { stem: string; ext: string } {
 function Switch({
   checked,
   onChange,
+  disabled,
   label,
   hint,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
   label: string;
   hint: string;
 }) {
   return (
-    <label className="flex items-start gap-2 cursor-pointer select-none">
+    <label
+      className={`flex items-start gap-2 select-none ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+      style={{ opacity: disabled ? 0.55 : 1 }}
+    >
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-[2px] shrink-0 cursor-pointer"
-        style={{ accentColor: 'var(--accent)' }}
+        className="mt-[2px] shrink-0"
+        style={{ accentColor: 'var(--accent)', cursor: disabled ? 'not-allowed' : 'pointer' }}
       />
       <span className="min-w-0">
         <span className="block text-[11px]" style={{ color: 'var(--text-primary)' }}>{label}</span>

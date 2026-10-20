@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 9;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 10;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -268,6 +268,24 @@ CREATE TABLE IF NOT EXISTS knowledge_base_files (
     added_at          INTEGER NOT NULL,
     PRIMARY KEY (knowledge_base_id, memory_id, file_id)
 );
+
+-- 投喂「待整理」队列：内容已收进主机，但当前没有可用模型做结构化整理。
+-- 与个人库同构（kb_ingest_queue）；区别是这里多了 org_id，且只有主机消费。
+CREATE TABLE IF NOT EXISTS kb_ingest_queue (
+    id          TEXT PRIMARY KEY,
+    org_id      TEXT NOT NULL,
+    kb_id       TEXT NOT NULL,
+    kind        TEXT NOT NULL,                   -- snippet / url / file
+    source_ref  TEXT NOT NULL,
+    payload     TEXT NOT NULL DEFAULT '{}',
+    status      TEXT NOT NULL DEFAULT 'pending',  -- pending / running / failed
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    UNIQUE(org_id, kb_id, kind, source_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_kb_ingest_queue_status ON kb_ingest_queue(org_id, status, created_at);
 
 -- ───────────────── 通知 / 资源级角色例外 ─────────────────
 CREATE TABLE IF NOT EXISTS notifications (

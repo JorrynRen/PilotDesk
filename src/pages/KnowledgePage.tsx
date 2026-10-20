@@ -49,6 +49,7 @@ export function KnowledgePage() {
   const files = useKnowledgeStore((s) => s.files);
   const fileAttrs = useKnowledgeStore((s) => s.fileAttrs);
   const candidates = useKnowledgeStore((s) => s.candidates);
+  const pendingIngest = useKnowledgeStore((s) => s.ingestQueue);
   const activeBaseId = useKnowledgeStore((s) => s.activeBaseId);
   const activeTab = useKnowledgeStore((s) => s.activeTab);
   const loading = useKnowledgeStore((s) => s.loading);
@@ -269,6 +270,15 @@ export function KnowledgePage() {
                       {M.label}
                       {badge > 0 && (
                         <span className="px-1 rounded-full text-[9px]" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>{badge}</span>
+                      )}
+                      {t === 'ingest' && pendingIngest.length > 0 && (
+                        <span
+                          className="px-1 rounded-full text-[9px]"
+                          style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
+                          title="待整理：原文已入库，等模型整理"
+                        >
+                          {pendingIngest.length}
+                        </span>
                       )}
                     </button>
                   );

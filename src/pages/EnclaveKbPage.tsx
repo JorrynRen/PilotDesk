@@ -9,6 +9,7 @@ import {
   Paperclip,
   Trash2,
   Save,
+  Check,
   AlertTriangle,
   ArrowUpRight,
   ChevronRight,
@@ -29,7 +30,8 @@ import { useEnclaveKbStore } from '../stores/enclaveKbStore';
 import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
 import { useAccountStore } from '../stores/accountStore';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
-import type { KbEntryView } from '../types/enclave';
+import { showToast } from '../utils/toast';
+import type { EnclaveKbQueueItem, KbEntryView } from '../types/enclave';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
 const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
@@ -38,6 +40,18 @@ const FIELD_STYLE = {
   color: 'var(--text-primary)',
   border: '1px solid var(--border)',
 } as const;
+
+/** 待整理条目的展示名：从 payload 里取原始输入（不额外存冗余字段） */
+function queueTitle(item: EnclaveKbQueueItem): string {
+  try {
+    const p = JSON.parse(item.payload) as Record<string, unknown>;
+    if (item.kind === 'url') return String(p.url ?? item.sourceRef);
+    const text = String(p.title ?? p.text ?? '');
+    return text.slice(0, 40) || '片段';
+  } catch {
+    return item.sourceRef;
+  }
+}
 
 function formatTime(unixSec: number): string {
   if (!unixSec) return '-';
@@ -144,7 +158,7 @@ function SearchField({
 const TABS: { key: KbTab; label: string; icon: typeof Search; enabled: boolean }[] = [
   { key: 'entries', label: '知识', icon: Search, enabled: true },
   { key: 'files', label: '文件', icon: Files, enabled: true },
-  { key: 'ingest', label: '投喂', icon: Sparkles, enabled: false },
+  { key: 'ingest', label: '投喂', icon: Sparkles, enabled: true },
   { key: 'graph', label: '图谱', icon: Network, enabled: false },
 ];
 
@@ -192,6 +206,53 @@ export function EnclaveKbPage() {
   const [draftTags, setDraftTags] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  /* ── 投喂（人工入库）：内容照收，整理按加工能力降级 ── */
+  const capability = useEnclaveKbStore((s) => s.capability);
+  const queue = useEnclaveKbStore((s) => s.queue);
+  const [ingestMode, setIngestMode] = useState<'snippet' | 'url'>('snippet');
+  const [snipTitle, setSnipTitle] = useState('');
+  const [snipText, setSnipText] = useState('');
+  const [ingestUrl, setIngestUrl] = useState('');
+  const [ingestUrlName, setIngestUrlName] = useState('');
+  const [ingesting, setIngesting] = useState(false);
+  const modelBlocked = capability !== null && capability.canProcess === 'none';
+
+  useEffect(() => {
+    if (tab !== 'ingest' || !activeOrgId || !activeKbId) return;
+    const st = useEnclaveKbStore.getState();
+    void st.loadCapability(activeOrgId);
+    void st.loadQueue(activeOrgId, activeKbId);
+  }, [tab, activeOrgId, activeKbId]);
+
+  const submitIngest = async () => {
+    if (!activeOrgId || !activeKbId || ingesting) return;
+    const st = useEnclaveKbStore.getState();
+    setIngesting(true);
+    try {
+      const out =
+        ingestMode === 'snippet'
+          ? await st.ingestSnippet(activeOrgId, activeKbId, snipTitle.trim(), snipText)
+          : await st.ingestUrl(
+              activeOrgId,
+              activeKbId,
+              ingestUrl.trim(),
+              ingestUrlName.trim() || undefined,
+            );
+      if (!out) return;
+      if (out.queued) {
+        showToast('已入库，等待主机模型整理（见「待整理」）', 'info');
+      } else {
+        showToast(`已整理入库 ${out.entries} 条知识`, 'success');
+      }
+      setSnipTitle('');
+      setSnipText('');
+      setIngestUrl('');
+      setIngestUrlName('');
+    } finally {
+      setIngesting(false);
+    }
+  };
 
   /** 手动刷新：身份 → 组织 → 知识库 / 文件 / 当前检索。 */
   const refreshKb = async () => {
@@ -609,6 +670,279 @@ export function EnclaveKbPage() {
               );
             })}
           </div>
+
+          {/* 投喂：内容先入库，整理按加工能力降级（没有模型时进「待整理」，不产出机械切片） */}
+          {tab === 'ingest' && (
+            <div className="flex-1 min-h-0 flex overflow-hidden">
+              <div
+                className="w-[400px] shrink-0 flex flex-col gap-2 p-3 overflow-y-auto"
+                style={{ backgroundColor: 'var(--bg-side)' }}
+              >
+                {capability && (
+                  <div
+                    className="flex items-start gap-2 px-2.5 py-2 rounded-lg text-[11px]"
+                    style={{
+                      backgroundColor: modelBlocked
+                        ? 'var(--status-warning-bg)'
+                        : 'var(--bg-tertiary)',
+                      color: modelBlocked ? 'var(--status-warning)' : 'var(--text-secondary)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {modelBlocked ? (
+                      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                    ) : (
+                      <Sparkles size={12} className="mt-0.5 shrink-0" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      {modelBlocked ? (
+                        <>
+                          暂无可用模型：内容会先入库并进入「待整理」，不会生成机械切片；
+                          主机配好本地模型或开启闸门后自动整理。
+                        </>
+                      ) : (
+                        <>
+                          加工能力：
+                          {capability.canProcess === 'local' ? '本地模型' : '云端模型'}
+                          {capability.model ? ` · ${capability.model}` : ''}
+                          {capability.providerName ? `（${capability.providerName}）` : ''}
+                        </>
+                      )}
+                      {modelBlocked && capability.reason && (
+                        <div className="mt-0.5 text-[10px] opacity-80 break-all">
+                          原因：{capability.reason}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  className="flex items-center gap-1 p-0.5 rounded-lg"
+                  style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+                >
+                  {([
+                    { key: 'snippet', label: '片段' },
+                    { key: 'url', label: '网址' },
+                  ] as const).map((m) => {
+                    const on = ingestMode === m.key;
+                    return (
+                      <button
+                        key={m.key}
+                        onClick={() => setIngestMode(m.key)}
+                        className="flex-1 px-2 py-1 rounded-md text-[11px]"
+                        style={{
+                          backgroundColor: on ? 'var(--bg-primary)' : 'transparent',
+                          color: on ? 'var(--accent)' : 'var(--text-secondary)',
+                          fontWeight: on ? 600 : 500,
+                          border: 'none',
+                        }}
+                      >
+                        {m.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {ingestMode === 'snippet' ? (
+                  <>
+                    <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                      粘贴结论 / 摘录 / 规则。原文立即入库；由主机模型整理成规范知识（标题、标签、
+                      专属属性），没有模型时先排队。
+                    </div>
+                    <input
+                      value={snipTitle}
+                      onChange={(e) => setSnipTitle(e.target.value)}
+                      placeholder="标题（可留空，由模型生成）"
+                      className={FIELD_CLASS}
+                      style={FIELD_STYLE}
+                    />
+                    <textarea
+                      value={snipText}
+                      onChange={(e) => setSnipText(e.target.value)}
+                      placeholder="把内容贴进来……"
+                      className="flex-1 min-h-[160px] p-2.5 rounded-lg text-xs leading-relaxed outline-none resize-none"
+                      style={FIELD_STYLE}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                      抓取正文后由主机模型整理（去噪、分节、补全标点，不改事实）。纯 JS 渲染的站点
+                      可能抓不到内容；没有模型时先排队。
+                    </div>
+                    <input
+                      value={ingestUrl}
+                      onChange={(e) => setIngestUrl(e.target.value)}
+                      placeholder="https://example.com/article"
+                      className={FIELD_CLASS}
+                      style={FIELD_STYLE}
+                    />
+                    <input
+                      value={ingestUrlName}
+                      onChange={(e) => setIngestUrlName(e.target.value)}
+                      placeholder="文件名（可留空，由模型取）"
+                      className={FIELD_CLASS}
+                      style={FIELD_STYLE}
+                    />
+                  </>
+                )}
+
+                <button
+                  onClick={() => void submitIngest()}
+                  disabled={
+                    ingesting ||
+                    (ingestMode === 'snippet' ? !snipText.trim() : !ingestUrl.trim())
+                  }
+                  className="shrink-0 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs"
+                  style={{
+                    backgroundColor: 'var(--accent)',
+                    color: '#fff',
+                    border: 'none',
+                    opacity:
+                      ingesting ||
+                      (ingestMode === 'snippet' ? !snipText.trim() : !ingestUrl.trim())
+                        ? 0.5
+                        : 1,
+                  }}
+                >
+                  {ingesting ? (
+                    <>
+                      <Loader2 size={12} className="animate-spin" />
+                      处理中…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={12} />
+                      {modelBlocked ? '提交入库（待整理）' : '提交整理'}
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+                <div
+                  className="shrink-0 px-4 py-2 flex items-center gap-2"
+                  style={{ borderBottom: '1px solid var(--border)' }}
+                >
+                  <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                    待整理
+                  </span>
+                  <span
+                    className="px-1.5 py-0.5 rounded-full text-[10px]"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
+                  >
+                    {queue.length}
+                  </span>
+                  <span className="text-[10px] min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                    原文已入库，主机模型可用后自动转成知识条目
+                  </span>
+                  <div className="flex-1" />
+                  <button
+                    onClick={() => {
+                      if (!activeOrgId) return;
+                      void useEnclaveKbStore.getState().runQueue(activeOrgId).then((o) => {
+                        if (o?.stopped) showToast('模型暂不可用，内容仍保留在待整理里', 'info');
+                        else if (o && o.done > 0) showToast(`已整理 ${o.done} 条`, 'success');
+                      });
+                    }}
+                    disabled={modelBlocked || queue.length === 0}
+                    className="text-[10px] px-2 py-0.5 rounded"
+                    style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-secondary)',
+                      border: '1px solid var(--border)',
+                      opacity: modelBlocked || queue.length === 0 ? 0.5 : 1,
+                    }}
+                  >
+                    立即整理
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                  {queue.length === 0 ? (
+                    <div
+                      className="h-full flex flex-col items-center justify-center gap-2 text-xs"
+                      style={{ color: 'var(--text-tertiary)' }}
+                    >
+                      <Check size={18} />
+                      没有待整理的内容
+                    </div>
+                  ) : (
+                    queue.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded text-[11px]"
+                        style={{
+                          backgroundColor: 'var(--bg-content)',
+                          border: '1px solid var(--border)',
+                        }}
+                      >
+                        <span
+                          className="shrink-0 px-1 rounded text-[9px]"
+                          style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                        >
+                          {item.kind === 'snippet' ? '片段' : item.kind === 'url' ? '网址' : item.kind}
+                        </span>
+                        <span
+                          className="flex-1 min-w-0 truncate"
+                          style={{ color: 'var(--text-primary)' }}
+                          title={queueTitle(item)}
+                        >
+                          {queueTitle(item)}
+                        </span>
+                        {item.status === 'failed' ? (
+                          <span
+                            className="shrink-0 text-[10px]"
+                            style={{ color: 'var(--status-danger)' }}
+                            title={item.lastError}
+                          >
+                            失败{item.attempts > 1 ? ` ×${item.attempts}` : ''}
+                          </span>
+                        ) : (
+                          <span className="shrink-0 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                            {item.status === 'running' ? '整理中' : '等待模型'}
+                          </span>
+                        )}
+                        {item.kind === 'snippet' && (
+                          <button
+                            className="shrink-0 text-[10px]"
+                            style={{ color: 'var(--text-secondary)' }}
+                            title="不经模型，按原文直接写入组织库"
+                            onClick={() => {
+                              if (activeOrgId) {
+                                void useEnclaveKbStore.getState().manualIngest(activeOrgId, item.id);
+                              }
+                            }}
+                          >
+                            手工入库
+                          </button>
+                        )}
+                        <button
+                          className="shrink-0 text-[10px]"
+                          style={{ color: 'var(--accent)' }}
+                          onClick={() => {
+                            if (activeOrgId) void useEnclaveKbStore.getState().retryQueueItem(activeOrgId, item.id);
+                          }}
+                        >
+                          重试
+                        </button>
+                        <button
+                          className="shrink-0"
+                          style={{ color: 'var(--text-tertiary)' }}
+                          title="移出队列"
+                          onClick={() => {
+                            if (activeOrgId) void useEnclaveKbStore.getState().dropQueueItem(activeOrgId, item.id);
+                          }}
+                        >
+                          <Trash2 size={10} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* 知识：条目列表（展开行即详情） */}
           {tab === 'entries' && (

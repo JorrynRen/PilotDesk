@@ -7,7 +7,15 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { errorMessage } from '../utils/errorMessage';
-import type { KbEntryView, KbFileListView, KbView } from '../types/enclave';
+import type {
+  EnclaveKbQueueItem,
+  KbEntryView,
+  KbFileListView,
+  KbView,
+  TeamIngestCapability,
+  TeamIngestOutcome,
+  TeamQueueRunOutcome,
+} from '../types/enclave';
 
 interface EnclaveKbState {
   kbs: KbView[];
@@ -19,6 +27,10 @@ interface EnclaveKbState {
   query: string;
   loading: boolean;
   error: string | null;
+  /** 团队库加工能力（断网 / 闸门关闭时 canProcess = none，但仍可入库待整理） */
+  capability: TeamIngestCapability | null;
+  /** 当前库的待整理队列 */
+  queue: EnclaveKbQueueItem[];
   /** 账号切换 / 退出：清空全部知识库缓存 */
   reset: () => void;
   loadKbs: (orgId: string) => Promise<void>;
@@ -37,6 +49,28 @@ interface EnclaveKbState {
   ) => Promise<boolean>;
   /** 移除条目（owner / admin）；交付物原件仍保留在任务中 */
   removeEntry: (orgId: string, kbId: string, memoryId: string) => Promise<boolean>;
+  /** 读取加工能力 */
+  loadCapability: (orgId: string) => Promise<void>;
+  /** 读取当前库的待整理队列 */
+  loadQueue: (orgId: string, kbId: string) => Promise<void>;
+  /** 片段投喂（内容立即入库/入队，整理按能力决定） */
+  ingestSnippet: (
+    orgId: string,
+    kbId: string,
+    title: string,
+    text: string,
+  ) => Promise<TeamIngestOutcome | null>;
+  ingestUrl: (
+    orgId: string,
+    kbId: string,
+    url: string,
+    name?: string,
+  ) => Promise<TeamIngestOutcome | null>;
+  runQueue: (orgId: string) => Promise<TeamQueueRunOutcome | null>;
+  retryQueueItem: (orgId: string, id: string) => Promise<void>;
+  dropQueueItem: (orgId: string, id: string) => Promise<void>;
+  /** 手工整理（仅片段）：不经模型，按原文直接写入组织库 */
+  manualIngest: (orgId: string, id: string) => Promise<void>;
 }
 
 export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
@@ -48,6 +82,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   query: '',
   loading: false,
   error: null,
+  capability: null,
+  queue: [],
 
   reset: () => {
     set({
@@ -59,6 +95,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       query: '',
       loading: false,
       error: null,
+      capability: null,
+      queue: [],
     });
   },
 
@@ -79,6 +117,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   selectKb: async (orgId, kbId) => {
     set({ activeKbId: kbId, activeEntry: null, files: [] });
     await get().search(orgId, get().query);
+    void get().loadQueue(orgId, kbId);
+    void get().loadCapability(orgId);
   },
 
   search: async (orgId, query) => {
@@ -170,6 +210,112 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
     } catch (e) {
       set({ error: errorMessage(e) });
       return false;
+    }
+  },
+
+  loadCapability: async (orgId) => {
+    try {
+      const capability = await invoke<TeamIngestCapability>('enclave_kb_ingest_capability', {
+        orgId,
+      });
+      set({ capability });
+    } catch {
+      // 能力探测失败不影响投喂：界面退回"未知"，提交仍会入库待整理
+    }
+  },
+
+  loadQueue: async (orgId, kbId) => {
+    try {
+      const queue = await invoke<EnclaveKbQueueItem[]>('enclave_kb_queue_list', {
+        orgId,
+        kbId,
+      });
+      set({ queue });
+    } catch {
+      // 静默：队列面板为空即可
+    }
+  },
+
+  ingestSnippet: async (orgId, kbId, title, text) => {
+    try {
+      const out = await invoke<TeamIngestOutcome>('enclave_kb_ingest_snippet', {
+        orgId,
+        kbId,
+        title,
+        text,
+      });
+      await get().loadQueue(orgId, kbId);
+      void get().loadCapability(orgId);
+      if (!out.queued) await get().search(orgId, get().query);
+      return out;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  ingestUrl: async (orgId, kbId, url, name) => {
+    try {
+      const out = await invoke<TeamIngestOutcome>('enclave_kb_ingest_url', {
+        orgId,
+        kbId,
+        url,
+        name: name ?? null,
+      });
+      await get().loadQueue(orgId, kbId);
+      void get().loadCapability(orgId);
+      if (!out.queued) await get().search(orgId, get().query);
+      return out;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  runQueue: async (orgId) => {
+    try {
+      const out = await invoke<TeamQueueRunOutcome>('enclave_kb_queue_run', { orgId });
+      const kbId = get().activeKbId;
+      if (kbId) await get().loadQueue(orgId, kbId);
+      void get().loadCapability(orgId);
+      if (out.done > 0) await get().search(orgId, get().query);
+      return out;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  retryQueueItem: async (orgId, id) => {
+    try {
+      await invoke('enclave_kb_queue_retry', { orgId, queueId: id });
+      const kbId = get().activeKbId;
+      if (kbId) await get().loadQueue(orgId, kbId);
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
+  },
+
+  dropQueueItem: async (orgId, id) => {
+    try {
+      await invoke('enclave_kb_queue_drop', { orgId, queueId: id });
+      const kbId = get().activeKbId;
+      if (kbId) await get().loadQueue(orgId, kbId);
+      void get().loadCapability(orgId);
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
+  },
+
+  manualIngest: async (orgId, id) => {
+    try {
+      await invoke('enclave_kb_ingest_manual', { orgId, queueId: id });
+      const kbId = get().activeKbId;
+      if (kbId) await get().loadQueue(orgId, kbId);
+      void get().loadCapability(orgId);
+      await get().search(orgId, get().query);
+    } catch (e) {
+      set({ error: errorMessage(e) });
     }
   },
 }));

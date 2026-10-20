@@ -166,7 +166,7 @@ export interface KnowledgeFile {
   mime: string;
   size: number;
   /** unsupported = 原文已登记，但该格式暂不支持抽取正文（内容不进检索） */
-  extractStatus: 'pending' | 'extracting' | 'done' | 'unsupported' | 'failed';
+  extractStatus: 'pending' | 'extracting' | 'done' | 'queued' | 'unsupported' | 'failed';
   chunkCount: number;
   /** 分块是否已过 AI 整理（打标 + 填专属属性） */
   enriched: boolean;
@@ -389,7 +389,7 @@ export function toFile(v: KnowledgeFileView): KnowledgeFile {
     url: v.url,
     mime: v.mime,
     size: v.size,
-    extractStatus: (['pending', 'extracting', 'done', 'unsupported', 'failed'].includes(v.extractStatus)
+    extractStatus: (['pending', 'extracting', 'done', 'queued', 'unsupported', 'failed'].includes(v.extractStatus)
       ? v.extractStatus
       : 'pending') as KnowledgeFile['extractStatus'],
     chunkCount: v.chunkCount,
@@ -411,8 +411,51 @@ export interface IngestOutcome {
   reused: boolean;
   status: string;
   truncated: boolean;
+  /** true = 内容已入库，但当前没有可用模型，已进入「待整理」（还没有知识条目） */
+  queued: boolean;
   /** AI 分组未生效的原因（生效时为空串）—— 投喂主路径就是 AI 分块，失败必须让用户看见 */
   aiNote: string;
+}
+
+/** 投喂加工能力（对应后端 IngestCapabilityView） */
+export interface IngestCapability {
+  /** none = 既没有本地模型也没有云端模型；local = 本机/内网模型；cloud = 云端模型 */
+  canProcess: 'none' | 'local' | 'cloud';
+  providerName: string;
+  model: string;
+  /** internal | cloud（无模型时为空） */
+  trustDomain: string;
+  reason: string;
+  /** 待整理条数（所有库合计） */
+  pending: number;
+}
+
+/** 「待整理」队列的一行 */
+export interface IngestQueueItem {
+  id: string;
+  kbId: string;
+  kind: 'snippet' | 'file' | 'url' | 'cloud';
+  sourceRef: string;
+  payload: string;
+  status: 'pending' | 'running' | 'failed';
+  attempts: number;
+  lastError: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface IngestQueueRunOutcome {
+  done: number;
+  failed: number;
+  stopped: boolean;
+  remaining: number;
+}
+
+/** 片段入队的返回：排队时 queued=true，candidateId=0 */
+export interface CandidateAddOutcome {
+  queued: boolean;
+  queueId: string;
+  candidateId: number;
 }
 
 /* ────────────────────────── 云文档源（第一期：语雀） ──────────────────────────
