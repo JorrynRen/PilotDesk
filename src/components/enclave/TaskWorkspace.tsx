@@ -1043,6 +1043,43 @@ function TaskDetail(props: {
         </legend>
         <div className="flex flex-col gap-3">
 
+      {/* 详情分组：概览 / 协作 / 交付 */}
+      <div
+        role="tablist"
+        className="flex items-center gap-0.5 p-0.5 rounded-lg self-start"
+        style={{ backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border)' }}
+      >
+        {([
+          { key: 'overview', label: '概览' },
+          { key: 'collab', label: '协作', count: comments.length + (progress?.items.length ?? 0) },
+          { key: 'delivery', label: '交付', count: reports.length },
+        ] as const).map((t) => {
+          const on = detailTab === t.key;
+          return (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={on}
+              onClick={() => setDetailTab(t.key)}
+              className="text-[11px] px-2.5 py-1 rounded-md flex items-center gap-1"
+              style={{
+                backgroundColor: on ? 'var(--bg-content)' : 'transparent',
+                color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
+                border: 'none',
+                boxShadow: on ? '0 1px 2px rgba(0,0,0,0.12)' : 'none',
+              }}
+            >
+              {t.label}
+              {'count' in t && t.count > 0 && (
+                <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
+                  {t.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       {/* 生命周期时间线：当前节点与全流程里程碑一眼可见 */}
       <div
         className="rounded-lg px-4 py-3"
@@ -1068,36 +1105,6 @@ function TaskDetail(props: {
           身份未校验（刷新失败或账号刚切换），已暂时隐藏所有编辑与提交入口
         </div>
       )}
-
-      {/* 详情分组：概览 / 协作 / 交付 */}
-      <div className="flex items-center gap-1.5">
-        {([
-          { key: 'overview', label: '概览' },
-          { key: 'collab', label: '协作', count: comments.length + (progress?.items.length ?? 0) },
-          { key: 'delivery', label: '交付', count: reports.length },
-        ] as const).map((t) => {
-          const on = detailTab === t.key;
-          return (
-            <button
-              key={t.key}
-              onClick={() => setDetailTab(t.key)}
-              className="text-[11px] px-2.5 py-1 rounded-lg flex items-center gap-1"
-              style={{
-                backgroundColor: on ? 'var(--bg-tertiary)' : 'transparent',
-                color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
-                border: `1px solid ${on ? 'var(--border)' : 'transparent'}`,
-              }}
-            >
-              {t.label}
-              {'count' in t && t.count > 0 && (
-                <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
-                  {t.count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
 
       {detailTab === 'overview' && (
         <>

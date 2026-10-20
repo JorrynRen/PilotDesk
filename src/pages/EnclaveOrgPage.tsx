@@ -227,7 +227,7 @@ export function EnclaveOrgPage() {
             className="shrink-0 h-9 px-3 flex items-center gap-2"
             style={{ borderBottom: '1px solid var(--border)' }}
           >
-            <Users size={13} style={{ color: 'var(--text-tertiary)' }} />
+            <Users size={13} style={{ color: 'var(--accent)' }} />
             <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
               成员
             </span>
@@ -240,7 +240,7 @@ export function EnclaveOrgPage() {
               </span>
             )}
           </div>
-          <div className="max-h-[420px] overflow-auto">
+          <div className="overflow-x-auto">
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-tertiary)' }}>

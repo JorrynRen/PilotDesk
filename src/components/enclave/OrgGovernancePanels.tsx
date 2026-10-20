@@ -797,7 +797,7 @@ function TransferCard({ orgId }: { orgId: string }) {
       style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
     >
       <div className="flex items-center gap-2">
-        <ArrowLeftRight size={13} style={{ color: 'var(--text-tertiary)' }} />
+        <ArrowLeftRight size={13} style={{ color: 'var(--accent)' }} />
         <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
           主机转移
         </span>
@@ -1111,7 +1111,7 @@ function BackupCard() {
       style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
     >
       <div className="flex items-center gap-2">
-        <History size={13} style={{ color: 'var(--text-tertiary)' }} />
+        <History size={13} style={{ color: 'var(--accent)' }} />
         <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
           主机自动备份
         </span>
@@ -1308,7 +1308,7 @@ export function OrgGovernanceSection({
         style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
       >
         <div className="flex items-center gap-2">
-          <Power size={13} style={{ color: emergencyOn ? 'var(--status-danger)' : 'var(--text-tertiary)' }} />
+          <Power size={13} style={{ color: emergencyOn ? 'var(--status-danger)' : 'var(--accent)' }} />
           <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
             主机应急
           </span>
@@ -1359,7 +1359,7 @@ export function OrgGovernanceSection({
           className="shrink-0 h-8 px-3 flex items-center gap-2"
           style={{ borderBottom: '1px solid var(--border)' }}
         >
-          <History size={12} style={{ color: 'var(--text-tertiary)' }} />
+          <History size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
             变更审计
           </span>
@@ -1367,7 +1367,7 @@ export function OrgGovernanceSection({
             {audit.length}
           </span>
         </div>
-        <div className="max-h-[180px] overflow-auto">
+        <div className="overflow-x-auto">
           <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-tertiary)' }}>
