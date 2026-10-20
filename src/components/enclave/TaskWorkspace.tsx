@@ -19,7 +19,7 @@ import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { Select } from '../common/Select';
 import type {
-  DepsPreview, MemberView, NotificationView, TaskStatus, TaskView, TeamFilesRootView,
+  DepsPreview, MemberView, NotificationView, TaskCommentView, TaskStatus, TaskView, TeamFilesRootView,
 } from '../../types/enclave';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
@@ -861,6 +861,16 @@ function TaskDetail(props: {
   const reports = useEnclaveTaskStore((s) => s.reports);
   const files = useEnclaveTaskStore((s) => s.files);
   const progress = useEnclaveTaskStore((s) => s.progress);
+  // 沟通层：任务讨论（与过程记录分开，任何非终态都可讨论）
+  const comments = useEnclaveTaskStore((s) => s.comments);
+  const [commentText, setCommentText] = useState('');
+  const [replyTo, setReplyTo] = useState<TaskCommentView | null>(null);
+  const [mentionIds, setMentionIds] = useState<string[]>([]);
+  const discussionReadOnly = task.status === 'archived' || task.status === 'cancelled';
+  const canComment =
+    identityVerified && !discussionReadOnly &&
+    (isParticipant || !!caps?.actions.includes('org.admin'));
+  const canManageComments = identityVerified && !!caps?.actions.includes('org.admin');
   /** 只有「进行中」才能写过程记录 / 完成汇报：未开始时先走「开始」；容器只读历史 */
   const canWriteProgress =
     canReport && !isContainer && task.status === 'in_progress' && !blocked && !progress?.locked;
@@ -1077,6 +1087,34 @@ function TaskDetail(props: {
       // 单个文件打不开不影响列表；错误由 store 统一提示
     }
   };
+
+  /** 发评论（支持回复与 @ 提及） */
+  const submitComment = async () => {
+    const text = commentText.trim();
+    if (!text) return;
+    const created = await useEnclaveTaskStore
+      .getState()
+      .addComment(orgId, task.id, text, replyTo?.id ?? null, mentionIds);
+    if (created) {
+      setCommentText('');
+      setReplyTo(null);
+      setMentionIds([]);
+    } else {
+      showToast(useEnclaveTaskStore.getState().error ?? '发送评论失败', 'error');
+    }
+  };
+
+  const removeComment = async (c: TaskCommentView) => {
+    const ok = await confirmDialog({
+      title: '删除评论',
+      message: '删除后不再显示（保留软删留痕）。是否继续？',
+      confirmText: '删除',
+    });
+    if (!ok) return;
+    await useEnclaveTaskStore.getState().deleteComment(orgId, task.id, c.id);
+  };
+
+  const mentionable = members.filter((m) => m.seatStatus !== 'removed' && m.userId !== me);
 
   return (
     <div className="p-4 flex flex-col gap-4">
@@ -1461,6 +1499,175 @@ function TaskDetail(props: {
               )}
             </div>
           ))
+        )}
+      </div>
+
+      {/* 沟通层：任务讨论（支持回复与 @ 提及；归档 / 作废后只读） */}
+      <div
+        className="rounded-lg p-3 flex flex-col gap-2"
+        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+      >
+        <div className="flex items-center gap-2">
+          <Info size={12} style={{ color: 'var(--accent)' }} />
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            讨论
+          </span>
+          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            {comments.length}
+          </span>
+          <div className="flex-1" />
+          {discussionReadOnly && (
+            <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              任务已归档 / 作废，讨论只读
+            </span>
+          )}
+        </div>
+
+        {comments.length === 0 && (
+          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            还没有讨论。任务相关的问题、决策与澄清都可以留在这里。
+          </div>
+        )}
+
+        {comments.map((c) => {
+          const parent = c.replyToId ? comments.find((x) => x.id === c.replyToId) : null;
+          const canDelete = canManageComments || c.authorId === me;
+          return (
+            <div
+              key={c.id}
+              className="rounded-lg px-2.5 py-2 flex flex-col gap-1"
+              style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+            >
+              <div className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>
+                  {memberLabel(c.authorId)}
+                </span>
+                <span>{formatDateTime(c.createdAt)}</span>
+                {parent && <span>· 回复 {memberLabel(parent.authorId)}</span>}
+                <div className="flex-1" />
+                {canComment && (
+                  <button
+                    onClick={() => setReplyTo(c)}
+                    className="px-1 rounded"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    回复
+                  </button>
+                )}
+                {canDelete && !discussionReadOnly && (
+                  <button
+                    onClick={() => void removeComment(c)}
+                    className="px-1 rounded"
+                    style={{ color: 'var(--status-danger)' }}
+                  >
+                    删除
+                  </button>
+                )}
+              </div>
+              <div
+                className="text-[11px] whitespace-pre-wrap break-words"
+                style={{ color: 'var(--text-primary)' }}
+              >
+                {c.content}
+              </div>
+              {c.mentions.length > 0 && (
+                <div className="text-[10px]" style={{ color: 'var(--accent)' }}>
+                  {c.mentions.map((id) => `@${memberLabel(id)}`).join(' ')}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {canComment ? (
+          <div className="flex flex-col gap-1.5">
+            {replyTo && (
+              <div className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                <span>回复 {memberLabel(replyTo.authorId)}</span>
+                <button onClick={() => setReplyTo(null)} style={{ color: 'var(--text-tertiary)' }}>
+                  取消
+                </button>
+              </div>
+            )}
+            {mentionIds.length > 0 && (
+              <div className="flex items-center gap-1 flex-wrap text-[10px]">
+                {mentionIds.map((id) => (
+                  <button
+                    key={id}
+                    onClick={() => setMentionIds((prev) => prev.filter((x) => x !== id))}
+                    className="px-1.5 py-0.5 rounded"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent)' }}
+                    title="点击移除提及"
+                  >
+                    @{memberLabel(id)} ×
+                  </button>
+                ))}
+              </div>
+            )}
+            <textarea
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              placeholder="写下讨论内容（Ctrl+Enter 发送）"
+              rows={2}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                  e.preventDefault();
+                  void submitComment();
+                }
+              }}
+              className="w-full p-2 rounded-lg text-[11px] leading-relaxed outline-none resize-y"
+              style={{
+                backgroundColor: 'var(--bg-content)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border)',
+              }}
+            />
+            <div className="flex items-center gap-1.5">
+              {mentionable.length > 0 && (
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    if (id && !mentionIds.includes(id)) {
+                      setMentionIds((prev) => [...prev, id]);
+                    }
+                  }}
+                  className="h-6 px-1 rounded text-[10px] outline-none"
+                  style={{
+                    backgroundColor: 'var(--bg-tertiary)',
+                    color: 'var(--text-secondary)',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  <option value="">@提及成员</option>
+                  {mentionable.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.displayName || m.email || m.userId}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <div className="flex-1" />
+              <button
+                onClick={() => void submitComment()}
+                disabled={!commentText.trim()}
+                className="h-6 px-2 rounded text-[10px]"
+                style={{
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  opacity: commentText.trim() ? 1 : 0.5,
+                }}
+              >
+                发送
+              </button>
+            </div>
+          </div>
+        ) : (
+          !discussionReadOnly && (
+            <div className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+              只有任务参与者与组织管理者可以参与讨论
+            </div>
+          )
         )}
       </div>
 

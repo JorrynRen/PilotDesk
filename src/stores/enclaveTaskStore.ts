@@ -15,6 +15,7 @@ import type {
   FileAssetView,
   ProgressList,
   ReportView,
+  TaskCommentView,
   TaskView,
   UpdateTaskInput,
 } from '../types/enclave';
@@ -30,6 +31,8 @@ interface EnclaveTaskState {
   reports: ReportView[];
   files: FileAssetView[];
   progress: ProgressList | null;
+  /** 任务讨论（沟通层） */
+  comments: TaskCommentView[];
   /** 汇报留言 / 退回原因（按 reportId 索引） */
   feedback: Record<string, FeedbackView[]>;
   /** 账号切换 / 退出：清空全部任务缓存 */
@@ -45,6 +48,16 @@ interface EnclaveTaskState {
   setDeps: (orgId: string, taskId: string, blockedBy: string[]) => Promise<boolean>;
   /** 拉当前任务的汇报与附件 */
   loadExtras: (orgId: string, taskId: string) => Promise<void>;
+  /** 发评论（可回复 / @ 成员）；成功返回评论 */
+  addComment: (
+    orgId: string,
+    taskId: string,
+    content: string,
+    replyToId?: string | null,
+    mentions?: string[],
+  ) => Promise<TaskCommentView | null>;
+  /** 删除评论（作者本人或组织管理者） */
+  deleteComment: (orgId: string, taskId: string, commentId: string) => Promise<boolean>;
   saveReportDraft: (orgId: string, taskId: string, content: string) => Promise<boolean>;
   /** 基于「已退回」的汇报继续修改：新建草稿并复制正文与交付物，原记录保留为日志 */
   reviseReport: (orgId: string, taskId: string, reportId: string) => Promise<ReportView | null>;
@@ -87,6 +100,7 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   reports: [],
   files: [],
   progress: null,
+  comments: [],
   feedback: {},
   /** 本轮是否成功用当前账号刷新过身份（失败则禁用一切写操作） */
   identityVerified: false,
@@ -100,6 +114,7 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
       reports: [],
       files: [],
       progress: null,
+      comments: [],
       feedback: {},
       identityVerified: false,
     });
@@ -207,10 +222,11 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   },
 
   loadExtras: async (orgId, taskId) => {
-    const [reports, files, progress] = await Promise.all([
+    const [reports, files, progress, comments] = await Promise.all([
       invoke<ReportView[]>('enclave_report_list', { orgId, taskId }).catch(() => []),
       invoke<FileAssetView[]>('enclave_task_file_list', { orgId, taskId }).catch(() => []),
       invoke<ProgressList>('enclave_task_progress_list', { orgId, taskId }).catch(() => null),
+      invoke<TaskCommentView[]>('enclave_task_comment_list', { orgId, taskId }).catch(() => []),
     ]);
     // 提交日志的退回原因 / 确认留言：按汇报逐条拉取（数量很少）
     const logs = reports.filter((r) => r.status !== 'draft');
@@ -227,7 +243,37 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
         }
       }),
     );
-    set({ reports, files, progress, feedback: Object.fromEntries(pairs) });
+    set({ reports, files, progress, comments, feedback: Object.fromEntries(pairs) });
+  },
+
+  addComment: async (orgId, taskId, content, replyToId, mentions) => {
+    try {
+      const comment = await invoke<TaskCommentView>('enclave_task_comment_add', {
+        orgId,
+        taskId,
+        content,
+        replyToId: replyToId ?? null,
+        mentions: mentions ?? [],
+      });
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return comment;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  deleteComment: async (orgId, taskId, commentId) => {
+    try {
+      await invoke('enclave_task_comment_delete', { orgId, commentId });
+      await get().loadExtras(orgId, taskId);
+      set({ error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
   },
 
   saveReportDraft: async (orgId, taskId, content) => {

@@ -1031,7 +1031,27 @@ pub fn set_status_checked(
         can_transition(&current, status, role)?;
         crate::enclave::reports::reopen_confirmed_report(conn, org_id, task_id, actor)?;
     }
-    set_status(conn, org_id, actor, task_id, status)
+    let next = set_status(conn, org_id, actor, task_id, status)?;
+    // 状态变更通知（§5.8）：手动流转提醒创建者与负责人；按状态区分，避免同一任务只提醒一次
+    let title = format!("任务状态变为「{}」", status_label(status));
+    let kind = format!("task.status.{}", status);
+    for uid in [Some(next.creator_id.as_str()), next.assignee_id.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        let _ = crate::enclave::notify::notify(
+            conn,
+            org_id,
+            actor,
+            Some(uid),
+            &kind,
+            &title,
+            &next.title,
+            "task",
+            task_id,
+        );
+    }
+    Ok(next)
 }
 
 /// 状态流转（含 `started_at` / `completed_at` 联动；提交/确认在 M4 接汇报后补联动）。

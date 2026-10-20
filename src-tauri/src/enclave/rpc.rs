@@ -178,6 +178,32 @@ pub fn dispatch(
             Ok(Value::Null)
         }
 
+        // ── 任务讨论（沟通层）────────────────────────────────
+        "comment.list" => {
+            let task_id = req_str(payload, "taskId")?;
+            to_value(super::comments::list_comments(conn, org_id, &task_id)?)
+        }
+        "comment.add" => {
+            let task_id = req_str(payload, "taskId")?;
+            let content = req_str(payload, "content")?;
+            let reply_to = opt_str(payload, "replyToId");
+            let mentions = str_vec(payload, "mentions");
+            to_value(super::comments::add_comment(
+                conn,
+                org_id,
+                actor,
+                &task_id,
+                &content,
+                reply_to.as_deref(),
+                &mentions,
+            )?)
+        }
+        "comment.delete" => {
+            let comment_id = req_str(payload, "commentId")?;
+            super::comments::delete_comment(conn, org_id, actor, &comment_id)?;
+            Ok(Value::Null)
+        }
+
         // ── 完成汇报 ──────────────────────────────────────────
         "report.list" => {
             let task_id = req_str(payload, "taskId")?;

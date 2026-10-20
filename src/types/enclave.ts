@@ -158,6 +158,19 @@ export interface HandoverOutcome {
 
 // ── 沟通层：通知 ────────────────────────────────────────────────
 
+/** 任务评论（`enclave_task_comment_list`）；与过程记录同表，但语义是讨论 */
+export interface TaskCommentView {
+  id: string;
+  taskId: string;
+  authorId: string;
+  content: string;
+  /** 回复的评论 id（顶层评论为 null） */
+  replyToId: string | null;
+  /** @ 提及的成员 user id */
+  mentions: string[];
+  createdAt: number;
+}
+
 /** 站内通知（`enclave_notification_list`）；写主机库，成员经主机转发读取 */
 export interface NotificationView {
   id: string;

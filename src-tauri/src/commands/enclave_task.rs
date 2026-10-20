@@ -318,6 +318,89 @@ pub async fn enclave_task_set_collaborators(
 }
 
 // ════════════════════════════════════════════════════════════
+// 沟通层：任务讨论
+// ════════════════════════════════════════════════════════════
+
+/// 任务讨论列表（按时间正序）。
+#[tauri::command]
+pub async fn enclave_task_comment_list(
+    org_id: String,
+    task_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::comments::CommentView>, String> {
+    let payload = json!({ "taskId": task_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "comment.list",
+        payload,
+        |c, _actor| crate::enclave::comments::list_comments(c, &org_id, &task_id),
+    )
+    .await
+}
+
+/// 发一条任务评论（可回复 / @ 成员）。
+#[tauri::command]
+pub async fn enclave_task_comment_add(
+    org_id: String,
+    task_id: String,
+    content: String,
+    reply_to_id: Option<String>,
+    mentions: Option<Vec<String>>,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::comments::CommentView, String> {
+    let mentions = mentions.unwrap_or_default();
+    let payload = json!({
+        "taskId": task_id.clone(),
+        "content": content.clone(),
+        "replyToId": reply_to_id.clone(),
+        "mentions": &mentions,
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "comment.add",
+        payload,
+        |c, actor| {
+            crate::enclave::comments::add_comment(
+                c,
+                &org_id,
+                actor,
+                &task_id,
+                &content,
+                reply_to_id.as_deref(),
+                &mentions,
+            )
+        },
+    )
+    .await
+}
+
+/// 删除评论（作者本人或组织管理者；软删）。
+#[tauri::command]
+pub async fn enclave_task_comment_delete(
+    org_id: String,
+    comment_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    let payload = json!({ "commentId": comment_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "comment.delete",
+        payload,
+        |c, actor| crate::enclave::comments::delete_comment(c, &org_id, actor, &comment_id),
+    )
+    .await
+}
+
+// ════════════════════════════════════════════════════════════
 // M4：完成汇报
 // ════════════════════════════════════════════════════════════
 

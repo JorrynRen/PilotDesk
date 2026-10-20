@@ -11,6 +11,7 @@
 
 pub mod authz;
 pub mod backup;
+pub mod comments;
 pub mod db;
 pub mod files;
 pub mod gate;
