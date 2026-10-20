@@ -8,6 +8,7 @@
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ListTree, Building2, Library, RefreshCw, Loader2 } from 'lucide-react';
+import { Select } from '../common/Select';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
 import { NotificationBell } from './NotificationBell';
@@ -62,28 +63,24 @@ export function EnclaveNavBar({
       })}
 
       {orgs.length > 0 && (
-        <span
-          className="mx-1 h-4 w-px shrink-0"
-          style={{ backgroundColor: 'var(--border)' }}
-          aria-hidden
-        />
+        <>
+          <span
+            className="mx-1 h-4 w-px shrink-0"
+            style={{ backgroundColor: 'var(--border)' }}
+            aria-hidden
+          />
+          {/* 组织多时用下拉承载，避免把功能按钮栏撑成多行 */}
+          <Select
+            value={activeOrgId}
+            onChange={(id) => void useEnclaveOrgStore.getState().selectOrg(id)}
+            options={orgs.map((o) => ({ value: o.orgId, label: o.name || o.orgId }))}
+            placeholder="选择组织"
+            size="sm"
+            className="w-[160px] shrink-0"
+            title="切换组织"
+          />
+        </>
       )}
-      {orgs.map((o) => (
-        <button
-          key={o.orgId}
-          onClick={() => void useEnclaveOrgStore.getState().selectOrg(o.orgId)}
-          className="text-xs px-2 py-0.5 rounded-lg"
-          style={{
-            backgroundColor:
-              o.orgId === activeOrgId ? 'var(--bg-tertiary)' : 'transparent',
-            color: o.orgId === activeOrgId ? 'var(--text-primary)' : 'var(--text-tertiary)',
-            border: '1px solid var(--border)',
-          }}
-          title={o.name || o.orgId}
-        >
-          {o.name || o.orgId}
-        </button>
-      ))}
 
       <div className="flex-1" />
       {right}
