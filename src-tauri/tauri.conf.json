@@ -16,9 +16,9 @@
       {
         "title": "PilotDesk",
         "width": 1200,
-        "height": 815,
+        "height": 720,
         "minWidth": 1020,
-        "minHeight": 815,
+        "minHeight": 620,
         "decorations": false,
         "shadow": false,
         "transparent": false,
