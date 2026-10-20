@@ -1126,15 +1126,24 @@ function TaskDetail(props: {
         </div>
 
         {!editingProps ? (
-          // 平铺单行，用「·」分隔，避免占多行
-          <div className="text-[11px] leading-5" style={{ color: 'var(--text-secondary)' }}>
-            {[
-              `创建者：${memberLabel(task.creatorId)}`,
-              `负责人：${memberLabel(task.assigneeId)}`,
-              `优先级：${PRIORITY_LABEL[task.priority] ?? task.priority}`,
-              `截止：${task.dueDate ? toDateInput(task.dueDate) : '未设置'}`,
-              `参与者：${task.collaborators.length ? task.collaborators.map((id) => memberLabel(id)).join('、') : '无'}`,
-              `前置依赖：${
+          // 允许换行：每项独立成行并带列表标记，长内容自然折行
+          <ul
+            className="m-0 pl-4 list-disc flex flex-col gap-0.5 text-[11px] leading-5"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <li>创建者：{memberLabel(task.creatorId)}</li>
+            <li>负责人：{memberLabel(task.assigneeId)}</li>
+            <li>优先级：{PRIORITY_LABEL[task.priority] ?? task.priority}</li>
+            <li>截止：{task.dueDate ? toDateInput(task.dueDate) : '未设置'}</li>
+            <li>
+              {`参与者：${
+                task.collaborators.length
+                  ? task.collaborators.map((id) => memberLabel(id)).join('、')
+                  : '无'
+              }`}
+            </li>
+            <li>
+              {`前置依赖：${
                 task.blockedBy.length
                   ? task.blockedBy
                     .map((id) => {
@@ -1143,9 +1152,9 @@ function TaskDetail(props: {
                     })
                     .join('、')
                   : '无'
-              }`,
-            ].join(' · ')}
-          </div>
+              }`}
+            </li>
+          </ul>
         ) : (
           <>
             <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
