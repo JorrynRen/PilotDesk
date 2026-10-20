@@ -39,7 +39,7 @@ export function EnclavePage() {
         onOpenMarket={() => navigate('/market')}
         onOpenInspirations={() => navigate('/inspirations')}
       />
-      <div className="flex-1 min-h-0 px-2 pt-2 flex flex-col overflow-hidden">
+      <div className="flex-1 min-h-0 px-2 flex flex-col overflow-hidden">
         <TaskWorkspace />
       </div>
       <StatusBar
