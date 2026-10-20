@@ -108,13 +108,15 @@ export function EnclaveOrgPage() {
 
       <div className="flex-1 min-h-0 px-2 pt-2 flex flex-col overflow-hidden">
         <div
-          className="shrink-0 rounded-lg overflow-hidden"
+          className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
           <EnclaveNavBar active="org" onRefresh={refreshOrg} refreshing={loading} />
-        </div>
 
-        <div className="flex-1 min-h-0 pt-2 pb-0 flex flex-col gap-2 overflow-auto">
+          <div
+            className="flex-1 min-h-0 p-2 flex flex-col gap-2 overflow-auto"
+            style={{ backgroundColor: 'var(--bg-canvas)' }}
+          >
         {error && (
           <div className="text-xs" style={{ color: 'var(--status-danger)' }}>
             {error}
@@ -242,6 +244,7 @@ export function EnclaveOrgPage() {
 
         {/* M2 治理：数据出境闸门 / 主机应急 / 变更审计 */}
         <OrgGovernanceSection />
+          </div>
         </div>
       </div>
 

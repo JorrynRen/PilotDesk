@@ -265,55 +265,51 @@ export function TaskWorkspace() {
         active="tasks"
         onRefresh={refreshAll}
         refreshing={refreshing || loading}
+        right={
+          <>
+            {/* 出境闸门常驻状态：默认关闭，Agent 能否检索团队知识库受此约束 */}
+            {activeOrgId && (
+              <span
+                className="text-[11px] px-1.5 py-0.5 rounded"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: policy?.allowCloudModel ? 'var(--status-danger)' : 'var(--text-tertiary)',
+                }}
+                title="团队数据发送至云端模型的开关（在「组织与权限」页修改）"
+              >
+                出境闸门：{policy?.allowCloudModel ? '允许' : '禁止'}
+              </span>
+            )}
+            {canManageRoot && (
+              <button
+                onClick={() => setRootOpen((v) => !v)}
+                className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
+                style={{
+                  backgroundColor: rootOpen ? 'var(--bg-tertiary)' : 'transparent',
+                  color: 'var(--text-secondary)',
+                  border: '1px solid var(--border)',
+                }}
+                title="本机团队文件根目录：仅影响本机的存放位置（全局设置）"
+              >
+                <FolderOpen size={12} /> 本机文件根
+              </button>
+            )}
+            <button
+              onClick={() => setNewOpen((v) => !v)}
+              disabled={!activeOrgId}
+              className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+                opacity: activeOrgId ? 1 : 0.5,
+              }}
+            >
+              <Plus size={12} /> 新建任务
+            </button>
+          </>
+        }
       />
-
-      {/* 任务页工具栏：出境闸门状态 + 本机设置 + 新建 */}
-      <div
-        className="shrink-0 h-9 px-3 flex items-center gap-2"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
-        {/* 出境闸门常驻状态：默认关闭，Agent 能否检索团队知识库受此约束 */}
-        {activeOrgId && (
-          <span
-            className="text-[11px] px-1.5 py-0.5 rounded"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: policy?.allowCloudModel ? 'var(--status-danger)' : 'var(--text-tertiary)',
-            }}
-            title="团队数据发送至云端模型的开关（在「组织与权限」页修改）"
-          >
-            出境闸门：{policy?.allowCloudModel ? '允许' : '禁止'}
-          </span>
-        )}
-        <div className="flex-1" />
-        {canManageRoot && (
-          <button
-            onClick={() => setRootOpen((v) => !v)}
-            className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
-            style={{
-              backgroundColor: rootOpen ? 'var(--bg-tertiary)' : 'transparent',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
-            title="本机团队文件根目录：仅影响本机的存放位置（全局设置）"
-          >
-            <FolderOpen size={12} /> 本机文件根
-          </button>
-        )}
-        <button
-          onClick={() => setNewOpen((v) => !v)}
-          disabled={!activeOrgId}
-          className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border)',
-            opacity: activeOrgId ? 1 : 0.5,
-          }}
-        >
-          <Plus size={12} /> 新建任务
-        </button>
-      </div>
 
       {/* 本机团队文件根目录（全局设置，仅影响本机存放位置） */}
       {canManageRoot && rootOpen && (
