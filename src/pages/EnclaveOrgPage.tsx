@@ -136,19 +136,29 @@ export function EnclaveOrgPage() {
           <EnclaveNavBar active="org" onRefresh={refreshOrg} refreshing={loading} />
         </div>
 
-        {/* 页内分组：把 8 个板块收敛为 3 组，避免单页过长 */}
-        <div className="shrink-0 flex items-center gap-1.5 pt-2">
+        {/* 页内分组：把 8 个板块收敛为 3 组，避免单页过长
+            与一级导航（实心强调色胶囊 + 图标）区分：这里用扁平下划线式 tab，
+            选中项为强调色文字 + 2px 下划线，不依赖底色对比 */}
+        <div
+          role="tablist"
+          className="shrink-0 flex items-stretch gap-4 mt-2"
+          style={{ borderBottom: '1px solid var(--border)' }}
+        >
           {ORG_TABS.map((t) => {
             const on = orgTab === t.key;
             return (
               <button
                 key={t.key}
+                role="tab"
+                aria-selected={on}
                 onClick={() => setOrgTab(t.key)}
-                className="text-xs px-2.5 py-1 rounded-lg"
+                className="text-xs px-1 pb-1.5 -mb-px"
                 style={{
-                  backgroundColor: on ? 'var(--bg-tertiary)' : 'transparent',
-                  color: on ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  border: `1px solid ${on ? 'var(--border)' : 'transparent'}`,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderBottom: `2px solid ${on ? 'var(--accent)' : 'transparent'}`,
+                  color: on ? 'var(--accent)' : 'var(--text-secondary)',
+                  fontWeight: on ? 600 : 400,
                 }}
               >
                 {t.label}
