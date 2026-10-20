@@ -295,6 +295,22 @@ pub fn init_db() -> Result<DbPool, AppError> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
 
+    // 飞地主机转移终态日志：写**主库**而不是 `enclave.db`——旧主机销毁后
+    // `enclave.db` 可能被整体重建/删除，`policy_audit` 会随之一并消失
+    // （实施计划 §9「审计留存」）。新表用 IF NOT EXISTS 每次启动补齐。
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS enclave_transfer_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id TEXT NOT NULL DEFAULT '',
+            transfer_id TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_enclave_transfer_log_org
+            ON enclave_transfer_log(org_id, created_at DESC);",
+    )?;
+
     // 老库补列：agents 增加 transport / conn / secret_ref（设计文档 §4.2 / §4.3）。
     // 与上面 sync_state 同一做法：只加列、带 DEFAULT 回填历史行、不随 SCHEMA_VERSION 门控。
     ensure_column(

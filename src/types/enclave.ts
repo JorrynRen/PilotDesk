@@ -135,6 +135,8 @@ export interface HostStatusView {
   discoveredAddr: string | null;
   discoveredHostName: string | null;
   discoveredSeenAt: number | null;
+  /** 平台登记下发的主机地址（广播被禁时的连接兜底） */
+  registeredAddr: string | null;
   /** 本机作为主机时的证书指纹（sha256 hex） */
   hostFingerprint: string | null;
   /** 成员端已固定的主机证书指纹（sha256 hex） */
@@ -152,6 +154,46 @@ export interface HandoverOutcome {
   orgId: string;
   packageHash: string;
   fileCount: number;
+}
+
+// ── 沟通层：通知 ────────────────────────────────────────────────
+
+/** 站内通知（`enclave_notification_list`）；写主机库，成员经主机转发读取 */
+export interface NotificationView {
+  id: string;
+  orgId: string;
+  userId: string;
+  /** task.assigned / report.submitted / report.confirmed / report.returned */
+  kind: string;
+  title: string;
+  body: string;
+  /** task / report */
+  targetType: string;
+  targetId: string;
+  readAt: number | null;
+  createdAt: number;
+}
+
+// ── 主机自动备份 ────────────────────────────────────────────────
+
+export interface BackupStatusView {
+  enabled: boolean;
+  intervalHours: number;
+  keep: number;
+  /** 最近一次成功备份（unix 秒，0 = 从未备份） */
+  lastAt: number;
+  lastPath: string;
+  lastSize: number;
+  lastError: string;
+  dir: string;
+}
+
+export interface BackupInfo {
+  path: string;
+  size: number;
+  fileCount: number;
+  orgCount: number;
+  createdAt: number;
 }
 
 /** 本机文件缓存信息（`enclave_cache_info`） */

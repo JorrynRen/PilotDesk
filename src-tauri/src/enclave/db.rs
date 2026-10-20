@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 8;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 9;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS org_snapshot (
     viewer_id       TEXT NOT NULL DEFAULT '',      -- 该快照对应的登录身份（user.id）：换账号后旧行自动失效
     host_device_id  TEXT NOT NULL DEFAULT '',      -- 平台登记的主机设备 id（空 = 尚未登记）
     host_device_name TEXT NOT NULL DEFAULT '',     -- 主机设备名（展示用）
+    host_addr       TEXT NOT NULL DEFAULT '',      -- 平台下发的主机局域网地址（广播被禁时的连接兜底）
+    host_port       INTEGER NOT NULL DEFAULT 0,    -- 平台下发的主机端口（0 = 未上报）
     synced_at       INTEGER NOT NULL DEFAULT 0
 );
 
@@ -481,6 +483,10 @@ impl EnclaveStore {
                 "host_device_name",
                 "TEXT NOT NULL DEFAULT ''",
             )?;
+        }
+        if current < 9 {
+            Self::ensure_column(conn, "org_snapshot", "host_addr", "TEXT NOT NULL DEFAULT ''")?;
+            Self::ensure_column(conn, "org_snapshot", "host_port", "INTEGER NOT NULL DEFAULT 0")?;
         }
 
         if current != ENCLAVE_SCHEMA_VERSION {

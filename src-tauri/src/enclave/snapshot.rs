@@ -97,6 +97,11 @@ struct HostRow {
     device_id: String,
     #[serde(default)]
     device_name: String,
+    /// 主机上报的局域网地址（空 = 未上报）
+    #[serde(default)]
+    address: String,
+    #[serde(default)]
+    port: i64,
 }
 
 /// 平台 `/api/v1/me` 响应：`{ user: PublicUser }`。
@@ -207,6 +212,12 @@ pub async fn run_snapshot_round(
                 .as_ref()
                 .map(|h| h.device_name.clone())
                 .unwrap_or_default(),
+            host_addr: o
+                .host
+                .as_ref()
+                .map(|h| h.address.clone())
+                .unwrap_or_default(),
+            host_port: o.host.as_ref().map(|h| h.port).unwrap_or(0),
         });
         match fetch_members(o.id, &token).await {
             Ok(MemberFetch::Data(members)) => member_sets.push((o.id.to_string(), members)),

@@ -875,6 +875,19 @@ pub fn create_task(
         sync_container_status(conn, org_id, parent)?;
     }
 
+    // 通知（沟通层 §5.8）：指派提醒只发给负责人，不出现在操作者自己的列表里
+    let _ = crate::enclave::notify::notify(
+        conn,
+        org_id,
+        actor,
+        input.assignee_id.as_deref(),
+        "task.assigned",
+        "你有一个新任务",
+        title,
+        "task",
+        &task_id,
+    );
+
     let _ = org_role;
     get_task(conn, org_id, &task_id, actor)
 }
@@ -961,6 +974,20 @@ pub fn update_task(
         ],
     )
     .map_err(|e| format!("更新任务失败：{}", e))?;
+    // 负责人变更 → 只提醒新负责人（旧负责人无需再跟进）
+    if assignee.as_deref() != row.assignee_id.as_deref() {
+        let _ = crate::enclave::notify::notify(
+            conn,
+            org_id,
+            actor,
+            assignee.as_deref(),
+            "task.assigned",
+            "任务已指派给你",
+            title,
+            "task",
+            task_id,
+        );
+    }
     get_task(conn, org_id, task_id, actor)
 }
 

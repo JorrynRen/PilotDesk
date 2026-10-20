@@ -19,7 +19,7 @@ use crate::enclave::EnclaveState;
 /// 成员端命令转发：owner 走本地库，成员经主机 WS 执行同一套领域逻辑。
 ///
 /// `local` 闭包必须使用传入的 `actor`（成员 user id），不要自己读 `local_identity`。
-async fn run_command<T, F>(
+pub(crate) async fn run_command<T, F>(
     state: &EnclaveState,
     db: &crate::DbState,
     org_id: &str,

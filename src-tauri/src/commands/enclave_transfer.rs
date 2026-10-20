@@ -122,14 +122,36 @@ pub fn enclave_transfer_destroy(
     transfer_id: String,
     org_id: String,
     confirmation: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<(), String> {
     if confirmation.trim() != org_id {
         return Err("请输入组织 ID 以确认销毁旧主机数据".to_string());
     }
+    let view = state.store.with_conn(|c| transfer::get(c, &transfer_id))?;
+    if view.org_id != org_id {
+        return Err("转移记录与组织不匹配".to_string());
+    }
     state
         .store
-        .with_conn(|c| transfer::destroy_org_data(c, &org_id, &transfer_id))
+        .with_conn(|c| transfer::destroy_org_data(c, &org_id, &transfer_id))?;
+
+    // 终态日志落**主库**：`enclave.db` 的审计可能随旧库删除/重建而消失（计划 §9）
+    let main = db.get_conn().map_err(|e| e.to_string())?;
+    let detail = serde_json::json!({
+        "direction": view.direction,
+        "peerDeviceId": view.peer_device_id,
+        "packageHash": view.package_hash,
+        "phase": view.phase,
+    })
+    .to_string();
+    main.execute(
+        "INSERT INTO enclave_transfer_log (org_id, transfer_id, action, detail, created_at)
+         VALUES (?1, ?2, 'data_destroyed', ?3, ?4)",
+        rusqlite::params![org_id, transfer_id, detail, chrono::Utc::now().timestamp()],
+    )
+    .map_err(|e| format!("写入转移终态日志失败：{}", e))?;
+    Ok(())
 }
 
 // ── 局域网自动迁移（数据面 + 云端所有权变更）───────────────

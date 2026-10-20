@@ -24,6 +24,10 @@ pub struct OrgSnapshotRow {
     pub host_device_id: String,
     /// 主机设备名（展示用）
     pub host_device_name: String,
+    /// 平台下发的主机局域网地址（空 = 未上报）
+    pub host_addr: String,
+    /// 平台下发的主机端口（0 = 未上报）
+    pub host_port: i64,
 }
 
 /// 成员快照的写入行（来自平台 `/organizations/:id/members`）。
@@ -55,6 +59,10 @@ pub struct OrgSnapshotView {
     pub host_device_id: String,
     /// 主机设备名（展示用）
     pub host_device_name: String,
+    /// 平台下发的主机局域网地址（空 = 未上报）
+    pub host_addr: String,
+    /// 平台下发的主机端口（0 = 未上报）
+    pub host_port: i64,
     pub synced_at: i64,
 }
 
@@ -98,8 +106,8 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
     conn.execute(
         "INSERT INTO org_snapshot
             (org_id, name, owner_user_id, plan_key, plan_expires_at, seats, member_count, status,
-             my_role, viewer_id, host_device_id, host_device_name, synced_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             my_role, viewer_id, host_device_id, host_device_name, host_addr, host_port, synced_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(org_id) DO UPDATE SET
             name = excluded.name,
             owner_user_id = excluded.owner_user_id,
@@ -112,6 +120,8 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
             viewer_id = excluded.viewer_id,
             host_device_id = excluded.host_device_id,
             host_device_name = excluded.host_device_name,
+            host_addr = excluded.host_addr,
+            host_port = excluded.host_port,
             synced_at = excluded.synced_at",
         params![
             row.org_id,
@@ -126,6 +136,8 @@ pub fn upsert_org_snapshot(conn: &Connection, row: &OrgSnapshotRow) -> Result<()
             row.viewer_id,
             row.host_device_id,
             row.host_device_name,
+            row.host_addr,
+            row.host_port,
             synced_at
         ],
     )
@@ -232,7 +244,9 @@ fn map_org_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrgSnapshotView> {
         my_role: r.get(8)?,
         host_device_id: r.get(9)?,
         host_device_name: r.get(10)?,
-        synced_at: r.get(11)?,
+        host_addr: r.get(11)?,
+        host_port: r.get(12)?,
+        synced_at: r.get(13)?,
     })
 }
 
@@ -244,7 +258,8 @@ pub fn list_orgs(conn: &Connection) -> Result<Vec<OrgSnapshotView>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
-                    seats, member_count, status, my_role, host_device_id, host_device_name, synced_at
+                    seats, member_count, status, my_role, host_device_id, host_device_name,
+                    host_addr, host_port, synced_at
              FROM org_snapshot
              WHERE viewer_id <> ''
                AND viewer_id = (SELECT user_id FROM local_identity LIMIT 1)
@@ -306,6 +321,46 @@ pub fn set_host_device(
     Ok(())
 }
 
+/// 立即把平台下发的主机地址/端口写入本地快照（登记成功后不必等下一轮轮询）。
+pub fn set_host_endpoint(
+    conn: &Connection,
+    org_id: &str,
+    addr: &str,
+    port: u16,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE org_snapshot SET host_addr = ?2, host_port = ?3 WHERE org_id = ?1",
+        params![org_id, addr, port as i64],
+    )
+    .map_err(|e| format!("更新主机地址失败：{}", e))?;
+    Ok(())
+}
+
+/// 读平台下发的主机地址（`addr:port`）；未上报返回 `None`。
+///
+/// 用于广播/mDNS 被禁用时的连接兜底（设计 §7.1「云账户辅助：只传地址」）。
+pub fn host_endpoint_of(conn: &Connection, org_id: &str) -> Option<String> {
+    let row: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT host_addr, host_port FROM org_snapshot WHERE org_id = ?1",
+            params![org_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let (addr, port) = row?;
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return None;
+    }
+    if port > 0 && port <= 65535 {
+        Some(format!("{}:{}", addr, port))
+    } else {
+        Some(addr.to_string())
+    }
+}
+
 /// 本机是否已有该组织的团队业务数据（用于升级期判断「哪台设备是原主机」）。
 pub fn has_local_org_data(conn: &Connection, org_id: &str) -> Result<bool, String> {
     let count: i64 = conn
@@ -347,7 +402,8 @@ pub fn org_detail(
     let org = conn
         .query_row(
             "SELECT org_id, name, owner_user_id, plan_key, plan_expires_at,
-                    seats, member_count, status, my_role, host_device_id, host_device_name, synced_at
+                    seats, member_count, status, my_role, host_device_id, host_device_name,
+                    host_addr, host_port, synced_at
              FROM org_snapshot
              WHERE org_id = ?1
                AND viewer_id <> ''

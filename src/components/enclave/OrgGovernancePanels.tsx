@@ -355,9 +355,21 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
               : '未发现（主机离线，或局域网 UDP 广播被防火墙拦截）'}
           </div>
           <div>
+            平台登记地址：
+            {host.registeredAddr
+              ? host.registeredAddr
+              : '未上报（主机下次登记后可用；广播被禁时作为连接兜底）'}
+          </div>
+          <div>
             当前连接目标：
-            <span style={{ color: host.manualAddr || host.discoveredAddr ? 'var(--text-secondary)' : 'var(--status-danger)' }}>
-              {host.manualAddr ? `手动 · ${host.manualAddr}` : host.discoveredAddr ? `自动 · ${host.discoveredAddr}` : '无'}
+            <span style={{ color: host.manualAddr || host.discoveredAddr || host.registeredAddr ? 'var(--text-secondary)' : 'var(--status-danger)' }}>
+              {host.manualAddr
+                ? `手动 · ${host.manualAddr}`
+                : host.discoveredAddr
+                  ? `自动 · ${host.discoveredAddr}`
+                  : host.registeredAddr
+                    ? `平台登记 · ${host.registeredAddr}`
+                    : '无'}
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -1037,8 +1049,142 @@ function TransferCard({ orgId }: { orgId: string }) {
 }
 
 /**
- * 治理区块：出境闸门 + 应急开关 + 审计流水。需先选中组织。
+ * 主机自动备份（设计 §13 一期前置条件）。
+ *
+ * 只在本机确实是主机时展示：备份 `enclave.db` 一致性快照 + 本机承载组织的团队文件，
+ * 落在本机备份目录并滚动保留。不是云同步，也不改变「主机是唯一权威」。
  */
+function BackupCard() {
+  const host = useEnclaveOrgStore((s) => s.host);
+  const backup = useEnclaveOrgStore((s) => s.backup);
+  const [busy, setBusy] = useState(false);
+  const [intervalHours, setIntervalHours] = useState('24');
+  const [keep, setKeep] = useState('7');
+
+  useEffect(() => {
+    if (host?.role === 'host') void useEnclaveOrgStore.getState().loadBackup();
+  }, [host?.role]);
+
+  useEffect(() => {
+    if (!backup) return;
+    setIntervalHours(String(backup.intervalHours));
+    setKeep(String(backup.keep));
+  }, [backup?.intervalHours, backup?.keep]);
+
+  if (host?.role !== 'host') return null;
+
+  const enabled = !!backup?.enabled;
+  const intervalNum = Number(intervalHours);
+  const keepNum = Number(keep);
+  const changed =
+    !!backup && (intervalNum !== backup.intervalHours || keepNum !== backup.keep);
+
+  const save = async (nextEnabled: boolean) => {
+    if (!Number.isFinite(intervalNum) || intervalNum < 1 || intervalNum > 168) {
+      showToast('备份间隔需在 1 ~ 168 小时之间', 'error');
+      return;
+    }
+    if (!Number.isFinite(keepNum) || keepNum < 1 || keepNum > 30) {
+      showToast('保留份数需在 1 ~ 30 之间', 'error');
+      return;
+    }
+    setBusy(true);
+    const ok = await useEnclaveOrgStore.getState().saveBackupConfig(nextEnabled, intervalNum, keepNum);
+    setBusy(false);
+    if (ok) showToast(nextEnabled ? '自动备份已开启' : '自动备份已关闭', 'success');
+  };
+
+  const runNow = async () => {
+    setBusy(true);
+    const info = await useEnclaveOrgStore.getState().runBackupNow();
+    setBusy(false);
+    if (info) {
+      showToast(`备份完成：${info.fileCount} 个文件，${formatBytes(info.size)}`, 'success');
+    }
+  };
+
+  return (
+    <div
+      className="rounded-lg px-3 py-2"
+      style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+    >
+      <div className="flex items-center gap-2">
+        <History size={13} style={{ color: 'var(--text-tertiary)' }} />
+        <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+          主机自动备份
+        </span>
+        <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+          本机兜底：数据库快照 + 团队文件，按份数滚动保留
+        </span>
+      </div>
+      <SwitchRow
+        title="自动备份"
+        desc="仅在本机承载组织时执行；备份包为普通 zip，落在本机备份目录，不含云端同步。"
+        on={enabled}
+        canEdit={!busy}
+        busy={busy}
+        onToggle={() => void save(!enabled)}
+        updatedByLabel=""
+        updatedAt={backup?.lastAt}
+      />
+      <div className="mt-1.5 flex items-center gap-2 flex-wrap text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+        <span>每</span>
+        <input
+          type="number"
+          min={1}
+          max={168}
+          value={intervalHours}
+          onChange={(e) => setIntervalHours(e.target.value)}
+          className="w-14 h-6 px-1.5 rounded text-[10px] outline-none"
+          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+        />
+        <span>小时</span>
+        <span className="ml-1">保留</span>
+        <input
+          type="number"
+          min={1}
+          max={30}
+          value={keep}
+          onChange={(e) => setKeep(e.target.value)}
+          className="w-12 h-6 px-1.5 rounded text-[10px] outline-none"
+          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+        />
+        <span>份</span>
+        {changed && (
+          <button
+            onClick={() => void save(enabled)}
+            disabled={busy}
+            className="h-6 px-2 rounded text-[10px]"
+            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          >
+            保存
+          </button>
+        )}
+        <div className="flex-1" />
+        <button
+          onClick={() => void runNow()}
+          disabled={busy}
+          className="h-6 px-2 rounded text-[10px] flex items-center gap-1"
+          style={{ backgroundColor: 'var(--accent)', color: '#fff', opacity: busy ? 0.6 : 1 }}
+        >
+          {busy && <Loader2 size={10} className="animate-spin" />}
+          立即备份
+        </button>
+      </div>
+      <div className="mt-1 text-[10px] break-all" style={{ color: 'var(--text-tertiary)' }}>
+        {backup?.lastAt
+          ? `上次备份：${formatTime(backup.lastAt)}（${formatBytes(backup.lastSize)}）${backup.lastPath}`
+          : `尚未备份；目录：${backup?.dir ?? '-'}`}
+      </div>
+      {!!backup?.lastError && (
+        <div className="mt-0.5 text-[10px]" style={{ color: 'var(--status-danger)' }}>
+          最近一次失败：{backup.lastError}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function OrgGovernanceSection() {
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
   const caps = useEnclaveOrgStore((s) => s.caps);
@@ -1176,6 +1322,9 @@ export function OrgGovernanceSection() {
 
       {/* 主机与连接（M7）：主机监听状态 / 成员发现与手动地址 */}
       <HostConnectionCard orgId={activeOrgId} />
+
+      {/* 主机自动备份（一期前置条件：单点故障的本地兜底） */}
+      <BackupCard />
 
       {/* 主机转移（M8）：迁移包导出导入 + 状态推进 + 旧机销毁 */}
       <TransferCard orgId={activeOrgId} />

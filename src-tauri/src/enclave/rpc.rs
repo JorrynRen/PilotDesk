@@ -70,6 +70,26 @@ pub fn dispatch(
         "policy.get" => to_value(super::org::policy_view(conn, org_id)?),
         "emergency.get" => to_value(super::org::emergency_view(conn, org_id)?),
 
+        // ── 通知（沟通层）：成员端读主机权威通知 ──
+        "notification.list" => {
+            let limit = payload.get("limit").and_then(|v| v.as_i64()).unwrap_or(30);
+            let unread_only = payload
+                .get("unreadOnly")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            to_value(super::notify::list(
+                conn,
+                org_id,
+                actor,
+                limit,
+                unread_only,
+            )?)
+        }
+        "notification.mark_read" => {
+            let ids = str_vec(payload, "ids");
+            to_value(super::notify::mark_read(conn, org_id, actor, &ids)?)
+        }
+
         // ── 任务 ──────────────────────────────────────────────
         "task.get" => {
             let task_id = req_str(payload, "taskId")?;

@@ -10,11 +10,13 @@
 //! - **不缓存**：成员端不缓存团队数据（离线不可用），因此没有 `enclave_cache.db`。
 
 pub mod authz;
+pub mod backup;
 pub mod db;
 pub mod files;
 pub mod gate;
 pub mod host;
 pub mod knowledge;
+pub mod notify;
 pub mod org;
 pub mod progress;
 pub mod reports;

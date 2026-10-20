@@ -10,12 +10,15 @@ import { invoke } from '@tauri-apps/api/core';
 import { errorMessage } from '../utils/errorMessage';
 import type {
   AuditView,
+  BackupInfo,
+  BackupStatusView,
   CacheInfoView,
   EmergencyView,
   EnclaveOrgCaps,
   HandoverOutcome,
   HostStatusView,
   LanOfferOutcome,
+  NotificationView,
   OrgDetailView,
   OrgSnapshotView,
   PolicyView,
@@ -47,6 +50,10 @@ interface EnclaveOrgState {
   lanPendingError: string | null;
   /** 策略 / 应急变更审计流水 */
   audit: AuditView[];
+  /** 站内通知（当前组织；成员端经主机转发读取） */
+  notifications: NotificationView[];
+  /** 主机自动备份状态（本机设置） */
+  backup: BackupStatusView | null;
   loading: boolean;
   error: string | null;
   /** 本轮是否已用当前账号刷新过本机身份（false 时不渲染本地团队数据） */
@@ -87,6 +94,16 @@ interface EnclaveOrgState {
   setCacheLimit: (maxMb: number) => Promise<boolean>;
   /** 清空本机文件缓存；成功返回 true */
   clearCache: () => Promise<boolean>;
+  /** 拉通知列表（当前组织） */
+  loadNotifications: (id: string) => Promise<void>;
+  /** 标记通知已读：不传 ids = 全部未读；成功返回 true */
+  markNotificationsRead: (id: string, ids?: string[]) => Promise<boolean>;
+  /** 读取本机自动备份状态 */
+  loadBackup: () => Promise<void>;
+  /** 保存自动备份设置；成功返回 true */
+  saveBackupConfig: (enabled: boolean, intervalHours: number, keep: number) => Promise<boolean>;
+  /** 立即备份一次；成功返回备份信息 */
+  runBackupNow: () => Promise<BackupInfo | null>;
   /** 重拉转移记录 */
   loadTransfers: (id: string) => Promise<void>;
   /** 导出线下加密迁移包（仅 owner） */
@@ -120,6 +137,8 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   lanPending: [],
   lanPendingError: null,
   audit: [],
+  notifications: [],
+  backup: null,
   loading: false,
   error: null,
   identityVerified: false,
@@ -153,6 +172,8 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
       lanPending: [],
       lanPendingError: null,
       audit: [],
+      notifications: [],
+      backup: null,
       loading: false,
       error: null,
       identityVerified: false,
@@ -324,6 +345,66 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
     } catch (e) {
       set({ error: errorMessage(e) });
       return false;
+    }
+  },
+
+  loadNotifications: async (id) => {
+    try {
+      const notifications = await invoke<NotificationView[]>('enclave_notification_list', {
+        orgId: id,
+        limit: 50,
+        unreadOnly: false,
+      });
+      set({ notifications });
+    } catch {
+      // 通知是辅助信息：拉取失败不阻塞任务工作台
+    }
+  },
+
+  markNotificationsRead: async (id, ids) => {
+    try {
+      await invoke<number>('enclave_notification_mark_read', { orgId: id, ids });
+      await get().loadNotifications(id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  loadBackup: async () => {
+    try {
+      const backup = await invoke<BackupStatusView>('enclave_backup_status');
+      set({ backup });
+    } catch {
+      // 非主机 / 未初始化时静默（备份卡只在主机侧展示）
+    }
+  },
+
+  saveBackupConfig: async (enabled, intervalHours, keep) => {
+    try {
+      const backup = await invoke<BackupStatusView>('enclave_backup_config_set', {
+        enabled,
+        intervalHours,
+        keep,
+      });
+      set({ backup, error: null });
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  runBackupNow: async () => {
+    try {
+      const info = await invoke<BackupInfo>('enclave_backup_now');
+      await get().loadBackup();
+      return info;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      await get().loadBackup();
+      return null;
     }
   },
 

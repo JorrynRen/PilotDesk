@@ -319,6 +319,28 @@ pub fn submit_report(
         params![draft.id, now],
     )
     .map_err(|e| format!("提交汇报失败：{}", e))?;
+
+    // 通知任务创建者（管理者视角）有待确认汇报；操作者自己提交则不提醒
+    let owner_to_notify: Option<String> = conn
+        .query_row(
+            "SELECT creator_id FROM org_tasks WHERE id = ?1 AND org_id = ?2",
+            params![task_id, org_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("读取任务创建者失败：{}", e))?;
+    let preview: String = content.chars().take(40).collect();
+    let _ = crate::enclave::notify::notify(
+        conn,
+        org_id,
+        actor,
+        owner_to_notify.as_deref(),
+        "report.submitted",
+        "有完成汇报待确认",
+        &preview,
+        "task",
+        task_id,
+    );
     load_report(conn, task_id, &draft.id)
 }
 
@@ -360,6 +382,18 @@ pub fn confirm_report(
         log::warn!("[Enclave] 产出沉淀失败（已记 sediment_error）：{}", e);
     }
 
+    let _ = crate::enclave::notify::notify(
+        conn,
+        org_id,
+        actor,
+        Some(&report.reporter_id),
+        "report.confirmed",
+        "完成汇报已确认",
+        "任务产出已归档进组织知识库",
+        "task",
+        task_id,
+    );
+
     load_report(conn, task_id, report_id)
 }
 
@@ -392,6 +426,17 @@ pub fn return_report(
         params![crate::utils::new_id(), report_id, actor, reason, now],
     )
     .map_err(|e| format!("记录退回原因失败：{}", e))?;
+    let _ = crate::enclave::notify::notify(
+        conn,
+        org_id,
+        actor,
+        Some(&report.reporter_id),
+        "report.returned",
+        "完成汇报被退回",
+        reason,
+        "task",
+        task_id,
+    );
     load_report(conn, task_id, report_id)
 }
 

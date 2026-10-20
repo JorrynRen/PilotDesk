@@ -176,6 +176,11 @@ pub async fn run_host_loop(state: std::sync::Arc<EnclaveState>) {
         let st = state.clone();
         tokio::spawn(async move { beacon_loop(st).await });
     }
+    {
+        // 主机自动备份（一期前置条件：主机单点故障的本地兜底）
+        let st = state.clone();
+        tokio::spawn(async move { super::backup::run_loop(st).await });
+    }
 
     let mut listener: Option<(TcpListener, tokio_rustls::TlsAcceptor)> = None;
     // 定期复核「本机是否仍是主机」：云端所有权转让后旧主机必须停服
@@ -2175,7 +2180,16 @@ pub fn manual_addr(state: &EnclaveState, org_id: &str) -> Option<String> {
 }
 
 fn resolve_host(state: &EnclaveState, org_id: &str) -> Option<String> {
-    manual_addr(state, org_id).or_else(|| state.discovered_host(org_id).map(|d| d.addr))
+    manual_addr(state, org_id)
+        .or_else(|| state.discovered_host(org_id).map(|d| d.addr))
+        // 广播被禁用 / 跨网段：用平台登记的地址兜底（只传地址，不传业务数据）
+        .or_else(|| {
+            state
+                .store
+                .with_conn(|c| Ok(org::host_endpoint_of(c, org_id)))
+                .ok()
+                .flatten()
+        })
 }
 
 #[derive(Serialize)]
@@ -2195,6 +2209,8 @@ pub struct HostStatusView {
     pub discovered_addr: Option<String>,
     pub discovered_host_name: Option<String>,
     pub discovered_seen_at: Option<i64>,
+    /// 平台登记下发的主机地址（成员端；广播被禁时的兜底）
+    pub registered_addr: Option<String>,
     /// 本机作为主机时的证书指纹（sha256 hex）
     pub host_fingerprint: Option<String>,
     /// 成员端已固定的主机证书指纹（sha256 hex）
@@ -2236,6 +2252,13 @@ pub fn host_status(
         None => (None, None),
     };
     let discovered = org_id.and_then(|o| state.discovered_host(o));
+    let registered_addr = org_id.and_then(|o| {
+        state
+            .store
+            .with_conn(|c| Ok(org::host_endpoint_of(c, o)))
+            .ok()
+            .flatten()
+    });
     let pinned_fingerprint = org_id.and_then(|o| {
         state
             .store
@@ -2261,6 +2284,7 @@ pub fn host_status(
         discovered_addr: discovered.as_ref().map(|d| d.addr.clone()),
         discovered_host_name: discovered.as_ref().map(|d| d.host_name.clone()),
         discovered_seen_at: discovered.map(|d| d.seen_at),
+        registered_addr,
         host_fingerprint,
         pinned_fingerprint,
         device_id: my_device,
@@ -2305,6 +2329,9 @@ pub struct HostInfo {
     pub device_name: String,
     #[serde(default)]
     pub port: u16,
+    /// 主机上报的局域网地址（空 = 未上报）
+    #[serde(default)]
+    pub address: String,
     #[serde(default)]
     pub updated_at: String,
 }
@@ -2330,6 +2357,7 @@ pub async fn register_with_platform(
         "deviceId": device_id(),
         "deviceName": host_name(),
         "port": configured_host_port(state),
+        "address": local_lan_addr(),
         "takeover": takeover,
     });
     platform::put_json_with_status::<_, HostRegistration>(&path, &body, Some(&token))
@@ -2340,8 +2368,29 @@ pub async fn register_with_platform(
 /// 把平台返回的主机信息写入本地快照（立即生效，无需等下一轮轮询）。
 pub fn apply_host_info(state: &EnclaveState, org_id: &str, info: &HostInfo) -> Result<(), String> {
     state.store.with_conn(|c| {
-        org::set_host_device(c, org_id, &info.device_id, &info.device_name)
+        org::set_host_device(c, org_id, &info.device_id, &info.device_name)?;
+        org::set_host_endpoint(c, org_id, &info.address, info.port)
     })
+}
+
+/// 本机在局域网中的出口地址（平台地址兜底发现用；只上报地址，不传业务数据）。
+///
+/// 用 UDP `connect` 让内核按路由表选本地地址——不实际发包，断网时也不会报错；
+/// 多网卡/特殊网络可用 `PILOTDESK_ENCLAVE_HOST_ADDR` 显式覆盖，取不到时返回空串。
+fn local_lan_addr() -> String {
+    if let Ok(v) = std::env::var("PILOTDESK_ENCLAVE_HOST_ADDR") {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| {
+            s.connect("8.8.8.8:80")?;
+            s.local_addr()
+        })
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default()
 }
 
 fn host_org_ids(state: &EnclaveState) -> Vec<String> {

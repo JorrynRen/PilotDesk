@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use serde::Serialize;
+use serde_json::json;
 use tauri::State;
 
 use crate::enclave::EnclaveState;
@@ -391,6 +392,82 @@ pub fn enclave_emergency_set(
     })?;
     state.set_disabled(view.disabled);
     Ok(view)
+}
+
+/// 读通知列表（沟通层）。主机走本地库；成员经主机 WS 拉取（不缓存）。
+#[tauri::command]
+pub async fn enclave_notification_list(
+    org_id: String,
+    limit: Option<i64>,
+    unread_only: Option<bool>,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::notify::NotificationView>, String> {
+    let limit = limit.unwrap_or(30);
+    let unread_only = unread_only.unwrap_or(false);
+    let payload = json!({ "limit": limit, "unreadOnly": unread_only });
+    crate::commands::enclave_task::run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "notification.list",
+        payload,
+        |c, actor| crate::enclave::notify::list(c, &org_id, actor, limit, unread_only),
+    )
+    .await
+}
+
+/// 标记通知已读：`ids` 为空 = 全部未读。
+#[tauri::command]
+pub async fn enclave_notification_mark_read(
+    org_id: String,
+    ids: Option<Vec<String>>,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<usize, String> {
+    let ids = ids.unwrap_or_default();
+    let payload = json!({ "ids": &ids });
+    crate::commands::enclave_task::run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "notification.mark_read",
+        payload,
+        |c, actor| crate::enclave::notify::mark_read(c, &org_id, actor, &ids),
+    )
+    .await
+}
+
+/// 主机自动备份状态（本机设置，仅主机有数据可备）。
+#[tauri::command]
+pub fn enclave_backup_status(
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::backup::BackupStatusView, String> {
+    state.store.with_conn(|c| crate::enclave::backup::status(c))
+}
+
+/// 修改自动备份设置：开关 / 间隔小时 / 保留份数。
+#[tauri::command]
+pub fn enclave_backup_config_set(
+    enabled: bool,
+    interval_hours: i64,
+    keep: i64,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::backup::BackupStatusView, String> {
+    state.store.with_conn(|c| {
+        crate::enclave::backup::set_config(c, enabled, interval_hours, keep)
+    })
+}
+
+/// 立即备份一次（阻塞线程池执行，避免卡住 UI）。
+#[tauri::command]
+pub async fn enclave_backup_now(
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::backup::BackupInfo, String> {
+    let st = state.inner().clone();
+    tokio::task::spawn_blocking(move || st.store.with_conn(|c| crate::enclave::backup::run_backup(c)))
+        .await
+        .map_err(|e| format!("备份线程异常：{}", e))?
 }
 
 /// 读策略 / 应急变更审计流水（按时间倒序）。
