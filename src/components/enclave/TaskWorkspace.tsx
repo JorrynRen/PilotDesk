@@ -10,7 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight, FolderOpen, Library,
-  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Bell,
+  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Bell, RefreshCw,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
@@ -269,11 +269,14 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
     };
   }, [accountKey]);
 
-  // 组织变化 → 重拉任务
+  // 组织变化或账号变化 → 重拉任务；无组织时清空，避免展示上一账号的数据
   useEffect(() => {
-    if (!activeOrgId) return;
+    if (!activeOrgId) {
+      useEnclaveTaskStore.getState().reset();
+      return;
+    }
     void useEnclaveTaskStore.getState().loadTasks(activeOrgId);
-  }, [activeOrgId]);
+  }, [activeOrgId, accountKey]);
 
   const members: MemberView[] = detail?.members ?? [];
   const memberLabel = (id: string | null): string => {
@@ -346,6 +349,24 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
     setLocalError(null);
   };
 
+  const [refreshing, setRefreshing] = useState(false);
+  /** 手动刷新：重新校验本机身份 → 重拉组织与治理 → 重拉任务与通知。 */
+  const refreshAll = async () => {
+    setRefreshing(true);
+    try {
+      const org = useEnclaveOrgStore.getState();
+      if (!(await org.ensureIdentity())) return;
+      await org.loadOrgs();
+      const next = useEnclaveOrgStore.getState().activeOrgId;
+      if (next) {
+        await useEnclaveTaskStore.getState().loadTasks(next);
+        await useEnclaveOrgStore.getState().loadNotifications(next);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
       {/* 组织选择 + 新建 */}
@@ -383,6 +404,21 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
           </span>
         )}
         {loading && <Loader2 size={12} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
+        <button
+          onClick={() => void refreshAll()}
+          disabled={refreshing || loading}
+          className="text-xs px-2 py-1 rounded flex items-center gap-1"
+          style={{
+            backgroundColor: 'var(--bg-tertiary)',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border)',
+            opacity: refreshing || loading ? 0.6 : 1,
+          }}
+          title="重新校验本机身份，并刷新组织、权限、任务与通知"
+        >
+          {refreshing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          刷新
+        </button>
         <NotificationBell orgId={activeOrgId} />
         {props.onOpenKb && (
           <button

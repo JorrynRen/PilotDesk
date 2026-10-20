@@ -119,7 +119,16 @@ export const useAccountStore = create<AccountStoreState>((set, get) => ({
   refresh: async () => {
     try {
       const account = await invoke<AccountInfo | null>('account_status');
+      const prevEmail = get().account?.email ?? null;
+      const nextEmail = account?.email ?? null;
       set({ account, loaded: true, error: '' });
+      // 账号在别处切换（浏览器登录 / 退出）后，必须按新身份重建飞地缓存：
+      // 否则任务列表、组织详情与权限会继续沿用上一个账号的本机快照。
+      if (prevEmail !== nextEmail) {
+        resetEnclaveCaches();
+        if (account) void reloadEnclaveForAccount();
+        return;
+      }
       // 启动时把飞地本机身份对齐到当前账号（账号在别处切换过也不会沿用旧身份）
       if (account && !useEnclaveOrgStore.getState().identityVerified) {
         void useEnclaveOrgStore.getState().ensureIdentity();
