@@ -1378,11 +1378,8 @@ function TaskDetail(props: {
         )}
       </div>
 
-      {/* 任务资料（描述之后：先看说明，再看支撑文件） */}
-      <div
-        className="flex flex-col gap-2 rounded-lg p-3"
-        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
-      >
+      {/* 任务资料（标题与其它任务内容平级，附件列表独立成块） */}
+      <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <Paperclip size={12} style={{ color: 'var(--accent)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务资料</span>
@@ -1398,34 +1395,39 @@ function TaskDetail(props: {
             </button>
           )}
         </div>
-        {taskFiles.length === 0 ? (
-          <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            暂无任务资料（汇报交付物在完成汇报里，过程附件在过程记录里）
-          </div>
-        ) : (
-          taskFiles.map((f) => (
-            <div key={f.id} className="attachment-row flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-              <span className="truncate flex-1">{f.fileName}</span>
-              <span style={{ color: 'var(--text-tertiary)' }}>{Math.max(1, Math.round(f.fileSize / 1024))} KB</span>
-              <button
-                onClick={() => void openFile(f.id)}
-                className="px-1.5 py-0.5 rounded"
-                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
-              >
-                打开
-              </button>
-              {canUpload && (
-                <button
-                  onClick={() => void removeTaskFile(f.id)}
-                  className="px-1.5 py-0.5 rounded"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
-                >
-                  移除
-                </button>
-              )}
+        <div
+          className="flex flex-col gap-2 rounded-lg p-3"
+          style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+        >
+          {taskFiles.length === 0 ? (
+            <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              暂无任务资料（汇报交付物在完成汇报里，过程附件在过程记录里）
             </div>
-          ))
-        )}
+          ) : (
+            taskFiles.map((f) => (
+              <div key={f.id} className="attachment-row flex items-center gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                <span className="truncate flex-1">{f.fileName}</span>
+                <span style={{ color: 'var(--text-tertiary)' }}>{Math.max(1, Math.round(f.fileSize / 1024))} KB</span>
+                <button
+                  onClick={() => void openFile(f.id)}
+                  className="px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+                >
+                  打开
+                </button>
+                {canUpload && (
+                  <button
+                    onClick={() => void removeTaskFile(f.id)}
+                    className="px-1.5 py-0.5 rounded"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--status-danger)', border: '1px solid var(--border)' }}
+                  >
+                    移除
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
         </>
@@ -1838,16 +1840,22 @@ function TaskDetail(props: {
 
       {/* 完成汇报（普通任务可写；容器只读展示历史） */}
       {detailTab === 'delivery' && (!isContainer || reports.length > 0) && (
-      <div
-        className="flex flex-col gap-2 rounded-lg p-3"
-        style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+      <fieldset
+        className="m-0 min-w-0 p-0"
+        style={{
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '10px 12px 12px',
+        }}
       >
-        <div className="flex items-center gap-2">
+        <legend
+          className="px-1.5 m-0 flex items-center gap-1 text-[11px] font-medium"
+          style={{ color: 'var(--text-secondary)' }}
+        >
           <ClipboardCheck size={12} style={{ color: 'var(--accent)' }} />
-          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-            完成汇报
-          </span>
-        </div>
+          完成汇报
+        </legend>
+        <div className="flex flex-col gap-2">
         {!isContainer && lockedReport && (
           <div className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {lockedReport.status === 'submitted'
@@ -2137,7 +2145,8 @@ function TaskDetail(props: {
             ))}
           </div>
         )}
-      </div>
+        </div>
+      </fieldset>
       )}
     </div>
   );
