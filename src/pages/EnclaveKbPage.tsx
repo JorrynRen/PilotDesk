@@ -28,6 +28,7 @@ import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
 import { useEnclaveKbStore } from '../stores/enclaveKbStore';
 import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
 import { useAccountStore } from '../stores/accountStore';
+import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
 import type { KbEntryView } from '../types/enclave';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
@@ -190,6 +191,26 @@ export function EnclaveKbPage() {
   const [draftContent, setDraftContent] = useState('');
   const [draftTags, setDraftTags] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  /** 手动刷新：身份 → 组织 → 知识库 / 文件 / 当前检索。 */
+  const refreshKb = async () => {
+    setRefreshing(true);
+    try {
+      const org = useEnclaveOrgStore.getState();
+      if (!(await org.ensureIdentity())) return;
+      await org.loadOrgs();
+      const next = useEnclaveOrgStore.getState().activeOrgId;
+      if (!next) return;
+      await useEnclaveKbStore.getState().loadKbs(next);
+      const kbId = useEnclaveKbStore.getState().activeKbId;
+      if (!kbId) return;
+      await useEnclaveKbStore.getState().loadFiles(next, kbId);
+      await useEnclaveKbStore.getState().search(next, useEnclaveKbStore.getState().query);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // 登录账号变化 → 先校验新身份，再加载组织与知识库
   const accountKey = useAccountStore((s) => s.account?.email ?? '');
@@ -445,29 +466,11 @@ export function EnclaveKbPage() {
           className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
-          {/* 顶部：组织切换 */}
-          <div
-            className="shrink-0 h-9 px-3 flex items-center gap-2"
-            style={{ borderBottom: '1px solid var(--border)' }}
-          >
-            <Library size={13} style={{ color: 'var(--accent)' }} />
-            {orgs.map((o) => (
-              <button
-                key={o.orgId}
-                onClick={() => void useEnclaveOrgStore.getState().selectOrg(o.orgId)}
-                className="text-xs px-2 py-0.5 rounded"
-                style={{
-                  backgroundColor: o.orgId === activeOrgId ? 'var(--accent)' : 'var(--bg-tertiary)',
-                  color: o.orgId === activeOrgId ? '#fff' : 'var(--text-secondary)',
-                  border: '1px solid var(--border)',
-                }}
-              >
-                {o.name || o.orgId}
-              </button>
-            ))}
-            <div className="flex-1" />
-            {loading && <Loader2 size={12} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
-          </div>
+          <EnclaveNavBar
+            active="kb"
+            onRefresh={refreshKb}
+            refreshing={refreshing || loading}
+          />
 
           {/* 知识库信息（owner / admin 可修改） */}
           <div

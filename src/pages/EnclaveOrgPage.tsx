@@ -1,11 +1,12 @@
 import { useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Building2, RefreshCw, Loader2, Users } from 'lucide-react';
+import { Users } from 'lucide-react';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
 import { useAccountStore } from '../stores/accountStore';
 import { OrgGovernanceSection } from '../components/enclave/OrgGovernancePanels';
+import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
 import type { MemberView } from '../types/enclave';
 
 /** 治理快照新鲜度上限（秒）：超过即视为「可能过期」，与后端 SNAPSHOT_STALE_MAX_SECS 对齐。 */
@@ -83,6 +84,13 @@ export function EnclaveOrgPage() {
   // 成员列表拉取失败的原因（平台成员接口属待对齐项）：只提示，不算整轮失败
   const memberWarning = lastRefresh?.memberError ?? null;
 
+  /** 手动刷新：身份 → 平台快照 → 组织/成员/治理。 */
+  const refreshOrg = async () => {
+    const st = useEnclaveOrgStore.getState();
+    if (!(await st.ensureIdentity())) return;
+    await useEnclaveOrgStore.getState().refresh();
+  };
+
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ backgroundColor: 'var(--bg-canvas)' }}>
       <TitleBar
@@ -98,56 +106,15 @@ export function EnclaveOrgPage() {
         onOpenInspirations={() => navigate('/inspirations')}
       />
 
-      <div className="flex-1 min-h-0 px-2 pt-2 pb-0 flex flex-col gap-2 overflow-auto">
-        {/* 顶部：组织选择 + 刷新 */}
+      <div className="flex-1 min-h-0 px-2 pt-2 flex flex-col overflow-hidden">
         <div
-          className="shrink-0 rounded-lg px-3 py-2 flex items-center gap-2 flex-wrap"
-          style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)' }}
+          className="shrink-0 rounded-lg overflow-hidden"
+          style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
-          <Building2 size={14} style={{ color: 'var(--accent)' }} />
-          <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-            组织
-          </span>
-          {orgs.length === 0 && (
-            <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-              暂无组织快照
-            </span>
-          )}
-          {orgs.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap">
-              {orgs.map((o) => (
-                <button
-                  key={o.orgId}
-                  onClick={() => void useEnclaveOrgStore.getState().selectOrg(o.orgId)}
-                  className="text-xs px-2 py-0.5 rounded"
-                  style={{
-                    backgroundColor: o.orgId === activeOrgId ? 'var(--accent)' : 'var(--bg-tertiary)',
-                    color: o.orgId === activeOrgId ? '#fff' : 'var(--text-secondary)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  {o.name || o.orgId}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="flex-1" />
-          <button
-            onClick={() => void useEnclaveOrgStore.getState().refresh()}
-            disabled={loading}
-            className="text-xs px-2 py-1 rounded flex items-center gap-1"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-              opacity: loading ? 0.6 : 1,
-            }}
-          >
-            {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-            刷新
-          </button>
+          <EnclaveNavBar active="org" onRefresh={refreshOrg} refreshing={loading} />
         </div>
 
+        <div className="flex-1 min-h-0 pt-2 pb-0 flex flex-col gap-2 overflow-auto">
         {error && (
           <div className="text-xs" style={{ color: 'var(--status-danger)' }}>
             {error}
@@ -275,6 +242,7 @@ export function EnclaveOrgPage() {
 
         {/* M2 治理：数据出境闸门 / 主机应急 / 变更审计 */}
         <OrgGovernanceSection />
+        </div>
       </div>
 
       <StatusBar

@@ -9,8 +9,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
-  Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight, FolderOpen, Library,
-  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Bell, RefreshCw,
+  Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight, FolderOpen,
+  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
@@ -18,8 +18,9 @@ import { useAccountStore } from '../../stores/accountStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { Select } from '../common/Select';
+import { EnclaveNavBar } from './EnclaveNavBar';
 import type {
-  DepsPreview, MemberView, NotificationView, TaskCommentView, TaskStatus, TaskView, TeamFilesRootView,
+  DepsPreview, MemberView, TaskCommentView, TaskStatus, TaskView, TeamFilesRootView,
 } from '../../types/enclave';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
@@ -108,117 +109,8 @@ function formatDateTime(unixSec: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 站内通知（沟通层 §10.1）：只承载任务/汇报状态变更，不做独立 IM。 */
-function NotificationBell({ orgId }: { orgId: string }) {
-  const notifications = useEnclaveOrgStore((s) => s.notifications);
-  const [open, setOpen] = useState(false);
-  const unread = notifications.filter((n) => !n.readAt).length;
 
-  useEffect(() => {
-    if (!orgId) return;
-    void useEnclaveOrgStore.getState().loadNotifications(orgId);
-    const timer = window.setInterval(
-      () => void useEnclaveOrgStore.getState().loadNotifications(orgId),
-      60_000,
-    );
-    return () => window.clearInterval(timer);
-  }, [orgId]);
-
-  if (!orgId) return null;
-
-  const openItem = async (n: NotificationView) => {
-    if (!n.readAt) {
-      await useEnclaveOrgStore.getState().markNotificationsRead(orgId, [n.id]);
-    }
-    if (n.targetType === 'task' && n.targetId) {
-      useEnclaveTaskStore.getState().selectTask(n.targetId);
-      setOpen(false);
-    }
-  };
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="text-xs px-2 py-1 rounded flex items-center gap-1"
-        style={{
-          backgroundColor: open ? 'var(--bg-tertiary)' : 'transparent',
-          color: 'var(--text-secondary)',
-          border: '1px solid var(--border)',
-        }}
-        title="站内通知：任务指派 / 汇报提交、确认、退回"
-      >
-        <Bell size={12} />
-        通知
-        {unread > 0 && (
-          <span
-            className="text-[9px] px-1 rounded-full"
-            style={{ backgroundColor: 'var(--status-danger)', color: '#fff' }}
-          >
-            {unread > 99 ? '99+' : unread}
-          </span>
-        )}
-      </button>
-      {open && (
-        <div
-          className="absolute right-0 top-8 z-50 w-[320px] max-h-[360px] overflow-auto rounded-lg shadow-lg"
-          style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
-        >
-          <div
-            className="h-8 px-2.5 flex items-center gap-2 text-[11px]"
-            style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}
-          >
-            <span className="font-medium">通知</span>
-            <div className="flex-1" />
-            {unread > 0 && (
-              <button
-                onClick={() => void useEnclaveOrgStore.getState().markNotificationsRead(orgId)}
-                className="text-[10px]"
-                style={{ color: 'var(--accent)' }}
-              >
-                全部已读
-              </button>
-            )}
-          </div>
-          {notifications.length === 0 && (
-            <div className="px-3 py-4 text-center text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-              暂无通知
-            </div>
-          )}
-          {notifications.map((n) => (
-            <button
-              key={n.id}
-              onClick={() => void openItem(n)}
-              className="w-full text-left px-2.5 py-2 flex flex-col gap-0.5"
-              style={{
-                borderBottom: '1px solid var(--border)',
-                backgroundColor: n.readAt ? 'transparent' : 'var(--bg-tertiary)',
-              }}
-            >
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
-                  {n.title}
-                </span>
-                <div className="flex-1" />
-                <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
-                  {formatDateTime(n.createdAt)}
-                </span>
-              </div>
-              {n.body && (
-                <span className="text-[10px] truncate" style={{ color: 'var(--text-tertiary)' }}>
-                  {n.body}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => void }) {
-  const orgs = useEnclaveOrgStore((s) => s.orgs);
+export function TaskWorkspace() {
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
   const detail = useEnclaveOrgStore((s) => s.detail);
   const policy = useEnclaveOrgStore((s) => s.policy);
@@ -369,27 +261,17 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-      {/* 组织选择 + 新建 */}
+      <EnclaveNavBar
+        active="tasks"
+        onRefresh={refreshAll}
+        refreshing={refreshing || loading}
+      />
+
+      {/* 任务页工具栏：出境闸门状态 + 本机设置 + 新建 */}
       <div
         className="shrink-0 h-9 px-3 flex items-center gap-2"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
-        <ListTree size={13} style={{ color: 'var(--accent)' }} />
-        {orgs.map((o) => (
-          <button
-            key={o.orgId}
-            onClick={() => void useEnclaveOrgStore.getState().selectOrg(o.orgId)}
-            className="text-xs px-2 py-0.5 rounded"
-            style={{
-              backgroundColor: o.orgId === activeOrgId ? 'var(--accent)' : 'var(--bg-tertiary)',
-              color: o.orgId === activeOrgId ? '#fff' : 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            {o.name || o.orgId}
-          </button>
-        ))}
-        <div className="flex-1" />
         {/* 出境闸门常驻状态：默认关闭，Agent 能否检索团队知识库受此约束 */}
         {activeOrgId && (
           <span
@@ -403,40 +285,11 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
             出境闸门：{policy?.allowCloudModel ? '允许' : '禁止'}
           </span>
         )}
-        {loading && <Loader2 size={12} className="animate-spin" style={{ color: 'var(--text-tertiary)' }} />}
-        <button
-          onClick={() => void refreshAll()}
-          disabled={refreshing || loading}
-          className="text-xs px-2 py-1 rounded flex items-center gap-1"
-          style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border)',
-            opacity: refreshing || loading ? 0.6 : 1,
-          }}
-          title="重新校验本机身份，并刷新组织、权限、任务与通知"
-        >
-          {refreshing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-          刷新
-        </button>
-        <NotificationBell orgId={activeOrgId} />
-        {props.onOpenKb && (
-          <button
-            onClick={props.onOpenKb}
-            className="text-xs px-2 py-1 rounded flex items-center gap-1"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            <Library size={12} /> 团队知识库
-          </button>
-        )}
+        <div className="flex-1" />
         {canManageRoot && (
           <button
             onClick={() => setRootOpen((v) => !v)}
-            className="text-xs px-2 py-1 rounded flex items-center gap-1"
+            className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
             style={{
               backgroundColor: rootOpen ? 'var(--bg-tertiary)' : 'transparent',
               color: 'var(--text-secondary)',
@@ -447,23 +300,10 @@ export function TaskWorkspace(props: { onOpenOrg?: () => void; onOpenKb?: () => 
             <FolderOpen size={12} /> 本机文件根
           </button>
         )}
-        {props.onOpenOrg && (
-          <button
-            onClick={props.onOpenOrg}
-            className="text-xs px-2 py-1 rounded"
-            style={{
-              backgroundColor: 'var(--bg-tertiary)',
-              color: 'var(--text-secondary)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            组织与权限
-          </button>
-        )}
         <button
           onClick={() => setNewOpen((v) => !v)}
           disabled={!activeOrgId}
-          className="text-xs px-2 py-1 rounded flex items-center gap-1"
+          className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
           style={{
             backgroundColor: 'var(--bg-tertiary)',
             color: 'var(--text-secondary)',
@@ -1660,28 +1500,21 @@ function TaskDetail(props: {
             />
             <div className="flex items-center gap-1.5">
               {mentionable.length > 0 && (
-                <select
+                <Select
                   value=""
-                  onChange={(e) => {
-                    const id = e.target.value;
+                  onChange={(id) => {
                     if (id && !mentionIds.includes(id)) {
                       setMentionIds((prev) => [...prev, id]);
                     }
                   }}
-                  className="h-6 px-1 rounded text-[10px] outline-none"
-                  style={{
-                    backgroundColor: 'var(--bg-tertiary)',
-                    color: 'var(--text-secondary)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  <option value="">@提及成员</option>
-                  {mentionable.map((m) => (
-                    <option key={m.userId} value={m.userId}>
-                      {m.displayName || m.email || m.userId}
-                    </option>
-                  ))}
-                </select>
+                  options={mentionable.map((m) => ({
+                    value: m.userId,
+                    label: m.displayName || m.email || m.userId,
+                  }))}
+                  placeholder="@提及成员"
+                  size="xs"
+                  className="w-[110px]"
+                />
               )}
               <div className="flex-1" />
               <button

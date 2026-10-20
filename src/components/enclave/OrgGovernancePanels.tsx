@@ -8,11 +8,20 @@
 import { useEffect, useState } from 'react';
 import { ShieldAlert, ShieldCheck, Power, History, Loader2, Server, RefreshCw, ArrowLeftRight } from 'lucide-react';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { Select } from '../common/Select';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
 import type { TransferExportOutcome, TransferPhase, TransferView } from '../../types/enclave';
+
+/** 表单控件口径：与任务页 / 知识库页一致（Select 用 size="sm" 对应 28px 高度） */
+const FIELD_CLASS = 'h-7 px-2 rounded-lg text-[11px] outline-none';
+const FIELD_STYLE = {
+  backgroundColor: 'var(--bg-field)',
+  border: '1px solid var(--border)',
+  color: 'var(--text-primary)',
+} as const;
 
 const ACTION_LABEL: Record<string, string> = {
   'policy.allow_cloud_model': '数据出境策略',
@@ -406,8 +415,8 @@ function HostConnectionCard({ orgId }: { orgId: string }) {
               value={addr}
               onChange={(e) => setAddr(e.target.value)}
               placeholder="手动填写主机地址，如 192.168.1.9:47820"
-              className="flex-1 h-7 px-2 rounded text-[11px] outline-none"
-              style={{ backgroundColor: 'var(--bg-side)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
+              className={'flex-1 ' + FIELD_CLASS}
+              style={FIELD_STYLE}
             />
             <button
               onClick={() => void saveAddr()}
@@ -780,11 +789,7 @@ function TransferCard({ orgId }: { orgId: string }) {
     </button>
   );
 
-  const inputStyle = {
-    backgroundColor: 'var(--bg-side)',
-    border: '1px solid var(--border)',
-    color: 'var(--text-primary)',
-  } as const;
+  const inputStyle = FIELD_STYLE;
 
   return (
     <div
@@ -819,20 +824,17 @@ function TransferCard({ orgId }: { orgId: string }) {
             方式① 局域网自动迁移
           </div>
           <div className="flex items-center gap-1.5">
-            <select
+            <Select
               value={targetId}
-              onChange={(e) => setTargetId(e.target.value)}
-              className="flex-1 min-w-0 h-7 px-2 rounded text-[11px] outline-none"
-              style={inputStyle}
-            >
-              <option value="">选择受让人（组织成员）</option>
-              {targets.map((m) => (
-                <option key={m.userId} value={m.userId}>
-                  {m.displayName || m.email || m.userId}
-                  {m.email && m.displayName ? `（${m.email}）` : ''}
-                </option>
-              ))}
-            </select>
+              onChange={setTargetId}
+              options={targets.map((m) => ({
+                value: m.userId,
+                label: `${m.displayName || m.email || m.userId}${m.email && m.displayName ? `（${m.email}）` : ''}`,
+              }))}
+              placeholder="选择受让人（组织成员）"
+              size="sm"
+              className="flex-1 min-w-0"
+            />
             <button
               onClick={() => void startOffer()}
               disabled={!targetId || offering}
@@ -863,7 +865,7 @@ function TransferCard({ orgId }: { orgId: string }) {
               readOnly
               value={outPath}
               placeholder="迁移包导出位置（留空用默认目录，可点右侧选择）"
-              className="flex-1 min-w-0 h-7 px-2 rounded text-[11px] outline-none"
+              className={'flex-1 min-w-0 ' + FIELD_CLASS}
               style={inputStyle}
             />
             <button onClick={() => void pickExportPath()} className="h-7 px-2 rounded text-[11px] shrink-0"
@@ -875,7 +877,7 @@ function TransferCard({ orgId }: { orgId: string }) {
               value={pass}
               onChange={(e) => setPass(e.target.value)}
               placeholder="迁移包口令（至少 8 位）"
-              className="w-[180px] h-7 px-2 rounded text-[11px] outline-none"
+              className={'w-[180px] ' + FIELD_CLASS}
               style={inputStyle}
             />
             <button onClick={() => setPass(randomPassphrase())} className="h-7 px-2 rounded text-[11px] shrink-0"
@@ -978,7 +980,7 @@ function TransferCard({ orgId }: { orgId: string }) {
               readOnly
               value={importPath}
               placeholder="迁移包路径（点击右侧选择）"
-              className="flex-1 min-w-0 h-7 px-2 rounded text-[11px] outline-none"
+              className={'flex-1 min-w-0 ' + FIELD_CLASS}
               style={inputStyle}
             />
             <button onClick={() => void pickImportPath()} className="h-7 px-2 rounded text-[11px] shrink-0"
@@ -990,7 +992,7 @@ function TransferCard({ orgId }: { orgId: string }) {
               value={importPass}
               onChange={(e) => setImportPass(e.target.value)}
               placeholder="迁移包口令"
-              className="w-[180px] h-7 px-2 rounded text-[11px] outline-none"
+              className={'w-[180px] ' + FIELD_CLASS}
               style={inputStyle}
             />
             <button onClick={() => void pastePassphrase()} className="h-7 px-2 rounded text-[11px] shrink-0"
@@ -1135,8 +1137,8 @@ function BackupCard() {
           max={168}
           value={intervalHours}
           onChange={(e) => setIntervalHours(e.target.value)}
-          className="w-14 h-6 px-1.5 rounded text-[10px] outline-none"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          className={'w-14 ' + FIELD_CLASS}
+          style={FIELD_STYLE}
         />
         <span>小时</span>
         <span className="ml-1">保留</span>
@@ -1146,8 +1148,8 @@ function BackupCard() {
           max={30}
           value={keep}
           onChange={(e) => setKeep(e.target.value)}
-          className="w-12 h-6 px-1.5 rounded text-[10px] outline-none"
-          style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}
+          className={'w-12 ' + FIELD_CLASS}
+          style={FIELD_STYLE}
         />
         <span>份</span>
         {changed && (

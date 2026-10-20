@@ -44,10 +44,7 @@ export function EnclavePage() {
           className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
-          <TaskWorkspace
-            onOpenOrg={() => navigate('/enclave/org')}
-            onOpenKb={() => navigate('/enclave/kb')}
-          />
+          <TaskWorkspace />
         </div>
       </div>
       <StatusBar
