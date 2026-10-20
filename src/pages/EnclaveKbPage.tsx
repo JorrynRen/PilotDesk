@@ -463,7 +463,7 @@ export function EnclaveKbPage() {
 
       <div className="flex-1 min-h-0 px-2 pt-2 flex flex-col overflow-hidden">
         <div
-          className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
+          className="shrink-0 rounded-lg overflow-hidden"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
           <EnclaveNavBar
@@ -471,6 +471,13 @@ export function EnclaveKbPage() {
             onRefresh={refreshKb}
             refreshing={refreshing || loading}
           />
+        </div>
+
+        <div className="flex-1 min-h-0 pt-2 flex flex-col overflow-hidden">
+          <div
+            className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
+            style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+          >
 
           {/* 知识库信息（owner / admin 可修改） */}
           <div
@@ -1092,6 +1099,7 @@ export function EnclaveKbPage() {
               {error}
             </div>
           )}
+          </div>
         </div>
       </div>
 
