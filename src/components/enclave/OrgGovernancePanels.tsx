@@ -1286,7 +1286,7 @@ export function OrgGovernanceSection({
         </div>
         <SwitchRow
           title="团队数据可发送至云端模型"
-          desc="组织级总闸，默认关闭；只管 enclave.db 内的团队数据，个人数据不受影响。策略随主机/数据库迁移。"
+          desc="组织级总闸，默认关闭；只管 enclave.db 内的团队数据，个人数据不受影响。本地/内网模型（internal Provider）不受限制，仅经「云端」Provider 出境时受此闸门约束。策略随主机/数据库迁移。"
           on={allowCloud}
           canEdit={canWritePolicy}
           busy={busy === 'policy'}
