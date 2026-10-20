@@ -16,8 +16,8 @@ export type EnclaveNavKey = 'tasks' | 'org' | 'kb';
 
 const TABS: { key: EnclaveNavKey; label: string; path: string; icon: typeof ListTree }[] = [
   { key: 'tasks', label: '任务管理', path: '/enclave', icon: ListTree },
-  { key: 'org', label: '组织与权限', path: '/enclave/org', icon: Building2 },
   { key: 'kb', label: '团队知识库', path: '/enclave/kb', icon: Library },
+  { key: 'org', label: '组织与权限', path: '/enclave/org', icon: Building2 },
 ];
 
 export function EnclaveNavBar({
