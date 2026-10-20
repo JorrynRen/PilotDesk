@@ -29,7 +29,8 @@ const KEY_LAST_SIZE: &str = "enclave_backup_last_size";
 const KEY_LAST_ERROR: &str = "enclave_backup_last_error";
 
 const DEFAULT_INTERVAL_HOURS: i64 = 24;
-const DEFAULT_KEEP: i64 = 7;
+/// 默认只保留 2 份：团队文件较多时备份包体积大，份数过多会占用过多磁盘
+const DEFAULT_KEEP: i64 = 2;
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +84,7 @@ pub fn status(conn: &Connection) -> Result<BackupStatusView, String> {
     Ok(BackupStatusView {
         enabled: get_setting(conn, KEY_ENABLED)
             .map(|v| v != "0")
-            .unwrap_or(true),
+            .unwrap_or(false),
         interval_hours: setting_i64(conn, KEY_INTERVAL_HOURS, DEFAULT_INTERVAL_HOURS)
             .clamp(1, 168),
         keep: setting_i64(conn, KEY_KEEP, DEFAULT_KEEP).clamp(1, 30),

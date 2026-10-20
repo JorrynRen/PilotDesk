@@ -1061,7 +1061,7 @@ function BackupCard() {
   const backup = useEnclaveOrgStore((s) => s.backup);
   const [busy, setBusy] = useState(false);
   const [intervalHours, setIntervalHours] = useState('24');
-  const [keep, setKeep] = useState('7');
+  const [keep, setKeep] = useState('2');
 
   useEffect(() => {
     if (host?.role === 'host') void useEnclaveOrgStore.getState().loadBackup();
