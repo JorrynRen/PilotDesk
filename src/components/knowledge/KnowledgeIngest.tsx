@@ -558,7 +558,10 @@ export function KnowledgeIngest({
                             disabled={!rename}
                             onChange={(e) => patch(e.target.value)}
                             placeholder={rename ? '留空则由 AI 取名' : stem}
-                            className="pd-field flex-1 min-w-0 px-1.5 py-1 rounded text-[10px] outline-none"
+                            // 这是**叶子输入框**（自带边框），不能挂 `pd-field`：
+                            // 那个类是给外层容器用的，挂在 input 上会同一次聚焦里
+                            // 叠加「accent 边框 + 2px 光晕 + 全局 1px 描边」，看起来是双层高亮
+                            className="flex-1 min-w-0 px-1.5 py-1 rounded text-[10px] outline-none"
                             style={{
                               backgroundColor: 'var(--bg-field)',
                               color: rename ? 'var(--text-primary)' : 'var(--text-tertiary)',
