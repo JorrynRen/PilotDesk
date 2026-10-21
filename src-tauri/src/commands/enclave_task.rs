@@ -1265,25 +1265,43 @@ pub async fn enclave_kb_ingest_manual(
                     (title, text)
                 }
                 "file" => {
-                    let rel = p
-                        .get("relPath")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
-                    let abs = files::resolve_team_files_root(c)?.join(rel);
-                    let prep = crate::api_agent::knowledge::prepare_file(&abs, false)?;
+                    // 以 file_assets 为准（fileId）取主机本地路径：投喂后可能被重命名/移动，
+                    // payload 里记的 relPath 只是当时的快照，不能当唯一依据。
+                    let file_id = p.get("fileId").and_then(|v| v.as_str()).unwrap_or("");
+                    let (abs, file_name) = if !file_id.is_empty() {
+                        let meta = files::file_meta(c, &org_for_write, file_id)?;
+                        (meta.abs_path, meta.file_name)
+                    } else {
+                        let rel = p
+                            .get("relPath")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
+                        let name = p
+                            .get("fileName")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(rel)
+                            .to_string();
+                        (
+                            files::org_dir(c, &org_for_write)?
+                                .join(rel)
+                                .to_string_lossy()
+                                .to_string(),
+                            name,
+                        )
+                    };
+                    let prep = crate::api_agent::knowledge::prepare_file(
+                        std::path::Path::new(&abs),
+                        false,
+                    )?;
                     if prep.text.trim().is_empty() {
                         return Err(
                             "该格式无法抽取正文，请等模型整理，或把正文粘成片段".to_string()
                         );
                     }
-                    let name = p
-                        .get("fileName")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(rel);
-                    let title = name
+                    let title = file_name
                         .rsplit_once('.')
                         .map(|(s, _)| s)
-                        .unwrap_or(name)
+                        .unwrap_or(&file_name)
                         .to_string();
                     (title, prep.text)
                 }
@@ -1798,16 +1816,27 @@ async fn process_team_queue_row(
             }]
         }
         "file" => {
-            let rel = payload
-                .get("relPath")
+            // 只认 file_assets（fileId）：投喂后文件可能被重命名/移动，relPath 只是快照。
+            let file_id = payload
+                .get("fileId")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
-            let abs = state.store.with_conn(|c| {
-                Ok(files::resolve_team_files_root(c)?
-                    .join(rel)
-                    .to_string_lossy()
-                    .to_string())
-            })?;
+                .unwrap_or("");
+            let abs = if !file_id.is_empty() {
+                state.store.with_conn(|c| {
+                    files::file_meta(c, org_id, file_id).map(|m| m.abs_path)
+                })?
+            } else {
+                let rel = payload
+                    .get("relPath")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
+                state.store.with_conn(|c| {
+                    Ok(files::org_dir(c, org_id)?
+                        .join(rel)
+                        .to_string_lossy()
+                        .to_string())
+                })?
+            };
             let prep = crate::api_agent::knowledge::prepare_file(
                 std::path::Path::new(&abs),
                 false,
