@@ -1249,6 +1249,12 @@ pub async fn enclave_kb_ingest_manual(
                 .ok_or_else(|| "待整理记录不存在".to_string())?;
             let p: serde_json::Value =
                 serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
+            // 文件投喂：手工入库同样要挂源文件
+            let manual_file_id = p
+                .get("fileId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
             let (title, text) = match row.kind.as_str() {
                 "snippet" => {
                     let text = p
@@ -1330,6 +1336,7 @@ pub async fn enclave_kb_ingest_manual(
                 &row.source_ref,
                 actor,
                 &entries,
+                manual_file_id.as_deref(),
             )?;
             crate::enclave::knowledge::finish_ingest(c, &row.id);
             Ok(TeamIngestOutcome {
@@ -1758,6 +1765,12 @@ async fn process_team_queue_row(
 ) -> Result<usize, String> {
     let payload: serde_json::Value =
         serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
+    // 文件投喂：条目写入后要把源文件挂上（条目可溯源、文件页可见）
+    let file_id_opt = payload
+        .get("fileId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
     let (kb_name, fields_json) = state.store.with_conn(|c| {
         crate::enclave::knowledge::kb_meta(c, org_id, &row.kb_id)
     })?;
@@ -1958,6 +1971,7 @@ async fn process_team_queue_row(
             &row.source_ref,
             &actor,
             &entries,
+            file_id_opt.as_deref(),
         )
     })
 }

@@ -391,6 +391,12 @@ pub fn dispatch(
                 .find(|r| r.id == id)
                 .ok_or_else(|| "待整理记录不存在".to_string())?;
             let p: Value = serde_json::from_str(&row.payload).unwrap_or(Value::Null);
+            // 文件投喂：手工入库同样要挂源文件
+            let manual_file_id = p
+                .get("fileId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
             let (title, text) = match row.kind.as_str() {
                 "snippet" => {
                     let text = p
@@ -469,6 +475,7 @@ pub fn dispatch(
                 &row.source_ref,
                 actor,
                 &entries,
+                manual_file_id.as_deref(),
             )?;
             knowledge::finish_ingest(conn, &row.id);
             to_value(serde_json::json!({

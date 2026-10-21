@@ -112,6 +112,10 @@ function joinTags(tags: string[]): string {
 const ORIGIN_LABEL: Record<string, string> = {
   task_output: '任务产出',
   manual: '手工添加',
+  file: '文件投喂',
+  url: '网址投喂',
+  snippet: '片段',
+  ai: 'AI 生成',
 };
 
 type KbTab = 'entries' | 'files' | 'ingest' | 'graph';
@@ -1347,7 +1351,7 @@ export function EnclaveKbPage() {
                     setKeyword('');
                     void runSearch('');
                   }}
-                  placeholder="搜索标题 / 正文 / 标签 / 交付物（回车）"
+                  placeholder="搜索标题 / 正文 / 标签 / 文件（回车）"
                 />
                 <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
                   {entries.length} 条{query && ` · 匹配「${query}」`}
@@ -1442,7 +1446,7 @@ export function EnclaveKbPage() {
                               <span
                                 className="shrink-0 flex items-center gap-0.5 text-[9px]"
                                 style={{ color: 'var(--text-tertiary)' }}
-                                title={`${e.files.length} 个交付物`}
+                                title={`${e.files.length} 个文件`}
                               >
                                 <Paperclip size={9} />
                                 {e.files.length}
@@ -1561,7 +1565,7 @@ export function EnclaveKbPage() {
 
                           <div>
                             <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                              交付物（{e.files.length}）
+                              {e.origin === 'task_output' ? '交付物' : '来源文件'}（{e.files.length}）
                             </div>
                             <div
                               className="rounded-md p-2 flex flex-col gap-1"
@@ -1569,7 +1573,7 @@ export function EnclaveKbPage() {
                             >
                               {e.files.length === 0 && (
                                 <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                                  该条目没有交付物
+                                  {e.origin === 'task_output' ? '该条目没有交付物' : '该条目没有关联原文'}
                                 </span>
                               )}
                               {e.files.map((f) => (
@@ -1671,7 +1675,7 @@ export function EnclaveKbPage() {
             </div>
           )}
 
-          {/* 文件：知识库全部交付物（参照个人知识库的文件页） */}
+          {/* 文件：知识库全部原文（任务交付物 + 投喂文件） */}
           {tab === 'files' && (
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <div
@@ -1707,7 +1711,7 @@ export function EnclaveKbPage() {
                 </span>
                 <div className="flex-1" />
                 <span className="text-[10px] shrink-0 whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
-                  与任务交付物是同一份原件 · 打开即查看
+                  任务交付物与投喂文件 · 打开即查看
                 </span>
               </div>
 
@@ -1718,7 +1722,7 @@ export function EnclaveKbPage() {
                     style={{ color: 'var(--text-tertiary)' }}
                   >
                     <Files size={18} />
-                    还没有文件：任务汇报「确认完成」时上传的交付物会归档到这里
+                    还没有文件：任务完成的交付物、投喂的文件都会归档到这里
                   </div>
                 )}
                 {files.length > 0 && fileGroups.length === 0 && (

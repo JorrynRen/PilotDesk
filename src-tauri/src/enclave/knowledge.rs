@@ -964,6 +964,7 @@ pub fn write_ingest_entries(
     source_ref: &str,
     actor: &str,
     entries: &[IngestEntryInput],
+    file_id: Option<&str>,
 ) -> Result<usize, String> {
     ensure_kb_write(conn, org_id)?;
     ensure_kb_owned(conn, org_id, kb_id)?;
@@ -1045,6 +1046,16 @@ pub fn write_ingest_entries(
             ],
         )
         .map_err(|e| format!("写入知识条目失败：{}", e))?;
+        // 文件投喂：把源文件挂到条目上，条目详情可回溯原文、文件页也能看到
+        if let Some(fid) = file_id {
+            conn.execute(
+                "INSERT OR IGNORE INTO knowledge_base_files
+                    (knowledge_base_id, memory_id, file_id, added_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![kb_id, e.memory_id, fid, now],
+            )
+            .map_err(|e| format!("关联知识条目与源文件失败：{}", e))?;
+        }
     }
     Ok(entries.len())
 }
@@ -1211,7 +1222,7 @@ pub fn adopt_candidate(
         tags: cand.tags,
         metadata: cand.metadata,
     }];
-    write_ingest_entries(conn, org_id, kb_id, "ai", id, actor, &entries)?;
+    write_ingest_entries(conn, org_id, kb_id, "ai", id, actor, &entries, None)?;
     conn.execute(
         "DELETE FROM kb_candidates WHERE id = ?1 AND org_id = ?2",
         params![id, org_id],
