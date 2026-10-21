@@ -1231,31 +1231,71 @@ pub async fn enclave_kb_ingest_manual(
         "kb.ingest.manual",
         payload,
         move |c, actor| {
+            // 手工入库 = 绕过模型直接写共享库，质量风险由管理角色兜底：
+            // 与「编辑/移除条目」同档（owner / admin）。普通成员只能投喂排队。
+            let role = crate::enclave::authz::role_for_member(c, &org_for_write, actor)?;
+            if !matches!(
+                role,
+                Some(crate::enclave::authz::Role::Owner)
+                    | Some(crate::enclave::authz::Role::Admin)
+            ) {
+                return Err("仅组织所有者/管理员可手工入库".to_string());
+            }
             let rows =
                 crate::enclave::knowledge::list_ingest_queue(c, &org_for_write, None)?;
             let row = rows
                 .into_iter()
                 .find(|r| r.id == qid)
                 .ok_or_else(|| "待整理记录不存在".to_string())?;
-            if row.kind != "snippet" {
-                return Err("只有「片段」支持不经模型直接入库；文件/网址请等模型整理".to_string());
-            }
             let p: serde_json::Value =
                 serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
-            let text = p
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if text.trim().is_empty() {
-                return Err("片段内容为空".to_string());
-            }
-            let raw_title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let title = if raw_title.trim().is_empty() {
-                crate::api_agent::knowledge::derive_title(&text)
-            } else {
-                raw_title.to_string()
+            let (title, text) = match row.kind.as_str() {
+                "snippet" => {
+                    let text = p
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let raw_title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    let title = if raw_title.trim().is_empty() {
+                        crate::api_agent::knowledge::derive_title(&text)
+                    } else {
+                        raw_title.to_string()
+                    };
+                    (title, text)
+                }
+                "file" => {
+                    let rel = p
+                        .get("relPath")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
+                    let abs = files::resolve_team_files_root(c)?.join(rel);
+                    let prep = crate::api_agent::knowledge::prepare_file(&abs, false)?;
+                    if prep.text.trim().is_empty() {
+                        return Err(
+                            "该格式无法抽取正文，请等模型整理，或把正文粘成片段".to_string()
+                        );
+                    }
+                    let name = p
+                        .get("fileName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(rel);
+                    let title = name
+                        .rsplit_once('.')
+                        .map(|(s, _)| s)
+                        .unwrap_or(name)
+                        .to_string();
+                    (title, prep.text)
+                }
+                _ => {
+                    return Err(
+                        "网址记录不支持手工入库；请等模型整理，或把正文粘成片段".to_string()
+                    )
+                }
             };
+            if text.trim().is_empty() {
+                return Err("内容为空".to_string());
+            }
             let digest = &crate::api_agent::knowledge::sha256_hex(text.as_bytes())[..16];
             let entries = vec![IngestEntryInput {
                 memory_id: format!("manual:{}", digest),

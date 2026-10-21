@@ -48,11 +48,24 @@ const FIELD_STYLE = {
   border: '1px solid var(--border)',
 } as const;
 
+/** 待整理条目的类型标签 */
+const QUEUE_KIND_LABEL: Record<string, string> = {
+  snippet: '片段',
+  file: '文件',
+  url: '网址',
+};
+
 /** 待整理条目的展示名：从 payload 里取原始输入（不额外存冗余字段） */
 function queueTitle(item: EnclaveKbQueueItem): string {
   try {
     const p = JSON.parse(item.payload) as Record<string, unknown>;
     if (item.kind === 'url') return String(p.url ?? item.sourceRef);
+    if (item.kind === 'file') {
+      const name = String(p.fileName ?? '');
+      if (name) return name;
+      const rel = String(p.relPath ?? item.sourceRef);
+      return rel.split(/[\\/]/).pop() || rel;
+    }
     const text = String(p.title ?? p.text ?? '');
     return text.slice(0, 40) || '片段';
   } catch {
@@ -420,6 +433,8 @@ export function EnclaveKbPage() {
 
   const myRole = orgs.find((o) => o.orgId === activeOrgId)?.myRole ?? '';
   const canEdit = myRole === 'owner' || myRole === 'admin';
+  /** 手工入库：绕过模型直接写共享库，与条目编辑同权限（owner / admin） */
+  const canManual = canEdit;
   /** 单一默认库：直接取列表里唯一的一项 */
   const kb = kbs[0] ?? null;
 
@@ -1254,7 +1269,7 @@ export function EnclaveKbPage() {
                           className="shrink-0 px-1 rounded text-[9px]"
                           style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
                         >
-                          {item.kind === 'snippet' ? '片段' : item.kind === 'url' ? '网址' : item.kind}
+                          {QUEUE_KIND_LABEL[item.kind] ?? item.kind}
                         </span>
                         <span
                           className="flex-1 min-w-0 truncate"
@@ -1276,11 +1291,11 @@ export function EnclaveKbPage() {
                             {item.status === 'running' ? '整理中' : '等待模型'}
                           </span>
                         )}
-                        {item.kind === 'snippet' && (
+                        {canManual && item.kind !== 'url' && (
                           <button
                             className="shrink-0 text-[10px]"
                             style={{ color: 'var(--text-secondary)' }}
-                            title="不经模型，按原文直接写入组织库"
+                            title="不经模型，按原文整条写入组织库（owner / admin）"
                             onClick={() => {
                               if (activeOrgId) {
                                 void useEnclaveKbStore.getState().manualIngest(activeOrgId, item.id);
