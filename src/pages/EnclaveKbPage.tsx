@@ -21,6 +21,8 @@ import {
   Pencil,
   FileUp,
   Wand2,
+  Scissors,
+  Globe,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -749,20 +751,21 @@ export function EnclaveKbPage() {
                   style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
                 >
                   {([
-                    { key: 'snippet', label: '片段' },
-                    { key: 'file', label: '文件' },
-                    { key: 'url', label: '网址' },
-                    { key: 'ai', label: 'AI 生成' },
+                    { key: 'snippet', label: '片段', icon: Scissors },
+                    { key: 'file', label: '文件', icon: FileUp },
+                    { key: 'url', label: '网址', icon: Globe },
+                    { key: 'ai', label: 'AI 生成', icon: Wand2 },
                   ] as const).map((m) => {
                     const on = ingestMode === m.key;
                     const blocked = m.key === 'ai' && modelBlocked;
+                    const Icon = m.icon;
                     return (
                       <button
                         key={m.key}
                         onClick={() => setIngestMode(m.key)}
                         disabled={blocked}
                         title={blocked ? 'AI 生成需要可用模型' : undefined}
-                        className="flex-1 px-2 py-1 rounded-md text-[11px]"
+                        className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[11px]"
                         style={{
                           backgroundColor: on ? 'var(--bg-primary)' : 'transparent',
                           color: on ? 'var(--accent)' : 'var(--text-secondary)',
@@ -772,6 +775,7 @@ export function EnclaveKbPage() {
                           cursor: blocked ? 'not-allowed' : 'pointer',
                         }}
                       >
+                        <Icon size={11} />
                         {m.label}
                       </button>
                     );
