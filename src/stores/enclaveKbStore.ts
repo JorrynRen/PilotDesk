@@ -190,6 +190,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
         orphans = [];
       }
       set({ files, orphans, loading: false });
+      // 文件页要提示「待整理」的文件投喂（它们还没有条目，但不是无引用冗余）
+      void get().loadQueue(orgId, kbId);
     } catch (e) {
       set({ error: errorMessage(e), loading: false });
     }

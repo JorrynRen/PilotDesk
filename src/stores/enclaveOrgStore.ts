@@ -106,6 +106,8 @@ interface EnclaveOrgState {
   loadNotifications: (id: string) => Promise<void>;
   /** 标记通知已读：不传 ids = 全部未读；成功返回 true */
   markNotificationsRead: (id: string, ids?: string[]) => Promise<boolean>;
+  /** 删除通知：不传 ids = 清空本账号全部已读；成功返回 true */
+  deleteNotifications: (id: string, ids?: string[]) => Promise<boolean>;
   /** 读取本机自动备份状态 */
   loadBackup: () => Promise<void>;
   /** 保存自动备份设置；成功返回 true */
@@ -409,6 +411,17 @@ export const useEnclaveOrgStore = create<EnclaveOrgState>((set, get) => ({
   markNotificationsRead: async (id, ids) => {
     try {
       await invoke<number>('enclave_notification_mark_read', { orgId: id, ids });
+      await get().loadNotifications(id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  deleteNotifications: async (id, ids) => {
+    try {
+      await invoke<number>('enclave_notification_delete', { orgId: id, ids });
       await get().loadNotifications(id);
       return true;
     } catch (e) {

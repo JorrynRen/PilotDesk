@@ -2810,6 +2810,7 @@ pub fn run() {
             commands::enclave::enclave_emergency_set,
             commands::enclave::enclave_notification_list,
             commands::enclave::enclave_notification_mark_read,
+            commands::enclave::enclave_notification_delete,
             commands::enclave::enclave_backup_status,
             commands::enclave::enclave_backup_config_set,
             commands::enclave::enclave_backup_now,

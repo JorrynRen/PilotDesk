@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bell } from 'lucide-react';
+import { Bell, X } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
 import type { NotificationView } from '../../types/enclave';
@@ -150,6 +150,16 @@ export function NotificationBell({
                   全部已读
                 </button>
               )}
+              {notifications.length > unread && (
+                <button
+                  onClick={() => void useEnclaveOrgStore.getState().deleteNotifications(orgId)}
+                  className="text-[10px]"
+                  style={{ color: 'var(--text-tertiary)' }}
+                  title="删除本账号全部已读通知（未读提醒保留）"
+                >
+                  清空已读
+                </button>
+              )}
             </div>
             {notifications.length === 0 && (
               <div className="px-3 py-4 text-[11px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
@@ -159,14 +169,22 @@ export function NotificationBell({
               </div>
             )}
             {notifications.map((n) => (
-              <button
+              <div
                 key={n.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => void openItem(n)}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return;
+                  e.preventDefault();
+                  void openItem(n);
+                }}
                 className="pd-card-btn w-full px-2.5 py-2"
                 style={{
                   borderBottom: '1px solid var(--border)',
                   backgroundColor: n.readAt ? 'transparent' : 'var(--bg-tertiary)',
                   gap: 2,
+                  cursor: 'pointer',
                 }}
               >
                 <div className="flex items-center gap-1.5">
@@ -177,13 +195,24 @@ export function NotificationBell({
                   <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
                     {formatTime(n.createdAt)}
                   </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void useEnclaveOrgStore.getState().deleteNotifications(orgId, [n.id]);
+                    }}
+                    className="shrink-0"
+                    style={{ color: 'var(--text-tertiary)', lineHeight: 0 }}
+                    title="删除这条通知"
+                  >
+                    <X size={10} />
+                  </button>
                 </div>
                 {n.body && (
                   <span className="text-[10px] truncate" style={{ color: 'var(--text-tertiary)' }}>
                     {n.body}
                   </span>
                 )}
-              </button>
+              </div>
             ))}
           </div>,
           document.body,

@@ -252,6 +252,11 @@ export function EnclaveKbPage() {
   const capability = useEnclaveKbStore((s) => s.capability);
   const queue = useEnclaveKbStore((s) => s.queue);
   const candidates = useEnclaveKbStore((s) => s.candidates);
+  /** 投喂队列里的文件（待整理 / 待重试）：已归档但还没产出条目 —— 文件页要显式提示，避免被当成冗余 */
+  const pendingFileQueue = useMemo(
+    () => queue.filter((q) => q.kind === 'file'),
+    [queue],
+  );
   const [ingestMode, setIngestMode] = useState<'snippet' | 'file' | 'url' | 'ai'>('snippet');
   const [snipTitle, setSnipTitle] = useState('');
   const [snipText, setSnipText] = useState('');
@@ -653,7 +658,8 @@ export function EnclaveKbPage() {
     if (!activeOrgId || orphans.length === 0) return;
     const ok = await confirmDialog({
       title: '清理无引用文件',
-      message: `将删除 ${orphans.length} 个已无任何条目 / 任务引用的原件，释放磁盘空间。此操作不可恢复。`,
+      message: `将删除 ${orphans.length} 个已无任何条目 / 任务引用的原件，释放磁盘空间。\n`
+        + '「待整理」中的投喂文件仍在队列里，不会计入本次清理。此操作不可恢复。',
       confirmText: '清理',
     });
     if (!ok) return;
@@ -908,6 +914,18 @@ export function EnclaveKbPage() {
                 >
                   <Icon size={11} />
                   {t.label}
+                  {t.key === 'ingest' && pendingFileQueue.length > 0 && (
+                    <span
+                      className="text-[9px] px-1 rounded-full"
+                      style={{
+                        backgroundColor: 'var(--status-warning-bg)',
+                        color: 'var(--status-warning)',
+                      }}
+                      title={`${pendingFileQueue.length} 个文件投喂待整理`}
+                    >
+                      {pendingFileQueue.length}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -1834,6 +1852,21 @@ export function EnclaveKbPage() {
                     ? `匹配 ${matchedFileCount} / ${totalFileCount} 个文件`
                     : `共 ${totalFileCount} 个文件`}
                 </span>
+                {pendingFileQueue.length > 0 && (
+                  <button
+                    onClick={() => setTab('ingest')}
+                    className="pd-btn shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[10px]"
+                    style={{
+                      color: 'var(--status-warning)',
+                      backgroundColor: 'var(--status-warning-bg)',
+                      border: '1px solid var(--border)',
+                    }}
+                    title="这些文件已归档但还没整理出知识条目，仍在「待整理」队列中：不会计入「清理无引用」，点此去投喂页查看"
+                  >
+                    <AlertTriangle size={10} />
+                    待整理 {pendingFileQueue.length} 个
+                  </button>
+                )}
                 {canEdit && orphans.length > 0 && (
                   <button
                     onClick={() => void cleanupOrphans()}
@@ -1843,7 +1876,7 @@ export function EnclaveKbPage() {
                       backgroundColor: 'var(--bg-field)',
                       border: '1px solid var(--border)',
                     }}
-                    title="删除已无任何条目 / 任务引用的原件，回收磁盘"
+                    title="删除已无任何条目 / 任务引用的原件，回收磁盘（待整理中的投喂文件、仍被队列引用的文件不会计入）"
                   >
                     <Trash2 size={10} />
                     清理无引用（{orphans.length}）

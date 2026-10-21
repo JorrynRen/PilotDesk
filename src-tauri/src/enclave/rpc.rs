@@ -102,6 +102,11 @@ pub fn dispatch(
             let ids = str_vec(payload, "ids");
             to_value(super::notify::mark_read(conn, org_id, actor, &ids)?)
         }
+        // ids 为空 = 清空已读
+        "notification.delete" => {
+            let ids = str_vec(payload, "ids");
+            to_value(super::notify::delete(conn, org_id, actor, &ids)?)
+        }
 
         // ── 任务 ──────────────────────────────────────────────
         "task.get" => {

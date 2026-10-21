@@ -645,6 +645,12 @@ fn orphan_rows(conn: &Connection, org_id: &str) -> Result<Vec<OrphanFileView>, S
               WHERE fa.owner_type = 'org' AND fa.owner_id = ?1
                 AND NOT EXISTS (SELECT 1 FROM task_file_links l WHERE l.file_id = fa.id)
                 AND NOT EXISTS (SELECT 1 FROM knowledge_base_files k WHERE k.file_id = fa.id)
+                -- 文件投喂：原件已归档但还没产出条目（含待重试），仍被队列引用，不是冗余文件
+                AND NOT EXISTS (
+                      SELECT 1 FROM kb_ingest_queue q
+                       WHERE q.org_id = fa.owner_id AND q.kind = 'file'
+                         AND json_extract(q.payload, '$.fileId') = fa.id
+                    )
               ORDER BY fa.created_at DESC",
         )
         .map_err(|e| format!("查询无引用文件失败：{}", e))?;
@@ -669,7 +675,7 @@ pub fn list_orphan_files(conn: &Connection, org_id: &str) -> Result<Vec<OrphanFi
 
 /// 删除一份团队文件原件。
 ///
-/// **前置条件**：没有任何任务挂载、也没有任何知识条目引用。引用还在时拒绝删除，
+/// **前置条件**：没有任何任务挂载、没有任何知识条目引用、也不在投喂队列里。引用还在时拒绝删除，
 /// 由调用方引导用户先去条目里解除关联 —— 原件是内容寻址、按 sha256 去重的，
 /// 一份文件可能被多个条目/任务共用，不能从某一个入口静默删掉。
 pub fn delete_asset(conn: &Connection, org_id: &str, file_id: &str) -> Result<(), String> {
@@ -704,6 +710,21 @@ pub fn delete_asset(conn: &Connection, org_id: &str, file_id: &str) -> Result<()
             "仍有引用：{} 个任务 / {} 个知识条目，请先在条目里解除关联",
             task_refs, kb_refs
         ));
+    }
+    // 文件投喂已归档但尚未整理出条目：此时它没有任何「引用」，但删掉会让队列整理失败
+    let queue_refs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM kb_ingest_queue
+              WHERE org_id = ?1 AND kind = 'file'
+                AND json_extract(payload, '$.fileId') = ?2",
+            params![org_id, file_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("查询投喂队列引用失败：{}", e))?;
+    if queue_refs > 0 {
+        return Err(
+            "该文件仍被投喂队列引用（待整理 / 待重试），请先在投喂页处理该队列项".to_string(),
+        );
     }
     conn.execute(
         "DELETE FROM file_assets WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",

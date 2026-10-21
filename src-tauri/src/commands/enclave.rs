@@ -438,6 +438,27 @@ pub async fn enclave_notification_mark_read(
     .await
 }
 
+/// 删除通知：`ids` 为空 = 清空本账号全部已读通知。
+#[tauri::command]
+pub async fn enclave_notification_delete(
+    org_id: String,
+    ids: Option<Vec<String>>,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<usize, String> {
+    let ids = ids.unwrap_or_default();
+    let payload = json!({ "ids": &ids });
+    crate::commands::enclave_task::run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "notification.delete",
+        payload,
+        |c, actor| crate::enclave::notify::delete(c, &org_id, actor, &ids),
+    )
+    .await
+}
+
 /// 主机自动备份状态（本机设置，仅主机有数据可备）。
 #[tauri::command]
 pub fn enclave_backup_status(

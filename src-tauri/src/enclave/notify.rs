@@ -145,6 +145,36 @@ pub fn mark_read(
     Ok(marked)
 }
 
+/// 删除通知：`ids` 为空 = 清空该用户全部**已读**通知；返回删除条数。
+///
+/// 只删自己的通知（`user_id` 是当前操作者），不提供「清空全部」以免误删未读提醒。
+pub fn delete(
+    conn: &Connection,
+    org_id: &str,
+    user_id: &str,
+    ids: &[String],
+) -> Result<usize, String> {
+    if ids.is_empty() {
+        return conn
+            .execute(
+                "DELETE FROM notifications
+                  WHERE org_id = ?1 AND user_id = ?2 AND read_at IS NOT NULL",
+                params![org_id, user_id],
+            )
+            .map_err(|e| format!("清理已读通知失败：{}", e));
+    }
+    let mut removed = 0usize;
+    for id in ids {
+        removed += conn
+            .execute(
+                "DELETE FROM notifications WHERE org_id = ?1 AND user_id = ?2 AND id = ?3",
+                params![org_id, user_id, id],
+            )
+            .map_err(|e| format!("删除通知失败：{}", e))?;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,6 +201,29 @@ mod tests {
                 // 已读后同一对象可以再提醒（例如再次退回）
                 notify(c, "1", "u1", Some("u2"), "task.assigned", "t", "b", "task", "t1")?;
                 assert_eq!(list(c, "1", "u2", 20, true)?.len(), 1);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn delete_only_own_and_clear_only_read() {
+        let store = store();
+        store
+            .with_conn(|c| {
+                notify(c, "1", "u1", Some("u2"), "comment.new", "t", "b", "task", "t1")?;
+                notify(c, "1", "u1", Some("u2"), "report.submitted", "t", "b", "task", "t2")?;
+                let rows = list(c, "1", "u2", 20, false)?;
+                assert_eq!(rows.len(), 2);
+                // 别人的通知删不掉
+                assert_eq!(delete(c, "1", "u3", &[rows[0].id.clone()])?, 0);
+                // 单条删除
+                assert_eq!(delete(c, "1", "u2", &[rows[0].id.clone()])?, 1);
+                // ids 为空只清已读：剩下那条未读不会被清
+                assert_eq!(delete(c, "1", "u2", &[])?, 0);
+                mark_read(c, "1", "u2", &[])?;
+                assert_eq!(delete(c, "1", "u2", &[])?, 1);
+                assert_eq!(list(c, "1", "u2", 20, false)?.len(), 0);
                 Ok(())
             })
             .unwrap();
