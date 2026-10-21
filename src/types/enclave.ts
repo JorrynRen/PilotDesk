@@ -452,6 +452,20 @@ export interface TeamQueueRunOutcome {
   remaining: number;
 }
 
+/** 团队库「待确认」候选（模型产出，采纳后才进库） */
+export interface KbCandidateView {
+  id: string;
+  orgId: string;
+  kbId: string;
+  title: string;
+  content: string;
+  tags: string;
+  metadata: string;
+  origin: string;
+  createdBy: string;
+  createdAt: number;
+}
+
 /** 团队知识库「文件」页的一行：某条目引用的一个交付物（同一原件可被多条引用） */
 export interface KbFileListView {
   fileId: string;

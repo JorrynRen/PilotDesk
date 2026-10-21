@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 10;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 11;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -286,6 +286,22 @@ CREATE TABLE IF NOT EXISTS kb_ingest_queue (
     UNIQUE(org_id, kb_id, kind, source_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_kb_ingest_queue_status ON kb_ingest_queue(org_id, status, created_at);
+
+-- 知识库「待确认」候选：模型产出（AI 生成）先落这里，人工核对后采纳才进库。
+-- 与个人库 kb_candidates 同构；团队库没有候选层时，模型产出只能直写共享库，风险不可接受。
+CREATE TABLE IF NOT EXISTS kb_candidates (
+    id          TEXT PRIMARY KEY,
+    org_id      TEXT NOT NULL,
+    kb_id       TEXT NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    content     TEXT NOT NULL DEFAULT '',
+    tags        TEXT NOT NULL DEFAULT '',
+    metadata    TEXT NOT NULL DEFAULT '{}',
+    origin      TEXT NOT NULL DEFAULT 'ai',
+    created_by  TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kb_candidates_org ON kb_candidates(org_id, kb_id, created_at);
 
 -- ───────────────── 通知 / 资源级角色例外 ─────────────────
 CREATE TABLE IF NOT EXISTS notifications (

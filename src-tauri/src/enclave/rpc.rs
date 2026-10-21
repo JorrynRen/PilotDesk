@@ -424,6 +424,67 @@ pub fn dispatch(
             }))
         }
 
+        "kb.ingest.file" => {
+            let kb_id = req_str(payload, "kbId")?;
+            let token = req_str(payload, "token")?;
+            let file_name = opt_str(payload, "fileName").unwrap_or_else(|| "file".to_string());
+            let temp = super::host::resolve_upload_token(org_id, actor, &token)?;
+            let bytes = std::fs::read(&temp).map_err(|e| format!("读取上传文件失败：{}", e))?;
+            let _ = std::fs::remove_file(&temp);
+            let imported = files::import_bytes(conn, org_id, &file_name, &bytes)?;
+            let body = serde_json::json!({
+                "fileId": imported.file_id,
+                "fileName": imported.file_name,
+                "relPath": imported.rel_path,
+            });
+            let queue_id = knowledge::enqueue_ingest(
+                conn,
+                org_id,
+                &kb_id,
+                "file",
+                &imported.rel_path,
+                &body.to_string(),
+            )?;
+            to_value(serde_json::json!({
+                "queued": true,
+                "queueId": queue_id,
+                "entries": 0,
+            }))
+        }
+        "kb.candidate.add" => {
+            let kb_id = req_str(payload, "kbId")?;
+            let title = opt_str(payload, "title").unwrap_or_default();
+            let content = opt_str(payload, "content").unwrap_or_default();
+            let tags = opt_str(payload, "tags").unwrap_or_default();
+            let metadata = opt_str(payload, "metadata").unwrap_or_default();
+            let origin = opt_str(payload, "origin").unwrap_or_else(|| "ai".to_string());
+            to_value(knowledge::add_candidate(
+                conn,
+                org_id,
+                &kb_id,
+                actor,
+                &title,
+                &content,
+                &tags,
+                &metadata,
+                &origin,
+            )?)
+        }
+        "kb.candidate.list" => {
+            let kb_id = req_str(payload, "kbId")?;
+            to_value(knowledge::list_candidates(conn, org_id, &kb_id)?)
+        }
+        "kb.candidate.adopt" => {
+            let kb_id = req_str(payload, "kbId")?;
+            let id = req_str(payload, "candidateId")?;
+            to_value(knowledge::adopt_candidate(conn, org_id, &kb_id, &id, actor)?)
+        }
+        "kb.candidate.reject" => {
+            let kb_id = req_str(payload, "kbId")?;
+            let id = req_str(payload, "candidateId")?;
+            to_value(knowledge::reject_candidate(conn, org_id, &kb_id, &id)?)
+        }
+
         "kb.list" => to_value(knowledge::list_kbs(conn, org_id)?),
         "kb.search" => {
             let query = req_str(payload, "query")?;

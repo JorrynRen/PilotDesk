@@ -19,8 +19,11 @@ import {
   FolderOpen,
   Folder,
   Pencil,
+  FileUp,
+  Wand2,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { TitleBar, StatusBar } from '../components/layout';
 import { TagEditor } from '../components/knowledge/TagEditor';
 import { Select } from '../components/common/Select';
@@ -210,19 +213,32 @@ export function EnclaveKbPage() {
   /* ── 投喂（人工入库）：内容照收，整理按加工能力降级 ── */
   const capability = useEnclaveKbStore((s) => s.capability);
   const queue = useEnclaveKbStore((s) => s.queue);
-  const [ingestMode, setIngestMode] = useState<'snippet' | 'url'>('snippet');
+  const candidates = useEnclaveKbStore((s) => s.candidates);
+  const [ingestMode, setIngestMode] = useState<'snippet' | 'file' | 'url' | 'ai'>('snippet');
   const [snipTitle, setSnipTitle] = useState('');
   const [snipText, setSnipText] = useState('');
   const [ingestUrl, setIngestUrl] = useState('');
   const [ingestUrlName, setIngestUrlName] = useState('');
+  const [filePath, setFilePath] = useState('');
+  const [topic, setTopic] = useState('');
+  const [picking, setPicking] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const modelBlocked = capability !== null && capability.canProcess === 'none';
+  const canSubmitIngest =
+    ingestMode === 'snippet'
+      ? Boolean(snipText.trim())
+      : ingestMode === 'file'
+        ? Boolean(filePath)
+        : ingestMode === 'url'
+          ? Boolean(ingestUrl.trim())
+          : Boolean(topic.trim()) && !modelBlocked;
 
   useEffect(() => {
     if (tab !== 'ingest' || !activeOrgId || !activeKbId) return;
     const st = useEnclaveKbStore.getState();
     void st.loadCapability(activeOrgId);
     void st.loadQueue(activeOrgId, activeKbId);
+    void st.loadCandidates(activeOrgId, activeKbId);
   }, [tab, activeOrgId, activeKbId]);
 
   const submitIngest = async () => {
@@ -230,15 +246,25 @@ export function EnclaveKbPage() {
     const st = useEnclaveKbStore.getState();
     setIngesting(true);
     try {
+      if (ingestMode === 'ai') {
+        const ok = await st.generate(activeOrgId, activeKbId, topic.trim());
+        if (ok) {
+          showToast('已生成草稿，请到「待确认」核对后采纳', 'success');
+          setTopic('');
+        }
+        return;
+      }
       const out =
         ingestMode === 'snippet'
           ? await st.ingestSnippet(activeOrgId, activeKbId, snipTitle.trim(), snipText)
-          : await st.ingestUrl(
-              activeOrgId,
-              activeKbId,
-              ingestUrl.trim(),
-              ingestUrlName.trim() || undefined,
-            );
+          : ingestMode === 'file'
+            ? await st.ingestFile(activeOrgId, activeKbId, filePath)
+            : await st.ingestUrl(
+                activeOrgId,
+                activeKbId,
+                ingestUrl.trim(),
+                ingestUrlName.trim() || undefined,
+              );
       if (!out) return;
       if (out.queued) {
         showToast('已入库，等待主机模型整理（见「待整理」）', 'info');
@@ -249,6 +275,7 @@ export function EnclaveKbPage() {
       setSnipText('');
       setIngestUrl('');
       setIngestUrlName('');
+      setFilePath('');
     } finally {
       setIngesting(false);
     }
@@ -723,19 +750,26 @@ export function EnclaveKbPage() {
                 >
                   {([
                     { key: 'snippet', label: '片段' },
+                    { key: 'file', label: '文件' },
                     { key: 'url', label: '网址' },
+                    { key: 'ai', label: 'AI 生成' },
                   ] as const).map((m) => {
                     const on = ingestMode === m.key;
+                    const blocked = m.key === 'ai' && modelBlocked;
                     return (
                       <button
                         key={m.key}
                         onClick={() => setIngestMode(m.key)}
+                        disabled={blocked}
+                        title={blocked ? 'AI 生成需要可用模型' : undefined}
                         className="flex-1 px-2 py-1 rounded-md text-[11px]"
                         style={{
                           backgroundColor: on ? 'var(--bg-primary)' : 'transparent',
                           color: on ? 'var(--accent)' : 'var(--text-secondary)',
                           fontWeight: on ? 600 : 500,
                           border: 'none',
+                          opacity: blocked ? 0.45 : 1,
+                          cursor: blocked ? 'not-allowed' : 'pointer',
                         }}
                       >
                         {m.label}
@@ -765,6 +799,64 @@ export function EnclaveKbPage() {
                       style={FIELD_STYLE}
                     />
                   </>
+                ) : ingestMode === 'file' ? (
+                  <>
+                    <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                      文件会先复制进主机团队文件根，再由模型整理成知识条目；没有模型时先排队。
+                      主机本机直接读路径，成员设备经局域网上传（单文件有大小上限）。
+                    </div>
+                    <div
+                      className="flex flex-col items-center justify-center gap-1.5 py-4 rounded-lg text-xs"
+                      style={{
+                        border: '1px dashed var(--border)',
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-tertiary)',
+                      }}
+                    >
+                      <FileUp size={18} />
+                      <div className="font-medium min-w-0 max-w-full truncate px-2">
+                        {filePath ? filePath.split(/[\\/]/).pop() : '选择一个文件'}
+                      </div>
+                      <button
+                        onClick={async () => {
+                          setPicking(true);
+                          try {
+                            const picked = await openDialog({
+                              multiple: false,
+                              title: '选择要投喂到团队知识库的文件',
+                            });
+                            if (typeof picked === 'string') setFilePath(picked);
+                          } finally {
+                            setPicking(false);
+                          }
+                        }}
+                        disabled={picking || ingesting}
+                        className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                        style={{
+                          color: 'var(--text-secondary)',
+                          backgroundColor: 'var(--bg-primary)',
+                          border: '1px solid var(--border)',
+                        }}
+                      >
+                        {picking ? <Loader2 size={11} className="animate-spin" /> : <FolderOpen size={11} />}
+                        选择文件
+                      </button>
+                    </div>
+                  </>
+                ) : ingestMode === 'ai' ? (
+                  <>
+                    <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                      输入主题或要求，由模型生成一条知识草稿。草稿先落「待确认」，核对后采纳才进库；
+                      生成只发送主题，不携带团队数据。
+                    </div>
+                    <textarea
+                      value={topic}
+                      onChange={(e) => setTopic(e.target.value)}
+                      placeholder="例如：整理一份团队周会纪要模板"
+                      className="flex-1 min-h-[160px] p-2.5 rounded-lg text-xs leading-relaxed outline-none resize-none"
+                      style={FIELD_STYLE}
+                    />
+                  </>
                 ) : (
                   <>
                     <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
@@ -790,20 +882,13 @@ export function EnclaveKbPage() {
 
                 <button
                   onClick={() => void submitIngest()}
-                  disabled={
-                    ingesting ||
-                    (ingestMode === 'snippet' ? !snipText.trim() : !ingestUrl.trim())
-                  }
+                  disabled={ingesting || !canSubmitIngest}
                   className="shrink-0 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs"
                   style={{
                     backgroundColor: 'var(--accent)',
                     color: '#fff',
                     border: 'none',
-                    opacity:
-                      ingesting ||
-                      (ingestMode === 'snippet' ? !snipText.trim() : !ingestUrl.trim())
-                        ? 0.5
-                        : 1,
+                    opacity: ingesting || !canSubmitIngest ? 0.5 : 1,
                   }}
                 >
                   {ingesting ? (
@@ -813,14 +898,92 @@ export function EnclaveKbPage() {
                     </>
                   ) : (
                     <>
-                      <Sparkles size={12} />
-                      {modelBlocked ? '提交入库（待整理）' : '提交整理'}
+                      {ingestMode === 'ai' ? <Wand2 size={12} /> : <Sparkles size={12} />}
+                      {ingestMode === 'ai'
+                        ? '生成草稿'
+                        : modelBlocked
+                          ? '提交入库（待整理）'
+                          : '提交整理'}
                     </>
                   )}
                 </button>
               </div>
 
               <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+                {/* 待确认：模型产出先落这里，人工采纳才进组织库 */}
+                {candidates.length > 0 && (
+                  <div
+                    className="shrink-0 flex flex-col overflow-hidden"
+                    style={{ borderBottom: '1px solid var(--border)' }}
+                  >
+                    <div className="px-4 py-2 flex items-center gap-2">
+                      <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                        待确认
+                      </span>
+                      <span
+                        className="px-1.5 py-0.5 rounded-full text-[10px]"
+                        style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                      >
+                        {candidates.length}
+                      </span>
+                      <span className="text-[10px] min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                        模型产出，核对后采纳才进库
+                      </span>
+                    </div>
+                    <div className="max-h-[220px] overflow-y-auto px-3 pb-2 space-y-1">
+                      {candidates.map((c) => (
+                        <div
+                          key={c.id}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded text-[11px]"
+                          style={{
+                            backgroundColor: 'var(--bg-content)',
+                            border: '1px solid var(--border)',
+                          }}
+                        >
+                          <span
+                            className="shrink-0 px-1 rounded text-[9px]"
+                            style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                          >
+                            AI
+                          </span>
+                          <span
+                            className="flex-1 min-w-0 truncate"
+                            style={{ color: 'var(--text-primary)' }}
+                            title={c.content.slice(0, 400)}
+                          >
+                            {c.title || '未命名草稿'}
+                          </span>
+                          <button
+                            className="shrink-0 text-[10px]"
+                            style={{ color: 'var(--accent)' }}
+                            onClick={() => {
+                              if (!activeOrgId || !activeKbId) return;
+                              void useEnclaveKbStore
+                                .getState()
+                                .adoptCandidate(activeOrgId, activeKbId, c.id)
+                                .then((ok) => ok && showToast('已采纳入库', 'success'));
+                            }}
+                          >
+                            采纳
+                          </button>
+                          <button
+                            className="shrink-0 text-[10px]"
+                            style={{ color: 'var(--text-tertiary)' }}
+                            onClick={() => {
+                              if (!activeOrgId || !activeKbId) return;
+                              void useEnclaveKbStore
+                                .getState()
+                                .rejectCandidate(activeOrgId, activeKbId, c.id);
+                            }}
+                          >
+                            拒绝
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div
                   className="shrink-0 px-4 py-2 flex items-center gap-2"
                   style={{ borderBottom: '1px solid var(--border)' }}

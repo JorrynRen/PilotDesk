@@ -623,6 +623,98 @@ pub fn detach_file(
     Ok(())
 }
 
+/// 知识库投喂：把文件写入团队文件根并登记为组织文件资产（**不挂任务**）。
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedFile {
+    pub file_id: String,
+    pub file_name: String,
+    pub file_type: String,
+    pub rel_path: String,
+    pub abs_path: String,
+}
+
+/// 用内存字节登记一个知识库投喂文件（按 sha256 在组织内去重）。
+pub fn import_bytes(
+    conn: &Connection,
+    org_id: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<ImportedFile, String> {
+    if bytes.is_empty() {
+        return Err("文件内容为空".to_string());
+    }
+    let dir = org_dir(conn, org_id)?;
+    let hash = hex_sha256(bytes);
+    let orig_name = safe_file_name(file_name);
+    let file_type = Path::new(file_name)
+        .extension()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let stored = format!("{}-{}", &hash[..8.min(hash.len())], orig_name);
+
+    let existing: Option<(String, String, String)> = conn
+        .query_row(
+            "SELECT id, file_path, file_type FROM file_assets
+             WHERE owner_type='org' AND owner_id=?1 AND file_hash=?2 LIMIT 1",
+            params![org_id, hash],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| format!("查询文件资产失败：{}", e))?;
+
+    let (file_id, rel_path, file_type) = match existing {
+        Some((id, rel, ft)) if dir.join(&rel).exists() => (id, rel, ft),
+        _ => {
+            let rel = stored;
+            let abs = dir.join(&rel);
+            std::fs::write(&abs, bytes)
+                .map_err(|e| format!("写入团队文件失败（{}）：{}", abs.display(), e))?;
+            let id = crate::utils::new_id();
+            let now = chrono::Utc::now().timestamp();
+            conn.execute(
+                "INSERT INTO file_assets
+                    (id, file_name, file_path, file_type, file_size, file_hash,
+                     storage_type, owner_type, owner_id, metadata, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'local', 'org', ?7, '{}', ?8, ?8)",
+                params![
+                    id,
+                    orig_name,
+                    rel,
+                    file_type,
+                    bytes.len() as i64,
+                    hash,
+                    org_id,
+                    now
+                ],
+            )
+            .map_err(|e| format!("登记文件资产失败：{}", e))?;
+            (id, rel, file_type)
+        }
+    };
+
+    Ok(ImportedFile {
+        file_id,
+        file_name: orig_name,
+        file_type,
+        abs_path: dir.join(&rel_path).to_string_lossy().to_string(),
+        rel_path,
+    })
+}
+
+/// 从本机路径导入（主机本机投喂用）。
+pub fn import_local_file(
+    conn: &Connection,
+    org_id: &str,
+    src_path: &str,
+) -> Result<ImportedFile, String> {
+    let src = PathBuf::from(src_path);
+    let bytes = std::fs::read(&src)
+        .map_err(|e| format!("读取待投喂文件失败（{}）：{}", src.display(), e))?;
+    let name = safe_file_name(&src.to_string_lossy());
+    import_bytes(conn, org_id, &name, &bytes)
+}
+
 /// 文件元信息（成员端 `file.stat` 用）。
 pub struct FileMetaView {
     pub file_name: String,

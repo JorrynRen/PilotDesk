@@ -1284,6 +1284,235 @@ pub async fn enclave_kb_ingest_manual(
     .await
 }
 
+/// 团队库文件投喂：主机直接读本机路径；成员先把文件经 WS 上传到主机临时区，再由主机导入。
+#[tauri::command]
+pub async fn enclave_kb_ingest_file(
+    org_id: String,
+    kb_id: Option<String>,
+    path: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TeamIngestOutcome, String> {
+    let role = state.store.with_conn(|c| authz::role_for_org(c, &org_id))?;
+    let kb = match kb_id {
+        Some(k) => k,
+        None => state.store.with_conn(|c| {
+            crate::enclave::knowledge::ensure_org_kb(c, &org_id, "")
+        })?,
+    };
+    match role {
+        Some(authz::Role::Owner) => {
+            let imported = state
+                .store
+                .with_conn(|c| files::import_local_file(c, &org_id, &path))?;
+            let payload = json!({
+                "fileId": imported.file_id,
+                "fileName": imported.file_name,
+                "relPath": imported.rel_path,
+            });
+            let queue_id = state.store.with_conn(|c| {
+                crate::enclave::knowledge::enqueue_ingest(
+                    c,
+                    &org_id,
+                    &kb,
+                    "file",
+                    &imported.rel_path,
+                    &payload.to_string(),
+                )
+            })?;
+            let run = drain_team_queue(db.inner(), state.inner(), &org_id, 1).await?;
+            Ok(TeamIngestOutcome {
+                queued: run.done == 0,
+                queue_id,
+                entries: run.done,
+            })
+        }
+        Some(_) => {
+            let file_name = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("file")
+                .to_string();
+            let token = crate::enclave::host::upload_temp_file(
+                state.inner(),
+                db.inner(),
+                &org_id,
+                &path,
+            )
+            .await?;
+            let data = crate::enclave::host::call_host(
+                state.inner(),
+                db.inner(),
+                &org_id,
+                "kb.ingest.file",
+                json!({ "kbId": kb, "token": token, "fileName": file_name }),
+            )
+            .await?;
+            serde_json::from_value(data).map_err(|e| format!("解析主机响应失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
+}
+
+/// AI 生成草稿（落「待确认」，人工采纳后才进库）。
+///
+/// 生成只把**主题**发给模型，不携带团队数据，因此不受出境闸门约束（与个人库同一语义）。
+/// 模型在本机解析：成员用自己的 Provider 生成，结果再交给主机入库。
+#[tauri::command]
+pub async fn enclave_kb_generate(
+    org_id: String,
+    kb_id: Option<String>,
+    topic: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::knowledge::KbCandidateView, String> {
+    let topic = topic.trim().to_string();
+    if topic.is_empty() {
+        return Err("请先写一个主题或要求".into());
+    }
+    let kb = match kb_id {
+        Some(k) => k,
+        None => state.store.with_conn(|c| {
+            crate::enclave::knowledge::ensure_org_kb(c, &org_id, "")
+        })?,
+    };
+    let (kb_name, fields_json) = state.store.with_conn(|c| {
+        crate::enclave::knowledge::kb_meta(c, &org_id, &kb)
+    })?;
+    let model = {
+        let conn = db.pool.get().map_err(|e| format!("取主库连接失败：{}", e))?;
+        crate::api_agent::kb_llm::resolve_kb_model(&conn)
+            .map_err(|e| format!("没有可用模型：{}", e))?
+    };
+    let draft = crate::api_agent::kb_llm::generate_draft(&model, &topic, &kb_name, &fields_json)
+        .await
+        .map_err(|e| format!("生成失败：{}", e))?;
+    if let Ok(conn) = db.pool.get() {
+        crate::commands::knowledge::record_kb_usage_conn(
+            &conn,
+            &format!("enclave:{}", org_id),
+            &model,
+        );
+    }
+    let title = if draft.title.trim().is_empty() {
+        let t: String = topic.chars().take(40).collect();
+        if t.is_empty() {
+            crate::api_agent::knowledge::derive_title(&draft.content)
+        } else {
+            t
+        }
+    } else {
+        draft.title
+    };
+    let metadata = serde_json::to_string(&draft.meta).unwrap_or_else(|_| "{}".into());
+    let tags = draft.tags.join(",");
+    let org_for_write = org_id.clone();
+    let kb_for_write = kb.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.candidate.add",
+        json!({
+            "kbId": kb, "title": &title, "content": &draft.content,
+            "tags": &tags, "metadata": &metadata, "origin": "ai",
+        }),
+        move |c, actor| {
+            crate::enclave::knowledge::add_candidate(
+                c,
+                &org_for_write,
+                &kb_for_write,
+                actor,
+                &title,
+                &draft.content,
+                &tags,
+                &metadata,
+                "ai",
+            )
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn enclave_kb_candidate_list(
+    org_id: String,
+    kb_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::knowledge::KbCandidateView>, String> {
+    let payload = json!({ "kbId": kb_id });
+    let kb_for_query = kb_id.clone();
+    let org_for_query = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.candidate.list",
+        payload,
+        move |c, _actor| {
+            crate::enclave::knowledge::list_candidates(c, &org_for_query, &kb_for_query)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn enclave_kb_candidate_adopt(
+    org_id: String,
+    kb_id: String,
+    candidate_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::knowledge::KbEntryView, String> {
+    let payload = json!({ "kbId": kb_id, "candidateId": candidate_id });
+    let kb_for_write = kb_id.clone();
+    let cand = candidate_id.clone();
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.candidate.adopt",
+        payload,
+        move |c, actor| {
+            crate::enclave::knowledge::adopt_candidate(
+                c,
+                &org_for_write,
+                &kb_for_write,
+                &cand,
+                actor,
+            )
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn enclave_kb_candidate_reject(
+    org_id: String,
+    kb_id: String,
+    candidate_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<bool, String> {
+    let payload = json!({ "kbId": kb_id, "candidateId": candidate_id });
+    let kb_for_write = kb_id.clone();
+    let cand = candidate_id.clone();
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.candidate.reject",
+        payload,
+        move |c, _actor| {
+            crate::enclave::knowledge::reject_candidate(c, &org_for_write, &kb_for_write, &cand)
+        },
+    )
+    .await
+}
+
 /// 片段投喂：片段是"用户已经拿到的文本"，入库不依赖模型；整理才依赖。
 #[tauri::command]
 pub async fn enclave_kb_ingest_snippet(
@@ -1528,6 +1757,64 @@ async fn process_team_queue_row(
                 metadata: serde_json::to_string(&draft.meta).unwrap_or_else(|_| "{}".into()),
             }]
         }
+        "file" => {
+            let rel = payload
+                .get("relPath")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
+            let abs = state.store.with_conn(|c| {
+                Ok(files::resolve_team_files_root(c)?
+                    .join(rel)
+                    .to_string_lossy()
+                    .to_string())
+            })?;
+            let prep = crate::api_agent::knowledge::prepare_file(
+                std::path::Path::new(&abs),
+                false,
+            )?;
+            if prep.blocks.is_empty() {
+                return Err("该格式暂不支持抽取正文（原文已入库）".into());
+            }
+            let blocks = crate::api_agent::knowledge::merge_small_blocks(
+                &prep.text,
+                &prep.blocks,
+                crate::api_agent::knowledge::MIN_MODEL_BLOCK,
+            );
+            let block_texts: Vec<String> = blocks.iter().map(|b| b.text.clone()).collect();
+            let (doc_title, plans) = crate::api_agent::kb_llm::plan_chunks(
+                &model,
+                &block_texts,
+                &kb_name,
+                &fields_json,
+                &prep.name,
+                false,
+            )
+            .await
+            .map_err(|e| format!("模型整理未生效：{}", e))?;
+            let (chunks, _truncated) = crate::api_agent::knowledge::assemble_plans(
+                &prep, &blocks, &plans,
+            );
+            let digest = &crate::api_agent::knowledge::sha256_hex(prep.sha.as_bytes())[..16];
+            chunks
+                .iter()
+                .enumerate()
+                .map(|(i, c)| IngestEntryInput {
+                    memory_id: format!("manual:{}:{}", digest, i),
+                    title: if c.title.trim().is_empty() {
+                        format!("{} · {}", doc_title, i + 1)
+                    } else {
+                        c.title.clone()
+                    },
+                    content: c.text.clone(),
+                    tags: c.tags.clone(),
+                    metadata: if c.meta_json.trim().is_empty() {
+                        "{}".into()
+                    } else {
+                        c.meta_json.clone()
+                    },
+                })
+                .collect()
+        }
         "url" => {
             let url = payload
                 .get("url")
@@ -1588,7 +1875,11 @@ async fn process_team_queue_row(
             &model,
         );
     }
-    let origin = if row.kind == "snippet" { "manual" } else { "url" };
+    let origin = match row.kind.as_str() {
+        "snippet" => "manual",
+        "file" => "file",
+        _ => "url",
+    };
     state.store.with_conn(|c| {
         crate::enclave::knowledge::write_ingest_entries(
             c,

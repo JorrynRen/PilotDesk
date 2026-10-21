@@ -1087,6 +1087,155 @@ pub fn load_ingest_capability(conn: &Connection, org_id: &str) -> Option<String>
     .flatten()
 }
 
+/* ── 待确认候选（模型产出先落这里，人工采纳后才进库） ── */
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct KbCandidateView {
+    pub id: String,
+    pub org_id: String,
+    pub kb_id: String,
+    pub title: String,
+    pub content: String,
+    pub tags: String,
+    pub metadata: String,
+    /// ai / ...
+    pub origin: String,
+    pub created_by: String,
+    pub created_at: i64,
+}
+
+fn candidate_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<KbCandidateView> {
+    Ok(KbCandidateView {
+        id: r.get(0)?,
+        org_id: r.get(1)?,
+        kb_id: r.get(2)?,
+        title: r.get(3)?,
+        content: r.get(4)?,
+        tags: r.get(5)?,
+        metadata: r.get(6)?,
+        origin: r.get(7)?,
+        created_by: r.get(8)?,
+        created_at: r.get(9)?,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn add_candidate(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    actor: &str,
+    title: &str,
+    content: &str,
+    tags: &str,
+    metadata: &str,
+    origin: &str,
+) -> Result<KbCandidateView, String> {
+    ensure_kb_write(conn, org_id)?;
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    let id = format!("kbc:{}", uuid::Uuid::new_v4());
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO kb_candidates
+            (id, org_id, kb_id, title, content, tags, metadata, origin, created_by, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            id,
+            org_id,
+            kb_id,
+            title,
+            content,
+            tags,
+            if metadata.trim().is_empty() { "{}" } else { metadata },
+            origin,
+            actor,
+            now
+        ],
+    )
+    .map_err(|e| format!("写入待确认候选失败：{}", e))?;
+    get_candidate(conn, org_id, kb_id, &id)?.ok_or_else(|| "候选写入后不可读".to_string())
+}
+
+pub fn list_candidates(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+) -> Result<Vec<KbCandidateView>, String> {
+    ensure_kb_write(conn, org_id)?;
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, org_id, kb_id, title, content, tags, metadata, origin, created_by, created_at
+             FROM kb_candidates WHERE org_id = ?1 AND kb_id = ?2
+             ORDER BY created_at DESC LIMIT 100",
+        )
+        .map_err(|e| format!("查询待确认候选失败：{}", e))?;
+    stmt.query_map(params![org_id, kb_id], candidate_row)
+        .map(|rows| rows.flatten().collect())
+        .map_err(|e| format!("读取待确认候选失败：{}", e))
+}
+
+fn get_candidate(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    id: &str,
+) -> Result<Option<KbCandidateView>, String> {
+    conn.query_row(
+        "SELECT id, org_id, kb_id, title, content, tags, metadata, origin, created_by, created_at
+         FROM kb_candidates WHERE id = ?1 AND org_id = ?2 AND kb_id = ?3",
+        params![id, org_id, kb_id],
+        candidate_row,
+    )
+    .optional()
+    .map_err(|e| format!("读取待确认候选失败：{}", e))
+}
+
+/// 采纳候选：写入组织库并删除候选。
+pub fn adopt_candidate(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    id: &str,
+    actor: &str,
+) -> Result<KbEntryView, String> {
+    ensure_kb_write(conn, org_id)?;
+    let cand = get_candidate(conn, org_id, kb_id, id)?
+        .ok_or_else(|| "候选不存在或已被处理".to_string())?;
+    let memory_id = format!("manual:ai:{}", id);
+    let entries = vec![IngestEntryInput {
+        memory_id: memory_id.clone(),
+        title: cand.title,
+        content: cand.content,
+        tags: cand.tags,
+        metadata: cand.metadata,
+    }];
+    write_ingest_entries(conn, org_id, kb_id, "ai", id, actor, &entries)?;
+    conn.execute(
+        "DELETE FROM kb_candidates WHERE id = ?1 AND org_id = ?2",
+        params![id, org_id],
+    )
+    .map_err(|e| format!("删除候选失败：{}", e))?;
+    get_entry(conn, org_id, kb_id, &memory_id)?
+        .ok_or_else(|| "采纳后未找到知识条目".to_string())
+}
+
+pub fn reject_candidate(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    id: &str,
+) -> Result<bool, String> {
+    ensure_kb_write(conn, org_id)?;
+    conn.execute(
+        "DELETE FROM kb_candidates WHERE id = ?1 AND org_id = ?2 AND kb_id = ?3",
+        params![id, org_id, kb_id],
+    )
+    .map(|n| n > 0)
+    .map_err(|e| format!("删除候选失败：{}", e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

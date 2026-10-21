@@ -639,8 +639,13 @@ pub async fn upload_temp_file(
     }
 
     let mut session = HostSession::connect(state, db, org_id).await?;
+    let file_name = Path::new(src_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("attachment")
+        .to_string();
     let begin = session
-        .request("file.upload_begin", json!({ "orgId": org_id, "fileName": "attachment" }))
+        .request("file.upload_begin", json!({ "orgId": org_id, "fileName": file_name }))
         .await?;
     let upload_id = begin["uploadId"].as_str().unwrap_or("").to_string();
     if upload_id.is_empty() {

@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { errorMessage } from '../utils/errorMessage';
 import type {
   EnclaveKbQueueItem,
+  KbCandidateView,
   KbEntryView,
   KbFileListView,
   KbView,
@@ -31,6 +32,8 @@ interface EnclaveKbState {
   capability: TeamIngestCapability | null;
   /** 当前库的待整理队列 */
   queue: EnclaveKbQueueItem[];
+  /** 当前库的待确认候选（模型产出） */
+  candidates: KbCandidateView[];
   /** 账号切换 / 退出：清空全部知识库缓存 */
   reset: () => void;
   loadKbs: (orgId: string) => Promise<void>;
@@ -71,6 +74,17 @@ interface EnclaveKbState {
   dropQueueItem: (orgId: string, id: string) => Promise<void>;
   /** 手工整理（仅片段）：不经模型，按原文直接写入组织库 */
   manualIngest: (orgId: string, id: string) => Promise<void>;
+  /** 文件投喂（主机本机直读；成员经主机上传通道） */
+  ingestFile: (
+    orgId: string,
+    kbId: string,
+    path: string,
+  ) => Promise<TeamIngestOutcome | null>;
+  /** AI 生成草稿（落待确认） */
+  generate: (orgId: string, kbId: string, topic: string) => Promise<boolean>;
+  loadCandidates: (orgId: string, kbId: string) => Promise<void>;
+  adoptCandidate: (orgId: string, kbId: string, id: string) => Promise<boolean>;
+  rejectCandidate: (orgId: string, kbId: string, id: string) => Promise<void>;
 }
 
 export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
@@ -84,6 +98,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   error: null,
   capability: null,
   queue: [],
+  candidates: [],
 
   reset: () => {
     set({
@@ -97,6 +112,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       error: null,
       capability: null,
       queue: [],
+      candidates: [],
     });
   },
 
@@ -118,6 +134,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
     set({ activeKbId: kbId, activeEntry: null, files: [] });
     await get().search(orgId, get().query);
     void get().loadQueue(orgId, kbId);
+    void get().loadCandidates(orgId, kbId);
     void get().loadCapability(orgId);
   },
 
@@ -314,6 +331,67 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       if (kbId) await get().loadQueue(orgId, kbId);
       void get().loadCapability(orgId);
       await get().search(orgId, get().query);
+    } catch (e) {
+      set({ error: errorMessage(e) });
+    }
+  },
+
+  ingestFile: async (orgId, kbId, path) => {
+    try {
+      const out = await invoke<TeamIngestOutcome>('enclave_kb_ingest_file', {
+        orgId,
+        kbId,
+        path,
+      });
+      await get().loadQueue(orgId, kbId);
+      void get().loadCapability(orgId);
+      if (!out.queued) await get().search(orgId, get().query);
+      return out;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return null;
+    }
+  },
+
+  generate: async (orgId, kbId, topic) => {
+    try {
+      await invoke<KbCandidateView>('enclave_kb_generate', { orgId, kbId, topic });
+      await get().loadCandidates(orgId, kbId);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  loadCandidates: async (orgId, kbId) => {
+    try {
+      const candidates = await invoke<KbCandidateView[]>('enclave_kb_candidate_list', {
+        orgId,
+        kbId,
+      });
+      set({ candidates });
+    } catch {
+      // 静默：候选面板为空即可
+    }
+  },
+
+  adoptCandidate: async (orgId, kbId, id) => {
+    try {
+      await invoke('enclave_kb_candidate_adopt', { orgId, kbId, candidateId: id });
+      await get().loadCandidates(orgId, kbId);
+      await get().search(orgId, get().query);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  rejectCandidate: async (orgId, kbId, id) => {
+    try {
+      await invoke('enclave_kb_candidate_reject', { orgId, kbId, candidateId: id });
+      await get().loadCandidates(orgId, kbId);
     } catch (e) {
       set({ error: errorMessage(e) });
     }

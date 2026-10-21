@@ -2865,6 +2865,11 @@ pub fn run() {
             commands::enclave_task::enclave_kb_queue_retry,
             commands::enclave_task::enclave_kb_queue_drop,
             commands::enclave_task::enclave_kb_ingest_manual,
+            commands::enclave_task::enclave_kb_ingest_file,
+            commands::enclave_task::enclave_kb_generate,
+            commands::enclave_task::enclave_kb_candidate_list,
+            commands::enclave_task::enclave_kb_candidate_adopt,
+            commands::enclave_task::enclave_kb_candidate_reject,
             commands::enclave_task::enclave_task_sediment_retry,
         ])
         .setup(move |app| {
