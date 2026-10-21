@@ -20,6 +20,9 @@ import type {
   UpdateTaskInput,
 } from '../types/enclave';
 
+/** 任务详情分组：概览 / 协作 / 交付 */
+export type TaskDetailTab = 'overview' | 'collab' | 'delivery';
+
 interface EnclaveTaskState {
   tasks: TaskView[];
   activeTaskId: string | null;
@@ -27,6 +30,8 @@ interface EnclaveTaskState {
   error: string | null;
   /** 本轮是否成功用当前账号刷新过身份（失败则禁用一切写操作） */
   identityVerified: boolean;
+  /** 外部请求打开某任务的指定分组（如通知跳转到「协作」）；由 TaskDetail 消费后清空 */
+  detailTabRequest: { taskId: string; tab: TaskDetailTab } | null;
   /** 当前选中任务的汇报、附件与过程记录 */
   reports: ReportView[];
   files: FileAssetView[];
@@ -39,6 +44,9 @@ interface EnclaveTaskState {
   reset: () => void;
   loadTasks: (orgId: string) => Promise<void>;
   selectTask: (taskId: string | null) => void;
+  /** 请求打开任务的指定分组（通知跳转用） */
+  requestDetailTab: (taskId: string, tab: TaskDetailTab) => void;
+  clearDetailTabRequest: () => void;
   createTask: (orgId: string, input: CreateTaskInput) => Promise<TaskView | null>;
   updateTask: (orgId: string, taskId: string, input: UpdateTaskInput) => Promise<boolean>;
   setStatus: (orgId: string, taskId: string, status: string) => Promise<boolean>;
@@ -106,6 +114,7 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
   feedback: {},
   /** 本轮是否成功用当前账号刷新过身份（失败则禁用一切写操作） */
   identityVerified: false,
+  detailTabRequest: null,
 
   reset: () => {
     set({
@@ -119,6 +128,7 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
       comments: [],
       feedback: {},
       identityVerified: false,
+      detailTabRequest: null,
     });
   },
 
@@ -153,7 +163,10 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
     }
   },
 
-  selectTask: (taskId) => set({ activeTaskId: taskId }),
+  selectTask: (taskId) => set({ activeTaskId: taskId, detailTabRequest: null }),
+
+  requestDetailTab: (taskId, tab) => set({ detailTabRequest: { taskId, tab } }),
+  clearDetailTabRequest: () => set({ detailTabRequest: null }),
 
   createTask: async (orgId, input) => {
     try {

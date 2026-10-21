@@ -13,7 +13,7 @@ import {
   Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Trash2,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
-import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
+import { useEnclaveTaskStore, type TaskDetailTab } from '../../stores/enclaveTaskStore';
 import { useAccountStore } from '../../stores/accountStore';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
@@ -754,7 +754,11 @@ function TaskDetail(props: {
   // 沟通层：任务讨论（与过程记录分开，任何非终态都可讨论）
   const comments = useEnclaveTaskStore((s) => s.comments);
   /** 详情分组：概览 / 协作 / 交付，避免单列承载全部内容 */
-  const [detailTab, setDetailTab] = useState<'overview' | 'collab' | 'delivery'>('overview');
+  const detailTabRequest = useEnclaveTaskStore((s) => s.detailTabRequest);
+  const [detailTab, setDetailTab] = useState<TaskDetailTab>('overview');
+  /** 通知跳转请求优先于本地选择；用户手动切换分组时清掉请求（见下方 tab 的 onClick） */
+  const activeTab: TaskDetailTab =
+    detailTabRequest?.taskId === task.id ? detailTabRequest.tab : detailTab;
   const [commentText, setCommentText] = useState('');
   const [replyTo, setReplyTo] = useState<TaskCommentView | null>(null);
   const [mentionIds, setMentionIds] = useState<string[]>([]);
@@ -1075,13 +1079,17 @@ function TaskDetail(props: {
           { key: 'collab', label: '协作', count: comments.length + (progress?.items.length ?? 0) },
           { key: 'delivery', label: '交付', count: reports.length },
         ] as const).map((t) => {
-          const on = detailTab === t.key;
+          const on = activeTab === t.key;
           return (
             <button
               key={t.key}
               role="tab"
               aria-selected={on}
-              onClick={() => setDetailTab(t.key)}
+              onClick={() => {
+                setDetailTab(t.key);
+                // 手动切分组后，通知跳转请求不再生效
+                useEnclaveTaskStore.getState().clearDetailTabRequest();
+              }}
               className="text-[11px] px-2.5 py-1 rounded-md flex items-center gap-1"
               style={{
                 backgroundColor: on ? 'var(--bg-content)' : 'transparent',
@@ -1127,7 +1135,7 @@ function TaskDetail(props: {
         </div>
       )}
 
-      {detailTab === 'overview' && (
+      {activeTab === 'overview' && (
         <>
       {/* 任务信息（属性 + 依赖都直接展示；修改时才出现表单） */}
       <div className="flex flex-col gap-2">
@@ -1463,7 +1471,7 @@ function TaskDetail(props: {
         </>
       )}
 
-      {detailTab === 'collab' && (
+      {activeTab === 'collab' && (
         <>
       {/* 沟通层：任务讨论（支持回复与 @ 提及；归档 / 作废后只读） */}
       <div
@@ -1629,7 +1637,7 @@ function TaskDetail(props: {
         </>
       )}
 
-      {detailTab === 'overview' && (
+      {activeTab === 'overview' && (
         <>
       {/* 汇总容器：状态由子任务派生，全部收敛后可汇总确认 */}
       {isContainer && (
@@ -1714,7 +1722,7 @@ function TaskDetail(props: {
       </fieldset>
 
       {/* 提交任务区：普通任务可写；拆分后的容器只读展示历史记录 */}
-      {detailTab === 'collab' && (!isContainer || hasExecutionHistory) && (
+      {activeTab === 'collab' && (!isContainer || hasExecutionHistory) && (
       <fieldset
         className="m-0 min-w-0 p-0"
         style={{
@@ -1889,7 +1897,7 @@ function TaskDetail(props: {
       )}
 
       {/* 完成汇报（普通任务可写；容器只读展示历史） */}
-      {detailTab === 'delivery' && (!isContainer || reports.length > 0) && (
+      {activeTab === 'delivery' && (!isContainer || reports.length > 0) && (
       <fieldset
         className="m-0 min-w-0 p-0"
         style={{

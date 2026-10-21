@@ -376,6 +376,8 @@ export function EnclaveKbPage() {
       if (ingestMode === 'file') {
         // 串行逐个提交：每个文件独立入队/独立整理，失败互不影响
         const paths = [...filePaths];
+        /** 本轮提交成功（入库或排队）的文件：提交后从清单移除 */
+        const donePaths = new Set<string>();
         let ok = 0;
         let queued = 0;
         let failed = 0;
@@ -389,9 +391,11 @@ export function EnclaveKbPage() {
             setFileOutcome((prev) => ({ ...prev, [p]: { status: 'error', message: '提交失败' } }));
           } else if (out.queued) {
             queued += 1;
+            donePaths.add(p);
             setFileOutcome((prev) => ({ ...prev, [p]: { status: 'queued' } }));
           } else {
             ok += 1;
+            donePaths.add(p);
             setFileOutcome((prev) => ({
               ...prev,
               [p]: { status: 'ok', message: `${out.entries} 条` },
@@ -400,6 +404,14 @@ export function EnclaveKbPage() {
           setFileProgress({ done: i + 1, total: paths.length });
         }
         setFileProgress(null);
+        // 已提交成功的文件从清单里移除（否则用户会误以为没提交成功）；失败的保留，便于重试
+        const failedPaths = paths.filter((p) => !donePaths.has(p));
+        setFilePaths(failedPaths);
+        setFileOutcome((prev) => {
+          const next: typeof prev = {};
+          for (const p of failedPaths) if (prev[p]) next[p] = prev[p];
+          return next;
+        });
         showToast(
           `已提交 ${paths.length} 个文件：入库 ${ok}，待整理 ${queued}${failed > 0 ? `，失败 ${failed}` : ''}`,
           failed > 0 ? 'error' : queued > 0 ? 'info' : 'success',

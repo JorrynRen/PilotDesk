@@ -81,10 +81,15 @@ export function NotificationBell({
       await useEnclaveOrgStore.getState().markNotificationsRead(orgId, [n.id]);
     }
     if (n.targetType === 'task' && n.targetId) {
+      // 先选中任务（selectTask 会清掉旧的分组请求），再按通知类型请求目标分组
       if (onOpenTask) {
         onOpenTask(n.targetId);
       } else {
         useEnclaveTaskStore.getState().selectTask(n.targetId);
+      }
+      // 讨论 / @ 提醒直达任务的「协作」分组（评论已从概览移到该分组）
+      if (n.kind === 'comment.new') {
+        useEnclaveTaskStore.getState().requestDetailTab(n.targetId, 'collab');
       }
       setOpen(false);
     }
@@ -157,10 +162,11 @@ export function NotificationBell({
               <button
                 key={n.id}
                 onClick={() => void openItem(n)}
-                className="w-full text-left px-2.5 py-2 flex flex-col gap-0.5"
+                className="pd-card-btn w-full px-2.5 py-2"
                 style={{
                   borderBottom: '1px solid var(--border)',
                   backgroundColor: n.readAt ? 'transparent' : 'var(--bg-tertiary)',
+                  gap: 2,
                 }}
               >
                 <div className="flex items-center gap-1.5">
