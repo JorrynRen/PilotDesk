@@ -223,7 +223,12 @@ export function EnclaveKbPage() {
   const [snipText, setSnipText] = useState('');
   const [ingestUrl, setIngestUrl] = useState('');
   const [ingestUrlName, setIngestUrlName] = useState('');
-  const [filePath, setFilePath] = useState('');
+  const [filePaths, setFilePaths] = useState<string[]>([]);
+  /** 每个文件的投喂结果（提交后保留，便于逐条看失败原因） */
+  const [fileOutcome, setFileOutcome] = useState<
+    Record<string, { status: 'ok' | 'queued' | 'error'; message?: string }>
+  >({});
+  const [fileProgress, setFileProgress] = useState<{ done: number; total: number } | null>(null);
   const [topic, setTopic] = useState('');
   const [picking, setPicking] = useState(false);
   const [ingesting, setIngesting] = useState(false);
@@ -238,7 +243,7 @@ export function EnclaveKbPage() {
     ingestMode === 'snippet'
       ? Boolean(snipText.trim())
       : ingestMode === 'file'
-        ? Boolean(filePath)
+        ? filePaths.length > 0
         : ingestMode === 'url'
           ? Boolean(ingestUrl.trim())
           : Boolean(topic.trim()) && !aiBlocked;
@@ -286,7 +291,10 @@ export function EnclaveKbPage() {
             setDragCount(0);
             if (over && p.paths.length > 0) {
               setIngestMode('file');
-              setFilePath(p.paths[0]);
+              setFilePaths((prev) => {
+                const seen = new Set(prev);
+                return [...prev, ...p.paths.filter((x) => !seen.has(x))];
+              });
             }
           }
         });
@@ -301,6 +309,23 @@ export function EnclaveKbPage() {
     };
   }, []);
 
+  const pickFiles = async () => {
+    setPicking(true);
+    try {
+      const picked = await openDialog({
+        multiple: true,
+        title: '选择要投喂到团队知识库的文件（可多选）',
+      });
+      const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
+      setFilePaths((prev) => {
+        const seen = new Set(prev);
+        return [...prev, ...list.filter((x) => !seen.has(x))];
+      });
+    } finally {
+      setPicking(false);
+    }
+  };
+
   const submitIngest = async () => {
     if (!activeOrgId || !activeKbId || ingesting) return;
     const st = useEnclaveKbStore.getState();
@@ -314,17 +339,48 @@ export function EnclaveKbPage() {
         }
         return;
       }
+      if (ingestMode === 'file') {
+        // 串行逐个提交：每个文件独立入队/独立整理，失败互不影响
+        const paths = [...filePaths];
+        let ok = 0;
+        let queued = 0;
+        let failed = 0;
+        setFileOutcome({});
+        setFileProgress({ done: 0, total: paths.length });
+        for (let i = 0; i < paths.length; i += 1) {
+          const p = paths[i];
+          const out = await st.ingestFile(activeOrgId, activeKbId, p);
+          if (!out) {
+            failed += 1;
+            setFileOutcome((prev) => ({ ...prev, [p]: { status: 'error', message: '提交失败' } }));
+          } else if (out.queued) {
+            queued += 1;
+            setFileOutcome((prev) => ({ ...prev, [p]: { status: 'queued' } }));
+          } else {
+            ok += 1;
+            setFileOutcome((prev) => ({
+              ...prev,
+              [p]: { status: 'ok', message: `${out.entries} 条` },
+            }));
+          }
+          setFileProgress({ done: i + 1, total: paths.length });
+        }
+        setFileProgress(null);
+        showToast(
+          `已提交 ${paths.length} 个文件：入库 ${ok}，待整理 ${queued}${failed > 0 ? `，失败 ${failed}` : ''}`,
+          failed > 0 ? 'error' : queued > 0 ? 'info' : 'success',
+        );
+        return;
+      }
       const out =
         ingestMode === 'snippet'
           ? await st.ingestSnippet(activeOrgId, activeKbId, snipTitle.trim(), snipText)
-          : ingestMode === 'file'
-            ? await st.ingestFile(activeOrgId, activeKbId, filePath)
-            : await st.ingestUrl(
-                activeOrgId,
-                activeKbId,
-                ingestUrl.trim(),
-                ingestUrlName.trim() || undefined,
-              );
+          : await st.ingestUrl(
+              activeOrgId,
+              activeKbId,
+              ingestUrl.trim(),
+              ingestUrlName.trim() || undefined,
+            );
       if (!out) return;
       if (out.queued) {
         showToast('已入库，等待主机模型整理（见「待整理」）', 'info');
@@ -335,7 +391,6 @@ export function EnclaveKbPage() {
       setSnipText('');
       setIngestUrl('');
       setIngestUrlName('');
-      setFilePath('');
     } finally {
       setIngesting(false);
     }
@@ -870,51 +925,127 @@ export function EnclaveKbPage() {
                   <>
                     <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
                       文件会先复制进主机团队文件根，再由模型整理成知识条目；没有模型时先排队。
-                      主机本机直接读路径，成员设备经局域网上传（单文件有大小上限）。
+                      支持多选：逐个提交，某个失败不影响其它文件。
                     </div>
-                    <div
-                      className="flex-1 min-h-[140px] flex flex-col items-center justify-center gap-1.5 py-4 rounded-lg text-xs"
-                      style={{
-                        border: `1px ${dragOver ? 'solid' : 'dashed'} ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
-                        backgroundColor: dragOver ? 'var(--accent-light)' : 'var(--bg-tertiary)',
-                        color: dragOver ? 'var(--accent)' : 'var(--text-tertiary)',
-                      }}
-                    >
-                      <FileUp size={18} />
-                      <div className="font-medium min-w-0 max-w-full truncate px-2">
-                        {dragOver
-                          ? dragCount > 1
-                            ? `松开即投喂 ${dragCount} 个文件（一次取第一个）`
-                            : '松开即投喂'
-                          : filePath
-                            ? filePath.split(/[\\/]/).pop()
-                            : '把文件拖到这里，或点击选择'}
-                      </div>
-                      <button
-                        onClick={async () => {
-                          setPicking(true);
-                          try {
-                            const picked = await openDialog({
-                              multiple: false,
-                              title: '选择要投喂到团队知识库的文件',
-                            });
-                            if (typeof picked === 'string') setFilePath(picked);
-                          } finally {
-                            setPicking(false);
-                          }
-                        }}
-                        disabled={picking || ingesting}
-                        className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                    {filePaths.length === 0 ? (
+                      <div
+                        className="flex-1 min-h-[140px] flex flex-col items-center justify-center gap-1.5 py-4 rounded-lg text-xs"
                         style={{
-                          color: 'var(--text-secondary)',
-                          backgroundColor: 'var(--bg-primary)',
-                          border: '1px solid var(--border)',
+                          border: `1px ${dragOver ? 'solid' : 'dashed'} ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
+                          backgroundColor: dragOver ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                          color: dragOver ? 'var(--accent)' : 'var(--text-tertiary)',
                         }}
                       >
-                        {picking ? <Loader2 size={11} className="animate-spin" /> : <FolderOpen size={11} />}
-                        选择文件
-                      </button>
-                    </div>
+                        <FileUp size={18} />
+                        <div className="font-medium min-w-0 max-w-full truncate px-2">
+                          {dragOver
+                            ? `松开即加入清单${dragCount > 1 ? `（${dragCount} 个）` : ''}`
+                            : '把文件拖到这里，或点击选择'}
+                        </div>
+                        <button
+                          onClick={() => void pickFiles()}
+                          disabled={picking || ingesting}
+                          className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                          style={{
+                            color: 'var(--text-secondary)',
+                            backgroundColor: 'var(--bg-primary)',
+                            border: '1px solid var(--border)',
+                          }}
+                        >
+                          {picking ? <Loader2 size={11} className="animate-spin" /> : <FolderOpen size={11} />}
+                          选择文件
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div
+                          className="shrink-0 flex items-center justify-between text-[10px]"
+                          style={{ color: 'var(--text-tertiary)' }}
+                        >
+                          <span>
+                            {fileProgress
+                              ? `处理中 ${fileProgress.done}/${fileProgress.total}`
+                              : `待投喂 ${filePaths.length} 个`}
+                          </span>
+                          <button
+                            className="pd-btn"
+                            disabled={ingesting}
+                            onClick={() => {
+                              setFilePaths([]);
+                              setFileOutcome({});
+                            }}
+                          >
+                            清空
+                          </button>
+                        </div>
+                        <div className="flex-1 min-h-0 overflow-y-auto space-y-1">
+                          {filePaths.map((p) => {
+                            const res = fileOutcome[p];
+                            const name = p.split(/[\\/]/).pop() ?? p;
+                            return (
+                              <div
+                                key={p}
+                                className="flex items-center gap-2 px-2 py-1 rounded text-[11px]"
+                                style={{
+                                  backgroundColor: 'var(--bg-content)',
+                                  border: '1px solid var(--border)',
+                                }}
+                              >
+                                <FileText size={11} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+                                <span className="flex-1 min-w-0 truncate" title={p}>
+                                  {name}
+                                </span>
+                                {res && (
+                                  <span
+                                    className="shrink-0 text-[10px]"
+                                    style={{
+                                      color:
+                                        res.status === 'error'
+                                          ? 'var(--status-danger)'
+                                          : res.status === 'queued'
+                                            ? 'var(--status-warning)'
+                                            : 'var(--status-success, var(--accent))',
+                                    }}
+                                  >
+                                    {res.status === 'error'
+                                      ? '失败'
+                                      : res.status === 'queued'
+                                        ? '待整理'
+                                        : `入库 ${res.message ?? ''}`}
+                                  </span>
+                                )}
+                                <button
+                                  disabled={ingesting}
+                                  style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}
+                                  title="移出清单"
+                                  onClick={() => setFilePaths((prev) => prev.filter((x) => x !== p))}
+                                >
+                                  <X size={10} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div
+                          className="shrink-0 flex items-center justify-center gap-1 py-2 rounded-lg text-[10px]"
+                          style={{
+                            border: `1px ${dragOver ? 'solid' : 'dashed'} ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
+                            backgroundColor: dragOver ? 'var(--accent-light)' : 'transparent',
+                            color: dragOver ? 'var(--accent)' : 'var(--text-tertiary)',
+                          }}
+                        >
+                          <FileUp size={12} />
+                          {dragOver ? '松开即加入清单' : '继续拖入，或'}
+                          <button
+                            className="pd-btn"
+                            onClick={() => void pickFiles()}
+                            disabled={picking || ingesting}
+                          >
+                            选择文件
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </>
                 ) : ingestMode === 'ai' ? (
                   <>
@@ -982,6 +1113,7 @@ export function EnclaveKbPage() {
                         : modelBlocked
                           ? '提交入库（待整理）'
                           : '提交整理'}
+                      {ingestMode === 'file' && filePaths.length > 0 ? `（${filePaths.length}）` : ''}
                     </>
                   )}
                 </button>
