@@ -303,10 +303,13 @@ export function TaskWorkspace() {
                 disabled={!activeOrgId}
                 className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
                 style={{
-                  backgroundColor: 'var(--bg-tertiary)',
-                  color: 'var(--text-secondary)',
-                  border: '1px solid var(--border)',
+                  // 主操作按钮：与「新建工作流」同口径用主题色实心，
+                  // 原来用 bg-tertiary + text-secondary，空态下看起来像禁用按钮
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  border: '1px solid var(--accent)',
                   opacity: activeOrgId ? 1 : 0.5,
+                  cursor: activeOrgId ? 'pointer' : 'not-allowed',
                 }}
               >
                 <Plus size={12} /> 新建任务
