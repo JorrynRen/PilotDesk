@@ -2361,7 +2361,11 @@ fn compute_diff(old: &str, new: &str) -> String {
     out
 }
 
-/// 初始化后端日志：**同时**写 stdout 与 `<配置根>/logs/agent.log`。
+/// 初始化后端日志：**同时**写 stdout 与 `<配置根>/logs/app.log`。
+///
+/// 文件名是 `app.log` 而不是 `agent.log`：这里接的是 `env_logger` 全局 logger，
+/// 落盘的是**整个后端**的日志（agent / enclave / workflow / account …），
+/// 早期只用于 Agent 回合诊断时留下的旧名字已统一改掉。
 ///
 /// 为什么必须落盘：此前日志只走 stdout，Windows release 构建是
 /// `windows_subsystem = "windows"`，**根本没有可见终端**；一旦出现问题（如
@@ -2387,16 +2391,33 @@ pub fn init_logging() {
     }
 }
 
-/// 打开日志文件（`<配置根>/logs/agent.log`），超过 5MB 先滚动一份 `.prev`。
+/// 日志文件名（滚动产物为 `app.log.1` … `app.log.N`）
+const LOG_FILE_NAME: &str = "app.log";
+/// 单个日志文件上限：超过即滚动
+const LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+/// 滚动保留份数（不含当前文件）
+const LOG_BACKUPS: usize = 3;
+
+/// 打开日志文件（`<配置根>/logs/app.log`），超过 5MB 先滚动，保留 3 份历史。
 fn open_log_file() -> Option<(std::path::PathBuf, std::fs::File)> {
     let dir = crate::utils::paths::app_root_dir().join("logs");
     if std::fs::create_dir_all(&dir).is_err() {
         return None;
     }
-    let path = dir.join("agent.log");
-    // 简单滚动：保留上一份即可满足"复现后翻上次现场"的需求，不做完整轮转
-    if std::fs::metadata(&path).map(|m| m.len() > 5 * 1024 * 1024).unwrap_or(false) {
-        let _ = std::fs::rename(&path, dir.join("agent.log.prev"));
+    let path = dir.join(LOG_FILE_NAME);
+    let too_big = std::fs::metadata(&path)
+        .map(|m| m.len() > LOG_MAX_BYTES)
+        .unwrap_or(false);
+    if too_big {
+        // app.log.N 最旧，先删；再依次把 .N-1 → .N、…、app.log → app.log.1
+        let _ = std::fs::remove_file(dir.join(format!("{}.{}", LOG_FILE_NAME, LOG_BACKUPS)));
+        for i in (1..LOG_BACKUPS).rev() {
+            let from = dir.join(format!("{}.{}", LOG_FILE_NAME, i));
+            if from.exists() {
+                let _ = std::fs::rename(&from, dir.join(format!("{}.{}", LOG_FILE_NAME, i + 1)));
+            }
+        }
+        let _ = std::fs::rename(&path, dir.join(format!("{}.1", LOG_FILE_NAME)));
     }
     std::fs::OpenOptions::new()
         .create(true)
