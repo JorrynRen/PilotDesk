@@ -873,7 +873,7 @@ export function EnclaveKbPage() {
                       主机本机直接读路径，成员设备经局域网上传（单文件有大小上限）。
                     </div>
                     <div
-                      className="flex flex-col items-center justify-center gap-1.5 py-4 rounded-lg text-xs"
+                      className="flex-1 min-h-[140px] flex flex-col items-center justify-center gap-1.5 py-4 rounded-lg text-xs"
                       style={{
                         border: `1px ${dragOver ? 'solid' : 'dashed'} ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
                         backgroundColor: dragOver ? 'var(--accent-light)' : 'var(--bg-tertiary)',
