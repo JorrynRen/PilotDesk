@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Library,
@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { TitleBar, StatusBar } from '../components/layout';
 import { TagEditor } from '../components/knowledge/TagEditor';
 import { Select } from '../components/common/Select';
@@ -37,6 +38,7 @@ import { useAccountStore } from '../stores/accountStore';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
 import { showToast } from '../utils/toast';
 import type { EnclaveKbQueueItem, KbEntryView } from '../types/enclave';
+import type { IngestCapability } from '../types/knowledge';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
 const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
@@ -225,7 +227,13 @@ export function EnclaveKbPage() {
   const [topic, setTopic] = useState('');
   const [picking, setPicking] = useState(false);
   const [ingesting, setIngesting] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [dragCount, setDragCount] = useState(0);
+  /** 本机模型（AI 生成用）：与团队加工能力分开判 —— 生成只把主题发给模型，不需要主机能力 */
+  const [localCap, setLocalCap] = useState<IngestCapability | null>(null);
+  const ingestPanelRef = useRef<HTMLDivElement>(null);
   const modelBlocked = capability !== null && capability.canProcess === 'none';
+  const aiBlocked = localCap === null || localCap.canProcess === 'none';
   const canSubmitIngest =
     ingestMode === 'snippet'
       ? Boolean(snipText.trim())
@@ -233,7 +241,7 @@ export function EnclaveKbPage() {
         ? Boolean(filePath)
         : ingestMode === 'url'
           ? Boolean(ingestUrl.trim())
-          : Boolean(topic.trim()) && !modelBlocked;
+          : Boolean(topic.trim()) && !aiBlocked;
 
   useEffect(() => {
     if (tab !== 'ingest' || !activeOrgId || !activeKbId) return;
@@ -241,7 +249,57 @@ export function EnclaveKbPage() {
     void st.loadCapability(activeOrgId);
     void st.loadQueue(activeOrgId, activeKbId);
     void st.loadCandidates(activeOrgId, activeKbId);
+    // AI 生成用本机模型：单独探测（与团队加工能力不是一回事）
+    void invoke<IngestCapability>('kb_ingest_capability')
+      .then(setLocalCap)
+      .catch(() => setLocalCap(null));
   }, [tab, activeOrgId, activeKbId]);
+
+  /** 拖拽投喂：拖入即切到文件模式；只认投喂面板内的落点 */
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    const isOverPanel = (x: number, y: number): boolean => {
+      const el = ingestPanelRef.current;
+      if (!el) return false;
+      const scale = window.devicePixelRatio || 1;
+      const r = el.getBoundingClientRect();
+      return x / scale >= r.left && x / scale <= r.right && y / scale >= r.top && y / scale <= r.bottom;
+    };
+    (async () => {
+      try {
+        unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+          const p = event.payload;
+          if (p.type === 'enter') {
+            const over = isOverPanel(p.position.x, p.position.y);
+            setDragOver(over);
+            setDragCount(over ? p.paths.length : 0);
+            if (over) setIngestMode('file');
+          } else if (p.type === 'over') {
+            setDragOver(isOverPanel(p.position.x, p.position.y));
+          } else if (p.type === 'leave') {
+            setDragOver(false);
+            setDragCount(0);
+          } else if (p.type === 'drop') {
+            const over = isOverPanel(p.position.x, p.position.y);
+            setDragOver(false);
+            setDragCount(0);
+            if (over && p.paths.length > 0) {
+              setIngestMode('file');
+              setFilePath(p.paths[0]);
+            }
+          }
+        });
+        if (disposed) unlisten();
+      } catch (e) {
+        console.warn('[EnclaveKbPage] 注册拖拽监听失败:', e);
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   const submitIngest = async () => {
     if (!activeOrgId || !activeKbId || ingesting) return;
@@ -704,6 +762,7 @@ export function EnclaveKbPage() {
           {tab === 'ingest' && (
             <div className="flex-1 min-h-0 flex overflow-hidden">
               <div
+                ref={ingestPanelRef}
                 className="w-[400px] shrink-0 flex flex-col gap-2 p-3 overflow-y-auto"
                 style={{ backgroundColor: 'var(--bg-side)' }}
               >
@@ -757,14 +816,18 @@ export function EnclaveKbPage() {
                     { key: 'ai', label: 'AI 生成', icon: Wand2 },
                   ] as const).map((m) => {
                     const on = ingestMode === m.key;
-                    const blocked = m.key === 'ai' && modelBlocked;
+                    const blocked = m.key === 'ai' && aiBlocked;
                     const Icon = m.icon;
                     return (
                       <button
                         key={m.key}
                         onClick={() => setIngestMode(m.key)}
                         disabled={blocked}
-                        title={blocked ? 'AI 生成需要可用模型' : undefined}
+                        title={
+                          blocked
+                            ? `AI 生成需要本机可用模型${localCap?.reason ? `：${localCap.reason}` : ''}`
+                            : undefined
+                        }
                         className="flex-1 flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[11px]"
                         style={{
                           backgroundColor: on ? 'var(--bg-primary)' : 'transparent',
@@ -812,14 +875,20 @@ export function EnclaveKbPage() {
                     <div
                       className="flex flex-col items-center justify-center gap-1.5 py-4 rounded-lg text-xs"
                       style={{
-                        border: '1px dashed var(--border)',
-                        backgroundColor: 'var(--bg-tertiary)',
-                        color: 'var(--text-tertiary)',
+                        border: `1px ${dragOver ? 'solid' : 'dashed'} ${dragOver ? 'var(--accent)' : 'var(--border)'}`,
+                        backgroundColor: dragOver ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                        color: dragOver ? 'var(--accent)' : 'var(--text-tertiary)',
                       }}
                     >
                       <FileUp size={18} />
                       <div className="font-medium min-w-0 max-w-full truncate px-2">
-                        {filePath ? filePath.split(/[\\/]/).pop() : '选择一个文件'}
+                        {dragOver
+                          ? dragCount > 1
+                            ? `松开即投喂 ${dragCount} 个文件（一次取第一个）`
+                            : '松开即投喂'
+                          : filePath
+                            ? filePath.split(/[\\/]/).pop()
+                            : '把文件拖到这里，或点击选择'}
                       </div>
                       <button
                         onClick={async () => {
@@ -852,6 +921,11 @@ export function EnclaveKbPage() {
                     <div className="text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
                       输入主题或要求，由模型生成一条知识草稿。草稿先落「待确认」，核对后采纳才进库；
                       生成只发送主题，不携带团队数据。
+                      <div className="mt-1" style={{ color: aiBlocked ? 'var(--status-warning)' : 'var(--text-secondary)' }}>
+                        {aiBlocked
+                          ? `当前无可用模型${localCap?.reason ? `（${localCap.reason}）` : ''}：请到「设置 › 知识库」配置模型，或先配置本地 Provider。`
+                          : `将使用本机模型：${localCap?.model || localCap?.providerName || '-'}`}
+                      </div>
                     </div>
                     <textarea
                       value={topic}
