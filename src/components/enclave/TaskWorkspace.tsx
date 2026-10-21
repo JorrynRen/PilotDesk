@@ -303,11 +303,11 @@ export function TaskWorkspace() {
                 disabled={!activeOrgId}
                 className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
                 style={{
-                  // 主操作按钮：与「新建工作流」同口径用主题色实心，
-                  // 原来用 bg-tertiary + text-secondary，空态下看起来像禁用按钮
-                  backgroundColor: 'var(--accent)',
-                  color: '#fff',
-                  border: '1px solid var(--accent)',
+                  // 与相邻的「本机文件根 / 团队通知」同口径：未展开用透明底，
+                  // 展开时才加 bg-tertiary。原来恒用 bg-tertiary，空态下看起来一直是被选中/按下态。
+                  backgroundColor: newOpen ? 'var(--bg-tertiary)' : 'transparent',
+                  color: 'var(--text-secondary)',
+                  border: '1px solid var(--border)',
                   opacity: activeOrgId ? 1 : 0.5,
                   cursor: activeOrgId ? 'pointer' : 'not-allowed',
                 }}
