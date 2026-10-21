@@ -180,9 +180,6 @@ function describeCron(expr: string): string {
   return `${fmtTime(hour, min)}`;
 }
 
-/** 仍在进行中的实例状态（用于卡片上的"运行中"标记） */
-const ACTIVE_INSTANCE_STATUSES = ['pending', 'running', 'paused'];
-
 /** 已运行时长（卡片上的"运行中 · 12s"） */
 function formatElapsed(startedAt?: number | null): string {
   if (!startedAt) return '进行中';
@@ -1011,11 +1008,26 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
     setDefPage(totalDefPages);
   }
 
-  /** 每个定义当前是否有正在进行的执行（卡片上的"运行中"标记） */
+  /** 每个定义当前**真的在跑**的执行（卡片上的"运行中"标记；paused 不算） */
   const runningByDef = useMemo(() => {
     const map = new Map<string, WorkflowInstance>();
     for (const inst of instances) {
-      if (ACTIVE_INSTANCE_STATUSES.includes(inst.status) && !map.has(inst.definitionId)) {
+      if ((inst.status === 'running' || inst.status === 'pending') && !map.has(inst.definitionId)) {
+        map.set(inst.definitionId, inst);
+      }
+    }
+    return map;
+  }, [instances]);
+
+  /**
+   * 已暂停的执行：进程退出后的遗留记录、或停在人工输入等待上。
+   * 单独展示「已暂停」，不能与"运行中"混为一谈 —— 否则应用重启后
+   * 任务会永远显示运行中，而输入提示已经无法重现。
+   */
+  const pausedByDef = useMemo(() => {
+    const map = new Map<string, WorkflowInstance>();
+    for (const inst of instances) {
+      if (inst.status === 'paused' && !map.has(inst.definitionId)) {
         map.set(inst.definitionId, inst);
       }
     }
@@ -1395,6 +1407,18 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                               运行中 · {formatElapsed(runningByDef.get(def.id)?.startedAt)}
                             </button>
                           )}
+                          {/* 已暂停 ≠ 运行中：进程退出后的遗留记录 / 等待人工输入，需要用户继续或停止 */}
+                          {!runningByDef.has(def.id) && pausedByDef.has(def.id) && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setActiveTab('instances'); }}
+                              className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full transition-opacity hover:opacity-80"
+                              style={{ backgroundColor: 'rgba(245,158,11,0.12)', color: '#F59E0B' }}
+                              title="已暂停：执行进程已退出或停在人工输入，可到「执行实例」继续补全或停止"
+                            >
+                              <Clock size={10} />
+                              已暂停
+                            </button>
+                          )}
                           {instCount > 0 && (
                             <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded" style={{
                               backgroundColor: 'rgba(59,130,246,0.1)',
@@ -1407,7 +1431,8 @@ export function WorkflowPage({ embedded }: WorkflowPageProps) {
                         </div>
                         <div className="flex items-center gap-1">
                           {(() => {
-                            // 有实例在跑就变「停止」：同一位置一个按钮表达"开始/结束这件事"
+                            // 只有**真在跑**才把运行按钮换成「停止」；paused 是已经停下来的状态，
+                            // 这里应保留「运行」，停止/补全在「执行实例」里操作。
                             const runningInst = runningByDef.get(def.id);
                             if (runningInst) {
                               const stopping = stoppingDefId === def.id;

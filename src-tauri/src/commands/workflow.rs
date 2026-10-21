@@ -677,7 +677,16 @@ pub async fn cancel_workflow(
         .forget_execution(&execution_id);
     let is_running = crate::workflow::events::derive_instance(&conn, &execution_id)
         .map_err(|e| AppError::Db(format!("查询失败: {}", e)))?
-        .map(|inst| inst.status == crate::workflow::WorkflowInstanceStatus::Running)
+        .map(|inst| {
+            matches!(
+                inst.status,
+                // paused 也要能停：进程退出后遗留的运行中实例会在启动时收敛为 paused，
+                // 若这里只认 Running，用户点「停止」会静默失败、实例永远停在那儿。
+                crate::workflow::WorkflowInstanceStatus::Running
+                    | crate::workflow::WorkflowInstanceStatus::Paused
+                    | crate::workflow::WorkflowInstanceStatus::Pending
+            )
+        })
         .unwrap_or(false);
     if !is_running {
         log::info!(

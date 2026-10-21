@@ -1273,6 +1273,37 @@ pub fn list_recoverable_executions(
     Ok(recoverable)
 }
 
+/// 收敛**进程退出后遗留**的「运行中」实例：标记为「已暂停」。
+///
+/// 进程内的运行登记表是"此刻真在跑"的唯一权威（与 `get_pending_human_inputs` 同一判据）。
+/// 应用重启后，事件日志里仍是 running 的实例不会再有超时 / 完成事件来收口——典型表现：
+/// 卡在人工输入的节点一直"暂停"，任务却永远显示"运行中"，而输入提示因为按活登记表过滤
+/// 再也无法重现。这里在启动阶段把它们如实标成 paused。
+///
+/// 用 paused 而不是 failed：既表示"没有在跑"，又保留「断点补全」的恢复入口。
+pub fn reconcile_stale_executions(
+    conn: &Connection,
+    live: &std::collections::HashSet<String>,
+) -> Result<usize, AppError> {
+    let mut count = 0usize;
+    for inst in derive_instances(conn)? {
+        if inst.status != WorkflowInstanceStatus::Running || live.contains(&inst.id) {
+            continue;
+        }
+        let event = serde_json::json!({
+            "executionId": inst.id,
+            "status": "paused",
+            "completionRate": inst.completion_rate,
+            "skippedCount": inst.skipped_count,
+            "errorMessage": "执行进程已退出（应用重启或异常终止），任务已暂停：可断点补全或终止",
+            "timestamp": crate::utils::now(),
+        });
+        crate::eventlog::append_workflow_event(conn, &inst.id, "execution/status", &event, true)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 /// 待人工输入（running 的 interact 节点；prompt/input_type 优先事件内完整 input，
 /// 事件缺失时回退到定义参数）。
 pub fn get_pending_human_inputs(

@@ -47,6 +47,8 @@ pub fn task_allows(role: TaskRole, action: Action) -> bool {
         Action::TaskEdit => matches!(role, TaskRole::Creator | TaskRole::Assignee),
         Action::TaskAssign => role == TaskRole::Creator,
         Action::TaskStatus => matches!(role, TaskRole::Creator | TaskRole::Assignee),
+        // 硬删除是不可逆操作：创建者本人，或组织 owner/admin（Manager）
+        Action::TaskDelete => matches!(role, TaskRole::Creator | TaskRole::Manager),
         Action::ReportSubmit | Action::FileUpload => matches!(
             role,
             TaskRole::Creator | TaskRole::Assignee | TaskRole::Collaborator
@@ -272,9 +274,11 @@ fn cascade_cancel_children(
             params![id, org_id, STATUS_CANCELLED, now],
         )
         .map_err(|e| format!("级联作废子任务失败：{}", e))?;
-        // 子任务可能曾确认过产出、恢复汇报后又被放弃：一并撤下它的知识条目
-        if let Err(e) = crate::enclave::knowledge::withdraw_task_output(conn, org_id, &id) {
-            log::warn!("[Enclave] 级联作废时撤下知识条目失败：{}", e);
+        // 子任务可能曾确认过产出、恢复汇报后又被放弃：保留条目，只标记「来源任务已作废」
+        if let Err(e) =
+            crate::enclave::knowledge::mark_task_output_cancelled(conn, org_id, &id)
+        {
+            log::warn!("[Enclave] 级联作废时标记知识条目失败：{}", e);
         }
     }
     Ok(())
@@ -613,6 +617,15 @@ fn to_view(
         if task_allows(role, a) {
             actions.push(a.as_str().to_string());
         }
+    }
+    // 删除对「待办 / 已作废 / 已归档」开放：待办还没有任何协作产出，让用户先开始再作废
+    // 纯属无效操作；进行中 / 待确认里已有他人内容，仍不开放。
+    if matches!(
+        r.status.as_str(),
+        STATUS_PENDING | STATUS_CANCELLED | STATUS_ARCHIVED
+    ) && task_allows(role, Action::TaskDelete)
+    {
+        actions.push(Action::TaskDelete.as_str().to_string());
     }
     TaskView {
         id: r.id.clone(),
@@ -1154,15 +1167,232 @@ pub fn set_status(
             _ => {}
         }
     }
-    // 作废 = 该任务的产出不再算数：从团队知识库撤下条目（派生动作，失败不阻塞作废）
+    // 作废 = 该任务不再推进：知识条目保留，只标记「来源任务已作废」（派生动作，失败不阻塞作废）
     if to == STATUS_CANCELLED {
-        if let Err(e) = crate::enclave::knowledge::withdraw_task_output(conn, org_id, task_id) {
-            log::warn!("[Enclave] 作废任务撤下知识条目失败：{}", e);
+        if let Err(e) =
+            crate::enclave::knowledge::mark_task_output_cancelled(conn, org_id, task_id)
+        {
+            log::warn!("[Enclave] 作废任务标记知识条目失败：{}", e);
         }
     }
     // 子任务状态变化 → 父容器状态派生
     sync_parent_container(conn, org_id, task_id)?;
     get_task(conn, org_id, task_id, actor)
+}
+
+/// 硬删除任务及其全部记录。
+///
+/// 对**待办 / 已作废 / 已归档**开放：待办任务还没有任何协作产出，强迫用户先「开始 → 作废」
+/// 再删除都是无效操作；进行中 / 待确认的任务里还有他人的协作内容，误删不可恢复。
+/// 权限：任务创建者，或组织 owner / admin（解析为 `TaskRole::Manager`）。
+///
+/// 删除范围：任务本体、子任务（须同为待办 / 已作废 / 已归档）、过程记录、讨论、
+/// 完成汇报与反馈、附件挂载、资源角色、定向通知。
+///
+/// **知识库不入删除范围**：已沉淀的知识条目与交付物保留，只把 `source_ref` 脱钩
+/// （任务已不存在）并在 metadata 里留下来源任务快照 —— 任务删除清的是协作过程，
+/// 不该顺带销毁团队已经提炼出来的知识。文件原件同理不删。
+pub fn delete_task(
+    conn: &Connection,
+    org_id: &str,
+    actor: &str,
+    task_id: &str,
+) -> Result<(), String> {
+    let row = load_task(conn, org_id, task_id)?;
+    let role = actor_task_role(conn, org_id, task_id, actor)?;
+    if !task_allows(role, Action::TaskDelete) {
+        return Err("只有任务创建者或组织管理员可以删除任务".to_string());
+    }
+    if !matches!(
+        row.status.as_str(),
+        STATUS_PENDING | STATUS_CANCELLED | STATUS_ARCHIVED
+    ) {
+        return Err(format!(
+            "只能删除待办 / 已作废 / 已归档的任务（当前：{}）",
+            status_label(&row.status)
+        ));
+    }
+    let children = child_rows(conn, org_id, task_id)?;
+    // 子任务可以是待办（尚未产生协作内容），但进行中 / 待确认 / 已完成的不连带删除
+    if children.iter().any(|(_, s)| {
+        !matches!(
+            s.as_str(),
+            STATUS_PENDING | STATUS_CANCELLED | STATUS_ARCHIVED
+        )
+    }) {
+        return Err("仍有进行中 / 待确认 / 已完成的子任务，请先处理".to_string());
+    }
+
+    let kb_id = crate::enclave::knowledge::implicit_kb_id(org_id);
+    // 删除前先把标题留好：任务行删掉后，知识条目仍要能显示「来自哪个任务」
+    let mut targets: Vec<(String, String)> = vec![(task_id.to_string(), row.title.clone())];
+    for (cid, _) in &children {
+        let child_title: String = conn
+            .query_row(
+                "SELECT title FROM org_tasks WHERE id = ?1 AND org_id = ?2",
+                params![cid, org_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("读取子任务标题失败：{}", e))?;
+        targets.push((cid.clone(), child_title));
+    }
+    let ids: Vec<String> = targets.iter().map(|(id, _)| id.clone()).collect();
+
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("开启删除事务失败：{}", e))?;
+    for id in &ids {
+        tx.execute(
+            "DELETE FROM report_feedback
+              WHERE report_id IN (SELECT id FROM task_reports WHERE task_id = ?1)",
+            params![id],
+        )
+        .map_err(|e| format!("删除汇报反馈失败：{}", e))?;
+        tx.execute("DELETE FROM task_reports WHERE task_id = ?1", params![id])
+            .map_err(|e| format!("删除完成汇报失败：{}", e))?;
+        tx.execute("DELETE FROM task_comments WHERE task_id = ?1", params![id])
+            .map_err(|e| format!("删除过程记录 / 讨论失败：{}", e))?;
+        tx.execute(
+            "DELETE FROM task_file_links WHERE task_id = ?1",
+            params![id],
+        )
+        .map_err(|e| format!("删除附件挂载失败：{}", e))?;
+        // v5 及以前的历史表，不再读写，随任务一起清理
+        tx.execute("DELETE FROM task_files WHERE task_id = ?1", params![id])
+            .map_err(|e| format!("删除历史附件记录失败：{}", e))?;
+        tx.execute(
+            "DELETE FROM notifications
+              WHERE org_id = ?1 AND target_type = 'task' AND target_id = ?2",
+            params![org_id, id],
+        )
+        .map_err(|e| format!("删除任务通知失败：{}", e))?;
+        tx.execute(
+            "DELETE FROM resource_roles
+              WHERE org_id = ?1 AND resource_type = 'task' AND resource_id = ?2",
+            params![org_id, id],
+        )
+        .map_err(|e| format!("删除任务角色例外失败：{}", e))?;
+        // 知识条目与交付物**保留**：任务删除只清协作记录，沉淀的知识继续留在知识库。
+        // 只把 source_ref 脱钩（任务已不存在），前端据此隐藏「查看来源任务」。
+        tx.execute(
+            "UPDATE knowledge_base_memories
+                SET source_ref = '', stale = 0
+              WHERE knowledge_base_id = ?1 AND memory_id = ?2",
+            params![kb_id, format!("task:{}", id)],
+        )
+        .map_err(|e| format!("知识条目脱钩失败：{}", e))?;
+        tx.execute(
+            "DELETE FROM org_tasks WHERE id = ?1 AND org_id = ?2",
+            params![id, org_id],
+        )
+        .map_err(|e| format!("删除任务失败：{}", e))?;
+    }
+    tx.commit().map_err(|e| format!("提交删除事务失败：{}", e))?;
+
+    // 知识条目与任务脱钩后的溯源快照（任务行已删，标题只能从删除前留存）
+    if let Err(e) = mark_detached_knowledge(conn, org_id, &targets) {
+        log::warn!("[Enclave] 任务删除后标记知识条目来源失败：{}", e);
+    }
+    // 其它任务的前置依赖里去掉被删 id，避免留下悬空引用
+    if let Err(e) = cleanup_blocked_by(conn, org_id, &ids) {
+        log::warn!("[Enclave] 删除任务后清理前置依赖失败：{}", e);
+    }
+    // 删的是子任务 → 父容器按剩余子任务重新派生状态
+    if let Some(parent) = row.parent_task_id.as_deref().filter(|s| !s.is_empty()) {
+        if let Err(e) = sync_container_status(conn, org_id, parent) {
+            log::warn!("[Enclave] 删除子任务后重算父容器失败：{}", e);
+        }
+    }
+    Ok(())
+}
+
+/// 任务删除后，把来源任务信息降级为 metadata 快照。
+///
+/// 条目本身保留（`source_ref` 已置空），这里补上 `sourceTaskId / sourceTaskTitle /
+/// sourceTaskDeletedAt`，界面上仍能看出这条知识来自哪个已删除的任务。
+fn mark_detached_knowledge(
+    conn: &Connection,
+    org_id: &str,
+    tasks: &[(String, String)],
+) -> Result<(), String> {
+    let kb_id = crate::enclave::knowledge::implicit_kb_id(org_id);
+    let now = chrono::Utc::now().timestamp();
+    for (task_id, title) in tasks {
+        let memory_id = format!("task:{}", task_id);
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT metadata FROM knowledge_base_memories
+                  WHERE knowledge_base_id = ?1 AND memory_id = ?2",
+                params![kb_id, memory_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询知识条目标记失败：{}", e))?;
+        let Some(raw) = raw else { continue };
+        let mut meta: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+        if !meta.is_object() {
+            meta = serde_json::json!({});
+        }
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("sourceTaskId".into(), serde_json::json!(task_id));
+            obj.insert("sourceTaskTitle".into(), serde_json::json!(title));
+            obj.insert("sourceTaskDeletedAt".into(), serde_json::json!(now));
+        }
+        conn.execute(
+            "UPDATE knowledge_base_memories SET metadata = ?3
+              WHERE knowledge_base_id = ?1 AND memory_id = ?2",
+            params![kb_id, memory_id, meta.to_string()],
+        )
+        .map_err(|e| format!("更新知识条目标记失败：{}", e))?;
+    }
+    Ok(())
+}
+
+/// 从其它任务的 `blocked_by` 中移除已删除的任务 id。
+fn cleanup_blocked_by(
+    conn: &Connection,
+    org_id: &str,
+    removed: &[String],
+) -> Result<(), String> {
+    let rows: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, blocked_by FROM org_tasks
+                  WHERE org_id = ?1 AND blocked_by <> '[]'",
+            )
+            .map_err(|e| format!("查询任务依赖失败：{}", e))?;
+        let mapped = stmt
+            .query_map(params![org_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| format!("查询任务依赖失败：{}", e))?;
+        mapped
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| format!("读取任务依赖失败：{}", e))?
+    };
+    for (id, raw) in rows {
+        let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(&raw)
+        else {
+            continue;
+        };
+        let kept: Vec<serde_json::Value> = items
+            .into_iter()
+            .filter(|v| {
+                v.as_str()
+                    .map(|s| !removed.iter().any(|r| r == s))
+                    .unwrap_or(true)
+            })
+            .collect();
+        let next = serde_json::Value::Array(kept).to_string();
+        if next != raw {
+            conn.execute(
+                "UPDATE org_tasks SET blocked_by = ?3, updated_at = ?4
+                  WHERE id = ?1 AND org_id = ?2",
+                params![id, org_id, next, chrono::Utc::now().timestamp()],
+            )
+            .map_err(|e| format!("清理任务依赖失败：{}", e))?;
+        }
+    }
+    Ok(())
 }
 
 /// 设置前置依赖（先校验 + 环检测，再落库）。

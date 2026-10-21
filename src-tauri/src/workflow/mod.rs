@@ -12,7 +12,7 @@ pub mod events;
 pub use events::{
     get_execution_timeline, get_node_execution_logs, get_node_type_stats, get_pending_human_inputs,
     get_top_errors, get_top_workflows, get_workflow_stats, list_instances,
-    list_recoverable_executions, list_unresolved_tool_approvals,
+    list_recoverable_executions, list_unresolved_tool_approvals, reconcile_stale_executions,
 };
 pub mod executors;
 pub mod plan;

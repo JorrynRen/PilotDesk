@@ -485,6 +485,14 @@ export interface KbFileListView {
   addedAt: number;
 }
 
+/** 无引用文件（条目被移除后留下的孤儿原件） */
+export interface KbOrphanFile {
+  fileId: string;
+  fileName: string;
+  fileSize: number;
+  createdAt: number;
+}
+
 /** 知识条目引用的交付物（同一份任务原件，不重复拷贝） */
 export interface KbFileView {
   fileId: string;

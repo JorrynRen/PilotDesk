@@ -2828,6 +2828,7 @@ pub fn run() {
             commands::enclave_task::enclave_task_create,
             commands::enclave_task::enclave_task_update,
             commands::enclave_task::enclave_task_set_status,
+            commands::enclave_task::enclave_task_delete,
             commands::enclave_task::enclave_task_container_confirm,
             commands::enclave_task::enclave_task_set_deps,
             commands::enclave_task::enclave_task_deps_preview,
@@ -2855,6 +2856,10 @@ pub fn run() {
             commands::enclave_task::enclave_kb_entry_get,
             commands::enclave_task::enclave_kb_entry_update,
             commands::enclave_task::enclave_kb_entry_remove,
+            commands::enclave_task::enclave_kb_entry_file_detach,
+            commands::enclave_task::enclave_kb_file_delete,
+            commands::enclave_task::enclave_kb_orphan_files,
+            commands::enclave_task::enclave_kb_orphan_cleanup,
             commands::enclave_task::enclave_kb_update,
             commands::enclave_task::enclave_kb_file_list,
             commands::enclave_task::enclave_kb_ingest_capability,
@@ -2912,6 +2917,28 @@ pub fn run() {
             // 初始同步：此时 PluginHost 为空，后续 plugin_discover 会触发再次同步
             node_executor.sync_plugin_node_types();
             app.manage(node_executor.clone());
+
+            // 启动收敛：上次进程遗留的「运行中」实例不可能再推进（典型：停在人工输入节点），
+            // 事件日志却仍显示 running —— 标成「已暂停」，避免任务永远"运行中"而输入提示又无法重现。
+            {
+                let reconcile_pool = pool.clone();
+                let reconcile_executor = node_executor.clone();
+                tauri::async_runtime::spawn(async move {
+                    // 等运行期状态稳定；定时调度首轮在 60s 后才会触发，不会误伤正在跑的实例
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    let live: std::collections::HashSet<String> =
+                        reconcile_executor.live_execution_ids().into_iter().collect();
+                    let Ok(conn) = reconcile_pool.get() else { return };
+                    match workflow::reconcile_stale_executions(&conn, &live) {
+                        Ok(0) => {}
+                        Ok(n) => log::warn!(
+                            "[Workflow] 已收敛 {} 个进程退出后遗留的运行中实例（标记为已暂停）",
+                            n
+                        ),
+                        Err(e) => log::warn!("[Workflow] 收敛遗留运行中实例失败：{}", e),
+                    }
+                });
+            }
 
             // 启动工作流定时调度器
             let scheduler = WorkflowScheduler::new(pool.clone());

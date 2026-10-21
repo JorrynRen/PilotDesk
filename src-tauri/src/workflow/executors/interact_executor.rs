@@ -176,7 +176,10 @@ struct PendingEntry {
 #[allow(dead_code)]
 impl PendingEntry {
     fn is_expired(&self) -> bool {
-        self.registered_at.elapsed().as_secs() > self.ttl_secs
+        // 多留 60s 宽限：执行器自己的 timeout 到点会主动 `forget`，这里只兜底清理
+        // "没人认领"的残留。TTL 与执行器超时严格相等时，前端轮询 `pending_keys()`
+        // 可能在超时边界抢先删掉条目，让接收端把「超时」误判成「用户取消」。
+        self.registered_at.elapsed().as_secs() > self.ttl_secs + 60
     }
 }
 
@@ -333,7 +336,23 @@ impl NodeExecutorTrait for InteractExecutor {
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout * 60), rx).await;
         let user_input = match result {
             Ok(Ok(response)) => response,
-            Ok(Err(_)) => return Err(AppError::External("用户取消了人工介入".into())),
+            Ok(Err(_)) => {
+                // 通道在收到答复前被关闭（TTL 残留清理 / 节点被中断）：按「超时未响应」降级。
+                // 不能当成用户取消 —— 那会让一次本可继续的自动运行整个节点失败。
+                self.manager.forget(execution_id, &node.id);
+                emitter
+                    .emit(
+                        "workflow:log",
+                        serde_json::json!({
+                            "execution_id": execution_id,
+                            "node_execution_id": node.id,
+                            "level": "warn",
+                            "message": "人工介入等待通道已关闭（未收到答复），使用默认值继续",
+                        }),
+                    )
+                    .ok();
+                config.default_value.unwrap_or_default()
+            }
             Err(_) => {
                 // 等待已结束：立刻撤销内存登记，别再把自己算作"有人在等"的待办
                 self.manager.forget(execution_id, &node.id);

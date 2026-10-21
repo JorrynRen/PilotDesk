@@ -586,14 +586,24 @@ pub fn detach_file(
     }
 
     // 全库已无挂载 → 删除资产行与物理文件（尽力而为，失败不阻塞解除）
-    let remaining: i64 = conn
+    //
+    // 「无挂载」必须同时看任务挂载和知识库引用：同一份原件可能既是交付物、
+    // 又被知识条目引用，只看 task_file_links 会把知识库正在用的原文删掉。
+    let task_refs: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM task_file_links WHERE file_id = ?1",
             params![file_id],
             |r| r.get(0),
         )
         .map_err(|e| format!("查询文件挂载失败：{}", e))?;
-    if remaining == 0 {
+    let kb_refs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_base_files WHERE file_id = ?1",
+            params![file_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("查询知识库引用失败：{}", e))?;
+    if task_refs == 0 && kb_refs == 0 {
         let rel: Option<String> = conn
             .query_row(
                 "SELECT file_path FROM file_assets
@@ -603,12 +613,6 @@ pub fn detach_file(
             )
             .optional()
             .map_err(|e| format!("查询文件资产失败：{}", e))?;
-        // 原件已不存在 → 知识库里的引用一并清掉，避免留下打不开的死链
-        conn.execute(
-            "DELETE FROM knowledge_base_files WHERE file_id = ?1",
-            params![file_id],
-        )
-        .map_err(|e| format!("清理知识库文件引用失败：{}", e))?;
         conn.execute(
             "DELETE FROM file_assets WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
             params![file_id, org_id],
@@ -621,6 +625,107 @@ pub fn detach_file(
         }
     }
     Ok(())
+}
+
+/// 知识库文件页的「无引用文件」：既没挂任务、也没被任何知识条目引用。
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanFileView {
+    pub file_id: String,
+    pub file_name: String,
+    pub file_size: i64,
+    pub created_at: i64,
+}
+
+fn orphan_rows(conn: &Connection, org_id: &str) -> Result<Vec<OrphanFileView>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT fa.id, fa.file_name, fa.file_size, fa.created_at
+               FROM file_assets fa
+              WHERE fa.owner_type = 'org' AND fa.owner_id = ?1
+                AND NOT EXISTS (SELECT 1 FROM task_file_links l WHERE l.file_id = fa.id)
+                AND NOT EXISTS (SELECT 1 FROM knowledge_base_files k WHERE k.file_id = fa.id)
+              ORDER BY fa.created_at DESC",
+        )
+        .map_err(|e| format!("查询无引用文件失败：{}", e))?;
+    let rows = stmt
+        .query_map(params![org_id], |r| {
+            Ok(OrphanFileView {
+                file_id: r.get(0)?,
+                file_name: r.get(1)?,
+                file_size: r.get(2)?,
+                created_at: r.get(3)?,
+            })
+        })
+        .map_err(|e| format!("查询无引用文件失败：{}", e))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取无引用文件失败：{}", e))
+}
+
+/// 列出无引用文件（删除条目后留下的孤儿）。
+pub fn list_orphan_files(conn: &Connection, org_id: &str) -> Result<Vec<OrphanFileView>, String> {
+    orphan_rows(conn, org_id)
+}
+
+/// 删除一份团队文件原件。
+///
+/// **前置条件**：没有任何任务挂载、也没有任何知识条目引用。引用还在时拒绝删除，
+/// 由调用方引导用户先去条目里解除关联 —— 原件是内容寻址、按 sha256 去重的，
+/// 一份文件可能被多个条目/任务共用，不能从某一个入口静默删掉。
+pub fn delete_asset(conn: &Connection, org_id: &str, file_id: &str) -> Result<(), String> {
+    let rel: Option<String> = conn
+        .query_row(
+            "SELECT file_path FROM file_assets
+              WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
+            params![file_id, org_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("查询文件资产失败：{}", e))?;
+    let Some(rel) = rel else {
+        return Err("文件不存在或已删除".to_string());
+    };
+    let task_refs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_file_links WHERE file_id = ?1",
+            params![file_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("查询任务引用失败：{}", e))?;
+    let kb_refs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_base_files WHERE file_id = ?1",
+            params![file_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("查询知识库引用失败：{}", e))?;
+    if task_refs > 0 || kb_refs > 0 {
+        return Err(format!(
+            "仍有引用：{} 个任务 / {} 个知识条目，请先在条目里解除关联",
+            task_refs, kb_refs
+        ));
+    }
+    conn.execute(
+        "DELETE FROM file_assets WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
+        params![file_id, org_id],
+    )
+    .map_err(|e| format!("删除文件资产失败：{}", e))?;
+    if let Ok(dir) = org_dir(conn, org_id) {
+        let _ = std::fs::remove_file(dir.join(rel));
+    }
+    Ok(())
+}
+
+/// 批量清理无引用文件（磁盘回收）。返回删除数量。
+pub fn cleanup_orphan_files(conn: &Connection, org_id: &str) -> Result<usize, String> {
+    let rows = orphan_rows(conn, org_id)?;
+    let mut removed = 0usize;
+    for f in rows {
+        if delete_asset(conn, org_id, &f.file_id).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// 知识库投喂：把文件写入团队文件根并登记为组织文件资产（**不挂任务**）。

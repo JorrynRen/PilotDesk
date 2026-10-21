@@ -669,12 +669,12 @@ export const WorkflowMonitor: React.FC<Props> = ({ onViewDefinition, onDeleteExe
                       {/* Actions（批量模式下收起：避免与勾选语义混淆、误触） */}
                       {!batchMode && (
                       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                        {instance.status === 'running' && (
+                        {(instance.status === 'running' || instance.status === 'paused') && (
                           <button
                             onClick={() => cancelWorkflow(instance.id)}
                             className="text-[10px] px-2 py-0.5 rounded transition-colors"
                             style={{ border: '1px solid var(--border)', background: 'transparent', color: '#EF4444' }}
-                            title="停止"
+                            title={instance.status === 'paused' ? '结束这次已暂停的执行' : '停止'}
                           >
                             <Square size={10} />
                           </button>

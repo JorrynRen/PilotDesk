@@ -7,7 +7,8 @@
 //! 模型口径（v7 起）：
 //! - **一个任务一条知识**（`memory_id = "task:{taskId}"`）：汇报是版本流水，知识库只留当前有效版本；
 //! - 交付物是**条目的附件**（`knowledge_base_files.memory_id`），重新确认时整体重建；
-//! - 条目只由任务确认流程派生；恢复汇报 → `stale=1`（待更新），任务作废 → 撤下条目；
+//! - 条目只由任务确认流程派生；恢复汇报 → `stale=1`（待更新），任务作废 → 保留条目并标记
+//!   `sourceTaskCancelledAt`（知识不随任务状态销毁），任务删除 → 脱钩为历史来源；
 //! - owner / admin 可人工修改标题/正文/标签或移除非任务产出的条目。
 //!
 //! 幂等：确定性主键 + `ON CONFLICT DO UPDATE` + `task_reports.sedimented_at` 守卫。
@@ -421,7 +422,40 @@ pub fn search_entries(
         }
     };
     attach_files(conn, &kb, &mut entries)?;
+    fill_task_titles(conn, org_id, &mut entries)?;
     Ok(entries)
+}
+
+/// 补齐来源任务标题。
+///
+/// `taskTitle` 是沉淀时写进 `metadata` 的快照：老数据可能没有它（界面上就会退化成
+/// 任务 UUID），任务改名后也不该继续显示旧名。读时以 `org_tasks` 为准，
+/// 任务已被删除时保留原快照（至少还有 id 可追溯）。
+fn fill_task_titles(
+    conn: &Connection,
+    org_id: &str,
+    entries: &mut [KbEntryView],
+) -> Result<(), String> {
+    for e in entries.iter_mut() {
+        if e.origin != "task_output" || e.source_ref.is_empty() {
+            continue;
+        }
+        let title: Option<String> = conn
+            .query_row(
+                "SELECT title FROM org_tasks WHERE id = ?1 AND org_id = ?2",
+                params![e.source_ref, org_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询来源任务失败：{}", e))?;
+        let Some(title) = title.filter(|t| !t.trim().is_empty()) else {
+            continue;
+        };
+        if let Some(obj) = e.metadata.as_object_mut() {
+            obj.insert("taskTitle".to_string(), serde_json::json!(title));
+        }
+    }
+    Ok(())
 }
 
 /// 取单条（校验库归属）。
@@ -446,6 +480,7 @@ pub fn get_entry(
         .map_err(|e| format!("查询知识条目失败：{}", e))?;
     if let Some(e) = entry.as_mut() {
         attach_files(conn, kb_id, std::slice::from_mut(e))?;
+        fill_task_titles(conn, org_id, std::slice::from_mut(e))?;
     }
     Ok(entry)
 }
@@ -631,24 +666,44 @@ pub fn mark_task_output_stale(
     Ok(())
 }
 
-/// 任务作废：撤下该任务的产出条目及其附件关联（知识库只保留有效产出）。
-pub fn withdraw_task_output(
+/// 任务作废：知识条目**保留**，只打上「来源任务已作废」标记。
+///
+/// 与删除任务同口径：任务状态变化不该销毁团队已经沉淀的知识。条目与交付物引用都保留
+/// （否则文件页会把交付物当成无主资产），由界面给出警示、由人决定是否继续使用或移除。
+pub fn mark_task_output_cancelled(
     conn: &Connection,
     org_id: &str,
     task_id: &str,
 ) -> Result<(), String> {
     let kb_id = implicit_kb_id(org_id);
     let memory_id = format!("task:{}", task_id);
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT metadata FROM knowledge_base_memories
+              WHERE knowledge_base_id = ?1 AND memory_id = ?2",
+            params![kb_id, memory_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("查询知识条目标记失败：{}", e))?;
+    let Some(raw) = raw else { return Ok(()) };
+    let mut meta: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+    if !meta.is_object() {
+        meta = serde_json::json!({});
+    }
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert(
+            "sourceTaskCancelledAt".into(),
+            serde_json::json!(chrono::Utc::now().timestamp()),
+        );
+    }
     conn.execute(
-        "DELETE FROM knowledge_base_files WHERE knowledge_base_id = ?1 AND memory_id = ?2",
-        params![kb_id, memory_id],
+        "UPDATE knowledge_base_memories SET metadata = ?3, stale = 0
+          WHERE knowledge_base_id = ?1 AND memory_id = ?2",
+        params![kb_id, memory_id, meta.to_string()],
     )
-    .map_err(|e| format!("撤下知识条目附件失败：{}", e))?;
-    conn.execute(
-        "DELETE FROM knowledge_base_memories WHERE knowledge_base_id = ?1 AND memory_id = ?2",
-        params![kb_id, memory_id],
-    )
-    .map_err(|e| format!("撤下知识条目失败：{}", e))?;
+    .map_err(|e| format!("标记知识条目「来源任务已作废」失败：{}", e))?;
     Ok(())
 }
 
@@ -730,6 +785,46 @@ pub fn remove_entry(
         .map_err(|e| format!("移除知识条目失败：{}", e))?;
     if removed == 0 {
         return Err("知识条目不存在".to_string());
+    }
+    Ok(())
+}
+
+/// 解除某条知识条目与一份原件的关联（不动原件，也不影响其它条目的引用）。
+///
+/// 任务产出条目的附件由汇报确认流程整体重建，单独解除会被下一次确认覆盖，
+/// 属于「假操作」，因此直接拒绝；原件回收由文件页 / 无引用清理负责。
+pub fn detach_entry_file(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    memory_id: &str,
+    file_id: &str,
+) -> Result<(), String> {
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    let origin: Option<String> = conn
+        .query_row(
+            "SELECT origin FROM knowledge_base_memories
+              WHERE knowledge_base_id = ?1 AND memory_id = ?2",
+            params![kb_id, memory_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("查询知识条目失败：{}", e))?;
+    let Some(origin) = origin else {
+        return Err("知识条目不存在".to_string());
+    };
+    if origin == "task_output" {
+        return Err("任务产出的交付物由汇报维护，不能单独解除".to_string());
+    }
+    let removed = conn
+        .execute(
+            "DELETE FROM knowledge_base_files
+              WHERE knowledge_base_id = ?1 AND memory_id = ?2 AND file_id = ?3",
+            params![kb_id, memory_id, file_id],
+        )
+        .map_err(|e| format!("解除文件关联失败：{}", e))?;
+    if removed == 0 {
+        return Err("该条目没有关联这份文件".to_string());
     }
     Ok(())
 }
@@ -832,6 +927,25 @@ pub fn enqueue_ingest(
     .map_err(|e| format!("读取待整理队列失败：{}", e))
 }
 
+/// 只刷新队列行的 payload（不动状态与尝试次数）。
+///
+/// 用途：网址投喂先抓原文落盘，再把 `fileId` 补写进这一行 —— 后面的模型整理
+/// 与手工入库都以这份快照为准，不再依赖"整理时页面还在"。
+pub fn update_ingest_payload(
+    conn: &Connection,
+    org_id: &str,
+    id: &str,
+    payload: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE kb_ingest_queue SET payload = ?3, updated_at = ?4
+          WHERE id = ?1 AND org_id = ?2",
+        params![id, org_id, payload, chrono::Utc::now().timestamp()],
+    )
+    .map_err(|e| format!("更新待整理记录失败：{}", e))?;
+    Ok(())
+}
+
 pub fn list_ingest_queue(
     conn: &Connection,
     org_id: &str,
@@ -921,11 +1035,31 @@ pub fn reset_running_ingest(conn: &Connection, org_id: &str) {
 
 pub fn retry_ingest(conn: &Connection, org_id: &str, id: &str) -> Result<(), String> {
     ensure_kb_write(conn, org_id)?;
+    // 上一次「网址原文抓取失败」也要一并忘掉，否则这条网址永远不会再落盘原文
+    let payload: Option<String> = conn
+        .query_row(
+            "SELECT payload FROM kb_ingest_queue WHERE id = ?1 AND org_id = ?2",
+            params![id, org_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("读取待整理记录失败：{}", e))?;
+    let mut cleared = None;
+    if let Some(raw) = payload {
+        if let Ok(serde_json::Value::Object(mut obj)) =
+            serde_json::from_str::<serde_json::Value>(&raw)
+        {
+            if obj.remove("snapshotError").is_some() {
+                cleared = Some(serde_json::Value::Object(obj).to_string());
+            }
+        }
+    }
     conn.execute(
         "UPDATE kb_ingest_queue
-            SET status = 'pending', attempts = 0, last_error = '', updated_at = ?2
+            SET status = 'pending', attempts = 0, last_error = '', updated_at = ?2,
+                payload = COALESCE(?4, payload)
           WHERE id = ?1 AND org_id = ?3",
-        params![id, chrono::Utc::now().timestamp(), org_id],
+        params![id, chrono::Utc::now().timestamp(), org_id, cleared],
     )
     .map_err(|e| format!("重试失败：{}", e))?;
     Ok(())

@@ -42,6 +42,8 @@ interface EnclaveTaskState {
   createTask: (orgId: string, input: CreateTaskInput) => Promise<TaskView | null>;
   updateTask: (orgId: string, taskId: string, input: UpdateTaskInput) => Promise<boolean>;
   setStatus: (orgId: string, taskId: string, status: string) => Promise<boolean>;
+  /** 硬删除终态任务及其全部记录（创建者 / 组织管理员） */
+  deleteTask: (orgId: string, taskId: string) => Promise<boolean>;
   /** 汇总确认：子任务全部收敛后，由创建者 / 负责人收口完成 */
   confirmContainer: (orgId: string, taskId: string) => Promise<boolean>;
   previewDeps: (orgId: string, taskId: string, blockedBy: string[]) => Promise<DepsPreview | null>;
@@ -183,6 +185,23 @@ export const useEnclaveTaskStore = create<EnclaveTaskState>((set, get) => ({
       set((s) => ({ tasks: upsert(s.tasks, task), error: null }));
       // 子任务变化会带动父容器状态；容器作废/归档会级联子树 → 整体重拉
       if (task.parentTaskId || task.childCount > 0) await get().loadTasks(orgId);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return false;
+    }
+  },
+
+  deleteTask: async (orgId, taskId) => {
+    try {
+      await invoke('enclave_task_delete', { orgId, taskId });
+      set((s) => ({
+        activeTaskId: s.activeTaskId === taskId ? null : s.activeTaskId,
+        tasks: s.tasks.filter((t) => t.id !== taskId),
+        error: null,
+      }));
+      // 删除子任务会影响父容器状态 / 依赖引用 → 整体重拉
+      await get().loadTasks(orgId);
       return true;
     } catch (e) {
       set({ error: errorMessage(e) });

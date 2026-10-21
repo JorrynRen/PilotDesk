@@ -150,6 +150,26 @@ pub async fn enclave_task_set_status(
     .await
 }
 
+/// 硬删除终态任务及其全部记录（创建者 / 组织管理员）。
+#[tauri::command]
+pub async fn enclave_task_delete(
+    org_id: String,
+    task_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    let payload = json!({ "taskId": task_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "task.delete",
+        payload,
+        |c, actor| tasks::delete_task(c, &org_id, actor, &task_id),
+    )
+    .await
+}
+
 /// 汇总确认：子任务全部收敛后，由创建者 / 负责人收口完成（容器不单独沉淀知识库）。
 #[tauri::command]
 pub async fn enclave_task_container_confirm(
@@ -737,6 +757,102 @@ pub fn enclave_kb_entry_remove(
     })
 }
 
+/// 解除知识条目与一份原件的关联（owner / admin；任务产出条目拒绝）。
+#[tauri::command]
+pub async fn enclave_kb_entry_file_detach(
+    org_id: String,
+    kb_id: String,
+    memory_id: String,
+    file_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    let payload = json!({
+        "kbId": kb_id.clone(),
+        "memoryId": memory_id.clone(),
+        "fileId": file_id.clone(),
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.entry_file_detach",
+        payload,
+        |c, _actor| {
+            authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+            crate::enclave::knowledge::detach_entry_file(
+                c, &org_id, &kb_id, &memory_id, &file_id,
+            )
+        },
+    )
+    .await
+}
+
+/// 删除一份团队文件原件（owner / admin；仍有任务挂载或条目引用时拒绝）。
+#[tauri::command]
+pub async fn enclave_kb_file_delete(
+    org_id: String,
+    file_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    let payload = json!({ "fileId": file_id.clone() });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.file_delete",
+        payload,
+        |c, _actor| {
+            authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+            files::delete_asset(c, &org_id, &file_id)
+        },
+    )
+    .await
+}
+
+/// 无引用文件（删除条目后留下的孤儿）。
+#[tauri::command]
+pub async fn enclave_kb_orphan_files(
+    org_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<files::OrphanFileView>, String> {
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.orphan_files",
+        json!({}),
+        |c, _actor| {
+            authz::authorize(c, &org_id, authz::Action::KbView)?;
+            files::list_orphan_files(c, &org_id)
+        },
+    )
+    .await
+}
+
+/// 批量清理无引用文件（owner / admin），返回删除数量。
+#[tauri::command]
+pub async fn enclave_kb_orphan_cleanup(
+    org_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<usize, String> {
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.orphan_cleanup",
+        json!({}),
+        |c, _actor| {
+            authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+            files::cleanup_orphan_files(c, &org_id)
+        },
+    )
+    .await
+}
+
 /// 修改知识库信息（名称 / 描述，owner / admin）。
 #[tauri::command]
 pub fn enclave_kb_update(
@@ -1311,9 +1427,36 @@ pub async fn enclave_kb_ingest_manual(
                         .to_string();
                     (title, prep.text)
                 }
+                "url" => {
+                    // 网址投喂已在入队后落了原文快照，因此可像文件一样按原文整条入库
+                    let file_id = p.get("fileId").and_then(|v| v.as_str()).unwrap_or("");
+                    if file_id.is_empty() {
+                        return Err(
+                            "该网址还没有抓到原文，请等模型整理，或重新投喂一次".to_string()
+                        );
+                    }
+                    let meta = files::file_meta(c, &org_for_write, file_id)?;
+                    let text = std::fs::read_to_string(&meta.abs_path)
+                        .map_err(|e| format!("读取网址原文快照失败：{}", e))?;
+                    let title = p
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            p.get("name")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_else(|| {
+                            meta.file_name.trim_end_matches(".md").to_string()
+                        });
+                    (title, text)
+                }
                 _ => {
                     return Err(
-                        "网址记录不支持手工入库；请等模型整理，或把正文粘成片段".to_string()
+                        "不支持该类型的手工入库；请等模型整理，或把正文粘成片段".to_string()
                     )
                 }
             };
@@ -1696,6 +1839,112 @@ pub async fn enclave_kb_ingest_url(
     }
 }
 
+/// 网址投喂的「原文落盘」：抓页面 → 本地清洗成 markdown → 存成团队文件资产。
+///
+/// 与个人知识库同一口径：原文入库**不依赖模型**。模型不可用时也能在「文件」页看原文、
+/// 也能由 owner / admin 手工入库；后续整理读这份快照，页面改版或下线都不影响已投喂内容。
+///
+/// 只处理 `pending` 且还没有 `fileId` 的行。抓取失败会把原因记进 payload（`snapshotError`），
+/// 之后不再自动重抓 —— 否则一个挂掉的站点会被每轮后台循环反复请求；界面上的「重试」会清掉它。
+async fn snapshot_pending_urls(
+    state: &EnclaveState,
+    org_id: &str,
+    max: usize,
+) -> Result<usize, String> {
+    if max == 0 {
+        return Ok(0);
+    }
+    let rows = state.store.with_conn(|c| {
+        crate::enclave::knowledge::list_ingest_queue(c, org_id, None)
+    })?;
+    let mut done = 0usize;
+    let mut tried = 0usize;
+    for row in rows {
+        // `max` 计的是**尝试次数**：抓取失败的站点也必须占额度，
+        // 否则一次 drain 会把队列里所有失败地址依次请求一遍。
+        if tried >= max {
+            break;
+        }
+        if row.kind != "url" || row.status != "pending" {
+            continue;
+        }
+        let payload: serde_json::Value =
+            serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
+        let Some(obj) = payload.as_object() else { continue };
+        let has_file = obj
+            .get("fileId")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if has_file || obj.contains_key("snapshotError") {
+            continue;
+        }
+        let url = obj
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if url.is_empty() {
+            continue;
+        }
+        let name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
+        tried += 1;
+        let fetched: Result<(String, crate::api_agent::knowledge::IngestPrep), String> = async {
+            let html = crate::commands::knowledge::load_page(&url).await?;
+            let text = crate::tools::browser::html_to_markdown(&html);
+            let title = name
+                .unwrap_or_else(|| crate::commands::knowledge::extract_title(&html, &url));
+            let prep = crate::api_agent::knowledge::prepare_web(&title, &text)?;
+            Ok((title, prep))
+        }
+        .await;
+
+        let mut next = payload.clone();
+        match fetched {
+            Ok((title, prep)) => {
+                let imported = state.store.with_conn(|c| {
+                    files::import_bytes(c, org_id, &prep.name, &prep.write_bytes)
+                })?;
+                if let Some(o) = next.as_object_mut() {
+                    o.insert("fileId".into(), json!(imported.file_id));
+                    o.insert("fileName".into(), json!(imported.file_name));
+                    o.insert("relPath".into(), json!(imported.rel_path));
+                    o.insert("title".into(), json!(title));
+                }
+                state.store.with_conn(|c| {
+                    crate::enclave::knowledge::update_ingest_payload(
+                        c,
+                        org_id,
+                        &row.id,
+                        &next.to_string(),
+                    )
+                })?;
+                done += 1;
+            }
+            Err(e) => {
+                log::warn!("[Enclave][KB] 网址原文落盘失败（{}）：{}", url, e);
+                if let Some(o) = next.as_object_mut() {
+                    o.insert("snapshotError".into(), json!(e));
+                }
+                let _ = state.store.with_conn(|c| {
+                    crate::enclave::knowledge::update_ingest_payload(
+                        c,
+                        org_id,
+                        &row.id,
+                        &next.to_string(),
+                    )
+                });
+            }
+        }
+    }
+    Ok(done)
+}
+
 /// 主机侧消费队列（单消费者，按入队顺序）。
 async fn drain_team_queue(
     db: &crate::DbState,
@@ -1707,6 +1956,10 @@ async fn drain_team_queue(
         crate::enclave::knowledge::reset_running_ingest(c, org_id);
         Ok(())
     });
+    // 网址先落原文（与个人库一致）：模型是否可用都要先有原文，后续整理只读这份快照
+    if let Err(e) = snapshot_pending_urls(state, org_id, 3).await {
+        log::warn!("[Enclave][KB] 网址原文落盘异常（{}）：{}", org_id, e);
+    }
     let cap = compute_team_capability(db, state, org_id);
     if cap.can_process == "none" {
         return Ok(TeamQueueRunOutcome {
@@ -1903,17 +2156,34 @@ async fn process_team_queue_row(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "待整理记录缺少网址".to_string())?;
             let name = payload.get("name").and_then(|v| v.as_str());
-            let html = crate::commands::knowledge::load_page(url)
-                .await
-                .map_err(|e| format!("抓取网页失败：{}", e))?;
-            let page_title = name
-                .map(str::to_string)
-                .unwrap_or_else(|| crate::commands::knowledge::extract_title(&html, url));
-            let text = crate::tools::browser::html_to_markdown(&html);
-            if text.trim().is_empty() {
-                return Err("页面没有可提取的正文（可能是纯 JS 渲染的站点）".into());
-            }
-            let prep = crate::api_agent::knowledge::prepare_web(&page_title, &text)?;
+            // 投喂时已把原文快照存成团队文件：整理只读这份快照，页面改版/下线都不影响
+            let (page_title, prep) = if let Some(fid) = file_id_opt.as_deref() {
+                let meta = state.store.with_conn(|c| files::file_meta(c, org_id, fid))?;
+                let text = std::fs::read_to_string(&meta.abs_path)
+                    .map_err(|e| format!("读取网址原文快照失败：{}", e))?;
+                let title = payload
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| name.map(str::to_string))
+                    .unwrap_or_else(|| meta.file_name.trim_end_matches(".md").to_string());
+                let prep = crate::api_agent::knowledge::prepare_web(&title, &text)?;
+                (title, prep)
+            } else {
+                let html = crate::commands::knowledge::load_page(url)
+                    .await
+                    .map_err(|e| format!("抓取网页失败：{}", e))?;
+                let title = name
+                    .map(str::to_string)
+                    .unwrap_or_else(|| crate::commands::knowledge::extract_title(&html, url));
+                let text = crate::tools::browser::html_to_markdown(&html);
+                if text.trim().is_empty() {
+                    return Err("页面没有可提取的正文（可能是纯 JS 渲染的站点）".into());
+                }
+                let prep = crate::api_agent::knowledge::prepare_web(&title, &text)?;
+                (title, prep)
+            };
             let blocks = crate::api_agent::knowledge::merge_small_blocks(
                 &prep.text,
                 &prep.blocks,
@@ -1989,6 +2259,10 @@ pub async fn run_enclave_kb_queue_loop(db: crate::DbState, state: Arc<EnclaveSta
         for org_id in hosts {
             let cap = compute_team_capability(&db, &state, &org_id);
             cache_team_capability(&state, &org_id, &cap);
+            if cap.pending > 0 {
+                // 网址原文落盘不依赖模型：无模型时也要先有原文（文件页可见、可手工入库）
+                let _ = snapshot_pending_urls(&state, &org_id, 3).await;
+            }
             if cap.can_process != "none" && cap.pending > 0 {
                 match drain_team_queue(&db, &state, &org_id, 3).await {
                     Ok(o) if o.done > 0 || o.failed > 0 => log::info!(

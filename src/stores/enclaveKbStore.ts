@@ -12,6 +12,7 @@ import type {
   KbCandidateView,
   KbEntryView,
   KbFileListView,
+  KbOrphanFile,
   KbView,
   TeamIngestCapability,
   TeamIngestOutcome,
@@ -25,6 +26,8 @@ interface EnclaveKbState {
   activeEntry: KbEntryView | null;
   /** 「文件」页：去重后的交付物 */
   files: KbFileListView[];
+  /** 无引用文件（条目已移除，原件仍在磁盘）：仅用于管理清理 */
+  orphans: KbOrphanFile[];
   query: string;
   loading: boolean;
   error: string | null;
@@ -40,6 +43,17 @@ interface EnclaveKbState {
   selectKb: (orgId: string, kbId: string) => Promise<void>;
   search: (orgId: string, query: string) => Promise<void>;
   loadFiles: (orgId: string, kbId: string) => Promise<void>;
+  /** 解除条目与一份原件的关联（owner / admin）；返回错误文案，成功为 null */
+  detachEntryFile: (
+    orgId: string,
+    kbId: string,
+    memoryId: string,
+    fileId: string,
+  ) => Promise<string | null>;
+  /** 删除原件（owner / admin；仍有引用时后端拒绝）；返回错误文案，成功为 null */
+  deleteFile: (orgId: string, fileId: string) => Promise<string | null>;
+  /** 批量清理无引用文件（owner / admin）；返回删除数量 */
+  cleanupOrphans: (orgId: string) => Promise<number>;
   openEntry: (entry: KbEntryView | null) => void;
   /** 人工维护知识库信息（owner / admin） */
   updateKb: (orgId: string, kbId: string, name: string, description: string) => Promise<boolean>;
@@ -93,6 +107,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   entries: [],
   activeEntry: null,
   files: [],
+  orphans: [],
   query: '',
   loading: false,
   error: null,
@@ -107,6 +122,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       entries: [],
       activeEntry: null,
       files: [],
+      orphans: [],
       query: '',
       loading: false,
       error: null,
@@ -131,7 +147,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   },
 
   selectKb: async (orgId, kbId) => {
-    set({ activeKbId: kbId, activeEntry: null, files: [] });
+    set({ activeKbId: kbId, activeEntry: null, files: [], orphans: [] });
     await get().search(orgId, get().query);
     void get().loadQueue(orgId, kbId);
     void get().loadCandidates(orgId, kbId);
@@ -166,9 +182,53 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const files = await invoke<KbFileListView[]>('enclave_kb_file_list', { orgId, kbId });
-      set({ files, loading: false });
+      // 无引用文件是管理信息：拿不到（旧版主机 / 权限不足）不影响文件列表本身
+      let orphans: KbOrphanFile[] = [];
+      try {
+        orphans = await invoke<KbOrphanFile[]>('enclave_kb_orphan_files', { orgId });
+      } catch {
+        orphans = [];
+      }
+      set({ files, orphans, loading: false });
     } catch (e) {
       set({ error: errorMessage(e), loading: false });
+    }
+  },
+
+  /** 解除条目与一份原件的关联（owner / admin）；返回错误文案，成功为 null */
+  detachEntryFile: async (orgId, kbId, memoryId, fileId) => {
+    try {
+      await invoke('enclave_kb_entry_file_detach', { orgId, kbId, memoryId, fileId });
+      await get().search(orgId, get().query);
+      await get().loadFiles(orgId, kbId);
+      return null;
+    } catch (e) {
+      return errorMessage(e);
+    }
+  },
+
+  /** 删除原件（owner / admin；仍有引用时后端拒绝）；返回错误文案，成功为 null */
+  deleteFile: async (orgId, fileId) => {
+    try {
+      await invoke('enclave_kb_file_delete', { orgId, fileId });
+      const kbId = get().activeKbId;
+      if (kbId) await get().loadFiles(orgId, kbId);
+      return null;
+    } catch (e) {
+      return errorMessage(e);
+    }
+  },
+
+  /** 批量清理无引用文件（owner / admin）；返回删除数量 */
+  cleanupOrphans: async (orgId) => {
+    try {
+      const n = await invoke<number>('enclave_kb_orphan_cleanup', { orgId });
+      const kbId = get().activeKbId;
+      if (kbId) await get().loadFiles(orgId, kbId);
+      return n;
+    } catch (e) {
+      set({ error: errorMessage(e) });
+      return 0;
     }
   },
 

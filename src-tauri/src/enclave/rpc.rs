@@ -29,6 +29,19 @@ fn opt_str(payload: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// 管理角色校验（与命令层 `Action::KbEdit` 同口径：owner / admin）。
+fn require_kb_edit(conn: &Connection, org_id: &str, actor: &str) -> Result<(), String> {
+    let role = crate::enclave::authz::role_for_member(conn, org_id, actor)?;
+    if matches!(
+        role,
+        Some(crate::enclave::authz::Role::Owner) | Some(crate::enclave::authz::Role::Admin)
+    ) {
+        Ok(())
+    } else {
+        Err("仅组织所有者/管理员可管理知识库文件".to_string())
+    }
+}
+
 fn str_vec(payload: &Value, key: &str) -> Vec<String> {
     payload
         .get(key)
@@ -116,6 +129,11 @@ pub fn dispatch(
             to_value(tasks::set_status_checked(
                 conn, org_id, actor, &task_id, &status,
             )?)
+        }
+        "task.delete" => {
+            let task_id = req_str(payload, "taskId")?;
+            tasks::delete_task(conn, org_id, actor, &task_id)?;
+            Ok(Value::Null)
         }
         "task.container_confirm" => {
             let task_id = req_str(payload, "taskId")?;
@@ -450,9 +468,34 @@ pub fn dispatch(
                         .to_string();
                     (title, prep.text)
                 }
+                "url" => {
+                    // 与命令层一致：网址原文已落盘，可按原文整条入库
+                    let file_id = p.get("fileId").and_then(|v| v.as_str()).unwrap_or("");
+                    if file_id.is_empty() {
+                        return Err(
+                            "该网址还没有抓到原文，请等模型整理，或重新投喂一次".to_string()
+                        );
+                    }
+                    let meta = files::file_meta(conn, org_id, file_id)?;
+                    let text = std::fs::read_to_string(&meta.abs_path)
+                        .map_err(|e| format!("读取网址原文快照失败：{}", e))?;
+                    let title = p
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            p.get("name")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_else(|| meta.file_name.trim_end_matches(".md").to_string());
+                    (title, text)
+                }
                 _ => {
                     return Err(
-                        "网址记录不支持手工入库；请等模型整理，或把正文粘成片段".to_string()
+                        "不支持该类型的手工入库；请等模型整理，或把正文粘成片段".to_string()
                     )
                 }
             };
@@ -567,6 +610,32 @@ pub fn dispatch(
         "kb.file_list" => {
             let kb_id = req_str(payload, "kbId")?;
             to_value(knowledge::list_files(conn, org_id, &kb_id)?)
+        }
+
+        // ── 文件回收（管理角色）──
+        "kb.entry_file_detach" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let kb_id = req_str(payload, "kbId")?;
+            let memory_id = req_str(payload, "memoryId")?;
+            let file_id = req_str(payload, "fileId")?;
+            knowledge::detach_entry_file(conn, org_id, &kb_id, &memory_id, &file_id)?;
+            Ok(Value::Null)
+        }
+        "kb.file_delete" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let file_id = req_str(payload, "fileId")?;
+            files::delete_asset(conn, org_id, &file_id)?;
+            Ok(Value::Null)
+        }
+        "kb.orphan_files" => {
+            // 只读列表：成员即可查看
+            crate::enclave::authz::role_for_member(conn, org_id, actor)?
+                .ok_or_else(|| "当前账号不是该组织成员".to_string())?;
+            to_value(files::list_orphan_files(conn, org_id)?)
+        }
+        "kb.orphan_cleanup" => {
+            require_kb_edit(conn, org_id, actor)?;
+            to_value(files::cleanup_orphan_files(conn, org_id)?)
         }
 
         other => Err(format!("未知的飞地命令：{}", other)),

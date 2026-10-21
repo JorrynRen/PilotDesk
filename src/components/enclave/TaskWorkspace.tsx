@@ -10,7 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   Plus, Loader2, ListTree, Link2, AlertTriangle, ChevronRight, FolderOpen,
-  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History,
+  Info, FileText, ListChecks, ClipboardCheck, Paperclip, Flag, History, Trash2,
 } from 'lucide-react';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
@@ -713,6 +713,8 @@ function TaskDetail(props: {
   // 身份未校验（刷新失败 / 账号刚切换）时一律不出现写入口，避免旧身份越权
   const canEdit = identityVerified && (isCreator || isAssignee) && !isClosed;
   const canStatus = identityVerified && (isCreator || isAssignee);
+  /** 后端只在「待办 / 已作废 / 已归档」且当前用户可删时返回 task.delete */
+  const canDelete = identityVerified && task.effectiveActions.includes('task.delete');
   const canAssign = identityVerified && isCreator && !isClosed;
   const canReport = identityVerified && isParticipant;
   const canUpload = identityVerified && isParticipant && !isClosed;
@@ -909,6 +911,22 @@ function TaskDetail(props: {
       if (!ok) return;
     }
     await useEnclaveTaskStore.getState().setStatus(orgId, task.id, status);
+  };
+
+  /** 删除任务（待办 / 已作废 / 已归档）：任务本体 + 过程记录 / 讨论 / 汇报反馈 一并删除 */
+  const removeTask = async () => {
+    const ok = await confirmDialog({
+      title: '删除任务',
+      message:
+        `将永久删除「${task.title}」及其全部记录（过程记录、讨论、完成汇报与反馈、附件挂载）`
+        + (task.childCount > 0 ? `，以及 ${task.childCount} 个子任务` : '')
+        + '。\n文件原件不会被删除（失去引用后可在知识库「文件」页清理）。此操作不可恢复。',
+      confirmText: '永久删除',
+    });
+    if (!ok) return;
+    const done = await useEnclaveTaskStore.getState().deleteTask(orgId, task.id);
+    if (done) showToast('任务已删除', 'success');
+    else showToast(useEnclaveTaskStore.getState().error ?? '删除失败', 'error');
   };
 
   /** 汇总确认：子任务全部收敛后收口完成（容器不单独沉淀知识库） */
@@ -1665,6 +1683,26 @@ function TaskDetail(props: {
               {t.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* 删除：待办 / 已作废 / 已归档可用，权限由后端 effectiveActions 判定 */}
+      {canDelete && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <Trash2 size={12} style={{ color: 'var(--status-danger)' }} />
+          <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>任务清理</span>
+          <button
+            onClick={() => void removeTask()}
+            className="text-xs px-2 py-1 rounded"
+            title="永久删除任务本体、过程记录、讨论、完成汇报与反馈；文件原件保留"
+            style={{
+              color: 'var(--status-danger)',
+              backgroundColor: 'var(--bg-tertiary)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            删除任务
+          </button>
         </div>
       )}
         </>

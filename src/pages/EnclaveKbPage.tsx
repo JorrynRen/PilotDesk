@@ -35,9 +35,10 @@ import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
 import { useEnclaveKbStore } from '../stores/enclaveKbStore';
 import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
 import { useAccountStore } from '../stores/accountStore';
+import { confirmDialog } from '../stores/confirmStore';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
 import { showToast } from '../utils/toast';
-import type { EnclaveKbQueueItem, KbEntryView } from '../types/enclave';
+import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
 import type { IngestCapability } from '../types/knowledge';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
@@ -59,7 +60,8 @@ const QUEUE_KIND_LABEL: Record<string, string> = {
 function queueTitle(item: EnclaveKbQueueItem): string {
   try {
     const p = JSON.parse(item.payload) as Record<string, unknown>;
-    if (item.kind === 'url') return String(p.url ?? item.sourceRef);
+    // 网址：抓到原文后优先显示页面标题，其次用户填的名，最后才回落到 URL
+    if (item.kind === 'url') return String(p.title ?? p.name ?? p.url ?? item.sourceRef);
     if (item.kind === 'file') {
       const name = String(p.fileName ?? '');
       if (name) return name;
@@ -70,6 +72,17 @@ function queueTitle(item: EnclaveKbQueueItem): string {
     return text.slice(0, 40) || '片段';
   } catch {
     return item.sourceRef;
+  }
+}
+
+/** 网址投喂是否已抓到原文：快照落盘后才能按原文手工入库（与个人库「原文入库」同口径） */
+function hasUrlSnapshot(item: EnclaveKbQueueItem): boolean {
+  if (item.kind !== 'url') return true;
+  try {
+    const p = JSON.parse(item.payload) as Record<string, unknown>;
+    return Boolean(p.fileId);
+  } catch {
+    return false;
   }
 }
 
@@ -202,13 +215,17 @@ export function EnclaveKbPage() {
 
   const orgs = useEnclaveOrgStore((s) => s.orgs);
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
-  const members = useEnclaveOrgStore((s) => s.detail?.members ?? []);
+  const orgDetail = useEnclaveOrgStore((s) => s.detail);
+  // 不要在选择器里写 `s.detail?.members ?? []`：detail 为空时每次都会返回**新的空数组**，
+  // useSyncExternalStore 会认为快照一直在变 → 提交阶段反复触发重渲染（Maximum update depth exceeded）。
+  const members = useMemo(() => orgDetail?.members ?? [], [orgDetail]);
 
   const kbs = useEnclaveKbStore((s) => s.kbs);
   const activeKbId = useEnclaveKbStore((s) => s.activeKbId);
   const entries = useEnclaveKbStore((s) => s.entries);
   const activeEntry = useEnclaveKbStore((s) => s.activeEntry);
   const files = useEnclaveKbStore((s) => s.files);
+  const orphans = useEnclaveKbStore((s) => s.orphans);
   const query = useEnclaveKbStore((s) => s.query);
   const loading = useEnclaveKbStore((s) => s.loading);
   const error = useEnclaveKbStore((s) => s.error);
@@ -577,14 +594,66 @@ export function EnclaveKbPage() {
 
   const removeEntry = async () => {
     if (!activeOrgId || !activeEntry) return;
-    if (!window.confirm('从团队知识库移除该条目？任务中的交付物原件不会被删除。')) return;
+    const ok = await confirmDialog({
+      title: '移除知识条目',
+      message: `确定从团队知识库移除「${activeEntry.title || activeEntry.memoryId}」？\n条目引用的交付物 / 来源文件原件不会被删除。`,
+      confirmText: '移除',
+    });
+    if (!ok) return;
     const kbId = useEnclaveKbStore.getState().activeKbId;
     await useEnclaveKbStore.getState().removeEntry(activeOrgId, kbId, activeEntry.memoryId);
   };
 
+  /** 解除条目与一份原件的关联（任务产出的附件由汇报维护，入口不渲染） */
+  const detachEntryFile = async (entry: KbEntryView, fileId: string, fileName: string) => {
+    if (!activeOrgId) return;
+    const ok = await confirmDialog({
+      title: '解除文件关联',
+      message: `解除「${entry.title || entry.memoryId}」与「${fileName}」的关联？\n原件仍保留在团队文件中，不影响其它条目。`,
+      confirmText: '解除',
+      danger: false,
+    });
+    if (!ok) return;
+    const kbId = useEnclaveKbStore.getState().activeKbId;
+    const err = await useEnclaveKbStore
+      .getState()
+      .detachEntryFile(activeOrgId, kbId, entry.memoryId, fileId);
+    if (err) showToast(err, 'error');
+    else showToast('已解除关联（原件仍保留）', 'success');
+  };
+
+  /** 删除文件原件：仍有任务 / 条目引用时后端拒绝，并把原因原样提示给用户 */
+  const deleteAsset = async (file: KbFileListView) => {
+    if (!activeOrgId) return;
+    const ok = await confirmDialog({
+      title: '删除文件原件',
+      message: `确定删除「${file.fileName}」？\n只有完全没有任务挂载、也没有任何知识条目引用时才会真正删除，且不可恢复。`,
+      confirmText: '删除',
+    });
+    if (!ok) return;
+    const err = await useEnclaveKbStore.getState().deleteFile(activeOrgId, file.fileId);
+    if (err) showToast(err, 'error');
+    else showToast('文件已删除', 'success');
+  };
+
+  /** 清理无引用文件（删条目后留下的孤儿原件，回收磁盘） */
+  const cleanupOrphans = async () => {
+    if (!activeOrgId || orphans.length === 0) return;
+    const ok = await confirmDialog({
+      title: '清理无引用文件',
+      message: `将删除 ${orphans.length} 个已无任何条目 / 任务引用的原件，释放磁盘空间。此操作不可恢复。`,
+      confirmText: '清理',
+    });
+    if (!ok) return;
+    const removed = await useEnclaveKbStore.getState().cleanupOrphans(activeOrgId);
+    showToast(removed > 0 ? `已清理 ${removed} 个文件` : '没有可清理的文件', removed > 0 ? 'success' : 'info');
+  };
+
   /** 跳回来源任务：先加载任务列表再选中，避免选中态被列表刷新覆盖。 */
   const jumpToTask = async () => {
-    const taskId = activeEntry?.sourceRef;
+    // 只有任务产出才有「来源任务」；投喂/手工/AI 条目的 source_ref 不是任务 id
+    if (activeEntry?.origin !== 'task_output') return;
+    const taskId = activeEntry.sourceRef;
     if (!activeOrgId || !taskId) return;
     await useEnclaveTaskStore.getState().loadTasks(activeOrgId);
     useEnclaveTaskStore.getState().selectTask(taskId);
@@ -1295,7 +1364,7 @@ export function EnclaveKbPage() {
                             {item.status === 'running' ? '整理中' : '等待模型'}
                           </span>
                         )}
-                        {canManual && item.kind !== 'url' && (
+                        {canManual && hasUrlSnapshot(item) && (
                           <button
                             className="shrink-0 text-[10px]"
                             style={{ color: 'var(--text-secondary)' }}
@@ -1442,6 +1511,15 @@ export function EnclaveKbPage() {
                                 待更新
                               </span>
                             )}
+                            {metaNum(e, 'sourceTaskCancelledAt') > 0 && (
+                              <span
+                                className="shrink-0 px-1.5 py-[1px] rounded text-[9px]"
+                                style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
+                                title="来源任务已作废：该条目为作废前的产出版本"
+                              >
+                                来源已作废
+                              </span>
+                            )}
                             {e.files.length > 0 && (
                               <span
                                 className="shrink-0 flex items-center gap-0.5 text-[9px]"
@@ -1492,17 +1570,41 @@ export function EnclaveKbPage() {
                             </div>
                           )}
 
+                          {/* 作废任务的知识条目保留（与删除同口径），但要明确提示产出来源已终止 */}
+                          {metaNum(e, 'sourceTaskCancelledAt') > 0 && (
+                            <div
+                              className="text-[11px] px-2 py-1 rounded flex items-center gap-1"
+                              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+                              title={`标记于 ${formatTime(metaNum(e, 'sourceTaskCancelledAt'))}`}
+                            >
+                              <AlertTriangle size={11} />
+                              来源任务已作废：这是作废前沉淀的产出版本，内容未必仍然有效
+                            </div>
+                          )}
+
                           <div
                             className="text-[10px] flex items-center gap-3 flex-wrap"
                             style={{ color: 'var(--text-tertiary)' }}
                           >
-                            <span>任务「{taskTitle || e.sourceRef}」</span>
-                            {confirmedAt > 0 && (
-                              <span>
-                                确认人 {memberName(metaStr(e, 'confirmedBy')) || '-'} · 确认于 {formatTime(confirmedAt)}
-                              </span>
+                            {e.origin === 'task_output' ? (
+                              <>
+                                {/* 任务删除后条目会脱钩（sourceRef 置空），来源降级为历史信息 */}
+                                <span>
+                                  {e.sourceRef
+                                    ? `任务「${taskTitle || '已删除或不可见'}」`
+                                    : `来源任务「${taskTitle || '未知'}」（已删除）`}
+                                </span>
+                                {confirmedAt > 0 && (
+                                  <span>
+                                    确认人 {memberName(metaStr(e, 'confirmedBy')) || '-'} · 确认于 {formatTime(confirmedAt)}
+                                  </span>
+                                )}
+                                <span>第 {metaNum(e, 'revision') || 1} 次确认</span>
+                              </>
+                            ) : (
+                              // 投喂 / 手工 / AI 条目没有来源任务，只标来源类型
+                              <span>来源 {ORIGIN_LABEL[e.origin] ?? e.origin}</span>
                             )}
-                            <span>第 {metaNum(e, 'revision') || 1} 次确认</span>
                             <span>首次沉淀 {formatTime(e.addedAt)}</span>
                             <span>最近更新 {formatTime(e.updatedAt)}</span>
                             {metaStr(e, 'editedBy') && (
@@ -1577,26 +1679,37 @@ export function EnclaveKbPage() {
                                 </span>
                               )}
                               {e.files.map((f) => (
-                                <button
-                                  key={f.fileId}
-                                  onClick={() => void openFile(f.fileId)}
-                                  className="attachment-row w-full text-left flex items-center gap-2 px-1 py-1"
-                                  title="打开文件"
-                                >
-                                  <FileText size={11} style={{ color: 'var(--accent)' }} />
-                                  <span
-                                    className="text-[11px] truncate flex-1"
-                                    style={{ color: 'var(--text-secondary)' }}
+                                <div key={f.fileId} className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => void openFile(f.fileId)}
+                                    className="attachment-row flex-1 min-w-0 text-left flex items-center gap-2 px-1 py-1"
+                                    title="打开文件"
                                   >
-                                    {f.fileName}
-                                  </span>
-                                  <span
-                                    className="text-[10px] shrink-0"
-                                    style={{ color: 'var(--text-tertiary)' }}
-                                  >
-                                    {formatSize(f.fileSize)}
-                                  </span>
-                                </button>
+                                    <FileText size={11} className="shrink-0" style={{ color: 'var(--accent)' }} />
+                                    <span
+                                      className="text-[11px] truncate flex-1"
+                                      style={{ color: 'var(--text-secondary)' }}
+                                    >
+                                      {f.fileName}
+                                    </span>
+                                    <span
+                                      className="text-[10px] shrink-0"
+                                      style={{ color: 'var(--text-tertiary)' }}
+                                    >
+                                      {formatSize(f.fileSize)}
+                                    </span>
+                                  </button>
+                                  {canEdit && e.origin !== 'task_output' && (
+                                    <button
+                                      onClick={() => void detachEntryFile(e, f.fileId, f.fileName)}
+                                      className="shrink-0 text-[10px] px-1"
+                                      style={{ color: 'var(--text-tertiary)' }}
+                                      title="解除这条知识与该文件的关联（原件保留；任务产出的交付物不提供此操作）"
+                                    >
+                                      解除
+                                    </button>
+                                  )}
+                                </div>
                               ))}
                             </div>
                           </div>
@@ -1635,7 +1748,7 @@ export function EnclaveKbPage() {
                                 取消
                               </button>
                             )}
-                            {e.sourceRef && (
+                            {e.origin === 'task_output' && e.sourceRef && (
                               <button
                                 onClick={() => void jumpToTask()}
                                 className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
@@ -1689,7 +1802,7 @@ export function EnclaveKbPage() {
                     size="sm"
                     className="w-full"
                     options={[
-                      { value: 'entry', label: '按来源任务' },
+                      { value: 'entry', label: '按来源条目' },
                       { value: 'assignee', label: '按负责人' },
                       { value: 'priority', label: '按优先级' },
                       { value: 'filetype', label: '按文件类型' },
@@ -1709,6 +1822,21 @@ export function EnclaveKbPage() {
                     ? `匹配 ${matchedFileCount} / ${totalFileCount} 个文件`
                     : `共 ${totalFileCount} 个文件`}
                 </span>
+                {canEdit && orphans.length > 0 && (
+                  <button
+                    onClick={() => void cleanupOrphans()}
+                    className="pd-btn shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[10px]"
+                    style={{
+                      color: 'var(--status-danger)',
+                      backgroundColor: 'var(--bg-field)',
+                      border: '1px solid var(--border)',
+                    }}
+                    title="删除已无任何条目 / 任务引用的原件，回收磁盘"
+                  >
+                    <Trash2 size={10} />
+                    清理无引用（{orphans.length}）
+                  </button>
+                )}
                 <div className="flex-1" />
                 <span className="text-[10px] shrink-0 whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
                   任务交付物与投喂文件 · 打开即查看
@@ -1792,7 +1920,7 @@ export function EnclaveKbPage() {
                               </div>
                               <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-tertiary)' }}>
                                 {fileGroupBy !== 'entry' && (
-                                  <>来源任务「{f.entryTitle || f.sourceRef || '未知'}」 · </>
+                                  <>来源「{f.entryTitle || f.sourceRef || '未知'}」 · </>
                                 )}
                                 {f.fileSize > 0 && `${formatSize(f.fileSize)} · `}
                                 {formatRelative(f.addedAt)}归档
@@ -1811,6 +1939,21 @@ export function EnclaveKbPage() {
                               <FolderOpen size={11} />
                               打开
                             </button>
+                            {canEdit && (
+                              <button
+                                onClick={() => void deleteAsset(f)}
+                                className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                                style={{
+                                  color: 'var(--status-danger)',
+                                  backgroundColor: 'var(--bg-field)',
+                                  border: '1px solid var(--border)',
+                                }}
+                                title="删除原件（仍有任务 / 条目引用时会被拒绝）"
+                              >
+                                <Trash2 size={11} />
+                                删除
+                              </button>
+                            )}
                           </div>
                         ))}
                     </div>
