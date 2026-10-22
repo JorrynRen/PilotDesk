@@ -736,7 +736,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
   const sky = useMemo(() => makeSkyStyle(), []);
   // 临时诊断（无法开 devtools：默认隐藏星云层，逐层排查那条横线）
   // 取值 'nebula' | 'dust' | 'bright' | ''；改这里 → 提交 → 我重新同步
-  const skyHide: string = 'dust';
+  const skyHide: string = 'both';
   // 来源图例与文案：团队库只列真实存在的来源，并覆盖团队语义（work → 任务产出）
   const legendOrigins = source?.legend?.origins ?? (Object.keys(ORIGIN_COLOR) as KnowledgeOrigin[]);
   const originLabel = (o: KnowledgeOrigin) => source?.legend?.labels?.[o] ?? ORIGIN_LABEL[o];
@@ -1998,12 +1998,14 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
             )}
 
             {/* 静态层：亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}
-            {skyHide !== 'bright' && (
+            {skyHide !== 'bright' && skyHide !== 'both' && (
               <div className="pd-graph-sky-bright" aria-hidden style={sky.bright} />
             )}
 
             {/* 抖动噪点：独立整屏层，不旋转、不参与动画 */}
-            <div className="pd-graph-sky-noise" aria-hidden style={sky.noise} />
+            {skyHide !== 'noise' && skyHide !== 'both' && (
+              <div className="pd-graph-sky-noise" aria-hidden style={sky.noise} />
+            )}
 
             {/* 画布上唯一的文字：跟随节点的悬停标签（位置每帧都在变，无法移出叠层） */}
             <div
