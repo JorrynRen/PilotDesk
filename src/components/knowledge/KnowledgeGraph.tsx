@@ -1976,6 +1976,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
           <div
             ref={hostRef}
             className={motionOn ? 'flex-1 min-h-0 relative overflow-hidden pd-motion' : 'flex-1 min-h-0 relative overflow-hidden'}
+            style={skyHide === 'both' ? { backgroundColor: 'var(--bg-field)' } : undefined}
           >
             {/* 漂移层：只有细尘，整层 transform 平移（合成器动画、主线程零重绘），
                 tile 取平移距离的约数，回位时图案完全重合。
@@ -2020,7 +2021,11 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               }}
             />
 
-            <canvas ref={canvasRef} className="block w-full h-full relative" style={{ touchAction: 'none' }} />
+            <canvas
+              ref={canvasRef}
+              className="block w-full h-full relative"
+              style={{ touchAction: 'none', ...(skyHide === 'both' ? { visibility: 'hidden' } : {}) }}
+            />
 
             {scene.nodes.length === 0 && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
