@@ -1169,9 +1169,10 @@ button:disabled:hover {
  * 星点的层数 / 每层点数 / 位置 / 点径**每次挂载由 JS 随机生成**（KnowledgeGraph 的
  * `makeSkyStyle`），这里只留图层定位与主题色 —— 固定的 CSS 图案会让每张图长得一模一样。
  *
- * 两层分工：
+ * 三层分工：
  *   · `.pd-graph-sky`        漂移层（细尘，平铺）。tile 只有 120/240，靠"点多且小"掩盖周期。
- *   · `.pd-graph-sky-bright` 静态层（星云 + 亮星，**不平铺**）。亮星最显眼，平铺会被一眼看穿。
+ *   · `.pd-graph-sky-nebula` 呼吸层（水波，**不平铺**）。圆心随机，明暗 + 缩放循环。
+ *   · `.pd-graph-sky-bright` 静态层（亮星，**不平铺**）。亮星最显眼，平铺会被一眼看穿。
  *
  * ⚠️ 漂移**只能用 `transform`**（见下面的 `.pd-graph-sky-drift`）：
  * `background-position` 走不了合成器，等于整块背景每帧重绘，压在它下面的文字会被反复
@@ -1181,7 +1182,8 @@ button:disabled:hover {
  * 深色族才是白/淡蓝点。深色族统一挂 `data-theme-kind`（见文件上方约定），不逐主题列举。
  */
 .pd-graph-sky,
-.pd-graph-sky-bright {
+.pd-graph-sky-bright,
+.pd-graph-sky-nebula {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -1189,15 +1191,16 @@ button:disabled:hover {
   --pd-star-1: rgba(51, 65, 85, 0.5);
   --pd-star-2: rgba(37, 99, 235, 0.42);
   --pd-star-bright: rgba(37, 99, 235, 0.62);
-  --pd-nebula: rgba(99, 102, 241, 0.1);
+  --pd-nebula: rgba(99, 102, 241, 0.18);
 }
 
 [data-theme-kind='dark'] .pd-graph-sky,
-[data-theme-kind='dark'] .pd-graph-sky-bright {
+[data-theme-kind='dark'] .pd-graph-sky-bright,
+[data-theme-kind='dark'] .pd-graph-sky-nebula {
   --pd-star-1: rgba(255, 255, 255, 0.8);
   --pd-star-2: rgba(186, 214, 255, 0.62);
   --pd-star-bright: rgba(214, 234, 255, 0.95);
-  --pd-nebula: rgba(99, 102, 241, 0.14);
+  --pd-nebula: rgba(99, 102, 241, 0.22);
 }
 
 /* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画。
@@ -1237,6 +1240,27 @@ button:disabled:hover {
   will-change: transform;
 }
 
+/*
+ * 星云"呼吸 / 水波"：实心柔光 + 一圈亮边，整层明暗起伏 + 轻微缩放。
+ * 缩放走 transform、明暗走 opacity —— 整条动画都在合成器上，主线程零重绘。
+ * 振幅刻意克制（0.94 → 1.08、透明度 0.35 → 1）：再大就会和节点自转抢注意力。
+ */
+@keyframes pd-nebula-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.94);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+.pd-graph-sky-nebula {
+  will-change: transform, opacity;
+}
+
 /* ═══════════════════════════════════════════════════
    知识图谱：动效开关（`.pd-motion`）
    ═══════════════════════════════════════════════════ */
@@ -1257,6 +1281,10 @@ button:disabled:hover {
  */
 .pd-motion .pd-graph-sky-drift {
   animation: pd-sky-drift 60s linear infinite;
+}
+
+.pd-motion .pd-graph-sky-nebula {
+  animation: pd-nebula-breathe 9s ease-in-out infinite;
 }
 
 .pd-motion .pd-graph-sky-bright {

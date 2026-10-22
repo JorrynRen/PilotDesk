@@ -108,15 +108,17 @@ const MAX_BUFFER_EDGE = 4096;
 /**
  * 星空背景：**每次挂载重新随机**。
  *
- * 两层分工 —— 这是"看起来随机"的关键：
- *   · dim   ：会漂移的**细尘**。想无限滚动只能平铺，所以 tile 故意做得很小、点很密
- *             （120 / 240 两种周期，每 tile 8~18 颗 0.4~1.3px 微粒）。密度足够高时
- *             看到的是噪点，不是格子。
- *   · bright：星云 + 亮星，**不平铺、也不漂移**。每颗星铺满整块单独定位，位置真正随机；
- *             亮星最大、最显眼，一旦平铺就会立刻暴露周期（之前就是它们在 120px 的 tile
- *             里重复，整片星空看起来像网格）。不漂移还顺带避开了"循环回位时整体跳一下"。
+ * 三层分工 —— 这是"看起来随机"的关键：
+ *   · dim    ：会漂移的**细尘**。想无限滚动只能平铺，所以 tile 故意做得很小、点很密
+ *              （120 / 240 两种周期，每 tile 8~18 颗 0.4~1.3px 微粒）。密度足够高时
+ *              看到的是噪点，不是格子。
+ *   · nebula ：**呼吸层**。两层同心渐变 = 柔光圆斑 + 一圈亮边，圆心的位置每次随机；
+ *              配合 CSS 的 opacity + scale 循环，看起来就是一圈淡淡的水波在扩散回缩。
+ *              独立成层，明暗只作用于它自己，不再连累亮星。
+ *   · bright ：亮星，**不平铺、也不漂移**。每颗星铺满整块单独定位，位置真正随机；
+ *              亮星最大、最显眼，一旦平铺就会立刻暴露周期。
  */
-function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
+function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties; nebula: CSSProperties } {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
   const pos = () => `${rand(0, 100).toFixed(1)}% ${rand(0, 100).toFixed(1)}%`;
 
@@ -134,10 +136,21 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
   addDust(120, 8, 0.4, 0.9);
   addDust(SKY_DRIFT_PX, 18, 0.5, 1.3);
 
-  // ── 静态层：星云 + 亮星（不平铺）──
-  const bright: string[] = [
-    `radial-gradient(62% 62% at ${pos()}, var(--pd-nebula), transparent 72%)`,
-  ];
+  // ── 呼吸层：同一个随机圆心上的"实心柔光 + 一圈亮边 + 外圈余晖" ──
+  const center = pos();
+  const nebula: CSSProperties = {
+    backgroundImage: [
+      // 外圈余晖：中间是空的，缩放时这一圈会像波纹一样往外推
+      `radial-gradient(66% 66% at ${center}, transparent 40%, var(--pd-nebula) 58%, transparent 78%)`,
+      // 内圈柔光：给圆心一点体积，避免只剩一个空心环
+      `radial-gradient(38% 38% at ${center}, var(--pd-nebula), transparent 70%)`,
+    ].join(', '),
+    backgroundSize: '100% 100%, 100% 100%',
+    backgroundRepeat: 'no-repeat',
+  };
+
+  // ── 静态层：亮星（不平铺）──
+  const bright: string[] = [];
   const brightDots = 10 + Math.floor(Math.random() * 6);
   for (let d = 0; d < brightDots; d += 1) {
     const r = rand(1.4, 2.8).toFixed(2);
@@ -150,6 +163,7 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
       backgroundSize: dustSize.join(', '),
       backgroundRepeat: 'repeat',
     },
+    nebula,
     bright: {
       backgroundImage: bright.join(', '),
       backgroundSize: bright.map(() => '100% 100%').join(', '),
@@ -1908,7 +1922,10 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               <div className="pd-graph-sky" style={sky.dim} />
             </div>
 
-            {/* 静态层：星云 + 亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}
+            {/* 呼吸层：一圈淡色水波（opacity + scale 循环，纯合成器，零重绘） */}
+            <div className="pd-graph-sky-nebula" aria-hidden style={sky.nebula} />
+
+            {/* 静态层：亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}
             <div className="pd-graph-sky-bright" aria-hidden style={sky.bright} />
 
             {/* 画布上唯一的文字：跟随节点的悬停标签（位置每帧都在变，无法移出叠层） */}
