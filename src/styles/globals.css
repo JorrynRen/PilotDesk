@@ -1220,11 +1220,11 @@ button:disabled:hover {
 }
 
 /*
- * 漂移层：整体平移 SKY_DRIFT_PX（240px，对角线），60s 一轮 = 每轴 4px/s。
+ * 漂移层：整体平移 SKY_DRIFT_PX（480px，对角线），90s 一轮 ≈ 5.3px/s。
  *
- * `inset: -240px` 是必须的：平移一个 tile 的过程中不能从边上露出空白。
- * 各层 tile 尺寸限定为 240 的约数（120 / 240），所以平移 240px 后图案与起点完全重合，
- * 循环处无缝。
+ * `inset: -480px` 是必须的：平移一个 tile 的过程中不能从边上露出空白。
+ * 各层 tile 尺寸限定为 480 的约数（240 / 480），所以平移 480px 后图案与起点完全重合，
+ * 循环处无缝；重复周期 480px，全屏下也只有 4 次重复，不会看成"平铺复制"。
  *
  * 整条动画都在合成器上跑，主线程一帧都不用重绘 —— 这也是它能和 HTML 文字共存的前提。
  */
@@ -1233,13 +1233,13 @@ button:disabled:hover {
     transform: translate3d(0, 0, 0);
   }
   to {
-    transform: translate3d(-240px, -240px, 0);
+    transform: translate3d(-480px, -480px, 0);
   }
 }
 
 .pd-graph-sky-drift {
   position: absolute;
-  inset: -240px;
+  inset: -480px;
   pointer-events: none;
   will-change: transform;
 }
@@ -1280,12 +1280,12 @@ button:disabled:hover {
 }
 
 .pd-motion .pd-graph-sky-arc {
-  animation: pd-arc-swirl 46s linear infinite;
+  animation: pd-arc-swirl 26s linear infinite;
 }
 
 /* 第二条亮弧：反向 + 更慢，与主亮弧形成差速，看起来像两条旋臂 */
 .pd-motion .pd-graph-sky-arc-alt {
-  animation-duration: 74s;
+  animation-duration: 52s;
   animation-direction: reverse;
 }
 
@@ -1308,7 +1308,7 @@ button:disabled:hover {
  * 代价是动效依赖 JS；反过来缺类名时表现为"静止"而不是"乱动"，是更安全的降级方向。
  */
 .pd-motion .pd-graph-sky-drift {
-  animation: pd-sky-drift 60s linear infinite;
+  animation: pd-sky-drift 90s linear infinite;
 }
 
 .pd-motion .pd-graph-sky-bright {

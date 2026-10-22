@@ -91,11 +91,12 @@ const kindHex = (k: LinkKind) => parseInt(kindColor(k).slice(1), 16);
 
 /**
  * 星空漂移层的平移距离（px）。整层用 `transform` 平移这个距离后回到起点，
- * 所以**每层 tile 必须取它的约数**（这里用 80/120/240），循环处才不会跳。
+ * 所以**每层 tile 必须取它的约数**。tile 取 240 / 480：重复周期 480px，
+ * 全屏下也只有 4 次重复，肉眼几乎看不出平铺（原来 120/240 的周期只有 240px，很规律）。
  *
  * 漂移必须用 transform：`background-position` 走不了合成器，等于整块背景每帧重绘。
  */
-const SKY_DRIFT_PX = 240;
+const SKY_DRIFT_PX = 480;
 
 /**
  * 绘制缓冲的单边上限（设备像素）。超过它继续加分辨率肉眼几乎看不出，只增加显存与带宽：
@@ -140,8 +141,8 @@ function makeSkyStyle(): {
       dustSize.push(`${tile}px ${tile}px`);
     }
   };
-  addDust(120, 8, 0.4, 0.9);
-  addDust(SKY_DRIFT_PX, 18, 0.5, 1.3);
+  addDust(240, 16, 0.35, 0.8);
+  addDust(SKY_DRIFT_PX, 34, 0.4, 1);
 
   // ── 银河带：外晕 + 盘面 + 内侧亮带 + 偏心亮弧 + 亮核 ──
   //
@@ -190,9 +191,11 @@ function makeSkyStyle(): {
    * 为什么不做整条盘面的旋转：那会让倾角全程变化（经过水平/竖直），并且更陡时这一层
    * 会在画布角上被裁出缺角线。亮弧本身是透明渐变，旋转不会露出任何边界。
    */
-  const arcCenter = `${(cx + rand(-4, 4)).toFixed(1)}% ${(cy + rand(-1.5, 1.5)).toFixed(1)}%`;
+  // 亮弧要**明显在动**：圆心离盘心远一点（8%~12%），自身收小一点，
+  // 这样旋转时看到的是"亮块在绕着中心走"，而不是一条对称的椭圆在原地微微转。
+  const arcCenter = `${(cx + rand(8, 12)).toFixed(1)}% ${(cy + rand(-4, 4)).toFixed(1)}%`;
   const arc: CSSProperties = {
-    backgroundImage: `radial-gradient(${radius(30, 11)} at ${arcCenter}, ${RING.map(([at, f]) => stop(f, at)).join(', ')})`,
+    backgroundImage: `radial-gradient(${radius(18, 7)} at ${arcCenter}, ${RING.map(([at, f]) => stop(f, at)).join(', ')})`,
     backgroundSize: '100% 100%',
     backgroundRepeat: 'no-repeat',
   };
@@ -201,9 +204,9 @@ function makeSkyStyle(): {
    * 第二条亮弧：更细、更长、更淡，**反向且更慢**地绕中心转（两条差速 = 旋臂感）。
    * 圆心偏在盘面另一侧，避免与第一条同步重叠。
    */
-  const arc2Center = `${(cx - rand(2, 4)).toFixed(1)}% ${(cy + rand(-1.5, 1.5)).toFixed(1)}%`;
+  const arc2Center = `${(cx - rand(8, 12)).toFixed(1)}% ${(cy + rand(-4, 4)).toFixed(1)}%`;
   const arc2: CSSProperties = {
-    backgroundImage: `radial-gradient(${radius(34, 9)} at ${arc2Center}, ${RING.map(([at, f]) => stop(f * 0.55, at)).join(', ')})`,
+    backgroundImage: `radial-gradient(${radius(22, 6)} at ${arc2Center}, ${RING.map(([at, f]) => stop(f * 0.7, at)).join(', ')})`,
     backgroundSize: '100% 100%',
     backgroundRepeat: 'no-repeat',
   };
