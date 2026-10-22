@@ -397,137 +397,24 @@ pub fn dispatch(
             }))
         }
 
-        "kb.ingest.manual" => {
-            // 与命令层同口径：手工入库需要管理角色（owner / admin）
-            let role = crate::enclave::authz::role_for_member(conn, org_id, actor)?;
-            if !matches!(
-                role,
-                Some(crate::enclave::authz::Role::Owner)
-                    | Some(crate::enclave::authz::Role::Admin)
-            ) {
-                return Err("仅组织所有者/管理员可手工入库".to_string());
-            }
+        // 手工整理第一步：把队列项原文提取出来给前端回填表单（不写库）
+        "kb.ingest.preview" => {
+            require_kb_edit(conn, org_id, actor)?;
             let id = req_str(payload, "queueId")?;
-            let rows = knowledge::list_ingest_queue(conn, org_id, None)?;
-            let row = rows
-                .into_iter()
-                .find(|r| r.id == id)
-                .ok_or_else(|| "待整理记录不存在".to_string())?;
+            let row = knowledge::get_ingest(conn, org_id, &id)?;
             let p: Value = serde_json::from_str(&row.payload).unwrap_or(Value::Null);
-            // 文件投喂：手工入库同样要挂源文件
-            let manual_file_id = p
-                .get("fileId")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string());
-            let (title, text) = match row.kind.as_str() {
-                "snippet" => {
-                    let text = p
-                        .get("text")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let raw_title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
-                    let title = if raw_title.trim().is_empty() {
-                        crate::api_agent::knowledge::derive_title(&text)
-                    } else {
-                        raw_title.to_string()
-                    };
-                    (title, text)
-                }
-                "file" => {
-                    // 与命令层一致：以 file_assets（fileId）为准，relPath 只作存量兜底
-                    let file_id = p.get("fileId").and_then(|v| v.as_str()).unwrap_or("");
-                    let (abs, file_name) = if !file_id.is_empty() {
-                        let meta = files::file_meta(conn, org_id, file_id)?;
-                        (meta.abs_path, meta.file_name)
-                    } else {
-                        let rel = p
-                            .get("relPath")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
-                        let name = p
-                            .get("fileName")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(rel)
-                            .to_string();
-                        (
-                            files::org_dir(conn, org_id)?
-                                .join(rel)
-                                .to_string_lossy()
-                                .to_string(),
-                            name,
-                        )
-                    };
-                    let prep =
-                        crate::api_agent::knowledge::prepare_file(std::path::Path::new(&abs), false)?;
-                    if prep.text.trim().is_empty() {
-                        return Err(
-                            "该格式无法抽取正文，请等模型整理，或把正文粘成片段".to_string()
-                        );
-                    }
-                    let title = file_name
-                        .rsplit_once('.')
-                        .map(|(s, _)| s)
-                        .unwrap_or(&file_name)
-                        .to_string();
-                    (title, prep.text)
-                }
-                "url" => {
-                    // 与命令层一致：网址原文已落盘，可按原文整条入库
-                    let file_id = p.get("fileId").and_then(|v| v.as_str()).unwrap_or("");
-                    if file_id.is_empty() {
-                        return Err(
-                            "该网址还没有抓到原文，请等模型整理，或重新投喂一次".to_string()
-                        );
-                    }
-                    let meta = files::file_meta(conn, org_id, file_id)?;
-                    let text = std::fs::read_to_string(&meta.abs_path)
-                        .map_err(|e| format!("读取网址原文快照失败：{}", e))?;
-                    let title = p
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                        .or_else(|| {
-                            p.get("name")
-                                .and_then(|v| v.as_str())
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_string)
-                        })
-                        .unwrap_or_else(|| meta.file_name.trim_end_matches(".md").to_string());
-                    (title, text)
-                }
-                _ => {
-                    return Err(
-                        "不支持该类型的手工入库；请等模型整理，或把正文粘成片段".to_string()
-                    )
-                }
-            };
-            if text.trim().is_empty() {
-                return Err("内容为空".to_string());
-            }
-            let digest = &crate::api_agent::knowledge::sha256_hex(text.as_bytes())[..16];
-            let entries = vec![knowledge::IngestEntryInput {
-                memory_id: format!("manual:{}", digest),
-                title,
-                content: text,
-                tags: String::new(),
-                metadata: "{}".into(),
-            }];
-            knowledge::write_ingest_entries(
-                conn,
-                org_id,
-                &row.kb_id,
-                // 直接写真实来源（snippet / file / url）—— 早期这里写的是 'manual'，
-                // 会凭空多出第六种来源，图谱里还会被当成"片段投喂"上色
-                row.kind.as_str(),
-                &row.source_ref,
-                actor,
-                &entries,
-                manual_file_id.as_deref(),
-            )?;
-            knowledge::finish_ingest(conn, &row.id);
+            let (title, content, _) =
+                knowledge::manual_ingest_text(conn, org_id, &row.kind, &p)?;
+            to_value(serde_json::json!({ "title": title, "content": content }))
+        }
+        // 手工整理第二步：用户确认（可能已改过标题/正文）后写入组织库
+        "kb.ingest.commit" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let id = req_str(payload, "queueId")?;
+            let title = opt_str(payload, "title").unwrap_or_default();
+            let content = req_str(payload, "content")?;
+            let row = knowledge::get_ingest(conn, org_id, &id)?;
+            knowledge::commit_manual_ingest(conn, org_id, &row, &title, &content, actor)?;
             to_value(serde_json::json!({
                 "queued": false,
                 "queueId": row.id,

@@ -1077,6 +1077,160 @@ pub fn drop_ingest(conn: &Connection, org_id: &str, id: &str) -> Result<bool, St
     .map_err(|e| format!("移除失败：{}", e))
 }
 
+/// 按 id 读取一条待整理记录。
+pub fn get_ingest(conn: &Connection, org_id: &str, id: &str) -> Result<KbIngestQueueView, String> {
+    ensure_kb_write(conn, org_id)?;
+    conn.query_row(
+        "SELECT id, org_id, kb_id, kind, source_ref, payload, status, attempts,
+                last_error, created_at, updated_at
+           FROM kb_ingest_queue WHERE id = ?1 AND org_id = ?2",
+        params![id, org_id],
+        queue_row,
+    )
+    .optional()
+    .map_err(|e| format!("读取待整理记录失败：{}", e))?
+    .ok_or_else(|| "待整理记录不存在".to_string())
+}
+
+/// 手工整理的**提取**一步：按队列项来源取出标题与正文（只读，不写库）。
+///
+/// 命令层（主机本机）与 rpc 层（成员端转发到主机）共用这一份口径 —— 否则"提取"与
+/// "入库"各写一遍，迟早会漂移成"表单里填得出正文、确认时却取不到"。
+pub fn manual_ingest_text(
+    conn: &Connection,
+    org_id: &str,
+    kind: &str,
+    payload: &serde_json::Value,
+) -> Result<(String, String, Option<String>), String> {
+    let file_id = payload
+        .get("fileId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    match kind {
+        "snippet" => {
+            let text = payload
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let raw_title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let title = if raw_title.trim().is_empty() {
+                crate::api_agent::knowledge::derive_title(&text)
+            } else {
+                raw_title.to_string()
+            };
+            Ok((title, text, None))
+        }
+        "file" => {
+            // 以 file_assets（fileId）为准：投喂后可能被重命名/移动，
+            // payload 里记的 relPath 只是当时的快照，不能当唯一依据。
+            let (abs, file_name) = match file_id.as_deref() {
+                Some(fid) => {
+                    let meta = super::files::file_meta(conn, org_id, fid)?;
+                    (meta.abs_path, meta.file_name)
+                }
+                None => {
+                    let rel = payload
+                        .get("relPath")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
+                    let name = payload
+                        .get("fileName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(rel)
+                        .to_string();
+                    (
+                        super::files::org_dir(conn, org_id)?
+                            .join(rel)
+                            .to_string_lossy()
+                            .to_string(),
+                        name,
+                    )
+                }
+            };
+            let prep = crate::api_agent::knowledge::prepare_file(std::path::Path::new(&abs), false)?;
+            let title = file_name
+                .rsplit_once('.')
+                .map(|(s, _)| s)
+                .unwrap_or(&file_name)
+                .to_string();
+            Ok((title, prep.text, file_id))
+        }
+        "url" => {
+            // 网址投喂已在入队后落了原文快照，因此可像文件一样按原文整条入库
+            let Some(fid) = file_id.as_deref() else {
+                return Err("该网址还没有抓到原文，请等模型整理，或重新投喂一次".to_string());
+            };
+            let meta = super::files::file_meta(conn, org_id, fid)?;
+            let text = std::fs::read_to_string(&meta.abs_path)
+                .map_err(|e| format!("读取网址原文快照失败：{}", e))?;
+            let title = payload
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| meta.file_name.trim_end_matches(".md").to_string());
+            Ok((title, text, file_id))
+        }
+        _ => Err("不支持该类型的手工入库；请等模型整理，或把正文粘成片段".to_string()),
+    }
+}
+
+/// 手工整理的**确认入库**一步：把用户确认后的标题/正文写进组织库并出队。
+///
+/// 来源写真实类型（snippet / file / url），不写 `manual` —— 团队库只有 5 种来源，
+/// 多出来的第六种会让图谱配色和来源筛选都对不上。
+pub fn commit_manual_ingest(
+    conn: &Connection,
+    org_id: &str,
+    row: &KbIngestQueueView,
+    title: &str,
+    content: &str,
+    actor: &str,
+) -> Result<(), String> {
+    if content.trim().is_empty() {
+        return Err("内容为空".to_string());
+    }
+    let payload: serde_json::Value =
+        serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
+    let file_id = payload
+        .get("fileId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let digest = &crate::api_agent::knowledge::sha256_hex(content.as_bytes())[..16];
+    let entries = vec![IngestEntryInput {
+        memory_id: format!("manual:{}", digest),
+        title: if title.trim().is_empty() {
+            crate::api_agent::knowledge::derive_title(content)
+        } else {
+            title.trim().to_string()
+        },
+        content: content.to_string(),
+        tags: String::new(),
+        metadata: "{}".into(),
+    }];
+    write_ingest_entries(
+        conn,
+        org_id,
+        &row.kb_id,
+        &row.kind,
+        &row.source_ref,
+        actor,
+        &entries,
+        file_id,
+    )?;
+    finish_ingest(conn, &row.id);
+    Ok(())
+}
+
 /// 一条待写入的投喂产物。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1135,6 +1135,25 @@ pub struct TeamIngestOutcome {
     pub entries: usize,
 }
 
+/// 手工整理第一步的回填内容（标题 + 正文，不落库）。
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamIngestPreview {
+    pub title: String,
+    pub content: String,
+}
+
+/// 手工入库 = 绕过模型直接写共享库，质量风险由管理角色兜底：
+/// 与「编辑/移除条目」同档（owner / admin）。普通成员只能投喂排队。
+fn require_ingest_editor(c: &Connection, org_id: &str, actor: &str) -> Result<(), String> {
+    let role = authz::role_for_member(c, org_id, actor)?;
+    if matches!(role, Some(authz::Role::Owner) | Some(authz::Role::Admin)) {
+        Ok(())
+    } else {
+        Err("仅组织所有者/管理员可手工入库".to_string())
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamQueueRunOutcome {
@@ -1332,14 +1351,16 @@ pub async fn enclave_kb_queue_run(
     }
 }
 
-/// 手工整理：把一条「片段」不经模型直接写入组织库（之后可继续人工编辑）。
+/// 手工整理第一步：把队列项的原文提取出来回填表单（只读，不写库）。
+///
+/// 提取失败（如网址还没抓到原文）不阻断流程：前端仍让用户手工填写后提交。
 #[tauri::command]
-pub async fn enclave_kb_ingest_manual(
+pub async fn enclave_kb_ingest_preview(
     org_id: String,
     queue_id: String,
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
-) -> Result<TeamIngestOutcome, String> {
+) -> Result<TeamIngestPreview, String> {
     let payload = json!({ "queueId": queue_id });
     let qid = queue_id.clone();
     let org_for_write = org_id.clone();
@@ -1347,144 +1368,55 @@ pub async fn enclave_kb_ingest_manual(
         state.inner(),
         db.inner(),
         &org_id,
-        "kb.ingest.manual",
+        "kb.ingest.preview",
         payload,
         move |c, actor| {
-            // 手工入库 = 绕过模型直接写共享库，质量风险由管理角色兜底：
-            // 与「编辑/移除条目」同档（owner / admin）。普通成员只能投喂排队。
-            let role = crate::enclave::authz::role_for_member(c, &org_for_write, actor)?;
-            if !matches!(
-                role,
-                Some(crate::enclave::authz::Role::Owner)
-                    | Some(crate::enclave::authz::Role::Admin)
-            ) {
-                return Err("仅组织所有者/管理员可手工入库".to_string());
-            }
-            let rows =
-                crate::enclave::knowledge::list_ingest_queue(c, &org_for_write, None)?;
-            let row = rows
-                .into_iter()
-                .find(|r| r.id == qid)
-                .ok_or_else(|| "待整理记录不存在".to_string())?;
+            require_ingest_editor(c, &org_for_write, actor)?;
+            let row = crate::enclave::knowledge::get_ingest(c, &org_for_write, &qid)?;
             let p: serde_json::Value =
                 serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null);
-            // 文件投喂：手工入库同样要挂源文件
-            let manual_file_id = p
-                .get("fileId")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string());
-            let (title, text) = match row.kind.as_str() {
-                "snippet" => {
-                    let text = p
-                        .get("text")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let raw_title = p.get("title").and_then(|v| v.as_str()).unwrap_or("");
-                    let title = if raw_title.trim().is_empty() {
-                        crate::api_agent::knowledge::derive_title(&text)
-                    } else {
-                        raw_title.to_string()
-                    };
-                    (title, text)
-                }
-                "file" => {
-                    // 以 file_assets 为准（fileId）取主机本地路径：投喂后可能被重命名/移动，
-                    // payload 里记的 relPath 只是当时的快照，不能当唯一依据。
-                    let file_id = p.get("fileId").and_then(|v| v.as_str()).unwrap_or("");
-                    let (abs, file_name) = if !file_id.is_empty() {
-                        let meta = files::file_meta(c, &org_for_write, file_id)?;
-                        (meta.abs_path, meta.file_name)
-                    } else {
-                        let rel = p
-                            .get("relPath")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| "待整理记录缺少文件路径".to_string())?;
-                        let name = p
-                            .get("fileName")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(rel)
-                            .to_string();
-                        (
-                            files::org_dir(c, &org_for_write)?
-                                .join(rel)
-                                .to_string_lossy()
-                                .to_string(),
-                            name,
-                        )
-                    };
-                    let prep = crate::api_agent::knowledge::prepare_file(
-                        std::path::Path::new(&abs),
-                        false,
-                    )?;
-                    if prep.text.trim().is_empty() {
-                        return Err(
-                            "该格式无法抽取正文，请等模型整理，或把正文粘成片段".to_string()
-                        );
-                    }
-                    let title = file_name
-                        .rsplit_once('.')
-                        .map(|(s, _)| s)
-                        .unwrap_or(&file_name)
-                        .to_string();
-                    (title, prep.text)
-                }
-                "url" => {
-                    // 网址投喂已在入队后落了原文快照，因此可像文件一样按原文整条入库
-                    let file_id = p.get("fileId").and_then(|v| v.as_str()).unwrap_or("");
-                    if file_id.is_empty() {
-                        return Err(
-                            "该网址还没有抓到原文，请等模型整理，或重新投喂一次".to_string()
-                        );
-                    }
-                    let meta = files::file_meta(c, &org_for_write, file_id)?;
-                    let text = std::fs::read_to_string(&meta.abs_path)
-                        .map_err(|e| format!("读取网址原文快照失败：{}", e))?;
-                    let title = p
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                        .or_else(|| {
-                            p.get("name")
-                                .and_then(|v| v.as_str())
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_string)
-                        })
-                        .unwrap_or_else(|| {
-                            meta.file_name.trim_end_matches(".md").to_string()
-                        });
-                    (title, text)
-                }
-                _ => {
-                    return Err(
-                        "不支持该类型的手工入库；请等模型整理，或把正文粘成片段".to_string()
-                    )
-                }
-            };
-            if text.trim().is_empty() {
-                return Err("内容为空".to_string());
-            }
-            let digest = &crate::api_agent::knowledge::sha256_hex(text.as_bytes())[..16];
-            let entries = vec![IngestEntryInput {
-                memory_id: format!("manual:{}", digest),
-                title,
-                content: text,
-                tags: String::new(),
-                metadata: "{}".into(),
-            }];
-            crate::enclave::knowledge::write_ingest_entries(
+            let (title, content, _) = crate::enclave::knowledge::manual_ingest_text(
                 c,
                 &org_for_write,
-                &row.kb_id,
-                "manual",
-                &row.source_ref,
-                actor,
-                &entries,
-                manual_file_id.as_deref(),
+                &row.kind,
+                &p,
             )?;
-            crate::enclave::knowledge::finish_ingest(c, &row.id);
+            Ok(TeamIngestPreview { title, content })
+        },
+    )
+    .await
+}
+
+/// 手工整理第二步：用户确认（标题/正文可改）后写入组织库。
+#[tauri::command]
+pub async fn enclave_kb_ingest_commit(
+    org_id: String,
+    queue_id: String,
+    title: String,
+    content: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<TeamIngestOutcome, String> {
+    let payload = json!({ "queueId": queue_id, "title": title, "content": content });
+    let qid = queue_id.clone();
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.ingest.commit",
+        payload,
+        move |c, actor| {
+            require_ingest_editor(c, &org_for_write, actor)?;
+            let row = crate::enclave::knowledge::get_ingest(c, &org_for_write, &qid)?;
+            crate::enclave::knowledge::commit_manual_ingest(
+                c,
+                &org_for_write,
+                &row,
+                &title,
+                &content,
+                actor,
+            )?;
             Ok(TeamIngestOutcome {
                 queued: false,
                 queue_id: row.id,

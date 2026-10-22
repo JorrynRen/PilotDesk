@@ -445,6 +445,12 @@ export interface TeamIngestOutcome {
   entries: number;
 }
 
+/** 手工整理第一步的回填内容（提取自原文，未落库） */
+export interface TeamIngestPreview {
+  title: string;
+  content: string;
+}
+
 export interface TeamQueueRunOutcome {
   done: number;
   failed: number;

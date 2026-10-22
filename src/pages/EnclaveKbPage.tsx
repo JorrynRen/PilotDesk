@@ -41,6 +41,7 @@ import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
 import { buildTeamGraph, normalizeOrigin } from '../components/enclave/teamGraph';
 import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
+import { errorMessage } from '../utils/errorMessage';
 import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
 import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeOrigin } from '../types/knowledge';
 
@@ -78,16 +79,21 @@ function queueTitle(item: EnclaveKbQueueItem): string {
   }
 }
 
-/** 网址投喂是否已抓到原文：快照落盘后才能按原文手工入库（与个人库「原文入库」同口径） */
-function hasUrlSnapshot(item: EnclaveKbQueueItem): boolean {
-  if (item.kind !== 'url') return true;
-  try {
-    const p = JSON.parse(item.payload) as Record<string, unknown>;
-    return Boolean(p.fileId);
-  } catch {
-    return false;
-  }
-}
+/**
+ * 待整理 → 手工整理的内联表单：先把原文提取回填，用户确认后才写组织库。
+ * 提取失败（如网址还没抓到原文）不挡路 —— 表单仍可手工填写后提交。
+ */
+type ManualDraft = {
+  id: string;
+  title: string;
+  content: string;
+  /** 正在提取原文 */
+  loading: boolean;
+  /** 提取失败的原因 */
+  notice: string;
+  saving: boolean;
+  error: string;
+};
 
 function formatTime(unixSec: number): string {
   if (!unixSec) return '-';
@@ -319,6 +325,7 @@ export function EnclaveKbPage() {
   const [topic, setTopic] = useState('');
   const [picking, setPicking] = useState(false);
   const [ingesting, setIngesting] = useState(false);
+  const [manualDraft, setManualDraft] = useState<ManualDraft | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [dragCount, setDragCount] = useState(0);
   /** 本机模型（AI 生成用）：与团队加工能力分开判 —— 生成只把主题发给模型，不需要主机能力 */
@@ -334,6 +341,51 @@ export function EnclaveKbPage() {
         : ingestMode === 'url'
           ? Boolean(ingestUrl.trim())
           : Boolean(topic.trim()) && !aiBlocked;
+
+  /** 手工整理第一步：打开内联表单并回填提取结果（提取失败则留空白表单） */
+  const openManualDraft = async (item: EnclaveKbQueueItem) => {
+    if (!activeOrgId) return;
+    setManualDraft({
+      id: item.id,
+      title: '',
+      content: '',
+      loading: true,
+      notice: '',
+      saving: false,
+      error: '',
+    });
+    try {
+      const preview = await useEnclaveKbStore
+        .getState()
+        .previewManualIngest(activeOrgId, item.id);
+      setManualDraft((d) =>
+        d && d.id === item.id ? { ...d, ...preview, loading: false } : d,
+      );
+    } catch (e) {
+      const notice = errorMessage(e);
+      setManualDraft((d) => (d && d.id === item.id ? { ...d, loading: false, notice } : d));
+    }
+  };
+
+  /** 手工整理第二步：确认表单内容后入库 */
+  const submitManualDraft = async () => {
+    if (!manualDraft || !activeOrgId) return;
+    if (!manualDraft.content.trim()) {
+      setManualDraft({ ...manualDraft, error: '正文不能为空' });
+      return;
+    }
+    setManualDraft({ ...manualDraft, saving: true, error: '' });
+    try {
+      await useEnclaveKbStore
+        .getState()
+        .commitManualIngest(activeOrgId, manualDraft.id, manualDraft.title, manualDraft.content);
+      setManualDraft(null);
+      showToast('已入组织库', 'success');
+    } catch (e) {
+      const msg = errorMessage(e);
+      setManualDraft((d) => (d ? { ...d, saving: false, error: msg } : d));
+    }
+  };
 
   useEffect(() => {
     if (tab !== 'ingest' || !activeOrgId || !activeKbId) return;
@@ -1461,73 +1513,148 @@ export function EnclaveKbPage() {
                     </div>
                   ) : (
                     queue.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded text-[11px]"
-                        style={{
-                          backgroundColor: 'var(--bg-content)',
-                          border: '1px solid var(--border)',
-                        }}
-                      >
-                        <span
-                          className="shrink-0 px-1 rounded text-[9px]"
-                          style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                      <div key={item.id}>
+                        <div
+                          className="flex items-center gap-2 px-2 py-1.5 rounded text-[11px]"
+                          style={{
+                            backgroundColor: 'var(--bg-content)',
+                            border: '1px solid var(--border)',
+                          }}
                         >
-                          {QUEUE_KIND_LABEL[item.kind] ?? item.kind}
-                        </span>
-                        <span
-                          className="flex-1 min-w-0 truncate"
-                          style={{ color: 'var(--text-primary)' }}
-                          title={queueTitle(item)}
-                        >
-                          {queueTitle(item)}
-                        </span>
-                        {item.status === 'failed' ? (
                           <span
-                            className="shrink-0 text-[10px]"
-                            style={{ color: 'var(--status-danger)' }}
-                            title={item.lastError}
+                            className="shrink-0 px-1 rounded text-[9px]"
+                            style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
                           >
-                            失败{item.attempts > 1 ? ` ×${item.attempts}` : ''}
+                            {QUEUE_KIND_LABEL[item.kind] ?? item.kind}
                           </span>
-                        ) : (
-                          <span className="shrink-0 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                            {item.status === 'running' ? '整理中' : '等待模型'}
+                          <span
+                            className="flex-1 min-w-0 truncate"
+                            style={{ color: 'var(--text-primary)' }}
+                            title={queueTitle(item)}
+                          >
+                            {queueTitle(item)}
                           </span>
-                        )}
-                        {canManual && hasUrlSnapshot(item) && (
+                          {item.status === 'failed' ? (
+                            <span
+                              className="shrink-0 text-[10px]"
+                              style={{ color: 'var(--status-danger)' }}
+                              title={item.lastError}
+                            >
+                              失败{item.attempts > 1 ? ` ×${item.attempts}` : ''}
+                            </span>
+                          ) : (
+                            <span className="shrink-0 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                              {item.status === 'running' ? '整理中' : '等待模型'}
+                            </span>
+                          )}
+                          {canManual && (
+                            <button
+                              className="shrink-0 text-[10px]"
+                              style={{ color: 'var(--text-secondary)' }}
+                              title="不经模型：先把原文提取到表单，确认后再写入组织库（owner / admin）"
+                              onClick={() => {
+                                if (manualDraft?.id === item.id) setManualDraft(null);
+                                else void openManualDraft(item);
+                              }}
+                            >
+                              {manualDraft?.id === item.id ? '收起' : '手工入库'}
+                            </button>
+                          )}
                           <button
                             className="shrink-0 text-[10px]"
-                            style={{ color: 'var(--text-secondary)' }}
-                            title="不经模型，按原文整条写入组织库（owner / admin）"
+                            style={{ color: 'var(--accent)' }}
                             onClick={() => {
-                              if (activeOrgId) {
-                                void useEnclaveKbStore.getState().manualIngest(activeOrgId, item.id);
-                              }
+                              if (activeOrgId) void useEnclaveKbStore.getState().retryQueueItem(activeOrgId, item.id);
                             }}
                           >
-                            手工入库
+                            重试
                           </button>
+                          <button
+                            className="shrink-0"
+                            style={{ color: 'var(--text-tertiary)' }}
+                            title="移出队列"
+                            onClick={() => {
+                              if (activeOrgId) void useEnclaveKbStore.getState().dropQueueItem(activeOrgId, item.id);
+                            }}
+                          >
+                            <Trash2 size={10} />
+                          </button>
+                        </div>
+
+                        {manualDraft?.id === item.id && (
+                          <div
+                            className="mt-1 p-2 rounded-lg space-y-1.5"
+                            style={{
+                              backgroundColor: 'var(--bg-tertiary)',
+                              border: '1px solid var(--border)',
+                            }}
+                          >
+                            <input
+                              value={manualDraft.title}
+                              onChange={(e) =>
+                                setManualDraft((d) => (d ? { ...d, title: e.target.value } : d))
+                              }
+                              placeholder="标题（可留空，自动取正文开头）"
+                              className={FIELD_CLASS}
+                              style={FIELD_STYLE}
+                              disabled={manualDraft.loading || manualDraft.saving}
+                            />
+                            <textarea
+                              value={manualDraft.content}
+                              onChange={(e) =>
+                                setManualDraft((d) => (d ? { ...d, content: e.target.value } : d))
+                              }
+                              placeholder={manualDraft.loading ? '正在提取原文…' : '正文'}
+                              rows={8}
+                              className="w-full p-2 rounded-lg text-[11px] leading-relaxed outline-none resize-y"
+                              style={FIELD_STYLE}
+                              disabled={manualDraft.loading || manualDraft.saving}
+                            />
+                            {manualDraft.notice && (
+                              <div
+                                className="text-[10px] leading-relaxed"
+                                style={{ color: 'var(--status-warning)' }}
+                              >
+                                没能自动提取：{manualDraft.notice}。可直接手工填写后提交。
+                              </div>
+                            )}
+                            {manualDraft.error && (
+                              <div className="text-[10px]" style={{ color: 'var(--status-danger)' }}>
+                                {manualDraft.error}
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2">
+                              <span className="flex-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                                确认后写入组织库，之后仍可人工编辑
+                              </span>
+                              <button
+                                onClick={() => setManualDraft(null)}
+                                disabled={manualDraft.saving}
+                                className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                                style={{
+                                  color: 'var(--text-secondary)',
+                                  backgroundColor: 'var(--bg-field)',
+                                  border: '1px solid var(--border)',
+                                }}
+                              >
+                                取消
+                              </button>
+                              <button
+                                onClick={() => void submitManualDraft()}
+                                disabled={manualDraft.loading || manualDraft.saving}
+                                className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
+                                style={{
+                                  backgroundColor: 'var(--accent)',
+                                  color: '#fff',
+                                  border: 'none',
+                                  opacity: manualDraft.loading || manualDraft.saving ? 0.6 : 1,
+                                }}
+                              >
+                                {manualDraft.saving ? '入库中…' : '确认入库'}
+                              </button>
+                            </div>
+                          </div>
                         )}
-                        <button
-                          className="shrink-0 text-[10px]"
-                          style={{ color: 'var(--accent)' }}
-                          onClick={() => {
-                            if (activeOrgId) void useEnclaveKbStore.getState().retryQueueItem(activeOrgId, item.id);
-                          }}
-                        >
-                          重试
-                        </button>
-                        <button
-                          className="shrink-0"
-                          style={{ color: 'var(--text-tertiary)' }}
-                          title="移出队列"
-                          onClick={() => {
-                            if (activeOrgId) void useEnclaveKbStore.getState().dropQueueItem(activeOrgId, item.id);
-                          }}
-                        >
-                          <Trash2 size={10} />
-                        </button>
                       </div>
                     ))
                   )}
