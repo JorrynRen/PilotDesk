@@ -90,13 +90,19 @@ const kindColor = (k: LinkKind) => (k === 'contains' ? CONTAINS_COLOR : EDGE_COL
 const kindHex = (k: LinkKind) => parseInt(kindColor(k).slice(1), 16);
 
 /**
+ * 星空漂移层的平移距离（px）。整层用 `transform` 平移这个距离后回到起点，
+ * 所以**每层 tile 必须取它的约数**（这里用 80/120/240），循环处才不会跳。
+ *
+ * 漂移必须用 transform：`background-position` 走不了合成器，等于整块背景每帧重绘。
+ */
+const SKY_DRIFT_PX = 240;
+
+/**
  * 星空背景：**每次挂载重新随机**（层数、每层点数、位置、大小）。
  *
- * 原来是一组写死在 CSS 里的固定图案（5 个 radial-gradient），每张图长得一模一样；
- * 更要命的是 `.pd-graph-sky` 上还挂着一条 `background-position` 的 60s 漂移动画 ——
- * 这个属性走不了合成器，等于整块背景**每帧重绘**，压在上面的 HTML 文字（顶部信息行、
- * 底部提示、标签、详情面板）会被反复重栅格化，表现就是"文字在循环抖动"。
- * 现在：背景静态（点位置随机），只保留闪烁（opacity 动画是合成器动画，不触发重绘）。
+ * 原来是一组写死在 CSS 里的固定图案（5 个 radial-gradient），每张图长得一模一样。
+ * 现在由这里现算：层数/点数/位置随机，只有 tile 尺寸限定在漂移距离的约数里。
+ * 位置是随机值，透视上不允许出现明显"格子"。
  */
 function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
@@ -108,10 +114,10 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
   ];
   const sizes: string[] = ['100% 100%'];
 
-  // 3~4 层平铺星场：层间周期不同 ⇒ 看不出"层"
+  // 3~4 层平铺星场：层间周期不同 ⇒ 看不出"层"；tile 取漂移距离的约数
   const layers = 3 + Math.floor(Math.random() * 2);
   for (let i = 0; i < layers; i += 1) {
-    const tile = Math.round(rand(200, 640));
+    const tile = [120, SKY_DRIFT_PX][Math.floor(Math.random() * 2)];
     const dots = 3 + Math.floor(Math.random() * 3);
     for (let d = 0; d < dots; d += 1) {
       const r = rand(1, 2.4).toFixed(2);
@@ -128,7 +134,7 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
     const r = rand(1.9, 3.4).toFixed(2);
     brightImages.push(`radial-gradient(${r}px ${r}px at ${pos()}, var(--pd-star-bright), transparent)`);
   }
-  const brightTile = Math.round(rand(420, 680));
+  const brightTile = [120, SKY_DRIFT_PX][Math.floor(Math.random() * 2)];
 
   return {
     dim: {
@@ -360,6 +366,13 @@ const POINT_VERT = `
 const POINT_FRAG = `
   varying vec3 vColor;
   varying float vPulse;
+  // three 的色彩管理把 Color.setHex 的 sRGB 输入转成了**线性值**；内置材质输出时会自动转回
+  // sRGB，自定义 ShaderMaterial 不会。不补这一句，各来源色会整体压暗并被压成同一种深蓝
+  // （任务产出的紫 #8B5CF6 会显示成 #421BEC），看起来就像"所有节点都是片段投喂"。
+  vec3 linearToSRGB(vec3 c) {
+    vec3 s = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+    return mix(c * 12.92, s, step(vec3(0.0031308), c));
+  }
   void main() {
     vec2 d = gl_PointCoord * 2.0 - 1.0;
     float r2 = dot(d, d);
@@ -375,7 +388,7 @@ const POINT_FRAG = `
     vec3 col = vColor * vPulse * (0.32 + 0.82 * diff) * (1.0 - 0.32 * rim) + vec3(spec) * 0.5;
     // 最外一圈给一点点 alpha 渐变做抗锯齿。**alpha 只是写进画布的通道**：
     // 材质是 opaque、开着深度写入，所以球内部严格遮挡后面的连线。
-    gl_FragColor = vec4(col, smoothstep(1.0, 0.80, r2));
+    gl_FragColor = vec4(linearToSRGB(col), smoothstep(1.0, 0.80, r2));
   }
 `;
 
@@ -402,13 +415,18 @@ const RING_FRAG = `
   uniform vec3 uColor;
   uniform float uStrokePx;
   varying float vPx;
+  // 同 POINT_FRAG：自定义着色器要自己做线性 → sRGB（uColor 是 Color 转出来的线性值）
+  vec3 linearToSRGB(vec3 c) {
+    vec3 s = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+    return mix(c * 12.92, s, step(vec3(0.0031308), c));
+  }
   void main() {
     vec2 d = gl_PointCoord * 2.0 - 1.0;
     float r = length(d);
     // 把"固定像素宽"换算成 [0,1] 的半径区间：环的外径是 vPx 像素
     float inner = 1.0 - 2.0 * uStrokePx / max(vPx, 1.0);
     if (r > 1.0 || r < inner) discard;
-    gl_FragColor = vec4(uColor, 1.0);
+    gl_FragColor = vec4(linearToSRGB(uColor), 1.0);
   }
 `;
 /* ────────────────────────── Three.js 现场 ────────────────────────── */
@@ -1811,96 +1829,91 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         </div>
       </div>
 
-      {/* 中：画布 */}
-      <div
-        ref={hostRef}
-        className={motionOn ? 'flex-1 relative overflow-hidden pd-motion' : 'flex-1 relative overflow-hidden'}
-      >
-        <div className="pd-graph-sky" aria-hidden style={sky.dim} />
-        <div className="pd-graph-sky-bright" aria-hidden style={sky.bright} />
-
-        <div
-          className="absolute top-2 left-3 text-[10px] z-10 pointer-events-none"
-          style={{
-            color: 'var(--text-tertiary)',
-            // 独立合成层：下方的星空层每帧重绘，文字与其同层会被反复重栅格化（表现为整行抖动）
-            transform: 'translateZ(0)',
-            willChange: 'transform',
-          }}
-        >
-          {`已显示 ${scene.shown} 个节点、${scene.edges.length} 条边`}
-          {` · 已展开 ${expandedCount} 个文件的分块`}
-          {scene.total > scene.shown && ` · 共 ${scene.total} 个，其余被安全阀截断`}
-          {filtersActive && <span> · 已按筛选条件收窄</span>}
-          {selectedId && <span>{` · 已选中`}</span>}
-        </div>
-
-        {/* 按需标签：绝对定位的 HTML，全程只有这一个元素 */}
-        <div
-          ref={labelRef}
-          className="absolute top-0 left-0 z-20 pointer-events-none px-1.5 py-0.5 rounded text-[11px] whitespace-nowrap"
-          style={{
-            display: 'none',
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
-            color: 'var(--text-primary)',
-            // 独立合成层：避免与下方每帧重绘的星空/画布一起重栅格化（否则文字会跟着动效抽）
-            willChange: 'transform',
-          }}
-        />
-
-        <canvas ref={canvasRef} className="block w-full h-full relative" style={{ touchAction: 'none' }} />
-
-        {scene.nodes.length === 0 && (
-          <div
-            className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none"
-            style={{ transform: 'translateZ(0)', willChange: 'transform' }}
-          >
-            <Crosshair size={20} style={{ color: 'var(--text-tertiary)' }} />
-            <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>这个库里还没有可显示的节点</div>
+      {/* 右：信息行 + 画布 + 底部行。**三者都在画布外**：
+          文字一旦叠在持续 60fps 重绘的 WebGL 画布上，合成器会在显存紧张时回收它的栅格，
+          表现就是"顶部信息 / 底部提示 / 属性面板周期性消失又出现"。 */}
+      <div className="flex-1 min-w-0 flex">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+          <div className="shrink-0 px-3 pt-2 pb-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+            {`已显示 ${scene.shown} 个节点、${scene.edges.length} 条边`}
+            {` · 已展开 ${expandedCount} 个文件的分块`}
+            {scene.total > scene.shown && ` · 共 ${scene.total} 个，其余被安全阀截断`}
+            {filtersActive && <span> · 已按筛选条件收窄</span>}
+            {selectedId && <span>{` · 已选中`}</span>}
           </div>
-        )}
 
-        {toastTip && (
-          <button
-            onClick={() => { setToastTip(false); localStorage.setItem(TOOLTIP_KEY, '0'); }}
-            className="absolute bottom-2 left-3 z-10 px-2 py-1 rounded text-[10px]"
-            style={{
-              color: 'var(--text-tertiary)',
-              backgroundColor: 'var(--bg-secondary)',
-              border: '1px solid var(--border)',
-              // 与顶部信息行同理：独立合成层，避免随星空重绘一起重栅格化
-              transform: 'translateZ(0)',
-              willChange: 'transform',
-            }}
-            title="点一下不再显示"
+          <div
+            ref={hostRef}
+            className={motionOn ? 'flex-1 min-h-0 relative overflow-hidden pd-motion' : 'flex-1 min-h-0 relative overflow-hidden'}
           >
-            拖动节点可挪位置 · 点空白取消选中 · 悬停看名称
-          </button>
-        )}
+            {/* 漂移层：整体 transform 平移（合成器动画、主线程零重绘），tile 取平移距离的约数 */}
+            <div className="pd-graph-sky-drift" aria-hidden>
+              <div className="pd-graph-sky" style={sky.dim} />
+              <div className="pd-graph-sky-bright" style={sky.bright} />
+            </div>
 
-        {source?.loadMore?.hasMore && (
-          <button
-            onClick={source.loadMore.onLoad}
-            disabled={source.loadMore.loading}
-            className="absolute bottom-2 z-10 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px]"
-            style={{
-              // 详情面板占住右侧 264px，别压在它下面
-              right: (selectedCore || selectedChunk || selectedScene) ? 280 : 12,
-              color: 'var(--text-secondary)',
-              backgroundColor: 'var(--bg-secondary)',
-              border: '1px solid var(--border)',
-              transform: 'translateZ(0)',
-              opacity: source.loadMore.loading ? 0.6 : 1,
-            }}
-            title="按最近更新顺序继续拉取更早的条目（每批 200 条）"
-          >
-            {source.loadMore.loading
-              ? <Loader2 size={11} className="pd-animate-spin" />
-              : <ChevronDown size={11} />}
-            {`加载更多（已载入 ${source.loadMore.loaded} 条）`}
-          </button>
-        )}
+            {/* 画布上唯一的文字：跟随节点的悬停标签（位置每帧都在变，无法移出叠层） */}
+            <div
+              ref={labelRef}
+              className="absolute top-0 left-0 z-20 pointer-events-none px-1.5 py-0.5 rounded text-[11px] whitespace-nowrap"
+              style={{
+                display: 'none',
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-primary)',
+                willChange: 'transform',
+              }}
+            />
+
+            <canvas ref={canvasRef} className="block w-full h-full relative" style={{ touchAction: 'none' }} />
+
+            {scene.nodes.length === 0 && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
+                <Crosshair size={20} style={{ color: 'var(--text-tertiary)' }} />
+                <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>这个库里还没有可显示的节点</div>
+              </div>
+            )}
+          </div>
+
+          {(toastTip || source?.loadMore?.hasMore) && (
+            <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-1">
+              {toastTip ? (
+                <button
+                  onClick={() => { setToastTip(false); localStorage.setItem(TOOLTIP_KEY, '0'); }}
+                  className="px-2 py-1 rounded text-[10px]"
+                  style={{
+                    color: 'var(--text-tertiary)',
+                    backgroundColor: 'var(--bg-secondary)',
+                    border: '1px solid var(--border)',
+                  }}
+                  title="点一下不再显示"
+                >
+                  拖动节点可挪位置 · 点空白取消选中 · 悬停看名称
+                </button>
+              ) : <span />}
+
+              {source?.loadMore?.hasMore && (
+                <button
+                  onClick={source.loadMore.onLoad}
+                  disabled={source.loadMore.loading}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px]"
+                  style={{
+                    color: 'var(--text-secondary)',
+                    backgroundColor: 'var(--bg-secondary)',
+                    border: '1px solid var(--border)',
+                    opacity: source.loadMore.loading ? 0.6 : 1,
+                  }}
+                  title="按最近更新顺序继续拉取更早的条目（每批 200 条）"
+                >
+                  {source.loadMore.loading
+                    ? <Loader2 size={11} className="pd-animate-spin" />
+                    : <ChevronDown size={11} />}
+                  {`加载更多（已载入 ${source.loadMore.loaded} 条）`}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
 
         {(selectedCore || selectedChunk || selectedScene) && (
           <DetailPanel
@@ -1980,13 +1993,11 @@ function DetailPanel({
   const tags = node?.tags ?? chunk?.tags ?? [];
   return (
     <div
-      className="absolute top-2 right-2 bottom-2 w-[264px] rounded-lg overflow-y-auto p-3 space-y-3 shadow-lg"
+      className="w-[264px] shrink-0 min-h-0 overflow-y-auto p-3 space-y-3"
       style={{
-        backgroundColor: 'var(--bg-secondary)',
-        border: '1px solid var(--border)',
-        // 独立合成层：面板叠在每帧重绘的画布/星空上，不隔离会跟着动效一起重栅格化文字
-        transform: 'translateZ(0)',
-        willChange: 'transform',
+        // 独立列（不再浮在画布上）：文字与持续重绘的 WebGL 画布没有合成叠层关系
+        backgroundColor: 'var(--bg-side)',
+        borderLeft: '1px solid var(--border)',
       }}
     >
       <div className="flex items-start gap-2">
