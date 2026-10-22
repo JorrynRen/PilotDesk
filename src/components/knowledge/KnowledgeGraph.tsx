@@ -98,6 +98,14 @@ const kindHex = (k: LinkKind) => parseInt(kindColor(k).slice(1), 16);
 const SKY_DRIFT_PX = 240;
 
 /**
+ * 绘制缓冲的单边上限（设备像素）。超过它继续加分辨率肉眼几乎看不出，只增加显存与带宽：
+ * 全屏 4K + DPR 2 会得到 7680×4320（约 130MB）的缓冲，再加上合成器里的一份纹理，
+ * 显存一紧张就会周期性丢帧/丢层 —— "全屏就闪、切回就好"正是这么来的。
+ * 4096 在 4K 全屏下约等于 DPR 1.07（画质基本不变），面积却只有原来的 1/4。
+ */
+const MAX_BUFFER_EDGE = 4096;
+
+/**
  * 星空背景：**每次挂载重新随机**。
  *
  * 两层分工 —— 这是"看起来随机"的关键：
@@ -730,15 +738,14 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
     const renderer = new THREE.WebGLRenderer({
       canvas,
       // 关 MSAA：节点边缘由片元着色器自己做平滑，连线是 1px；而 MSAA 会让显存里多出
-      // 3~4 倍的大缓冲。显存一紧张，合成器最先丢的就是画布纹理 —— 表现正是
-      // "节点和边整片消失一下又回来"（越跑越频繁）。这一项是最大的显存来源。
+      // 3~4 倍的大缓冲。显存一紧张，合成器最先丢的就是画布纹理。
       antialias: false,
       alpha: true,
-      // 画布是透明的，合成器会在 rAF 之外再合成一次；保留缓冲可以保证任何一次合成
-      // 拿到的都是完整画面（默认的 present 后清空在 WebView2 下会闪出一帧空白）。
-      preserveDrawingBuffer: true,
+      // **不要** preserveDrawingBuffer：它会让每帧多一次整块缓冲拷贝，全屏时就是几十 MB
+      // 的带宽。我们开着动效时每帧都重绘，present 后的清空不会显示出来。
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // 真正的像素比在 applySize 里按"缓冲单边上限"现算，这里只给个初值
+    renderer.setPixelRatio(1);
     renderer.setClearColor(0x000000, 0); // 透明：让画布下方的星空层透上来
 
     const glScene = new THREE.Scene();
@@ -833,6 +840,16 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
     const markDirty = () => { ctx.dirty = true; };
     controls.addEventListener('change', markDirty);
 
+    // 诊断用：如果真是驱动/显存丢上下文，控制台会先出现这一行（three 自己也会打 Context Lost）。
+    // 有它才能区分"画布被合成器丢纹理"和"上下文丢了在重建"。
+    const onContextLost = () => console.warn('[graph] WebGL 上下文丢失');
+    const onContextRestored = () => {
+      console.warn('[graph] WebGL 上下文已恢复');
+      markDirty();
+    };
+    canvas.addEventListener('webglcontextlost', onContextLost);
+    canvas.addEventListener('webglcontextrestored', onContextRestored);
+
     /**
      * 尺寸变化：**必须合并**。
      *
@@ -851,9 +868,14 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
       if (w === lastW && h === lastH) return;
       lastW = w;
       lastH = h;
-      // 高 DPI 下缓冲面积按 DPR² 增长：1.5 之后肉眼基本看不出差别，显存却差一倍多
-      const dpr = Math.min(window.devicePixelRatio, 1.5);
-      if (renderer.getPixelRatio() !== dpr) renderer.setPixelRatio(dpr);
+      /**
+       * 像素比要**按缓冲上限**现算，而不是简单取 DPR：
+       * 全屏 4K 时 `DPR 2` 会得到 7680×4320 的绘制缓冲（约 130MB），再加上合成器里的
+       * 一份纹理，显存一紧就会周期性丢帧/丢层 —— 这正是"全屏就闪、切回就好"的来源。
+       * 单边超过 MAX_BUFFER_EDGE 之后继续加分辨率肉眼已看不出，只增加风险。
+       */
+      const ratio = Math.min(window.devicePixelRatio || 1, MAX_BUFFER_EDGE / Math.max(w, h));
+      if (Math.abs(renderer.getPixelRatio() - ratio) > 0.01) renderer.setPixelRatio(ratio);
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -1217,6 +1239,8 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
     return () => {
       cancelAnimationFrame(ctx.raf);
       window.clearTimeout(resizeTimer);
+      canvas.removeEventListener('webglcontextlost', onContextLost);
+      canvas.removeEventListener('webglcontextrestored', onContextRestored);
       ro.disconnect();
       canvas.removeEventListener('pointerdown', onPointerDown, { capture: true });
       canvas.removeEventListener('pointermove', onPointerMove);
