@@ -107,6 +107,27 @@ const SKY_DRIFT_PX = 480;
 const MAX_BUFFER_EDGE = 4096;
 
 /**
+ * 图谱背景：**独立于应用主题**。
+ *
+ * 星空/银河天然需要深色底才看得见；浅色主题下它只能是一层几乎透明的灰雾。
+ * 所以这里给图谱区单独一份底色选择，值只影响这一块画布区域，不改应用主题。
+ * 同时切换星点调色板（浅底用深灰点、深底用白点），否则换底之后星点会直接看不见。
+ */
+type BackdropPref = 'auto' | 'space' | 'dusk' | 'light';
+const BACKDROP_KEY = 'pilotdesk.graph.backdrop.v1';
+const BACKDROP_OPTIONS: { value: BackdropPref; label: string; bg: string; swatch: string }[] = [
+  { value: 'auto', label: '跟随主题', bg: '', swatch: 'transparent' },
+  { value: 'space', label: '深空', bg: '#0B1020', swatch: '#0B1020' },
+  { value: 'dusk', label: '暮紫', bg: '#170F2B', swatch: '#170F2B' },
+  { value: 'light', label: '浅色', bg: '#F7F7FA', swatch: '#F7F7FA' },
+];
+
+function readBackdropPref(): BackdropPref {
+  const v = localStorage.getItem(BACKDROP_KEY);
+  return v === 'space' || v === 'dusk' || v === 'light' ? v : 'auto';
+}
+
+/**
  * 星空背景：**每次挂载重新随机**。
  *
  * 三层分工 —— 这是"看起来随机"的关键：
@@ -748,6 +769,20 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
 
   // 星空每次挂载重新生成（层数/点数/位置都随机），与动效开关无关
   const sky = useMemo(() => makeSkyStyle(), []);
+  // 图谱底色（独立于应用主题）
+  const [backdrop, setBackdrop] = useState<BackdropPref>(readBackdropPref);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const backdropBg = BACKDROP_OPTIONS.find((o) => o.value === backdrop)?.bg ?? '';
+  const skyPalette =
+    backdrop === 'space' || backdrop === 'dusk' ? 'pd-sky-dark'
+      : backdrop === 'light' ? 'pd-sky-light' : '';
+  const chooseBackdrop = (v: BackdropPref) => {
+    setBackdrop(v);
+    setPaletteOpen(false);
+    try {
+      localStorage.setItem(BACKDROP_KEY, v);
+    } catch { /* ignore */ }
+  };
   // 来源图例与文案：团队库只列真实存在的来源，并覆盖团队语义（work → 任务产出）
   const legendOrigins = source?.legend?.origins ?? (Object.keys(ORIGIN_COLOR) as KnowledgeOrigin[]);
   const originLabel = (o: KnowledgeOrigin) => source?.legend?.labels?.[o] ?? ORIGIN_LABEL[o];
@@ -1986,7 +2021,8 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
 
           <div
             ref={hostRef}
-            className={motionOn ? 'flex-1 min-h-0 relative overflow-hidden pd-motion' : 'flex-1 min-h-0 relative overflow-hidden'}
+            className={`${motionOn ? 'flex-1 min-h-0 relative overflow-hidden pd-motion' : 'flex-1 min-h-0 relative overflow-hidden'} ${skyPalette}`.trim()}
+            style={backdropBg ? { backgroundColor: backdropBg } : undefined}
           >
             {/* 漂移层：只有细尘，整层 transform 平移（合成器动画、主线程零重绘），
                 tile 取平移距离的约数，回位时图案完全重合 */}
@@ -2023,6 +2059,50 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
             />
 
             <canvas ref={canvasRef} className="block w-full h-full relative" style={{ touchAction: 'none' }} />
+
+            {/* 图谱底色选择（只影响这块画布区域，不改应用主题） */}
+            <div className="absolute top-2 right-2 z-30">
+              <button
+                onClick={() => setPaletteOpen((v) => !v)}
+                className="pd-btn flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]"
+                style={{
+                  color: 'var(--text-secondary)',
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border)',
+                }}
+                title="图谱背景色（独立于应用主题）"
+              >
+                <Palette size={11} />
+                {BACKDROP_OPTIONS.find((o) => o.value === backdrop)?.label}
+              </button>
+              {paletteOpen && (
+                <div
+                  className="absolute right-0 mt-1 p-1 rounded-lg shadow-lg space-y-0.5"
+                  style={{ backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border)' }}
+                >
+                  {BACKDROP_OPTIONS.map((o) => (
+                    <button
+                      key={o.value}
+                      onClick={() => chooseBackdrop(o.value)}
+                      className="w-full flex items-center gap-1.5 px-2 py-1 rounded text-[10px] whitespace-nowrap"
+                      style={{
+                        color: o.value === backdrop ? 'var(--accent)' : 'var(--text-secondary)',
+                        backgroundColor: o.value === backdrop ? 'var(--bg-hover)' : 'transparent',
+                      }}
+                    >
+                      <span
+                        className="w-3 h-3 rounded-sm shrink-0"
+                        style={{
+                          backgroundColor: o.swatch === 'transparent' ? 'var(--bg-field)' : o.swatch,
+                          border: '1px solid var(--border)',
+                        }}
+                      />
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {scene.nodes.length === 0 && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">

@@ -1207,6 +1207,29 @@ button:disabled:hover {
   --pd-nebula-a: 0.30;
 }
 
+/* 图谱自选底色（右上角「背景」）时的调色板：与 data-theme-kind 解耦。
+   必须写在主题规则之后 —— 两者优先级相同，靠顺序覆盖。 */
+.pd-sky-dark .pd-graph-sky,
+.pd-sky-dark .pd-graph-sky-bright,
+.pd-sky-dark .pd-graph-sky-nebula {
+  --pd-star-1: rgba(255, 255, 255, 0.8);
+  --pd-star-2: rgba(186, 214, 255, 0.62);
+  --pd-star-bright: rgba(214, 234, 255, 0.95);
+  --pd-nebula-rgb: 99, 102, 241;
+  /* 深底上可以把星云做浓一点，浅色主题下也能看出银河 */
+  --pd-nebula-a: 0.34;
+}
+
+.pd-sky-light .pd-graph-sky,
+.pd-sky-light .pd-graph-sky-bright,
+.pd-sky-light .pd-graph-sky-nebula {
+  --pd-star-1: rgba(51, 65, 85, 0.5);
+  --pd-star-2: rgba(37, 99, 235, 0.42);
+  --pd-star-bright: rgba(37, 99, 235, 0.62);
+  --pd-nebula-rgb: 99, 102, 241;
+  --pd-nebula-a: 0.24;
+}
+
 /* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画。
    暗到 0.08 才看得出"在闪"（0.35 起跳只是亮度轻微起伏，实测不够明显）。 */
 @keyframes pd-sky-twinkle {
