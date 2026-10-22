@@ -144,28 +144,29 @@ function makeSkyStyle(): {
   // ── 银河带：外晕 + 盘面 + 内侧亮带 + 偏心亮弧 + 亮核 ──
   //
   // 盘面是一条很扁的椭圆（横 44% / 纵 15% 是**半径**），圆心略随机；倾角交给外层 wrapper，
-  // 取值范围 24°~34°：太小看不出"盘"的透视，太大就会在窄画布上触边。
-  // 各级渐变在 82% 处已经完全透明，所以只要倾角不超 34°，可见部分根本碰不到画布边界，
-  // **不需要 mask**（mask 会引入带裁剪边界的合成表面，在 WebView2 下会显出矩形痕迹）。
+  // 取值范围 24°~34°：太小看不出"盘"的透视，太大就要更多余量。
   //
-  // ⚠️ 这里**不放"星云团块"**（点在椭圆上的小亮斑）：渐变里的 rx 是宽度的百分比、ry 是高度
-  // 的百分比，在 2:1 这种宽画布上两者的视觉长宽比会被拉到 6~8:1 —— 小球直接变成一个个
-  // 斜着的"梭形亮斑"，沿盘面看就是四个角上的高亮点。要做出内部层次，只能用**同心/偏心椭圆**。
+  // ⚠️ 这条带子所在的元素比画布**大 40%**（CSS 里 `inset: -20%`），所有半径按 K 等比缩回，
+  // 视觉大小不变。原因：元素要被外层 rotate 倾斜，如果它就是画布大小，旋转后四个角必然
+  // 有区域落在元素外 —— 带子在那些地方还有亮度，就会沿元素边界被"切"出一条直边
+  // （之前那条"区域框 / 横向界线"就是它）。放大 40% 后，旋转到 34° 时画布仍完整落在元素内。
+  const K = 0.714;
+  const radius = (rx: number, ry: number) => `${(rx * K).toFixed(1)}% ${(ry * K).toFixed(1)}%`;
   const cx = rand(46, 54);
   const cy = rand(47, 53);
   const center = `${cx.toFixed(1)}% ${cy.toFixed(1)}%`;
 
   const layers: string[] = [
     // 外晕：盘面之外的弥散星光
-    `radial-gradient(52% 24% at ${center}, transparent 26%, var(--pd-nebula) 52%, transparent 88%)`,
+    `radial-gradient(${radius(52, 24)} at ${center}, transparent 26%, var(--pd-nebula) 52%, transparent 88%)`,
     // 盘面：主带
-    `radial-gradient(44% 15% at ${center}, transparent 38%, var(--pd-nebula) 60%, transparent 84%)`,
+    `radial-gradient(${radius(44, 15)} at ${center}, transparent 38%, var(--pd-nebula) 60%, transparent 84%)`,
     // 内侧亮带：让盘面有厚度
-    `radial-gradient(33% 10% at ${center}, transparent 26%, var(--pd-nebula) 56%, transparent 82%)`,
+    `radial-gradient(${radius(33, 10)} at ${center}, transparent 26%, var(--pd-nebula) 56%, transparent 82%)`,
     // 偏心亮弧：略偏一点的窄带，制造"盘面厚薄不均"的层次（仍是平滑椭圆，不会出现亮点）
-    `radial-gradient(30% 11% at ${(cx + rand(-5, 5)).toFixed(1)}% ${(cy + rand(-2, 2)).toFixed(1)}%, transparent 30%, var(--pd-nebula) 56%, transparent 84%)`,
+    `radial-gradient(${radius(30, 11)} at ${(cx + rand(-4, 4)).toFixed(1)}% ${(cy + rand(-1.5, 1.5)).toFixed(1)}%, transparent 30%, var(--pd-nebula) 56%, transparent 84%)`,
     // 亮核：星系中心
-    `radial-gradient(13% 6% at ${center}, var(--pd-nebula), transparent 78%)`,
+    `radial-gradient(${radius(13, 6)} at ${center}, var(--pd-nebula), transparent 78%)`,
   ];
 
   const nebula: CSSProperties = {
