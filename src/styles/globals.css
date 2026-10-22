@@ -1244,24 +1244,6 @@ button:disabled:hover {
   will-change: transform;
 }
 
-/*
- * 星云"呼吸"：只做明暗起伏（opacity），**不做缩放**。
- *
- * 之前是 `scale(1) → scale(1.08)`，问题在于：缩放会让合成器按中间比例重新栅格化这一大层，
- * WebView2/D3D 下常见的结果是"部分瓦片更新了、部分没更新" —— 交界处就是一条横贯画面的
- * 硬线（位置随层尺寸/原点轻微变化，所以放大图层后它只挪了一点点）。这跟渐变、mask 都无关。
- * 纯 opacity 是合成器动画，栅格一次成型、永不重做，也就没有瓦片接缝。
- */
-@keyframes pd-nebula-breathe {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 .pd-graph-sky-nebula-wrap {
   /* 只负责倾角（静态 rotate，不参与动画） */
   position: absolute;
@@ -1271,13 +1253,34 @@ button:disabled:hover {
 
 .pd-graph-sky-nebula {
   /* 比画布大 40%（每边 -20%）：这一层要被外层 rotate 倾斜，如果它正好是画布大小，
-     旋转后四个角一定有地方落在元素外 —— 带子在那里的亮度会被元素边界"切"出一条直边
-     （就是之前看到的"区域框 / 横向界线"）。放大后画布始终完整落在元素内。
-     渐变半径在 JS 里按同一比例缩回（K=0.714），视觉大小不变。
+     旋转后四个角一定有地方落在元素外 —— 带子在那里的亮度会被元素边界"切"出一条直边。
+     放大后画布始终完整落在元素内。渐变半径在 JS 里按同一比例缩回（K=0.714），视觉大小不变。
      ⚠️ 不要用 mask 代替：mask 会多出一个带裁剪边界的合成表面，在 WebView2 下同样会显痕迹。 */
   inset: -20%;
-  /* 只留 opacity：这一层不再做缩放，栅格一次成型，避免合成器按中间比例重建瓦片 */
-  will-change: opacity;
+}
+
+/*
+ * 流动层（偏心亮弧）：绕盘面中心缓慢自转 —— 盘面朝向不变，只有盘内亮纹在流动。
+ * 亮弧是透明渐变，旋转不会露出边界；纯 transform，合成器动画、零重绘。
+ */
+@keyframes pd-arc-swirl {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pd-graph-sky-arc {
+  position: absolute;
+  inset: -20%;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.pd-motion .pd-graph-sky-arc {
+  animation: pd-arc-swirl 46s linear infinite;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -1300,10 +1303,6 @@ button:disabled:hover {
  */
 .pd-motion .pd-graph-sky-drift {
   animation: pd-sky-drift 60s linear infinite;
-}
-
-.pd-motion .pd-graph-sky-nebula {
-  animation: pd-nebula-breathe 9s ease-in-out infinite;
 }
 
 .pd-motion .pd-graph-sky-bright {

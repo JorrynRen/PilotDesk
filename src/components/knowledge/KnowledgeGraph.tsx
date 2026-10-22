@@ -122,6 +122,7 @@ function makeSkyStyle(): {
   dim: CSSProperties;
   bright: CSSProperties;
   nebula: CSSProperties;
+  arc: CSSProperties;
   nebulaTilt: number;
 } {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
@@ -178,10 +179,22 @@ function makeSkyStyle(): {
     ring(52, 24), // 外晕
     ring(44, 15), // 盘面主带
     ring(33, 10), // 内侧亮带
-    // 偏心亮弧：圆心偏一点点，制造"盘面厚薄不均"
-    `radial-gradient(${radius(30, 11)} at ${(cx + rand(-4, 4)).toFixed(1)}% ${(cy + rand(-1.5, 1.5)).toFixed(1)}%, ${RING.map(([at, f]) => stop(f, at)).join(', ')})`,
     core(13, 6), // 星系中心
   ];
+
+  /**
+   * 流动层：偏心亮弧。**单独成层**，绕盘面中心缓慢旋转 —— 盘面朝向（倾角）保持不动，
+   * 只有盘内这一条亮纹在绕中心流动，视觉上像旋臂在转。
+   *
+   * 为什么不做整条盘面的旋转：那会让倾角全程变化（经过水平/竖直），并且更陡时这一层
+   * 会在画布角上被裁出缺角线。亮弧本身是透明渐变，旋转不会露出任何边界。
+   */
+  const arcCenter = `${(cx + rand(-4, 4)).toFixed(1)}% ${(cy + rand(-1.5, 1.5)).toFixed(1)}%`;
+  const arc: CSSProperties = {
+    backgroundImage: `radial-gradient(${radius(30, 11)} at ${arcCenter}, ${RING.map(([at, f]) => stop(f, at)).join(', ')})`,
+    backgroundSize: '100% 100%',
+    backgroundRepeat: 'no-repeat',
+  };
 
   const nebula: CSSProperties = {
     backgroundImage: layers.join(', '),
@@ -204,6 +217,7 @@ function makeSkyStyle(): {
       backgroundRepeat: 'repeat',
     },
     nebula,
+    arc,
     // 倾角避开两端：太接近 0° 或 90° 都看不出"盘面"的透视，24°~34° 最像倾斜的银河
     nebulaTilt: (Math.random() < 0.5 ? -1 : 1) * rand(24, 34),
     bright: {
@@ -1971,6 +1985,8 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               style={{ transform: `rotate(${sky.nebulaTilt.toFixed(1)}deg)` }}
             >
               <div className="pd-graph-sky-nebula" style={sky.nebula} />
+              {/* 流动层：一条偏心亮弧绕中心缓慢旋转（盘面朝向不变） */}
+              <div className="pd-graph-sky-arc" style={sky.arc} />
             </div>
 
             {/* 静态层：亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}
