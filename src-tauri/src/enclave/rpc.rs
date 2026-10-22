@@ -519,7 +519,9 @@ pub fn dispatch(
                 conn,
                 org_id,
                 &row.kb_id,
-                "manual",
+                // 直接写真实来源（snippet / file / url）—— 早期这里写的是 'manual'，
+                // 会凭空多出第六种来源，图谱里还会被当成"片段投喂"上色
+                row.kind.as_str(),
                 &row.source_ref,
                 actor,
                 &entries,

@@ -38,7 +38,7 @@ import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
 import { useAccountStore } from '../stores/accountStore';
 import { confirmDialog } from '../stores/confirmStore';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
-import { buildTeamGraph } from '../components/enclave/teamGraph';
+import { buildTeamGraph, normalizeOrigin } from '../components/enclave/teamGraph';
 import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
 import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
@@ -125,14 +125,20 @@ function joinTags(tags: string[]): string {
   return tags.join(',');
 }
 
+/** 团队库只有 5 种真实来源；`manual` 是早期数据的错误值，读时统一经 normalizeOrigin 还原 */
 const ORIGIN_LABEL: Record<string, string> = {
   task_output: '任务产出',
-  manual: '手工添加',
   file: '文件投喂',
   url: '网址投喂',
   snippet: '片段',
   ai: 'AI 生成',
 };
+
+/** 条目来源的展示文案（先还原历史 'manual'，再取标签） */
+function entryOriginLabel(e: KbEntryView): string {
+  const o = normalizeOrigin(e);
+  return ORIGIN_LABEL[o] ?? o;
+}
 
 type KbTab = 'entries' | 'files' | 'ingest' | 'graph';
 
@@ -1623,9 +1629,9 @@ export function EnclaveKbPage() {
                             <span
                               className="shrink-0 px-1.5 py-[1px] rounded text-[9px]"
                               style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
-                              title={`来源：${ORIGIN_LABEL[e.origin] ?? e.origin}`}
+                              title={`来源：${entryOriginLabel(e)}`}
                             >
-                              {ORIGIN_LABEL[e.origin] ?? e.origin}
+                              {entryOriginLabel(e)}
                             </span>
                             {e.stale && (
                               <span
@@ -1728,7 +1734,7 @@ export function EnclaveKbPage() {
                               </>
                             ) : (
                               // 投喂 / 手工 / AI 条目没有来源任务，只标来源类型
-                              <span>来源 {ORIGIN_LABEL[e.origin] ?? e.origin}</span>
+                              <span>来源 {entryOriginLabel(e)}</span>
                             )}
                             <span>首次沉淀 {formatTime(e.addedAt)}</span>
                             <span>最近更新 {formatTime(e.updatedAt)}</span>

@@ -44,6 +44,20 @@ function mapOrigin(origin: string): KnowledgeOrigin {
   }
 }
 
+/**
+ * 历史数据兼容：早期「手工入库」把 origin 写成 `'manual'`（只可能出现在 snippet / file / url
+ * 三种待整理项里），它不属于 5 种来源，会凭空多出第六种；图谱里还会落到默认分支被当成
+ * 「片段投喂」上色（文件/网址知识看起来像片段）。
+ *
+ * 读时按内容还原真实来源：网址快照 → url；有原件 → file；其余 → snippet。
+ * 新写入已直接写真实来源（见 rpc.rs 的 kb.ingest_manual）。
+ */
+export function normalizeOrigin(e: KbEntryView): string {
+  if (e.origin !== 'manual') return e.origin;
+  if (e.sourceRef.startsWith('http')) return 'url';
+  return e.files.length > 0 ? 'file' : 'snippet';
+}
+
 /** 标签串 → 去重数组（与页面里的 splitTags 同口径） */
 function splitTags(raw: string): string[] {
   return [...new Set(
@@ -62,7 +76,7 @@ export function toKnowledgeEntry(e: KbEntryView): KnowledgeEntry {
     createdAt: e.addedAt,
     updatedAt: e.updatedAt,
     meta: {},
-    origin: mapOrigin(e.origin),
+    origin: mapOrigin(normalizeOrigin(e)),
     sourceRef: '',
     baseIds: [],
   };
