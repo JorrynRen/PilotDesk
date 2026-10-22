@@ -790,6 +790,8 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
   // 来源图例与文案：团队库只列真实存在的来源，并覆盖团队语义（work → 任务产出）
   const legendOrigins = source?.legend?.origins ?? (Object.keys(ORIGIN_COLOR) as KnowledgeOrigin[]);
   const originLabel = (o: KnowledgeOrigin) => source?.legend?.labels?.[o] ?? ORIGIN_LABEL[o];
+  // 团队库没有"分块归属"这条结构边，图例里也不该出现
+  const legendKinds = source ? LEGEND.filter((k) => k !== 'contains') : LEGEND;
 
   /** 已展开分块的文件：`文件节点 id` → 它的分块（已过筛选）。键的集合就是"哪些文件展开了" */
   const personalExpanded = useMemo(() => {
@@ -1816,37 +1818,40 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         此时不再严格对齐（徽标宽度随数字位数变化，对齐不了）。
       */}
       <div className="w-[256px] shrink-0 overflow-y-auto p-3 space-y-3" style={{ backgroundColor: 'var(--bg-side)' }}>
-        <div>
-          <BlockTitle icon={Layers} text="分块展开" right={`${expandedCount} / ${expandTargets.length} 个文件`} />
-          <div className="grid grid-cols-2 gap-1.5">
-            <button
-              onClick={() => void expandGraphFiles(expandTargets, { silent: true })}
-              disabled={expandTargets.length === 0 || expandedCount >= expandTargets.length}
-              className="justify-center px-1 py-1 rounded-lg text-[10px]"
-              style={{
-                color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)',
-                opacity: expandTargets.length === 0 || expandedCount >= expandTargets.length ? 0.5 : 1,
-              }}
-            >
-              展开全部分块
-            </button>
-            <button
-              onClick={() => collapseGraphFiles()}
-              disabled={expandedCount === 0}
-              className="justify-center px-1 py-1 rounded-lg text-[10px]"
-              style={{
-                color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)',
-                opacity: expandedCount === 0 ? 0.5 : 1,
-              }}
-            >
-              收起全部分块
-            </button>
+        {/* 团队库没有"文件分块"这一层，整块不出现（否则会问"分块条目在哪"） */}
+        {!source && (
+          <div>
+            <BlockTitle icon={Layers} text="分块展开" right={`${expandedCount} / ${expandTargets.length} 个文件`} />
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                onClick={() => void expandGraphFiles(expandTargets, { silent: true })}
+                disabled={expandTargets.length === 0 || expandedCount >= expandTargets.length}
+                className="justify-center px-1 py-1 rounded-lg text-[10px]"
+                style={{
+                  color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)',
+                  opacity: expandTargets.length === 0 || expandedCount >= expandTargets.length ? 0.5 : 1,
+                }}
+              >
+                展开全部分块
+              </button>
+              <button
+                onClick={() => collapseGraphFiles()}
+                disabled={expandedCount === 0}
+                className="justify-center px-1 py-1 rounded-lg text-[10px]"
+                style={{
+                  color: 'var(--text-secondary)', backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)',
+                  opacity: expandedCount === 0 ? 0.5 : 1,
+                }}
+              >
+                收起全部分块
+              </button>
+            </div>
+            <div className="mt-1.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+              小库（文件 + 分块 ≤ {AUTO_EXPAND_MAX_NODES} 个节点）默认全展开；大库默认只画文件，
+              点某个文件才展开它自己。要缩小规模请用「知识」列表的筛选。
+            </div>
           </div>
-          <div className="mt-1.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-            小库（文件 + 分块 ≤ {AUTO_EXPAND_MAX_NODES} 个节点）默认全展开；大库默认只画文件，
-            点某个文件才展开它自己。要缩小规模请用「知识」列表的筛选。
-          </div>
-        </div>
+        )}
 
         {/* 节点图例：颜色是**唯一**区分来源的手段（大小表达的是"有多少分块"），
             没有它就只能靠猜 —— 边有图例，节点更该有 */}
@@ -1872,7 +1877,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         <div>
           <BlockTitle icon={Share2} text="连线（可开关）" />
           <div className="space-y-1">
-            {LEGEND.map((k) => {
+            {legendKinds.map((k) => {
               const on = enabledKinds.includes(k);
               return (
                 <button
@@ -1891,10 +1896,12 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               );
             })}
           </div>
-          <div className="mt-1.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-            「分块归属」= 文件 → 它自己的分块；「共标签」里也包含「分块 → 别的文件」的跨文件连线
-            （每个分块最多 3 条，只在展开了分块时出现）。
-          </div>
+          {!source && (
+            <div className="mt-1.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+              「分块归属」= 文件 → 它自己的分块；「共标签」里也包含「分块 → 别的文件」的跨文件连线
+              （每个分块最多 3 条，只在展开了分块时出现）。
+            </div>
+          )}
         </div>
 
         {/* 分隔：上面是**业务参数**（图里显示什么：展开哪些分块、画哪些边、节点是什么来源），
@@ -2023,7 +2030,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
             style={{ color: 'var(--text-tertiary)' }}
           >
             {`已显示 ${scene.shown} 个节点、${scene.edges.length} 条边`}
-            {` · 已展开 ${expandedCount} 个文件的分块`}
+            {!source && ` · 已展开 ${expandedCount} 个文件的分块`}
             {scene.total > scene.shown && ` · 共 ${scene.total} 个，其余被安全阀截断`}
             {filtersActive && <span> · 已按筛选条件收窄</span>}
             {selectedId && <span>{` · 已选中`}</span>}
