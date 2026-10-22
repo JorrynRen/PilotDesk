@@ -1280,14 +1280,6 @@ button:disabled:hover {
   will-change: opacity;
 }
 
-.pd-graph-sky-noise {
-  /* 抖动噪点层：整屏、不旋转、不参与动画（只用来打散 8bit alpha 台阶） */
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.5;
-}
-
 /* ═══════════════════════════════════════════════════
    知识图谱：动效开关（`.pd-motion`）
    ═══════════════════════════════════════════════════ */

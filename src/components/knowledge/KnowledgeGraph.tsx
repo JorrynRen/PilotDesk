@@ -122,7 +122,6 @@ function makeSkyStyle(): {
   dim: CSSProperties;
   bright: CSSProperties;
   nebula: CSSProperties;
-  noise: CSSProperties;
   nebulaTilt: number;
 } {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
@@ -184,24 +183,10 @@ function makeSkyStyle(): {
     core(13, 6), // 星系中心
   ];
 
-  /**
-   * 抖动噪点（dither）：单独一层、**不旋转、不平铺到画布之外**。
-   *
-   * ⚠️ 不能挂在星云层上：那一层比画布大 40% 且被 rotate 倾斜，噪点是 `repeat` 的，
-   * 会一直铺到元素边缘；旋转后元素的两条边正好从画面角上斜切过去，于是出现
-   * "两个方向、约 15% 高度的缺角边界线"。放到独立的整屏层上就只剩纯颗粒。
-   */
-  const NOISE = "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='160' height='160' filter='url(%23n)' opacity='0.02'/></svg>\")";
-
   const nebula: CSSProperties = {
     backgroundImage: layers.join(', '),
     backgroundSize: layers.map(() => '100% 100%').join(', '),
     backgroundRepeat: 'no-repeat',
-  };
-  const noise: CSSProperties = {
-    backgroundImage: NOISE,
-    backgroundSize: '160px 160px',
-    backgroundRepeat: 'repeat',
   };
 
   // ── 静态层：亮星（不平铺）──
@@ -219,7 +204,6 @@ function makeSkyStyle(): {
       backgroundRepeat: 'repeat',
     },
     nebula,
-    noise,
     // 倾角避开两端：太接近 0° 或 90° 都看不出"盘面"的透视，24°~34° 最像倾斜的银河
     nebulaTilt: (Math.random() < 0.5 ? -1 : 1) * rand(24, 34),
     bright: {
@@ -734,9 +718,6 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
 
   // 星空每次挂载重新生成（层数/点数/位置都随机），与动效开关无关
   const sky = useMemo(() => makeSkyStyle(), []);
-  // 临时诊断（无法开 devtools：默认隐藏星云层，逐层排查那条横线）
-  // 取值 'nebula' | 'dust' | 'bright' | ''；改这里 → 提交 → 我重新同步
-  const skyHide: string = 'both';
   // 来源图例与文案：团队库只列真实存在的来源，并覆盖团队语义（work → 任务产出）
   const legendOrigins = source?.legend?.origins ?? (Object.keys(ORIGIN_COLOR) as KnowledgeOrigin[]);
   const originLabel = (o: KnowledgeOrigin) => source?.legend?.labels?.[o] ?? ORIGIN_LABEL[o];
@@ -1976,37 +1957,24 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
           <div
             ref={hostRef}
             className={motionOn ? 'flex-1 min-h-0 relative overflow-hidden pd-motion' : 'flex-1 min-h-0 relative overflow-hidden'}
-            style={skyHide === 'both' ? { backgroundColor: 'var(--bg-field)' } : undefined}
           >
             {/* 漂移层：只有细尘，整层 transform 平移（合成器动画、主线程零重绘），
-                tile 取平移距离的约数，回位时图案完全重合。
-                `skyHide` 是临时诊断开关（localStorage 'pd.graph.skyHide'），定位完就删。 */}
-            {skyHide !== 'dust' && (
-              <div className="pd-graph-sky-drift" aria-hidden>
-                <div className="pd-graph-sky" style={sky.dim} />
-              </div>
-            )}
+                tile 取平移距离的约数，回位时图案完全重合 */}
+            <div className="pd-graph-sky-drift" aria-hidden>
+              <div className="pd-graph-sky" style={sky.dim} />
+            </div>
 
             {/* 银河带：外层给倾角（静态），内层做明暗呼吸（合成器动画，零重绘） */}
-            {skyHide !== 'nebula' && (
-              <div
-                className="pd-graph-sky-nebula-wrap"
-                aria-hidden
-                style={{ transform: `rotate(${sky.nebulaTilt.toFixed(1)}deg)` }}
-              >
-                <div className="pd-graph-sky-nebula" style={sky.nebula} />
-              </div>
-            )}
+            <div
+              className="pd-graph-sky-nebula-wrap"
+              aria-hidden
+              style={{ transform: `rotate(${sky.nebulaTilt.toFixed(1)}deg)` }}
+            >
+              <div className="pd-graph-sky-nebula" style={sky.nebula} />
+            </div>
 
             {/* 静态层：亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}
-            {skyHide !== 'bright' && skyHide !== 'both' && (
-              <div className="pd-graph-sky-bright" aria-hidden style={sky.bright} />
-            )}
-
-            {/* 抖动噪点：独立整屏层，不旋转、不参与动画 */}
-            {skyHide !== 'noise' && skyHide !== 'both' && (
-              <div className="pd-graph-sky-noise" aria-hidden style={sky.noise} />
-            )}
+            <div className="pd-graph-sky-bright" aria-hidden style={sky.bright} />
 
             {/* 画布上唯一的文字：跟随节点的悬停标签（位置每帧都在变，无法移出叠层） */}
             <div
@@ -2021,11 +1989,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               }}
             />
 
-            <canvas
-              ref={canvasRef}
-              className="block w-full h-full relative"
-              style={{ touchAction: 'none', ...(skyHide === 'both' ? { visibility: 'hidden' } : {}) }}
-            />
+            <canvas ref={canvasRef} className="block w-full h-full relative" style={{ touchAction: 'none' }} />
 
             {scene.nodes.length === 0 && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
