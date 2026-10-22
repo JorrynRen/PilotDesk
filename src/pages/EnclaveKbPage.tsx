@@ -23,6 +23,7 @@ import {
   Wand2,
   Scissors,
   Globe,
+  Info,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -194,6 +195,20 @@ function SearchField({
   );
 }
 
+/** 成员端：文件会被下载到本机缓存，给一个常驻说明图标（主机本机读文件无需提示） */
+function CacheHintIcon({ visible }: { visible: boolean }) {
+  if (!visible) return null;
+  return (
+    <span
+      className="shrink-0 flex items-center"
+      style={{ color: 'var(--text-tertiary)' }}
+      title="打开会把副本下载到本机缓存；可在「团队 › 主机与连接」查看用量或清空"
+    >
+      <Info size={11} />
+    </span>
+  );
+}
+
 const TABS: { key: KbTab; label: string; icon: typeof Search; enabled: boolean }[] = [
   { key: 'entries', label: '知识', icon: Search, enabled: true },
   { key: 'files', label: '文件', icon: Files, enabled: true },
@@ -203,6 +218,24 @@ const TABS: { key: KbTab; label: string; icon: typeof Search; enabled: boolean }
 
 /** 图谱组件的 `entries` 入参：团队数据走 `source`，这里给一个稳定空数组即可 */
 const NO_ENTRIES: KnowledgeEntry[] = [];
+
+/** 成员端首次打开文件时提示「会下载副本」的一次性标记 */
+const CACHE_HINT_KEY = 'pilotdesk.enclave.cacheHint.v1';
+
+/** 成员端（非主机）打开文件会把副本下载到本机缓存：只说明一次 */
+function showCacheHintOnce(): void {
+  try {
+    if (localStorage.getItem(CACHE_HINT_KEY)) return;
+    localStorage.setItem(CACHE_HINT_KEY, '1');
+  } catch {
+    // 隐私模式等拿不到 localStorage：照常提示，只是下次还会再提示
+  }
+  showToast(
+    '已把文件副本下载到本机缓存；可在「团队 › 主机与连接」查看用量或清空',
+    'info',
+    9000,
+  );
+}
 
 /**
  * 飞地团队知识库 —— 独立路由 `/enclave/kb`。
@@ -597,6 +630,8 @@ export function EnclaveKbPage() {
 
   const openFile = async (fileId: string) => {
     if (!activeOrgId) return;
+    // 主机（owner）直接读本机文件；其余角色会先把副本下载到本机缓存
+    if (myRole && myRole !== 'owner') showCacheHintOnce();
     try {
       const path = await invoke<string>('enclave_file_abs_path', { orgId: activeOrgId, fileId });
       await invoke('open_path', { path });
@@ -1770,6 +1805,7 @@ export function EnclaveKbPage() {
                                     >
                                       {formatSize(f.fileSize)}
                                     </span>
+                                    <CacheHintIcon visible={myRole !== '' && myRole !== 'owner'} />
                                   </button>
                                   {canEdit && e.origin !== 'task_output' && (
                                     <button
@@ -2013,6 +2049,7 @@ export function EnclaveKbPage() {
                                 {formatRelative(f.addedAt)}归档
                               </div>
                             </div>
+                            <CacheHintIcon visible={myRole !== '' && myRole !== 'owner'} />
                             <button
                               onClick={() => void openFile(f.fileId)}
                               className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] shrink-0"

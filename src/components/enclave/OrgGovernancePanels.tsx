@@ -28,6 +28,7 @@ const ACTION_LABEL: Record<string, string> = {
   'host.emergency': '主机应急开关',
   'host.transfer': '主机转移',
   'files.root': '本机团队文件根目录',
+  'file.download': '文件下载（成员拉取原件）',
   'transfer.export': '主机转移 · 导出迁移包',
   'transfer.import': '主机转移 · 导入迁移包',
   'transfer.offer': '主机转移 · 发起局域网转移',
@@ -60,9 +61,14 @@ function formatDetail(action: string, detail: string): string {
   } catch {
     return detail || '-';
   }
-  const obj = parsed as { from?: unknown; to?: unknown; redacted?: unknown } | null;
+  const obj = parsed as { from?: unknown; to?: unknown; redacted?: unknown; fileName?: unknown; fileSize?: unknown } | null;
   if (obj && obj.redacted === true) {
     return '本机路径仅所有者可见';
+  }
+  // 文件下载审计：明细只展示文件名与大小，不外带本机路径
+  if (action === 'file.download' && obj && typeof obj.fileName === 'string') {
+    const size = typeof obj.fileSize === 'number' ? `（${formatBytes(obj.fileSize)}）` : '';
+    return `${obj.fileName}${size}`;
   }
   // 转移状态流转：from / to 是 phase 字符串，不是路径
   if (action.startsWith('transfer.') && obj && typeof obj.from === 'string' && typeof obj.to === 'string') {

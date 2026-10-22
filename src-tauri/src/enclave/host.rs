@@ -1449,8 +1449,29 @@ async fn handle_conn(
                     let file_id = req.params["fileId"].as_str().unwrap_or("").to_string();
                     let offset = req.params["offset"].as_u64().unwrap_or(0);
                     let len = req.params["len"].as_u64().unwrap_or(transfer::LAN_CHUNK_MAX);
-                    match handle_file_fetch(&state, org, &hello.user_id, &file_id, offset, len) {
-                        Ok(v) => res_ok(&req.id, v),
+                    match handle_file_fetch(&state, &org, &hello.user_id, &file_id, offset, len) {
+                        Ok(v) => {
+                            // 下载审计：成员把原件拉到本机时记一条（只在首个分块记，避免每块刷一条）。
+                            // 主机自己打开文件走本地路径、不会经过这里，所以审计天然只记"外带"。
+                            if offset == 0 {
+                                let _ = state.store.with_conn(|c| {
+                                    let meta = files::file_meta(c, &org, &file_id)?;
+                                    let detail = json!({
+                                        "fileId": file_id,
+                                        "fileName": meta.file_name,
+                                        "fileSize": meta.file_size,
+                                    });
+                                    crate::enclave::org::audit(
+                                        c,
+                                        &org,
+                                        &hello.user_id,
+                                        "file.download",
+                                        &detail.to_string(),
+                                    )
+                                });
+                            }
+                            res_ok(&req.id, v)
+                        }
                         Err(e) => res_err(&req.id, &e),
                     }
                 }
