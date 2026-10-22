@@ -727,7 +727,17 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
     const host = hostRef.current;
     if (!canvas || !host) return;
 
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      // 关 MSAA：节点边缘由片元着色器自己做平滑，连线是 1px；而 MSAA 会让显存里多出
+      // 3~4 倍的大缓冲。显存一紧张，合成器最先丢的就是画布纹理 —— 表现正是
+      // "节点和边整片消失一下又回来"（越跑越频繁）。这一项是最大的显存来源。
+      antialias: false,
+      alpha: true,
+      // 画布是透明的，合成器会在 rAF 之外再合成一次；保留缓冲可以保证任何一次合成
+      // 拿到的都是完整画面（默认的 present 后清空在 WebView2 下会闪出一帧空白）。
+      preserveDrawingBuffer: true,
+    });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0x000000, 0); // 透明：让画布下方的星空层透上来
 
