@@ -98,54 +98,54 @@ const kindHex = (k: LinkKind) => parseInt(kindColor(k).slice(1), 16);
 const SKY_DRIFT_PX = 240;
 
 /**
- * 星空背景：**每次挂载重新随机**（层数、每层点数、位置、大小）。
+ * 星空背景：**每次挂载重新随机**。
  *
- * 原来是一组写死在 CSS 里的固定图案（5 个 radial-gradient），每张图长得一模一样。
- * 现在由这里现算：层数/点数/位置随机，只有 tile 尺寸限定在漂移距离的约数里。
- * 位置是随机值，透视上不允许出现明显"格子"。
+ * 两层分工 —— 这是"看起来随机"的关键：
+ *   · dim   ：会漂移的**细尘**。想无限滚动只能平铺，所以 tile 故意做得很小、点很密
+ *             （120 / 240 两种周期，每 tile 8~18 颗 0.4~1.3px 微粒）。密度足够高时
+ *             看到的是噪点，不是格子。
+ *   · bright：星云 + 亮星，**不平铺、也不漂移**。每颗星铺满整块单独定位，位置真正随机；
+ *             亮星最大、最显眼，一旦平铺就会立刻暴露周期（之前就是它们在 120px 的 tile
+ *             里重复，整片星空看起来像网格）。不漂移还顺带避开了"循环回位时整体跳一下"。
  */
 function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
   const pos = () => `${rand(0, 100).toFixed(1)}% ${rand(0, 100).toFixed(1)}%`;
 
-  // 星云底：随机圆心，只出现一次（不平铺）
-  const images: string[] = [
+  // ── 漂移层：细尘（平铺，tile 取漂移距离的约数）──
+  const dust: string[] = [];
+  const dustSize: string[] = [];
+  const addDust = (tile: number, count: number, rMin: number, rMax: number) => {
+    for (let i = 0; i < count; i += 1) {
+      const r = rand(rMin, rMax).toFixed(2);
+      const color = Math.random() < 0.5 ? 'var(--pd-star-1)' : 'var(--pd-star-2)';
+      dust.push(`radial-gradient(${r}px ${r}px at ${pos()}, ${color}, transparent)`);
+      dustSize.push(`${tile}px ${tile}px`);
+    }
+  };
+  addDust(120, 8, 0.4, 0.9);
+  addDust(SKY_DRIFT_PX, 18, 0.5, 1.3);
+
+  // ── 静态层：星云 + 亮星（不平铺）──
+  const bright: string[] = [
     `radial-gradient(62% 62% at ${pos()}, var(--pd-nebula), transparent 72%)`,
   ];
-  const sizes: string[] = ['100% 100%'];
-
-  // 3~4 层平铺星场：层间周期不同 ⇒ 看不出"层"；tile 取漂移距离的约数
-  const layers = 3 + Math.floor(Math.random() * 2);
-  for (let i = 0; i < layers; i += 1) {
-    const tile = [120, SKY_DRIFT_PX][Math.floor(Math.random() * 2)];
-    const dots = 3 + Math.floor(Math.random() * 3);
-    for (let d = 0; d < dots; d += 1) {
-      const r = rand(1, 2.4).toFixed(2);
-      const color = Math.random() < 0.5 ? 'var(--pd-star-1)' : 'var(--pd-star-2)';
-      images.push(`radial-gradient(${r}px ${r}px at ${pos()}, ${color}, transparent)`);
-      sizes.push(`${tile}px ${tile}px`);
-    }
-  }
-
-  // 亮星：单独一层（闪烁动画挂在它身上）
-  const brightImages: string[] = [];
-  const brightDots = 4 + Math.floor(Math.random() * 3);
+  const brightDots = 10 + Math.floor(Math.random() * 6);
   for (let d = 0; d < brightDots; d += 1) {
-    const r = rand(1.9, 3.4).toFixed(2);
-    brightImages.push(`radial-gradient(${r}px ${r}px at ${pos()}, var(--pd-star-bright), transparent)`);
+    const r = rand(1.4, 2.8).toFixed(2);
+    bright.push(`radial-gradient(${r}px ${r}px at ${pos()}, var(--pd-star-bright), transparent)`);
   }
-  const brightTile = [120, SKY_DRIFT_PX][Math.floor(Math.random() * 2)];
 
   return {
     dim: {
-      backgroundImage: images.join(', '),
-      backgroundSize: sizes.join(', '),
-      backgroundRepeat: ['no-repeat', ...sizes.slice(1).map(() => 'repeat')].join(', '),
+      backgroundImage: dust.join(', '),
+      backgroundSize: dustSize.join(', '),
+      backgroundRepeat: 'repeat',
     },
     bright: {
-      backgroundImage: brightImages.join(', '),
-      backgroundSize: `${brightTile}px ${brightTile}px`,
-      backgroundRepeat: 'repeat',
+      backgroundImage: bright.join(', '),
+      backgroundSize: bright.map(() => '100% 100%').join(', '),
+      backgroundRepeat: 'no-repeat',
     },
   };
 }
@@ -1846,11 +1846,14 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
             ref={hostRef}
             className={motionOn ? 'flex-1 min-h-0 relative overflow-hidden pd-motion' : 'flex-1 min-h-0 relative overflow-hidden'}
           >
-            {/* 漂移层：整体 transform 平移（合成器动画、主线程零重绘），tile 取平移距离的约数 */}
+            {/* 漂移层：只有细尘，整层 transform 平移（合成器动画、主线程零重绘），
+                tile 取平移距离的约数，回位时图案完全重合 */}
             <div className="pd-graph-sky-drift" aria-hidden>
               <div className="pd-graph-sky" style={sky.dim} />
-              <div className="pd-graph-sky-bright" style={sky.bright} />
             </div>
+
+            {/* 静态层：星云 + 亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}
+            <div className="pd-graph-sky-bright" aria-hidden style={sky.bright} />
 
             {/* 画布上唯一的文字：跟随节点的悬停标签（位置每帧都在变，无法移出叠层） */}
             <div
