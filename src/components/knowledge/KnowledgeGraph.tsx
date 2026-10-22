@@ -112,13 +112,18 @@ const MAX_BUFFER_EDGE = 4096;
  *   · dim    ：会漂移的**细尘**。想无限滚动只能平铺，所以 tile 故意做得很小、点很密
  *              （120 / 240 两种周期，每 tile 8~18 颗 0.4~1.3px 微粒）。密度足够高时
  *              看到的是噪点，不是格子。
- *   · nebula ：**呼吸层**。两层同心渐变 = 柔光圆斑 + 一圈亮边，圆心的位置每次随机；
- *              配合 CSS 的 opacity + scale 循环，看起来就是一圈淡淡的水波在扩散回缩。
- *              独立成层，明暗只作用于它自己，不再连累亮星。
+ *   · nebula ：**银河带**。三层同心椭圆 = 盘面环 + 内层亮带 + 星系核心，外加一个随机
+ *              倾角（-18°~18°），看起来像一条斜着铺开的星云环，节点正好落在盘面中央。
+ *              配合 CSS 的 opacity + scale 循环做"呼吸"。
  *   · bright ：亮星，**不平铺、也不漂移**。每颗星铺满整块单独定位，位置真正随机；
  *              亮星最大、最显眼，一旦平铺就会立刻暴露周期。
  */
-function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties; nebula: CSSProperties } {
+function makeSkyStyle(): {
+  dim: CSSProperties;
+  bright: CSSProperties;
+  nebula: CSSProperties;
+  nebulaTilt: number;
+} {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
   const pos = () => `${rand(0, 100).toFixed(1)}% ${rand(0, 100).toFixed(1)}%`;
 
@@ -136,21 +141,22 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties; nebula: CS
   addDust(120, 8, 0.4, 0.9);
   addDust(SKY_DRIFT_PX, 18, 0.5, 1.3);
 
-  // ── 呼吸层：同一个随机圆心上的"实心柔光 + 一圈亮边 + 外圈余晖" ──
+  // ── 银河带：同一个圆心上的"盘面环 + 内层亮带 + 核心"，由外层 wrapper 加倾角 ──
   //
-  // 两层约束缺一不可，否则缩小的瞬间会露出"矩形的直边"：
-  //   ① 圆心只取中间 30%~70%：靠边时渐变还没到透明就被元素边界裁掉了，裁口是一条直线；
-  //   ② 渐变半径 36% / 26%，最外圈到圆心的距离 ≈ 28%，最远也离元素边界还有 2%。
-  // 元素本身另在 CSS 里 `inset: -240px`（比画布大一圈），缩放 0.94 也收不进画面。
-  const center = `${rand(30, 70).toFixed(1)}% ${rand(30, 70).toFixed(1)}%`;
+  // 椭圆要**整个落在元素内部**：所有渐变在 82% 处已经完全透明，圆心又限定在中间，
+  // 所以元素边界永远是透明区 —— 缩放/旋转都不会露出裁断的直边。
+  // 横向半径 46%、纵向 17% ⇒ 一条又宽又薄的盘面；倾角取 ±18°，再大就会在窄画布上触边。
+  const center = `${rand(42, 58).toFixed(1)}% ${rand(46, 54).toFixed(1)}%`;
   const nebula: CSSProperties = {
     backgroundImage: [
-      // 外圈余晖：中间是空的，缩放时这一圈会像波纹一样往外推
-      `radial-gradient(36% 36% at ${center}, transparent 40%, var(--pd-nebula) 58%, transparent 78%)`,
-      // 内圈柔光：给圆心一点体积，避免只剩一个空心环
-      `radial-gradient(26% 26% at ${center}, var(--pd-nebula), transparent 70%)`,
+      // 盘面：中间空、边缘散开，缩放时像星云的旋臂在推
+      `radial-gradient(46% 17% at ${center}, transparent 42%, var(--pd-nebula) 62%, transparent 82%)`,
+      // 内层亮带：盘面里更亮的一条，制造厚度
+      `radial-gradient(34% 12% at ${center}, transparent 30%, var(--pd-nebula) 58%, transparent 84%)`,
+      // 星系核心：中心一团柔光，节点簇正好压在它上面
+      `radial-gradient(14% 6% at ${center}, var(--pd-nebula), transparent 78%)`,
     ].join(', '),
-    backgroundSize: '100% 100%, 100% 100%',
+    backgroundSize: '100% 100%, 100% 100%, 100% 100%',
     backgroundRepeat: 'no-repeat',
   };
 
@@ -169,6 +175,7 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties; nebula: CS
       backgroundRepeat: 'repeat',
     },
     nebula,
+    nebulaTilt: rand(-18, 18),
     bright: {
       backgroundImage: bright.join(', '),
       backgroundSize: bright.map(() => '100% 100%').join(', '),
@@ -1927,8 +1934,14 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               <div className="pd-graph-sky" style={sky.dim} />
             </div>
 
-            {/* 呼吸层：一圈淡色水波（opacity + scale 循环，纯合成器，零重绘） */}
-            <div className="pd-graph-sky-nebula" aria-hidden style={sky.nebula} />
+            {/* 银河带：外层给倾角（静态），内层做明暗 + 缩放的呼吸（合成器动画，零重绘） */}
+            <div
+              className="pd-graph-sky-nebula-wrap"
+              aria-hidden
+              style={{ transform: `rotate(${sky.nebulaTilt.toFixed(1)}deg)` }}
+            >
+              <div className="pd-graph-sky-nebula" style={sky.nebula} />
+            </div>
 
             {/* 静态层：亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}
             <div className="pd-graph-sky-bright" aria-hidden style={sky.bright} />

@@ -1171,7 +1171,7 @@ button:disabled:hover {
  *
  * 三层分工：
  *   · `.pd-graph-sky`        漂移层（细尘，平铺）。tile 只有 120/240，靠"点多且小"掩盖周期。
- *   · `.pd-graph-sky-nebula` 呼吸层（水波，**不平铺**）。圆心随机，明暗 + 缩放循环。
+ *   · `.pd-graph-sky-nebula` 银河带（倾斜椭圆盘面，**不平铺**）。倾角随机，明暗 + 缩放循环。
  *   · `.pd-graph-sky-bright` 静态层（亮星，**不平铺**）。亮星最显眼，平铺会被一眼看穿。
  *
  * ⚠️ 漂移**只能用 `transform`**（见下面的 `.pd-graph-sky-drift`）：
@@ -1191,7 +1191,7 @@ button:disabled:hover {
   --pd-star-1: rgba(51, 65, 85, 0.5);
   --pd-star-2: rgba(37, 99, 235, 0.42);
   --pd-star-bright: rgba(37, 99, 235, 0.62);
-  --pd-nebula: rgba(99, 102, 241, 0.18);
+  --pd-nebula: rgba(99, 102, 241, 0.22);
 }
 
 [data-theme-kind='dark'] .pd-graph-sky,
@@ -1200,7 +1200,7 @@ button:disabled:hover {
   --pd-star-1: rgba(255, 255, 255, 0.8);
   --pd-star-2: rgba(186, 214, 255, 0.62);
   --pd-star-bright: rgba(214, 234, 255, 0.95);
-  --pd-nebula: rgba(99, 102, 241, 0.22);
+  --pd-nebula: rgba(99, 102, 241, 0.26);
 }
 
 /* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画。
@@ -1257,10 +1257,16 @@ button:disabled:hover {
   }
 }
 
+.pd-graph-sky-nebula-wrap {
+  /* 只负责倾角：rotate 写在这里、缩放写在内层，两段 transform 互不覆盖 */
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .pd-graph-sky-nebula {
-  /* 不用放大元素：渐变本身在离圆心 28% 处就完全透明，而圆心限定在中间 30%~70%，
-     所以元素边界永远落在"全透明区"里 —— 缩到 0.94 也不会看到裁断的直边。
-     （放大到 inset:-240px 也能解决，但会多占一块整屏的显存，没必要。） */
+  /* 渐变最外圈在 82% 处就完全透明，圆心又限定在画面中段 ——
+     元素边界永远落在透明区里，缩放/旋转都不会露出裁断的直边。 */
   will-change: transform, opacity;
 }
 
