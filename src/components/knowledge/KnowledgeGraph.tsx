@@ -738,7 +738,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
       // 拿到的都是完整画面（默认的 present 后清空在 WebView2 下会闪出一帧空白）。
       preserveDrawingBuffer: true,
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setClearColor(0x000000, 0); // 透明：让画布下方的星空层透上来
 
     const glScene = new THREE.Scene();
@@ -833,10 +833,27 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
     const markDirty = () => { ctx.dirty = true; };
     controls.addEventListener('change', markDirty);
 
-    const resize = () => {
+    /**
+     * 尺寸变化：**必须合并**。
+     *
+     * `ResizeObserver` 在拖窗口 / 全屏来回切时每帧都会回调；每次都 `setSize` 会把绘制缓冲
+     * 销毁重建一遍，合成器在这段时间拿到的是空/旧纹理 —— 表现就是"节点和边整块闪一下"。
+     * 所以：尺寸没变就不重建；拖动期间不动手，停稳 150ms 后再重建一次
+     * （拖动过程中画布由 CSS 拉伸，只是暂时糊一点）。
+     */
+    let lastW = 0;
+    let lastH = 0;
+    let resizeTimer = 0;
+    const applySize = () => {
       const r = host.getBoundingClientRect();
       const w = Math.max(1, Math.round(r.width));
       const h = Math.max(1, Math.round(r.height));
+      if (w === lastW && h === lastH) return;
+      lastW = w;
+      lastH = h;
+      // 高 DPI 下缓冲面积按 DPR² 增长：1.5 之后肉眼基本看不出差别，显存却差一倍多
+      const dpr = Math.min(window.devicePixelRatio, 1.5);
+      if (renderer.getPixelRatio() !== dpr) renderer.setPixelRatio(dpr);
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -845,8 +862,12 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
       uScale.value = ctx.uScale;
       markDirty();
     };
-    resize();
-    const ro = new ResizeObserver(resize);
+    const scheduleResize = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(applySize, 150);
+    };
+    applySize();
+    const ro = new ResizeObserver(scheduleResize);
     ro.observe(host);
 
     /* ── 指针：悬停拾取、选中、拖动节点。用**捕获阶段的原生监听** ──
@@ -1195,6 +1216,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
 
     return () => {
       cancelAnimationFrame(ctx.raf);
+      window.clearTimeout(resizeTimer);
       ro.disconnect();
       canvas.removeEventListener('pointerdown', onPointerDown, { capture: true });
       canvas.removeEventListener('pointermove', onPointerMove);
