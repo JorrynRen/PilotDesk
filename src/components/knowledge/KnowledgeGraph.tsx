@@ -734,14 +734,9 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
 
   // 星空每次挂载重新生成（层数/点数/位置都随机），与动效开关无关
   const sky = useMemo(() => makeSkyStyle(), []);
-  // 临时诊断：devtools 里 localStorage.setItem('pd.graph.skyHide', 'nebula'|'dust'|'bright') 后刷新
-  const skyHide = useMemo(() => {
-    try {
-      return localStorage.getItem('pd.graph.skyHide') ?? '';
-    } catch {
-      return '';
-    }
-  }, []);
+  // 临时诊断（无法开 devtools：默认隐藏星云层，逐层排查那条横线）
+  // 取值 'nebula' | 'dust' | 'bright' | ''；改这里 → 提交 → 我重新同步
+  const skyHide: string = 'nebula';
   // 来源图例与文案：团队库只列真实存在的来源，并覆盖团队语义（work → 任务产出）
   const legendOrigins = source?.legend?.origins ?? (Object.keys(ORIGIN_COLOR) as KnowledgeOrigin[]);
   const originLabel = (o: KnowledgeOrigin) => source?.legend?.labels?.[o] ?? ORIGIN_LABEL[o];
