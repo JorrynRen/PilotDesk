@@ -1258,6 +1258,9 @@ button:disabled:hover {
 }
 
 .pd-graph-sky-nebula {
+  /* 不用放大元素：渐变本身在离圆心 28% 处就完全透明，而圆心限定在中间 30%~70%，
+     所以元素边界永远落在"全透明区"里 —— 缩到 0.94 也不会看到裁断的直边。
+     （放大到 inset:-240px 也能解决，但会多占一块整屏的显存，没必要。） */
   will-change: transform, opacity;
 }
 

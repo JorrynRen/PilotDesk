@@ -137,13 +137,18 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties; nebula: CS
   addDust(SKY_DRIFT_PX, 18, 0.5, 1.3);
 
   // ── 呼吸层：同一个随机圆心上的"实心柔光 + 一圈亮边 + 外圈余晖" ──
-  const center = pos();
+  //
+  // 两层约束缺一不可，否则缩小的瞬间会露出"矩形的直边"：
+  //   ① 圆心只取中间 30%~70%：靠边时渐变还没到透明就被元素边界裁掉了，裁口是一条直线；
+  //   ② 渐变半径 36% / 26%，最外圈到圆心的距离 ≈ 28%，最远也离元素边界还有 2%。
+  // 元素本身另在 CSS 里 `inset: -240px`（比画布大一圈），缩放 0.94 也收不进画面。
+  const center = `${rand(30, 70).toFixed(1)}% ${rand(30, 70).toFixed(1)}%`;
   const nebula: CSSProperties = {
     backgroundImage: [
       // 外圈余晖：中间是空的，缩放时这一圈会像波纹一样往外推
-      `radial-gradient(66% 66% at ${center}, transparent 40%, var(--pd-nebula) 58%, transparent 78%)`,
+      `radial-gradient(36% 36% at ${center}, transparent 40%, var(--pd-nebula) 58%, transparent 78%)`,
       // 内圈柔光：给圆心一点体积，避免只剩一个空心环
-      `radial-gradient(38% 38% at ${center}, var(--pd-nebula), transparent 70%)`,
+      `radial-gradient(26% 26% at ${center}, var(--pd-nebula), transparent 70%)`,
     ].join(', '),
     backgroundSize: '100% 100%, 100% 100%',
     backgroundRepeat: 'no-repeat',
