@@ -1191,7 +1191,10 @@ button:disabled:hover {
   --pd-star-1: rgba(51, 65, 85, 0.5);
   --pd-star-2: rgba(37, 99, 235, 0.42);
   --pd-star-bright: rgba(37, 99, 235, 0.62);
-  --pd-nebula: rgba(99, 102, 241, 0.26);
+  /* 星云色拆成 rgb + alpha 两个变量：JS 用 11 段平滑剖面现拼渐变色（见 makeSkyStyle），
+     alpha 由 calc(var(--pd-nebula-a) * 系数) 缩放 */
+  --pd-nebula-rgb: 99, 102, 241;
+  --pd-nebula-a: 0.26;
 }
 
 [data-theme-kind='dark'] .pd-graph-sky,
@@ -1200,7 +1203,8 @@ button:disabled:hover {
   --pd-star-1: rgba(255, 255, 255, 0.8);
   --pd-star-2: rgba(186, 214, 255, 0.62);
   --pd-star-bright: rgba(214, 234, 255, 0.95);
-  --pd-nebula: rgba(99, 102, 241, 0.30);
+  --pd-nebula-rgb: 99, 102, 241;
+  --pd-nebula-a: 0.30;
 }
 
 /* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画。

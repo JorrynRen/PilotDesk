@@ -156,17 +156,31 @@ function makeSkyStyle(): {
   const cy = rand(47, 53);
   const center = `${cx.toFixed(1)}% ${cy.toFixed(1)}%`;
 
+  // ⚠️ 渐变必须用**多段平滑剖面**，不能用 `transparent 38%, color 60%, transparent 84%` 这种三段式：
+  // 三个 stop 会在 38% / 60% / 84% 处产生斜率突变，大面积柔光上会显成一条条等高线
+  // （马赫带）—— 之前那条"横向界线 / 区域框"就是这么来的，跟 mask、跟元素大小都无关，
+  // 所以放大图层只让它挪了一点点。下面用 11 段逼近一个钟形曲线，全程没有突变。
+  const RING: Array<[number, number]> = [
+    [0, 0], [10, 0.02], [22, 0.1], [34, 0.28], [44, 0.58], [52, 0.85],
+    [60, 1], [68, 0.75], [78, 0.38], [88, 0.12], [100, 0],
+  ];
+  const CORE: Array<[number, number]> = [
+    [0, 1], [28, 0.92], [44, 0.72], [58, 0.46], [72, 0.22], [86, 0.06], [100, 0],
+  ];
+  const stop = (f: number, at: number) =>
+    `rgba(var(--pd-nebula-rgb), calc(var(--pd-nebula-a) * ${f})) ${at}%`;
+  const ring = (rx: number, ry: number) =>
+    `radial-gradient(${radius(rx, ry)} at ${center}, ${RING.map(([at, f]) => stop(f, at)).join(', ')})`;
+  const core = (rx: number, ry: number) =>
+    `radial-gradient(${radius(rx, ry)} at ${center}, ${CORE.map(([at, f]) => stop(f, at)).join(', ')})`;
+
   const layers: string[] = [
-    // 外晕：盘面之外的弥散星光
-    `radial-gradient(${radius(52, 24)} at ${center}, transparent 26%, var(--pd-nebula) 52%, transparent 88%)`,
-    // 盘面：主带
-    `radial-gradient(${radius(44, 15)} at ${center}, transparent 38%, var(--pd-nebula) 60%, transparent 84%)`,
-    // 内侧亮带：让盘面有厚度
-    `radial-gradient(${radius(33, 10)} at ${center}, transparent 26%, var(--pd-nebula) 56%, transparent 82%)`,
-    // 偏心亮弧：略偏一点的窄带，制造"盘面厚薄不均"的层次（仍是平滑椭圆，不会出现亮点）
-    `radial-gradient(${radius(30, 11)} at ${(cx + rand(-4, 4)).toFixed(1)}% ${(cy + rand(-1.5, 1.5)).toFixed(1)}%, transparent 30%, var(--pd-nebula) 56%, transparent 84%)`,
-    // 亮核：星系中心
-    `radial-gradient(${radius(13, 6)} at ${center}, var(--pd-nebula), transparent 78%)`,
+    ring(52, 24), // 外晕
+    ring(44, 15), // 盘面主带
+    ring(33, 10), // 内侧亮带
+    // 偏心亮弧：圆心偏一点点，制造"盘面厚薄不均"
+    `radial-gradient(${radius(30, 11)} at ${(cx + rand(-4, 4)).toFixed(1)}% ${(cy + rand(-1.5, 1.5)).toFixed(1)}%, ${RING.map(([at, f]) => stop(f, at)).join(', ')})`,
+    core(13, 6), // 星系中心
   ];
 
   const nebula: CSSProperties = {
