@@ -1184,7 +1184,7 @@ pub fn manual_ingest_text(
     }
 }
 
-/// 手工整理的**确认入库**一步：把用户确认后的标题/正文写进组织库并出队。
+/// 手工整理的**确认入库**一步：把用户确认后的标题/正文/标签写进组织库并出队。
 ///
 /// 来源写真实类型（snippet / file / url），不写 `manual` —— 团队库只有 5 种来源，
 /// 多出来的第六种会让图谱配色和来源筛选都对不上。
@@ -1194,6 +1194,7 @@ pub fn commit_manual_ingest(
     row: &KbIngestQueueView,
     title: &str,
     content: &str,
+    tags: &str,
     actor: &str,
 ) -> Result<(), String> {
     if content.trim().is_empty() {
@@ -1214,7 +1215,7 @@ pub fn commit_manual_ingest(
             title.trim().to_string()
         },
         content: content.to_string(),
-        tags: String::new(),
+        tags: tags.trim().to_string(),
         metadata: "{}".into(),
     }];
     write_ingest_entries(

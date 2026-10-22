@@ -407,14 +407,15 @@ pub fn dispatch(
                 knowledge::manual_ingest_text(conn, org_id, &row.kind, &p)?;
             to_value(serde_json::json!({ "title": title, "content": content }))
         }
-        // 手工整理第二步：用户确认（可能已改过标题/正文）后写入组织库
+        // 手工整理第二步：用户确认（可改标题/正文、补标签）后写入组织库
         "kb.ingest.commit" => {
             require_kb_edit(conn, org_id, actor)?;
             let id = req_str(payload, "queueId")?;
             let title = opt_str(payload, "title").unwrap_or_default();
             let content = req_str(payload, "content")?;
+            let tags = opt_str(payload, "tags").unwrap_or_default();
             let row = knowledge::get_ingest(conn, org_id, &id)?;
-            knowledge::commit_manual_ingest(conn, org_id, &row, &title, &content, actor)?;
+            knowledge::commit_manual_ingest(conn, org_id, &row, &title, &content, &tags, actor)?;
             to_value(serde_json::json!({
                 "queued": false,
                 "queueId": row.id,

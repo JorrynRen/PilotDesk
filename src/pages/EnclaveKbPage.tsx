@@ -87,6 +87,7 @@ type ManualDraft = {
   id: string;
   title: string;
   content: string;
+  tags: string[];
   /** 正在提取原文 */
   loading: boolean;
   /** 提取失败的原因 */
@@ -349,6 +350,7 @@ export function EnclaveKbPage() {
       id: item.id,
       title: '',
       content: '',
+      tags: [],
       loading: true,
       notice: '',
       saving: false,
@@ -378,7 +380,13 @@ export function EnclaveKbPage() {
     try {
       await useEnclaveKbStore
         .getState()
-        .commitManualIngest(activeOrgId, manualDraft.id, manualDraft.title, manualDraft.content);
+        .commitManualIngest(
+          activeOrgId,
+          manualDraft.id,
+          manualDraft.title,
+          manualDraft.content,
+          joinTags(manualDraft.tags),
+        );
       setManualDraft(null);
       showToast('已入组织库', 'success');
     } catch (e) {
@@ -1610,6 +1618,20 @@ export function EnclaveKbPage() {
                               style={FIELD_STYLE}
                               disabled={manualDraft.loading || manualDraft.saving}
                             />
+                            <div>
+                              <div
+                                className="text-[10px] mb-1"
+                                style={{ color: 'var(--text-secondary)' }}
+                              >
+                                标签（用于检索与图谱连线）
+                              </div>
+                              <TagEditor
+                                tags={manualDraft.tags}
+                                onChange={(tags) =>
+                                  setManualDraft((d) => (d ? { ...d, tags } : d))
+                                }
+                              />
+                            </div>
                             {manualDraft.notice && (
                               <div
                                 className="text-[10px] leading-relaxed"

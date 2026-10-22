@@ -1387,17 +1387,18 @@ pub async fn enclave_kb_ingest_preview(
     .await
 }
 
-/// 手工整理第二步：用户确认（标题/正文可改）后写入组织库。
+/// 手工整理第二步：用户确认（标题/正文/标签可改）后写入组织库。
 #[tauri::command]
 pub async fn enclave_kb_ingest_commit(
     org_id: String,
     queue_id: String,
     title: String,
     content: String,
+    tags: String,
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TeamIngestOutcome, String> {
-    let payload = json!({ "queueId": queue_id, "title": title, "content": content });
+    let payload = json!({ "queueId": queue_id, "title": title, "content": content, "tags": tags });
     let qid = queue_id.clone();
     let org_for_write = org_id.clone();
     run_command(
@@ -1415,6 +1416,7 @@ pub async fn enclave_kb_ingest_commit(
                 &row,
                 &title,
                 &content,
+                &tags,
                 actor,
             )?;
             Ok(TeamIngestOutcome {

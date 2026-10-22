@@ -115,8 +115,14 @@ interface EnclaveKbState {
   dropQueueItem: (orgId: string, id: string) => Promise<void>;
   /** 手工整理第一步：提取原文回填表单（不写库；失败时抛错，由调用方降级为空白表单） */
   previewManualIngest: (orgId: string, id: string) => Promise<TeamIngestPreview>;
-  /** 手工整理第二步：确认（可改过）标题/正文后入库 */
-  commitManualIngest: (orgId: string, id: string, title: string, content: string) => Promise<void>;
+  /** 手工整理第二步：确认（可改过）标题/正文/标签后入库 */
+  commitManualIngest: (
+    orgId: string,
+    id: string,
+    title: string,
+    content: string,
+    tags: string,
+  ) => Promise<void>;
   /** 文件投喂（主机本机直读；成员经主机上传通道） */
   ingestFile: (
     orgId: string,
@@ -475,8 +481,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   previewManualIngest: async (orgId, id) =>
     invoke<TeamIngestPreview>('enclave_kb_ingest_preview', { orgId, queueId: id }),
 
-  commitManualIngest: async (orgId, id, title, content) => {
-    await invoke('enclave_kb_ingest_commit', { orgId, queueId: id, title, content });
+  commitManualIngest: async (orgId, id, title, content, tags) => {
+    await invoke('enclave_kb_ingest_commit', { orgId, queueId: id, title, content, tags });
     const kbId = get().activeKbId;
     if (kbId) await get().loadQueue(orgId, kbId);
     void get().loadCapability(orgId);
