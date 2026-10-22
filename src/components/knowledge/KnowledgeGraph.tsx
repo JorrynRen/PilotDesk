@@ -757,7 +757,11 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         ctx.worldPos[index * 3 + 2],
       ).project(camera);
       const rect = canvas.getBoundingClientRect();
-      el.style.transform = `translate(${(v.x * 0.5 + 0.5) * rect.width + 12}px, ${(-v.y * 0.5 + 0.5) * rect.height + 10}px)`;
+      // 取整：相机自转/手抖下坐标每帧都是小数，亚像素定位会让文字反复重绘，
+      // 看起来就是"标签在循环抖动"（动效关掉不动时才不抖）。
+      const x = Math.round((v.x * 0.5 + 0.5) * rect.width + 12);
+      const y = Math.round((-v.y * 0.5 + 0.5) * rect.height + 10);
+      el.style.transform = `translate(${x}px, ${y}px)`;
     };
     const showLabel = (index: number) => {
       const el = labelRef.current;
@@ -1753,6 +1757,8 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
             backgroundColor: 'var(--bg-secondary)',
             border: '1px solid var(--border)',
             color: 'var(--text-primary)',
+            // 独立合成层：避免与下方每帧重绘的星空/画布一起重栅格化（否则文字会跟着动效抽）
+            willChange: 'transform',
           }}
         />
 
@@ -1851,7 +1857,13 @@ function DetailPanel({
   return (
     <div
       className="absolute top-2 right-2 bottom-2 w-[264px] rounded-lg overflow-y-auto p-3 space-y-3 shadow-lg"
-      style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+      style={{
+        backgroundColor: 'var(--bg-secondary)',
+        border: '1px solid var(--border)',
+        // 独立合成层：面板叠在每帧重绘的画布/星空上，不隔离会跟着动效一起重栅格化文字
+        transform: 'translateZ(0)',
+        willChange: 'transform',
+      }}
     >
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
