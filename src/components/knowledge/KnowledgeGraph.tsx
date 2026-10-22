@@ -116,15 +116,19 @@ const MAX_BUFFER_EDGE = 4096;
 type BackdropPref = 'auto' | 'space' | 'dusk' | 'light';
 const BACKDROP_KEY = 'pilotdesk.graph.backdrop.v1';
 const BACKDROP_OPTIONS: { value: BackdropPref; label: string; bg: string; swatch: string }[] = [
-  { value: 'auto', label: '跟随主题', bg: '', swatch: 'transparent' },
   { value: 'space', label: '深空', bg: '#0B1020', swatch: '#0B1020' },
   { value: 'dusk', label: '暮紫', bg: '#170F2B', swatch: '#170F2B' },
   { value: 'light', label: '浅色', bg: '#F7F7FA', swatch: '#F7F7FA' },
+  { value: 'auto', label: '跟随主题', bg: '', swatch: 'transparent' },
 ];
 
+/**
+ * 默认「深空」：星空/银河只有在深底上才成立，跟随浅色主题时效果几乎为零，
+ * 所以不把"跟随主题"当默认，只作为可选档。
+ */
 function readBackdropPref(): BackdropPref {
   const v = localStorage.getItem(BACKDROP_KEY);
-  return v === 'space' || v === 'dusk' || v === 'light' ? v : 'auto';
+  return v === 'space' || v === 'dusk' || v === 'light' || v === 'auto' ? v : 'space';
 }
 
 /**
@@ -2006,24 +2010,24 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         </div>
       </div>
 
-      {/* 右：信息行 + 画布 + 底部行。**三者都在画布外**：
-          文字一旦叠在持续 60fps 重绘的 WebGL 画布上，合成器会在显存紧张时回收它的栅格，
-          表现就是"顶部信息 / 底部提示 / 属性面板周期性消失又出现"。 */}
+      {/* 右：画布（信息行 / 底部提示 / 底色按钮都作为叠层放在画布内，与画布同一块底色） */}
       <div className="flex-1 min-w-0 flex">
-        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-          <div className="shrink-0 px-3 pt-2 pb-1 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+        <div
+          ref={hostRef}
+          className={`${motionOn ? 'flex-1 min-w-0 min-h-0 relative overflow-hidden pd-motion' : 'flex-1 min-w-0 min-h-0 relative overflow-hidden'} ${skyPalette}`.trim()}
+          style={backdropBg ? { backgroundColor: backdropBg } : undefined}
+        >
+          {/* 顶部信息行：与「背景」按钮同一行 */}
+          <div
+            className="absolute top-2 left-3 z-10 pointer-events-none text-[10px]"
+            style={{ color: 'var(--text-tertiary)' }}
+          >
             {`已显示 ${scene.shown} 个节点、${scene.edges.length} 条边`}
             {` · 已展开 ${expandedCount} 个文件的分块`}
             {scene.total > scene.shown && ` · 共 ${scene.total} 个，其余被安全阀截断`}
             {filtersActive && <span> · 已按筛选条件收窄</span>}
             {selectedId && <span>{` · 已选中`}</span>}
           </div>
-
-          <div
-            ref={hostRef}
-            className={`${motionOn ? 'flex-1 min-h-0 relative overflow-hidden pd-motion' : 'flex-1 min-h-0 relative overflow-hidden'} ${skyPalette}`.trim()}
-            style={backdropBg ? { backgroundColor: backdropBg } : undefined}
-          >
             {/* 漂移层：只有细尘，整层 transform 平移（合成器动画、主线程零重绘），
                 tile 取平移距离的约数，回位时图案完全重合 */}
             <div className="pd-graph-sky-drift" aria-hidden>
@@ -2110,10 +2114,10 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
                 <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>这个库里还没有可显示的节点</div>
               </div>
             )}
-          </div>
 
+          {/* 底部行：操作提示（左）与「加载更多」（右），同样叠在画布内 */}
           {(toastTip || source?.loadMore?.hasMore) && (
-            <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-1">
+            <div className="absolute bottom-2 left-3 right-3 z-10 flex items-center justify-between gap-2">
               {toastTip ? (
                 <button
                   onClick={() => { setToastTip(false); localStorage.setItem(TOOLTIP_KEY, '0'); }}
