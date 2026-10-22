@@ -1740,7 +1740,15 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         <div className="pd-graph-sky" aria-hidden />
         <div className="pd-graph-sky-bright" aria-hidden />
 
-        <div className="absolute top-2 left-3 text-[10px] z-10 pointer-events-none" style={{ color: 'var(--text-tertiary)' }}>
+        <div
+          className="absolute top-2 left-3 text-[10px] z-10 pointer-events-none"
+          style={{
+            color: 'var(--text-tertiary)',
+            // 独立合成层：下方的星空层每帧重绘，文字与其同层会被反复重栅格化（表现为整行抖动）
+            transform: 'translateZ(0)',
+            willChange: 'transform',
+          }}
+        >
           {`已显示 ${scene.shown} 个节点、${scene.edges.length} 条边`}
           {` · 已展开 ${expandedCount} 个文件的分块`}
           {scene.total > scene.shown && ` · 共 ${scene.total} 个，其余被安全阀截断`}
@@ -1765,7 +1773,10 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         <canvas ref={canvasRef} className="block w-full h-full relative" style={{ touchAction: 'none' }} />
 
         {scene.nodes.length === 0 && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none">
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 pointer-events-none"
+            style={{ transform: 'translateZ(0)', willChange: 'transform' }}
+          >
             <Crosshair size={20} style={{ color: 'var(--text-tertiary)' }} />
             <div className="text-xs" style={{ color: 'var(--text-tertiary)' }}>这个库里还没有可显示的节点</div>
           </div>
@@ -1775,7 +1786,14 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
           <button
             onClick={() => { setToastTip(false); localStorage.setItem(TOOLTIP_KEY, '0'); }}
             className="absolute bottom-2 left-3 z-10 px-2 py-1 rounded text-[10px]"
-            style={{ color: 'var(--text-tertiary)', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+            style={{
+              color: 'var(--text-tertiary)',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border)',
+              // 与顶部信息行同理：独立合成层，避免随星空重绘一起重栅格化
+              transform: 'translateZ(0)',
+              willChange: 'transform',
+            }}
             title="点一下不再显示"
           >
             拖动节点可挪位置 · 点空白取消选中 · 悬停看名称
