@@ -1265,10 +1265,11 @@ button:disabled:hover {
 }
 
 .pd-graph-sky-nebula {
-  /* 倾斜 24°~40° 时椭圆会伸出画布，靠这层椭圆渐隐把边缘"化开" ——
-     无论怎么旋转/缩放都不会看到被元素边界裁断的直边。
-     纯渐变的 mask 是静态栅格，不参与每帧重绘。 */
-  mask-image: radial-gradient(closest-side, #000 78%, transparent 100%);
+  /* 倾斜 24°~40° 时椭圆会伸出画布，靠这层渐隐把边缘"化开"。
+     ⚠️ 必须是**一条长斜坡**，不能有"平台段"：平台结束的位置（上一版是 78%）会有
+     斜率突变，在柔和渐变上会显出马赫带 —— 就是那条"区域框"的痕迹。
+     这里从 30% 一路线性淡到 100%，全程连续，看不出边界。 */
+  mask-image: radial-gradient(closest-side, #000 30%, transparent 100%);
   will-change: transform, opacity;
 }
 
