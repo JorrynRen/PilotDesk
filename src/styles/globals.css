@@ -1197,11 +1197,12 @@ button:disabled:hover {
   --pd-nebula: rgba(99, 102, 241, 0.14);
 }
 
-/* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画 */
+/* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画。
+   暗到 0.08 才看得出"在闪"（0.35 起跳只是亮度轻微起伏，实测不够明显）。 */
 @keyframes pd-sky-twinkle {
   0%,
   100% {
-    opacity: 0.35;
+    opacity: 0.08;
   }
   50% {
     opacity: 1;
@@ -1227,7 +1228,7 @@ button:disabled:hover {
  * 代价是动效依赖 JS；反过来缺类名时表现为"静止"而不是"乱动"，是更安全的降级方向。
  */
 .pd-motion .pd-graph-sky-bright {
-  animation: pd-sky-twinkle 9s ease-in-out infinite;
+  animation: pd-sky-twinkle 6s ease-in-out infinite;
 }
 
 /* ═══════════════════════════════════════════════════

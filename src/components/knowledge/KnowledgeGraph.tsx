@@ -114,7 +114,7 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
     const tile = Math.round(rand(200, 640));
     const dots = 3 + Math.floor(Math.random() * 3);
     for (let d = 0; d < dots; d += 1) {
-      const r = rand(0.6, 1.7).toFixed(2);
+      const r = rand(1, 2.4).toFixed(2);
       const color = Math.random() < 0.5 ? 'var(--pd-star-1)' : 'var(--pd-star-2)';
       images.push(`radial-gradient(${r}px ${r}px at ${pos()}, ${color}, transparent)`);
       sizes.push(`${tile}px ${tile}px`);
@@ -123,9 +123,9 @@ function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
 
   // 亮星：单独一层（闪烁动画挂在它身上）
   const brightImages: string[] = [];
-  const brightDots = 3 + Math.floor(Math.random() * 3);
+  const brightDots = 4 + Math.floor(Math.random() * 3);
   for (let d = 0; d < brightDots; d += 1) {
-    const r = rand(1.3, 2.4).toFixed(2);
+    const r = rand(1.9, 3.4).toFixed(2);
     brightImages.push(`radial-gradient(${r}px ${r}px at ${pos()}, var(--pd-star-bright), transparent)`);
   }
   const brightTile = Math.round(rand(420, 680));
