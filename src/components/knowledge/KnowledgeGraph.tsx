@@ -112,9 +112,9 @@ const MAX_BUFFER_EDGE = 4096;
  *   · dim    ：会漂移的**细尘**。想无限滚动只能平铺，所以 tile 故意做得很小、点很密
  *              （120 / 240 两种周期，每 tile 8~18 颗 0.4~1.3px 微粒）。密度足够高时
  *              看到的是噪点，不是格子。
- *   · nebula ：**银河带**。三层同心椭圆 = 盘面环 + 内层亮带 + 星系核心，外加一个随机
- *              倾角（-18°~18°），看起来像一条斜着铺开的星云环，节点正好落在盘面中央。
- *              配合 CSS 的 opacity + scale 循环做"呼吸"。
+ *   · nebula ：**银河带**。外晕 + 盘面 + 内侧亮带 + 亮核 + 几个沿盘面分布的星云团块，
+ *              再叠一个 24°~40° 的随机倾角，看起来就是一条斜着铺开的银河，节点正好落在
+ *              盘面中央。配合 CSS 的 opacity + scale 循环做"呼吸"。
  *   · bright ：亮星，**不平铺、也不漂移**。每颗星铺满整块单独定位，位置真正随机；
  *              亮星最大、最显眼，一旦平铺就会立刻暴露周期。
  */
@@ -141,22 +141,42 @@ function makeSkyStyle(): {
   addDust(120, 8, 0.4, 0.9);
   addDust(SKY_DRIFT_PX, 18, 0.5, 1.3);
 
-  // ── 银河带：同一个圆心上的"盘面环 + 内层亮带 + 核心"，由外层 wrapper 加倾角 ──
+  // ── 银河带：外晕 + 盘面 + 内侧亮带 + 亮核 + 沿盘面分布的星云团块 ──
   //
-  // 椭圆要**整个落在元素内部**：所有渐变在 82% 处已经完全透明，圆心又限定在中间，
-  // 所以元素边界永远是透明区 —— 缩放/旋转都不会露出裁断的直边。
-  // 横向半径 46%、纵向 17% ⇒ 一条又宽又薄的盘面；倾角取 ±18°，再大就会在窄画布上触边。
-  const center = `${rand(42, 58).toFixed(1)}% ${rand(46, 54).toFixed(1)}%`;
+  // 盘面是一条很扁的椭圆（横 44% / 纵 15% 是**半径**），圆心略随机；倾角交给外层 wrapper，
+  // 取值范围 24°~40°（避开近乎水平/垂直，否则看不出"盘"的透视）。
+  // 倾斜后椭圆会伸出画布，所以这一层在 CSS 里挂了一个椭圆渐隐 mask：越靠画布边缘越透明，
+  // 永远不会出现被边界裁断的直边。
+  const cx = rand(46, 54);
+  const cy = rand(47, 53);
+  const center = `${cx.toFixed(1)}% ${cy.toFixed(1)}%`;
+
+  const layers: string[] = [
+    // 外晕：盘面之外的弥散星光
+    `radial-gradient(52% 24% at ${center}, transparent 26%, var(--pd-nebula) 52%, transparent 88%)`,
+    // 盘面：主带
+    `radial-gradient(44% 15% at ${center}, transparent 38%, var(--pd-nebula) 60%, transparent 84%)`,
+    // 内侧亮带：让盘面有厚度
+    `radial-gradient(33% 10% at ${center}, transparent 26%, var(--pd-nebula) 56%, transparent 82%)`,
+    // 亮核：星系中心
+    `radial-gradient(13% 6% at ${center}, var(--pd-nebula), transparent 78%)`,
+  ];
+  // 星云团块：在盘面椭圆上按极角取点，团块自然落在带子里（而不是散成一片）
+  const blobCount = 4 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < blobCount; i += 1) {
+    const t = Math.random() * Math.PI * 2;
+    const bx = cx + Math.cos(t) * rand(26, 34);
+    const by = cy + Math.sin(t) * rand(7, 11);
+    const rx = rand(3, 6).toFixed(1);
+    const ry = (Number(rx) * 0.45).toFixed(1);
+    layers.push(
+      `radial-gradient(${rx}% ${ry}% at ${bx.toFixed(1)}% ${by.toFixed(1)}%, var(--pd-nebula), transparent 80%)`,
+    );
+  }
+
   const nebula: CSSProperties = {
-    backgroundImage: [
-      // 盘面：中间空、边缘散开，缩放时像星云的旋臂在推
-      `radial-gradient(46% 17% at ${center}, transparent 42%, var(--pd-nebula) 62%, transparent 82%)`,
-      // 内层亮带：盘面里更亮的一条，制造厚度
-      `radial-gradient(34% 12% at ${center}, transparent 30%, var(--pd-nebula) 58%, transparent 84%)`,
-      // 星系核心：中心一团柔光，节点簇正好压在它上面
-      `radial-gradient(14% 6% at ${center}, var(--pd-nebula), transparent 78%)`,
-    ].join(', '),
-    backgroundSize: '100% 100%, 100% 100%, 100% 100%',
+    backgroundImage: layers.join(', '),
+    backgroundSize: layers.map(() => '100% 100%').join(', '),
     backgroundRepeat: 'no-repeat',
   };
 
@@ -175,7 +195,8 @@ function makeSkyStyle(): {
       backgroundRepeat: 'repeat',
     },
     nebula,
-    nebulaTilt: rand(-18, 18),
+    // 倾角避开两端：太接近 0° 或 90° 都看不出"盘面"的透视，24°~40° 最像倾斜的银河
+    nebulaTilt: (Math.random() < 0.5 ? -1 : 1) * rand(24, 40),
     bright: {
       backgroundImage: bright.join(', '),
       backgroundSize: bright.map(() => '100% 100%').join(', '),

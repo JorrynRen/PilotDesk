@@ -1191,7 +1191,7 @@ button:disabled:hover {
   --pd-star-1: rgba(51, 65, 85, 0.5);
   --pd-star-2: rgba(37, 99, 235, 0.42);
   --pd-star-bright: rgba(37, 99, 235, 0.62);
-  --pd-nebula: rgba(99, 102, 241, 0.22);
+  --pd-nebula: rgba(99, 102, 241, 0.26);
 }
 
 [data-theme-kind='dark'] .pd-graph-sky,
@@ -1200,7 +1200,7 @@ button:disabled:hover {
   --pd-star-1: rgba(255, 255, 255, 0.8);
   --pd-star-2: rgba(186, 214, 255, 0.62);
   --pd-star-bright: rgba(214, 234, 255, 0.95);
-  --pd-nebula: rgba(99, 102, 241, 0.26);
+  --pd-nebula: rgba(99, 102, 241, 0.30);
 }
 
 /* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画。
@@ -1265,8 +1265,10 @@ button:disabled:hover {
 }
 
 .pd-graph-sky-nebula {
-  /* 渐变最外圈在 82% 处就完全透明，圆心又限定在画面中段 ——
-     元素边界永远落在透明区里，缩放/旋转都不会露出裁断的直边。 */
+  /* 倾斜 24°~40° 时椭圆会伸出画布，靠这层椭圆渐隐把边缘"化开" ——
+     无论怎么旋转/缩放都不会看到被元素边界裁断的直边。
+     纯渐变的 mask 是静态栅格，不参与每帧重绘。 */
+  mask-image: radial-gradient(closest-side, #000 78%, transparent 100%);
   will-change: transform, opacity;
 }
 
