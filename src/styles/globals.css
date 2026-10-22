@@ -1283,6 +1283,12 @@ button:disabled:hover {
   animation: pd-arc-swirl 46s linear infinite;
 }
 
+/* 第二条亮弧：反向 + 更慢，与主亮弧形成差速，看起来像两条旋臂 */
+.pd-motion .pd-graph-sky-arc-alt {
+  animation-duration: 74s;
+  animation-direction: reverse;
+}
+
 /* ═══════════════════════════════════════════════════
    知识图谱：动效开关（`.pd-motion`）
    ═══════════════════════════════════════════════════ */

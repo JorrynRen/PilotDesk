@@ -123,6 +123,7 @@ function makeSkyStyle(): {
   bright: CSSProperties;
   nebula: CSSProperties;
   arc: CSSProperties;
+  arc2: CSSProperties;
   nebulaTilt: number;
 } {
   const rand = (min: number, max: number) => min + Math.random() * (max - min);
@@ -196,6 +197,17 @@ function makeSkyStyle(): {
     backgroundRepeat: 'no-repeat',
   };
 
+  /**
+   * 第二条亮弧：更细、更长、更淡，**反向且更慢**地绕中心转（两条差速 = 旋臂感）。
+   * 圆心偏在盘面另一侧，避免与第一条同步重叠。
+   */
+  const arc2Center = `${(cx - rand(2, 4)).toFixed(1)}% ${(cy + rand(-1.5, 1.5)).toFixed(1)}%`;
+  const arc2: CSSProperties = {
+    backgroundImage: `radial-gradient(${radius(34, 9)} at ${arc2Center}, ${RING.map(([at, f]) => stop(f * 0.55, at)).join(', ')})`,
+    backgroundSize: '100% 100%',
+    backgroundRepeat: 'no-repeat',
+  };
+
   const nebula: CSSProperties = {
     backgroundImage: layers.join(', '),
     backgroundSize: layers.map(() => '100% 100%').join(', '),
@@ -218,6 +230,7 @@ function makeSkyStyle(): {
     },
     nebula,
     arc,
+    arc2,
     // 倾角避开两端：太接近 0° 或 90° 都看不出"盘面"的透视，24°~34° 最像倾斜的银河
     nebulaTilt: (Math.random() < 0.5 ? -1 : 1) * rand(24, 34),
     bright: {
@@ -1985,8 +1998,9 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
               style={{ transform: `rotate(${sky.nebulaTilt.toFixed(1)}deg)` }}
             >
               <div className="pd-graph-sky-nebula" style={sky.nebula} />
-              {/* 流动层：一条偏心亮弧绕中心缓慢旋转（盘面朝向不变） */}
+              {/* 流动层：两条偏心亮弧差速反向旋转（盘面朝向不变） */}
               <div className="pd-graph-sky-arc" style={sky.arc} />
+              <div className="pd-graph-sky-arc pd-graph-sky-arc-alt" style={sky.arc2} />
             </div>
 
             {/* 静态层：亮星。不平铺 ⇒ 位置真正随机；不漂移 ⇒ 没有回位跳变 */}
