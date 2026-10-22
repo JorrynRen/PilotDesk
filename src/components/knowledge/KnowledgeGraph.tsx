@@ -23,10 +23,10 @@
  * 标签一律**按需**（悬停 / 选中），且是**绝对定位的 HTML**：上万节点不可能有上万个文本对象。
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Crosshair, Eye, Layers, Maximize2, Palette, RotateCcw, Share2, SlidersHorizontal, Sparkles, Trash2, type LucideIcon } from 'lucide-react';
+import { ChevronDown, Crosshair, Eye, Layers, Loader2, Maximize2, Palette, RotateCcw, Share2, SlidersHorizontal, Sparkles, Trash2, type LucideIcon } from 'lucide-react';
 import {
   filterEntries,
   fileNodeId,
@@ -88,6 +88,61 @@ const LEGEND: LinkKind[] = ['same_field', 'shared_tag', 'attachment', 'supersede
 const kindLabel = (k: LinkKind) => (k === 'contains' ? CONTAINS_LABEL : EDGE_LABEL[k]);
 const kindColor = (k: LinkKind) => (k === 'contains' ? CONTAINS_COLOR : EDGE_COLOR[k]);
 const kindHex = (k: LinkKind) => parseInt(kindColor(k).slice(1), 16);
+
+/**
+ * 星空背景：**每次挂载重新随机**（层数、每层点数、位置、大小）。
+ *
+ * 原来是一组写死在 CSS 里的固定图案（5 个 radial-gradient），每张图长得一模一样；
+ * 更要命的是 `.pd-graph-sky` 上还挂着一条 `background-position` 的 60s 漂移动画 ——
+ * 这个属性走不了合成器，等于整块背景**每帧重绘**，压在上面的 HTML 文字（顶部信息行、
+ * 底部提示、标签、详情面板）会被反复重栅格化，表现就是"文字在循环抖动"。
+ * 现在：背景静态（点位置随机），只保留闪烁（opacity 动画是合成器动画，不触发重绘）。
+ */
+function makeSkyStyle(): { dim: CSSProperties; bright: CSSProperties } {
+  const rand = (min: number, max: number) => min + Math.random() * (max - min);
+  const pos = () => `${rand(0, 100).toFixed(1)}% ${rand(0, 100).toFixed(1)}%`;
+
+  // 星云底：随机圆心，只出现一次（不平铺）
+  const images: string[] = [
+    `radial-gradient(62% 62% at ${pos()}, var(--pd-nebula), transparent 72%)`,
+  ];
+  const sizes: string[] = ['100% 100%'];
+
+  // 3~4 层平铺星场：层间周期不同 ⇒ 看不出"层"
+  const layers = 3 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < layers; i += 1) {
+    const tile = Math.round(rand(200, 640));
+    const dots = 3 + Math.floor(Math.random() * 3);
+    for (let d = 0; d < dots; d += 1) {
+      const r = rand(0.6, 1.7).toFixed(2);
+      const color = Math.random() < 0.5 ? 'var(--pd-star-1)' : 'var(--pd-star-2)';
+      images.push(`radial-gradient(${r}px ${r}px at ${pos()}, ${color}, transparent)`);
+      sizes.push(`${tile}px ${tile}px`);
+    }
+  }
+
+  // 亮星：单独一层（闪烁动画挂在它身上）
+  const brightImages: string[] = [];
+  const brightDots = 3 + Math.floor(Math.random() * 3);
+  for (let d = 0; d < brightDots; d += 1) {
+    const r = rand(1.3, 2.4).toFixed(2);
+    brightImages.push(`radial-gradient(${r}px ${r}px at ${pos()}, var(--pd-star-bright), transparent)`);
+  }
+  const brightTile = Math.round(rand(420, 680));
+
+  return {
+    dim: {
+      backgroundImage: images.join(', '),
+      backgroundSize: sizes.join(', '),
+      backgroundRepeat: ['no-repeat', ...sizes.slice(1).map(() => 'repeat')].join(', '),
+    },
+    bright: {
+      backgroundImage: brightImages.join(', '),
+      backgroundSize: `${brightTile}px ${brightTile}px`,
+      backgroundRepeat: 'repeat',
+    },
+  };
+}
 
 /**
  * **默认把分块全展开的规模上限**：文件数 + 全部分块数 ≤ 这个值就自动展开所有文件的分块。
@@ -456,6 +511,22 @@ export interface KnowledgeGraphSource {
   onGoEntries?: () => void;
   /** 文件节点在详情里的计数单位（默认「个分块」；团队库传「个关联条目」） */
   fileCountLabel?: string;
+  /**
+   * 来源图例：不传就列个人库全部 6 种。
+   * 团队库只列真实存在的来源，并可用团队语义覆盖文案（如 work → 任务产出）。
+   */
+  legend?: {
+    origins: KnowledgeOrigin[];
+    labels?: Partial<Record<KnowledgeOrigin, string>>;
+  };
+  /** 增量加载：团队库图谱条目是分页拉的，还有下一批时给出回调 */
+  loadMore?: {
+    hasMore: boolean;
+    loading: boolean;
+    /** 已载入的条目数（按钮文案用） */
+    loaded: number;
+    onLoad: () => void;
+  };
 }
 
 export interface KnowledgeGraphProps {
@@ -562,6 +633,12 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
     [source, entries, filters, base, storeFiles, fileRelations, filtersActive],
   );
   const core = source?.core ?? personalCore;
+
+  // 星空每次挂载重新生成（层数/点数/位置都随机），与动效开关无关
+  const sky = useMemo(() => makeSkyStyle(), []);
+  // 来源图例与文案：团队库只列真实存在的来源，并覆盖团队语义（work → 任务产出）
+  const legendOrigins = source?.legend?.origins ?? (Object.keys(ORIGIN_COLOR) as KnowledgeOrigin[]);
+  const originLabel = (o: KnowledgeOrigin) => source?.legend?.labels?.[o] ?? ORIGIN_LABEL[o];
 
   /** 已展开分块的文件：`文件节点 id` → 它的分块（已过筛选）。键的集合就是"哪些文件展开了" */
   const personalExpanded = useMemo(() => {
@@ -1579,15 +1656,17 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
           {/* 两列排：6 条来源单列会拖出很长一竖、右侧大片留白；两列后整块只剩三行。
               标签加 truncate 兜底 —— 来源名以后变长时截断，好过换行把两列的基线错开 */}
           <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-            {(Object.keys(ORIGIN_COLOR) as KnowledgeOrigin[]).map((o) => (
+            {legendOrigins.map((o) => (
               <div key={o} className="flex items-center gap-1.5 min-w-0 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                 <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: ORIGIN_COLOR[o] }} />
-                <span className="truncate">{ORIGIN_LABEL[o]}</span>
+                <span className="truncate">{originLabel(o)}</span>
               </div>
             ))}
           </div>
           <div className="mt-1.5 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
-            圆越大 = 该文件登记的分块越多；小圆点是分块本身。选中的节点由主题色描边标出。
+            {source
+              ? '圆越大 = 该文件关联的条目越多。选中的节点由主题色描边标出。'
+              : '圆越大 = 该文件登记的分块越多；小圆点是分块本身。选中的节点由主题色描边标出。'}
           </div>
         </div>
 
@@ -1737,8 +1816,8 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
         ref={hostRef}
         className={motionOn ? 'flex-1 relative overflow-hidden pd-motion' : 'flex-1 relative overflow-hidden'}
       >
-        <div className="pd-graph-sky" aria-hidden />
-        <div className="pd-graph-sky-bright" aria-hidden />
+        <div className="pd-graph-sky" aria-hidden style={sky.dim} />
+        <div className="pd-graph-sky-bright" aria-hidden style={sky.bright} />
 
         <div
           className="absolute top-2 left-3 text-[10px] z-10 pointer-events-none"
@@ -1800,6 +1879,29 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
           </button>
         )}
 
+        {source?.loadMore?.hasMore && (
+          <button
+            onClick={source.loadMore.onLoad}
+            disabled={source.loadMore.loading}
+            className="absolute bottom-2 z-10 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px]"
+            style={{
+              // 详情面板占住右侧 264px，别压在它下面
+              right: (selectedCore || selectedChunk || selectedScene) ? 280 : 12,
+              color: 'var(--text-secondary)',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border)',
+              transform: 'translateZ(0)',
+              opacity: source.loadMore.loading ? 0.6 : 1,
+            }}
+            title="按最近更新顺序继续拉取更早的条目（每批 200 条）"
+          >
+            {source.loadMore.loading
+              ? <Loader2 size={11} className="pd-animate-spin" />
+              : <ChevronDown size={11} />}
+            {`加载更多（已载入 ${source.loadMore.loaded} 条）`}
+          </button>
+        )}
+
         {(selectedCore || selectedChunk || selectedScene) && (
           <DetailPanel
             base={base}
@@ -1811,6 +1913,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
             onClose={() => setSelectedId(null)}
             onGoEntries={goEntries}
             fileCountLabel={source?.fileCountLabel}
+            originLabel={originLabel}
           />
         )}
       </div>
@@ -1856,6 +1959,8 @@ interface DetailProps {
   onGoEntries: () => void;
   /** 文件节点计数的单位（个人库「个分块」/ 团队库「个关联条目」） */
   fileCountLabel?: string;
+  /** 来源文案（团队库会覆盖成团队语义，如 work → 任务产出） */
+  originLabel: (o: KnowledgeOrigin) => string;
 }
 
 /** 详情面板：内容全部来自核心图/分块的**原始记录**，不是渲染层的那点信息 */
@@ -1869,6 +1974,7 @@ function DetailPanel({
   onClose,
   onGoEntries,
   fileCountLabel,
+  originLabel,
 }: DetailProps) {
   const label = node?.label ?? (chunk ? entryTitle(chunk.key) : sceneNode?.label ?? '');
   const tags = node?.tags ?? chunk?.tags ?? [];
@@ -1887,7 +1993,7 @@ function DetailPanel({
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium break-all" style={{ color: 'var(--text-primary)' }}>{label}</div>
           <div className="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap" style={{ color: 'var(--text-tertiary)' }}>
-            {sceneNode && <span>{ORIGIN_LABEL[sceneNode.origin]}</span>}
+            {sceneNode && <span>{originLabel(sceneNode.origin)}</span>}
             {node?.kind === 'file' && <span>· {node.chunkCount} {fileCountLabel ?? '个分块'}</span>}
             {chunk && <span>· 文件分块</span>}
           </div>

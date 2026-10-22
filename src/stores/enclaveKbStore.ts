@@ -19,6 +19,22 @@ import type {
   TeamQueueRunOutcome,
 } from '../types/enclave';
 
+/** 图谱分页：单批 200 是后端 `search_entries` 的硬上限（clamp 到 200） */
+const GRAPH_PAGE = 200;
+/** 进入图谱时自动续拉到的上限；再往后由用户点「加载更多」逐批追加 */
+const GRAPH_AUTO_MAX = 1000;
+
+/** 拉图谱的一页（不带状态，首屏自动续拉与手动加载更多共用） */
+function fetchGraphPage(orgId: string, kbId: string, offset: number): Promise<KbEntryView[]> {
+  return invoke<KbEntryView[]>('enclave_kb_search', {
+    orgId,
+    kbId,
+    query: '',
+    limit: GRAPH_PAGE,
+    offset,
+  });
+}
+
 interface EnclaveKbState {
   kbs: KbView[];
   activeKbId: string;
@@ -37,15 +53,21 @@ interface EnclaveKbState {
   queue: EnclaveKbQueueItem[];
   /** 当前库的待确认候选（模型产出） */
   candidates: KbCandidateView[];
-  /** 图谱专用条目（一次多取，不覆盖列表/搜索状态） */
+  /** 图谱专用条目（分页拉取，不覆盖列表/搜索状态） */
   graphEntries: KbEntryView[];
+  /** 图谱是否还有更早的条目没拉（把这一批拉满了就说明可能还有） */
+  graphHasMore: boolean;
+  /** 图谱正在加载（首次自动续拉 / 手动加载更多共用） */
+  graphLoading: boolean;
   /** 账号切换 / 退出：清空全部知识库缓存 */
   reset: () => void;
   loadKbs: (orgId: string) => Promise<void>;
   selectKb: (orgId: string, kbId: string) => Promise<void>;
   search: (orgId: string, query: string) => Promise<void>;
-  /** 图谱：一次多取条目（200 条，后端上限），失败只记错误、不影响列表 */
+  /** 图谱：进页面自动续拉到 1000 条（每批 200，后端单批上限），失败只记错误、不影响列表 */
   loadGraphEntries: (orgId: string, kbId: string) => Promise<void>;
+  /** 图谱：手动再拉一批（200 条），上限与个人库一致（渲染层安全阀） */
+  loadMoreGraphEntries: (orgId: string, kbId: string) => Promise<void>;
   loadFiles: (orgId: string, kbId: string) => Promise<void>;
   /** 解除条目与一份原件的关联（owner / admin）；返回错误文案，成功为 null */
   detachEntryFile: (
@@ -119,6 +141,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   queue: [],
   candidates: [],
   graphEntries: [],
+  graphHasMore: false,
+  graphLoading: false,
 
   reset: () => {
     set({
@@ -135,6 +159,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       queue: [],
       candidates: [],
       graphEntries: [],
+      graphHasMore: false,
+      graphLoading: false,
     });
   },
 
@@ -153,7 +179,15 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   },
 
   selectKb: async (orgId, kbId) => {
-    set({ activeKbId: kbId, activeEntry: null, files: [], orphans: [], graphEntries: [] });
+    set({
+      activeKbId: kbId,
+      activeEntry: null,
+      files: [],
+      orphans: [],
+      graphEntries: [],
+      graphHasMore: false,
+      graphLoading: false,
+    });
     await get().search(orgId, get().query);
     void get().loadQueue(orgId, kbId);
     void get().loadCandidates(orgId, kbId);
@@ -185,17 +219,45 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   },
 
   loadGraphEntries: async (orgId, kbId) => {
+    set({ graphLoading: true, graphEntries: [], graphHasMore: false });
     try {
-      const graphEntries = await invoke<KbEntryView[]>('enclave_kb_search', {
-        orgId,
-        kbId,
-        query: '',
-        // 后端口径上限 200；图谱按"最近更新"取一批就够用了
-        limit: 200,
-      });
-      set({ graphEntries });
+      const all: KbEntryView[] = [];
+      let hasMore = false;
+      // 自动续拉到 GRAPH_AUTO_MAX：单批 200 是后端上限，所以只能分批
+      while (all.length < GRAPH_AUTO_MAX) {
+        const page = await fetchGraphPage(orgId, kbId, all.length);
+        all.push(...page);
+        hasMore = page.length === GRAPH_PAGE;
+        if (!hasMore) break;
+      }
+      // 切库 / 重复进入时，晚到的旧响应不能盖掉新库的数据
+      if (get().activeKbId !== kbId) return;
+      set({ graphEntries: all, graphHasMore: hasMore, graphLoading: false, error: null });
     } catch (e) {
-      set({ error: errorMessage(e), graphEntries: [] });
+      if (get().activeKbId !== kbId) return;
+      set({
+        error: errorMessage(e),
+        graphEntries: [],
+        graphHasMore: false,
+        graphLoading: false,
+      });
+    }
+  },
+
+  loadMoreGraphEntries: async (orgId, kbId) => {
+    if (get().graphLoading) return;
+    set({ graphLoading: true });
+    try {
+      const page = await fetchGraphPage(orgId, kbId, get().graphEntries.length);
+      if (get().activeKbId !== kbId) return;
+      set((s) => ({
+        graphEntries: [...s.graphEntries, ...page],
+        graphHasMore: page.length === GRAPH_PAGE,
+        graphLoading: false,
+        error: null,
+      }));
+    } catch (e) {
+      set({ error: errorMessage(e), graphLoading: false });
     }
   },
 

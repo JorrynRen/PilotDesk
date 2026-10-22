@@ -599,12 +599,14 @@ pub fn dispatch(
             let query = req_str(payload, "query")?;
             let kb_id = opt_str(payload, "kbId");
             let limit = payload.get("limit").and_then(|v| v.as_i64()).unwrap_or(50);
+            let offset = payload.get("offset").and_then(|v| v.as_i64()).unwrap_or(0);
             to_value(knowledge::search_entries(
                 conn,
                 org_id,
                 kb_id.as_deref(),
                 &query,
                 limit,
+                offset,
             )?)
         }
         "kb.entry_get" => {

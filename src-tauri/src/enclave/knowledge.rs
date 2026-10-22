@@ -348,6 +348,7 @@ pub fn search_entries(
     kb_id: Option<&str>,
     query: &str,
     limit: i64,
+    offset: i64,
 ) -> Result<Vec<KbEntryView>, String> {
     let kb = kb_id
         .map(|s| s.to_string())
@@ -356,17 +357,18 @@ pub fn search_entries(
 
     let q = query.trim();
     let limit = limit.clamp(1, 200);
+    let offset = offset.max(0);
     let mut entries = if q.is_empty() {
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {} FROM knowledge_base_memories
                  WHERE knowledge_base_id = ?1
-                 ORDER BY COALESCE(NULLIF(updated_at, 0), added_at) DESC LIMIT ?2",
+                 ORDER BY COALESCE(NULLIF(updated_at, 0), added_at) DESC LIMIT ?2 OFFSET ?3",
                 ENTRY_COLS
             ))
             .map_err(|e| format!("查询知识条目失败：{}", e))?;
         let rows = stmt
-            .query_map(params![kb, limit], map_entry)
+            .query_map(params![kb, limit, offset], map_entry)
             .map_err(|e| format!("查询知识条目失败：{}", e))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| format!("读取知识条目失败：{}", e))?
@@ -389,12 +391,12 @@ pub fn search_entries(
                              WHERE kbf.knowledge_base_id = ?1
                                AND kbf.memory_id = m.memory_id
                                AND fa.file_name LIKE ?3))
-                     ORDER BY COALESCE(NULLIF(m.updated_at, 0), m.added_at) DESC LIMIT ?4",
+                     ORDER BY COALESCE(NULLIF(m.updated_at, 0), m.added_at) DESC LIMIT ?4 OFFSET ?5",
                     qualified_cols("m")
                 ))
                 .map_err(|e| format!("查询知识条目失败：{}", e))?;
             let rows = stmt
-                .query_map(params![kb, phrase, like, limit], map_entry)
+                .query_map(params![kb, phrase, like, limit, offset], map_entry)
                 .map_err(|e| format!("查询知识条目失败：{}", e))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(|e| format!("读取知识条目失败：{}", e))?
@@ -410,12 +412,12 @@ pub fn search_entries(
                               WHERE kbf.knowledge_base_id = ?1
                                 AND kbf.memory_id = m.memory_id
                                 AND fa.file_name LIKE ?2))
-                     ORDER BY COALESCE(NULLIF(m.updated_at, 0), m.added_at) DESC LIMIT ?3",
+                     ORDER BY COALESCE(NULLIF(m.updated_at, 0), m.added_at) DESC LIMIT ?3 OFFSET ?4",
                     qualified_cols("m")
                 ))
                 .map_err(|e| format!("查询知识条目失败：{}", e))?;
             let rows = stmt
-                .query_map(params![kb, like, limit], map_entry)
+                .query_map(params![kb, like, limit, offset], map_entry)
                 .map_err(|e| format!("查询知识条目失败：{}", e))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(|e| format!("读取知识条目失败：{}", e))?

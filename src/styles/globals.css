@@ -1162,20 +1162,19 @@ button:disabled:hover {
 }
 
 /* ═══════════════════════════════════════════════════
-   知识图谱：星空背景（零 DOM 的星点）
+   知识图谱：星空背景（星点由 JS 每次随机生成）
    ═══════════════════════════════════════════════════ */
 
 /*
- * 为什么用 CSS 背景而不是 SVG 里画几百个 <circle>：
- *   ① 星点只需要"看起来在动"，不需要交互、不需要跟着节点走 —— 建 DOM 是纯浪费；
- *   ② 背景层跑在合成器上，不占 JS 线程，也不会跟着每帧重算的节点坐标一起 diff；
- *   ③ 远星不视差（物理上也是对的），所以"不跟着图平移缩放"不是缺陷。
+ * 星点的层数 / 每层点数 / 位置 / 点径**每次挂载由 JS 随机生成**（KnowledgeGraph 的
+ * `makeSkyStyle`），这里只留图层定位与主题色 —— 固定的 CSS 图案会让每张图长得一模一样。
  *
- * 三层不同 tile 尺寸的星点 + 一层中心辉光：tile 尺寸互质、各自以不同速度漂移，
- * 叠起来既看不出重复的格子、又有层次（640px 那层比 240px 那层快 2.7 倍 = 视差）。
+ * ⚠️ 这里**不能再挂 `background-position` 之类的漂移动画**：该属性走不了合成器，
+ * 等于整块背景每帧重绘，压在上面的 HTML 文字（顶部信息行 / 底部提示 / 标签 / 详情面板）
+ * 会被反复重栅格化，表现就是"文字在循环抖动"，且浏览器层合并一回收就必现。
+ * 版面上要"活"一点，只能靠 WebGL 场景自转与下面这个 opacity 闪烁（合成器动画、零重绘）。
  *
- * 颜色与点径都按主题给：**浅色主题下"星"是偏深的蓝灰微尘**（白底上画白点等于没画，
- * 0.26 透明的 1px 点在白底上实测几乎不可见），并且点要更大才撑得住同样的观感；
+ * 颜色按主题给：**浅色主题下"星"是偏深的蓝灰微尘**（白底上画白点等于没画），
  * 深色族才是白/淡蓝点。深色族统一挂 `data-theme-kind`（见文件上方约定），不逐主题列举。
  */
 .pd-graph-sky,
@@ -1183,16 +1182,11 @@ button:disabled:hover {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  /* 浅色主题（默认）：偏深、更实、点更大 */
+  /* 浅色主题（默认）：偏深、更实 */
   --pd-star-1: rgba(51, 65, 85, 0.5);
   --pd-star-2: rgba(37, 99, 235, 0.42);
   --pd-star-bright: rgba(37, 99, 235, 0.62);
   --pd-nebula: rgba(99, 102, 241, 0.1);
-  --pd-dot-1: 2px;
-  --pd-dot-2: 1.6px;
-  --pd-dot-3: 1.8px;
-  --pd-dot-4: 1.4px;
-  --pd-dot-bright: 3px;
 }
 
 [data-theme-kind='dark'] .pd-graph-sky,
@@ -1201,47 +1195,6 @@ button:disabled:hover {
   --pd-star-2: rgba(186, 214, 255, 0.62);
   --pd-star-bright: rgba(214, 234, 255, 0.95);
   --pd-nebula: rgba(99, 102, 241, 0.14);
-  --pd-dot-1: 1.6px;
-  --pd-dot-2: 1.1px;
-  --pd-dot-3: 1.3px;
-  --pd-dot-4: 1px;
-  --pd-dot-bright: 2.2px;
-}
-
-.pd-graph-sky {
-  background-image:
-    radial-gradient(62% 62% at 50% 44%, var(--pd-nebula), transparent 72%),
-    radial-gradient(var(--pd-dot-1) var(--pd-dot-1) at 22% 28%, var(--pd-star-1), transparent),
-    radial-gradient(var(--pd-dot-2) var(--pd-dot-2) at 71% 63%, var(--pd-star-2), transparent),
-    radial-gradient(var(--pd-dot-3) var(--pd-dot-3) at 46% 84%, var(--pd-star-1), transparent),
-    radial-gradient(var(--pd-dot-4) var(--pd-dot-4) at 12% 72%, var(--pd-star-2), transparent);
-  background-size: 100% 100%, 240px 240px, 370px 370px, 520px 520px, 640px 640px;
-  background-repeat: no-repeat, repeat, repeat, repeat, repeat;
-}
-
-.pd-graph-sky-bright {
-  background-image:
-    radial-gradient(var(--pd-dot-bright) var(--pd-dot-bright) at 18% 14%, var(--pd-star-bright), transparent),
-    radial-gradient(var(--pd-dot-bright) var(--pd-dot-bright) at 63% 39%, var(--pd-star-bright), transparent),
-    radial-gradient(var(--pd-dot-bright) var(--pd-dot-bright) at 87% 71%, var(--pd-star-bright), transparent),
-    radial-gradient(var(--pd-dot-bright) var(--pd-dot-bright) at 41% 86%, var(--pd-star-bright), transparent);
-  /* 亮星 tile 远大于星场：两者的重复周期不会对齐，于是看不出"层" */
-  background-size: 620px 620px;
-  background-repeat: repeat;
-}
-
-/*
- * 漂移：整层平移一个 tile 后回位。**必须正好一个 tile**，否则循环处会跳一下。
- * 60s 一轮 ≈ 4px/s（640px 那层 10.7px/s）：慢到不抢注意力，但盯着看得出在动 ——
- * 原来 240s ≈ 1px/s 是"理论上在动、肉眼一律看不见"，等于白做。
- */
-@keyframes pd-sky-drift {
-  from {
-    background-position: 0 0, 0 0, 0 0, 0 0, 0 0;
-  }
-  to {
-    background-position: 0 0, 240px 240px, -370px 370px, 520px -520px, -640px 640px;
-  }
 }
 
 /* 亮星的"呼吸"：整层 opacity 脉动最省 —— 不为每颗星各建节点、各写一条动画 */
@@ -1260,7 +1213,7 @@ button:disabled:hover {
    ═══════════════════════════════════════════════════ */
 
 /*
- * 图谱里的**全部**动效（片段放射 / 连线依次画出 / 星点漂移与闪烁）只挂在这一个类下面，
+ * 图谱里的**全部**动效（片段放射 / 连线依次画出 / 亮星闪烁）只挂在这一个类下面，
  * 由 JS 决定加不加 —— 而不是各自写一条 `@media (prefers-reduced-motion: reduce)`。
  *
  * 改成这样是踩出来的两条：
@@ -1268,15 +1221,11 @@ button:disabled:hover {
  *      恒为 reduce，CSS 里没有任何办法把它重新打开；而用户完全可能就是想在这台机器上
  *      看到动效（图谱左侧「图谱动效」提供了这一档）。
  *   ② **`@media` 不改变优先级**。原先那条 `@media (prefers-reduced-motion: reduce)`
- *      写在基础规则**之前**，于是 `.pd-graph-sky { animation: pd-sky-drift … }` 直接把它覆盖掉，
+ *      写在基础规则**之前**，于是后面的 `animation` 规则直接把它覆盖掉，
  *      `animation: none` 成了永远不生效的死代码 —— 不看实测根本发现不了。
  * 现在只有一个真相来源：JS 读 `matchMedia` + 用户的三档偏好，折成加不加 `.pd-motion`。
  * 代价是动效依赖 JS；反过来缺类名时表现为"静止"而不是"乱动"，是更安全的降级方向。
  */
-.pd-motion .pd-graph-sky {
-  animation: pd-sky-drift 60s linear infinite;
-}
-
 .pd-motion .pd-graph-sky-bright {
   animation: pd-sky-twinkle 9s ease-in-out infinite;
 }

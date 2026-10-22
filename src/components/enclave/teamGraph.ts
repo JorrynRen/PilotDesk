@@ -14,13 +14,12 @@ import type {
   KnowledgeRelation,
 } from '../../types/knowledge';
 import type { GraphModel } from '../../stores/knowledgeStore';
+import { MAX_SCENE_NODES } from '../knowledge/graphModel';
 
 const ENTRY_PREFIX = 'entry:';
 const FILE_PREFIX = 'file:';
 /** 单个标签的节点数超过这个值就不连边（人人都有它，连出来只是一团废线） */
 const MAX_TAG_GROUP = 8;
-/** 画布能承载的节点上限（与个人库的安全阀同口径） */
-const MAX_NODES = 400;
 
 /**
  * 团队来源 → 个人库的来源枚举。
@@ -111,9 +110,9 @@ export function buildTeamGraph(entries: KbEntryView[]): GraphModel {
     });
   }
 
-  // 规模封顶：条目多的库只画最近的一部分（图例里会显示「已显示 N / 共 M」）
+  // 规模封顶：**与个人库同一个显存安全阀**（不是体验闸门）；图例会显示「已显示 N / 共 M」
   const totalNodes = nodes.length;
-  const kept = totalNodes > MAX_NODES ? nodes.slice(0, MAX_NODES) : nodes;
+  const kept = totalNodes > MAX_SCENE_NODES ? nodes.slice(0, MAX_SCENE_NODES) : nodes;
   const keptIds = new Set(kept.map((n) => n.id));
 
   const map = new Map<string, KnowledgeRelation>();

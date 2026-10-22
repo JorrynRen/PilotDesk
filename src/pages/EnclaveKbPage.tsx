@@ -42,7 +42,7 @@ import { buildTeamGraph } from '../components/enclave/teamGraph';
 import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
 import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
-import type { IngestCapability, KnowledgeBase, KnowledgeEntry } from '../types/knowledge';
+import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeOrigin } from '../types/knowledge';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
 const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
@@ -264,8 +264,10 @@ export function EnclaveKbPage() {
   const activeEntry = useEnclaveKbStore((s) => s.activeEntry);
   const files = useEnclaveKbStore((s) => s.files);
   const orphans = useEnclaveKbStore((s) => s.orphans);
-  /** 图谱专用条目（一次多取，与列表/搜索互不影响） */
+  /** 图谱专用条目（分页拉取，与列表/搜索互不影响） */
   const graphEntries = useEnclaveKbStore((s) => s.graphEntries);
+  const graphHasMore = useEnclaveKbStore((s) => s.graphHasMore);
+  const graphLoading = useEnclaveKbStore((s) => s.graphLoading);
   const query = useEnclaveKbStore((s) => s.query);
   const loading = useEnclaveKbStore((s) => s.loading);
   const error = useEnclaveKbStore((s) => s.error);
@@ -540,8 +542,24 @@ export function EnclaveKbPage() {
       onGoEntries: () => setTab('entries'),
       // 团队文件节点的计数口径是"被几个条目引用"，不是分块
       fileCountLabel: '个关联条目',
+      // 团队库投喂只有 文本/文件/网址/AI，没有「云文档」；task_output 在团队语义里是「任务产出」
+      legend: {
+        origins: ['work', 'snippet', 'file', 'url', 'ai'] as KnowledgeOrigin[],
+        labels: { work: '任务产出' } as Partial<Record<KnowledgeOrigin, string>>,
+      },
+      // 条目分页拉：首屏自动续拉到 1000 条，之后由用户点「加载更多」逐批追加
+      loadMore: {
+        hasMore: graphHasMore,
+        loading: graphLoading,
+        loaded: graphEntries.length,
+        onLoad: () => {
+          if (activeOrgId && activeKbId) {
+            void useEnclaveKbStore.getState().loadMoreGraphEntries(activeOrgId, activeKbId);
+          }
+        },
+      },
     }),
-    [teamGraph],
+    [teamGraph, graphHasMore, graphLoading, graphEntries.length, activeOrgId, activeKbId],
   );
 
   const memberName = (raw: unknown): string => {

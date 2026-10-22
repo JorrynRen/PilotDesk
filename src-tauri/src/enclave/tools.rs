@@ -162,7 +162,7 @@ impl ToolHandler for SearchOrgKnowledgeTool {
         }
 
         let entries = self.store.with_conn(|c| {
-            knowledge::search_entries(c, &self.org_id, None, &query, limit)
+            knowledge::search_entries(c, &self.org_id, None, &query, limit, 0)
         })?;
         let brief: Vec<serde_json::Value> = entries
             .iter()

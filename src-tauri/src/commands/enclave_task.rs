@@ -641,6 +641,7 @@ pub async fn enclave_kb_search(
     kb_id: Option<String>,
     query: String,
     limit: Option<i64>,
+    offset: Option<i64>,
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<crate::enclave::knowledge::KbEntryView>, String> {
@@ -648,6 +649,7 @@ pub async fn enclave_kb_search(
         "kbId": &kb_id,
         "query": query.clone(),
         "limit": limit,
+        "offset": offset,
     });
     run_command(
         state.inner(),
@@ -663,6 +665,7 @@ pub async fn enclave_kb_search(
                 kb_id.as_deref(),
                 &query,
                 limit.unwrap_or(50),
+                offset.unwrap_or(0),
             )
         },
     )
