@@ -1245,25 +1245,25 @@ button:disabled:hover {
 }
 
 /*
- * 星云"呼吸 / 水波"：整层明暗起伏 + 轻微放大。
- * 缩放走 transform、明暗走 opacity —— 整条动画都在合成器上，主线程零重绘。
- * **从 1 放大到 1.08，而不是缩小再放大**：这一层要靠"比画布大 40%"来保证旋转后仍盖满画布，
- * 一旦缩到 1 以下，旋转的角上又会露出被裁断的直边。
+ * 星云"呼吸"：只做明暗起伏（opacity），**不做缩放**。
+ *
+ * 之前是 `scale(1) → scale(1.08)`，问题在于：缩放会让合成器按中间比例重新栅格化这一大层，
+ * WebView2/D3D 下常见的结果是"部分瓦片更新了、部分没更新" —— 交界处就是一条横贯画面的
+ * 硬线（位置随层尺寸/原点轻微变化，所以放大图层后它只挪了一点点）。这跟渐变、mask 都无关。
+ * 纯 opacity 是合成器动画，栅格一次成型、永不重做，也就没有瓦片接缝。
  */
 @keyframes pd-nebula-breathe {
   0%,
   100% {
     opacity: 0.35;
-    transform: scale(1);
   }
   50% {
     opacity: 1;
-    transform: scale(1.08);
   }
 }
 
 .pd-graph-sky-nebula-wrap {
-  /* 只负责倾角：rotate 写在这里、缩放写在内层，两段 transform 互不覆盖 */
+  /* 只负责倾角（静态 rotate，不参与动画） */
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -1276,7 +1276,8 @@ button:disabled:hover {
      渐变半径在 JS 里按同一比例缩回（K=0.714），视觉大小不变。
      ⚠️ 不要用 mask 代替：mask 会多出一个带裁剪边界的合成表面，在 WebView2 下同样会显痕迹。 */
   inset: -20%;
-  will-change: transform, opacity;
+  /* 只留 opacity：这一层不再做缩放，栅格一次成型，避免合成器按中间比例重建瓦片 */
+  will-change: opacity;
 }
 
 /* ═══════════════════════════════════════════════════
