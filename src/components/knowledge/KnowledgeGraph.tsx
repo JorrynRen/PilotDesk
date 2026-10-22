@@ -183,10 +183,21 @@ function makeSkyStyle(): {
     core(13, 6), // 星系中心
   ];
 
+  /**
+   * 抖动噪点：**必需**。
+   *
+   * 星云的 alpha 只有 0.26 且铺得极大，8bit 输出下每 1/255 的 alpha 台阶在这么平缓的
+   * 渐变上就是一条闭合等高线；最外圈那条（alpha 从 ~1/255 掉到 0）落在画面左侧 ~70% 高度，
+   * 看起来就是一条莫名横线 —— 静态、随画布高度按比例缩放、与动画/mask 全无关，
+   * 现象完全对得上。加一层 ±1 级的随机噪点把台阶打散（dither），轮廓就消失了。
+   * 用 SVG turbulence 现画、平铺，栅格一次成型，不参与重绘。
+   */
+  const NOISE = "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='160' height='160' filter='url(%23n)' opacity='0.02'/></svg>\")";
+
   const nebula: CSSProperties = {
-    backgroundImage: layers.join(', '),
-    backgroundSize: layers.map(() => '100% 100%').join(', '),
-    backgroundRepeat: 'no-repeat',
+    backgroundImage: [NOISE, ...layers].join(', '),
+    backgroundSize: ['160px 160px', ...layers.map(() => '100% 100%')].join(', '),
+    backgroundRepeat: ['repeat', ...layers.map(() => 'no-repeat')].join(', '),
   };
 
   // ── 静态层：亮星（不平铺）──
