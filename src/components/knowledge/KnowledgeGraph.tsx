@@ -32,6 +32,7 @@ import {
   fileNodeId,
   hasActiveEntryFilters,
   useKnowledgeStore,
+  type GraphModel,
 } from '../../stores/knowledgeStore';
 import {
   buildCore,
@@ -440,12 +441,33 @@ interface DragState {
   attract: Map<number, { w: number; anchor: THREE.Vector3 }>;
 }
 
+/**
+ * 外部数据源：团队知识库用（数据来自主机 enclave，不走个人库 store）。
+ *
+ * 传了 `core` 就跳过 `buildCore`（个人库派生），并关闭只有个人库才有的
+ * 「文件分块展开」与筛选联动；渲染、拖拽、选中详情全部复用。
+ */
+export interface KnowledgeGraphSource {
+  core: GraphModel;
+  /** 展开的文件分块（团队库没有分块概念，留空即可） */
+  chunks?: Record<string, KnowledgeEntry[]>;
+  loading?: boolean;
+  /** 「去条目列表」的去处（默认切个人库的 entries tab） */
+  onGoEntries?: () => void;
+  /** 文件节点在详情里的计数单位（默认「个分块」；团队库传「个关联条目」） */
+  fileCountLabel?: string;
+}
+
 export interface KnowledgeGraphProps {
   base: KnowledgeBase;
   entries: KnowledgeEntry[];
+  /** 外部数据源；不传则按个人知识库 store 派生（行为不变） */
+  source?: KnowledgeGraphSource;
 }
 
-export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
+const EMPTY_GRAPH: GraphModel = { nodes: [], relations: [], totalNodes: 0 };
+
+export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
   const storeFiles = useKnowledgeStore((s) => s.files);
   const fileRelations = useKnowledgeStore((s) => s.relations);
   const filters = useKnowledgeStore((s) => s.entryFilters);
@@ -530,21 +552,38 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
   const commitClickRef = useRef<(index: number) => void>(() => {});
   const syncRingRef = useRef<() => void>(() => {});
 
-  const filtersActive = hasActiveEntryFilters(filters);
+  const filtersActive = !source && hasActiveEntryFilters(filters);
 
-  const core = useMemo(
-    () => buildCore(filterEntries(entries, filters), base, storeFiles, fileRelations, filtersActive),
-    [entries, filters, base, storeFiles, fileRelations, filtersActive],
+  const personalCore = useMemo(
+    () =>
+      source
+        ? EMPTY_GRAPH
+        : buildCore(filterEntries(entries, filters), base, storeFiles, fileRelations, filtersActive),
+    [source, entries, filters, base, storeFiles, fileRelations, filtersActive],
   );
+  const core = source?.core ?? personalCore;
 
   /** 已展开分块的文件：`文件节点 id` → 它的分块（已过筛选）。键的集合就是"哪些文件展开了" */
-  const expanded = useMemo(() => {
+  const personalExpanded = useMemo(() => {
     const m = new Map<string, KnowledgeEntry[]>();
+    if (source) return m;
     for (const [relPath, list] of Object.entries(graphChunks)) {
       m.set(fileNodeId(relPath), filterEntries(list, filters));
     }
     return m;
-  }, [graphChunks, filters]);
+  }, [source, graphChunks, filters]);
+  const expanded = useMemo(() => {
+    if (!source?.chunks) return personalExpanded;
+    const m = new Map<string, KnowledgeEntry[]>();
+    for (const [relPath, list] of Object.entries(source.chunks)) {
+      m.set(fileNodeId(relPath), list);
+    }
+    return m;
+  }, [source, personalExpanded]);
+  /** 外部数据源自带 loading 语义；个人库沿用 store 的 */
+  const effectiveLoading = source?.loading ?? loading;
+  /** 「去条目列表」的去处：团队库切自己的 tab，个人库切 store 的 entries */
+  const goEntries = source?.onGoEntries ?? (() => setTab('entries'));
 
   const scene = useMemo(
     () => buildScene({ core, expanded, enabledKinds }),
@@ -578,12 +617,14 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
    */
   const autoExpandedFor = useRef('');
   useEffect(() => {
-    if (!base.id || loading || core.nodes.length === 0 || autoExpandedFor.current === base.id) return;
+    // 外部数据源（团队库）没有"文件分块"这层结构，不做自动展开
+    if (source) return;
+    if (!base.id || effectiveLoading || core.nodes.length === 0 || autoExpandedFor.current === base.id) return;
     autoExpandedFor.current = base.id;
     const total = core.nodes.length + expandTargets.reduce((s, t) => s + t.chunkCount, 0);
     if (total > AUTO_EXPAND_MAX_NODES) return;
     void expandGraphFiles(expandTargets, { silent: true });
-  }, [base.id, loading, core.nodes.length, expandTargets, expandGraphFiles]);
+  }, [source, base.id, effectiveLoading, core.nodes.length, expandTargets, expandGraphFiles]);
 
   /* ── 初始化 GL 现场（只做一次） ── */
   useEffect(() => {
@@ -1372,7 +1413,8 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
     );
     // 大库默认不展开分块：点一个文件就展开**它自己**（幂等），于是它旁边立刻长出分块。
     // 读 store 现取而不是用 `expanded` 闭包 —— 这个函数是命令式的，闭包可能过期。
-    if (node.refId?.startsWith('file:')) {
+    // 外部数据源（团队库）没有分块层，不能去碰个人库的 graphChunks。
+    if (!source && node.refId?.startsWith('file:')) {
       const src = nodeById.get(node.refId);
       const path = src?.sourceRef;
       if (path && src && src.chunkCount > 0 && !useKnowledgeStore.getState().graphChunks[path]) {
@@ -1743,7 +1785,8 @@ export function KnowledgeGraph({ base, entries }: KnowledgeGraphProps) {
             links={selectedLinks}
             onJump={(id) => setSelectedId(id)}
             onClose={() => setSelectedId(null)}
-            onGoEntries={() => setTab('entries')}
+            onGoEntries={goEntries}
+            fileCountLabel={source?.fileCountLabel}
           />
         )}
       </div>
@@ -1787,10 +1830,22 @@ interface DetailProps {
   onJump: (id: string) => void;
   onClose: () => void;
   onGoEntries: () => void;
+  /** 文件节点计数的单位（个人库「个分块」/ 团队库「个关联条目」） */
+  fileCountLabel?: string;
 }
 
 /** 详情面板：内容全部来自核心图/分块的**原始记录**，不是渲染层的那点信息 */
-function DetailPanel({ base, node, chunk, sceneNode, links, onJump, onClose, onGoEntries }: DetailProps) {
+function DetailPanel({
+  base,
+  node,
+  chunk,
+  sceneNode,
+  links,
+  onJump,
+  onClose,
+  onGoEntries,
+  fileCountLabel,
+}: DetailProps) {
   const label = node?.label ?? (chunk ? entryTitle(chunk.key) : sceneNode?.label ?? '');
   const tags = node?.tags ?? chunk?.tags ?? [];
   return (
@@ -1803,7 +1858,7 @@ function DetailPanel({ base, node, chunk, sceneNode, links, onJump, onClose, onG
           <div className="text-xs font-medium break-all" style={{ color: 'var(--text-primary)' }}>{label}</div>
           <div className="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap" style={{ color: 'var(--text-tertiary)' }}>
             {sceneNode && <span>{ORIGIN_LABEL[sceneNode.origin]}</span>}
-            {node?.kind === 'file' && <span>· {node.chunkCount} 个分块</span>}
+            {node?.kind === 'file' && <span>· {node.chunkCount} {fileCountLabel ?? '个分块'}</span>}
             {chunk && <span>· 文件分块</span>}
           </div>
         </div>

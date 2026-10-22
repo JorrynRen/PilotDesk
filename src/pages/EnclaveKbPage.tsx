@@ -37,9 +37,11 @@ import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
 import { useAccountStore } from '../stores/accountStore';
 import { confirmDialog } from '../stores/confirmStore';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
+import { buildTeamGraph } from '../components/enclave/teamGraph';
+import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
 import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
-import type { IngestCapability } from '../types/knowledge';
+import type { IngestCapability, KnowledgeBase, KnowledgeEntry } from '../types/knowledge';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
 const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
@@ -196,8 +198,11 @@ const TABS: { key: KbTab; label: string; icon: typeof Search; enabled: boolean }
   { key: 'entries', label: '知识', icon: Search, enabled: true },
   { key: 'files', label: '文件', icon: Files, enabled: true },
   { key: 'ingest', label: '投喂', icon: Sparkles, enabled: true },
-  { key: 'graph', label: '图谱', icon: Network, enabled: false },
+  { key: 'graph', label: '图谱', icon: Network, enabled: true },
 ];
+
+/** 图谱组件的 `entries` 入参：团队数据走 `source`，这里给一个稳定空数组即可 */
+const NO_ENTRIES: KnowledgeEntry[] = [];
 
 /**
  * 飞地团队知识库 —— 独立路由 `/enclave/kb`。
@@ -226,6 +231,8 @@ export function EnclaveKbPage() {
   const activeEntry = useEnclaveKbStore((s) => s.activeEntry);
   const files = useEnclaveKbStore((s) => s.files);
   const orphans = useEnclaveKbStore((s) => s.orphans);
+  /** 图谱专用条目（一次多取，与列表/搜索互不影响） */
+  const graphEntries = useEnclaveKbStore((s) => s.graphEntries);
   const query = useEnclaveKbStore((s) => s.query);
   const loading = useEnclaveKbStore((s) => s.loading);
   const error = useEnclaveKbStore((s) => s.error);
@@ -476,6 +483,34 @@ export function EnclaveKbPage() {
   /** 单一默认库：直接取列表里唯一的一项 */
   const kb = kbs[0] ?? null;
 
+  /* ── 图谱：团队条目 → 个人库图谱组件认识的 GraphModel（复用 3D 渲染） ── */
+  const teamGraph = useMemo(() => buildTeamGraph(graphEntries), [graphEntries]);
+  const graphBase: KnowledgeBase = useMemo(
+    () => ({
+      id: kb?.id ?? '',
+      name: kb?.name ?? '',
+      description: kb?.description ?? '',
+      // 团队库没有「专属字段」：详情面板据此自然不渲染属性区
+      fields: [],
+      entryCount: kb?.entryCount ?? 0,
+      pinnedCount: 0,
+      fileCount: kb?.fileCount ?? 0,
+      pendingCount: 0,
+      createdAt: 0,
+      updatedAt: kb?.lastEntryAt ?? 0,
+    }),
+    [kb],
+  );
+  const graphSource = useMemo(
+    () => ({
+      core: teamGraph,
+      onGoEntries: () => setTab('entries'),
+      // 团队文件节点的计数口径是"被几个条目引用"，不是分块
+      fileCountLabel: '个关联条目',
+    }),
+    [teamGraph],
+  );
+
   const memberName = (raw: unknown): string => {
     const id = typeof raw === 'string' ? raw : '';
     if (!id) return '';
@@ -532,6 +567,13 @@ export function EnclaveKbPage() {
   useEffect(() => {
     if (tab === 'files' && activeOrgId && activeKbId) {
       void useEnclaveKbStore.getState().loadFiles(activeOrgId, activeKbId);
+    }
+  }, [tab, activeOrgId, activeKbId]);
+
+  // 「图谱」tab 懒加载：单独多取一批条目（不覆盖列表/搜索状态）
+  useEffect(() => {
+    if (tab === 'graph' && activeOrgId && activeKbId) {
+      void useEnclaveKbStore.getState().loadGraphEntries(activeOrgId, activeKbId);
     }
   }, [tab, activeOrgId, activeKbId]);
 
@@ -2006,6 +2048,11 @@ export function EnclaveKbPage() {
                 })}
               </div>
             </div>
+          )}
+
+          {/* 图谱：团队条目的关系图（条目 / 文件 / 共标签 / 附件），复用个人库的 3D 渲染 */}
+          {tab === 'graph' && (
+            <KnowledgeGraph base={graphBase} entries={NO_ENTRIES} source={graphSource} />
           )}
 
           {error && (

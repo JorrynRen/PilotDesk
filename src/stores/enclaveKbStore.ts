@@ -37,11 +37,15 @@ interface EnclaveKbState {
   queue: EnclaveKbQueueItem[];
   /** 当前库的待确认候选（模型产出） */
   candidates: KbCandidateView[];
+  /** 图谱专用条目（一次多取，不覆盖列表/搜索状态） */
+  graphEntries: KbEntryView[];
   /** 账号切换 / 退出：清空全部知识库缓存 */
   reset: () => void;
   loadKbs: (orgId: string) => Promise<void>;
   selectKb: (orgId: string, kbId: string) => Promise<void>;
   search: (orgId: string, query: string) => Promise<void>;
+  /** 图谱：一次多取条目（200 条，后端上限），失败只记错误、不影响列表 */
+  loadGraphEntries: (orgId: string, kbId: string) => Promise<void>;
   loadFiles: (orgId: string, kbId: string) => Promise<void>;
   /** 解除条目与一份原件的关联（owner / admin）；返回错误文案，成功为 null */
   detachEntryFile: (
@@ -114,6 +118,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   capability: null,
   queue: [],
   candidates: [],
+  graphEntries: [],
 
   reset: () => {
     set({
@@ -129,6 +134,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       capability: null,
       queue: [],
       candidates: [],
+      graphEntries: [],
     });
   },
 
@@ -147,7 +153,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   },
 
   selectKb: async (orgId, kbId) => {
-    set({ activeKbId: kbId, activeEntry: null, files: [], orphans: [] });
+    set({ activeKbId: kbId, activeEntry: null, files: [], orphans: [], graphEntries: [] });
     await get().search(orgId, get().query);
     void get().loadQueue(orgId, kbId);
     void get().loadCandidates(orgId, kbId);
@@ -175,6 +181,21 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       }));
     } catch (e) {
       set({ error: errorMessage(e), loading: false });
+    }
+  },
+
+  loadGraphEntries: async (orgId, kbId) => {
+    try {
+      const graphEntries = await invoke<KbEntryView[]>('enclave_kb_search', {
+        orgId,
+        kbId,
+        query: '',
+        // 后端口径上限 200；图谱按"最近更新"取一批就够用了
+        limit: 200,
+      });
+      set({ graphEntries });
+    } catch (e) {
+      set({ error: errorMessage(e), graphEntries: [] });
     }
   },
 
