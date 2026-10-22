@@ -736,7 +736,7 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
   const sky = useMemo(() => makeSkyStyle(), []);
   // 临时诊断（无法开 devtools：默认隐藏星云层，逐层排查那条横线）
   // 取值 'nebula' | 'dust' | 'bright' | ''；改这里 → 提交 → 我重新同步
-  const skyHide: string = 'nebula';
+  const skyHide: string = 'dust';
   // 来源图例与文案：团队库只列真实存在的来源，并覆盖团队语义（work → 任务产出）
   const legendOrigins = source?.legend?.origins ?? (Object.keys(ORIGIN_COLOR) as KnowledgeOrigin[]);
   const originLabel = (o: KnowledgeOrigin) => source?.legend?.labels?.[o] ?? ORIGIN_LABEL[o];
