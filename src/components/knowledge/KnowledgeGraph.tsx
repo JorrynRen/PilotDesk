@@ -112,9 +112,9 @@ const MAX_BUFFER_EDGE = 4096;
  *   · dim    ：会漂移的**细尘**。想无限滚动只能平铺，所以 tile 故意做得很小、点很密
  *              （120 / 240 两种周期，每 tile 8~18 颗 0.4~1.3px 微粒）。密度足够高时
  *              看到的是噪点，不是格子。
- *   · nebula ：**银河带**。外晕 + 盘面 + 内侧亮带 + 亮核 + 几个沿盘面分布的星云团块，
- *              再叠一个 24°~40° 的随机倾角，看起来就是一条斜着铺开的银河，节点正好落在
- *              盘面中央。配合 CSS 的 opacity + scale 循环做"呼吸"。
+ *   · nebula ：**银河带**。外晕 + 盘面 + 内侧亮带 + 偏心亮弧 + 亮核（全部是平滑椭圆，
+ *              不出现点状亮斑），再叠一个 24°~40° 的随机倾角，看起来就是一条斜着铺开的
+ *              银河，节点正好落在盘面中央。配合 CSS 的 opacity + scale 循环做"呼吸"。
  *   · bright ：亮星，**不平铺、也不漂移**。每颗星铺满整块单独定位，位置真正随机；
  *              亮星最大、最显眼，一旦平铺就会立刻暴露周期。
  */
@@ -141,12 +141,16 @@ function makeSkyStyle(): {
   addDust(120, 8, 0.4, 0.9);
   addDust(SKY_DRIFT_PX, 18, 0.5, 1.3);
 
-  // ── 银河带：外晕 + 盘面 + 内侧亮带 + 亮核 + 沿盘面分布的星云团块 ──
+  // ── 银河带：外晕 + 盘面 + 内侧亮带 + 偏心亮弧 + 亮核 ──
   //
   // 盘面是一条很扁的椭圆（横 44% / 纵 15% 是**半径**），圆心略随机；倾角交给外层 wrapper，
   // 取值范围 24°~40°（避开近乎水平/垂直，否则看不出"盘"的透视）。
   // 倾斜后椭圆会伸出画布，所以这一层在 CSS 里挂了一个椭圆渐隐 mask：越靠画布边缘越透明，
   // 永远不会出现被边界裁断的直边。
+  //
+  // ⚠️ 这里**不放"星云团块"**（点在椭圆上的小亮斑）：渐变里的 rx 是宽度的百分比、ry 是高度
+  // 的百分比，在 2:1 这种宽画布上两者的视觉长宽比会被拉到 6~8:1 —— 小球直接变成一个个
+  // 斜着的"梭形亮斑"，沿盘面看就是四个角上的高亮点。要做出内部层次，只能用**同心/偏心椭圆**。
   const cx = rand(46, 54);
   const cy = rand(47, 53);
   const center = `${cx.toFixed(1)}% ${cy.toFixed(1)}%`;
@@ -158,21 +162,11 @@ function makeSkyStyle(): {
     `radial-gradient(44% 15% at ${center}, transparent 38%, var(--pd-nebula) 60%, transparent 84%)`,
     // 内侧亮带：让盘面有厚度
     `radial-gradient(33% 10% at ${center}, transparent 26%, var(--pd-nebula) 56%, transparent 82%)`,
+    // 偏心亮弧：略偏一点的窄带，制造"盘面厚薄不均"的层次（仍是平滑椭圆，不会出现亮点）
+    `radial-gradient(30% 11% at ${(cx + rand(-5, 5)).toFixed(1)}% ${(cy + rand(-2, 2)).toFixed(1)}%, transparent 30%, var(--pd-nebula) 56%, transparent 84%)`,
     // 亮核：星系中心
     `radial-gradient(13% 6% at ${center}, var(--pd-nebula), transparent 78%)`,
   ];
-  // 星云团块：在盘面椭圆上按极角取点，团块自然落在带子里（而不是散成一片）
-  const blobCount = 4 + Math.floor(Math.random() * 3);
-  for (let i = 0; i < blobCount; i += 1) {
-    const t = Math.random() * Math.PI * 2;
-    const bx = cx + Math.cos(t) * rand(26, 34);
-    const by = cy + Math.sin(t) * rand(7, 11);
-    const rx = rand(3, 6).toFixed(1);
-    const ry = (Number(rx) * 0.45).toFixed(1);
-    layers.push(
-      `radial-gradient(${rx}% ${ry}% at ${bx.toFixed(1)}% ${by.toFixed(1)}%, var(--pd-nebula), transparent 80%)`,
-    );
-  }
 
   const nebula: CSSProperties = {
     backgroundImage: layers.join(', '),
