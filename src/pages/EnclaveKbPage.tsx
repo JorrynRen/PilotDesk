@@ -44,7 +44,7 @@ import { buildTeamGraph, normalizeOrigin } from '../components/enclave/teamGraph
 import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
-import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
+import type { EnclaveKbQueueItem, KbCandidateView, KbEntryView, KbFileListView } from '../types/enclave';
 import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeFieldDef, KnowledgeFieldType, KnowledgeMeta, KnowledgeOrigin } from '../types/knowledge';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
@@ -387,8 +387,19 @@ export function EnclaveKbPage() {
   const [fileGroupBy, setFileGroupBy] = useState<FileGroupBy>({ kind: 'entry' });
   /** 文件目录树里被折叠的分组 */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
-  /** 待确认候选的展开预览（一次只展开一条） */
-  const [candPreview, setCandPreview] = useState<string | null>(null);
+  /**
+   * 待确认候选的展开编辑草稿（一次只展开一条）。
+   *
+   * 候选和「待整理」一样是**模型草稿**，采纳前允许人工修正标题 / 正文 / 标签 / 专属属性；
+   * 折叠状态下点「采纳」则直接按模型原值入库。
+   */
+  const [candDraft, setCandDraft] = useState<null | {
+    id: string;
+    title: string;
+    content: string;
+    tags: string[];
+    meta: KnowledgeMeta;
+  }>(null);
   /** 本机团队文件根目录面板（全局设置，与任务页共用） */
   const [rootOpen, setRootOpen] = useState(false);
   // 知识库定义表单（owner / admin）：新建与编辑共用一套草稿
@@ -809,6 +820,31 @@ export function EnclaveKbPage() {
   useEffect(() => {
     if (isAllKb && tab === 'ingest') setTab('entries');
   }, [isAllKb, tab]);
+
+  // 切库后候选草稿失效：草稿里的属性键来自上一库的 field_schema
+  useEffect(() => setCandDraft(null), [activeKbId]);
+
+  /** 采纳候选：展开态提交人工修正值，折叠态直接按模型原值入库 */
+  const adoptCandidate = (c: KbCandidateView) => {
+    if (!activeOrgId || !activeKbId) return;
+    const draft = candDraft?.id === c.id ? candDraft : null;
+    const patch = draft
+      ? {
+          title: draft.title,
+          content: draft.content,
+          tags: joinTags(draft.tags),
+          fields: JSON.stringify(draft.meta),
+        }
+      : { title: c.title, content: c.content, tags: c.tags, fields: '' };
+    void useEnclaveKbStore
+      .getState()
+      .adoptCandidate(activeOrgId, activeKbId, c.id, patch)
+      .then((ok) => {
+        if (!ok) return;
+        setCandDraft(null);
+        showToast('已采纳入库', 'success');
+      });
+  };
 
   // 「文件」tab 懒加载（条目页不需要先拉全量文件）
   useEffect(() => {
@@ -1735,14 +1771,13 @@ export function EnclaveKbPage() {
                         {candidates.length}
                       </span>
                       <span className="text-[10px] min-w-0 truncate" style={{ color: 'var(--text-tertiary)' }}>
-                        模型产出，核对后采纳才进库
+                        模型产出，展开可修正，采纳才进库
                       </span>
                     </div>
-                    <div className="max-h-[320px] overflow-y-auto px-3 pb-2 space-y-1">
+                    <div className="max-h-[420px] overflow-y-auto px-3 pb-2 space-y-1">
                       {candidates.map((c) => {
-                        const open = candPreview === c.id;
-                        const meta = parseMetaJson(c.metadata);
-                        const tags = splitTags(c.tags);
+                        const draft = candDraft?.id === c.id ? candDraft : null;
+                        const open = !!draft;
                         return (
                           <div
                             key={c.id}
@@ -1754,8 +1789,20 @@ export function EnclaveKbPage() {
                           >
                             <div
                               className="flex items-center gap-2 px-2 py-1.5 text-[11px] cursor-pointer"
-                              onClick={() => setCandPreview(open ? null : c.id)}
-                              title={open ? '收起预览' : '展开预览：正文 / 标签 / 专属属性'}
+                              onClick={() =>
+                                setCandDraft(
+                                  draft
+                                    ? null
+                                    : {
+                                        id: c.id,
+                                        title: c.title,
+                                        content: c.content,
+                                        tags: splitTags(c.tags),
+                                        meta: parseMetaJson(c.metadata),
+                                      },
+                                )
+                              }
+                              title={open ? '收起' : '展开：可修正标题 / 正文 / 标签 / 专属属性后再采纳'}
                             >
                               <ChevronRight
                                 size={11}
@@ -1775,18 +1822,14 @@ export function EnclaveKbPage() {
                                 className="flex-1 min-w-0 truncate"
                                 style={{ color: 'var(--text-primary)' }}
                               >
-                                {c.title || '未命名草稿'}
+                                {(draft?.title ?? c.title) || '未命名草稿'}
                               </span>
                               <button
                                 className="shrink-0 text-[10px]"
                                 style={{ color: 'var(--accent)' }}
                                 onClick={(ev) => {
                                   ev.stopPropagation();
-                                  if (!activeOrgId || !activeKbId) return;
-                                  void useEnclaveKbStore
-                                    .getState()
-                                    .adoptCandidate(activeOrgId, activeKbId, c.id)
-                                    .then((ok) => ok && showToast('已采纳入库', 'success'));
+                                  adoptCandidate(c);
                                 }}
                               >
                                 采纳
@@ -1797,6 +1840,7 @@ export function EnclaveKbPage() {
                                 onClick={(ev) => {
                                   ev.stopPropagation();
                                   if (!activeOrgId || !activeKbId) return;
+                                  if (open) setCandDraft(null);
                                   void useEnclaveKbStore
                                     .getState()
                                     .rejectCandidate(activeOrgId, activeKbId, c.id);
@@ -1805,56 +1849,76 @@ export function EnclaveKbPage() {
                                 拒绝
                               </button>
                             </div>
-                            {open && (
+                            {draft && (
                               <div className="px-2 pb-2 space-y-1.5">
-                                <div
-                                  className="text-[11px] leading-relaxed whitespace-pre-wrap select-text max-h-[240px] overflow-y-auto rounded p-2"
+                                <input
+                                  value={draft.title}
+                                  onChange={(ev) => setCandDraft({ ...draft, title: ev.target.value })}
+                                  placeholder="标题（留空则沿用模型标题）"
+                                  className="w-full px-2 py-1 rounded text-[11px] outline-none"
                                   style={{
                                     backgroundColor: 'var(--bg-field)',
-                                    color: 'var(--text-secondary)',
+                                    color: 'var(--text-primary)',
+                                    border: '1px solid var(--border)',
                                   }}
-                                >
-                                  {c.content || '（无正文）'}
+                                />
+                                <textarea
+                                  value={draft.content}
+                                  onChange={(ev) => setCandDraft({ ...draft, content: ev.target.value })}
+                                  rows={Math.min(14, Math.max(5, draft.content.split('\n').length))}
+                                  placeholder="正文"
+                                  className="w-full px-2 py-1 rounded text-[11px] leading-relaxed outline-none resize-y"
+                                  style={{
+                                    backgroundColor: 'var(--bg-field)',
+                                    color: 'var(--text-primary)',
+                                    border: '1px solid var(--border)',
+                                  }}
+                                />
+                                <div>
+                                  <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>
+                                    标签
+                                  </div>
+                                  <TagEditor
+                                    tags={draft.tags}
+                                    onChange={(tags) => setCandDraft({ ...draft, tags })}
+                                  />
                                 </div>
                                 {kbFields.length > 0 && (
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    {kbFields.map((f) => {
-                                      const v = meta[f.key];
-                                      if (v === undefined || v === null || v === '') return null;
-                                      const text =
-                                        typeof v === 'boolean' ? (v ? '是' : '否') : String(v);
-                                      return (
-                                        <span
-                                          key={f.key}
-                                          className="max-w-[180px] truncate px-1.5 py-[1px] rounded text-[9px]"
-                                          style={{
-                                            backgroundColor: 'var(--accent-light)',
-                                            color: 'var(--accent)',
-                                          }}
-                                          title={`${f.label || f.key}：${text}`}
-                                        >
-                                          {f.label || f.key}：{text}
-                                        </span>
-                                      );
-                                    })}
+                                  <div>
+                                    <div className="text-[10px] mb-1" style={{ color: 'var(--text-tertiary)' }}>
+                                      专属属性（模型可能填错，采纳前请核对）
+                                    </div>
+                                    <MetaEditor
+                                      fields={kbFields}
+                                      value={draft.meta}
+                                      onChange={(meta) => setCandDraft({ ...draft, meta })}
+                                    />
                                   </div>
                                 )}
-                                {tags.length > 0 && (
-                                  <div className="flex items-center gap-1 flex-wrap">
-                                    {tags.map((t) => (
-                                      <span
-                                        key={t}
-                                        className="px-1.5 py-[1px] rounded text-[9px]"
-                                        style={{
-                                          backgroundColor: 'var(--bg-tertiary)',
-                                          color: 'var(--text-secondary)',
-                                        }}
-                                      >
-                                        #{t}
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
+                                <div className="flex items-center gap-2 pt-0.5">
+                                  <button
+                                    className="px-2 py-[3px] rounded text-[10px]"
+                                    style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                                    onClick={() => adoptCandidate(c)}
+                                  >
+                                    采纳并入库
+                                  </button>
+                                  <button
+                                    className="text-[10px]"
+                                    style={{ color: 'var(--text-tertiary)' }}
+                                    onClick={() =>
+                                      setCandDraft({
+                                        id: c.id,
+                                        title: c.title,
+                                        content: c.content,
+                                        tags: splitTags(c.tags),
+                                        meta: parseMetaJson(c.metadata),
+                                      })
+                                    }
+                                  >
+                                    还原模型原值
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>

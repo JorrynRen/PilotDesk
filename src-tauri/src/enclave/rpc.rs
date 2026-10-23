@@ -495,7 +495,22 @@ pub fn dispatch(
         "kb.candidate.adopt" => {
             let kb_id = req_str(payload, "kbId")?;
             let id = req_str(payload, "candidateId")?;
-            to_value(knowledge::adopt_candidate(conn, org_id, &kb_id, &id, actor)?)
+            // 采纳前可修正标题 / 正文 / 标签 / 专属属性（缺省 = 用模型原值）
+            let title = opt_str(payload, "title");
+            let content = opt_str(payload, "content");
+            let tags = opt_str(payload, "tags");
+            let fields = fields_value(payload)?;
+            to_value(knowledge::adopt_candidate(
+                conn,
+                org_id,
+                &kb_id,
+                &id,
+                title.as_deref(),
+                content.as_deref(),
+                tags.as_deref(),
+                &fields,
+                actor,
+            )?)
         }
         "kb.candidate.reject" => {
             let kb_id = req_str(payload, "kbId")?;

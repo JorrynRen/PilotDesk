@@ -1739,15 +1739,27 @@ pub async fn enclave_kb_candidate_list(
     .await
 }
 
+/// 采纳候选：可先修正标题 / 正文 / 标签 / 专属属性，确认后写入组织库。
 #[tauri::command]
 pub async fn enclave_kb_candidate_adopt(
     org_id: String,
     kb_id: String,
     candidate_id: String,
+    title: String,
+    content: String,
+    tags: String,
+    fields: String,
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::knowledge::KbEntryView, String> {
-    let payload = json!({ "kbId": kb_id, "candidateId": candidate_id });
+    let payload = json!({
+        "kbId": kb_id,
+        "candidateId": candidate_id,
+        "title": title,
+        "content": content,
+        "tags": tags,
+        "fields": fields,
+    });
     let kb_for_write = kb_id.clone();
     let cand = candidate_id.clone();
     let org_for_write = org_id.clone();
@@ -1758,11 +1770,20 @@ pub async fn enclave_kb_candidate_adopt(
         "kb.candidate.adopt",
         payload,
         move |c, actor| {
+            let fields_value: serde_json::Value = if fields.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(&fields).map_err(|_| "专属属性格式不正确".to_string())?
+            };
             crate::enclave::knowledge::adopt_candidate(
                 c,
                 &org_for_write,
                 &kb_for_write,
                 &cand,
+                Some(&title),
+                Some(&content),
+                Some(&tags),
+                &fields_value,
                 actor,
             )
         },

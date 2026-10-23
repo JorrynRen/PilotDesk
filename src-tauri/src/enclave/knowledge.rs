@@ -1737,23 +1737,52 @@ fn get_candidate(
 }
 
 /// 采纳候选：写入组织库并删除候选。
+///
+/// 采纳前允许人工修正：`title` / `content` / `tags` 传 `Some` 即覆盖（空串视为不覆盖标题正文），
+/// `fields` 传非空对象时按当前库 `field_schema` 覆盖模型填的专属属性（空串 = 清空该属性）。
+#[allow(clippy::too_many_arguments)]
 pub fn adopt_candidate(
     conn: &Connection,
     org_id: &str,
     kb_id: &str,
     id: &str,
+    title: Option<&str>,
+    content: Option<&str>,
+    tags: Option<&str>,
+    fields: &serde_json::Value,
     actor: &str,
 ) -> Result<KbEntryView, String> {
     ensure_kb_write(conn, org_id)?;
     let cand = get_candidate(conn, org_id, kb_id, id)?
         .ok_or_else(|| "候选不存在或已被处理".to_string())?;
     let memory_id = format!("manual:ai:{}", id);
+
+    let title = title
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or(cand.title);
+    let content = content
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(cand.content);
+    let tags = match tags {
+        Some(t) => t.trim().to_string(),
+        None => cand.tags,
+    };
+    // 专属属性：以模型写入的 metadata 为底，用户改过的字段按 schema 覆盖 / 清空
+    let mut metadata: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&cand.metadata).unwrap_or_default();
+    if fields.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
+        merge_entry_fields(conn, kb_id, &mut metadata, fields)?;
+    }
+
     let entries = vec![IngestEntryInput {
         memory_id: memory_id.clone(),
-        title: cand.title,
-        content: cand.content,
-        tags: cand.tags,
-        metadata: cand.metadata,
+        title,
+        content,
+        tags,
+        metadata: serde_json::Value::Object(metadata).to_string(),
     }];
     write_ingest_entries(conn, org_id, kb_id, "ai", id, actor, &entries, None)?;
     conn.execute(

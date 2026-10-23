@@ -151,7 +151,13 @@ interface EnclaveKbState {
   /** AI 生成草稿（落待确认） */
   generate: (orgId: string, kbId: string, topic: string) => Promise<boolean>;
   loadCandidates: (orgId: string, kbId: string) => Promise<void>;
-  adoptCandidate: (orgId: string, kbId: string, id: string) => Promise<boolean>;
+  /** 采纳候选：`patch` 是人工修正后的标题 / 正文 / 标签 / 专属属性（fields 为 JSON 对象字符串） */
+  adoptCandidate: (
+    orgId: string,
+    kbId: string,
+    id: string,
+    patch: { title: string; content: string; tags: string; fields: string },
+  ) => Promise<boolean>;
   rejectCandidate: (orgId: string, kbId: string, id: string) => Promise<void>;
 }
 
@@ -605,9 +611,17 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
     }
   },
 
-  adoptCandidate: async (orgId, kbId, id) => {
+  adoptCandidate: async (orgId, kbId, id, patch) => {
     try {
-      await invoke('enclave_kb_candidate_adopt', { orgId, kbId, candidateId: id });
+      await invoke('enclave_kb_candidate_adopt', {
+        orgId,
+        kbId,
+        candidateId: id,
+        title: patch.title,
+        content: patch.content,
+        tags: patch.tags,
+        fields: patch.fields,
+      });
       await get().loadCandidates(orgId, kbId);
       await get().search(orgId, get().query);
       return true;
