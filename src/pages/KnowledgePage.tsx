@@ -269,7 +269,13 @@ export function KnowledgePage() {
                       <M.icon size={11} />
                       {M.label}
                       {badge > 0 && (
-                        <span className="px-1 rounded-full text-[9px]" style={{ backgroundColor: 'var(--accent)', color: '#fff' }}>{badge}</span>
+                        <span
+                          className="px-1 rounded-full text-[9px]"
+                          style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                          title={`${badge} 条待确认（模型草稿，采纳后才进库）`}
+                        >
+                          {badge}
+                        </span>
                       )}
                       {t === 'ingest' && pendingIngest.length > 0 && (
                         <span

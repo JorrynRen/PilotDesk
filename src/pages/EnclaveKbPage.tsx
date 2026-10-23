@@ -1420,6 +1420,15 @@ export function EnclaveKbPage() {
                 >
                   <Icon size={11} />
                   {t.label}
+                  {!isAllKb && t.key === 'ingest' && candidates.length > 0 && (
+                    <span
+                      className="text-[9px] px-1 rounded-full"
+                      style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
+                      title={`${candidates.length} 条待确认（模型草稿，采纳后才进库）`}
+                    >
+                      {candidates.length}
+                    </span>
+                  )}
                   {t.key === 'ingest' && pendingFileQueue.length > 0 && (
                     <span
                       className="text-[9px] px-1 rounded-full"
