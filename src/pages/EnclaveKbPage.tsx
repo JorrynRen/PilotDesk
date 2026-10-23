@@ -127,13 +127,24 @@ function formatSize(bytes: number): string {
 
 function splitTags(raw: string): string[] {
   return raw
-    .split(/[,，]/)
+    // 与后端 normalize_tags 同口径：, ， 、 ; ； | 与空白都算分隔符
+    .split(/[,，、;；|\s]+/)
     .map((t) => t.trim().replace(/^#/, '').trim())
     .filter(Boolean);
 }
 
 function joinTags(tags: string[]): string {
   return tags.join(',');
+}
+
+/** 候选草稿的 metadata 是 JSON 字符串（条目那边已解析成对象），预览时按专属属性展示 */
+function parseMetaJson(raw: string): KnowledgeMeta {
+  try {
+    const v = JSON.parse(raw || '{}');
+    return v && typeof v === 'object' ? (v as KnowledgeMeta) : {};
+  } catch {
+    return {};
+  }
 }
 
 /** 团队库只有 5 种真实来源；`manual` 是早期数据的错误值，读时统一经 normalizeOrigin 还原 */
@@ -376,6 +387,8 @@ export function EnclaveKbPage() {
   const [fileGroupBy, setFileGroupBy] = useState<FileGroupBy>({ kind: 'entry' });
   /** 文件目录树里被折叠的分组 */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
+  /** 待确认候选的展开预览（一次只展开一条） */
+  const [candPreview, setCandPreview] = useState<string | null>(null);
   /** 本机团队文件根目录面板（全局设置，与任务页共用） */
   const [rootOpen, setRootOpen] = useState(false);
   // 知识库定义表单（owner / admin）：新建与编辑共用一套草稿
@@ -1725,56 +1738,128 @@ export function EnclaveKbPage() {
                         模型产出，核对后采纳才进库
                       </span>
                     </div>
-                    <div className="max-h-[220px] overflow-y-auto px-3 pb-2 space-y-1">
-                      {candidates.map((c) => (
-                        <div
-                          key={c.id}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded text-[11px]"
-                          style={{
-                            backgroundColor: 'var(--bg-content)',
-                            border: '1px solid var(--border)',
-                          }}
-                        >
-                          <span
-                            className="shrink-0 px-1 rounded text-[9px]"
-                            style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
-                          >
-                            AI
-                          </span>
-                          <span
-                            className="flex-1 min-w-0 truncate"
-                            style={{ color: 'var(--text-primary)' }}
-                            title={c.content.slice(0, 400)}
-                          >
-                            {c.title || '未命名草稿'}
-                          </span>
-                          <button
-                            className="shrink-0 text-[10px]"
-                            style={{ color: 'var(--accent)' }}
-                            onClick={() => {
-                              if (!activeOrgId || !activeKbId) return;
-                              void useEnclaveKbStore
-                                .getState()
-                                .adoptCandidate(activeOrgId, activeKbId, c.id)
-                                .then((ok) => ok && showToast('已采纳入库', 'success'));
+                    <div className="max-h-[320px] overflow-y-auto px-3 pb-2 space-y-1">
+                      {candidates.map((c) => {
+                        const open = candPreview === c.id;
+                        const meta = parseMetaJson(c.metadata);
+                        const tags = splitTags(c.tags);
+                        return (
+                          <div
+                            key={c.id}
+                            className="rounded"
+                            style={{
+                              backgroundColor: 'var(--bg-content)',
+                              border: '1px solid var(--border)',
                             }}
                           >
-                            采纳
-                          </button>
-                          <button
-                            className="shrink-0 text-[10px]"
-                            style={{ color: 'var(--text-tertiary)' }}
-                            onClick={() => {
-                              if (!activeOrgId || !activeKbId) return;
-                              void useEnclaveKbStore
-                                .getState()
-                                .rejectCandidate(activeOrgId, activeKbId, c.id);
-                            }}
-                          >
-                            拒绝
-                          </button>
-                        </div>
-                      ))}
+                            <div
+                              className="flex items-center gap-2 px-2 py-1.5 text-[11px] cursor-pointer"
+                              onClick={() => setCandPreview(open ? null : c.id)}
+                              title={open ? '收起预览' : '展开预览：正文 / 标签 / 专属属性'}
+                            >
+                              <ChevronRight
+                                size={11}
+                                className="shrink-0 transition-transform"
+                                style={{
+                                  color: 'var(--text-tertiary)',
+                                  transform: open ? 'rotate(90deg)' : 'none',
+                                }}
+                              />
+                              <span
+                                className="shrink-0 px-1 rounded text-[9px]"
+                                style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                              >
+                                AI
+                              </span>
+                              <span
+                                className="flex-1 min-w-0 truncate"
+                                style={{ color: 'var(--text-primary)' }}
+                              >
+                                {c.title || '未命名草稿'}
+                              </span>
+                              <button
+                                className="shrink-0 text-[10px]"
+                                style={{ color: 'var(--accent)' }}
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  if (!activeOrgId || !activeKbId) return;
+                                  void useEnclaveKbStore
+                                    .getState()
+                                    .adoptCandidate(activeOrgId, activeKbId, c.id)
+                                    .then((ok) => ok && showToast('已采纳入库', 'success'));
+                                }}
+                              >
+                                采纳
+                              </button>
+                              <button
+                                className="shrink-0 text-[10px]"
+                                style={{ color: 'var(--text-tertiary)' }}
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  if (!activeOrgId || !activeKbId) return;
+                                  void useEnclaveKbStore
+                                    .getState()
+                                    .rejectCandidate(activeOrgId, activeKbId, c.id);
+                                }}
+                              >
+                                拒绝
+                              </button>
+                            </div>
+                            {open && (
+                              <div className="px-2 pb-2 space-y-1.5">
+                                <div
+                                  className="text-[11px] leading-relaxed whitespace-pre-wrap select-text max-h-[240px] overflow-y-auto rounded p-2"
+                                  style={{
+                                    backgroundColor: 'var(--bg-field)',
+                                    color: 'var(--text-secondary)',
+                                  }}
+                                >
+                                  {c.content || '（无正文）'}
+                                </div>
+                                {kbFields.length > 0 && (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {kbFields.map((f) => {
+                                      const v = meta[f.key];
+                                      if (v === undefined || v === null || v === '') return null;
+                                      const text =
+                                        typeof v === 'boolean' ? (v ? '是' : '否') : String(v);
+                                      return (
+                                        <span
+                                          key={f.key}
+                                          className="max-w-[180px] truncate px-1.5 py-[1px] rounded text-[9px]"
+                                          style={{
+                                            backgroundColor: 'var(--accent-light)',
+                                            color: 'var(--accent)',
+                                          }}
+                                          title={`${f.label || f.key}：${text}`}
+                                        >
+                                          {f.label || f.key}：{text}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                                {tags.length > 0 && (
+                                  <div className="flex items-center gap-1 flex-wrap">
+                                    {tags.map((t) => (
+                                      <span
+                                        key={t}
+                                        className="px-1.5 py-[1px] rounded text-[9px]"
+                                        style={{
+                                          backgroundColor: 'var(--bg-tertiary)',
+                                          color: 'var(--text-secondary)',
+                                        }}
+                                      >
+                                        #{t}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

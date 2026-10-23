@@ -1059,6 +1059,9 @@ function CandidateCard({
   const [key, setKey] = useState(candidate.key);
   const [value, setValue] = useState(candidate.value);
   const [meta, setMeta] = useState<KnowledgeMeta>(candidate.meta);
+  /** 长正文默认只露 3 行，展开后整段可见（采纳前先看清全文） */
+  const [expanded, setExpanded] = useState(false);
+  const isLong = value.length > 160 || value.split('\n').length > 4;
 
   const inputStyle = {
     backgroundColor: 'var(--bg-field)',
@@ -1089,10 +1092,20 @@ function CandidateCard({
       <textarea
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        rows={3}
+        rows={expanded ? 14 : 3}
         className="w-full p-2 rounded-lg outline-none resize-none text-[11px] leading-relaxed"
         style={inputStyle}
       />
+      {isLong && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="text-[10px]"
+          style={{ color: 'var(--accent)' }}
+          title={expanded ? '收起正文' : '展开完整正文'}
+        >
+          {expanded ? '收起' : `展开全文（${value.length} 字）`}
+        </button>
+      )}
 
       {/* 专属属性按当前库的字段定义预填，采纳前可改 */}
       <MetaEditor fields={base.fields} value={meta} onChange={setMeta} />
