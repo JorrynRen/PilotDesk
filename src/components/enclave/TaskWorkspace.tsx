@@ -126,14 +126,14 @@ export function TaskWorkspace() {
   const [newAssignee, setNewAssignee] = useState('');
   const [newPriority, setNewPriority] = useState('normal');
   const [newDue, setNewDue] = useState('');
-  /** 产出归档库（空 = 默认库） */
+  /** 产出目标库（空 = 默认库） */
   const [newKb, setNewKb] = useState('');
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   /** 任务列表筛选：默认「活跃」= 不含已归档；也可按单一状态筛选 */
   const [statusFilter, setStatusFilter] = useState<'active' | 'all' | TaskStatus>('active');
 
-  /** 产出归档库候选（直接查主机，不走知识库页的 store —— 避免打开任务页就把知识库"打开"） */
+  /** 产出目标库候选（直接查主机，不走知识库页的 store —— 避免打开任务页就把知识库"打开"） */
   const [kbOptions, setKbOptions] = useState<{ id: string; name: string; isImplicit: boolean }[]>([]);
 
   // 本机团队文件根目录：**全局设置**，与具体组织无关（按钮与面板三个页面共用）
@@ -165,7 +165,7 @@ export function TaskWorkspace() {
     void useEnclaveTaskStore.getState().loadTasks(activeOrgId);
   }, [activeOrgId, accountKey]);
 
-  // 产出归档库候选：按组织拉一次（失败静默，任务照常可用，目标库只显示为未知）
+  // 产出目标库候选：按组织拉一次（失败静默，任务照常可用，目标库只显示为未知）
   useEffect(() => {
     if (!activeOrgId) {
       setKbOptions([]);
@@ -381,7 +381,7 @@ export function TaskWorkspace() {
             />
           </label>
           <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
-            <span>产出归档</span>
+            <span>产出目标库</span>
             <Select
               value={newKb}
               onChange={setNewKb}
@@ -392,7 +392,7 @@ export function TaskWorkspace() {
                   .filter((k) => !k.isImplicit)
                   .map((k) => ({ value: k.id, label: k.name })),
               ]}
-              title="汇报确认后，任务产出沉淀到哪个知识库"
+              title="汇报确认后，任务产出沉淀到哪个知识库（与任务状态「归档」无关）"
             />
           </div>
           <button
@@ -638,7 +638,7 @@ function TaskDetail(props: {
   tasks: TaskView[];
   members: MemberView[];
   memberLabel: (id: string | null) => string;
-  /** 产出归档库候选（默认库 + 本组织自定义库） */
+  /** 产出目标库候选（默认库 + 本组织自定义库） */
   kbOptions: { id: string; name: string; isImplicit: boolean }[];
 }) {
   const { orgId, task, tasks, members, memberLabel, kbOptions } = props;
@@ -663,7 +663,7 @@ function TaskDetail(props: {
   const canUpload = identityVerified && isParticipant && !isClosed;
   /** 有子任务 = 汇总容器：状态由子任务派生，自身不执行 */
   const isContainer = task.childCount > 0;
-  /** 产出归档库显示名：空 = 默认库 */
+  /** 产出目标库显示名：空 = 默认库 */
   const kbLabel = (id: string): string =>
     id ? kbOptions.find((k) => k.id === id)?.name ?? '未知库' : '默认库';
   const transitions = isContainer ? CONTAINER_TRANSITIONS[task.status] : TRANSITIONS[task.status];
@@ -689,7 +689,7 @@ function TaskDetail(props: {
   const [due, setDue] = useState(toDateInput(task.dueDate));
   const [collaborators, setCollaborators] = useState<string[]>(task.collaborators);
   const [deps, setDeps] = useState<string[]>(task.blockedBy);
-  /** 产出归档库草稿（空 = 默认库） */
+  /** 产出目标库草稿（空 = 默认库） */
   const [kbTarget, setKbTarget] = useState(task.targetKbId);
   const [preview, setPreview] = useState<DepsPreview | null>(null);
 
@@ -1110,7 +1110,7 @@ function TaskDetail(props: {
             <li>优先级：{PRIORITY_LABEL[task.priority] ?? task.priority}</li>
             <li>截止：{task.dueDate ? toDateInput(task.dueDate) : '未设置'}</li>
             {!isContainer && (
-              <li>产出归档：{kbLabel(task.targetKbId)}</li>
+              <li>产出目标库：{kbLabel(task.targetKbId)}</li>
             )}
             <li>
               {`参与者：${
@@ -1171,7 +1171,7 @@ function TaskDetail(props: {
             </label>
             {!isContainer && (
               <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
-                产出归档
+                产出目标库
                 <Select
                   value={kbTarget}
                   onChange={setKbTarget}
@@ -1182,7 +1182,7 @@ function TaskDetail(props: {
                       .filter((k) => !k.isImplicit)
                       .map((k) => ({ value: k.id, label: k.name })),
                   ]}
-                  title="汇报确认后，任务产出沉淀到哪个知识库（已沉淀的条目不会自动搬家）"
+                  title="汇报确认后，任务产出沉淀到哪个知识库（与任务状态「归档」无关；已沉淀的条目不会自动搬家）"
                 />
               </label>
             )}

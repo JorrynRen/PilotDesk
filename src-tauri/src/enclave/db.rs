@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS org_tasks (
     completed_at   INTEGER,
     blocked_by     TEXT NOT NULL DEFAULT '[]',     -- JSON 数组（前置任务 id，纯 AND 语义）
     visibility     TEXT NOT NULL DEFAULT 'org',
-    target_kb_id   TEXT NOT NULL DEFAULT '',       -- 任务产出的归档库；空 = 默认库
+    target_kb_id   TEXT NOT NULL DEFAULT '',       -- 任务产出的目标库；空 = 默认库
     metadata       TEXT NOT NULL DEFAULT '{}',
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL

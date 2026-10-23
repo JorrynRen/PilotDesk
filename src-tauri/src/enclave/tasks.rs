@@ -366,7 +366,7 @@ pub struct TaskView {
     pub visibility: String,
     /// 当前是否被前置任务阻塞（archived 视作已放行）
     pub blocked: bool,
-    /// 任务产出的归档库；空字符串 = 默认库
+    /// 任务产出的目标库；空字符串 = 默认库
     pub target_kb_id: String,
     /// 子任务数量：> 0 表示这是一个「汇总容器」（状态由子任务派生，自身不执行）
     pub child_count: i64,
@@ -392,7 +392,7 @@ pub struct CreateTaskInput {
     pub due_date: Option<i64>,
     #[serde(default)]
     pub blocked_by: Option<Vec<String>>,
-    /// 产出归档库；缺省 / 空串 = 默认库
+    /// 产出目标库；缺省 / 空串 = 默认库
     #[serde(default)]
     pub target_kb_id: Option<String>,
 }
@@ -412,7 +412,7 @@ pub struct UpdateTaskInput {
     pub priority: Option<String>,
     #[serde(default)]
     pub due_date: Option<Option<i64>>,
-    /// 产出归档库；`Some("")` = 改回默认库
+    /// 产出目标库；`Some("")` = 改回默认库
     #[serde(default)]
     pub target_kb_id: Option<String>,
 }
@@ -449,7 +449,7 @@ struct TaskRow {
     completed_at: Option<i64>,
     blocked_by: Vec<String>,
     visibility: String,
-    /// 任务产出的归档库（空 = 默认库）
+    /// 任务产出的目标库（空 = 默认库）
     target_kb_id: String,
     created_at: i64,
     updated_at: i64,
@@ -824,7 +824,7 @@ fn require_org_role(conn: &Connection, org_id: &str) -> Result<Role, String> {
     })
 }
 
-/// 校验并规范化「任务产出归档库」。
+/// 校验并规范化「任务产出目标库」。
 ///
 /// 空 = 默认库（沉淀时再懒创建）；非空必须是本组织的库。默认库的 id 显式传入时
 /// 归一成空串，保证「默认 / 自定义」只有一种表示。
@@ -899,7 +899,7 @@ pub fn create_task(
     if let Some(cycle) = detect_cycle(conn, org_id, &task_id, &deps)? {
         return Err(format!("存在循环依赖：{}", cycle.join(" → ")));
     }
-    // 产出归档库在创建时就确定：汇报确认时直接按它沉淀（空 = 默认库）
+    // 产出目标库在创建时就确定：汇报确认时直接按它沉淀（空 = 默认库）
     let target_kb_id = resolve_target_kb(conn, org_id, input.target_kb_id.as_deref())?;
 
     let now = chrono::Utc::now().timestamp();
@@ -1006,7 +1006,7 @@ pub fn update_task(
         Some(next) => next,
         None => row.due_date,
     };
-    // 产出归档库：未传 = 保持；传空串 = 改回默认库
+    // 产出目标库：未传 = 保持；传空串 = 改回默认库
     let target_kb_id = match input.target_kb_id.as_deref() {
         Some(raw) => resolve_target_kb(conn, org_id, Some(raw))?,
         None => row.target_kb_id.clone(),

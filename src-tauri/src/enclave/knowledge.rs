@@ -315,7 +315,7 @@ pub fn delete_kb(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(), Str
     if candidates > 0 {
         return Err("库里还有待确认草稿，先采纳或拒绝后再删除".to_string());
     }
-    // 任务产出归档目标：活跃任务指向该库时拒绝删除（用户可去任务里改目标）；
+    // 任务产出目标库：活跃任务指向该库时拒绝删除（用户可去任务里改目标）；
     // 已归档 / 已作废的任务不会再沉淀，直接回落到默认库，避免留下悬空引用。
     conn.execute(
         "UPDATE org_tasks SET target_kb_id = '', updated_at = ?3
@@ -332,10 +332,10 @@ pub fn delete_kb(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(), Str
             params![org_id, kb_id],
             |r| r.get(0),
         )
-        .map_err(|e| format!("校验任务归档目标失败：{}", e))?;
+        .map_err(|e| format!("校验任务产出目标库失败：{}", e))?;
     if active_targets > 0 {
         return Err(format!(
-            "有 {} 个任务以该库为产出归档目标，先去任务里改到其它库再删除",
+            "有 {} 个任务把产出沉淀到该库，先去任务里改到其它库再删除",
             active_targets
         ));
     }
@@ -774,7 +774,7 @@ fn do_sediment(
         return Ok(()); // 幂等：已沉淀
     }
 
-    // 归档库以任务定义为准：空 = 默认库（懒创建）；自定义库需仍存在且属于本组织
+    // 目标库以任务定义为准：空 = 默认库（懒创建）；自定义库需仍存在且属于本组织
     let kb_id = if target_kb_id.trim().is_empty() {
         ensure_org_kb(conn, org_id, actor)?
     } else {
@@ -1914,7 +1914,7 @@ mod tests {
         conn
     }
 
-    /// 任务指定了归档库：确认后的产出进目标库，不落默认库。
+    /// 任务指定了产出目标库：确认后的产出进目标库，不落默认库。
     #[test]
     fn sediment_goes_to_task_target_kb() {
         let conn = seeded();
@@ -1968,6 +1968,6 @@ mod tests {
         )
         .unwrap();
         let err = delete_kb(&conn, "8", "kb-custom").unwrap_err();
-        assert!(err.contains("归档目标"), "错误应说明任务仍在引用：{}", err);
+        assert!(err.contains("产出"), "错误应说明任务仍在引用：{}", err);
     }
 }
