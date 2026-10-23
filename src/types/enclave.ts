@@ -515,6 +515,8 @@ export interface KbFileView {
 /** 组织知识条目 */
 export interface KbEntryView {
   memoryId: string;
+  /** 所属知识库（「全部库」聚合视图据此标注来源库） */
+  kbId: string;
   title: string;
   content: string;
   tags: string;

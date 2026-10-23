@@ -25,6 +25,9 @@ const GRAPH_PAGE = 200;
 /** 进入图谱时自动续拉到的上限；再往后由用户点「加载更多」逐批追加 */
 const GRAPH_AUTO_MAX = 1000;
 
+/** 「全部库」聚合视图的伪库 id：只读跨库检索，与后端 `ALL_KB_PARAM` 一致 */
+export const ALL_KB_ID = '__all__';
+
 /** 拉图谱的一页（不带状态，首屏自动续拉与手动加载更多共用） */
 function fetchGraphPage(orgId: string, kbId: string, offset: number): Promise<KbEntryView[]> {
   return invoke<KbEntryView[]>('enclave_kb_search', {
@@ -193,9 +196,10 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const kbs = await invoke<KbView[]>('enclave_kb_list', { orgId });
-      const next = kbs.some((k) => k.id === get().activeKbId)
-        ? get().activeKbId
-        : kbs[0]?.id ?? '';
+      const cur = get().activeKbId;
+      // 「全部库」不是真实库，刷新时要保留这个选择
+      const next =
+        cur === ALL_KB_ID || kbs.some((k) => k.id === cur) ? cur : kbs[0]?.id ?? '';
       set({ kbs, activeKbId: next, loading: false });
       if (next) await get().selectKb(orgId, next);
     } catch (e) {
@@ -214,9 +218,12 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       graphLoading: false,
     });
     await get().search(orgId, get().query);
-    void get().loadQueue(orgId, kbId);
-    void get().loadCandidates(orgId, kbId);
-    void get().loadCapability(orgId);
+    // 待整理 / 待确认 / 加工能力都是「按库」的；聚合视图只读，不加载
+    if (kbId !== ALL_KB_ID) {
+      void get().loadQueue(orgId, kbId);
+      void get().loadCandidates(orgId, kbId);
+      void get().loadCapability(orgId);
+    }
   },
 
   search: async (orgId, query) => {
@@ -231,9 +238,13 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       });
       set((s) => ({
         entries,
-        // 展开行跟随最新数据（检索 / 刷新后不能继续展示旧对象）
+        // 展开行跟随最新数据（检索 / 刷新后不能继续展示旧对象）；
+        // 聚合视图下 memory_id 可能跨库重复，按「库 + 条目」匹配
         activeEntry: s.activeEntry
-          ? entries.find((e) => e.memoryId === s.activeEntry?.memoryId) ?? null
+          ? entries.find(
+              (e) =>
+                e.memoryId === s.activeEntry?.memoryId && e.kbId === s.activeEntry?.kbId,
+            ) ?? null
           : null,
         loading: false,
         error: null,

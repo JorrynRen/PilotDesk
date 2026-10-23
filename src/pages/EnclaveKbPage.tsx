@@ -34,7 +34,7 @@ import { FieldSchemaEditor, MetaEditor } from '../components/knowledge/Knowledge
 import { Select } from '../components/common/Select';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
-import { useEnclaveKbStore } from '../stores/enclaveKbStore';
+import { ALL_KB_ID, useEnclaveKbStore } from '../stores/enclaveKbStore';
 import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
 import { useAccountStore } from '../stores/accountStore';
 import { confirmDialog } from '../stores/confirmStore';
@@ -673,8 +673,12 @@ export function EnclaveKbPage() {
   const canEdit = myRole === 'owner' || myRole === 'admin';
   /** 手工入库：绕过模型直接写共享库，与条目编辑同权限（owner / admin） */
   const canManual = canEdit;
-  /** 当前库：默认库排最前，切换后按 activeKbId 取 */
-  const kb = kbs.find((k) => k.id === activeKbId) ?? kbs[0] ?? null;
+  /** 「全部库」聚合视图：跨库只读检索；写入 / 文件 / 投喂仍按具体库 */
+  const isAllKb = activeKbId === ALL_KB_ID;
+  /** 条目编辑：聚合视图下只读（各库 schema 不同，无法在混排里安全编辑） */
+  const canEditEntry = canEdit && !isAllKb;
+  /** 当前库：默认库排最前；聚合视图没有具体库 */
+  const kb = isAllKb ? null : kbs.find((k) => k.id === activeKbId) ?? kbs[0] ?? null;
   /** 当前库的专属属性定义（图谱详情按它渲染属性区） */
   const kbFields = useMemo<KnowledgeFieldDef[]>(() => {
     try {
@@ -747,10 +751,11 @@ export function EnclaveKbPage() {
     return typeof v === 'number' ? v : 0;
   };
 
-  /** 展开 / 收起：同一个条目再点一次即收起。 */
+  /** 展开 / 收起：同一个条目再点一次即收起（聚合视图下按「库 + 条目」识别） */
   const toggleEntry = (entry: KbEntryView) => {
     const cur = useEnclaveKbStore.getState().activeEntry;
-    useEnclaveKbStore.getState().openEntry(cur?.memoryId === entry.memoryId ? null : entry);
+    const same = cur?.memoryId === entry.memoryId && cur?.kbId === entry.kbId;
+    useEnclaveKbStore.getState().openEntry(same ? null : entry);
   };
 
   useEffect(() => {
@@ -783,6 +788,11 @@ export function EnclaveKbPage() {
   useEffect(() => {
     if (activeOrgId) void useEnclaveKbStore.getState().loadKbs(activeOrgId);
   }, [activeOrgId]);
+
+  // 「全部库」只读：文件 / 投喂两个 tab 不可用，切过去时退回知识列表
+  useEffect(() => {
+    if (isAllKb && (tab === 'files' || tab === 'ingest')) setTab('entries');
+  }, [isAllKb, tab]);
 
   // 「文件」tab 懒加载（条目页不需要先拉全量文件）
   useEffect(() => {
@@ -988,7 +998,7 @@ export function EnclaveKbPage() {
 
   const dirty =
     !!activeEntry &&
-    canEdit &&
+    canEditEntry &&
     (draftTitle.trim() !== activeEntry.title ||
       draftContent !== activeEntry.content ||
       joinTags(draftTags) !== joinTags(splitTags(activeEntry.tags)) ||
@@ -1227,7 +1237,7 @@ export function EnclaveKbPage() {
                 <div className="flex items-center gap-2 min-w-0">
                   <Library size={12} style={{ color: 'var(--accent)' }} />
                   <Select
-                    value={kb?.id ?? ''}
+                    value={isAllKb ? ALL_KB_ID : kb?.id ?? ''}
                     onChange={(v) => {
                       if (activeOrgId && v !== activeKbId) {
                         void useEnclaveKbStore.getState().selectKb(activeOrgId, v);
@@ -1235,26 +1245,43 @@ export function EnclaveKbPage() {
                     }}
                     size="sm"
                     className="w-[240px] shrink-0"
-                    options={kbs.map((k) => ({
-                      value: k.id,
-                      label: k.isImplicit ? `${k.name}（默认）` : k.name,
-                    }))}
+                    options={[
+                      // 聚合视图：跨库只读检索，不承载写入
+                      { value: ALL_KB_ID, label: '全部库（只读）' },
+                      ...kbs.map((k) => ({
+                        value: k.id,
+                        label: k.isImplicit ? `${k.name}（默认）` : k.name,
+                      })),
+                    ]}
                   />
                   <span
                     className="text-[10px] min-w-0 truncate"
                     style={{ color: 'var(--text-tertiary)' }}
                   >
-                    {kb?.entryCount ?? entries.length} 条知识
+                    {isAllKb
+                      ? kbs.reduce((n, k) => n + k.entryCount, 0)
+                      : kb?.entryCount ?? entries.length} 条知识
                     {' · '}
-                    {kb?.fileCount ?? files.length} 个文件
+                    {isAllKb
+                      ? kbs.reduce((n, k) => n + k.fileCount, 0)
+                      : kb?.fileCount ?? files.length} 个文件
                     {' · '}
-                    <span title="专属属性按当前库的定义计（「编辑定义」里修改）">
-                      {kbFields.length} 个专属属性
-                    </span>
-                    {kb && kb.lastEntryAt > 0 && ` · 最近更新 ${formatTime(kb.lastEntryAt)}`}
+                    {isAllKb ? (
+                      <span title="每个库的专属属性独立定义，切到具体库查看">
+                        专属属性按库各自定义
+                      </span>
+                    ) : (
+                      <span title="专属属性按当前库的定义计（「编辑定义」里修改）">
+                        {kbFields.length} 个专属属性
+                      </span>
+                    )}
+                    {!isAllKb &&
+                      kb &&
+                      kb.lastEntryAt > 0 &&
+                      ` · 最近更新 ${formatTime(kb.lastEntryAt)}`}
                   </span>
                   <div className="flex-1" />
-                  {canEdit && (
+                  {canEdit && kb && (
                     <>
                       <button
                         onClick={startEditKb}
@@ -1292,10 +1319,12 @@ export function EnclaveKbPage() {
                   style={{ color: 'var(--text-secondary)' }}
                   title={kb?.description}
                 >
-                  {kb?.description ||
-                    (kb?.isImplicit
-                      ? '默认库：任务产出自动沉淀；团队共享（可改定义，不可删除）'
-                      : '自定义库：投喂与手工入库的目标库')}
+                  {isAllKb
+                    ? '跨库只读视图：可搜索 / 看图谱；写入请切回具体库'
+                    : kb?.description ||
+                      (kb?.isImplicit
+                        ? '默认库：任务产出自动沉淀；团队共享（可改定义，不可删除）'
+                        : '自定义库：投喂与手工入库的目标库')}
                 </div>
               </>
             )}
@@ -1304,22 +1333,31 @@ export function EnclaveKbPage() {
           {/* tab：知识 / 文件 / 投喂 / 图谱 */}
           <div className="shrink-0 px-3 flex items-center gap-1" style={{ borderBottom: '1px solid var(--border)' }}>
             {TABS.map((t) => {
+              // 「全部库」是只读聚合：文件与投喂都按库，切到具体库才有意义
+              const enabled =
+                t.enabled && !(isAllKb && (t.key === 'files' || t.key === 'ingest'));
               const active = tab === t.key;
               const Icon = t.icon;
               return (
                 <button
                   key={t.key}
-                  onClick={() => t.enabled && setTab(t.key)}
-                  disabled={!t.enabled}
+                  onClick={() => enabled && setTab(t.key)}
+                  disabled={!enabled}
                   className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] transition-colors"
                   style={{
                     color: active ? 'var(--accent)' : 'var(--text-secondary)',
                     borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
                     fontWeight: active ? 600 : 500,
-                    opacity: t.enabled ? 1 : 0.45,
-                    cursor: t.enabled ? 'pointer' : 'not-allowed',
+                    opacity: enabled ? 1 : 0.45,
+                    cursor: enabled ? 'pointer' : 'not-allowed',
                   }}
-                  title={t.enabled ? t.label : `${t.label}（下一阶段实现）`}
+                  title={
+                    enabled
+                      ? t.label
+                      : isAllKb
+                        ? `${t.label}（全部库视图不可用，请切到具体库）`
+                        : `${t.label}（下一阶段实现）`
+                  }
                 >
                   <Icon size={11} />
                   {t.label}
@@ -2000,7 +2038,8 @@ export function EnclaveKbPage() {
                 )}
 
                 {entries.map((e) => {
-                  const open = activeEntry?.memoryId === e.memoryId;
+                  const open =
+                    activeEntry?.memoryId === e.memoryId && activeEntry?.kbId === e.kbId;
                   const tags = splitTags(e.tags);
                   const taskTitle = metaStr(e, 'taskTitle');
                   const confirmedAt = metaNum(e, 'confirmedAt');
@@ -2031,10 +2070,10 @@ export function EnclaveKbPage() {
                         <div className="flex-1 min-w-0">
                           <div
                             className="flex items-center gap-1.5 min-w-0"
-                            style={{ cursor: open && canEdit ? 'default' : 'pointer' }}
-                            onClick={() => { if (!(open && canEdit)) toggleEntry(e); }}
+                            style={{ cursor: open && canEditEntry ? 'default' : 'pointer' }}
+                            onClick={() => { if (!(open && canEditEntry)) toggleEntry(e); }}
                           >
-                            {open && canEdit ? (
+                            {open && canEditEntry ? (
                               <input
                                 className={FIELD_CLASS + ' flex-1'}
                                 style={FIELD_STYLE}
@@ -2059,6 +2098,18 @@ export function EnclaveKbPage() {
                             >
                               {entryOriginLabel(e)}
                             </span>
+                            {isAllKb && (
+                              <span
+                                className="shrink-0 max-w-[120px] truncate px-1.5 py-[1px] rounded text-[9px]"
+                                style={{
+                                  backgroundColor: 'var(--bg-tertiary)',
+                                  color: 'var(--text-secondary)',
+                                }}
+                                title={`所属知识库：${kbs.find((k) => k.id === e.kbId)?.name ?? e.kbId}`}
+                              >
+                                {kbs.find((k) => k.id === e.kbId)?.name ?? '未知库'}
+                              </span>
+                            )}
                             {e.stale && (
                               <span
                                 className="shrink-0 px-1.5 py-[1px] rounded text-[9px]"
@@ -2189,9 +2240,9 @@ export function EnclaveKbPage() {
 
                           <div>
                             <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                              正文{canEdit ? '（可编辑）' : ''}
+                              正文{canEditEntry ? '（可编辑）' : ''}
                             </div>
-                            {canEdit ? (
+                            {canEditEntry ? (
                               <textarea
                                 value={draftContent}
                                 onChange={(ev) => setDraftContent(ev.target.value)}
@@ -2218,7 +2269,7 @@ export function EnclaveKbPage() {
                             <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
                               标签（用于检索）
                             </div>
-                            {canEdit ? (
+                            {canEditEntry ? (
                               <TagEditor tags={draftTags} onChange={setDraftTags} />
                             ) : (
                               <div className="flex items-center gap-1.5 flex-wrap">
@@ -2241,9 +2292,9 @@ export function EnclaveKbPage() {
                           {kbFields.length > 0 && (
                             <div>
                               <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
-                                专属属性{canEdit ? '（可编辑）' : ''}
+                                专属属性{canEditEntry ? '（可编辑）' : ''}
                               </div>
-                              {canEdit ? (
+                              {canEditEntry ? (
                                 <MetaEditor
                                   fields={kbFields}
                                   value={draftMeta}
@@ -2315,7 +2366,7 @@ export function EnclaveKbPage() {
                                     </span>
                                     <CacheHintIcon visible={myRole !== '' && myRole !== 'owner'} />
                                   </button>
-                                  {canEdit && e.origin !== 'task_output' && (
+                                  {canEditEntry && e.origin !== 'task_output' && (
                                     <button
                                       onClick={() => void detachEntryFile(e, f.fileId, f.fileName)}
                                       className="shrink-0 text-[10px] px-1"
@@ -2331,7 +2382,7 @@ export function EnclaveKbPage() {
                           </div>
 
                           <div className="flex items-center gap-2 flex-wrap">
-                            {canEdit && (
+                            {canEditEntry && (
                               <button
                                 onClick={() => void saveEntry()}
                                 disabled={saving || !dirty}
@@ -2349,7 +2400,7 @@ export function EnclaveKbPage() {
                                 {saving ? '保存中…' : dirty ? '保存' : '已保存'}
                               </button>
                             )}
-                            {canEdit && (
+                            {canEditEntry && (
                               <button
                                 onClick={cancelEdit}
                                 className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
@@ -2379,7 +2430,7 @@ export function EnclaveKbPage() {
                                 查看来源任务
                               </button>
                             )}
-                            {canEdit && (
+                            {canEditEntry && (
                               <button
                                 onClick={() => void removeEntry()}
                                 className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"

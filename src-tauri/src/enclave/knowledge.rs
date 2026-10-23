@@ -55,6 +55,8 @@ pub struct KbFileView {
 #[serde(rename_all = "camelCase")]
 pub struct KbEntryView {
     pub memory_id: String,
+    /// 所属知识库（「全部库」聚合视图据此标注来源库）
+    pub kb_id: String,
     pub title: String,
     pub content: String,
     pub tags: String,
@@ -77,6 +79,9 @@ pub struct KbEntryView {
 pub fn implicit_kb_id(org_id: &str) -> String {
     format!("kb-org-{}", org_id)
 }
+
+/// 「全部库」聚合视图的伪库 id（只读检索用，不对应 `knowledge_bases` 里的行）。
+pub const ALL_KB_PARAM: &str = "__all__";
 
 fn snapshot_org_name(conn: &Connection, org_id: &str) -> Option<String> {
     conn.query_row(
@@ -391,6 +396,7 @@ fn map_entry(r: &rusqlite::Row<'_>) -> rusqlite::Result<KbEntryView> {
     let updated_at: i64 = r.get(10)?;
     Ok(KbEntryView {
         memory_id: r.get(0)?,
+        kb_id: r.get(11)?,
         title: r.get(1)?,
         content: r.get(2)?,
         tags: r.get(3)?,
@@ -407,7 +413,7 @@ fn map_entry(r: &rusqlite::Row<'_>) -> rusqlite::Result<KbEntryView> {
 }
 
 const ENTRY_COLS: &str =
-    "memory_id, title, content, tags, origin, source_ref, metadata, added_by, added_at, stale, updated_at";
+    "memory_id, title, content, tags, origin, source_ref, metadata, added_by, added_at, stale, updated_at, knowledge_base_id";
 
 fn qualified_cols(alias: &str) -> String {
     ENTRY_COLS
@@ -418,51 +424,60 @@ fn qualified_cols(alias: &str) -> String {
 }
 
 /// 批量补齐条目的交付物（内连 `file_assets`：原件已被删除的悬空引用自然不出现）。
-fn attach_files(
-    conn: &Connection,
-    kb_id: &str,
-    entries: &mut [KbEntryView],
-) -> Result<(), String> {
+///
+/// 「全部库」聚合时一页里可能跨多个库，且 `memory_id` 只在库内唯一
+/// （例如同内容在两个库手工入库会得到同一个 `manual:<digest>`），
+/// 所以按「库 + memory_id」分组查询与回填。
+fn attach_files(conn: &Connection, entries: &mut [KbEntryView]) -> Result<(), String> {
     if entries.is_empty() {
         return Ok(());
     }
-    let ids: Vec<String> = entries.iter().map(|e| e.memory_id.clone()).collect();
-    let placeholders = vec!["?"; ids.len()].join(", ");
-    let sql = format!(
-        "SELECT kbf.memory_id, fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash
-         FROM knowledge_base_files kbf
-         JOIN file_assets fa ON fa.id = kbf.file_id
-         WHERE kbf.knowledge_base_id = ? AND kbf.memory_id IN ({})
-         ORDER BY fa.file_name",
-        placeholders
-    );
-    let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|e| format!("查询知识库文件失败：{}", e))?;
-    let mut args: Vec<String> = Vec::with_capacity(ids.len() + 1);
-    args.push(kb_id.to_string());
-    args.extend(ids);
-    let rows = stmt
-        .query_map(params_from_iter(args.iter()), |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                KbFileView {
-                    file_id: r.get(1)?,
-                    file_name: r.get(2)?,
-                    file_type: r.get(3)?,
-                    file_size: r.get(4)?,
-                    file_hash: r.get(5)?,
-                },
-            ))
-        })
-        .map_err(|e| format!("查询知识库文件失败：{}", e))?;
-    let mut grouped: HashMap<String, Vec<KbFileView>> = HashMap::new();
-    for row in rows {
-        let (memory_id, file) = row.map_err(|e| format!("读取知识库文件失败：{}", e))?;
-        grouped.entry(memory_id).or_default().push(file);
+    let mut ids_by_kb: HashMap<String, Vec<String>> = HashMap::new();
+    for e in entries.iter() {
+        ids_by_kb
+            .entry(e.kb_id.clone())
+            .or_default()
+            .push(e.memory_id.clone());
+    }
+
+    let mut grouped: HashMap<(String, String), Vec<KbFileView>> = HashMap::new();
+    for (kb_id, ids) in ids_by_kb {
+        let placeholders = vec!["?"; ids.len()].join(", ");
+        let sql = format!(
+            "SELECT kbf.memory_id, fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash
+             FROM knowledge_base_files kbf
+             JOIN file_assets fa ON fa.id = kbf.file_id
+             WHERE kbf.knowledge_base_id = ? AND kbf.memory_id IN ({})
+             ORDER BY fa.file_name",
+            placeholders
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("查询知识库文件失败：{}", e))?;
+        let mut args: Vec<String> = Vec::with_capacity(ids.len() + 1);
+        args.push(kb_id.clone());
+        args.extend(ids);
+        let rows = stmt
+            .query_map(params_from_iter(args.iter()), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    KbFileView {
+                        file_id: r.get(1)?,
+                        file_name: r.get(2)?,
+                        file_type: r.get(3)?,
+                        file_size: r.get(4)?,
+                        file_hash: r.get(5)?,
+                    },
+                ))
+            })
+            .map_err(|e| format!("查询知识库文件失败：{}", e))?;
+        for row in rows {
+            let (memory_id, file) = row.map_err(|e| format!("读取知识库文件失败：{}", e))?;
+            grouped.entry((kb_id.clone(), memory_id)).or_default().push(file);
+        }
     }
     for e in entries.iter_mut() {
-        if let Some(files) = grouped.remove(&e.memory_id) {
+        if let Some(files) = grouped.remove(&(e.kb_id.clone(), e.memory_id.clone())) {
             e.files = files;
         }
     }
@@ -499,10 +514,23 @@ pub fn search_entries(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<KbEntryView>, String> {
-    let kb = kb_id
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| implicit_kb_id(org_id));
-    ensure_kb_owned(conn, org_id, &kb)?;
+    let all = kb_id == Some(ALL_KB_PARAM);
+    let kb = if all {
+        org_id.to_string()
+    } else {
+        kb_id
+            .map(str::to_string)
+            .unwrap_or_else(|| implicit_kb_id(org_id))
+    };
+    if !all {
+        ensure_kb_owned(conn, org_id, &kb)?;
+    }
+    // 作用域片段：单库时 ?1 = 库 id；「全部库」时 ?1 = 组织 id（走子查询）
+    let scope = if all {
+        "IN (SELECT id FROM knowledge_bases WHERE owner_type = 'org' AND owner_id = ?1)"
+    } else {
+        "= ?1"
+    };
 
     let q = query.trim();
     let limit = limit.clamp(1, 200);
@@ -511,7 +539,7 @@ pub fn search_entries(
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT {} FROM knowledge_base_memories
-                 WHERE knowledge_base_id = ?1
+                 WHERE knowledge_base_id {scope}
                  ORDER BY COALESCE(NULLIF(updated_at, 0), added_at) DESC LIMIT ?2 OFFSET ?3",
                 ENTRY_COLS
             ))
@@ -529,15 +557,15 @@ pub fn search_entries(
             let mut stmt = conn
                 .prepare(&format!(
                     "SELECT {} FROM knowledge_base_memories m
-                     WHERE m.knowledge_base_id = ?1
+                     WHERE m.knowledge_base_id {scope}
                        AND (m.memory_id IN (
                              SELECT f.memory_id FROM kb_mem_fts f
-                             WHERE f.knowledge_base_id = ?1 AND kb_mem_fts MATCH ?2
+                             WHERE f.knowledge_base_id {scope} AND kb_mem_fts MATCH ?2
                            )
                            OR EXISTS (
                              SELECT 1 FROM knowledge_base_files kbf
                              JOIN file_assets fa ON fa.id = kbf.file_id
-                             WHERE kbf.knowledge_base_id = ?1
+                             WHERE kbf.knowledge_base_id {scope}
                                AND kbf.memory_id = m.memory_id
                                AND fa.file_name LIKE ?3))
                      ORDER BY COALESCE(NULLIF(m.updated_at, 0), m.added_at) DESC LIMIT ?4 OFFSET ?5",
@@ -553,12 +581,12 @@ pub fn search_entries(
             let mut stmt = conn
                 .prepare(&format!(
                     "SELECT {} FROM knowledge_base_memories m
-                     WHERE m.knowledge_base_id = ?1
+                     WHERE m.knowledge_base_id {scope}
                        AND (m.title LIKE ?2 OR m.content LIKE ?2 OR m.tags LIKE ?2
                             OR EXISTS (
                               SELECT 1 FROM knowledge_base_files kbf
                               JOIN file_assets fa ON fa.id = kbf.file_id
-                              WHERE kbf.knowledge_base_id = ?1
+                              WHERE kbf.knowledge_base_id {scope}
                                 AND kbf.memory_id = m.memory_id
                                 AND fa.file_name LIKE ?2))
                      ORDER BY COALESCE(NULLIF(m.updated_at, 0), m.added_at) DESC LIMIT ?3 OFFSET ?4",
@@ -572,7 +600,7 @@ pub fn search_entries(
                 .map_err(|e| format!("读取知识条目失败：{}", e))?
         }
     };
-    attach_files(conn, &kb, &mut entries)?;
+    attach_files(conn, &mut entries)?;
     fill_task_titles(conn, org_id, &mut entries)?;
     Ok(entries)
 }
@@ -630,7 +658,7 @@ pub fn get_entry(
         .optional()
         .map_err(|e| format!("查询知识条目失败：{}", e))?;
     if let Some(e) = entry.as_mut() {
-        attach_files(conn, kb_id, std::slice::from_mut(e))?;
+        attach_files(conn, std::slice::from_mut(e))?;
         fill_task_titles(conn, org_id, std::slice::from_mut(e))?;
     }
     Ok(entry)
