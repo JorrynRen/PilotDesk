@@ -315,6 +315,30 @@ pub fn delete_kb(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(), Str
     if candidates > 0 {
         return Err("库里还有待确认草稿，先采纳或拒绝后再删除".to_string());
     }
+    // 任务产出归档目标：活跃任务指向该库时拒绝删除（用户可去任务里改目标）；
+    // 已归档 / 已作废的任务不会再沉淀，直接回落到默认库，避免留下悬空引用。
+    conn.execute(
+        "UPDATE org_tasks SET target_kb_id = '', updated_at = ?3
+         WHERE org_id = ?1 AND target_kb_id = ?2
+           AND status IN ('archived', 'cancelled')",
+        params![org_id, kb_id, chrono::Utc::now().timestamp()],
+    )
+    .map_err(|e| format!("回落任务归档目标失败：{}", e))?;
+    let active_targets: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM org_tasks
+             WHERE org_id = ?1 AND target_kb_id = ?2
+               AND status NOT IN ('archived', 'cancelled')",
+            params![org_id, kb_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("校验任务归档目标失败：{}", e))?;
+    if active_targets > 0 {
+        return Err(format!(
+            "有 {} 个任务以该库为产出归档目标，先去任务里改到其它库再删除",
+            active_targets
+        ));
+    }
     conn.execute("DELETE FROM knowledge_bases WHERE id = ?1", params![kb_id])
         .map_err(|e| format!("删除知识库失败：{}", e))?;
     Ok(())
@@ -712,7 +736,7 @@ fn do_sediment(
     let row = conn
         .query_row(
             "SELECT t.title, t.description, t.assignee_id, t.completed_at,
-                    r.content, r.status, r.sedimented_at
+                    r.content, r.status, r.sedimented_at, t.target_kb_id
              FROM task_reports r JOIN org_tasks t ON t.id = r.task_id
              WHERE r.id = ?1 AND r.task_id = ?2 AND t.org_id = ?3",
             params![report_id, task_id, org_id],
@@ -725,14 +749,23 @@ fn do_sediment(
                     r.get::<_, String>(4)?,
                     r.get::<_, String>(5)?,
                     r.get::<_, Option<i64>>(6)?,
+                    r.get::<_, String>(7)?,
                 ))
             },
         )
         .optional()
         .map_err(|e| format!("读取汇报失败：{}", e))?
         .ok_or_else(|| "汇报不存在或不属于该组织".to_string())?;
-    let (task_title, task_desc, assignee_id, completed_at, report_content, status, sedimented_at) =
-        row;
+    let (
+        task_title,
+        task_desc,
+        assignee_id,
+        completed_at,
+        report_content,
+        status,
+        sedimented_at,
+        target_kb_id,
+    ) = row;
 
     if status != crate::enclave::reports::REPORT_CONFIRMED {
         return Err("只有已确认的汇报才能沉淀".to_string());
@@ -741,7 +774,13 @@ fn do_sediment(
         return Ok(()); // 幂等：已沉淀
     }
 
-    let kb_id = ensure_org_kb(conn, org_id, actor)?;
+    // 归档库以任务定义为准：空 = 默认库（懒创建）；自定义库需仍存在且属于本组织
+    let kb_id = if target_kb_id.trim().is_empty() {
+        ensure_org_kb(conn, org_id, actor)?
+    } else {
+        ensure_kb_owned(conn, org_id, &target_kb_id)?;
+        target_kb_id
+    };
     let memory_id = format!("task:{}", task_id);
     let now = chrono::Utc::now().timestamp();
 
@@ -844,6 +883,8 @@ fn do_sediment(
 }
 
 /// 来源任务恢复汇报：条目标记为「待更新」（内容仍是上次确认的版本）。
+///
+/// 目标库可改：同一任务的条目可能留在此前的库里，因此按「组织内全部库」定位。
 pub fn mark_task_output_stale(
     conn: &Connection,
     org_id: &str,
@@ -851,11 +892,37 @@ pub fn mark_task_output_stale(
 ) -> Result<(), String> {
     conn.execute(
         "UPDATE knowledge_base_memories SET stale = 1
-         WHERE knowledge_base_id = ?1 AND memory_id = ?2 AND stale = 0",
-        params![implicit_kb_id(org_id), format!("task:{}", task_id)],
+         WHERE memory_id = ?2 AND stale = 0
+           AND knowledge_base_id IN (
+             SELECT id FROM knowledge_bases WHERE owner_type = 'org' AND owner_id = ?1
+           )",
+        params![org_id, format!("task:{}", task_id)],
     )
     .map_err(|e| format!("标记知识条目待更新失败：{}", e))?;
     Ok(())
+}
+
+/// 任务产出条目的落点（库 id + metadata）：改过目标库的任务可能在多个库留有历史条目。
+fn task_output_locations(
+    conn: &Connection,
+    org_id: &str,
+    task_id: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.knowledge_base_id, m.metadata
+             FROM knowledge_base_memories m
+             JOIN knowledge_bases kb ON kb.id = m.knowledge_base_id
+             WHERE kb.owner_type = 'org' AND kb.owner_id = ?1 AND m.memory_id = ?2",
+        )
+        .map_err(|e| format!("查询知识条目落点失败：{}", e))?;
+    let rows = stmt
+        .query_map(params![org_id, format!("task:{}", task_id)], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("查询知识条目落点失败：{}", e))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取知识条目落点失败：{}", e))
 }
 
 /// 任务作废：知识条目**保留**，只打上「来源任务已作废」标记。
@@ -867,35 +934,26 @@ pub fn mark_task_output_cancelled(
     org_id: &str,
     task_id: &str,
 ) -> Result<(), String> {
-    let kb_id = implicit_kb_id(org_id);
     let memory_id = format!("task:{}", task_id);
-    let raw: Option<String> = conn
-        .query_row(
-            "SELECT metadata FROM knowledge_base_memories
+    for (kb_id, raw) in task_output_locations(conn, org_id, task_id)? {
+        let mut meta: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+        if !meta.is_object() {
+            meta = serde_json::json!({});
+        }
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert(
+                "sourceTaskCancelledAt".into(),
+                serde_json::json!(chrono::Utc::now().timestamp()),
+            );
+        }
+        conn.execute(
+            "UPDATE knowledge_base_memories SET metadata = ?3, stale = 0
               WHERE knowledge_base_id = ?1 AND memory_id = ?2",
-            params![kb_id, memory_id],
-            |r| r.get(0),
+            params![kb_id, memory_id, meta.to_string()],
         )
-        .optional()
-        .map_err(|e| format!("查询知识条目标记失败：{}", e))?;
-    let Some(raw) = raw else { return Ok(()) };
-    let mut meta: serde_json::Value =
-        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
-    if !meta.is_object() {
-        meta = serde_json::json!({});
+        .map_err(|e| format!("标记知识条目「来源任务已作废」失败：{}", e))?;
     }
-    if let Some(obj) = meta.as_object_mut() {
-        obj.insert(
-            "sourceTaskCancelledAt".into(),
-            serde_json::json!(chrono::Utc::now().timestamp()),
-        );
-    }
-    conn.execute(
-        "UPDATE knowledge_base_memories SET metadata = ?3, stale = 0
-          WHERE knowledge_base_id = ?1 AND memory_id = ?2",
-        params![kb_id, memory_id, meta.to_string()],
-    )
-    .map_err(|e| format!("标记知识条目「来源任务已作废」失败：{}", e))?;
     Ok(())
 }
 
@@ -1824,5 +1882,92 @@ mod tests {
         assert!(ENTRY_COLS.contains("memory_id"));
         assert!(ENTRY_COLS.split(", ").count() >= 8);
         assert!(qualified_cols("m").starts_with("m.memory_id"));
+    }
+
+    /// 内存库：本机 owner + 组织 8 的治理快照。
+    fn seeded() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::enclave::db::ENCLAVE_SCHEMA_SQL)
+            .unwrap();
+        conn.execute(
+            "INSERT INTO local_identity (user_id, email, nickname, synced_at)
+             VALUES ('1', 'a@b.c', '测试', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, synced_at)
+             VALUES ('8', '测试组织', '1', 'owner', '1', 0)",
+            [],
+        )
+        .unwrap();
+        ensure_org_kb(&conn, "8", "1").unwrap();
+        conn.execute(
+            "INSERT INTO knowledge_bases
+                (id, name, description, scope, owner_type, owner_id, is_implicit,
+                 field_schema, filter_rules, visibility, created_by, created_at, updated_at)
+             VALUES ('kb-custom', '专项库', '', 'org', 'org', '8', 0,
+                     '[]', '[]', 'org', '1', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    /// 任务指定了归档库：确认后的产出进目标库，不落默认库。
+    #[test]
+    fn sediment_goes_to_task_target_kb() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO org_tasks
+                (id, org_id, title, description, creator_id, status, target_kb_id,
+                 created_at, updated_at)
+             VALUES ('t1', '8', '任务A', '任务描述', '1', 'submitted', 'kb-custom', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO task_reports
+                (id, task_id, reporter_id, content, status, created_at, updated_at)
+             VALUES ('r1', 't1', '1', '汇报正文', 'confirmed', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        sediment_task_output(&conn, "8", "t1", "r1", "1").unwrap();
+
+        let in_custom: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_base_memories
+                 WHERE knowledge_base_id = 'kb-custom' AND memory_id = 'task:t1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(in_custom, 1, "产出应落在任务指定的库");
+        let in_implicit: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_base_memories
+                 WHERE knowledge_base_id = ?1 AND memory_id = 'task:t1'",
+                params![implicit_kb_id("8")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(in_implicit, 0, "指定了目标库时不应再写默认库");
+    }
+
+    /// 活跃任务把某库当作归档目标时，拒绝删除该库（避免任务产出无处安放）。
+    #[test]
+    fn delete_kb_rejects_active_task_target() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO org_tasks
+                (id, org_id, title, creator_id, status, target_kb_id, created_at, updated_at)
+             VALUES ('t1', '8', '任务A', '1', 'in_progress', 'kb-custom', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let err = delete_kb(&conn, "8", "kb-custom").unwrap_err();
+        assert!(err.contains("归档目标"), "错误应说明任务仍在引用：{}", err);
     }
 }

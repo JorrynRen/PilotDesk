@@ -366,6 +366,8 @@ pub struct TaskView {
     pub visibility: String,
     /// 当前是否被前置任务阻塞（archived 视作已放行）
     pub blocked: bool,
+    /// 任务产出的归档库；空字符串 = 默认库
+    pub target_kb_id: String,
     /// 子任务数量：> 0 表示这是一个「汇总容器」（状态由子任务派生，自身不执行）
     pub child_count: i64,
     /// 前端渲染按钮的唯一来源
@@ -390,6 +392,9 @@ pub struct CreateTaskInput {
     pub due_date: Option<i64>,
     #[serde(default)]
     pub blocked_by: Option<Vec<String>>,
+    /// 产出归档库；缺省 / 空串 = 默认库
+    #[serde(default)]
+    pub target_kb_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -407,6 +412,9 @@ pub struct UpdateTaskInput {
     pub priority: Option<String>,
     #[serde(default)]
     pub due_date: Option<Option<i64>>,
+    /// 产出归档库；`Some("")` = 改回默认库
+    #[serde(default)]
+    pub target_kb_id: Option<String>,
 }
 
 /// 依赖变更预览：先给出影响，再由用户确认保存。
@@ -441,6 +449,8 @@ struct TaskRow {
     completed_at: Option<i64>,
     blocked_by: Vec<String>,
     visibility: String,
+    /// 任务产出的归档库（空 = 默认库）
+    target_kb_id: String,
     created_at: i64,
     updated_at: i64,
 }
@@ -472,6 +482,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         completed_at: r.get(12)?,
         blocked_by: parse_ids(&blocked_by),
         visibility: r.get(14)?,
+        target_kb_id: r.get(17)?,
         created_at: r.get(15)?,
         updated_at: r.get(16)?,
     })
@@ -479,7 +490,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
 
 const SELECT_COLS: &str = "id, org_id, parent_task_id, title, description, creator_id, assignee_id,
      collaborators, status, priority, due_date, started_at, completed_at, blocked_by,
-     visibility, created_at, updated_at";
+     visibility, created_at, updated_at, target_kb_id";
 
 fn load_task(conn: &Connection, org_id: &str, task_id: &str) -> Result<TaskRow, String> {
     conn.query_row(
@@ -644,6 +655,7 @@ fn to_view(
         blocked_by: r.blocked_by.clone(),
         visibility: r.visibility.clone(),
         blocked,
+        target_kb_id: r.target_kb_id.clone(),
         child_count,
         effective_actions: actions,
         created_at: r.created_at,
@@ -812,6 +824,35 @@ fn require_org_role(conn: &Connection, org_id: &str) -> Result<Role, String> {
     })
 }
 
+/// 校验并规范化「任务产出归档库」。
+///
+/// 空 = 默认库（沉淀时再懒创建）；非空必须是本组织的库。默认库的 id 显式传入时
+/// 归一成空串，保证「默认 / 自定义」只有一种表示。
+fn resolve_target_kb(
+    conn: &Connection,
+    org_id: &str,
+    raw: Option<&str>,
+) -> Result<String, String> {
+    let raw = raw.unwrap_or("").trim();
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    let implicit: Option<i64> = conn
+        .query_row(
+            "SELECT is_implicit FROM knowledge_bases
+             WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
+            params![raw, org_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("校验产出目标库失败：{}", e))?;
+    match implicit {
+        Some(1) => Ok(String::new()),
+        Some(_) => Ok(raw.to_string()),
+        None => Err("产出目标库不存在或不属于该组织".to_string()),
+    }
+}
+
 /// 建任务（含子任务）。父任务必须是**根任务**（两层结构）。
 pub fn create_task(
     conn: &Connection,
@@ -858,14 +899,16 @@ pub fn create_task(
     if let Some(cycle) = detect_cycle(conn, org_id, &task_id, &deps)? {
         return Err(format!("存在循环依赖：{}", cycle.join(" → ")));
     }
+    // 产出归档库在创建时就确定：汇报确认时直接按它沉淀（空 = 默认库）
+    let target_kb_id = resolve_target_kb(conn, org_id, input.target_kb_id.as_deref())?;
 
     let now = chrono::Utc::now().timestamp();
     conn.execute(
         "INSERT INTO org_tasks
             (id, org_id, parent_task_id, title, description, creator_id, assignee_id,
              collaborators, status, priority, due_date, started_at, completed_at,
-             blocked_by, visibility, metadata, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '[]', ?8, ?9, ?10, NULL, NULL, ?11, 'org', '{}', ?12, ?12)",
+             blocked_by, visibility, target_kb_id, metadata, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '[]', ?8, ?9, ?10, NULL, NULL, ?11, 'org', ?12, '{}', ?13, ?13)",
         params![
             task_id,
             org_id,
@@ -878,6 +921,7 @@ pub fn create_task(
             input.priority.as_deref().filter(|s| !s.is_empty()).unwrap_or("normal"),
             input.due_date,
             ids_json(&deps),
+            target_kb_id,
             now
         ],
     )
@@ -962,6 +1006,11 @@ pub fn update_task(
         Some(next) => next,
         None => row.due_date,
     };
+    // 产出归档库：未传 = 保持；传空串 = 改回默认库
+    let target_kb_id = match input.target_kb_id.as_deref() {
+        Some(raw) => resolve_target_kb(conn, org_id, Some(raw))?,
+        None => row.target_kb_id.clone(),
+    };
     if let Some(c) = &assignee {
         if c.trim().is_empty() {
             // 空串统一视为「取消负责人」
@@ -972,7 +1021,7 @@ pub fn update_task(
     let now = chrono::Utc::now().timestamp();
     conn.execute(
         "UPDATE org_tasks SET title=?3, description=?4, assignee_id=?5, collaborators=?6,
-                priority=?7, due_date=?8, updated_at=?9
+                priority=?7, due_date=?8, target_kb_id=?9, updated_at=?10
          WHERE id=?1 AND org_id=?2",
         params![
             task_id,
@@ -983,6 +1032,7 @@ pub fn update_task(
             ids_json(&collaborators),
             priority,
             due_date,
+            target_kb_id,
             now
         ],
     )

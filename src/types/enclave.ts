@@ -298,6 +298,8 @@ export interface TaskView {
   visibility: string;
   /** 是否被未完成的前置任务阻塞 */
   blocked: boolean;
+  /** 产出归档库；空串 = 默认库 */
+  targetKbId: string;
   /** 子任务数量：> 0 表示汇总容器（状态由子任务派生） */
   childCount: number;
   effectiveActions: string[];
@@ -314,6 +316,8 @@ export interface CreateTaskInput {
   priority?: string;
   dueDate?: number | null;
   blockedBy?: string[];
+  /** 产出归档库；缺省 / 空串 = 默认库 */
+  targetKbId?: string;
 }
 
 /** 编辑任务入参（只传要改的字段） */
@@ -324,6 +328,8 @@ export interface UpdateTaskInput {
   collaborators?: string[];
   priority?: string;
   dueDate?: number | null;
+  /** 产出归档库；空串 = 改回默认库 */
+  targetKbId?: string;
 }
 
 /** 依赖变更预览 */

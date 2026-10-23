@@ -21,7 +21,7 @@ import { Select } from '../common/Select';
 import { EnclaveNavBar } from './EnclaveNavBar';
 import { EnclaveToolbarActions, EnclaveFilesRootPanel } from './EnclaveToolbar';
 import type {
-  DepsPreview, MemberView, TaskCommentView, TaskStatus, TaskView,
+  DepsPreview, KbView, MemberView, TaskCommentView, TaskStatus, TaskView,
 } from '../../types/enclave';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
@@ -126,10 +126,15 @@ export function TaskWorkspace() {
   const [newAssignee, setNewAssignee] = useState('');
   const [newPriority, setNewPriority] = useState('normal');
   const [newDue, setNewDue] = useState('');
+  /** 产出归档库（空 = 默认库） */
+  const [newKb, setNewKb] = useState('');
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   /** 任务列表筛选：默认「活跃」= 不含已归档；也可按单一状态筛选 */
   const [statusFilter, setStatusFilter] = useState<'active' | 'all' | TaskStatus>('active');
+
+  /** 产出归档库候选（直接查主机，不走知识库页的 store —— 避免打开任务页就把知识库"打开"） */
+  const [kbOptions, setKbOptions] = useState<{ id: string; name: string; isImplicit: boolean }[]>([]);
 
   // 本机团队文件根目录：**全局设置**，与具体组织无关（按钮与面板三个页面共用）
   const [rootOpen, setRootOpen] = useState(false);
@@ -159,6 +164,26 @@ export function TaskWorkspace() {
     }
     void useEnclaveTaskStore.getState().loadTasks(activeOrgId);
   }, [activeOrgId, accountKey]);
+
+  // 产出归档库候选：按组织拉一次（失败静默，任务照常可用，目标库只显示为未知）
+  useEffect(() => {
+    if (!activeOrgId) {
+      setKbOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void invoke<KbView[]>('enclave_kb_list', { orgId: activeOrgId })
+      .then((list) => {
+        if (cancelled) return;
+        setKbOptions(list.map((k) => ({ id: k.id, name: k.name, isImplicit: k.isImplicit })));
+      })
+      .catch(() => {
+        if (!cancelled) setKbOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOrgId]);
 
   const members: MemberView[] = detail?.members ?? [];
   const memberLabel = (id: string | null): string => {
@@ -215,6 +240,7 @@ export function TaskWorkspace() {
       assigneeId: newAssignee || null,
       priority: newPriority,
       dueDate: fromDateInput(newDue),
+      targetKbId: newKb,
     });
     setCreating(false);
     if (created) cancelCreate();
@@ -228,6 +254,7 @@ export function TaskWorkspace() {
     setNewAssignee('');
     setNewDue('');
     setNewPriority('normal');
+    setNewKb('');
     setLocalError(null);
   };
 
@@ -353,6 +380,21 @@ export function TaskWorkspace() {
               onChange={(e) => setNewDue(e.target.value)}
             />
           </label>
+          <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+            <span>产出归档</span>
+            <Select
+              value={newKb}
+              onChange={setNewKb}
+              style={{ width: 170, flexShrink: 0 }}
+              options={[
+                { value: '', label: '默认库（团队知识库）' },
+                ...kbOptions
+                  .filter((k) => !k.isImplicit)
+                  .map((k) => ({ value: k.id, label: k.name })),
+              ]}
+              title="汇报确认后，任务产出沉淀到哪个知识库"
+            />
+          </div>
           <button
             onClick={() => void submitCreate()}
             disabled={creating}
@@ -451,6 +493,7 @@ export function TaskWorkspace() {
               tasks={tasks}
               members={members}
               memberLabel={memberLabel}
+              kbOptions={kbOptions}
             />
           )}
         </div>
@@ -595,8 +638,10 @@ function TaskDetail(props: {
   tasks: TaskView[];
   members: MemberView[];
   memberLabel: (id: string | null) => string;
+  /** 产出归档库候选（默认库 + 本组织自定义库） */
+  kbOptions: { id: string; name: string; isImplicit: boolean }[];
 }) {
-  const { orgId, task, tasks, members, memberLabel } = props;
+  const { orgId, task, tasks, members, memberLabel, kbOptions } = props;
   // 权限按「当前登录身份 + 任务字段」本地复核（同时兼容快照未及时刷新）：
   // 非参与者不出现任何提交表单；创建者 / 负责人才能编辑与流转状态。
   const caps = useEnclaveOrgStore((s) => s.caps);
@@ -618,6 +663,9 @@ function TaskDetail(props: {
   const canUpload = identityVerified && isParticipant && !isClosed;
   /** 有子任务 = 汇总容器：状态由子任务派生，自身不执行 */
   const isContainer = task.childCount > 0;
+  /** 产出归档库显示名：空 = 默认库 */
+  const kbLabel = (id: string): string =>
+    id ? kbOptions.find((k) => k.id === id)?.name ?? '未知库' : '默认库';
   const transitions = isContainer ? CONTAINER_TRANSITIONS[task.status] : TRANSITIONS[task.status];
   const statusText =
     isContainer && task.status === 'submitted'
@@ -641,6 +689,8 @@ function TaskDetail(props: {
   const [due, setDue] = useState(toDateInput(task.dueDate));
   const [collaborators, setCollaborators] = useState<string[]>(task.collaborators);
   const [deps, setDeps] = useState<string[]>(task.blockedBy);
+  /** 产出归档库草稿（空 = 默认库） */
+  const [kbTarget, setKbTarget] = useState(task.targetKbId);
   const [preview, setPreview] = useState<DepsPreview | null>(null);
 
   const reports = useEnclaveTaskStore((s) => s.reports);
@@ -1059,6 +1109,9 @@ function TaskDetail(props: {
             <li>负责人：{memberLabel(task.assigneeId)}</li>
             <li>优先级：{PRIORITY_LABEL[task.priority] ?? task.priority}</li>
             <li>截止：{task.dueDate ? toDateInput(task.dueDate) : '未设置'}</li>
+            {!isContainer && (
+              <li>产出归档：{kbLabel(task.targetKbId)}</li>
+            )}
             <li>
               {`参与者：${
                 task.collaborators.length
@@ -1116,6 +1169,23 @@ function TaskDetail(props: {
                 onChange={(e) => setDue(e.target.value)}
               />
             </label>
+            {!isContainer && (
+              <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+                产出归档
+                <Select
+                  value={kbTarget}
+                  onChange={setKbTarget}
+                  className="w-full"
+                  options={[
+                    { value: '', label: '默认库（团队知识库）' },
+                    ...kbOptions
+                      .filter((k) => !k.isImplicit)
+                      .map((k) => ({ value: k.id, label: k.name })),
+                  ]}
+                  title="汇报确认后，任务产出沉淀到哪个知识库（已沉淀的条目不会自动搬家）"
+                />
+              </label>
+            )}
 
             <div className="flex flex-col gap-1">
               <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
@@ -1219,6 +1289,7 @@ function TaskDetail(props: {
                     ...(canAssign ? { assigneeId: assignee || null } : {}),
                     priority,
                     dueDate: fromDateInput(due),
+                    ...(isContainer ? {} : { targetKbId: kbTarget }),
                   });
                   const ok2 = await useEnclaveTaskStore
                     .getState()
@@ -1239,6 +1310,7 @@ function TaskDetail(props: {
                   setAssignee(task.assigneeId ?? '');
                   setPriority(task.priority);
                   setDue(toDateInput(task.dueDate));
+                  setKbTarget(task.targetKbId);
                   setCollaborators(task.collaborators);
                   setDeps(task.blockedBy);
                   setPreview(null);

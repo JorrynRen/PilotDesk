@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 11;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 12;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS org_tasks (
     completed_at   INTEGER,
     blocked_by     TEXT NOT NULL DEFAULT '[]',     -- JSON 数组（前置任务 id，纯 AND 语义）
     visibility     TEXT NOT NULL DEFAULT 'org',
+    target_kb_id   TEXT NOT NULL DEFAULT '',       -- 任务产出的归档库；空 = 默认库
     metadata       TEXT NOT NULL DEFAULT '{}',
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
@@ -521,6 +522,10 @@ impl EnclaveStore {
         if current < 9 {
             Self::ensure_column(conn, "org_snapshot", "host_addr", "TEXT NOT NULL DEFAULT ''")?;
             Self::ensure_column(conn, "org_snapshot", "host_port", "INTEGER NOT NULL DEFAULT 0")?;
+        }
+        // v11 → v12：任务产出可选归档到自定义库（空 = 默认库，存量任务行为不变）
+        if current < 12 {
+            Self::ensure_column(conn, "org_tasks", "target_kb_id", "TEXT NOT NULL DEFAULT ''")?;
         }
 
         if current != ENCLAVE_SCHEMA_VERSION {
