@@ -182,6 +182,7 @@ function encodeGroupBy(g: FileGroupBy): string {
 function decodeGroupBy(v: string): FileGroupBy {
   if (v.startsWith('field:')) return { kind: 'field', key: v.slice(6) };
   switch (v) {
+    case 'kb':
     case 'assignee':
     case 'taskPriority':
     case 'filetype':
