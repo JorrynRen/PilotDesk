@@ -1010,6 +1010,8 @@ export interface GraphModel {
   relations: KnowledgeRelation[];
   /** 折叠后、截断前的节点总数（用于「已显示 N / 共 M」提示） */
   totalNodes: number;
+  /** 防护截断前的关系总数（用于「已省略 N 条弱关联」提示；不提供 = 未做边数防护） */
+  totalRelations?: number;
 }
 
 /**

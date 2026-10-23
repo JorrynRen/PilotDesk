@@ -2032,6 +2032,9 @@ export function KnowledgeGraph({ base, entries, source }: KnowledgeGraphProps) {
             {`已显示 ${scene.shown} 个节点、${scene.edges.length} 条边`}
             {!source && ` · 已展开 ${expandedCount} 个文件的分块`}
             {scene.total > scene.shown && ` · 共 ${scene.total} 个，其余被安全阀截断`}
+            {source?.core.totalRelations !== undefined &&
+              source.core.totalRelations > source.core.relations.length &&
+              ` · 已省略 ${source.core.totalRelations - source.core.relations.length} 条弱关联`}
             {filtersActive && <span> · 已按筛选条件收窄</span>}
             {selectedId && <span>{` · 已选中`}</span>}
           </div>
