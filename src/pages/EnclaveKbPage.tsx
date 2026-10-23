@@ -90,6 +90,8 @@ type ManualDraft = {
   title: string;
   content: string;
   tags: string[];
+  /** 专属属性（按当前库 field_schema 渲染） */
+  fields: KnowledgeMeta;
   /** 正在提取原文 */
   loading: boolean;
   /** 提取失败的原因 */
@@ -439,6 +441,7 @@ export function EnclaveKbPage() {
       title: '',
       content: '',
       tags: [],
+      fields: {},
       loading: true,
       notice: '',
       saving: false,
@@ -474,6 +477,7 @@ export function EnclaveKbPage() {
           manualDraft.title,
           manualDraft.content,
           joinTags(manualDraft.tags),
+          JSON.stringify(manualDraft.fields),
         );
       setManualDraft(null);
       showToast('已入组织库', 'success');
@@ -1888,6 +1892,23 @@ export function EnclaveKbPage() {
                                 }
                               />
                             </div>
+                            {kbFields.length > 0 && (
+                              <div>
+                                <div
+                                  className="text-[10px] mb-1"
+                                  style={{ color: 'var(--text-secondary)' }}
+                                >
+                                  专属属性（按当前库定义）
+                                </div>
+                                <MetaEditor
+                                  fields={kbFields}
+                                  value={manualDraft.fields}
+                                  onChange={(fields) =>
+                                    setManualDraft((d) => (d ? { ...d, fields } : d))
+                                  }
+                                />
+                              </div>
+                            )}
                             {manualDraft.notice && (
                               <div
                                 className="text-[10px] leading-relaxed"

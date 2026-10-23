@@ -723,8 +723,9 @@ pub async fn enclave_task_sediment_retry(
 /// 人工编辑知识条目（owner / admin）：标题、正文、标签、专属属性。
 ///
 /// `fields` 是专属属性的 JSON 对象字符串（只含当前库 `field_schema` 里的键）。
+/// 成员端（admin）经主机 WS 转发执行，与 owner 本机同一条领域逻辑。
 #[tauri::command]
-pub fn enclave_kb_entry_update(
+pub async fn enclave_kb_entry_update(
     org_id: String,
     kb_id: String,
     memory_id: String,
@@ -732,41 +733,70 @@ pub fn enclave_kb_entry_update(
     content: String,
     tags: String,
     fields: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::knowledge::KbEntryView, String> {
-    state.store.with_conn(|c| {
-        let actor = authz::authorize(c, &org_id, authz::Action::KbEdit)?;
-        let fields_value: serde_json::Value = if fields.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::from_str(&fields).map_err(|_| "专属属性格式不正确".to_string())?
-        };
-        crate::enclave::knowledge::update_entry(
-            c,
-            &org_id,
-            &kb_id,
-            &memory_id,
-            &title,
-            &content,
-            &tags,
-            &fields_value,
-            &actor,
-        )
-    })
+    let payload = json!({
+        "kbId": kb_id,
+        "memoryId": memory_id,
+        "title": title,
+        "content": content,
+        "tags": tags,
+        "fields": fields,
+    });
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.entry_update",
+        payload,
+        move |c, actor| {
+            authz::authorize(c, &org_for_write, authz::Action::KbEdit)?;
+            let fields_value: serde_json::Value = if fields.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(&fields).map_err(|_| "专属属性格式不正确".to_string())?
+            };
+            crate::enclave::knowledge::update_entry(
+                c,
+                &org_for_write,
+                &kb_id,
+                &memory_id,
+                &title,
+                &content,
+                &tags,
+                &fields_value,
+                actor,
+            )
+        },
+    )
+    .await
 }
 
-/// 移除知识条目（owner / admin）。
+/// 移除知识条目（owner / admin；成员端转发到主机）。
 #[tauri::command]
-pub fn enclave_kb_entry_remove(
+pub async fn enclave_kb_entry_remove(
     org_id: String,
     kb_id: String,
     memory_id: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<(), String> {
-    state.store.with_conn(|c| {
-        let _actor = authz::authorize(c, &org_id, authz::Action::KbEdit)?;
-        crate::enclave::knowledge::remove_entry(c, &org_id, &kb_id, &memory_id)
-    })
+    let payload = json!({ "kbId": kb_id, "memoryId": memory_id });
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.entry_remove",
+        payload,
+        move |c, _actor| {
+            authz::authorize(c, &org_for_write, authz::Action::KbEdit)?;
+            crate::enclave::knowledge::remove_entry(c, &org_for_write, &kb_id, &memory_id)
+        },
+    )
+    .await
 }
 
 /// 解除知识条目与一份原件的关联（owner / admin；任务产出条目拒绝）。
@@ -1481,7 +1511,7 @@ pub async fn enclave_kb_ingest_preview(
     .await
 }
 
-/// 手工整理第二步：用户确认（标题/正文/标签可改）后写入组织库。
+/// 手工整理第二步：用户确认（标题/正文/标签/专属属性可改）后写入组织库。
 #[tauri::command]
 pub async fn enclave_kb_ingest_commit(
     org_id: String,
@@ -1489,10 +1519,17 @@ pub async fn enclave_kb_ingest_commit(
     title: String,
     content: String,
     tags: String,
+    fields: String,
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<TeamIngestOutcome, String> {
-    let payload = json!({ "queueId": queue_id, "title": title, "content": content, "tags": tags });
+    let payload = json!({
+        "queueId": queue_id,
+        "title": title,
+        "content": content,
+        "tags": tags,
+        "fields": fields,
+    });
     let qid = queue_id.clone();
     let org_for_write = org_id.clone();
     run_command(
@@ -1504,6 +1541,11 @@ pub async fn enclave_kb_ingest_commit(
         move |c, actor| {
             require_ingest_editor(c, &org_for_write, actor)?;
             let row = crate::enclave::knowledge::get_ingest(c, &org_for_write, &qid)?;
+            let fields_value: serde_json::Value = if fields.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(&fields).map_err(|_| "专属属性格式不正确".to_string())?
+            };
             crate::enclave::knowledge::commit_manual_ingest(
                 c,
                 &org_for_write,
@@ -1511,6 +1553,7 @@ pub async fn enclave_kb_ingest_commit(
                 &title,
                 &content,
                 &tags,
+                &fields_value,
                 actor,
             )?;
             Ok(TeamIngestOutcome {

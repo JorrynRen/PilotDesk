@@ -858,6 +858,47 @@ pub fn mark_task_output_cancelled(
     Ok(())
 }
 
+/// 按当前库 `field_schema` 合并专属属性（键白名单；空值 / null 即删除）。
+///
+/// 条目编辑与手工入库共用同一份口径：两处都只允许写 schema 里定义的键，
+/// 避免覆盖 `reportId` / `editedBy` 这类溯源信息。
+fn merge_entry_fields(
+    conn: &Connection,
+    kb_id: &str,
+    metadata: &mut serde_json::Map<String, serde_json::Value>,
+    fields: &serde_json::Value,
+) -> Result<(), String> {
+    let schema_raw: String = conn
+        .query_row(
+            "SELECT field_schema FROM knowledge_bases WHERE id = ?1",
+            params![kb_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("读取知识库定义失败：{}", e))?
+        .unwrap_or_else(|| "[]".to_string());
+    let schema: Vec<serde_json::Value> = serde_json::from_str(&schema_raw).unwrap_or_default();
+    let incoming = fields.as_object();
+    for f in schema {
+        let Some(key) = f.get("key").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let key = key.to_string();
+        let value = incoming.and_then(|o| o.get(&key));
+        let empty = match value {
+            None | Some(serde_json::Value::Null) => true,
+            Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+            _ => false,
+        };
+        if empty {
+            metadata.remove(&key);
+        } else if let Some(v) = value {
+            metadata.insert(key, v.clone());
+        }
+    }
+    Ok(())
+}
+
 /// 人工修改条目（仅 owner / admin，授权在命令层）。
 ///
 /// 修改不会改变 `source_ref` 与文件集合；再次确认汇报时正文仍以汇报为准覆盖。
@@ -896,35 +937,7 @@ pub fn update_entry(
         .unwrap_or_default();
 
     // 专属属性：只认当前库定义的键；空串 / null 视为清空
-    let schema_raw: String = conn
-        .query_row(
-            "SELECT field_schema FROM knowledge_bases WHERE id = ?1",
-            params![kb_id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| format!("读取知识库定义失败：{}", e))?
-        .unwrap_or_else(|| "[]".to_string());
-    let schema: Vec<serde_json::Value> =
-        serde_json::from_str(&schema_raw).unwrap_or_default();
-    let incoming = fields.as_object();
-    for f in schema {
-        let Some(key) = f.get("key").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let key = key.to_string();
-        let value = incoming.and_then(|o| o.get(&key));
-        let empty = match value {
-            None | Some(serde_json::Value::Null) => true,
-            Some(serde_json::Value::String(s)) => s.trim().is_empty(),
-            _ => false,
-        };
-        if empty {
-            metadata.remove(&key);
-        } else if let Some(v) = value {
-            metadata.insert(key, v.clone());
-        }
-    }
+    merge_entry_fields(conn, kb_id, &mut metadata, fields)?;
 
     let now = chrono::Utc::now().timestamp();
     metadata.insert("editedBy".into(), serde_json::json!(actor));
@@ -1368,7 +1381,7 @@ pub fn manual_ingest_text(
     }
 }
 
-/// 手工整理的**确认入库**一步：把用户确认后的标题/正文/标签写进组织库并出队。
+/// 手工整理的**确认入库**一步：把用户确认后的标题/正文/标签/专属属性写进组织库并出队。
 ///
 /// 来源写真实类型（snippet / file / url），不写 `manual` —— 团队库只有 5 种来源，
 /// 多出来的第六种会让图谱配色和来源筛选都对不上。
@@ -1379,6 +1392,7 @@ pub fn commit_manual_ingest(
     title: &str,
     content: &str,
     tags: &str,
+    fields: &serde_json::Value,
     actor: &str,
 ) -> Result<(), String> {
     if content.trim().is_empty() {
@@ -1391,6 +1405,9 @@ pub fn commit_manual_ingest(
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty());
     let digest = &crate::api_agent::knowledge::sha256_hex(content.as_bytes())[..16];
+    // 专属属性：与「编辑条目」同一份白名单合并口径
+    let mut metadata = serde_json::Map::new();
+    merge_entry_fields(conn, &row.kb_id, &mut metadata, fields)?;
     let entries = vec![IngestEntryInput {
         memory_id: format!("manual:{}", digest),
         title: if title.trim().is_empty() {
@@ -1400,7 +1417,7 @@ pub fn commit_manual_ingest(
         },
         content: content.to_string(),
         tags: tags.trim().to_string(),
-        metadata: "{}".into(),
+        metadata: serde_json::Value::Object(metadata).to_string(),
     }];
     write_ingest_entries(
         conn,

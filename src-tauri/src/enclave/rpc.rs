@@ -29,6 +29,15 @@ fn opt_str(payload: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// 专属属性参数：JSON 对象字符串（缺省 = 空对象）。
+fn fields_value(payload: &Value) -> Result<Value, String> {
+    let raw = opt_str(payload, "fields").unwrap_or_default();
+    if raw.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&raw).map_err(|_| "专属属性格式不正确".to_string())
+}
+
 /// 管理角色校验（与命令层 `Action::KbEdit` 同口径：owner / admin）。
 fn require_kb_edit(conn: &Connection, org_id: &str, actor: &str) -> Result<(), String> {
     let role = crate::enclave::authz::role_for_member(conn, org_id, actor)?;
@@ -407,15 +416,25 @@ pub fn dispatch(
                 knowledge::manual_ingest_text(conn, org_id, &row.kind, &p)?;
             to_value(serde_json::json!({ "title": title, "content": content }))
         }
-        // 手工整理第二步：用户确认（可改标题/正文、补标签）后写入组织库
+        // 手工整理第二步：用户确认（可改标题/正文/标签，补专属属性）后写入组织库
         "kb.ingest.commit" => {
             require_kb_edit(conn, org_id, actor)?;
             let id = req_str(payload, "queueId")?;
             let title = opt_str(payload, "title").unwrap_or_default();
             let content = req_str(payload, "content")?;
             let tags = opt_str(payload, "tags").unwrap_or_default();
+            let fields = fields_value(payload)?;
             let row = knowledge::get_ingest(conn, org_id, &id)?;
-            knowledge::commit_manual_ingest(conn, org_id, &row, &title, &content, &tags, actor)?;
+            knowledge::commit_manual_ingest(
+                conn,
+                org_id,
+                &row,
+                &title,
+                &content,
+                &tags,
+                &fields,
+                actor,
+            )?;
             to_value(serde_json::json!({
                 "queued": false,
                 "queueId": row.id,
@@ -539,6 +558,34 @@ pub fn dispatch(
             let kb_id = req_str(payload, "kbId")?;
             let memory_id = req_str(payload, "memoryId")?;
             to_value(knowledge::get_entry(conn, org_id, &kb_id, &memory_id)?)
+        }
+        // 条目编辑 / 移除：与「编辑库定义」同档（owner / admin）
+        "kb.entry_update" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let kb_id = req_str(payload, "kbId")?;
+            let memory_id = req_str(payload, "memoryId")?;
+            let title = req_str(payload, "title")?;
+            let content = opt_str(payload, "content").unwrap_or_default();
+            let tags = opt_str(payload, "tags").unwrap_or_default();
+            let fields = fields_value(payload)?;
+            to_value(knowledge::update_entry(
+                conn,
+                org_id,
+                &kb_id,
+                &memory_id,
+                &title,
+                &content,
+                &tags,
+                &fields,
+                actor,
+            )?)
+        }
+        "kb.entry_remove" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let kb_id = req_str(payload, "kbId")?;
+            let memory_id = req_str(payload, "memoryId")?;
+            knowledge::remove_entry(conn, org_id, &kb_id, &memory_id)?;
+            Ok(Value::Null)
         }
         "kb.file_list" => {
             let kb_id = req_str(payload, "kbId")?;
