@@ -325,7 +325,7 @@ pub fn enclave_policy_set(
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::org::PolicyView, String> {
     use crate::enclave::authz::{authorize, Action};
-    state.store.with_conn(|c| {
+    let view = state.store.with_conn(|c| {
         let actor = authorize(c, &org_id, Action::PolicyWrite)?;
         let before = crate::enclave::org::get_allow_cloud_model(c, &org_id)?.unwrap_or(false);
         crate::enclave::org::set_allow_cloud_model(c, &org_id, allow, &actor)?;
@@ -337,7 +337,10 @@ pub fn enclave_policy_set(
             &serde_json::json!({ "from": before, "to": allow }).to_string(),
         )?;
         crate::enclave::org::policy_view(c, &org_id)
-    })
+    })?;
+    // 出境闸门变更：在线成员的界面要同步（本机事件 + WS 广播）
+    crate::enclave::host::notify_change(state.inner(), &org_id, "org");
+    Ok(view)
 }
 
 /// 读主机应急开关。成员端以主机状态为准。
@@ -391,6 +394,8 @@ pub fn enclave_emergency_set(
         crate::enclave::org::emergency_view(c, &org_id)
     })?;
     state.set_disabled(view.disabled);
+    // 应急开关变化：让在线成员的治理视图跟着刷新（对外服务随后会拒绝新连接）
+    crate::enclave::host::notify_change(state.inner(), &org_id, "org");
     Ok(view)
 }
 

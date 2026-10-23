@@ -62,6 +62,9 @@ export function EnclaveNavBar({
         if (taskId) void useEnclaveTaskStore.getState().loadExtras(orgId, taskId);
       } else if (topic === 'notify') {
         void useEnclaveOrgStore.getState().loadNotifications(orgId);
+      } else if (topic === 'org') {
+        // 出境闸门 / 应急开关变化：成员端的治理视图跟着刷新
+        void useEnclaveOrgStore.getState().loadGovernance(orgId);
       } else if (topic === 'kb') {
         const kb = useEnclaveKbStore.getState();
         // 「全部库」是只读聚合，同样需要跟着刷新
