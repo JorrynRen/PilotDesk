@@ -7,6 +7,7 @@ import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
 import { useAccountStore } from '../stores/accountStore';
 import { OrgGovernanceSection } from '../components/enclave/OrgGovernancePanels';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
+import { EnclaveToolbarActions, EnclaveFilesRootPanel } from '../components/enclave/EnclaveToolbar';
 import type { MemberView } from '../types/enclave';
 
 /** 治理快照新鲜度上限（秒）：超过即视为「可能过期」，与后端 SNAPSHOT_STALE_MAX_SECS 对齐。 */
@@ -94,6 +95,8 @@ export function EnclaveOrgPage() {
   const members: MemberView[] = detail?.members ?? [];
   const [orgTab, setOrgTab] = useState<OrgTab>('basic');
   const [memberPage, setMemberPage] = useState(0);
+  /** 本机团队文件根目录面板（全局设置，与任务/知识库页共用） */
+  const [rootOpen, setRootOpen] = useState(false);
   const memberPages = Math.max(1, Math.ceil(members.length / MEMBER_PAGE_SIZE));
   const currentMemberPage = Math.min(memberPage, memberPages - 1);
   const pagedMembers = members.slice(
@@ -133,8 +136,21 @@ export function EnclaveOrgPage() {
           className="shrink-0 rounded-lg overflow-hidden"
           style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
         >
-          <EnclaveNavBar active="org" onRefresh={refreshOrg} refreshing={loading} />
+          <EnclaveNavBar
+            active="org"
+            onRefresh={refreshOrg}
+            refreshing={loading}
+            right={
+              <EnclaveToolbarActions
+                rootOpen={rootOpen}
+                onToggleRoot={() => setRootOpen((v) => !v)}
+              />
+            }
+          />
         </div>
+
+        {/* 本机团队文件根目录（全局设置；本页没有「新建」，只保留共用动作） */}
+        <EnclaveFilesRootPanel open={rootOpen} />
 
         {/* 页内分组：把 8 个板块收敛为 3 组，避免单页过长
             与一级导航（实心强调色胶囊 + 图标）区分：这里用扁平下划线式 tab，

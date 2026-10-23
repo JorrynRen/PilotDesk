@@ -19,7 +19,6 @@ import {
   FolderOpen,
   Folder,
   Pencil,
-  Plus,
   FileUp,
   Wand2,
   Scissors,
@@ -40,6 +39,7 @@ import { useEnclaveTaskStore } from '../stores/enclaveTaskStore';
 import { useAccountStore } from '../stores/accountStore';
 import { confirmDialog } from '../stores/confirmStore';
 import { EnclaveNavBar } from '../components/enclave/EnclaveNavBar';
+import { EnclaveToolbarActions, EnclaveFilesRootPanel } from '../components/enclave/EnclaveToolbar';
 import { buildTeamGraph, normalizeOrigin } from '../components/enclave/teamGraph';
 import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
@@ -373,6 +373,8 @@ export function EnclaveKbPage() {
   const [fileGroupBy, setFileGroupBy] = useState<FileGroupBy>({ kind: 'entry' });
   /** 文件目录树里被折叠的分组 */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
+  /** 本机团队文件根目录面板（全局设置，与任务页共用） */
+  const [rootOpen, setRootOpen] = useState(false);
   // 知识库定义表单（owner / admin）：新建与编辑共用一套草稿
   const [kbForm, setKbForm] = useState<null | {
     mode: 'create' | 'edit';
@@ -1105,6 +1107,25 @@ export function EnclaveKbPage() {
             active="kb"
             onRefresh={refreshKb}
             refreshing={refreshing || loading}
+            right={
+              <EnclaveToolbarActions
+                rootOpen={rootOpen}
+                onToggleRoot={() => setRootOpen((v) => !v)}
+                create={
+                  canEdit
+                    ? {
+                        label: '新建知识库',
+                        open: kbForm?.mode === 'create',
+                        onToggle: () => {
+                          if (kbForm?.mode === 'create') setKbForm(null);
+                          else startCreateKb();
+                        },
+                        disabled: !activeOrgId,
+                      }
+                    : undefined
+                }
+              />
+            }
           />
         </div>
 
@@ -1113,6 +1134,8 @@ export function EnclaveKbPage() {
             className="flex-1 min-h-0 rounded-lg overflow-hidden flex flex-col"
             style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
           >
+            {/* 本机团队文件根目录（全局设置，仅影响本机存放位置；面板与任务页共用） */}
+            <EnclaveFilesRootPanel open={rootOpen} />
 
           {/* 知识库信息（owner / admin 可修改） */}
           <div
@@ -1225,19 +1248,6 @@ export function EnclaveKbPage() {
                   <div className="flex-1" />
                   {canEdit && (
                     <>
-                      <button
-                        onClick={startCreateKb}
-                        className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
-                        style={{
-                          color: 'var(--text-secondary)',
-                          backgroundColor: 'var(--bg-field)',
-                          border: '1px solid var(--border)',
-                        }}
-                        title="新建自定义库（owner / admin）"
-                      >
-                        <Plus size={11} />
-                        新建库
-                      </button>
                       <button
                         onClick={startEditKb}
                         className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
