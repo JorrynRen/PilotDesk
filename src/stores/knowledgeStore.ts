@@ -10,6 +10,7 @@ import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
+import { capRelations } from '../components/knowledge/graphCaps';
 import {
   toBase,
   toCandidate,
@@ -1242,5 +1243,11 @@ export function deriveGraph(
     add(from, to, r.kind, 2);
   }
 
-  return { nodes: kept, relations: [...map.values()], totalNodes };
+  const relations = [...map.values()];
+  return {
+    nodes: kept,
+    relations: capRelations(relations),
+    totalNodes,
+    totalRelations: relations.length,
+  };
 }

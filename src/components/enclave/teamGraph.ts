@@ -16,6 +16,7 @@ import type {
 } from '../../types/knowledge';
 import type { GraphModel } from '../../stores/knowledgeStore';
 import { MAX_SCENE_NODES } from '../knowledge/graphModel';
+import { capRelations } from '../knowledge/graphCaps';
 
 const ENTRY_PREFIX = 'entry:';
 const FILE_PREFIX = 'file:';
@@ -26,43 +27,6 @@ const MAX_TAG_GROUP = 8;
  * 属性比标签更能说明关系（同客户 / 同项目），但"状态=进行中"这类值也会覆盖大半张图。
  */
 const MAX_FIELD_GROUP = 8;
-/** 每个节点最多保留的语义边数：超出后按权重丢弃弱边（总边数上界 ≈ 节点数 × 这个值） */
-const MAX_EDGES_PER_NODE = 10;
-/** 全局边预算：再大的库也不让边数无限增长 */
-const MAX_TOTAL_EDGES = 30_000;
-
-/**
- * 边数防护：结构边只受全局预算约束，语义边（共标签 / 同专属属性）再受每节点上限。
- *
- * 组上限（8）只保证"单组"不爆炸；标签 / 属性多的库仍会线性涨到十万级。
- * 这里把语义边压到 O(节点数 × MAX_EDGES_PER_NODE)，先丢弱关系；
- * 附件这类结构边表达"知识有哪些文件"，不参与每节点上限，只受全局预算兜底。
- */
-function capRelations(relations: KnowledgeRelation[]): KnowledgeRelation[] {
-  const sorted = [...relations].sort((a, b) => b.weight - a.weight);
-  const isStructural = (r: KnowledgeRelation) =>
-    r.kinds.includes('attachment') || r.kinds.includes('supersedes');
-  const out: KnowledgeRelation[] = [];
-
-  // 1) 结构边优先占用预算
-  for (const r of sorted) {
-    if (out.length >= MAX_TOTAL_EDGES) break;
-    if (isStructural(r)) out.push(r);
-  }
-  // 2) 语义边：每个节点最多 K 条
-  const degree = new Map<string, number>();
-  for (const r of sorted) {
-    if (out.length >= MAX_TOTAL_EDGES) break;
-    if (isStructural(r)) continue;
-    const da = degree.get(r.from) ?? 0;
-    const db = degree.get(r.to) ?? 0;
-    if (da >= MAX_EDGES_PER_NODE || db >= MAX_EDGES_PER_NODE) continue;
-    out.push(r);
-    degree.set(r.from, da + 1);
-    degree.set(r.to, db + 1);
-  }
-  return out;
-}
 
 /**
  * 团队来源 → 个人库的来源枚举。
