@@ -1091,7 +1091,7 @@ export function EnclaveKbPage() {
                     }))}
                   />
                   <span
-                    className="text-[10px] shrink-0 whitespace-nowrap"
+                    className="text-[10px] min-w-0 truncate"
                     style={{ color: 'var(--text-tertiary)' }}
                   >
                     {kb?.entryCount ?? entries.length} 条知识
