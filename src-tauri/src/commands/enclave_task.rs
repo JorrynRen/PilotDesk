@@ -856,19 +856,104 @@ pub async fn enclave_kb_orphan_cleanup(
     .await
 }
 
-/// 修改知识库信息（名称 / 描述，owner / admin）。
+/// 修改知识库定义（名称 / 描述 / 专属属性，owner / admin）。
 #[tauri::command]
-pub fn enclave_kb_update(
+pub async fn enclave_kb_update(
     org_id: String,
     kb_id: String,
     name: String,
     description: String,
+    field_schema: String,
+    db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::knowledge::KbView, String> {
-    state.store.with_conn(|c| {
-        authz::authorize(c, &org_id, authz::Action::KbEdit)?;
-        crate::enclave::knowledge::update_kb(c, &org_id, &kb_id, &name, &description)
-    })
+    let payload = json!({
+        "kbId": kb_id,
+        "name": name,
+        "description": description,
+        "fieldSchema": field_schema,
+    });
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.update",
+        payload,
+        move |c, _actor| {
+            authz::authorize(c, &org_for_write, authz::Action::KbEdit)?;
+            crate::enclave::knowledge::update_kb(
+                c,
+                &org_for_write,
+                &kb_id,
+                &name,
+                &description,
+                &field_schema,
+            )
+        },
+    )
+    .await
+}
+
+/// 新建自定义库（owner / admin）。默认库由系统自动创建，不在这里建。
+#[tauri::command]
+pub async fn enclave_kb_create(
+    org_id: String,
+    name: String,
+    description: String,
+    field_schema: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::knowledge::KbView, String> {
+    let payload = json!({
+        "name": name,
+        "description": description,
+        "fieldSchema": field_schema,
+    });
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.create",
+        payload,
+        move |c, actor| {
+            authz::authorize(c, &org_for_write, authz::Action::KbEdit)?;
+            crate::enclave::knowledge::create_kb(
+                c,
+                &org_for_write,
+                &name,
+                &description,
+                &field_schema,
+                actor,
+            )
+        },
+    )
+    .await
+}
+
+/// 删除自定义库（默认库与有内容的库会被拒绝，owner / admin）。
+#[tauri::command]
+pub async fn enclave_kb_delete(
+    org_id: String,
+    kb_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    let payload = json!({ "kbId": kb_id });
+    let org_for_write = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.delete",
+        payload,
+        move |c, _actor| {
+            authz::authorize(c, &org_for_write, authz::Action::KbEdit)?;
+            crate::enclave::knowledge::delete_kb(c, &org_for_write, &kb_id)
+        },
+    )
+    .await
 }
 
 /// 知识库「文件」页：去重后的交付物列表（成员可读）。

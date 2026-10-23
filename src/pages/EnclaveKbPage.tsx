@@ -19,6 +19,7 @@ import {
   FolderOpen,
   Folder,
   Pencil,
+  Plus,
   FileUp,
   Wand2,
   Scissors,
@@ -30,6 +31,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { TitleBar, StatusBar } from '../components/layout';
 import { TagEditor } from '../components/knowledge/TagEditor';
+import { FieldSchemaEditor } from '../components/knowledge/KnowledgeFieldInputs';
 import { Select } from '../components/common/Select';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
@@ -43,7 +45,7 @@ import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
 import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
-import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeOrigin } from '../types/knowledge';
+import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeFieldDef, KnowledgeOrigin } from '../types/knowledge';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
 const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
@@ -292,10 +294,13 @@ export function EnclaveKbPage() {
   const [fileGroupBy, setFileGroupBy] = useState<FileGroupBy>('entry');
   /** 文件目录树里被折叠的分组 */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
-  // 知识库信息编辑（owner / admin）
-  const [editingKb, setEditingKb] = useState(false);
-  const [draftKbName, setDraftKbName] = useState('');
-  const [draftKbDesc, setDraftKbDesc] = useState('');
+  // 知识库定义表单（owner / admin）：新建与编辑共用一套草稿
+  const [kbForm, setKbForm] = useState<null | {
+    mode: 'create' | 'edit';
+    name: string;
+    description: string;
+    fields: KnowledgeFieldDef[];
+  }>(null);
   // 展开行的草稿：正文 / 标签 / 标题一起保存（与个人知识库一致）
   const [draftTitle, setDraftTitle] = useState('');
   const [draftContent, setDraftContent] = useState('');
@@ -581,8 +586,17 @@ export function EnclaveKbPage() {
   const canEdit = myRole === 'owner' || myRole === 'admin';
   /** 手工入库：绕过模型直接写共享库，与条目编辑同权限（owner / admin） */
   const canManual = canEdit;
-  /** 单一默认库：直接取列表里唯一的一项 */
-  const kb = kbs[0] ?? null;
+  /** 当前库：默认库排最前，切换后按 activeKbId 取 */
+  const kb = kbs.find((k) => k.id === activeKbId) ?? kbs[0] ?? null;
+  /** 当前库的专属属性定义（图谱详情按它渲染属性区） */
+  const kbFields = useMemo<KnowledgeFieldDef[]>(() => {
+    try {
+      const parsed = JSON.parse(kb?.fieldSchema ?? '[]');
+      return Array.isArray(parsed) ? (parsed as KnowledgeFieldDef[]) : [];
+    } catch {
+      return [];
+    }
+  }, [kb?.fieldSchema]);
 
   /* ── 图谱：团队条目 → 个人库图谱组件认识的 GraphModel（复用 3D 渲染） ── */
   const teamGraph = useMemo(() => buildTeamGraph(graphEntries), [graphEntries]);
@@ -591,8 +605,7 @@ export function EnclaveKbPage() {
       id: kb?.id ?? '',
       name: kb?.name ?? '',
       description: kb?.description ?? '',
-      // 团队库没有「专属字段」：详情面板据此自然不渲染属性区
-      fields: [],
+      fields: kbFields,
       entryCount: kb?.entryCount ?? 0,
       pinnedCount: 0,
       fileCount: kb?.fileCount ?? 0,
@@ -600,7 +613,7 @@ export function EnclaveKbPage() {
       createdAt: 0,
       updatedAt: kb?.lastEntryAt ?? 0,
     }),
-    [kb],
+    [kb, kbFields],
   );
   const graphSource = useMemo(
     () => ({
@@ -656,9 +669,9 @@ export function EnclaveKbPage() {
     setDraftTags(splitTags(activeEntry?.tags ?? ''));
   }, [activeEntry]);
 
-  // 切换组织 / 账号：退出信息编辑态
+  // 切换组织 / 账号 / 知识库：退出定义编辑态
   useEffect(() => {
-    setEditingKb(false);
+    setKbForm(null);
   }, [kb?.id, activeOrgId]);
 
   useEffect(() => {
@@ -726,23 +739,52 @@ export function EnclaveKbPage() {
 
   const startEditKb = () => {
     if (!kb) return;
-    setDraftKbName(kb.name);
-    setDraftKbDesc(kb.description);
-    setEditingKb(true);
+    setKbForm({ mode: 'edit', name: kb.name, description: kb.description, fields: kbFields });
+  };
+
+  const startCreateKb = () => {
+    setKbForm({ mode: 'create', name: '', description: '', fields: [] });
   };
 
   const saveKb = async () => {
-    if (!activeOrgId || !kb) return;
-    const ok = await useEnclaveKbStore
-      .getState()
-      .updateKb(activeOrgId, kb.id, draftKbName, draftKbDesc);
-    if (ok) setEditingKb(false);
+    if (!activeOrgId || !kbForm) return;
+    const name = kbForm.name.trim();
+    if (!name) {
+      showToast('知识库名称不能为空', 'error');
+      return;
+    }
+    const schema = JSON.stringify(kbForm.fields);
+    const store = useEnclaveKbStore.getState();
+    if (kbForm.mode === 'create') {
+      const ok = await store.createKb(activeOrgId, name, kbForm.description, schema);
+      if (ok) {
+        setKbForm(null);
+        showToast('已创建知识库', 'success');
+      }
+      return;
+    }
+    if (!kb) return;
+    const ok = await store.updateKb(activeOrgId, kb.id, name, kbForm.description, schema);
+    if (ok) {
+      setKbForm(null);
+      showToast('已保存知识库定义', 'success');
+    }
   };
 
-  const cancelEditKb = () => {
-    setDraftKbName(kb?.name ?? '');
-    setDraftKbDesc(kb?.description ?? '');
-    setEditingKb(false);
+  const cancelKbForm = () => setKbForm(null);
+
+  /** 删除自定义库：默认库与有内容的库由后端拒绝 */
+  const removeKb = async () => {
+    if (!activeOrgId || !kb || kb.isImplicit) return;
+    const ok = await confirmDialog({
+      title: '删除知识库',
+      message: `确定删除「${kb.name}」？\n只有空库能删除：库里还有知识条目 / 待整理 / 待确认草稿时会被拒绝。`,
+      confirmText: '删除',
+      danger: true,
+    });
+    if (!ok) return;
+    const done = await useEnclaveKbStore.getState().deleteKb(activeOrgId, kb.id);
+    if (done) showToast('已删除知识库', 'success');
   };
 
   const saveEntry = async () => {
@@ -954,17 +996,19 @@ export function EnclaveKbPage() {
             className="shrink-0 px-4 pt-2.5 pb-2"
             style={{ borderBottom: '1px solid var(--border)' }}
           >
-            {editingKb ? (
+            {kbForm ? (
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <span className="w-14 shrink-0 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                    名称
+                    {kbForm.mode === 'create' ? '新建库' : '名称'}
                   </span>
                   <input
                     className={FIELD_CLASS + ' flex-1'}
                     style={FIELD_STYLE}
-                    value={draftKbName}
-                    onChange={(e) => setDraftKbName(e.target.value)}
+                    value={kbForm.name}
+                    onChange={(e) =>
+                      setKbForm((f) => (f ? { ...f, name: e.target.value } : f))
+                    }
                     placeholder="知识库名称"
                     autoFocus
                   />
@@ -980,10 +1024,29 @@ export function EnclaveKbPage() {
                     className="flex-1 p-2.5 rounded-lg text-xs leading-relaxed outline-none resize-y"
                     style={{ ...FIELD_STYLE, minHeight: 56 }}
                     rows={2}
-                    value={draftKbDesc}
-                    onChange={(e) => setDraftKbDesc(e.target.value)}
+                    value={kbForm.description}
+                    onChange={(e) =>
+                      setKbForm((f) => (f ? { ...f, description: e.target.value } : f))
+                    }
                     placeholder="知识库描述（用途、收录范围等）"
                   />
+                </div>
+                <div className="flex items-start gap-2">
+                  <span
+                    className="w-14 shrink-0 text-[11px] leading-6"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    专属属性
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <FieldSchemaEditor
+                      fields={kbForm.fields}
+                      onChange={(fields) => setKbForm((f) => (f ? { ...f, fields } : f))}
+                    />
+                    <div className="mt-1 text-[10px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
+                      不同库可以有不同属性；模型整理与手工入库都按当前库的定义抽取。
+                    </div>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-14 shrink-0" />
@@ -993,10 +1056,10 @@ export function EnclaveKbPage() {
                     style={{ backgroundColor: 'var(--accent)', color: '#fff', border: 'none' }}
                   >
                     <Save size={11} />
-                    保存
+                    {kbForm.mode === 'create' ? '创建' : '保存'}
                   </button>
                   <button
-                    onClick={cancelEditKb}
+                    onClick={cancelKbForm}
                     className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px]"
                     style={{
                       color: 'var(--text-secondary)',
@@ -1013,9 +1076,20 @@ export function EnclaveKbPage() {
               <>
                 <div className="flex items-center gap-2 min-w-0">
                   <Library size={12} style={{ color: 'var(--accent)' }} />
-                  <span className="text-sm font-medium truncate min-w-0" style={{ color: 'var(--text-primary)' }}>
-                    {kb?.name ?? '团队知识库'}
-                  </span>
+                  <Select
+                    value={kb?.id ?? ''}
+                    onChange={(v) => {
+                      if (activeOrgId && v !== activeKbId) {
+                        void useEnclaveKbStore.getState().selectKb(activeOrgId, v);
+                      }
+                    }}
+                    size="sm"
+                    className="w-[240px] shrink-0"
+                    options={kbs.map((k) => ({
+                      value: k.id,
+                      label: k.isImplicit ? `${k.name}（默认）` : k.name,
+                    }))}
+                  />
                   <span
                     className="text-[10px] shrink-0 whitespace-nowrap"
                     style={{ color: 'var(--text-tertiary)' }}
@@ -1027,19 +1101,49 @@ export function EnclaveKbPage() {
                   </span>
                   <div className="flex-1" />
                   {canEdit && (
-                    <button
-                      onClick={startEditKb}
-                      className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
-                      style={{
-                        color: 'var(--text-secondary)',
-                        backgroundColor: 'var(--bg-field)',
-                        border: '1px solid var(--border)',
-                      }}
-                      title="修改知识库名称与描述（owner / admin）"
-                    >
-                      <Pencil size={11} />
-                      编辑信息
-                    </button>
+                    <>
+                      <button
+                        onClick={startCreateKb}
+                        className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                        style={{
+                          color: 'var(--text-secondary)',
+                          backgroundColor: 'var(--bg-field)',
+                          border: '1px solid var(--border)',
+                        }}
+                        title="新建自定义库（owner / admin）"
+                      >
+                        <Plus size={11} />
+                        新建库
+                      </button>
+                      <button
+                        onClick={startEditKb}
+                        className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                        style={{
+                          color: 'var(--text-secondary)',
+                          backgroundColor: 'var(--bg-field)',
+                          border: '1px solid var(--border)',
+                        }}
+                        title="修改名称 / 描述 / 专属属性（owner / admin）"
+                      >
+                        <Pencil size={11} />
+                        编辑定义
+                      </button>
+                      {kb && !kb.isImplicit && (
+                        <button
+                          onClick={() => void removeKb()}
+                          className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                          style={{
+                            color: 'var(--status-danger)',
+                            backgroundColor: 'var(--bg-field)',
+                            border: '1px solid var(--border)',
+                          }}
+                          title="删除这个自定义库（只有空库可删）"
+                        >
+                          <Trash2 size={11} />
+                          删除
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
                 <div
@@ -1047,7 +1151,10 @@ export function EnclaveKbPage() {
                   style={{ color: 'var(--text-secondary)' }}
                   title={kb?.description}
                 >
-                  {kb?.description || '任务产出自动沉淀；团队共享'}
+                  {kb?.description ||
+                    (kb?.isImplicit
+                      ? '默认库：任务产出自动沉淀；团队共享（可改定义，不可删除）'
+                      : '自定义库：投喂与手工入库的目标库')}
                 </div>
               </>
             )}
@@ -1138,6 +1245,16 @@ export function EnclaveKbPage() {
                     </div>
                   </div>
                 )}
+
+                {/* 投喂目标库：多库后必须让用户看到内容会落到哪个库 */}
+                <div className="px-0.5 text-[10px] flex items-center gap-1 min-w-0" style={{ color: 'var(--text-tertiary)' }}>
+                  <Library size={10} className="shrink-0" />
+                  <span className="shrink-0">投喂到：</span>
+                  <span className="truncate" style={{ color: 'var(--text-secondary)' }}>
+                    {kb?.name ?? '-'}
+                    {kb?.isImplicit ? '（默认库）' : ''}
+                  </span>
+                </div>
 
                 <div
                   className="flex items-center gap-1 p-0.5 rounded-lg"

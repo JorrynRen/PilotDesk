@@ -485,6 +485,42 @@ pub fn dispatch(
         }
 
         "kb.list" => to_value(knowledge::list_kbs(conn, org_id)?),
+        // 库定义管理：与「编辑条目」同档（owner / admin）
+        "kb.update" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let kb_id = req_str(payload, "kbId")?;
+            let name = req_str(payload, "name")?;
+            let description = opt_str(payload, "description").unwrap_or_default();
+            let field_schema = opt_str(payload, "fieldSchema").unwrap_or_default();
+            to_value(knowledge::update_kb(
+                conn,
+                org_id,
+                &kb_id,
+                &name,
+                &description,
+                &field_schema,
+            )?)
+        }
+        "kb.create" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let name = req_str(payload, "name")?;
+            let description = opt_str(payload, "description").unwrap_or_default();
+            let field_schema = opt_str(payload, "fieldSchema").unwrap_or_default();
+            to_value(knowledge::create_kb(
+                conn,
+                org_id,
+                &name,
+                &description,
+                &field_schema,
+                actor,
+            )?)
+        }
+        "kb.delete" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let kb_id = req_str(payload, "kbId")?;
+            knowledge::delete_kb(conn, org_id, &kb_id)?;
+            to_value(serde_json::json!({ "deleted": true }))
+        }
         "kb.search" => {
             let query = req_str(payload, "query")?;
             let kb_id = opt_str(payload, "kbId");

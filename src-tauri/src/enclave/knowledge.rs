@@ -1,7 +1,8 @@
 //! 飞地组织知识库：任务产出自动沉淀 + 检索（FTS5 trigram）。
 //!
-//! 每组织一个**隐式库**（`knowledge_bases.id = "kb-org-{orgId}"`，`is_implicit=1`），
-//! 单人组织即归档地，成员增加后天然成为共享库。正文直接落 `enclave.db`
+//! 每组织有一个**默认库**（`knowledge_bases.id = "kb-org-{orgId}"`，`is_implicit=1`）：
+//! 系统自动建、不可删除、任务产出固定沉淀在这里；另可有若干**自定义库**，
+//! 各自维护专属属性（`field_schema`）。正文直接落 `enclave.db`
 //! （`knowledge_base_memories`），同步维护 `kb_mem_fts` 全文索引。
 //!
 //! 模型口径（v7 起）：
@@ -26,7 +27,10 @@ pub struct KbView {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// 默认库（系统自动创建、不可删除；任务产出固定沉淀到这里）
     pub is_implicit: bool,
+    /// 专属属性定义（JSON 数组，团队库也支持，由 owner / admin 配置）
+    pub field_schema: String,
     pub entry_count: i64,
     /// 库内交付物文件数（按 file_id 去重）
     pub file_count: i64,
@@ -90,7 +94,7 @@ fn org_name(conn: &Connection, org_id: &str) -> String {
     snapshot_org_name(conn, org_id).unwrap_or_else(|| format!("组织 {}", org_id))
 }
 
-/// 确保隐式库存在（幂等）。返回库 id。
+/// 确保默认库存在（幂等）。返回库 id。
 pub fn ensure_org_kb(conn: &Connection, org_id: &str, actor: &str) -> Result<String, String> {
     let id = implicit_kb_id(org_id);
     let now = chrono::Utc::now().timestamp();
@@ -109,12 +113,13 @@ pub fn ensure_org_kb(conn: &Connection, org_id: &str, actor: &str) -> Result<Str
     Ok(id)
 }
 
-/// 本组织的知识库列表（含隐式库；隐式库不存在时懒创建）。
+/// 本组织的知识库列表（默认库排最前；默认库不存在时懒创建）。
 pub fn list_kbs(conn: &Connection, org_id: &str) -> Result<Vec<KbView>, String> {
     ensure_org_kb(conn, org_id, "")?;
     let mut stmt = conn
         .prepare(
-            "SELECT kb.id, kb.name, kb.description, kb.is_implicit, kb.created_at, kb.updated_at,
+            "SELECT kb.id, kb.name, kb.description, kb.is_implicit, kb.field_schema,
+                    kb.created_at, kb.updated_at,
                     (SELECT COUNT(*) FROM knowledge_base_memories m WHERE m.knowledge_base_id = kb.id),
                     (SELECT COALESCE(MAX(COALESCE(NULLIF(m.updated_at, 0), m.added_at)), 0)
                      FROM knowledge_base_memories m WHERE m.knowledge_base_id = kb.id),
@@ -134,11 +139,12 @@ pub fn list_kbs(conn: &Connection, org_id: &str) -> Result<Vec<KbView>, String> 
                 name: r.get(1)?,
                 description: r.get(2)?,
                 is_implicit: r.get::<_, i64>(3)? != 0,
-                created_at: r.get(4)?,
-                updated_at: r.get(5)?,
-                entry_count: r.get(6)?,
-                last_entry_at: r.get(7)?,
-                file_count: r.get(8)?,
+                field_schema: r.get(4)?,
+                created_at: r.get(5)?,
+                updated_at: r.get(6)?,
+                entry_count: r.get(7)?,
+                last_entry_at: r.get(8)?,
+                file_count: r.get(9)?,
             })
         })
         .map_err(|e| format!("查询组织知识库失败：{}", e))?;
@@ -146,30 +152,147 @@ pub fn list_kbs(conn: &Connection, org_id: &str) -> Result<Vec<KbView>, String> 
         .map_err(|e| format!("读取组织知识库失败：{}", e))
 }
 
-/// 人工维护知识库信息（仅 owner / admin，授权在命令层）：名称 + 描述。
+/// 校验并规整专属属性定义（`[{key,label,type,...}]`）。
+///
+/// 只做结构与键唯一性校验：类型/选项的取舍交给前端编辑器，后端不重复业务判断，
+/// 但必须挡住"非数组 / 空键 / 重复键"——这些会让模型整理时写出一份无意义的属性表。
+fn normalize_field_schema(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok("[]".to_string());
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(trimmed).map_err(|_| "专属属性定义不是合法 JSON".to_string())?;
+    let arr = parsed
+        .as_array()
+        .ok_or_else(|| "专属属性定义必须是数组".to_string())?;
+    let mut seen = std::collections::HashSet::new();
+    for f in arr {
+        let key = f
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if key.is_empty() {
+            return Err("专属属性的存储键不能为空".to_string());
+        }
+        if !seen.insert(key.to_string()) {
+            return Err(format!("专属属性存储键重复：{}", key));
+        }
+    }
+    Ok(serde_json::Value::Array(arr.clone()).to_string())
+}
+
+/// 人工维护知识库定义（仅 owner / admin，授权在命令层）：名称 + 描述 + 专属属性。
+///
+/// 默认库也允许改定义（只禁止删除）——这正是"不同目标库属性不同"的落点。
 pub fn update_kb(
     conn: &Connection,
     org_id: &str,
     kb_id: &str,
     name: &str,
     description: &str,
+    field_schema: &str,
 ) -> Result<KbView, String> {
     ensure_kb_owned(conn, org_id, kb_id)?;
     let name = name.trim();
     if name.is_empty() {
         return Err("知识库名称不能为空".to_string());
     }
+    let schema = normalize_field_schema(field_schema)?;
     let now = chrono::Utc::now().timestamp();
     conn.execute(
-        "UPDATE knowledge_bases SET name = ?3, description = ?4, updated_at = ?5
-         WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
-        params![kb_id, org_id, name, description.trim(), now],
+        "UPDATE knowledge_bases
+            SET name = ?3, description = ?4, field_schema = ?5, updated_at = ?6
+          WHERE id = ?1 AND owner_type = 'org' AND owner_id = ?2",
+        params![kb_id, org_id, name, description.trim(), schema, now],
     )
     .map_err(|e| format!("保存知识库信息失败：{}", e))?;
     list_kbs(conn, org_id)?
         .into_iter()
         .find(|k| k.id == kb_id)
         .ok_or_else(|| "知识库不存在或不属于该组织".to_string())
+}
+
+/// 新建自定义库（owner / admin，授权在命令层）。
+///
+/// 默认库由 [`ensure_org_kb`] 自动创建，这里只管自定义库；两者在数据上只差 `is_implicit`。
+pub fn create_kb(
+    conn: &Connection,
+    org_id: &str,
+    name: &str,
+    description: &str,
+    field_schema: &str,
+    actor: &str,
+) -> Result<KbView, String> {
+    ensure_kb_write(conn, org_id)?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("知识库名称不能为空".to_string());
+    }
+    let schema = normalize_field_schema(field_schema)?;
+    let duplicated: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_bases
+              WHERE owner_type = 'org' AND owner_id = ?1 AND name = ?2",
+            params![org_id, name],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("校验知识库重名失败：{}", e))?;
+    if duplicated > 0 {
+        return Err(format!("已存在同名知识库：{}", name));
+    }
+    let id = format!("kb-{}", uuid::Uuid::new_v4());
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO knowledge_bases
+            (id, name, description, scope, owner_type, owner_id, is_implicit,
+             field_schema, filter_rules, visibility, created_by, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'org', 'org', ?4, 0, ?5, '[]', 'org', ?6, ?7, ?7)",
+        params![id, name, description.trim(), org_id, schema, actor, now],
+    )
+    .map_err(|e| format!("创建知识库失败：{}", e))?;
+    list_kbs(conn, org_id)?
+        .into_iter()
+        .find(|k| k.id == id)
+        .ok_or_else(|| "创建知识库后读取失败".to_string())
+}
+
+/// 删除自定义库（owner / admin，授权在命令层）。
+///
+/// 默认库不可删（保证组织永远有落点）；有内容的库也不删——条目、待整理、待确认
+/// 都指向这个 kb，静默级联删会连带丢文件引用，必须由用户先清空。
+pub fn delete_kb(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(), String> {
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    let is_implicit: i64 = conn
+        .query_row(
+            "SELECT is_implicit FROM knowledge_bases WHERE id = ?1",
+            params![kb_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("读取知识库定义失败：{}", e))?;
+    if is_implicit != 0 {
+        return Err("默认库不能删除，只能修改它的定义".to_string());
+    }
+    let count = |sql: &str| -> Result<i64, String> {
+        conn.query_row(sql, params![kb_id], |r| r.get(0))
+            .map_err(|e| format!("校验知识库内容失败：{}", e))
+    };
+    let entries = count("SELECT COUNT(*) FROM knowledge_base_memories WHERE knowledge_base_id = ?1")?;
+    if entries > 0 {
+        return Err(format!("库里还有 {} 条知识，先移除后再删除", entries));
+    }
+    let queued = count("SELECT COUNT(*) FROM kb_ingest_queue WHERE kb_id = ?1")?;
+    if queued > 0 {
+        return Err("库里还有待整理内容，先处理或移除后再删除".to_string());
+    }
+    let candidates = count("SELECT COUNT(*) FROM kb_candidates WHERE kb_id = ?1")?;
+    if candidates > 0 {
+        return Err("库里还有待确认草稿，先采纳或拒绝后再删除".to_string());
+    }
+    conn.execute("DELETE FROM knowledge_bases WHERE id = ?1", params![kb_id])
+        .map_err(|e| format!("删除知识库失败：{}", e))?;
+    Ok(())
 }
 
 /// 文件视图（团队知识库「文件」页）：一行 = 某条目引用的一个交付物。

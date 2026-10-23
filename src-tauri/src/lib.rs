@@ -2883,6 +2883,8 @@ pub fn run() {
             commands::enclave_task::enclave_kb_orphan_files,
             commands::enclave_task::enclave_kb_orphan_cleanup,
             commands::enclave_task::enclave_kb_update,
+            commands::enclave_task::enclave_kb_create,
+            commands::enclave_task::enclave_kb_delete,
             commands::enclave_task::enclave_kb_file_list,
             commands::enclave_task::enclave_kb_ingest_capability,
             commands::enclave_task::enclave_kb_ingest_snippet,

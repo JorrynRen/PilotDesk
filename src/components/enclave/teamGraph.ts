@@ -10,6 +10,7 @@ import type { KbEntryView } from '../../types/enclave';
 import type {
   KnowledgeEntry,
   KnowledgeGraphNode,
+  KnowledgeMeta,
   KnowledgeOrigin,
   KnowledgeRelation,
 } from '../../types/knowledge';
@@ -75,11 +76,31 @@ export function toKnowledgeEntry(e: KbEntryView): KnowledgeEntry {
     accessCount: 0,
     createdAt: e.addedAt,
     updatedAt: e.updatedAt,
-    meta: {},
+    meta: toMeta(e.metadata),
     origin: mapOrigin(normalizeOrigin(e)),
     sourceRef: '',
     baseIds: [],
   };
+}
+
+/** 专属属性只取标量：metadata 里的溯源信息（reportId 等）不按属性渲染 */
+function toMeta(raw: Record<string, unknown>): KnowledgeMeta {
+  const out: KnowledgeMeta = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') out[k] = v;
+  }
+  return out;
+}
+
+/** 节点级属性：图谱详情按字符串渲染 */
+function toNodeMeta(raw: Record<string, unknown>): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+      out[k] = String(v);
+    }
+  }
+  return out;
 }
 
 export function buildTeamGraph(entries: KbEntryView[]): GraphModel {
@@ -98,7 +119,7 @@ export function buildTeamGraph(entries: KbEntryView[]): GraphModel {
       chunkCount: 1,
       entries: [entry],
       tags: entry.tags,
-      meta: {},
+      meta: toNodeMeta(raw.metadata),
       pin: false,
     });
     for (const f of raw.files) {

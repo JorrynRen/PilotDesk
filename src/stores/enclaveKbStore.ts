@@ -83,7 +83,22 @@ interface EnclaveKbState {
   cleanupOrphans: (orgId: string) => Promise<number>;
   openEntry: (entry: KbEntryView | null) => void;
   /** 人工维护知识库信息（owner / admin） */
-  updateKb: (orgId: string, kbId: string, name: string, description: string) => Promise<boolean>;
+  updateKb: (
+    orgId: string,
+    kbId: string,
+    name: string,
+    description: string,
+    fieldSchema: string,
+  ) => Promise<boolean>;
+  /** 新建自定义库（默认库由系统自动创建） */
+  createKb: (
+    orgId: string,
+    name: string,
+    description: string,
+    fieldSchema: string,
+  ) => Promise<boolean>;
+  /** 删除自定义库（默认库与有内容的库会被后端拒绝） */
+  deleteKb: (orgId: string, kbId: string) => Promise<boolean>;
   /** 人工编辑条目（owner / admin） */
   updateEntry: (
     orgId: string,
@@ -328,14 +343,55 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
 
   openEntry: (entry) => set({ activeEntry: entry }),
 
-  updateKb: async (orgId, kbId, name, description) => {
+  updateKb: async (orgId, kbId, name, description, fieldSchema) => {
     set({ loading: true, error: null });
     try {
-      const next = await invoke<KbView>('enclave_kb_update', { orgId, kbId, name, description });
+      const next = await invoke<KbView>('enclave_kb_update', {
+        orgId,
+        kbId,
+        name,
+        description,
+        fieldSchema,
+      });
       set((s) => ({
         kbs: s.kbs.map((k) => (k.id === kbId ? next : k)),
         loading: false,
       }));
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e), loading: false });
+      return false;
+    }
+  },
+
+  createKb: async (orgId, name, description, fieldSchema) => {
+    set({ loading: true, error: null });
+    try {
+      const created = await invoke<KbView>('enclave_kb_create', {
+        orgId,
+        name,
+        description,
+        fieldSchema,
+      });
+      const kbs = await invoke<KbView[]>('enclave_kb_list', { orgId });
+      set({ kbs, loading: false });
+      // 建完直接切过去，用户马上能配置/投喂
+      await get().selectKb(orgId, created.id);
+      return true;
+    } catch (e) {
+      set({ error: errorMessage(e), loading: false });
+      return false;
+    }
+  },
+
+  deleteKb: async (orgId, kbId) => {
+    set({ loading: true, error: null });
+    try {
+      await invoke('enclave_kb_delete', { orgId, kbId });
+      const kbs = await invoke<KbView[]>('enclave_kb_list', { orgId });
+      const next = kbs[0]?.id ?? '';
+      set({ kbs, loading: false });
+      if (get().activeKbId === kbId) await get().selectKb(orgId, next);
       return true;
     } catch (e) {
       set({ error: errorMessage(e), loading: false });

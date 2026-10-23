@@ -396,13 +396,15 @@ export interface TeamFilesRootView {
 
 // ── M5：组织知识库 ──────────────────────────────────────────────
 
-/** 组织知识库（每组织一个隐式库） */
+/** 组织知识库：默认库（系统建、不可删）+ 若干自定义库 */
 export interface KbView {
   id: string;
   name: string;
   description: string;
-  /** 隐式库（任务产出自动归档地） */
+  /** 默认库（系统自动创建、不可删除；任务产出固定沉淀到这里） */
   isImplicit: boolean;
+  /** 专属属性定义（JSON 数组字符串，团队库可配置） */
+  fieldSchema: string;
   entryCount: number;
   /** 库内交付物文件数（按文件去重） */
   fileCount: number;
