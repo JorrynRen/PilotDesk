@@ -45,7 +45,7 @@ import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
 import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
-import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeFieldDef, KnowledgeOrigin } from '../types/knowledge';
+import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeFieldDef, KnowledgeFieldType, KnowledgeOrigin } from '../types/knowledge';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
 const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
@@ -151,8 +151,65 @@ function entryOriginLabel(e: KbEntryView): string {
 
 type KbTab = 'entries' | 'files' | 'ingest' | 'graph';
 
-/** 文件目录树的分组维度：全部基于现有数据，不需要额外录入属性 */
-type FileGroupBy = 'entry' | 'assignee' | 'priority' | 'filetype' | 'month';
+/** 文件目录树的分组维度：系统维度 + 当前库的专属属性字段 */
+type FileGroupBy =
+  | { kind: 'entry' }
+  | { kind: 'assignee' }
+  | { kind: 'taskPriority' }
+  | { kind: 'filetype' }
+  | { kind: 'month' }
+  | { kind: 'field'; key: string };
+
+/** Select 只吃字符串：专属属性编码成 `field:<key>` */
+function encodeGroupBy(g: FileGroupBy): string {
+  return g.kind === 'field' ? `field:${g.key}` : g.kind;
+}
+
+function decodeGroupBy(v: string): FileGroupBy {
+  if (v.startsWith('field:')) return { kind: 'field', key: v.slice(6) };
+  switch (v) {
+    case 'assignee':
+    case 'taskPriority':
+    case 'filetype':
+    case 'month':
+      return { kind: v };
+    default:
+      return { kind: 'entry' };
+  }
+}
+
+/**
+ * 专属属性值 → 目录。
+ *
+ * 空值单独成组（「未标注」），布尔按是/否，日期按月归并 ——
+ * 与「按月份」维度同口径；其余类型直接用原值当目录名。
+ */
+function fieldGroup(
+  f: KbFileListView,
+  key: string,
+  type?: KnowledgeFieldType,
+): { id: string; title: string } {
+  const raw = f.metadata?.[key];
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return { id: '__empty__', title: '未标注' };
+  }
+  if (type === 'boolean') {
+    const on = raw === true || raw === 'true' || raw === 1 || raw === '1';
+    return { id: on ? 'true' : 'false', title: on ? '是' : '否' };
+  }
+  if (type === 'date') {
+    const d = new Date(String(raw));
+    if (!Number.isNaN(d.getTime())) {
+      const m = d.getMonth() + 1;
+      return {
+        id: `${d.getFullYear()}-${String(m).padStart(2, '0')}`,
+        title: `${d.getFullYear()} 年 ${m} 月`,
+      };
+    }
+  }
+  const text = String(raw);
+  return { id: text, title: text };
+}
 
 const PRIORITY_LABEL: Record<string, string> = {
   low: '低',
@@ -291,7 +348,7 @@ export function EnclaveKbPage() {
   const [keyword, setKeyword] = useState('');
   const [fileKeyword, setFileKeyword] = useState('');
   /** 文件目录树的分组维度 */
-  const [fileGroupBy, setFileGroupBy] = useState<FileGroupBy>('entry');
+  const [fileGroupBy, setFileGroupBy] = useState<FileGroupBy>({ kind: 'entry' });
   /** 文件目录树里被折叠的分组 */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
   // 知识库定义表单（owner / admin）：新建与编辑共用一套草稿
@@ -712,6 +769,18 @@ export function EnclaveKbPage() {
     setCollapsedGroups([]);
   }, [fileGroupBy]);
 
+  // 切库后旧库的属性 key 可能已不存在：回到默认维度
+  useEffect(() => {
+    setFileGroupBy({ kind: 'entry' });
+  }, [activeKbId]);
+
+  // 当前库删掉了正在使用的属性：同样退回默认维度（否则整页都归「未标注」）
+  useEffect(() => {
+    if (fileGroupBy.kind === 'field' && !kbFields.some((f) => f.key === fileGroupBy.key)) {
+      setFileGroupBy({ kind: 'entry' });
+    }
+  }, [kbFields, fileGroupBy]);
+
   const handleModeChange = useCallback(
     (mode: ViewMode) => {
       setMode(mode);
@@ -888,9 +957,13 @@ export function EnclaveKbPage() {
       draftContent !== activeEntry.content ||
       joinTags(draftTags) !== joinTags(splitTags(activeEntry.tags)));
 
-  /** 文件页目录树：按所选维度分组（默认按知识条目 / 来源任务） */
+  /** 文件页目录树：按所选维度分组（系统维度 / 当前库的专属属性） */
   const fileGroups = useMemo(() => {
     const q = fileKeyword.trim().toLowerCase();
+    const fieldDef =
+      fileGroupBy.kind === 'field'
+        ? kbFields.find((f) => f.key === fileGroupBy.key)
+        : undefined;
     const map = new Map<
       string,
       { id: string; title: string; files: typeof files; latest: number }
@@ -899,33 +972,37 @@ export function EnclaveKbPage() {
       if (q && !f.fileName.toLowerCase().includes(q)) continue;
       let id: string;
       let title: string;
-      switch (fileGroupBy) {
-        case 'assignee':
-          id = f.assigneeId || '__unassigned__';
-          title = f.assigneeId ? memberName(f.assigneeId) : '未指派';
-          break;
-        case 'priority': {
-          const p = f.priority || 'normal';
-          id = p;
-          title = `优先级：${PRIORITY_LABEL[p] ?? p}`;
-          break;
+      if (fileGroupBy.kind === 'field') {
+        ({ id, title } = fieldGroup(f, fileGroupBy.key, fieldDef?.type));
+      } else {
+        switch (fileGroupBy.kind) {
+          case 'assignee':
+            id = f.assigneeId || '__unassigned__';
+            title = f.assigneeId ? memberName(f.assigneeId) : '未指派';
+            break;
+          case 'taskPriority': {
+            const p = f.priority || 'normal';
+            id = p;
+            title = `任务优先级：${PRIORITY_LABEL[p] ?? p}`;
+            break;
+          }
+          case 'filetype': {
+            const ext = fileExt(f.fileName);
+            id = ext || '__noext__';
+            title = ext ? `${ext.toUpperCase()} 文件` : '无扩展名';
+            break;
+          }
+          case 'month': {
+            const d = new Date(f.addedAt * 1000);
+            const m = d.getMonth() + 1;
+            id = `${d.getFullYear()}-${String(m).padStart(2, '0')}`;
+            title = `${d.getFullYear()} 年 ${m} 月`;
+            break;
+          }
+          default:
+            id = f.memoryId || f.sourceRef || '__orphan__';
+            title = f.entryTitle || f.sourceRef || '未关联条目';
         }
-        case 'filetype': {
-          const ext = fileExt(f.fileName);
-          id = ext || '__noext__';
-          title = ext ? `${ext.toUpperCase()} 文件` : '无扩展名';
-          break;
-        }
-        case 'month': {
-          const d = new Date(f.addedAt * 1000);
-          const m = d.getMonth() + 1;
-          id = `${d.getFullYear()}-${String(m).padStart(2, '0')}`;
-          title = `${d.getFullYear()} 年 ${m} 月`;
-          break;
-        }
-        default:
-          id = f.memoryId || f.sourceRef || '__orphan__';
-          title = f.entryTitle || f.sourceRef || '未关联条目';
       }
       let g = map.get(id);
       if (!g) {
@@ -938,14 +1015,29 @@ export function EnclaveKbPage() {
     }
     const groups = [...map.values()];
     groups.sort((a, b) => {
-      if (fileGroupBy === 'month') return b.id.localeCompare(a.id);
-      if (fileGroupBy === 'priority') {
+      if (fileGroupBy.kind === 'month') return b.id.localeCompare(a.id);
+      if (fileGroupBy.kind === 'taskPriority') {
         return (PRIORITY_ORDER[a.id] ?? 9) - (PRIORITY_ORDER[b.id] ?? 9);
+      }
+      if (fileGroupBy.kind === 'field') {
+        // 「未标注」永远排最后：它是缺口提示，不该抢占首屏
+        if (a.id === '__empty__' || b.id === '__empty__') {
+          return a.id === '__empty__' ? 1 : -1;
+        }
+        const type = fieldDef?.type ?? 'text';
+        if (type === 'number') return Number(a.id) - Number(b.id);
+        if (type === 'boolean') return a.id === 'true' ? -1 : 1;
+        if (type === 'select') {
+          const opts = fieldDef?.options ?? [];
+          return opts.indexOf(a.title) - opts.indexOf(b.title);
+        }
+        if (type === 'date') return b.id.localeCompare(a.id);
+        return b.files.length - a.files.length || b.latest - a.latest;
       }
       return b.latest - a.latest;
     });
     return groups;
-  }, [files, fileKeyword, fileGroupBy, members]);
+  }, [files, fileKeyword, fileGroupBy, members, kbFields]);
 
   const matchedFileCount = useMemo(
     () => new Set(fileGroups.flatMap((g) => g.files.map((f) => f.fileId))).size,
@@ -2195,18 +2287,23 @@ export function EnclaveKbPage() {
                 className="shrink-0 px-4 py-1.5 flex items-center gap-2"
                 style={{ borderBottom: '1px solid var(--border)' }}
               >
-                <div className="w-[150px] shrink-0">
+                <div className="w-[200px] shrink-0">
                   <Select
-                    value={fileGroupBy}
-                    onChange={(v) => setFileGroupBy(v as FileGroupBy)}
+                    value={encodeGroupBy(fileGroupBy)}
+                    onChange={(v) => setFileGroupBy(decodeGroupBy(v))}
                     size="sm"
                     className="w-full"
                     options={[
                       { value: 'entry', label: '按来源条目' },
-                      { value: 'assignee', label: '按负责人' },
-                      { value: 'priority', label: '按优先级' },
+                      { value: 'assignee', label: '按任务负责人' },
+                      { value: 'taskPriority', label: '按任务优先级' },
                       { value: 'filetype', label: '按文件类型' },
                       { value: 'month', label: '按归档月份' },
+                      // 当前库的专属属性：跟着库定义走，换库后选项自然变化
+                      ...kbFields.map((f) => ({
+                        value: `field:${f.key}`,
+                        label: `按属性 · ${f.label || f.key}`,
+                      })),
                     ]}
                     title="切换文件分组方式"
                   />
@@ -2334,7 +2431,7 @@ export function EnclaveKbPage() {
                                 {f.fileName}
                               </div>
                               <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-tertiary)' }}>
-                                {fileGroupBy !== 'entry' && (
+                                {fileGroupBy.kind !== 'entry' && (
                                   <>来源「{f.entryTitle || f.sourceRef || '未知'}」 · </>
                                 )}
                                 {f.fileSize > 0 && `${formatSize(f.fileSize)} · `}

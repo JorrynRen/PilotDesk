@@ -490,6 +490,8 @@ export interface KbFileListView {
   assigneeId: string;
   /** 来源任务优先级（low / normal / high / urgent） */
   priority: string;
+  /** 所属条目的 metadata（含模型写入的专属属性，文件页「按专属属性」分组用） */
+  metadata: Record<string, unknown>;
   addedAt: number;
 }
 

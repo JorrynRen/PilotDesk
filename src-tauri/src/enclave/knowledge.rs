@@ -313,6 +313,8 @@ pub struct KbFileListView {
     /// 来源任务的负责人 / 优先级：供「按负责人 / 优先级」分组
     pub assignee_id: String,
     pub priority: String,
+    /// 所属条目的 metadata（含模型写入的专属属性）：文件页按专属属性分组用
+    pub metadata: serde_json::Value,
     pub added_at: i64,
 }
 
@@ -327,7 +329,8 @@ pub fn list_files(
         .prepare(
             "SELECT fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash,
                     kbf.memory_id, COALESCE(m.title, ''), COALESCE(m.source_ref, ''), kbf.added_at,
-                    COALESCE(t.assignee_id, ''), COALESCE(t.priority, 'normal')
+                    COALESCE(t.assignee_id, ''), COALESCE(t.priority, 'normal'),
+                    COALESCE(m.metadata, '{}')
              FROM knowledge_base_files kbf
              JOIN file_assets fa ON fa.id = kbf.file_id
              LEFT JOIN knowledge_base_memories m
@@ -340,6 +343,7 @@ pub fn list_files(
         .map_err(|e| format!("查询知识库文件失败：{}", e))?;
     let rows = stmt
         .query_map(params![kb_id], |r| {
+            let metadata_raw: String = r.get(11)?;
             Ok(KbFileListView {
                 file_id: r.get(0)?,
                 file_name: r.get(1)?,
@@ -352,6 +356,8 @@ pub fn list_files(
                 added_at: r.get(8)?,
                 assignee_id: r.get(9)?,
                 priority: r.get(10)?,
+                metadata: serde_json::from_str(&metadata_raw)
+                    .unwrap_or_else(|_| serde_json::json!({})),
             })
         })
         .map_err(|e| format!("查询知识库文件失败：{}", e))?;
