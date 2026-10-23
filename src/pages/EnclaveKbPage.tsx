@@ -1243,6 +1243,10 @@ export function EnclaveKbPage() {
                     {kb?.entryCount ?? entries.length} 条知识
                     {' · '}
                     {kb?.fileCount ?? files.length} 个文件
+                    {' · '}
+                    <span title="专属属性按当前库的定义计（「编辑定义」里修改）">
+                      {kbFields.length} 个专属属性
+                    </span>
                     {kb && kb.lastEntryAt > 0 && ` · 最近更新 ${formatTime(kb.lastEntryAt)}`}
                   </span>
                   <div className="flex-1" />
