@@ -65,10 +65,10 @@ export function normalizeOrigin(e: KbEntryView): string {
   return e.files.length > 0 ? 'file' : 'snippet';
 }
 
-/** 标签串 → 去重数组（与页面里的 splitTags 同口径） */
+/** 标签串 → 去重数组（与后端 `normalize_tags` 同口径：, ， 、 ; ； | 与空白都算分隔符） */
 function splitTags(raw: string): string[] {
   return [...new Set(
-    raw.split(/[,，;；\s]+/).map((t) => t.trim()).filter(Boolean),
+    raw.split(/[,，、;；|\s]+/).map((t) => t.trim()).filter(Boolean),
   )];
 }
 
@@ -180,7 +180,9 @@ export function buildTeamGraph(
     for (const e of rec.entries) add(`${ENTRY_PREFIX}${e.key}`, fileNode, 'attachment', 1.5);
   }
 
-  // 共标签（共享 ≥2 个才算）：倒排索引 + 组内配对，组过大的标签跳过
+  // 共标签（共享 1 个即连）：团队库通常只有几十条，单个标签的区分度足够；
+  // 组过大的标签仍跳过，避免"人人都有的标签"把图串成一片。
+  // （个人库保留"≥2 个才算"，因为那边条目量大、单标签太容易撞）
   const tagGroups = new Map<string, KnowledgeGraphNode[]>();
   for (const n of kept) {
     for (const t of n.tags) {
@@ -202,12 +204,11 @@ export function buildTeamGraph(
     }
   }
   for (const [key, shared] of sharedCount) {
-    if (shared < 2) continue;
     const sep = key.indexOf('\u0000');
     add(key.slice(0, sep), key.slice(sep + 1), 'shared_tag', shared * 0.5);
   }
 
-  // 同专属属性：同一字段同值即连（一个字段就够，不像标签要求 ≥2）；
+  // 同专属属性：同一字段同值即连（不像共标签有组大小上限之外的额外门槛）；
   // 值过宽的组（如"状态=进行中"）跳过，否则整张图会被一条线串成链
   if (fieldKeys.length > 0) {
     const fieldCount = new Map<string, number>();
