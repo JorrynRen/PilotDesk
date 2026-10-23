@@ -99,12 +99,12 @@ interface EnclaveKbState {
   ) => Promise<boolean>;
   /** 删除自定义库（默认库与有内容的库会被后端拒绝） */
   deleteKb: (orgId: string, kbId: string) => Promise<boolean>;
-  /** 人工编辑条目（owner / admin） */
+  /** 人工编辑条目（owner / admin）；`fields` 是专属属性 JSON 字符串 */
   updateEntry: (
     orgId: string,
     kbId: string,
     memoryId: string,
-    input: { title: string; content: string; tags: string },
+    input: { title: string; content: string; tags: string; fields: string },
   ) => Promise<boolean>;
   /** 移除条目（owner / admin）；交付物原件仍保留在任务中 */
   removeEntry: (orgId: string, kbId: string, memoryId: string) => Promise<boolean>;
@@ -409,6 +409,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
         title: input.title,
         content: input.content,
         tags: input.tags,
+        fields: input.fields,
       });
       set((s) => ({
         entries: s.entries.map((e) => (e.memoryId === memoryId ? next : e)),

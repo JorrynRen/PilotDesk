@@ -152,10 +152,27 @@ pub fn list_kbs(conn: &Connection, org_id: &str) -> Result<Vec<KbView>, String> 
         .map_err(|e| format!("读取组织知识库失败：{}", e))
 }
 
+/// 条目 metadata 里由系统写入的键。
+///
+/// 这些键不能拿来当专属属性：人工编辑属性时会按同名键覆盖，
+/// 直接破坏「来源任务 / 确认人 / 编辑留痕」这些溯源信息。
+const RESERVED_META_KEYS: &[&str] = &[
+    "reportId",
+    "taskTitle",
+    "assigneeId",
+    "completedAt",
+    "confirmedBy",
+    "confirmedAt",
+    "revision",
+    "editedBy",
+    "editedAt",
+    "sourceTaskCancelledAt",
+];
+
 /// 校验并规整专属属性定义（`[{key,label,type,...}]`）。
 ///
 /// 只做结构与键唯一性校验：类型/选项的取舍交给前端编辑器，后端不重复业务判断，
-/// 但必须挡住"非数组 / 空键 / 重复键"——这些会让模型整理时写出一份无意义的属性表。
+/// 但必须挡住"非数组 / 空键 / 重复键 / 系统保留键"——这些会让模型整理时写出一份无意义的属性表。
 fn normalize_field_schema(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -175,6 +192,9 @@ fn normalize_field_schema(raw: &str) -> Result<String, String> {
             .trim();
         if key.is_empty() {
             return Err("专属属性的存储键不能为空".to_string());
+        }
+        if RESERVED_META_KEYS.contains(&key) {
+            return Err(format!("「{}」是系统保留键，换一个存储键", key));
         }
         if !seen.insert(key.to_string()) {
             return Err(format!("专属属性存储键重复：{}", key));
@@ -841,6 +861,8 @@ pub fn mark_task_output_cancelled(
 /// 人工修改条目（仅 owner / admin，授权在命令层）。
 ///
 /// 修改不会改变 `source_ref` 与文件集合；再次确认汇报时正文仍以汇报为准覆盖。
+/// `fields` 只用于专属属性：按当前库 `field_schema` 的键白名单合并，清空即删除，
+/// 溯源信息（reportId / editedBy 等）不允许被前端覆盖。
 pub fn update_entry(
     conn: &Connection,
     org_id: &str,
@@ -849,6 +871,7 @@ pub fn update_entry(
     title: &str,
     content: &str,
     tags: &str,
+    fields: &serde_json::Value,
     actor: &str,
 ) -> Result<KbEntryView, String> {
     ensure_kb_owned(conn, org_id, kb_id)?;
@@ -871,6 +894,38 @@ pub fn update_entry(
         .ok()
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
+
+    // 专属属性：只认当前库定义的键；空串 / null 视为清空
+    let schema_raw: String = conn
+        .query_row(
+            "SELECT field_schema FROM knowledge_bases WHERE id = ?1",
+            params![kb_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("读取知识库定义失败：{}", e))?
+        .unwrap_or_else(|| "[]".to_string());
+    let schema: Vec<serde_json::Value> =
+        serde_json::from_str(&schema_raw).unwrap_or_default();
+    let incoming = fields.as_object();
+    for f in schema {
+        let Some(key) = f.get("key").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let key = key.to_string();
+        let value = incoming.and_then(|o| o.get(&key));
+        let empty = match value {
+            None | Some(serde_json::Value::Null) => true,
+            Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+            _ => false,
+        };
+        if empty {
+            metadata.remove(&key);
+        } else if let Some(v) = value {
+            metadata.insert(key, v.clone());
+        }
+    }
+
     let now = chrono::Utc::now().timestamp();
     metadata.insert("editedBy".into(), serde_json::json!(actor));
     metadata.insert("editedAt".into(), serde_json::json!(now));

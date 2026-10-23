@@ -720,7 +720,9 @@ pub async fn enclave_task_sediment_retry(
     .await
 }
 
-/// 人工编辑知识条目（owner / admin）：标题、正文、标签。
+/// 人工编辑知识条目（owner / admin）：标题、正文、标签、专属属性。
+///
+/// `fields` 是专属属性的 JSON 对象字符串（只含当前库 `field_schema` 里的键）。
 #[tauri::command]
 pub fn enclave_kb_entry_update(
     org_id: String,
@@ -729,10 +731,16 @@ pub fn enclave_kb_entry_update(
     title: String,
     content: String,
     tags: String,
+    fields: String,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<crate::enclave::knowledge::KbEntryView, String> {
     state.store.with_conn(|c| {
         let actor = authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+        let fields_value: serde_json::Value = if fields.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&fields).map_err(|_| "专属属性格式不正确".to_string())?
+        };
         crate::enclave::knowledge::update_entry(
             c,
             &org_id,
@@ -741,6 +749,7 @@ pub fn enclave_kb_entry_update(
             &title,
             &content,
             &tags,
+            &fields_value,
             &actor,
         )
     })

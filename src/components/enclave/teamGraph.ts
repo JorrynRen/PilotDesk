@@ -2,7 +2,7 @@
  * 团队知识库图谱：把主机返回的知识条目派生成图谱核心数据（GraphModel）。
  *
  * 与个人库的区别：团队条目没有"文件分块"这一层，节点口径是
- * **知识条目 + 文件（交付物 / 来源文件）**；边只有「共标签」与「附件」。
+ * **知识条目 + 文件（交付物 / 来源文件）**；边有「共标签」「附件」「同专属属性」。
  * 渲染层复用个人库的 `KnowledgeGraph`（通过其 `source` 入口传入本文件的结果）。
  */
 
@@ -21,6 +21,11 @@ const ENTRY_PREFIX = 'entry:';
 const FILE_PREFIX = 'file:';
 /** 单个标签的节点数超过这个值就不连边（人人都有它，连出来只是一团废线） */
 const MAX_TAG_GROUP = 8;
+/**
+ * 单个属性值的条目数上限：超过就不连「同专属属性」边。
+ * 属性比标签更能说明关系（同客户 / 同项目），但"状态=进行中"这类值也会覆盖大半张图。
+ */
+const MAX_FIELD_GROUP = 8;
 
 /**
  * 团队来源 → 个人库的来源枚举。
@@ -103,7 +108,11 @@ function toNodeMeta(raw: Record<string, unknown>): Record<string, string | null>
   return out;
 }
 
-export function buildTeamGraph(entries: KbEntryView[]): GraphModel {
+export function buildTeamGraph(
+  entries: KbEntryView[],
+  /** 当前库的专属属性键：只有这些键参与「同专属属性」连边 */
+  fieldKeys: string[] = [],
+): GraphModel {
   const nodes: KnowledgeGraphNode[] = [];
   /** 文件 → 关联的条目（同一份原件可能被多个条目引用） */
   const files = new Map<string, { name: string; entries: KnowledgeEntry[] }>();
@@ -195,6 +204,39 @@ export function buildTeamGraph(entries: KbEntryView[]): GraphModel {
     if (shared < 2) continue;
     const sep = key.indexOf('\u0000');
     add(key.slice(0, sep), key.slice(sep + 1), 'shared_tag', shared * 0.5);
+  }
+
+  // 同专属属性：同一字段同值即连（一个字段就够，不像标签要求 ≥2）；
+  // 值过宽的组（如"状态=进行中"）跳过，否则整张图会被一条线串成链
+  if (fieldKeys.length > 0) {
+    const fieldCount = new Map<string, number>();
+    for (const key of fieldKeys) {
+      const groups = new Map<string, KnowledgeGraphNode[]>();
+      for (const n of kept) {
+        if (n.kind !== 'entry') continue;
+        const v = n.meta[key];
+        if (v === null || v === undefined || String(v).trim() === '') continue;
+        const value = String(v);
+        const g = groups.get(value) ?? [];
+        g.push(n);
+        groups.set(value, g);
+      }
+      for (const g of groups.values()) {
+        if (g.length < 2 || g.length > MAX_FIELD_GROUP) continue;
+        for (let i = 0; i < g.length; i += 1) {
+          for (let j = i + 1; j < g.length; j += 1) {
+            const a = g[i].id;
+            const b = g[j].id;
+            const pair = a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
+            fieldCount.set(pair, (fieldCount.get(pair) ?? 0) + 1);
+          }
+        }
+      }
+    }
+    for (const [pair, shared] of fieldCount) {
+      const sep = pair.indexOf('\u0000');
+      add(pair.slice(0, sep), pair.slice(sep + 1), 'same_field', shared * 0.8);
+    }
   }
 
   return { nodes: kept, relations: [...map.values()], totalNodes };

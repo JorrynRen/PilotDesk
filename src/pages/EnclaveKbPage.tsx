@@ -31,7 +31,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { TitleBar, StatusBar } from '../components/layout';
 import { TagEditor } from '../components/knowledge/TagEditor';
-import { FieldSchemaEditor } from '../components/knowledge/KnowledgeFieldInputs';
+import { FieldSchemaEditor, MetaEditor } from '../components/knowledge/KnowledgeFieldInputs';
 import { Select } from '../components/common/Select';
 import { useTerminal, type ViewMode } from '../TerminalManager';
 import { useEnclaveOrgStore } from '../stores/enclaveOrgStore';
@@ -45,7 +45,7 @@ import { KnowledgeGraph } from '../components/knowledge/KnowledgeGraph';
 import { showToast } from '../utils/toast';
 import { errorMessage } from '../utils/errorMessage';
 import type { EnclaveKbQueueItem, KbEntryView, KbFileListView } from '../types/enclave';
-import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeFieldDef, KnowledgeFieldType, KnowledgeOrigin } from '../types/knowledge';
+import type { IngestCapability, KnowledgeBase, KnowledgeEntry, KnowledgeFieldDef, KnowledgeFieldType, KnowledgeMeta, KnowledgeOrigin } from '../types/knowledge';
 
 /** 表单控件口径：与个人知识库一致（参见 KnowledgeBaseDialog） */
 const FIELD_CLASS = 'w-full px-2.5 py-1.5 rounded-lg text-xs outline-none';
@@ -230,6 +230,28 @@ function fileExt(name: string): string {
   return i > 0 && i < name.length - 1 ? name.slice(i + 1).toLowerCase() : '';
 }
 
+/** 条目上属于当前库专属属性的取值（只取标量，忽略 reportId 这类溯源信息） */
+function pickFields(entry: KbEntryView | null, fields: KnowledgeFieldDef[]): KnowledgeMeta {
+  const out: KnowledgeMeta = {};
+  if (!entry) return out;
+  for (const f of fields) {
+    const v = entry.metadata?.[f.key];
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+      out[f.key] = v;
+    }
+  }
+  return out;
+}
+
+/** 专属属性草稿是否有改动（逐键比较，不受键顺序影响） */
+function sameFields(a: KnowledgeMeta, b: KnowledgeMeta): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    if (String(a[k] ?? '') !== String(b[k] ?? '')) return false;
+  }
+  return true;
+}
+
 /** 搜索框口径：与个人知识库一致（pd-field 容器 + 内部透明输入） */
 function SearchField({
   value,
@@ -362,6 +384,8 @@ export function EnclaveKbPage() {
   const [draftTitle, setDraftTitle] = useState('');
   const [draftContent, setDraftContent] = useState('');
   const [draftTags, setDraftTags] = useState<string[]>([]);
+  /** 专属属性草稿（只含当前库 field_schema 的键） */
+  const [draftMeta, setDraftMeta] = useState<KnowledgeMeta>({});
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -656,7 +680,10 @@ export function EnclaveKbPage() {
   }, [kb?.fieldSchema]);
 
   /* ── 图谱：团队条目 → 个人库图谱组件认识的 GraphModel（复用 3D 渲染） ── */
-  const teamGraph = useMemo(() => buildTeamGraph(graphEntries), [graphEntries]);
+  const teamGraph = useMemo(
+    () => buildTeamGraph(graphEntries, kbFields.map((f) => f.key)),
+    [graphEntries, kbFields],
+  );
   const graphBase: KnowledgeBase = useMemo(
     () => ({
       id: kb?.id ?? '',
@@ -724,7 +751,8 @@ export function EnclaveKbPage() {
     setDraftTitle(activeEntry?.title ?? '');
     setDraftContent(activeEntry?.content ?? '');
     setDraftTags(splitTags(activeEntry?.tags ?? ''));
-  }, [activeEntry]);
+    setDraftMeta(pickFields(activeEntry, kbFields));
+  }, [activeEntry, kbFields]);
 
   // 切换组织 / 账号 / 知识库：退出定义编辑态
   useEffect(() => {
@@ -865,6 +893,7 @@ export function EnclaveKbPage() {
         title: draftTitle,
         content: draftContent,
         tags: joinTags(draftTags),
+        fields: JSON.stringify(draftMeta),
       });
     } finally {
       setSaving(false);
@@ -877,6 +906,7 @@ export function EnclaveKbPage() {
       setDraftTitle(activeEntry.title);
       setDraftContent(activeEntry.content);
       setDraftTags(splitTags(activeEntry.tags));
+      setDraftMeta(pickFields(activeEntry, kbFields));
     }
     useEnclaveKbStore.getState().openEntry(null);
   };
@@ -955,7 +985,8 @@ export function EnclaveKbPage() {
     canEdit &&
     (draftTitle.trim() !== activeEntry.title ||
       draftContent !== activeEntry.content ||
-      joinTags(draftTags) !== joinTags(splitTags(activeEntry.tags)));
+      joinTags(draftTags) !== joinTags(splitTags(activeEntry.tags)) ||
+      !sameFields(draftMeta, pickFields(activeEntry, kbFields)));
 
   /** 文件页目录树：按所选维度分组（系统维度 / 当前库的专属属性） */
   const fileGroups = useMemo(() => {
@@ -2155,6 +2186,48 @@ export function EnclaveKbPage() {
                               </div>
                             )}
                           </div>
+
+                          {kbFields.length > 0 && (
+                            <div>
+                              <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                                专属属性{canEdit ? '（可编辑）' : ''}
+                              </div>
+                              {canEdit ? (
+                                <MetaEditor
+                                  fields={kbFields}
+                                  value={draftMeta}
+                                  onChange={setDraftMeta}
+                                />
+                              ) : (
+                                <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                  {kbFields.map((f) => {
+                                    const v = e.metadata?.[f.key];
+                                    const text =
+                                      typeof v === 'string' || typeof v === 'number'
+                                        ? String(v)
+                                        : typeof v === 'boolean'
+                                          ? v
+                                            ? '是'
+                                            : '否'
+                                          : '-';
+                                    return (
+                                      <div
+                                        key={f.key}
+                                        className="flex items-baseline gap-1.5 min-w-0 text-[11px]"
+                                      >
+                                        <span className="shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                                          {f.label || f.key}
+                                        </span>
+                                        <span className="truncate" style={{ color: 'var(--text-secondary)' }}>
+                                          {text}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                           <div>
                             <div className="text-[11px] mb-1.5" style={{ color: 'var(--text-secondary)' }}>
