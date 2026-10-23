@@ -1593,7 +1593,9 @@ export function EnclaveKbPage() {
                           <div
                             className="mt-1 p-2 rounded-lg space-y-1.5"
                             style={{
-                              backgroundColor: 'var(--bg-tertiary)',
+                              // 表单本身是一张卡（与上方队列行同档），
+                              // 输入框用凹槽档 —— 两者同档时输入框会"消失"在表单里
+                              backgroundColor: 'var(--bg-content)',
                               border: '1px solid var(--border)',
                             }}
                           >
