@@ -17,10 +17,12 @@
 //! ← {"type":"res","id":"…","ok":false,"error":"…"}
 //! ```
 
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -32,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use super::authz::{self, Role};
@@ -80,6 +83,19 @@ pub struct HostRuntime {
     inner: Mutex<HostInner>,
     /// 设备接管（同账号换机）运行态：迁移期间冻结写请求。
     handover: Mutex<Option<HandoverRuntime>>,
+    /// 已连接成员的出站通道（按组织），用于变更广播。
+    subscribers: Mutex<HashMap<String, Vec<Subscriber>>>,
+    /// 本机 UI 的事件出口：app 启动时注入一个通道，由 lib.rs 侧转发成 Tauri 事件。
+    /// 这里刻意不持有 `AppHandle`——测试二进制不链接 GUI 运行时（无 manifest 会起不来）。
+    ui_tx: Mutex<Option<mpsc::UnboundedSender<Value>>>,
+    /// 订阅 id 分配器
+    next_sub_id: AtomicU64,
+}
+
+/// 一条常驻成员连接：只要还连着，就接收该组织的变更事件。
+struct Subscriber {
+    id: u64,
+    tx: mpsc::UnboundedSender<String>,
 }
 
 /// 进行中的设备接管：新设备从本机拉取加密包，校验后再由平台登记为新主机。
@@ -154,6 +170,127 @@ impl HostRuntime {
         let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         (g.running, g.port, g.last_error.clone())
     }
+
+    /// 注入本机 UI 的事件出口（app 启动时调用一次）。
+    pub fn set_ui_sink(&self, tx: mpsc::UnboundedSender<Value>) {
+        let mut g = self.ui_tx.lock().unwrap_or_else(|e| e.into_inner());
+        *g = Some(tx);
+    }
+
+    fn ui_sink(&self) -> Option<mpsc::UnboundedSender<Value>> {
+        self.ui_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// 登记一条常驻成员连接，返回订阅 id（断开时用同一个 id 注销）。
+    fn register_subscriber(
+        &self,
+        org_id: &str,
+        user_id: &str,
+        tx: mpsc::UnboundedSender<String>,
+    ) -> u64 {
+        let id = self.next_sub_id.fetch_add(1, Ordering::Relaxed) + 1;
+        log::debug!("[enclave] 成员 {} 订阅组织 {} 的变更", user_id, org_id);
+        let mut g = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        g.entry(org_id.to_string())
+            .or_default()
+            .push(Subscriber { id, tx });
+        id
+    }
+
+    fn unregister_subscriber(&self, org_id: &str, id: u64) {
+        let mut g = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(list) = g.get_mut(org_id) {
+            list.retain(|s| s.id != id);
+            if list.is_empty() {
+                g.remove(org_id);
+            }
+        }
+    }
+
+    /// 向该组织所有在线成员推一帧（`except` = 跳过发起本次变更的连接）；
+    /// 发送失败（连接已断）的订阅顺手剔除。
+    fn broadcast(&self, org_id: &str, frame: &str, except: Option<u64>) {
+        let mut g = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(list) = g.get_mut(org_id) else { return };
+        list.retain(|s| {
+            if Some(s.id) == except {
+                return true;
+            }
+            s.tx.send(frame.to_string()).is_ok()
+        });
+        if list.is_empty() {
+            g.remove(org_id);
+        }
+    }
+}
+
+/// 写命令 → 变更主题（读命令返回 `None`，不触发广播）。
+pub fn change_topic(command: &str) -> Option<&'static str> {
+    if command.is_empty()
+        || command.ends_with(".list")
+        || command.ends_with(".get")
+        || command.ends_with(".search")
+        || command.ends_with(".preview")
+        || command.ends_with(".capability")
+    {
+        return None;
+    }
+    // 已读状态只影响本人，不广播
+    if command == "notification.mark_read" {
+        return None;
+    }
+    if command.starts_with("kb.") {
+        return Some("kb");
+    }
+    if command.starts_with("notification.") {
+        return Some("notify");
+    }
+    if command.starts_with("task.")
+        || command.starts_with("report.")
+        || command.starts_with("progress.")
+        || command.starts_with("comment.")
+        || command.starts_with("file.")
+    {
+        return Some("task");
+    }
+    if command.starts_with("policy.") || command.starts_with("emergency.") {
+        return Some("org");
+    }
+    None
+}
+
+/// 广播一次业务变更：本机 UI 收 Tauri 事件，已连接的成员收到 WS `event` 帧。
+///
+/// 事件只带主题（task / kb / notify / org），不带业务数据——成员端据此重拉，
+/// 保证「不缓存团队数据」的边界不被实时通道打破。
+///
+/// `except` 用于跳过发起本次变更的那条连接：请求方已经拿到了响应，无需再收一遍事件。
+pub fn notify_change_except(
+    state: &EnclaveState,
+    org_id: &str,
+    topic: &str,
+    except: Option<u64>,
+) {
+    let at = chrono::Utc::now().timestamp();
+    if let Some(tx) = state.host.ui_sink() {
+        let _ = tx.send(json!({ "orgId": org_id, "topic": topic, "at": at }));
+    }
+    let frame = json!({
+        "type": "event",
+        "orgId": org_id,
+        "topic": topic,
+        "at": at,
+    })
+    .to_string();
+    state.host.broadcast(org_id, &frame, except);
+}
+
+/// 主机本机写入：本机 UI + 所有在线成员都要刷新。
+pub fn notify_change(state: &EnclaveState, org_id: &str, topic: &str) {
+    notify_change_except(state, org_id, topic, None);
 }
 
 /// 发现到的主机（成员端内存缓存，不落库）。
@@ -1023,18 +1160,43 @@ type WsTx = futures::stream::SplitSink<WsStream, Message>;
 type WsRx = futures::stream::SplitStream<WsStream>;
 
 /// 已完成 `hello` 握手的主机连接：后续 `request` 复用同一连接（一次迁移多次分块）。
-struct HostSession {
+pub(crate) struct HostSession {
     tx: WsTx,
     rx: WsRx,
 }
 
 impl HostSession {
-    async fn connect(
+    pub(crate) async fn connect(
         state: &EnclaveState,
         db: &crate::DbState,
         org_id: &str,
     ) -> Result<Self, String> {
         Self::connect_with_db(state, Some(db), org_id).await
+    }
+
+    /// 常驻监听：等待主机推送的 `event` 帧；空闲时定期 ping 保活（主机 180s 无请求会断开）。
+    pub(crate) async fn wait_event(&mut self) -> Result<Value, String> {
+        loop {
+            match tokio::time::timeout(Duration::from_secs(45), next_json(&mut self.rx)).await {
+                Ok(Ok(v)) => {
+                    if v["type"].as_str() == Some("event") {
+                        return Ok(v);
+                    }
+                    // 其他帧（如保活 ping 的响应）直接忽略
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    let id = crate::utils::new_id();
+                    self.tx
+                        .send(Message::Text(
+                            json!({ "type": "req", "id": id, "method": "ping", "params": {} })
+                                .to_string(),
+                        ))
+                        .await
+                        .map_err(|e| format!("发送保活失败：{}", e))?;
+                }
+            }
+        }
     }
 
     async fn connect_with_db(
@@ -1248,6 +1410,19 @@ async fn handle_conn(
         return;
     }
 
+    // 常驻连接：写统一走通道，由独立 writer 任务发送 —— 这样广播侧也能往这条连接推事件帧。
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
+    let writer = tokio::spawn(async move {
+        while let Some(msg) = out_rx.recv().await {
+            if send_json(&mut tx, &msg).await.is_err() {
+                break;
+            }
+        }
+    });
+    let sub_id = state
+        .host
+        .register_subscriber(&hello.org_id, &hello.user_id, out_tx.clone());
+
     loop {
         let req_val = match tokio::time::timeout(IDLE_TIMEOUT, next_json(&mut rx)).await {
             Ok(Ok(v)) => v,
@@ -1257,23 +1432,19 @@ async fn handle_conn(
             Ok(r) if r.kind == "req" => r,
             Ok(_) => continue,
             Err(e) => {
-                let _ = send_json(&mut tx, &res_err("", &format!("请求格式不正确：{}", e))).await;
+                let _ = out_tx.send(res_err("", &format!("请求格式不正确：{}", e)));
                 continue;
             }
         };
         if org_disabled(&state, &hello.org_id) && !peer.ip().is_loopback() {
-            let _ = send_json(&mut tx, &res_err(&req.id, "飞地对外服务已临时关闭")).await;
+            let _ = out_tx.send(res_err(&req.id, "飞地对外服务已临时关闭"));
             break;
         }
         // 设备接管迁移期间冻结写请求（只放行接管协议与只读命令）
         if state.host.handover_frozen(&hello.org_id)
             && !handover_allows(&req.method, &req.params)
         {
-            let _ = send_json(
-                &mut tx,
-                &res_err(&req.id, "主机正在进行设备接管迁移，请稍候"),
-            )
-            .await;
+            let _ = out_tx.send(res_err(&req.id, "主机正在进行设备接管迁移，请稍候"));
             continue;
         }
         let reply = match req.method.as_str() {
@@ -1524,10 +1695,20 @@ async fn handle_conn(
             },
             other => res_err(&req.id, &format!("未知方法：{}", other)),
         };
-        if send_json(&mut tx, &reply).await.is_err() {
+        // 先回响应，再广播；发起连接本身跳过（它已经拿到响应）
+        let changed = request_topic(&req).filter(|_| reply_ok(&reply));
+        if out_tx.send(reply).is_err() {
             break;
         }
+        if let Some(topic) = changed {
+            let org = req.params["orgId"].as_str().unwrap_or(hello.org_id.as_str());
+            notify_change_except(&state, org, topic, Some(sub_id));
+        }
     }
+
+    state.host.unregister_subscriber(&hello.org_id, sub_id);
+    drop(out_tx);
+    let _ = writer.await;
 }
 
 async fn verify_member(state: &EnclaveState, hello: &HelloMsg) -> Result<&'static str, String> {
@@ -2530,6 +2711,23 @@ fn res_ok(id: &str, data: Value) -> String {
 
 fn res_err(id: &str, message: &str) -> String {
     json!({ "type": "res", "id": id, "ok": false, "error": message }).to_string()
+}
+
+/// 这条请求是否可能改动业务数据；返回变更主题（读请求 / 未知方法返回 `None`）。
+fn request_topic(req: &RequestMsg) -> Option<&'static str> {
+    match req.method.as_str() {
+        "enclave.call" => change_topic(req.params["command"].as_str().unwrap_or("")),
+        // 上传收尾才真正挂到任务 / 汇报上
+        "file.upload_finish" | "file.upload_keep" => Some("task"),
+        _ => None,
+    }
+}
+
+fn reply_ok(reply: &str) -> bool {
+    serde_json::from_str::<Value>(reply)
+        .ok()
+        .and_then(|v| v.get("ok").and_then(|b| b.as_bool()))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

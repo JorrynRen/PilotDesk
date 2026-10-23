@@ -20,6 +20,7 @@ pub mod knowledge;
 pub mod notify;
 pub mod org;
 pub mod progress;
+pub mod realtime;
 pub mod reports;
 pub mod rpc;
 pub mod snapshot;

@@ -33,10 +33,17 @@ where
 {
     let role = state.store.with_conn(|c| authz::role_for_org(c, org_id))?;
     match role {
-        Some(authz::Role::Owner) => state.store.with_conn(|c| {
-            let actor = authz::current_actor_id(c)?;
-            local(c, &actor)
-        }),
+        Some(authz::Role::Owner) => {
+            let out = state.store.with_conn(|c| {
+                let actor = authz::current_actor_id(c)?;
+                local(c, &actor)
+            })?;
+            // 主机本机写入也要让在线成员知道（成员走 WS 广播，本机 UI 走 Tauri 事件）
+            if let Some(topic) = crate::enclave::host::change_topic(command) {
+                crate::enclave::host::notify_change(state, org_id, topic);
+            }
+            Ok(out)
+        }
         Some(_) => {
             let data =
                 crate::enclave::host::call_host(state, db, org_id, command, payload).await?;
@@ -2356,17 +2363,26 @@ pub async fn run_enclave_kb_queue_loop(db: crate::DbState, state: Arc<EnclaveSta
             cache_team_capability(&state, &org_id, &cap);
             if cap.pending > 0 {
                 // 网址原文落盘不依赖模型：无模型时也要先有原文（文件页可见、可手工入库）
-                let _ = snapshot_pending_urls(&state, &org_id, 3).await;
+                match snapshot_pending_urls(&state, &org_id, 3).await {
+                    Ok(n) if n > 0 => {
+                        crate::enclave::host::notify_change(&state, &org_id, "kb")
+                    }
+                    _ => {}
+                }
             }
             if cap.can_process != "none" && cap.pending > 0 {
                 match drain_team_queue(&db, &state, &org_id, 3).await {
-                    Ok(o) if o.done > 0 || o.failed > 0 => log::info!(
-                        "[Enclave][KB] 待整理消费（{}）：完成 {}，失败 {}，剩余 {}",
-                        org_id,
-                        o.done,
-                        o.failed,
-                        o.remaining
-                    ),
+                    Ok(o) if o.done > 0 || o.failed > 0 => {
+                        log::info!(
+                            "[Enclave][KB] 待整理消费（{}）：完成 {}，失败 {}，剩余 {}",
+                            org_id,
+                            o.done,
+                            o.failed,
+                            o.remaining
+                        );
+                        // 后台整理产出新条目：在线成员与本机 UI 都要刷新
+                        crate::enclave::host::notify_change(&state, &org_id, "kb");
+                    }
                     Ok(_) => {}
                     Err(e) => log::warn!("[Enclave][KB] 待整理消费异常（{}）：{}", org_id, e),
                 }

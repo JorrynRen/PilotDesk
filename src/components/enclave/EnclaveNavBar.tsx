@@ -5,12 +5,14 @@
  * 组织切换紧随其后，右侧统一放页面扩展位、团队通知与刷新。
  */
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { listen } from '@tauri-apps/api/event';
 import { ListTree, Building2, Library, RefreshCw, Loader2 } from 'lucide-react';
 import { Select } from '../common/Select';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
+import { ALL_KB_ID, useEnclaveKbStore } from '../../stores/enclaveKbStore';
 import { NotificationBell } from './NotificationBell';
 
 export type EnclaveNavKey = 'tasks' | 'org' | 'kb';
@@ -36,6 +38,50 @@ export function EnclaveNavBar({
   const navigate = useNavigate();
   const orgs = useEnclaveOrgStore((s) => s.orgs);
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
+
+  /**
+   * 实时变更：主机广播 / 本机写入都会发 `enclave:changed`（只带主题，不带业务数据）。
+   *
+   * 三个页面共用这块导航，所以监听放在这里：按主题重拉对应数据，同类变更 400ms 合并，
+   * 避免一轮操作触发多次并发请求。
+   */
+  useEffect(() => {
+    if (!activeOrgId) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    const lastAt = new Map<string, number>();
+    void listen<{ orgId: string; topic: string }>('enclave:changed', (ev) => {
+      const { orgId, topic } = ev.payload ?? { orgId: '', topic: '' };
+      if (orgId !== activeOrgId) return;
+      const now = Date.now();
+      if (now - (lastAt.get(topic) ?? 0) < 400) return;
+      lastAt.set(topic, now);
+      if (topic === 'task') {
+        void useEnclaveTaskStore.getState().loadTasks(orgId);
+        const taskId = useEnclaveTaskStore.getState().activeTaskId;
+        if (taskId) void useEnclaveTaskStore.getState().loadExtras(orgId, taskId);
+      } else if (topic === 'notify') {
+        void useEnclaveOrgStore.getState().loadNotifications(orgId);
+      } else if (topic === 'kb') {
+        const kb = useEnclaveKbStore.getState();
+        // 「全部库」是只读聚合，同样需要跟着刷新
+        if (!kb.activeKbId) return;
+        void kb.search(orgId, kb.query);
+        if (kb.activeKbId !== ALL_KB_ID) {
+          void kb.loadCandidates(orgId, kb.activeKbId);
+          void kb.loadQueue(orgId, kb.activeKbId);
+          if (kb.files.length > 0) void kb.loadFiles(orgId, kb.activeKbId);
+        }
+      }
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [activeOrgId]);
 
   return (
     <div

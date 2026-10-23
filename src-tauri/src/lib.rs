@@ -3024,6 +3024,24 @@ pub fn run() {
                 commands::enclave_task::run_enclave_kb_queue_loop(kbq_db, kbq_state).await;
             });
 
+            // 飞地实时通道：主机本机写变更 → Tauri 事件；成员端常驻连接主机接收广播。
+            // 领域层只拿到一个数据通道，Tauri 事件在这里统一转发（测试二进制不链接 GUI 运行时）。
+            let (enclave_ui_tx, mut enclave_ui_rx) =
+                tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+            enclave_state.host.set_ui_sink(enclave_ui_tx.clone());
+            let ui_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(payload) = enclave_ui_rx.recv().await {
+                    let _ = ui_app.emit("enclave:changed", payload);
+                }
+            });
+            let rt_state = enclave_state.clone();
+            let rt_pool = pool.clone();
+            let rt_tx = enclave_ui_tx;
+            tauri::async_runtime::spawn(async move {
+                enclave::realtime::run_member_loop(rt_state, rt_pool, rt_tx).await;
+            });
+
             log::info!("PilotDesk initialized successfully.");
             Ok(())
         })
