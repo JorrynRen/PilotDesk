@@ -323,7 +323,7 @@ pub fn delete_kb(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(), Str
            AND status IN ('archived', 'cancelled')",
         params![org_id, kb_id, chrono::Utc::now().timestamp()],
     )
-    .map_err(|e| format!("回落任务归档目标失败：{}", e))?;
+    .map_err(|e| format!("回落任务产出目标库失败：{}", e))?;
     let active_targets: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM org_tasks
@@ -1956,7 +1956,7 @@ mod tests {
         assert_eq!(in_implicit, 0, "指定了目标库时不应再写默认库");
     }
 
-    /// 活跃任务把某库当作归档目标时，拒绝删除该库（避免任务产出无处安放）。
+    /// 活跃任务把某库当作产出目标库时，拒绝删除该库（避免任务产出无处安放）。
     #[test]
     fn delete_kb_rejects_active_task_target() {
         let conn = seeded();
