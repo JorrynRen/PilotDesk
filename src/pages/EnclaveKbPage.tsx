@@ -2062,6 +2062,22 @@ export function EnclaveKbPage() {
 
                           {!open && (
                             <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                              {/* 专属属性徽标：与个人知识库同口径（未填不占位） */}
+                              {kbFields.map((f) => {
+                                const v = e.metadata?.[f.key];
+                                if (v === undefined || v === null || v === '') return null;
+                                return (
+                                  <span
+                                    key={f.key}
+                                    className="max-w-[180px] truncate px-1.5 py-[1px] rounded text-[9px]"
+                                    style={{ backgroundColor: 'var(--accent-light)', color: 'var(--accent)' }}
+                                    title={`${f.label || f.key}：${typeof v === 'boolean' ? (v ? '是' : '否') : String(v)}`}
+                                  >
+                                    {f.label || f.key}：
+                                    {typeof v === 'boolean' ? (v ? '是' : '否') : String(v)}
+                                  </span>
+                                );
+                              })}
                               {tags.map((t) => (
                                 <span
                                   key={t}
