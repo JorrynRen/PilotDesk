@@ -486,6 +486,8 @@ export interface KbFileListView {
   entryTitle: string;
   /** 来源任务 id */
   sourceRef: string;
+  /** 所属知识库（「全部库」聚合视图据此分组 / 标注来源库） */
+  kbId: string;
   /** 来源任务负责人（供「按负责人」分组；空 = 未指派） */
   assigneeId: string;
   /** 来源任务优先级（low / normal / high / urgent） */

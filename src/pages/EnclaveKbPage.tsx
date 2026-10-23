@@ -156,6 +156,7 @@ type KbTab = 'entries' | 'files' | 'ingest' | 'graph';
 /** 文件目录树的分组维度：系统维度 + 当前库的专属属性字段 */
 type FileGroupBy =
   | { kind: 'entry' }
+  | { kind: 'kb' }
   | { kind: 'assignee' }
   | { kind: 'taskPriority' }
   | { kind: 'filetype' }
@@ -696,18 +697,20 @@ export function EnclaveKbPage() {
   );
   const graphBase: KnowledgeBase = useMemo(
     () => ({
-      id: kb?.id ?? '',
-      name: kb?.name ?? '',
-      description: kb?.description ?? '',
+      id: isAllKb ? ALL_KB_ID : kb?.id ?? '',
+      name: isAllKb ? '全部库' : kb?.name ?? '',
+      description: isAllKb ? '跨库只读视图（各库专属属性不同，不画同属性边）' : kb?.description ?? '',
       fields: kbFields,
-      entryCount: kb?.entryCount ?? 0,
+      entryCount: isAllKb
+        ? kbs.reduce((n, k) => n + k.entryCount, 0)
+        : kb?.entryCount ?? 0,
       pinnedCount: 0,
-      fileCount: kb?.fileCount ?? 0,
+      fileCount: isAllKb ? kbs.reduce((n, k) => n + k.fileCount, 0) : kb?.fileCount ?? 0,
       pendingCount: 0,
       createdAt: 0,
       updatedAt: kb?.lastEntryAt ?? 0,
     }),
-    [kb, kbFields],
+    [isAllKb, kb, kbFields, kbs],
   );
   const graphSource = useMemo(
     () => ({
@@ -789,9 +792,9 @@ export function EnclaveKbPage() {
     if (activeOrgId) void useEnclaveKbStore.getState().loadKbs(activeOrgId);
   }, [activeOrgId]);
 
-  // 「全部库」只读：文件 / 投喂两个 tab 不可用，切过去时退回知识列表
+  // 「全部库」只读：投喂（写）按库，切过去时退回知识列表
   useEffect(() => {
-    if (isAllKb && (tab === 'files' || tab === 'ingest')) setTab('entries');
+    if (isAllKb && tab === 'ingest') setTab('entries');
   }, [isAllKb, tab]);
 
   // 「文件」tab 懒加载（条目页不需要先拉全量文件）
@@ -1046,8 +1049,13 @@ export function EnclaveKbPage() {
             title = `${d.getFullYear()} 年 ${m} 月`;
             break;
           }
+          case 'kb':
+            id = f.kbId || '__unknown__';
+            title = kbs.find((k) => k.id === f.kbId)?.name ?? '未知库';
+            break;
           default:
-            id = f.memoryId || f.sourceRef || '__orphan__';
+            // 聚合视图下 memory_id 可能跨库重复：按「库 + 条目」成组
+            id = `${f.kbId}\u0000${f.memoryId || f.sourceRef || '__orphan__'}`;
             title = f.entryTitle || f.sourceRef || '未关联条目';
         }
       }
@@ -1063,6 +1071,7 @@ export function EnclaveKbPage() {
     const groups = [...map.values()];
     groups.sort((a, b) => {
       if (fileGroupBy.kind === 'month') return b.id.localeCompare(a.id);
+      if (fileGroupBy.kind === 'kb') return a.title.localeCompare(b.title, 'zh');
       if (fileGroupBy.kind === 'taskPriority') {
         return (PRIORITY_ORDER[a.id] ?? 9) - (PRIORITY_ORDER[b.id] ?? 9);
       }
@@ -1084,13 +1093,15 @@ export function EnclaveKbPage() {
       return b.latest - a.latest;
     });
     return groups;
-  }, [files, fileKeyword, fileGroupBy, members, kbFields]);
+  }, [files, fileKeyword, fileGroupBy, members, kbFields, kbs]);
 
   const matchedFileCount = useMemo(
     () => new Set(fileGroups.flatMap((g) => g.files.map((f) => f.fileId))).size,
     [fileGroups],
   );
-  const totalFileCount = kb?.fileCount ?? new Set(files.map((f) => f.fileId)).size;
+  const totalFileCount = isAllKb
+    ? kbs.reduce((n, k) => n + k.fileCount, 0)
+    : kb?.fileCount ?? new Set(files.map((f) => f.fileId)).size;
 
   const toggleGroup = (id: string) =>
     setCollapsedGroups((prev) =>
@@ -1333,9 +1344,8 @@ export function EnclaveKbPage() {
           {/* tab：知识 / 文件 / 投喂 / 图谱 */}
           <div className="shrink-0 px-3 flex items-center gap-1" style={{ borderBottom: '1px solid var(--border)' }}>
             {TABS.map((t) => {
-              // 「全部库」是只读聚合：文件与投喂都按库，切到具体库才有意义
-              const enabled =
-                t.enabled && !(isAllKb && (t.key === 'files' || t.key === 'ingest'));
+              // 「全部库」是只读聚合：只有投喂（写）按库，必须切到具体库
+              const enabled = t.enabled && !(isAllKb && t.key === 'ingest');
               const active = tab === t.key;
               const Icon = t.icon;
               return (
@@ -2470,6 +2480,8 @@ export function EnclaveKbPage() {
                     className="w-full"
                     options={[
                       { value: 'entry', label: '按来源条目' },
+                      // 聚合视图下文件行跨库，才有「按所属库」的意义
+                      ...(isAllKb ? [{ value: 'kb', label: '按所属库' }] : []),
                       { value: 'assignee', label: '按任务负责人' },
                       { value: 'taskPriority', label: '按任务优先级' },
                       { value: 'filetype', label: '按文件类型' },
@@ -2608,6 +2620,9 @@ export function EnclaveKbPage() {
                               <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-tertiary)' }}>
                                 {fileGroupBy.kind !== 'entry' && (
                                   <>来源「{f.entryTitle || f.sourceRef || '未知'}」 · </>
+                                )}
+                                {isAllKb && fileGroupBy.kind !== 'kb' && (
+                                  <>库「{kbs.find((k) => k.id === f.kbId)?.name ?? '未知'}」 · </>
                                 )}
                                 {f.fileSize > 0 && `${formatSize(f.fileSize)} · `}
                                 {formatRelative(f.addedAt)}归档

@@ -335,6 +335,8 @@ pub struct KbFileListView {
     pub memory_id: String,
     pub entry_title: String,
     pub source_ref: String,
+    /// 所属知识库（「全部库」聚合视图据此分目录 / 标注来源库）
+    pub kb_id: String,
     /// 来源任务的负责人 / 优先级：供「按负责人 / 优先级」分组
     pub assignee_id: String,
     pub priority: String,
@@ -349,25 +351,35 @@ pub fn list_files(
     org_id: &str,
     kb_id: &str,
 ) -> Result<Vec<KbFileListView>, String> {
-    ensure_kb_owned(conn, org_id, kb_id)?;
+    let all = kb_id == ALL_KB_PARAM;
+    // 作用域片段：单库时 ?1 = 库 id；「全部库」时 ?1 = 组织 id（走子查询）
+    let scope = if all {
+        "IN (SELECT id FROM knowledge_bases WHERE owner_type = 'org' AND owner_id = ?1)"
+    } else {
+        "= ?1"
+    };
+    let key = if all { org_id } else { kb_id };
+    if !all {
+        ensure_kb_owned(conn, org_id, kb_id)?;
+    }
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash,
                     kbf.memory_id, COALESCE(m.title, ''), COALESCE(m.source_ref, ''), kbf.added_at,
                     COALESCE(t.assignee_id, ''), COALESCE(t.priority, 'normal'),
-                    COALESCE(m.metadata, '{}')
+                    COALESCE(m.metadata, '{{}}'), kbf.knowledge_base_id
              FROM knowledge_base_files kbf
              JOIN file_assets fa ON fa.id = kbf.file_id
              LEFT JOIN knowledge_base_memories m
                ON m.knowledge_base_id = kbf.knowledge_base_id
               AND m.memory_id = kbf.memory_id
              LEFT JOIN org_tasks t ON t.id = m.source_ref
-             WHERE kbf.knowledge_base_id = ?1
-             ORDER BY kbf.added_at DESC, fa.file_name",
-        )
+             WHERE kbf.knowledge_base_id {scope}
+             ORDER BY kbf.added_at DESC, fa.file_name"
+        ))
         .map_err(|e| format!("查询知识库文件失败：{}", e))?;
     let rows = stmt
-        .query_map(params![kb_id], |r| {
+        .query_map(params![key], |r| {
             let metadata_raw: String = r.get(11)?;
             Ok(KbFileListView {
                 file_id: r.get(0)?,
@@ -383,6 +395,7 @@ pub fn list_files(
                 priority: r.get(10)?,
                 metadata: serde_json::from_str(&metadata_raw)
                     .unwrap_or_else(|_| serde_json::json!({})),
+                kb_id: r.get(12)?,
             })
         })
         .map_err(|e| format!("查询知识库文件失败：{}", e))?;
