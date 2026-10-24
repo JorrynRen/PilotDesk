@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
@@ -2247,13 +2248,17 @@ function TaskDetail(props: {
           </div>
         )}
         </div>
+      </fieldset>
+      )}
 
-      {/* AI 拆解草稿：模型产出先过人工，勾选后才创建 */}
-      {splitOpen && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(0,0,0,0.35)' }}
-        >
+      {/* AI 拆解草稿：模型产出先过人工，勾选后才创建。
+          用 portal 挂到 body，并放在所有 tab 条件之外 —— 否则在「概览」点拆解后弹窗永远不渲染 */}
+      {splitOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center"
+            style={{ backgroundColor: 'rgba(0,0,0,0.35)' }}
+          >
           <div
             className="w-[560px] max-h-[80vh] flex flex-col rounded-xl overflow-hidden"
             style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
@@ -2382,10 +2387,9 @@ function TaskDetail(props: {
               </button>
             </div>
           </div>
-        </div>
-      )}
-      </fieldset>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
