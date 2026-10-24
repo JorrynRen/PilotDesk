@@ -299,6 +299,8 @@ export function KnowledgeFileList({
   const relations = useKnowledgeStore((s) => s.relations);
   const linkFiles = useKnowledgeStore((s) => s.linkFiles);
   const unlinkFiles = useKnowledgeStore((s) => s.unlinkFiles);
+  const loadMoreFiles = useKnowledgeStore((s) => s.loadMoreFiles);
+  const ensureAllFiles = useKnowledgeStore((s) => s.ensureAllFiles);
   const removeFiles = useKnowledgeStore((s) => s.removeFiles);
   /** 已加载的条目：文件搜索按「条目标题」命中时要用（分页外条目搜不到，与条目页同口径） */
   const entries = useKnowledgeStore((s) => s.entries);
@@ -888,7 +890,12 @@ export function KnowledgeFileList({
                 打开原文
               </button>
               <button
-                onClick={() => setRelPanelId((v) => (v === f.id ? null : f.id))}
+                onClick={() => {
+                  const next = relPanelId === f.id ? null : f.id;
+                  setRelPanelId(next);
+                  // 选择器要能搜到整库文件：后台补齐分页，选项随 files 更新
+                  if (next) void ensureAllFiles();
+                }}
                 className="pd-btn shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[11px]"
                 style={{
                   color: parentId || versionOf || replaces.length > 0 ? 'var(--accent)' : 'var(--text-secondary)',

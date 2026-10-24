@@ -129,6 +129,8 @@ interface KnowledgeState {
   loadMoreEntries: () => Promise<void>;
   /** 文件列表：按当前库再拉一批（offset = 已加载文件数） */
   loadMoreFiles: () => Promise<void>;
+  /** 文件关系选择器：把文件补满到上限，避免下拉里只有已加载的前几页 */
+  ensureAllFiles: () => Promise<void>;
   /** 图谱：把条目自动补满到 `GRAPH_ENTRY_MAX`，避免图谱只画第一页 */
   ensureAllEntries: () => Promise<void>;
   /** 只重新拉取文件关系（改关系后不必整库刷新） */
@@ -370,6 +372,16 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       await get().loadMoreEntries();
       // 出错时 loadMoreEntries 不追加数据，避免死循环
       if (get().entries.length === before) break;
+    }
+  },
+
+  ensureAllFiles: async () => {
+    // 关系选择器要能搜到整库文件：打开面板时把分页补满（上限与文件页一致）
+    while (get().filesHasMore && !get().filesLoadingMore && get().files.length < 5000) {
+      const before = get().files.length;
+      await get().loadMoreFiles();
+      // 出错时 loadMoreFiles 不追加数据，避免死循环
+      if (get().files.length === before) break;
     }
   },
 

@@ -89,6 +89,8 @@ interface EnclaveKbState {
   loadFiles: (orgId: string, kbId: string) => Promise<void>;
   /** 文件列表：再拉一批（offset = 已加载行数） */
   loadMoreFiles: (orgId: string) => Promise<void>;
+  /** 文件关系选择器：把文件补满到上限，避免下拉里只有已加载的前几页 */
+  ensureAllFiles: (orgId: string) => Promise<void>;
   /** 建立文件关系（owner / admin）；返回错误文案，成功为 null */
   linkFileRelation: (
     orgId: string,
@@ -435,6 +437,16 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       }));
     } catch (e) {
       set({ filesLoadingMore: false, error: errorMessage(e) });
+    }
+  },
+
+  ensureAllFiles: async (orgId) => {
+    // 关系选择器要能搜到整库文件：打开面板时把分页补满（与文件页同一上限口径）
+    while (get().filesHasMore && !get().filesLoadingMore && get().files.length < 5000) {
+      const before = get().files.length;
+      await get().loadMoreFiles(orgId);
+      // 出错时 loadMoreFiles 不追加数据，避免死循环
+      if (get().files.length === before) break;
     }
   },
 

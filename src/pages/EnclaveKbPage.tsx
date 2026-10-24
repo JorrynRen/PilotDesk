@@ -3213,7 +3213,17 @@ export function EnclaveKbPage() {
                                 <CacheHintIcon visible={myRole !== '' && myRole !== 'owner'} />
                                 {canEdit && !isAllKb && (
                                   <button
-                                    onClick={() => setRelPanelFileId(panelOpen ? null : f.fileId)}
+                                    onClick={() => {
+                                      if (panelOpen) {
+                                        setRelPanelFileId(null);
+                                        return;
+                                      }
+                                      setRelPanelFileId(f.fileId);
+                                      // 选择器要能搜到整库文件：后台补齐分页，选项随 files 更新
+                                      if (activeOrgId) {
+                                        void useEnclaveKbStore.getState().ensureAllFiles(activeOrgId);
+                                      }
+                                    }}
                                     className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
                                     style={{
                                       color: 'var(--text-secondary)',
