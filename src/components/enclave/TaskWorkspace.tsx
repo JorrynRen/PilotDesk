@@ -146,10 +146,14 @@ export function TaskWorkspace() {
   const [batchAssignee, setBatchAssignee] = useState('');
   const [batchDue, setBatchDue] = useState('');
   const [batchBusy, setBatchBusy] = useState(false);
-  /** 任务模板：一键生成「父任务 + 交付物子任务」 */
+  /** 任务模板：选模板 → 预览 / 修改草稿 → 一次生成父任务与子任务 */
   const [tplOpen, setTplOpen] = useState(false);
+  const [tplStage, setTplStage] = useState<'pick' | 'edit'>('pick');
   const [tplId, setTplId] = useState<string>(TASK_TEMPLATES[0]?.id ?? '');
   const [tplTitle, setTplTitle] = useState('');
+  const [tplDrafts, setTplDrafts] = useState<
+    { title: string; description: string; priority: string; checked: boolean }[]
+  >([]);
   const [tplBusy, setTplBusy] = useState(false);
 
   /** 产出目标库候选（直接查主机，不走知识库页的 store —— 避免打开任务页就把知识库"打开"） */
@@ -357,13 +361,46 @@ export function TaskWorkspace() {
     setLocalError(null);
   };
 
-  /** 按模板创建：父任务 + 一份份可交付的子任务（逐条走既有创建命令，权限与校验一致） */
-  const createFromTemplate = async () => {
-    if (!activeOrgId) return;
+  /** 关闭模板弹窗并复位（下次打开从「选模板」开始） */
+  const closeTemplate = () => {
+    setTplOpen(false);
+    setTplStage('pick');
+    setTplDrafts([]);
+    setTplTitle('');
+    setLocalError(null);
+  };
+
+  /** 选好模板后进入预览：把模板子任务变成可勾选 / 可改的草稿 */
+  const startTemplatePreview = () => {
     const tpl = TASK_TEMPLATES.find((t) => t.id === tplId);
     if (!tpl) return;
     if (!tplTitle.trim()) {
       setLocalError('请填写父任务标题');
+      return;
+    }
+    setTplDrafts(
+      tpl.children.map((c) => ({
+        title: c.title,
+        description: c.description,
+        priority: c.priority ?? 'normal',
+        checked: true,
+      })),
+    );
+    setTplStage('edit');
+    setLocalError(null);
+  };
+
+  /** 按预览里的草稿创建：父任务 + 勾选且填了标题的子任务 */
+  const createFromTemplate = async () => {
+    if (!activeOrgId) return;
+    if (!tplTitle.trim()) {
+      setLocalError('请填写父任务标题');
+      setTplStage('pick');
+      return;
+    }
+    const picked = tplDrafts.filter((d) => d.checked && d.title.trim());
+    if (picked.length === 0) {
+      setLocalError('请至少勾选一个子任务');
       return;
     }
     setTplBusy(true);
@@ -377,19 +414,18 @@ export function TaskWorkspace() {
       return;
     }
     let ok = 0;
-    for (const c of tpl.children) {
+    for (const d of picked) {
       const created = await useEnclaveTaskStore.getState().createTask(activeOrgId, {
-        title: c.title,
-        description: c.description,
+        title: d.title.trim(),
+        description: d.description.trim(),
         parentTaskId: parent.id,
-        priority: c.priority ?? 'normal',
+        priority: d.priority,
       });
       if (created) ok += 1;
     }
     setTplBusy(false);
     showToast(`已按模板创建「${parent.title}」及 ${ok} 个子任务`, ok > 0 ? 'success' : 'error');
-    setTplOpen(false);
-    setTplTitle('');
+    closeTemplate();
     setNewOpen(false);
     await useEnclaveTaskStore.getState().loadTasks(activeOrgId);
     useEnclaveTaskStore.getState().selectTask(parent.id);
@@ -534,8 +570,13 @@ export function TaskWorkspace() {
           </div>
           <button
             onClick={() => {
-              setTplOpen(true);
+              // 每次打开都从「选模板」开始，避免残留上一次的草稿
+              setTplStage('pick');
+              setTplId(TASK_TEMPLATES[0]?.id ?? '');
+              setTplDrafts([]);
+              setTplTitle('');
               setLocalError(null);
+              setTplOpen(true);
             }}
             disabled={!!newParentId}
             className="pd-btn text-xs px-3 py-1.5 rounded-lg flex items-center gap-1"
@@ -789,7 +830,7 @@ export function TaskWorkspace() {
         </div>
       </div>
 
-      {/* 任务模板：选模板 + 填父任务标题 → 一次生成父任务与可交付子任务 */}
+      {/* 任务模板：选模板 + 填父任务标题 → 预览草稿（可改）→ 一次生成父任务与子任务 */}
       {tplOpen &&
         createPortal(
           <div
@@ -806,14 +847,16 @@ export function TaskWorkspace() {
               >
                 <ListChecks size={13} style={{ color: 'var(--accent)' }} />
                 <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                  从模板创建
+                  {tplStage === 'pick' ? '从模板创建' : '模板草稿'}
                 </span>
                 <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  模板会生成一个父任务 + 若干可交付子任务
+                  {tplStage === 'pick'
+                    ? '模板会生成一个父任务 + 若干可交付子任务'
+                    : '勾选需要创建的子任务；标题与描述可先改再创建'}
                 </span>
                 <div className="flex-1" />
                 <button
-                  onClick={() => setTplOpen(false)}
+                  onClick={closeTemplate}
                   className="text-xs"
                   style={{ color: 'var(--text-tertiary)' }}
                 >
@@ -832,35 +875,107 @@ export function TaskWorkspace() {
                     placeholder="例如：2026 年一季度数据报送"
                   />
                 </label>
-                {TASK_TEMPLATES.map((tpl: TaskTemplate) => {
-                  const on = tpl.id === tplId;
-                  return (
-                    <button
-                      key={tpl.id}
-                      onClick={() => setTplId(tpl.id)}
-                      className="text-left rounded-lg p-2.5 flex flex-col gap-1"
-                      style={{
-                        backgroundColor: on ? 'var(--accent-light)' : 'var(--bg-field)',
-                        border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
-                      }}
-                    >
-                      <span className="flex items-center gap-2">
-                        <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                          {tpl.name}
+                {tplStage === 'pick' ? (
+                  TASK_TEMPLATES.map((tpl: TaskTemplate) => {
+                    const on = tpl.id === tplId;
+                    return (
+                      <button
+                        key={tpl.id}
+                        onClick={() => setTplId(tpl.id)}
+                        className="text-left rounded-lg p-2.5 flex flex-col gap-1"
+                        style={{
+                          backgroundColor: on ? 'var(--accent-light)' : 'var(--bg-field)',
+                          border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                        }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                            {tpl.name}
+                          </span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                            {tpl.children.length} 个子任务
+                          </span>
                         </span>
                         <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                          {tpl.children.length} 个子任务
+                          {tpl.description}
                         </span>
+                        <span className="text-[10px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                          {tpl.children.map((c) => c.title).join(' · ')}
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                      <span>
+                        已选 {tplDrafts.filter((d) => d.checked && d.title.trim()).length} / {tplDrafts.length}
                       </span>
-                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                        {tpl.description}
-                      </span>
-                      <span className="text-[10px] truncate" style={{ color: 'var(--text-secondary)' }}>
-                        {tpl.children.map((c) => c.title).join(' · ')}
-                      </span>
-                    </button>
-                  );
-                })}
+                      <button
+                        onClick={() => setTplDrafts((prev) => prev.map((d) => ({ ...d, checked: true })))}
+                        style={{ color: 'var(--accent)' }}
+                      >
+                        全选
+                      </button>
+                      <button onClick={() => setTplDrafts((prev) => prev.map((d) => ({ ...d, checked: false })))}>
+                        全不选
+                      </button>
+                    </div>
+                    {tplDrafts.map((d, i) => (
+                      <div
+                        key={i}
+                        className="flex items-start gap-2 rounded-lg p-2"
+                        style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={d.checked}
+                          onChange={() =>
+                            setTplDrafts((prev) =>
+                              prev.map((x, j) => (j === i ? { ...x, checked: !x.checked } : x)),
+                            )
+                          }
+                          className="mt-1"
+                          style={{ accentColor: 'var(--accent)' }}
+                        />
+                        <div className="flex-1 min-w-0 flex flex-col gap-1">
+                          <input
+                            value={d.title}
+                            onChange={(e) =>
+                              setTplDrafts((prev) =>
+                                prev.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)),
+                              )
+                            }
+                            className="w-full px-1.5 py-0.5 rounded text-xs outline-none"
+                            style={{
+                              backgroundColor: 'var(--bg-content)',
+                              color: 'var(--text-primary)',
+                              border: '1px solid var(--border)',
+                            }}
+                          />
+                          <input
+                            value={d.description}
+                            placeholder="交付物 / 验收点（可留空）"
+                            onChange={(e) =>
+                              setTplDrafts((prev) =>
+                                prev.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)),
+                              )
+                            }
+                            className="w-full px-1.5 py-0.5 rounded text-[11px] outline-none"
+                            style={{
+                              backgroundColor: 'var(--bg-content)',
+                              color: 'var(--text-secondary)',
+                              border: '1px solid var(--border)',
+                            }}
+                          />
+                          <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                            优先级：{PRIORITY_LABEL[d.priority] ?? d.priority}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
                 {localError && (
                   <span className="text-[11px]" style={{ color: 'var(--status-danger)' }}>
                     {localError}
@@ -872,32 +987,74 @@ export function TaskWorkspace() {
                 style={{ borderTop: '1px solid var(--border)' }}
               >
                 <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                  子任务创建后仍可改标题、指派负责人与截止时间
+                  {tplStage === 'pick'
+                    ? '下一步可先核对 / 修改子任务，再创建'
+                    : '创建后仍可指派负责人与截止时间'}
                 </span>
                 <div className="flex-1" />
-                <button
-                  onClick={() => setTplOpen(false)}
-                  className="text-xs px-2 py-1 rounded"
-                  style={{
-                    backgroundColor: 'var(--bg-tertiary)',
-                    color: 'var(--text-secondary)',
-                    border: '1px solid var(--border)',
-                  }}
-                >
-                  取消
-                </button>
-                <button
-                  onClick={() => void createFromTemplate()}
-                  disabled={tplBusy || !tplTitle.trim()}
-                  className="text-xs px-2 py-1 rounded"
-                  style={{
-                    backgroundColor: 'var(--accent)',
-                    color: '#fff',
-                    opacity: tplBusy || !tplTitle.trim() ? 0.5 : 1,
-                  }}
-                >
-                  {tplBusy ? '创建中…' : '创建'}
-                </button>
+                {tplStage === 'pick' ? (
+                  <>
+                    <button
+                      onClick={closeTemplate}
+                      className="text-xs px-2 py-1 rounded"
+                      style={{
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={startTemplatePreview}
+                      disabled={!tplTitle.trim()}
+                      className="text-xs px-2 py-1 rounded"
+                      style={{
+                        backgroundColor: 'var(--accent)',
+                        color: '#fff',
+                        opacity: tplTitle.trim() ? 1 : 0.5,
+                      }}
+                    >
+                      下一步：预览
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        setTplStage('pick');
+                        setLocalError(null);
+                      }}
+                      className="text-xs px-2 py-1 rounded"
+                      style={{
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      返回选择模板
+                    </button>
+                    <button
+                      onClick={() => void createFromTemplate()}
+                      disabled={
+                        tplBusy || tplDrafts.filter((d) => d.checked && d.title.trim()).length === 0
+                      }
+                      className="text-xs px-2 py-1 rounded"
+                      style={{
+                        backgroundColor: 'var(--accent)',
+                        color: '#fff',
+                        opacity:
+                          tplBusy || tplDrafts.filter((d) => d.checked && d.title.trim()).length === 0
+                            ? 0.5
+                            : 1,
+                      }}
+                    >
+                      {tplBusy
+                        ? '创建中…'
+                        : `创建（${tplDrafts.filter((d) => d.checked && d.title.trim()).length} 个子任务）`}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>,
