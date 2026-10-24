@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{files, knowledge, progress, reports, tasks};
+use super::{files, knowledge, progress, reports, stats, tasks};
 
 fn to_value<T: Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|e| format!("序列化主机响应失败：{}", e))
@@ -91,6 +91,19 @@ pub fn dispatch(
         // ── 治理只读：成员端 Agent 工具 / 面板按主机策略复核出境闸门 ──
         "policy.get" => to_value(super::org::policy_view(conn, org_id)?),
         "emergency.get" => to_value(super::org::emergency_view(conn, org_id)?),
+
+        // ── 报告 / 绩效（只读聚合）──
+        "stats.team" => {
+            let from = payload
+                .get("from")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "缺少参数：from".to_string())?;
+            let to = payload
+                .get("to")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "缺少参数：to".to_string())?;
+            to_value(stats::team_stats(conn, org_id, from, to)?)
+        }
 
         // ── 通知（沟通层）：成员端读主机权威通知 ──
         "notification.list" => {

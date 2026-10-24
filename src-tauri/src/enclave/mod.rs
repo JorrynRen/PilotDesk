@@ -24,6 +24,7 @@ pub mod realtime;
 pub mod reports;
 pub mod rpc;
 pub mod snapshot;
+pub mod stats;
 pub mod tasks;
 pub mod tls;
 pub mod tools;

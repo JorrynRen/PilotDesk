@@ -2838,6 +2838,7 @@ pub fn run() {
             commands::enclave::enclave_backup_now,
             commands::enclave::enclave_audit_list,
             commands::enclave_task::enclave_task_list,
+            commands::enclave_task::enclave_team_stats,
             commands::enclave_transfer::enclave_transfer_list,
             commands::enclave_transfer::enclave_transfer_export,
             commands::enclave_transfer::enclave_transfer_import,

@@ -8,18 +8,19 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
-import { ListTree, Building2, Library, RefreshCw, Loader2, WifiOff } from 'lucide-react';
+import { ListTree, Building2, Library, BarChart3, RefreshCw, Loader2, WifiOff } from 'lucide-react';
 import { Select } from '../common/Select';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
 import { ALL_KB_ID, useEnclaveKbStore } from '../../stores/enclaveKbStore';
 import { NotificationBell } from './NotificationBell';
 
-export type EnclaveNavKey = 'tasks' | 'org' | 'kb';
+export type EnclaveNavKey = 'tasks' | 'kb' | 'report' | 'org';
 
 const TABS: { key: EnclaveNavKey; label: string; path: string; icon: typeof ListTree }[] = [
   { key: 'tasks', label: '任务管理', path: '/enclave', icon: ListTree },
   { key: 'kb', label: '团队知识库', path: '/enclave/kb', icon: Library },
+  { key: 'report', label: '团队报告', path: '/enclave/reports', icon: BarChart3 },
   { key: 'org', label: '组织与权限', path: '/enclave/org', icon: Building2 },
 ];
 

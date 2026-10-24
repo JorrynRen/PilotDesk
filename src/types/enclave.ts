@@ -340,6 +340,30 @@ export interface DepsPreview {
   error: string | null;
 }
 
+/** 团队报告：成员维度的绩效数据（只计数，不做评分） */
+export interface MemberStat {
+  userId: string;
+  completed: number;
+  inProgress: number;
+  submitted: number;
+  overdue: number;
+  /** 周期内完成任务的平均耗时（小时，0 = 无样本） */
+  avgHours: number;
+}
+
+/** 团队报告：一个周期的只读聚合 */
+export interface TeamStats {
+  from: number;
+  to: number;
+  generatedAt: number;
+  created: number;
+  completed: number;
+  reportsConfirmed: number;
+  entriesAdded: number;
+  filesAdded: number;
+  members: MemberStat[];
+}
+
 // ── M4：汇报与文件 ──────────────────────────────────────────────
 
 /** 汇报状态（四态） */

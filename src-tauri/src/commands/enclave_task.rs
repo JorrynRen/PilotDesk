@@ -2350,6 +2350,29 @@ async fn process_team_queue_row(
     })
 }
 
+/// 团队报告（只读聚合）：周期内的任务 / 汇报 / 知识产出与成员绩效数据。
+///
+/// 主机走本地库；成员经局域网 WS 转发（授权按成员身份复核）。
+#[tauri::command]
+pub async fn enclave_team_stats(
+    org_id: String,
+    from: i64,
+    to: i64,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<crate::enclave::stats::TeamStats, String> {
+    let org_for_query = org_id.clone();
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "stats.team",
+        json!({ "from": from, "to": to }),
+        move |c, _actor| crate::enclave::stats::team_stats(c, &org_for_query, from, to),
+    )
+    .await
+}
+
 /// 主机后台消费循环（只处理本机承载的组织）。
 pub async fn run_enclave_kb_queue_loop(db: crate::DbState, state: Arc<EnclaveState>) {
     tokio::time::sleep(Duration::from_secs(20)).await;
