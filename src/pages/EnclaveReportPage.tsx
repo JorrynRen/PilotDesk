@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { BarChart3, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Download, Loader2 } from 'lucide-react';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useTerminal, type ViewMode } from '../TerminalManager';
@@ -239,7 +240,7 @@ export function EnclaveReportPage() {
   };
 
   /** 导出 CSV：概览 + 成员 + 完成明细（带 BOM，Excel 打开不乱码） */
-  const exportCsv = () => {
+  const exportCsv = async () => {
     if (!stats) return;
     const quote = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
     const rows: (string | number)[][] = [
@@ -269,13 +270,18 @@ export function EnclaveReportPage() {
       ]),
     ];
     const csv = rows.map((r) => r.map(quote).join(',')).join('\r\n');
-    const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `团队报告-${range.label}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // WebView 里 Blob + a.click 下载不可靠：走系统保存对话框 + Rust 落盘
+    const path = await saveDialog({
+      defaultPath: `团队报告-${range.label}.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+    });
+    if (!path) return;
+    try {
+      await invoke('write_text_file', { path, content: `\ufeff${csv}` });
+      showToast('已导出 CSV', 'success');
+    } catch (e) {
+      showToast(`导出失败：${errorMessage(e)}`, 'error');
+    }
   };
 
   const cards: { label: string; value: number; hint: string }[] = stats
@@ -423,7 +429,7 @@ export function EnclaveReportPage() {
             复制 Markdown
           </button>
           <button
-            onClick={exportCsv}
+            onClick={() => void exportCsv()}
             disabled={!stats}
             className="pd-btn text-xs px-2 py-1 rounded-lg flex items-center gap-1"
             style={{
