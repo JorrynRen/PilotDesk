@@ -73,6 +73,15 @@ fn member_orgs(state: &EnclaveState) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// 实时通道的连接状态（前端据此提示「已降级，正在重连」）。
+fn send_status(ui_tx: &mpsc::UnboundedSender<Value>, org_id: &str, connected: bool) {
+    let _ = ui_tx.send(json!({
+        "type": "realtime",
+        "orgId": org_id,
+        "connected": connected,
+    }));
+}
+
 async fn watch_org(
     state: Arc<EnclaveState>,
     pool: crate::DbPool,
@@ -82,12 +91,16 @@ async fn watch_org(
     let mut backoff = 3u64;
     loop {
         if !member_orgs(&state).iter().any(|o| o == &org_id) {
+            send_status(&ui_tx, &org_id, false);
             return;
         }
         let db = crate::DbState { pool: pool.clone() };
         match watch_once(&state, &db, &ui_tx, &org_id).await {
             Ok(()) => backoff = 3,
-            Err(e) => log::debug!("[enclave] 实时通道断开（{}）：{}", org_id, e),
+            Err(e) => {
+                log::debug!("[enclave] 实时通道断开（{}）：{}", org_id, e);
+                send_status(&ui_tx, &org_id, false);
+            }
         }
         tokio::time::sleep(Duration::from_secs(backoff)).await;
         backoff = (backoff * 2).min(30);
@@ -101,6 +114,7 @@ async fn watch_once(
     org_id: &str,
 ) -> Result<(), String> {
     let mut session = HostSession::connect(state, db, org_id).await?;
+    send_status(ui_tx, org_id, true);
     loop {
         let ev = session.wait_event().await?;
         if ev["orgId"].as_str() != Some(org_id) {

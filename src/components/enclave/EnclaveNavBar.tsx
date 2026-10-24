@@ -5,10 +5,10 @@
  * 组织切换紧随其后，右侧统一放页面扩展位、团队通知与刷新。
  */
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
-import { ListTree, Building2, Library, RefreshCw, Loader2 } from 'lucide-react';
+import { ListTree, Building2, Library, RefreshCw, Loader2, WifiOff } from 'lucide-react';
 import { Select } from '../common/Select';
 import { useEnclaveOrgStore } from '../../stores/enclaveOrgStore';
 import { useEnclaveTaskStore } from '../../stores/enclaveTaskStore';
@@ -38,6 +38,8 @@ export function EnclaveNavBar({
   const navigate = useNavigate();
   const orgs = useEnclaveOrgStore((s) => s.orgs);
   const activeOrgId = useEnclaveOrgStore((s) => s.activeOrgId);
+  /** 成员端与主机的实时通道是否断开（owner 不走常驻通道，永远是 false） */
+  const [realtimeDown, setRealtimeDown] = useState(false);
 
   /**
    * 实时变更：主机广播 / 本机写入都会发 `enclave:changed`（只带主题，不带业务数据）。
@@ -50,9 +52,21 @@ export function EnclaveNavBar({
     let disposed = false;
     let unlisten: (() => void) | null = null;
     const lastAt = new Map<string, number>();
-    void listen<{ orgId: string; topic: string }>('enclave:changed', (ev) => {
-      const { orgId, topic } = ev.payload ?? { orgId: '', topic: '' };
+    setRealtimeDown(false);
+    void listen<{
+      orgId: string;
+      topic?: string;
+      type?: string;
+      connected?: boolean;
+    }>('enclave:changed', (ev) => {
+      const { orgId, topic, type, connected } = ev.payload ?? {};
       if (orgId !== activeOrgId) return;
+      // 连接状态：不走业务刷新，只更新提示
+      if (type === 'realtime') {
+        setRealtimeDown(!connected);
+        return;
+      }
+      if (!topic) return;
       const now = Date.now();
       if (now - (lastAt.get(topic) ?? 0) < 400) return;
       lastAt.set(topic, now);
@@ -129,6 +143,17 @@ export function EnclaveNavBar({
             title="切换组织"
           />
         </>
+      )}
+
+      {realtimeDown && (
+        <span
+          className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px]"
+          style={{ backgroundColor: 'var(--status-warning-bg)', color: 'var(--status-warning)' }}
+          title="与主机的实时通道已断开，正在自动重连；期间数据不会自动刷新，可点右侧「刷新」手动拉取"
+        >
+          <WifiOff size={10} />
+          实时连接中断
+        </span>
       )}
 
       <div className="flex-1" />
