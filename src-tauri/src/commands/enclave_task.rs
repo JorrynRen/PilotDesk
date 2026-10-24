@@ -2375,21 +2375,36 @@ pub async fn enclave_task_split_preview(
                 .to_string(),
         );
     }
-    let (title, description, child_count, status): (String, String, i64, String) = state
-        .store
-        .with_conn(|c| {
-            c.query_row(
-                "SELECT t.title, t.description,
+    let (title, description, parent_task_id, child_count, status): (
+        String,
+        String,
+        Option<String>,
+        i64,
+        String,
+    ) = state.store.with_conn(|c| {
+        c.query_row(
+            "SELECT t.title, t.description, t.parent_task_id,
                         (SELECT COUNT(*) FROM org_tasks WHERE parent_task_id = t.id),
                         t.status
                  FROM org_tasks t WHERE t.id = ?1 AND t.org_id = ?2",
-                rusqlite::params![task_id, org_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
-            .optional()
-            .map_err(|e| format!("读取任务失败：{}", e))?
-            .ok_or_else(|| "任务不存在或不属于该组织".to_string())
-        })?;
+            rusqlite::params![task_id, org_id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| format!("读取任务失败：{}", e))?
+        .ok_or_else(|| "任务不存在或不属于该组织".to_string())
+    })?;
+    if parent_task_id.as_deref().is_some_and(|p| !p.is_empty()) {
+        return Err("该任务本身就是子任务，只能对顶层任务做 AI 拆解（系统只支持一层父子）".to_string());
+    }
     if child_count > 0 {
         return Err("该任务已经是汇总容器，请对它的子任务单独拆解".to_string());
     }

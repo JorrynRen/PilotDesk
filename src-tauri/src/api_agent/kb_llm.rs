@@ -1440,25 +1440,41 @@ fn parse_split(raw: &str) -> Result<Vec<TaskSplitDraft>, String> {
     let text = extract_json(raw)
         .ok_or_else(|| "模型没有输出 JSON 数组（可换一个更擅长结构化输出的模型）".to_string())?;
     let v: Value = serde_json::from_str(&text).map_err(|e| format!("解析模型输出失败: {}", e))?;
-    // 容忍两种根：直接数组，或 { "subtasks": [...] }
-    let items = if let Some(arr) = v.as_array() {
-        arr.clone()
-    } else if let Some(arr) = v.get("subtasks").and_then(|x| x.as_array()) {
-        arr.clone()
-    } else {
-        return Err("模型输出不是子任务数组".to_string());
-    };
+    let items =
+        split_items(&v).ok_or_else(|| "模型输出里没有子任务列表".to_string())?;
     let mut out = Vec::new();
     for item in items {
-        let title = item["title"].as_str().unwrap_or("").trim().to_string();
+        // 条目允许是字符串（模型偶尔只给标题）或对象
+        let title = match item.as_str() {
+            Some(s) => s.trim().to_string(),
+            None => item
+                .get("title")
+                .or_else(|| item.get("name"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+        };
         if title.is_empty() {
             continue;
         }
-        let description = item["description"].as_str().unwrap_or("").trim().to_string();
-        let priority = match item["priority"].as_str().unwrap_or("").to_lowercase().as_str() {
-            "low" => "low",
-            "high" => "high",
-            "urgent" => "urgent",
+        let description = item
+            .get("description")
+            .or_else(|| item.get("desc"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let priority = match item["priority"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase()
+            .as_str()
+        {
+            "low" | "低" => "low",
+            "high" | "高" => "high",
+            "urgent" | "紧急" => "urgent",
             _ => "normal",
         }
         .to_string();
@@ -1475,6 +1491,44 @@ fn parse_split(raw: &str) -> Result<Vec<TaskSplitDraft>, String> {
         return Err("模型没有给出可用的子任务".to_string());
     }
     Ok(out)
+}
+
+/// 从模型输出里取出子任务条目，容忍各家模型的常见形态：
+/// 数组根、`{"subtasks":[...]}` 之类的包装键（含任意「对象/字符串数组」值）、
+/// 单个任务对象（根就是一项）、纯字符串数组。
+fn split_items(v: &Value) -> Option<Vec<Value>> {
+    if let Some(arr) = v.as_array() {
+        return Some(arr.clone());
+    }
+    let obj = v.as_object()?;
+    for key in [
+        "subtasks",
+        "sub_tasks",
+        "tasks",
+        "children",
+        "items",
+        "steps",
+        "list",
+        "result",
+    ] {
+        if let Some(arr) = obj.get(key).and_then(|x| x.as_array()) {
+            return Some(arr.clone());
+        }
+    }
+    // 未知键名：取第一个「元素都是对象或字符串」的非空数组
+    if let Some(arr) = obj.values().find_map(|x| {
+        x.as_array()
+            .filter(|a| a.iter().all(|i| i.is_object() || i.is_string()))
+    }) {
+        if !arr.is_empty() {
+            return Some(arr.clone());
+        }
+    }
+    // 模型把单个任务直接当根输出
+    if obj.contains_key("title") || obj.contains_key("name") {
+        return Some(vec![v.clone()]);
+    }
+    None
 }
 
 /// 从模型的输出里抠出 JSON 文本（容忍 markdown 代码块围栏与前后的废话）。
@@ -1657,6 +1711,17 @@ mod tests {
         // 也容忍 {"subtasks": [...]} 包装
         let out = parse_split(r#"{"subtasks":[{"title":"A"}]}"#).unwrap();
         assert_eq!(out.len(), 1);
+        // 其它常见包装键名
+        let out = parse_split(r#"{"tasks":[{"title":"B"}]}"#).unwrap();
+        assert_eq!(out[0].title, "B");
+        // 根就是单个任务对象
+        let out = parse_split(r#"{"title":"单个任务","priority":"高"}"#).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].priority, "high");
+        // 纯字符串数组
+        let out = parse_split(r#"["步骤一","步骤二"]"#).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1].title, "步骤二");
         // 全部无效 → 报错，由调用方提示换模型
         assert!(parse_split(r#"[{"description":"没有标题"}]"#).is_err());
     }

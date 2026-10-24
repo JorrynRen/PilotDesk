@@ -668,8 +668,9 @@ function TaskDetail(props: {
   const canUpload = identityVerified && isParticipant && !isClosed;
   /** 有子任务 = 汇总容器：状态由子任务派生，自身不执行 */
   const isContainer = task.childCount > 0;
-  /** AI 拆解只对主机 owner 开放（团队数据出境闸门在主机侧判定），且只拆未终态的普通任务 */
-  const canSplit = identityVerified && myRole === 'owner' && !isContainer && !isClosed;
+  /** AI 拆解只对主机 owner 开放（团队数据出境闸门在主机侧判定），且只拆顶层、未终态的任务 */
+  const canSplit =
+    identityVerified && myRole === 'owner' && !isContainer && !isClosed && !task.parentTaskId;
 
   const requestSplit = async () => {
     setSplitLoading(true);

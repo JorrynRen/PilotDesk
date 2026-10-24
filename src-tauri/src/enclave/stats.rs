@@ -4,9 +4,11 @@
 //! - 任务：周期内新增 / 完成、当前进行中 / 待确认 / 逾期；
 //! - 汇报：周期内确认数；
 //! - 知识：周期内新增条目与交付物（按组织知识库统计）；
-//! - 成员：按负责人聚合完成数、在办数、逾期数与平均完成耗时。
+//! - 成员：按平台成员名册统计完成数、在办数、逾期数与平均完成耗时（没有任务的成员补 0）。
 //!
 //! 设计口径：**不做自动绩效评级**，只提供可核对的数据（设计文档 §13 第三阶段）。
+
+use std::collections::HashMap;
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -103,6 +105,25 @@ pub fn team_stats(
            AND f.added_at >= ?2 AND f.added_at < ?3",
     )?;
 
+    // 成员名册：以平台同步的成员快照为准（排除已移出），这样没有任务的成员也会出现在报告里；
+    // 同时并上任务里出现但快照缺失的负责人，避免数据被藏起来。
+    let mut stmt = conn
+        .prepare(
+            "SELECT user_id FROM member_snapshot
+             WHERE org_id = ?1 AND seat_status <> 'removed'
+             UNION
+             SELECT DISTINCT assignee_id FROM org_tasks
+             WHERE org_id = ?1 AND assignee_id IS NOT NULL AND assignee_id <> ''",
+        )
+        .map_err(|e| format!("统计成员名单失败：{}", e))?;
+    let mut roster = stmt
+        .query_map(params![org_id], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("统计成员名单失败：{}", e))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取成员名单失败：{}", e))?;
+    roster.sort();
+    roster.dedup();
+
     let mut stmt = conn
         .prepare(
             "SELECT assignee_id,
@@ -119,7 +140,7 @@ pub fn team_stats(
              GROUP BY assignee_id",
         )
         .map_err(|e| format!("统计成员数据失败：{}", e))?;
-    let members = stmt
+    let rows = stmt
         .query_map(params![org_id, from, to, now], |r| {
             Ok(MemberStat {
                 user_id: r.get(0)?,
@@ -134,7 +155,23 @@ pub fn team_stats(
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("读取成员统计失败：{}", e))?;
 
-    let mut members = members;
+    let mut by_user: HashMap<String, MemberStat> = rows
+        .into_iter()
+        .map(|m| (m.user_id.clone(), m))
+        .collect();
+    let mut members: Vec<MemberStat> = roster
+        .into_iter()
+        .map(|user_id| {
+            by_user.remove(&user_id).unwrap_or(MemberStat {
+                user_id,
+                completed: 0,
+                in_progress: 0,
+                submitted: 0,
+                overdue: 0,
+                avg_hours: 0.0,
+            })
+        })
+        .collect();
     // 完成多的排前面；完成数相同按在办、待确认、逾期
     members.sort_by(|a, b| {
         b.completed
@@ -217,6 +254,21 @@ mod tests {
             [],
         )
         .unwrap();
+        // 成员名册：1 = 主机（owner），2/3 有任务，4 没有任务，9 已移出
+        for (uid, role, name, seat) in [
+            ("1", "owner", "主机", "active"),
+            ("2", "member", "成员二", "active"),
+            ("3", "member", "成员三", "active"),
+            ("4", "member", "成员四", "active"),
+            ("9", "member", "已移出", "removed"),
+        ] {
+            conn.execute(
+                "INSERT INTO member_snapshot (org_id, user_id, role, display_name, seat_status)
+                 VALUES ('8', ?1, ?2, ?3, ?4)",
+                params![uid, role, name, seat],
+            )
+            .unwrap();
+        }
         conn
     }
 
@@ -272,7 +324,15 @@ mod tests {
         assert_eq!(s.completed_tasks.len(), 1, "周期内只有 t1 完成");
         assert_eq!(s.completed_tasks[0].task_id, "t1");
         assert!(s.completed_tasks[0].has_output, "t1 的产出已沉淀进组织库");
-        assert_eq!(s.members.len(), 2);
+        assert_eq!(s.members.len(), 4, "成员列表以名册为准，没有任务的成员也要出现");
+        // 4 没有任何任务，仍应出现在列表里且计数为 0
+        let m4 = s.members.iter().find(|m| m.user_id == "4").unwrap();
+        assert_eq!(m4.completed, 0);
+        assert_eq!(m4.in_progress, 0);
+        assert_eq!(m4.submitted, 0);
+        assert_eq!(m4.overdue, 0);
+        assert!(s.members.iter().any(|m| m.user_id == "1"), "主机也应出现");
+        assert!(!s.members.iter().any(|m| m.user_id == "9"), "已移出成员不应出现");
         let m2 = s.members.iter().find(|m| m.user_id == "2").unwrap();
         assert_eq!(m2.completed, 1);
         // started_at=1000，completed_at=1720 → 720s = 0.2h
