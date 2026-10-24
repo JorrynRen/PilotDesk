@@ -761,40 +761,28 @@ export function EnclaveKbPage() {
   }, [kb?.fieldSchema]);
 
   /**
-   * 专属属性筛选：选项从「当前已加载条目」里现取（key + 值），只筛当前列表。
+   * 专属属性筛选：属性「名」从库定义里选（有限枚举），属性「值」是自由输入 + 包含匹配
+   * —— 值域不确定（人名、模块、来源等都可能无限），不做成下拉枚举。
    * 「全部库」视图各库 schema 不同，不提供该筛选。
    */
-  const [attrFilter, setAttrFilter] = useState('');
-  const attrOptions = useMemo(() => {
-    if (kbFields.length === 0) return [] as { value: string; label: string }[];
-    const seen = new Set<string>();
-    const out: { value: string; label: string }[] = [];
-    for (const f of kbFields) {
-      for (const e of entries) {
-        const raw = e.metadata?.[f.key];
-        if (raw === undefined || raw === null || raw === '') continue;
-        const text = typeof raw === 'boolean' ? (raw ? '是' : '否') : String(raw);
-        const value = `${f.key}\u0000${text}`;
-        if (seen.has(value)) continue;
-        seen.add(value);
-        out.push({ value, label: `${f.label || f.key}：${text}` });
-        if (out.length >= 60) return out;
-      }
-    }
-    return out;
-  }, [entries, kbFields]);
+  const [attrField, setAttrField] = useState('');
+  const [attrValue, setAttrValue] = useState('');
   const shownEntries = useMemo(() => {
-    if (!attrFilter) return entries;
-    const [key, want] = attrFilter.split('\u0000');
+    if (!attrField) return entries;
+    const needle = attrValue.trim().toLowerCase();
     return entries.filter((e) => {
-      const raw = e.metadata?.[key];
+      const raw = e.metadata?.[attrField];
       const text =
         typeof raw === 'boolean' ? (raw ? '是' : '否') : raw === undefined || raw === null ? '' : String(raw);
-      return text === want;
+      if (!text) return false;
+      return needle ? text.toLowerCase().includes(needle) : true;
     });
-  }, [entries, attrFilter]);
-  // 切库 / 换组织后属性选项会变，回到「全部属性」
-  useEffect(() => setAttrFilter(''), [activeKbId, activeOrgId]);
+  }, [entries, attrField, attrValue]);
+  // 切库 / 换组织后属性定义会变，清空筛选
+  useEffect(() => {
+    setAttrField('');
+    setAttrValue('');
+  }, [activeKbId, activeOrgId]);
 
   /* ── 图谱：团队条目 → 个人库图谱组件认识的 GraphModel（复用 3D 渲染） ── */
   const teamGraph = useMemo(
@@ -2267,21 +2255,54 @@ export function EnclaveKbPage() {
                   }}
                   placeholder="搜索标题 / 正文 / 标签 / 文件（回车）"
                 />
-                {attrOptions.length > 0 && (
-                  <div className="w-[170px] shrink-0">
+                {kbFields.length > 0 && (
+                  <div className="w-[140px] shrink-0">
                     <Select
-                      value={attrFilter}
-                      onChange={setAttrFilter}
+                      value={attrField}
+                      onChange={(v) => {
+                        setAttrField(v);
+                        setAttrValue('');
+                      }}
                       size="sm"
                       className="w-full"
-                      options={[{ value: '', label: '全部属性' }, ...attrOptions]}
-                      title="按专属属性筛选当前列表（选项来自已加载的条目）"
+                      options={[
+                        { value: '', label: '全部属性' },
+                        ...kbFields.map((f) => ({ value: f.key, label: f.label || f.key })),
+                      ]}
+                      title="先选一个专属属性，再按属性值做包含匹配"
                     />
+                  </div>
+                )}
+                {attrField && (
+                  <div
+                    className="pd-field flex items-center gap-1.5 px-2 py-1 rounded-lg shrink-0 w-[150px]"
+                    style={{ backgroundColor: 'var(--bg-field)', border: '1px solid var(--border)' }}
+                  >
+                    <input
+                      className="flex-1 min-w-0 bg-transparent outline-none text-xs"
+                      style={{ color: 'var(--text-primary)' }}
+                      value={attrValue}
+                      onChange={(ev) => setAttrValue(ev.target.value)}
+                      placeholder="属性值包含…"
+                      title="自由输入做包含匹配；留空 = 只保留填了该属性的条目"
+                    />
+                    {attrValue && (
+                      <button
+                        onClick={() => setAttrValue('')}
+                        style={{ color: 'var(--text-tertiary)', flexShrink: 0 }}
+                        title="清空属性值"
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
                   </div>
                 )}
                 <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
                   {shownEntries.length} 条{query && ` · 匹配「${query}」`}
-                  {attrFilter && ' · 已按属性筛选'}
+                  {attrField &&
+                    ` · 属性「${kbFields.find((f) => f.key === attrField)?.label || attrField}」${
+                      attrValue.trim() ? `包含「${attrValue.trim()}」` : '已填写'
+                    }`}
                 </span>
                 <div className="flex-1" />
                 <span className="text-[10px] shrink-0 whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
@@ -2298,7 +2319,7 @@ export function EnclaveKbPage() {
                     <Search size={18} />
                     {query
                       ? `没有匹配「${query}」的条目`
-                      : attrFilter
+                      : attrField
                         ? '没有符合该属性筛选的条目'
                         : '还没有条目：任务汇报「确认完成」后会自动沉淀到这里'}
                   </div>
