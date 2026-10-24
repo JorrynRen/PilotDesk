@@ -17,6 +17,7 @@ import { TagEditor } from './TagEditor';
 import { confirmDialog } from '../../stores/confirmStore';
 import { showToast } from '../../utils/toast';
 import { errorMessage } from '../../utils/errorMessage';
+import { highlightText, matchSnippet } from '../../utils/highlight';
 import {
   EMPTY_ENTRY_FILTERS,
   filterEntries,
@@ -106,6 +107,8 @@ export function KnowledgeEntryList({
   // 筛选条件放在 store 里：图谱页共用同一套口径，且图谱能据此限流
   const filters = useKnowledgeStore((s) => s.entryFilters);
   const setFilters = useKnowledgeStore((s) => s.setEntryFilters);
+  /** 当前搜索词：用于命中高亮与片段定位 */
+  const q = filters.query;
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [draftMeta, setDraftMeta] = useState<KnowledgeMeta>({});
   /** 展开行的正文 / 标签草稿：与 meta 一起保存，任一项改动都算"有未保存的改动" */
@@ -297,6 +300,7 @@ export function KnowledgeEntryList({
           </label>
           <span className="text-[11px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
             {filtered.length} / {entries.length} 条{hasMore ? '（已加载）' : ''}
+            {q.trim() ? ` · 匹配「${q.trim()}」` : ''}
           </span>
         </div>
 
@@ -420,7 +424,7 @@ export function KnowledgeEntryList({
                     <div className="flex items-center gap-1.5 min-w-0">
                       {e.pin && <Pin size={10} className="shrink-0" style={{ color: '#F59E0B' }} />}
                       <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }} title={entryTitle(e.key)}>
-                        {entryTitle(e.key)}
+                        {highlightText(entryTitle(e.key), q)}
                       </span>
                       <span
                         className="shrink-0 flex items-center gap-0.5 px-1.5 py-[1px] rounded text-[9px]"
@@ -453,7 +457,9 @@ export function KnowledgeEntryList({
                       )}
                     </div>
                     {!open && (
-                      <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>{e.value}</div>
+                      <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                        {e.value ? highlightText(matchSnippet(e.value, q), q) : '（无正文）'}
+                      </div>
                     )}
                     {!open && (
                       <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
@@ -472,7 +478,7 @@ export function KnowledgeEntryList({
                         })}
                         {e.tags.map((t) => (
                           <span key={t} className="px-1.5 py-[1px] rounded text-[9px]" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-                            #{t}
+                            #{highlightText(t, q)}
                           </span>
                         ))}
                         <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
