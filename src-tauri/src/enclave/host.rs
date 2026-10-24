@@ -1125,6 +1125,25 @@ pub async fn call_host_without_token(
     data
 }
 
+/// 成员端取在线成员：`org.online` 是**主机协议方法**（读主机内存里的订阅表），
+/// 不是 `enclave.call` 里的 RPC 命令。
+///
+/// 之前套用 [`call_host_without_token`]（它固定发 `enclave.call`）会被主机当成
+/// 「未知的飞地命令：org.online」拒绝，成员端于是永远拿不到列表 —— 表现为成员设备上
+/// 自己的在线状态恒为「—」，而主机侧能看到。
+pub async fn online_members_via_host(
+    state: &EnclaveState,
+    org_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut session = HostSession::connect_with_db(state, None, org_id).await?;
+    let data = session
+        .request("org.online", json!({ "orgId": org_id }))
+        .await;
+    session.close().await;
+    let value = data?;
+    serde_json::from_value(value).map_err(|e| format!("解析在线成员失败：{}", e))
+}
+
 /// 拉取发给当前账号的转移请求（收到后由本地决定是否接受）。
 pub async fn fetch_pending_transfers(
     state: &EnclaveState,
@@ -3755,6 +3774,92 @@ mod tests {
         drop(tx_b);
         drop(rx_b);
         drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 成员端取在线列表：调用方本人也必须在线。
+    ///
+    /// 复现路径与 `enclave_online_members` 的成员分支一致：不带平台 token 建一条临时连接，
+    /// 主机应把这条连接也计入订阅列表 —— 否则成员设备上永远看不到自己的「在线」。
+    #[tokio::test]
+    async fn online_list_via_temp_connection_includes_caller() {
+        let dir = std::env::temp_dir().join(format!(
+            "pilotdesk-enclave-online-test-{}",
+            crate::utils::new_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = std::sync::Arc::new(
+            super::super::db::EnclaveStore::open(&dir.join("host.db")).unwrap(),
+        );
+        store
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT INTO local_identity (user_id, email) VALUES ('1', 'host@example.com')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO org_snapshot (org_id, name, owner_user_id, my_role, viewer_id, host_device_id, host_device_name)
+                     VALUES ('org1', 'Org', '1', 'owner', '1', 'test-device', 'TestDevice')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                c.execute(
+                    "INSERT INTO member_snapshot (org_id, user_id, role, display_name)
+                     VALUES ('org1', '2', 'member', '甲')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        let host_state = std::sync::Arc::new(EnclaveState::new(store));
+
+        let host_tls = tls::ensure_host_tls_in(&dir.join("tls")).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn({
+            let st = host_state.clone();
+            let acceptor = host_tls.acceptor.clone();
+            async move {
+                if let Ok((stream, peer)) = listener.accept().await {
+                    if let Ok(tls_stream) = acceptor.accept(stream).await {
+                        tokio::spawn(async move { handle_conn(tls_stream, peer, st).await });
+                    }
+                }
+            }
+        });
+
+        // 成员端：只有本机身份 + 手动填写的主机地址（与真实成员设备的最小状态一致）
+        let mstore = std::sync::Arc::new(
+            super::super::db::EnclaveStore::open(&dir.join("member.db")).unwrap(),
+        );
+        mstore
+            .with_conn(|c| {
+                c.execute(
+                    "INSERT INTO local_identity (user_id, email) VALUES ('2', 'm@example.com')",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+                put_setting(
+                    c,
+                    &format!("{}org1", HOST_ADDR_PREFIX),
+                    &format!("127.0.0.1:{}", port),
+                )
+            })
+            .unwrap();
+        let member_state = std::sync::Arc::new(EnclaveState::new(mstore));
+
+        let ids = online_members_via_host(&member_state, "org1")
+            .await
+            .unwrap();
+        assert!(
+            ids.contains(&"2".to_string()),
+            "调用方应出现在在线列表：{ids:?}"
+        );
+
+        drop(host_state);
+        drop(member_state);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

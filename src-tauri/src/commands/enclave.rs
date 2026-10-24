@@ -376,14 +376,9 @@ pub async fn enclave_online_members(
             Ok(crate::enclave::host::online_member_ids(state.inner(), &org_id))
         }
         Some(_) => {
-            let data = crate::enclave::host::call_host_without_token(
-                state.inner(),
-                &org_id,
-                "org.online",
-                serde_json::json!({}),
-            )
-            .await?;
-            serde_json::from_value(data).map_err(|e| format!("解析在线成员失败：{}", e))
+            // `org.online` 是主机协议方法而不是 RPC 命令，必须直接按方法名发；
+            // 套 `call_host_without_token` 会被主机拒绝为「未知的飞地命令」。
+            crate::enclave::host::online_members_via_host(state.inner(), &org_id).await
         }
         None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
     }
