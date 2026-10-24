@@ -92,9 +92,11 @@ pub struct HostRuntime {
     next_sub_id: AtomicU64,
 }
 
-/// 一条常驻成员连接：只要还连着，就接收该组织的变更事件。
+/// 一条常驻成员连接：只要还连着，就接收该组织的变更事件，并计入「在线成员」。
 struct Subscriber {
     id: u64,
+    /// 连接握手确认过的成员 user id（在线列表按它去重）
+    user_id: String,
     tx: mpsc::UnboundedSender<String>,
 }
 
@@ -196,8 +198,24 @@ impl HostRuntime {
         let mut g = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
         g.entry(org_id.to_string())
             .or_default()
-            .push(Subscriber { id, tx });
+            .push(Subscriber {
+                id,
+                user_id: user_id.to_string(),
+                tx,
+            });
         id
+    }
+
+    /// 该组织当前在线的成员 user id（按连接去重；主机 owner 不在订阅列表里）。
+    pub fn online_member_ids(&self, org_id: &str) -> Vec<String> {
+        let g = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ids: Vec<String> = g
+            .get(org_id)
+            .map(|list| list.iter().map(|s| s.user_id.clone()).collect())
+            .unwrap_or_default();
+        ids.sort();
+        ids.dedup();
+        ids
     }
 
     fn unregister_subscriber(&self, org_id: &str, id: u64) {
@@ -291,6 +309,11 @@ pub fn notify_change_except(
 /// 主机本机写入：本机 UI + 所有在线成员都要刷新。
 pub fn notify_change(state: &EnclaveState, org_id: &str, topic: &str) {
     notify_change_except(state, org_id, topic, None);
+}
+
+/// 该组织当前在线的成员 user id（主机本地读取；成员端经 `org.online` RPC 取）。
+pub fn online_member_ids(state: &EnclaveState, org_id: &str) -> Vec<String> {
+    state.host.online_member_ids(org_id)
 }
 
 /// 发现到的主机（成员端内存缓存，不落库）。
@@ -1552,6 +1575,15 @@ async fn handle_conn(
                 }
                 Err(e) => res_err(&req.id, &e),
             },
+            // 在线成员：只读，成员之间互相可见
+            "org.online" => {
+                let req_org = req.params["orgId"].as_str().unwrap_or(hello.org_id.as_str());
+                if req_org != hello.org_id {
+                    res_err(&req.id, "不能跨组织访问")
+                } else {
+                    res_ok(&req.id, json!(online_member_ids(&state, req_org)))
+                }
+            }
             "file.upload_begin" => match org_param(&req, &hello) {
                 Ok(org) => match handle_upload_begin(&state, org, &hello.user_id) {
                     Ok(v) => res_ok(&req.id, v),
@@ -3599,6 +3631,11 @@ mod tests {
 
         let (mut tx_a, mut rx_a) = hello_as(port, "2").await;
         let (mut tx_b, mut rx_b) = hello_as(port, "3").await;
+
+        // 在线成员：两条握手后的连接都应出现在主机侧列表里（按 user id 去重）
+        let mut online = state.host.online_member_ids("org1");
+        online.sort();
+        assert_eq!(online, vec!["2".to_string(), "3".to_string()]);
 
         // 甲建任务
         tx_a.send(Message::Text(

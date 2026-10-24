@@ -343,6 +343,35 @@ pub fn enclave_policy_set(
     Ok(view)
 }
 
+/// 在线成员（主机侧订阅列表）。主机本地读取；成员经主机 WS 的 `org.online` 取。
+///
+/// 只读信息：成员之间互相可见，不涉及治理权限。
+#[tauri::command]
+pub async fn enclave_online_members(
+    org_id: String,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<String>, String> {
+    let role = state
+        .store
+        .with_conn(|c| crate::enclave::authz::role_for_org(c, &org_id))?;
+    match role {
+        Some(crate::enclave::authz::Role::Owner) => {
+            Ok(crate::enclave::host::online_member_ids(state.inner(), &org_id))
+        }
+        Some(_) => {
+            let data = crate::enclave::host::call_host_without_token(
+                state.inner(),
+                &org_id,
+                "org.online",
+                serde_json::json!({}),
+            )
+            .await?;
+            serde_json::from_value(data).map_err(|e| format!("解析在线成员失败：{}", e))
+        }
+        None => Err("尚未同步该组织的治理快照，请先在「组织与权限」页刷新".to_string()),
+    }
+}
+
 /// 读主机应急开关。成员端以主机状态为准。
 #[tauri::command]
 pub async fn enclave_emergency_get(

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { invoke } from '@tauri-apps/api/core';
 import { Users } from 'lucide-react';
 import { TitleBar, StatusBar } from '../components/layout';
 import { useTerminal, type ViewMode } from '../TerminalManager';
@@ -93,6 +94,39 @@ export function EnclaveOrgPage() {
 
   const org = detail?.org ?? orgs.find((o) => o.orgId === activeOrgId) ?? null;
   const members: MemberView[] = detail?.members ?? [];
+  /**
+   * 在线成员（主机侧订阅列表）：每 20s 拉一次。
+   *
+   * 团队数据本身不缓存，在线状态只是主机内存里的连接数；owner 由本机提供主机服务，
+   * 因此能读到列表就说明 owner 在线，一并标成在线。
+   */
+  const [onlineIds, setOnlineIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (!activeOrgId) {
+      setOnlineIds([]);
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      void invoke<string[]>('enclave_online_members', { orgId: activeOrgId })
+        .then((ids) => {
+          if (!cancelled) setOnlineIds(ids);
+        })
+        .catch(() => {
+          if (!cancelled) setOnlineIds([]);
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeOrgId]);
+  const onlineSet = new Set(onlineIds);
+  // owner 就是主机：能读到在线列表说明主机在线。平台快照未带 ownerUserId 时回退到成员表里的 owner 行
+  const ownerId = org?.ownerUserId || members.find((m) => m.role === 'owner')?.userId || '';
+  if (ownerId) onlineSet.add(ownerId);
   const [orgTab, setOrgTab] = useState<OrgTab>('basic');
   const [memberPage, setMemberPage] = useState(0);
   /** 本机团队文件根目录面板（全局设置，与任务/知识库页共用） */
@@ -240,6 +274,13 @@ export function EnclaveOrgPage() {
             <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--text-secondary)' }}>
               <span>席位 {org.seats}</span>
               <span>成员 {org.memberCount}</span>
+              <span className="flex items-center gap-1">
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{ backgroundColor: 'var(--status-success, #2f9e44)' }}
+                />
+                在线 {onlineSet.size}
+              </span>
             </div>
           </div>
         )}
@@ -270,6 +311,7 @@ export function EnclaveOrgPage() {
             <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ color: 'var(--text-tertiary)' }}>
+                  <th className="text-left px-3 py-1.5 font-normal">状态</th>
                   <th className="text-left px-3 py-1.5 font-normal">姓名</th>
                   <th className="text-left px-3 py-1.5 font-normal">邮箱</th>
                   <th className="text-left px-3 py-1.5 font-normal">角色</th>
@@ -288,6 +330,22 @@ export function EnclaveOrgPage() {
                         opacity: removed ? 0.6 : 1,
                       }}
                     >
+                      <td className="px-3 py-1.5">
+                        {onlineSet.has(m.userId) ? (
+                          <span
+                            className="inline-flex items-center gap-1"
+                            style={{ color: 'var(--status-success, #2f9e44)' }}
+                          >
+                            <span
+                              className="w-1.5 h-1.5 rounded-full"
+                              style={{ backgroundColor: 'var(--status-success, #2f9e44)' }}
+                            />
+                            在线
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text-tertiary)' }}>—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-1.5">{m.displayName || m.userId}</td>
                       <td className="px-3 py-1.5">{m.email || '-'}</td>
                       <td className="px-3 py-1.5">{roleLabel(m.role)}</td>
@@ -298,7 +356,7 @@ export function EnclaveOrgPage() {
                 {members.length === 0 && (
                   <tr>
                     <td
-                      colSpan={4}
+                      colSpan={5}
                       className="px-3 py-4 text-center"
                       style={{ color: memberWarning ? 'var(--status-danger)' : 'var(--text-tertiary)' }}
                     >
