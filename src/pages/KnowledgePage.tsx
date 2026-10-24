@@ -53,6 +53,8 @@ export function KnowledgePage() {
   const activeBaseId = useKnowledgeStore((s) => s.activeBaseId);
   const activeTab = useKnowledgeStore((s) => s.activeTab);
   const loading = useKnowledgeStore((s) => s.loading);
+  const entriesHasMore = useKnowledgeStore((s) => s.entriesHasMore);
+  const entriesLoadingMore = useKnowledgeStore((s) => s.entriesLoadingMore);
   const ingestBusy = useKnowledgeStore((s) => s.ingestBusy);
 
   const [dialog, setDialog] = useState<{ open: boolean; baseId: string | null }>({ open: false, baseId: null });
@@ -61,6 +63,13 @@ export function KnowledgePage() {
   useEffect(() => {
     void useKnowledgeStore.getState().loadBases();
   }, []);
+
+  // 图谱按整库画节点：进图谱页时把条目补满到上限（列表页仍由「加载更多」控制节奏）
+  useEffect(() => {
+    if (activeTab === 'graph' && activeBaseId) {
+      void useKnowledgeStore.getState().ensureAllEntries();
+    }
+  }, [activeTab, activeBaseId]);
 
   // 组合开关点击：切模式并回到主布局（与设置页同一套处理）
   const handleModeChange = useCallback((mode: ViewMode) => {
@@ -299,6 +308,9 @@ export function KnowledgePage() {
                 onSave={(key, patch) => useKnowledgeStore.getState().updateEntry(key, patch)}
                 onRemove={(key) => void useKnowledgeStore.getState().removeFromBase(key)}
                 onRemoveMany={(keys) => void useKnowledgeStore.getState().removeEntries(keys)}
+                hasMore={entriesHasMore}
+                loadingMore={entriesLoadingMore}
+                onLoadMore={() => void useKnowledgeStore.getState().loadMoreEntries()}
               />
             )}
             {activeTab === 'files' && <KnowledgeFileList base={base} files={files} fileAttrs={fileAttrs} />}

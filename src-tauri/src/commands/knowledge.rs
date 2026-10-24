@@ -88,13 +88,17 @@ pub fn kb_list_entries(
     origin: Option<String>,
     pin_only: Option<bool>,
     meta_filter: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 ) -> Result<Vec<KnowledgeEntryView>, String> {
-    Ok(store()?.list_entries(
+    Ok(store()?.list_entries_page(
         &kb_id,
         query.as_deref(),
         origin.as_deref(),
         pin_only.unwrap_or(false),
         meta_filter.as_deref(),
+        limit,
+        offset,
     ))
 }
 

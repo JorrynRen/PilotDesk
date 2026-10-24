@@ -31,7 +31,7 @@ pub const REL_ATTACHMENT: &str = "attachment";
 /// 文件关系：新版 → 旧版（`from` 替代了 `to`；仅标注，旧版仍然保留并可检索）
 pub const REL_SUPERSEDES: &str = "supersedes";
 
-/// 迁移/查询用的默认上限（列表页一次最多取这么多，避免一次把整库拉进前端）
+/// 列表分页的单页硬上限（`list_entries_page` 会把 limit 夹到这里；默认调用仍取满一页）。
 const ENTRY_LIST_LIMIT: usize = 500;
 
 /// 单个原文一次最多取回多少分块（图谱「展开文件」用）。
@@ -1083,6 +1083,8 @@ impl KnowledgeStore {
     /* ── 条目 ── */
 
     /// 列表/检索：通用属性（关键词、来源、重要）× 专属属性（meta_filter JSON 对象，逐字段等值）
+    ///
+    /// 整库上限口径：内部委托 [`Self::list_entries_page`]，默认取前 `ENTRY_LIST_LIMIT` 条。
     pub fn list_entries(
         &self,
         kb_id: &str,
@@ -1091,6 +1093,22 @@ impl KnowledgeStore {
         pin_only: bool,
         meta_filter: Option<&str>,
     ) -> Vec<KnowledgeEntryView> {
+        self.list_entries_page(kb_id, query, origin, pin_only, meta_filter, None, None)
+    }
+
+    /// 分页版列表/检索：`limit` 夹在 `[1, ENTRY_LIST_LIMIT]`，`offset` 供「加载更多」使用。
+    pub fn list_entries_page(
+        &self,
+        kb_id: &str,
+        query: Option<&str>,
+        origin: Option<&str>,
+        pin_only: bool,
+        meta_filter: Option<&str>,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Vec<KnowledgeEntryView> {
+        let limit = limit.unwrap_or(ENTRY_LIST_LIMIT).clamp(1, ENTRY_LIST_LIMIT);
+        let offset = offset.unwrap_or(0);
         let conn = self.conn.lock().unwrap();
         let mut sql = String::from(ENTRY_VIEW_COLUMNS);
         sql.push_str(" WHERE l.kb_id = ?");
@@ -1149,10 +1167,9 @@ impl KnowledgeStore {
             }
         }
 
-        sql.push_str(&format!(
-            " ORDER BY m.pin DESC, m.updated_at DESC LIMIT {}",
-            ENTRY_LIST_LIMIT
-        ));
+        sql.push_str(" ORDER BY m.pin DESC, m.updated_at DESC LIMIT ? OFFSET ?");
+        args.push(SqlValue::Integer(limit as i64));
+        args.push(SqlValue::Integer(offset as i64));
 
         let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
@@ -3345,6 +3362,36 @@ mod tests {
     }
 
     const FIELDS: &str = r#"[{"key":"module","label":"模块","type":"select"}]"#;
+
+    #[test]
+    fn paged_list_entries_walks_by_offset() {
+        let dir = tmp_dir();
+        let store = KnowledgeStore::open(&dir).unwrap();
+        store.create_base("kb1", "库一", "描述", FIELDS).unwrap();
+        for i in 0..5 {
+            store
+                .save_entry("kb1", &format!("条目{}", i), "正文", "", "snippet", "", None)
+                .unwrap();
+        }
+        let page = |offset: usize| {
+            store.list_entries_page("kb1", None, None, false, None, Some(2), Some(offset))
+        };
+        let first = page(0);
+        let second = page(2);
+        let third = page(4);
+        assert_eq!((first.len(), second.len(), third.len()), (2, 2, 1));
+        let mut keys: Vec<String> = first
+            .into_iter()
+            .chain(second)
+            .chain(third)
+            .map(|e| e.key)
+            .collect();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), 5, "分页拼起来应覆盖整库且不重复");
+        // 不传 limit/offset 时保持整库口径（工具与老调用方行为不变）
+        assert_eq!(store.list_entries("kb1", None, None, false, None).len(), 5);
+    }
 
     #[test]
     fn schema_and_trigram_search_works() {

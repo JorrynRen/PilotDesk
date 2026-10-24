@@ -43,6 +43,13 @@ import {
 
 export type KnowledgeTab = 'entries' | 'files' | 'ingest' | 'graph';
 
+/** 条目列表每批条数（后端单页硬上限 500；先取 100，其余按需「加载更多」） */
+const ENTRY_PAGE = 100;
+/** 与后端 `ENTRY_LIST_LIMIT` 对齐：单次请求最多 500 条 */
+const ENTRY_LIST_MAX = 500;
+/** 打开图谱时自动把条目补满到该上限（超过部分仍可在列表里继续加载，图谱只看前 N 条） */
+const GRAPH_ENTRY_MAX = 500;
+
 /** 新建库的 id 由前端生成（slug），后端只做唯一性校验 */
 export function makeBaseId(name: string): string {
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '');
@@ -52,6 +59,9 @@ export function makeBaseId(name: string): string {
 interface KnowledgeState {
   bases: KnowledgeBase[];
   entries: KnowledgeEntry[];
+  /** 条目列表是否还有更早的条目没拉（本批拉满即认为可能还有） */
+  entriesHasMore: boolean;
+  entriesLoadingMore: boolean;
   files: KnowledgeFile[];
   /**
    * 文件级专属属性（按 `path` 索引）——由该文件的分块聚合而来（`kb_files` 上没有属性列）。
@@ -110,6 +120,10 @@ interface KnowledgeState {
   /** 关掉当前打开的知识库、回到默认页（只清"打开了哪个"，库列表与库本身都不动） */
   closeBase: () => void;
   selectBase: (id: string) => Promise<void>;
+  /** 条目列表：按当前库再拉一批（offset = 已加载条数） */
+  loadMoreEntries: () => Promise<void>;
+  /** 图谱：把条目自动补满到 `GRAPH_ENTRY_MAX`，避免图谱只画第一页 */
+  ensureAllEntries: () => Promise<void>;
   /** 只重新拉取文件关系（改关系后不必整库刷新） */
   reloadRelations: () => Promise<void>;
   /** 建立文件关系：attachment = from(正文)→to(附件)；supersedes = from(新版)→to(旧版) */
@@ -208,6 +222,8 @@ interface KnowledgeState {
 export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
   bases: [],
   entries: [],
+  entriesHasMore: false,
+  entriesLoadingMore: false,
   files: [],
   fileAttrs: {},
   relations: [],
@@ -236,7 +252,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       }));
       const { activeBaseId } = get();
       if (activeBaseId) await get().selectBase(activeBaseId);
-      else set({ entries: [], files: [], fileAttrs: {}, candidates: [], relations: [], graphChunks: {}, graphChunkLoading: '' });
+      else set({ entries: [], entriesHasMore: false, entriesLoadingMore: false, files: [], fileAttrs: {}, candidates: [], relations: [], graphChunks: {}, graphChunkLoading: '' });
     } catch (e) {
       showToast(`读取知识库列表失败: ${errorMessage(e)}`, 'error');
     }
@@ -247,6 +263,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     set((s) => ({
       activeBaseId: '',
       entries: [],
+      entriesHasMore: false,
+      entriesLoadingMore: false,
       files: [],
       fileAttrs: {},
       candidates: [],
@@ -260,6 +278,9 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     // 只重新拉数据时**不要**清展开态：这会在每次"保存条目 / 改专属属性"后把图谱的展开全收掉。
     // 只有真的换库（id 变了）才清 —— 片段是按库拉的，留着会张冠李戴。
     const same = get().activeBaseId === id;
+    // 同一库内刷新（保存条目 / 改属性后）保留已加载页数，避免「加载更多」后一保存就跳回第一页
+    const prevCount = same ? get().entries.length : 0;
+    const pageLimit = Math.min(ENTRY_LIST_MAX, Math.max(ENTRY_PAGE, prevCount));
     set({ activeBaseId: id, loading: true, ...(same ? {} : { graphChunks: {}, graphChunkLoading: '', expandEpoch: get().expandEpoch + 1 }) });
     try {
       const [entries, files, candidates, relations, fileAttrs] = await Promise.all([
@@ -271,6 +292,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
           origin: null,
           pinOnly: false,
           metaFilter: null,
+          limit: pageLimit,
+          offset: 0,
         }),
         invoke<KnowledgeFileView[]>('kb_list_files', { kbId: id }),
         invoke<KnowledgeCandidateView[]>('kb_list_candidates', { kbId: id }),
@@ -280,6 +303,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       ]);
       set({
         entries: entries.map(toEntry),
+        entriesHasMore: entries.length === pageLimit && pageLimit < ENTRY_LIST_MAX,
+        entriesLoadingMore: false,
         files: files.map(toFile),
         candidates: candidates.map(toCandidate),
         relations: relations.map(toFileRelation),
@@ -292,6 +317,41 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     }
     // 待整理队列按库过滤，切库要跟着换（失败静默）
     void get().loadIngestQueue();
+  },
+
+  loadMoreEntries: async () => {
+    const { activeBaseId, entries, entriesHasMore, entriesLoadingMore } = get();
+    if (!activeBaseId || !entriesHasMore || entriesLoadingMore) return;
+    set({ entriesLoadingMore: true });
+    try {
+      const page = await invoke<KnowledgeEntryView[]>('kb_list_entries', {
+        kbId: activeBaseId,
+        query: null,
+        origin: null,
+        pinOnly: false,
+        metaFilter: null,
+        limit: ENTRY_PAGE,
+        offset: entries.length,
+      });
+      set((s) => ({
+        entries: [...s.entries, ...page.map(toEntry)],
+        entriesHasMore: page.length === ENTRY_PAGE && s.entries.length + page.length < ENTRY_LIST_MAX,
+        entriesLoadingMore: false,
+      }));
+    } catch (e) {
+      set({ entriesLoadingMore: false });
+      showToast(`加载更多条目失败: ${errorMessage(e)}`, 'error');
+    }
+  },
+
+  ensureAllEntries: async () => {
+    // 图谱按整库画节点：进图谱页时把条目补满到上限，避免只画第一页
+    while (get().entriesHasMore && get().entries.length < GRAPH_ENTRY_MAX) {
+      const before = get().entries.length;
+      await get().loadMoreEntries();
+      // 出错时 loadMoreEntries 不追加数据，避免死循环
+      if (get().entries.length === before) break;
+    }
   },
 
   setTab: (tab) => set({ activeTab: tab }),

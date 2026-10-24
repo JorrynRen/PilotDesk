@@ -67,6 +67,10 @@ interface KnowledgeEntryListProps {
   onRemove: (key: string) => void;
   /** 批量解除/删除（多选后一次处理） */
   onRemoveMany: (keys: string[]) => void;
+  /** 分页：还有更早的条目没加载 */
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 function fmtTime(sec: number): string {
@@ -89,7 +93,16 @@ function sameMeta(a: KnowledgeMeta, b: KnowledgeMeta): boolean {
  * 标签维护：chip 列表 + 输入框 —— 实现已抽到 [`TagEditor`]，个人库与团队知识库共用。
  */
 
-export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMany }: KnowledgeEntryListProps) {
+export function KnowledgeEntryList({
+  base,
+  entries,
+  onSave,
+  onRemove,
+  onRemoveMany,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: KnowledgeEntryListProps) {
   // 筛选条件放在 store 里：图谱页共用同一套口径，且图谱能据此限流
   const filters = useKnowledgeStore((s) => s.entryFilters);
   const setFilters = useKnowledgeStore((s) => s.setEntryFilters);
@@ -283,7 +296,7 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
             全选
           </label>
           <span className="text-[11px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-            {filtered.length} / {entries.length} 条
+            {filtered.length} / {entries.length} 条{hasMore ? '（已加载）' : ''}
           </span>
         </div>
 
@@ -562,6 +575,24 @@ export function KnowledgeEntryList({ base, entries, onSave, onRemove, onRemoveMa
               </div>
             );
           })
+        )}
+        {hasMore && (
+          <div className="px-4 py-2 flex items-center justify-center">
+            <button
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="text-[11px] px-3 py-1 rounded-lg"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+                opacity: loadingMore ? 0.6 : 1,
+              }}
+              title="继续加载更早的知识条目"
+            >
+              {loadingMore ? '加载中…' : `加载更多（已加载 ${entries.length} 条）`}
+            </button>
+          </div>
         )}
       </div>
     </div>
