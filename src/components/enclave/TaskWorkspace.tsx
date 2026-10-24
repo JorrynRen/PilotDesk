@@ -2272,7 +2272,7 @@ function TaskDetail(props: {
                 AI 拆解草稿
               </span>
               <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
-                勾选需要创建的子任务；标题与描述可先改再创建
+                每个子任务应是一份可交付、可指派的成果；勾选后创建，标题与描述可先改
               </span>
               <div className="flex-1" />
               <button
@@ -2353,6 +2353,21 @@ function TaskDetail(props: {
                 草稿由模型生成，请核对后再创建
               </span>
               <div className="flex-1" />
+              <button
+                onClick={() => void requestSplit()}
+                disabled={splitLoading || splitCreating}
+                className="text-xs px-2 py-1 rounded flex items-center gap-1"
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-secondary)',
+                  border: '1px solid var(--border)',
+                  opacity: splitLoading || splitCreating ? 0.5 : 1,
+                }}
+                title="结果不符合交付物口径时，可让模型重新拆一次"
+              >
+                {splitLoading ? <Loader2 size={11} className="animate-spin" /> : <Wand2 size={11} />}
+                重新拆解
+              </button>
               <button
                 onClick={() => {
                   setSplitOpen(false);
