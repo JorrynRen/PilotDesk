@@ -424,6 +424,8 @@ export function EnclaveKbPage() {
   const graphLoading = useEnclaveKbStore((s) => s.graphLoading);
   const query = useEnclaveKbStore((s) => s.query);
   const loading = useEnclaveKbStore((s) => s.loading);
+  const entriesHasMore = useEnclaveKbStore((s) => s.entriesHasMore);
+  const entriesLoadingMore = useEnclaveKbStore((s) => s.entriesLoadingMore);
   const error = useEnclaveKbStore((s) => s.error);
 
   const [tab, setTab] = useState<KbTab>('entries');
@@ -2765,6 +2767,26 @@ export function EnclaveKbPage() {
                     </div>
                   );
                 })}
+                {entriesHasMore && (
+                  <div className="px-4 py-2 flex items-center justify-center">
+                    <button
+                      onClick={() => {
+                        if (activeOrgId) void useEnclaveKbStore.getState().loadMoreEntries(activeOrgId);
+                      }}
+                      disabled={entriesLoadingMore}
+                      className="text-[11px] px-3 py-1 rounded-lg"
+                      style={{
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border)',
+                        opacity: entriesLoadingMore ? 0.6 : 1,
+                      }}
+                      title="按当前检索词继续加载更早的条目"
+                    >
+                      {entriesLoadingMore ? '加载中…' : `加载更多（已显示 ${entries.length} 条）`}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}

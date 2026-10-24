@@ -24,6 +24,8 @@ import type {
 const GRAPH_PAGE = 200;
 /** 进入图谱时自动续拉到的上限；再往后由用户点「加载更多」逐批追加 */
 const GRAPH_AUTO_MAX = 1000;
+/** 条目列表每批条数（后端上限 200；100 条一屏足够，其余按需追加） */
+const ENTRY_PAGE = 100;
 
 /** 「全部库」聚合视图的伪库 id：只读跨库检索，与后端 `ALL_KB_PARAM` 一致 */
 export const ALL_KB_ID = '__all__';
@@ -43,6 +45,9 @@ interface EnclaveKbState {
   kbs: KbView[];
   activeKbId: string;
   entries: KbEntryView[];
+  /** 条目列表是否还有更早的条目没拉（本批拉满就说明可能还有） */
+  entriesHasMore: boolean;
+  entriesLoadingMore: boolean;
   activeEntry: KbEntryView | null;
   /** 「文件」页：去重后的交付物 */
   files: KbFileListView[];
@@ -68,6 +73,8 @@ interface EnclaveKbState {
   loadKbs: (orgId: string) => Promise<void>;
   selectKb: (orgId: string, kbId: string) => Promise<void>;
   search: (orgId: string, query: string) => Promise<void>;
+  /** 条目列表：按当前检索词再拉一批（offset = 已加载条数） */
+  loadMoreEntries: (orgId: string) => Promise<void>;
   /** 图谱：进页面自动续拉到 1000 条（每批 200，后端单批上限），失败只记错误、不影响列表 */
   loadGraphEntries: (orgId: string, kbId: string) => Promise<void>;
   /** 图谱：手动再拉一批（200 条），上限与个人库一致（渲染层安全阀） */
@@ -165,6 +172,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   kbs: [],
   activeKbId: '',
   entries: [],
+  entriesHasMore: false,
+  entriesLoadingMore: false,
   activeEntry: null,
   files: [],
   orphans: [],
@@ -183,6 +192,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       kbs: [],
       activeKbId: '',
       entries: [],
+      entriesHasMore: false,
+      entriesLoadingMore: false,
       activeEntry: null,
       files: [],
       orphans: [],
@@ -240,10 +251,13 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
         orgId,
         kbId: get().activeKbId,
         query,
-        limit: 100,
+        limit: ENTRY_PAGE,
+        offset: 0,
       });
       set((s) => ({
         entries,
+        entriesHasMore: entries.length === ENTRY_PAGE,
+        entriesLoadingMore: false,
         // 展开行跟随最新数据（检索 / 刷新后不能继续展示旧对象）；
         // 聚合视图下 memory_id 可能跨库重复，按「库 + 条目」匹配
         activeEntry: s.activeEntry
@@ -257,6 +271,29 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       }));
     } catch (e) {
       set({ error: errorMessage(e), loading: false });
+    }
+  },
+
+  loadMoreEntries: async (orgId) => {
+    const { activeKbId, query, entries, entriesHasMore, entriesLoadingMore } = get();
+    if (!activeKbId || !entriesHasMore || entriesLoadingMore) return;
+    set({ entriesLoadingMore: true });
+    try {
+      const page = await invoke<KbEntryView[]>('enclave_kb_search', {
+        orgId,
+        kbId: activeKbId,
+        query,
+        limit: ENTRY_PAGE,
+        offset: entries.length,
+      });
+      set((s) => ({
+        entries: [...s.entries, ...page],
+        entriesHasMore: page.length === ENTRY_PAGE,
+        entriesLoadingMore: false,
+        error: null,
+      }));
+    } catch (e) {
+      set({ error: errorMessage(e), entriesLoadingMore: false });
     }
   },
 
