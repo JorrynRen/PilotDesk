@@ -987,7 +987,9 @@ function FileRelationPanel({
   return (
     <div
       className="px-4 py-2.5 flex flex-col gap-2 text-[11px]"
-      style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-tertiary)' }}
+      // 面板底色不能用 --bg-tertiary：`--bg-field` 就是 tertiary（控件底色），
+      // 同值会让面板里的 Select / 输入框与面板融成一片，看不出控件边界。
+      style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
     >
       <div className="flex items-center gap-2">
         <span className="shrink-0 w-20" style={{ color: 'var(--text-secondary)' }}>所属正文</span>
