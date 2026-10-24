@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Library,
@@ -265,6 +265,51 @@ function sameFields(a: KnowledgeMeta, b: KnowledgeMeta): boolean {
     if (String(a[k] ?? '') !== String(b[k] ?? '')) return false;
   }
   return true;
+}
+
+/** 命中高亮：把查询词命中的片段包一层强调底色；无命中时原样返回 */
+function highlightText(text: string, query: string): ReactNode {
+  const q = query.trim();
+  if (!q || !text) return text;
+  const lower = text.toLowerCase();
+  const needle = q.toLowerCase();
+  let idx = lower.indexOf(needle);
+  if (idx < 0) return text;
+  const parts: ReactNode[] = [];
+  let from = 0;
+  let key = 0;
+  while (idx >= 0) {
+    if (idx > from) parts.push(text.slice(from, idx));
+    parts.push(
+      <mark
+        key={key++}
+        style={{
+          backgroundColor: 'var(--accent-light)',
+          color: 'var(--accent)',
+          borderRadius: 2,
+          padding: '0 1px',
+        }}
+      >
+        {text.slice(idx, idx + needle.length)}
+      </mark>,
+    );
+    from = idx + needle.length;
+    idx = lower.indexOf(needle, from);
+  }
+  if (from < text.length) parts.push(text.slice(from));
+  return parts;
+}
+
+/** 命中片段：以首个命中为中心截取，避免只看得到正文开头；未命中则取开头 */
+function matchSnippet(content: string, query: string, max = 160): string {
+  const text = content.replace(/\s+/g, ' ').trim();
+  const q = query.trim();
+  if (!q) return text.slice(0, max);
+  const idx = text.toLowerCase().indexOf(q.toLowerCase());
+  if (idx < 0) return text.slice(0, max);
+  const start = Math.max(0, idx - Math.floor(max / 3));
+  const end = Math.min(text.length, start + max);
+  return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`;
 }
 
 /** 搜索框口径：与个人知识库一致（pd-field 容器 + 内部透明输入） */
@@ -714,6 +759,42 @@ export function EnclaveKbPage() {
       return [];
     }
   }, [kb?.fieldSchema]);
+
+  /**
+   * 专属属性筛选：选项从「当前已加载条目」里现取（key + 值），只筛当前列表。
+   * 「全部库」视图各库 schema 不同，不提供该筛选。
+   */
+  const [attrFilter, setAttrFilter] = useState('');
+  const attrOptions = useMemo(() => {
+    if (kbFields.length === 0) return [] as { value: string; label: string }[];
+    const seen = new Set<string>();
+    const out: { value: string; label: string }[] = [];
+    for (const f of kbFields) {
+      for (const e of entries) {
+        const raw = e.metadata?.[f.key];
+        if (raw === undefined || raw === null || raw === '') continue;
+        const text = typeof raw === 'boolean' ? (raw ? '是' : '否') : String(raw);
+        const value = `${f.key}\u0000${text}`;
+        if (seen.has(value)) continue;
+        seen.add(value);
+        out.push({ value, label: `${f.label || f.key}：${text}` });
+        if (out.length >= 60) return out;
+      }
+    }
+    return out;
+  }, [entries, kbFields]);
+  const shownEntries = useMemo(() => {
+    if (!attrFilter) return entries;
+    const [key, want] = attrFilter.split('\u0000');
+    return entries.filter((e) => {
+      const raw = e.metadata?.[key];
+      const text =
+        typeof raw === 'boolean' ? (raw ? '是' : '否') : raw === undefined || raw === null ? '' : String(raw);
+      return text === want;
+    });
+  }, [entries, attrFilter]);
+  // 切库 / 换组织后属性选项会变，回到「全部属性」
+  useEffect(() => setAttrFilter(''), [activeKbId, activeOrgId]);
 
   /* ── 图谱：团队条目 → 个人库图谱组件认识的 GraphModel（复用 3D 渲染） ── */
   const teamGraph = useMemo(
@@ -2186,8 +2267,21 @@ export function EnclaveKbPage() {
                   }}
                   placeholder="搜索标题 / 正文 / 标签 / 文件（回车）"
                 />
+                {attrOptions.length > 0 && (
+                  <div className="w-[170px] shrink-0">
+                    <Select
+                      value={attrFilter}
+                      onChange={setAttrFilter}
+                      size="sm"
+                      className="w-full"
+                      options={[{ value: '', label: '全部属性' }, ...attrOptions]}
+                      title="按专属属性筛选当前列表（选项来自已加载的条目）"
+                    />
+                  </div>
+                )}
                 <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
-                  {entries.length} 条{query && ` · 匹配「${query}」`}
+                  {shownEntries.length} 条{query && ` · 匹配「${query}」`}
+                  {attrFilter && ' · 已按属性筛选'}
                 </span>
                 <div className="flex-1" />
                 <span className="text-[10px] shrink-0 whitespace-nowrap" style={{ color: 'var(--text-tertiary)' }}>
@@ -2196,17 +2290,21 @@ export function EnclaveKbPage() {
               </div>
 
               <div className="flex-1 overflow-y-auto">
-                {entries.length === 0 && (
+                {shownEntries.length === 0 && (
                   <div
                     className="h-full flex flex-col items-center justify-center gap-2 text-xs"
                     style={{ color: 'var(--text-tertiary)' }}
                   >
                     <Search size={18} />
-                    {query ? `没有匹配「${query}」的条目` : '还没有条目：任务汇报「确认完成」后会自动沉淀到这里'}
+                    {query
+                      ? `没有匹配「${query}」的条目`
+                      : attrFilter
+                        ? '没有符合该属性筛选的条目'
+                        : '还没有条目：任务汇报「确认完成」后会自动沉淀到这里'}
                   </div>
                 )}
 
-                {entries.map((e) => {
+                {shownEntries.map((e) => {
                   const open =
                     activeEntry?.memoryId === e.memoryId && activeEntry?.kbId === e.kbId;
                   const tags = splitTags(e.tags);
@@ -2257,7 +2355,7 @@ export function EnclaveKbPage() {
                                 style={{ color: 'var(--text-primary)' }}
                                 title={e.title}
                               >
-                                {e.title}
+                                {highlightText(e.title, query)}
                               </span>
                             )}
                             <span
@@ -2311,9 +2409,26 @@ export function EnclaveKbPage() {
 
                           {!open && (
                             <div className="text-[11px] mt-1 line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
-                              {e.content || '（无正文）'}
+                              {e.content ? highlightText(matchSnippet(e.content, query), query) : '（无正文）'}
                             </div>
                           )}
+
+                          {/* 文件名命中（搜索会匹配交付物文件名）：正文里看不到，单独点出来 */}
+                          {!open && query.trim() && (() => {
+                            const needle = query.trim().toLowerCase();
+                            const hit = e.files.filter((f) => f.fileName.toLowerCase().includes(needle));
+                            if (hit.length === 0) return null;
+                            return (
+                              <div
+                                className="text-[10px] mt-1 flex items-center gap-1 truncate"
+                                style={{ color: 'var(--text-tertiary)' }}
+                              >
+                                <Paperclip size={9} className="shrink-0" />
+                                命中文件：{highlightText(hit[0].fileName, query)}
+                                {hit.length > 1 && ` 等 ${hit.length} 个`}
+                              </div>
+                            );
+                          })()}
 
                           {!open && (
                             <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
@@ -2342,6 +2457,15 @@ export function EnclaveKbPage() {
                                   #{t}
                                 </span>
                               ))}
+                              {taskTitle && (
+                                <span
+                                  className="max-w-[180px] truncate text-[9px]"
+                                  style={{ color: 'var(--text-tertiary)' }}
+                                  title={`来源任务：${taskTitle}`}
+                                >
+                                  来自「{taskTitle}」
+                                </span>
+                              )}
                               <span className="text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
                                 更新于 {formatRelative(e.updatedAt)}
                               </span>
@@ -2429,7 +2553,7 @@ export function EnclaveKbPage() {
                                 className="text-xs whitespace-pre-wrap leading-6"
                                 style={{ color: 'var(--text-secondary)' }}
                               >
-                                {e.content || '（无正文）'}
+                                {e.content ? highlightText(e.content, query) : '（无正文）'}
                               </div>
                             )}
                           </div>
