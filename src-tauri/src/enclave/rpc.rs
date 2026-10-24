@@ -617,7 +617,10 @@ pub fn dispatch(
         }
         "kb.file_list" => {
             let kb_id = req_str(payload, "kbId")?;
-            to_value(knowledge::list_files(conn, org_id, &kb_id)?)
+            // 可选分页：成员端「加载更多」带 limit/offset；不带时保持整库口径
+            let limit = payload.get("limit").and_then(|v| v.as_i64());
+            let offset = payload.get("offset").and_then(|v| v.as_i64());
+            to_value(knowledge::list_files_page(conn, org_id, &kb_id, limit, offset)?)
         }
 
         // ── 文件回收（管理角色）──

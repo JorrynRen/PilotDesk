@@ -164,9 +164,11 @@ pub fn kb_unlink_entries(kb_id: String, keys: Vec<String>) -> Result<UnlinkEntri
 pub fn kb_list_files(
     state: State<'_, DbState>,
     kb_id: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
 ) -> Result<Vec<KnowledgeFileView>, String> {
     let root = knowledge_root(&state)?;
-    Ok(store()?.list_files(&root, &kb_id))
+    Ok(store()?.list_files_page(&root, &kb_id, limit, offset))
 }
 
 /// 本库文件之间的关系（正文—附件 / 新旧版本）

@@ -253,9 +253,20 @@ interface KnowledgeFileListProps {
   files: KnowledgeFile[];
   /** 文件级专属属性（按 `path` 索引）：「按属性分目录」用；缺省则只有文件关系一种分组 */
   fileAttrs: Record<string, KnowledgeFileAttr>;
+  /** 分页：还有更早的文件没加载 */
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
-export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListProps) {
+export function KnowledgeFileList({
+  base,
+  files,
+  fileAttrs,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: KnowledgeFileListProps) {
   /**
    * 分组方式（'' = 文件关系；否则是「按这个专属属性分目录」），**按库记住**。
    *
@@ -535,7 +546,9 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
         <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
           {selected.length > 0
             ? `已选 ${selected.length} / ${filtered.length}`
-            : filteredOut > 0 ? `匹配 ${filtered.length} / ${files.length} 个文件` : `共 ${files.length} 个文件`}
+            : filteredOut > 0
+              ? `匹配 ${filtered.length} / ${files.length} 个文件${hasMore ? '（已加载）' : ''}`
+              : `共 ${files.length} 个文件${hasMore ? '（已加载）' : ''}`}
         </span>
         {enriching && (
           <span className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--accent)' }}>
@@ -856,6 +869,24 @@ export function KnowledgeFileList({ base, files, fileAttrs }: KnowledgeFileListP
             </div>
           );
         })}
+        {hasMore && (
+          <div className="px-4 py-2 flex items-center justify-center">
+            <button
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="text-[11px] px-3 py-1 rounded-lg"
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+                opacity: loadingMore ? 0.6 : 1,
+              }}
+              title="继续加载更早的文件"
+            >
+              {loadingMore ? '加载中…' : `加载更多（已加载 ${files.length} 个文件）`}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

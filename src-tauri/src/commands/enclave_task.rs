@@ -1009,10 +1009,18 @@ pub async fn enclave_kb_delete(
 pub async fn enclave_kb_file_list(
     org_id: String,
     kb_id: String,
+    limit: Option<i64>,
+    offset: Option<i64>,
     db: State<'_, crate::DbState>,
     state: State<'_, Arc<EnclaveState>>,
 ) -> Result<Vec<crate::enclave::knowledge::KbFileListView>, String> {
-    let payload = json!({ "kbId": kb_id.clone() });
+    let mut payload = json!({ "kbId": kb_id.clone() });
+    if let Some(l) = limit {
+        payload["limit"] = json!(l);
+    }
+    if let Some(o) = offset {
+        payload["offset"] = json!(o);
+    }
     run_command(
         state.inner(),
         db.inner(),
@@ -1021,7 +1029,7 @@ pub async fn enclave_kb_file_list(
         payload,
         |c, _actor| {
             ensure_kb_view(c, &org_id)?;
-            crate::enclave::knowledge::list_files(c, &org_id, &kb_id)
+            crate::enclave::knowledge::list_files_page(c, &org_id, &kb_id, limit, offset)
         },
     )
     .await

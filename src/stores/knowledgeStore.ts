@@ -47,6 +47,8 @@ export type KnowledgeTab = 'entries' | 'files' | 'ingest' | 'graph';
 const ENTRY_PAGE = 100;
 /** 与后端 `ENTRY_LIST_LIMIT` 对齐：单次请求最多 500 条 */
 const ENTRY_LIST_MAX = 500;
+/** 文件列表每批条数（后端单页硬上限 5000） */
+const FILE_PAGE = 200;
 /** 打开图谱时自动把条目补满到该上限（超过部分仍可在列表里继续加载，图谱只看前 N 条） */
 const GRAPH_ENTRY_MAX = 500;
 
@@ -63,6 +65,9 @@ interface KnowledgeState {
   entriesHasMore: boolean;
   entriesLoadingMore: boolean;
   files: KnowledgeFile[];
+  /** 文件列表是否还有更早的文件没拉（本批拉满即认为可能还有） */
+  filesHasMore: boolean;
+  filesLoadingMore: boolean;
   /**
    * 文件级专属属性（按 `path` 索引）——由该文件的分块聚合而来（`kb_files` 上没有属性列）。
    * 文件视图「按属性分目录」用；没有分块的文件不会出现在这里（必然未分类）。
@@ -122,6 +127,8 @@ interface KnowledgeState {
   selectBase: (id: string) => Promise<void>;
   /** 条目列表：按当前库再拉一批（offset = 已加载条数） */
   loadMoreEntries: () => Promise<void>;
+  /** 文件列表：按当前库再拉一批（offset = 已加载文件数） */
+  loadMoreFiles: () => Promise<void>;
   /** 图谱：把条目自动补满到 `GRAPH_ENTRY_MAX`，避免图谱只画第一页 */
   ensureAllEntries: () => Promise<void>;
   /** 只重新拉取文件关系（改关系后不必整库刷新） */
@@ -225,6 +232,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
   entriesHasMore: false,
   entriesLoadingMore: false,
   files: [],
+  filesHasMore: false,
+  filesLoadingMore: false,
   fileAttrs: {},
   relations: [],
   candidates: [],
@@ -252,7 +261,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       }));
       const { activeBaseId } = get();
       if (activeBaseId) await get().selectBase(activeBaseId);
-      else set({ entries: [], entriesHasMore: false, entriesLoadingMore: false, files: [], fileAttrs: {}, candidates: [], relations: [], graphChunks: {}, graphChunkLoading: '' });
+      else set({ entries: [], entriesHasMore: false, entriesLoadingMore: false, files: [], filesHasMore: false, filesLoadingMore: false, fileAttrs: {}, candidates: [], relations: [], graphChunks: {}, graphChunkLoading: '' });
     } catch (e) {
       showToast(`读取知识库列表失败: ${errorMessage(e)}`, 'error');
     }
@@ -266,6 +275,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       entriesHasMore: false,
       entriesLoadingMore: false,
       files: [],
+      filesHasMore: false,
+      filesLoadingMore: false,
       fileAttrs: {},
       candidates: [],
       relations: [],
@@ -281,6 +292,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     // 同一库内刷新（保存条目 / 改属性后）保留已加载页数，避免「加载更多」后一保存就跳回第一页
     const prevCount = same ? get().entries.length : 0;
     const pageLimit = Math.min(ENTRY_LIST_MAX, Math.max(ENTRY_PAGE, prevCount));
+    const prevFileCount = same ? get().files.length : 0;
+    const fileLimit = Math.min(5000, Math.max(FILE_PAGE, prevFileCount));
     set({ activeBaseId: id, loading: true, ...(same ? {} : { graphChunks: {}, graphChunkLoading: '', expandEpoch: get().expandEpoch + 1 }) });
     try {
       const [entries, files, candidates, relations, fileAttrs] = await Promise.all([
@@ -295,7 +308,11 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
           limit: pageLimit,
           offset: 0,
         }),
-        invoke<KnowledgeFileView[]>('kb_list_files', { kbId: id }),
+        invoke<KnowledgeFileView[]>('kb_list_files', {
+          kbId: id,
+          limit: fileLimit,
+          offset: 0,
+        }),
         invoke<KnowledgeCandidateView[]>('kb_list_candidates', { kbId: id }),
         invoke<KnowledgeFileRelationView[]>('kb_list_file_relations', { kbId: id }),
         // 文件级属性（由分块聚合）：文件视图「按属性分目录」的数据源
@@ -306,6 +323,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
         entriesHasMore: entries.length === pageLimit && pageLimit < ENTRY_LIST_MAX,
         entriesLoadingMore: false,
         files: files.map(toFile),
+        filesHasMore: files.length === fileLimit && fileLimit < 5000,
+        filesLoadingMore: false,
         candidates: candidates.map(toCandidate),
         relations: relations.map(toFileRelation),
         fileAttrs: Object.fromEntries(fileAttrs.map((a) => [a.sourceRef, a])),
@@ -351,6 +370,27 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
       await get().loadMoreEntries();
       // 出错时 loadMoreEntries 不追加数据，避免死循环
       if (get().entries.length === before) break;
+    }
+  },
+
+  loadMoreFiles: async () => {
+    const { activeBaseId, files, filesHasMore, filesLoadingMore } = get();
+    if (!activeBaseId || !filesHasMore || filesLoadingMore) return;
+    set({ filesLoadingMore: true });
+    try {
+      const page = await invoke<KnowledgeFileView[]>('kb_list_files', {
+        kbId: activeBaseId,
+        limit: FILE_PAGE,
+        offset: files.length,
+      });
+      set((s) => ({
+        files: [...s.files, ...page.map(toFile)],
+        filesHasMore: page.length === FILE_PAGE && s.files.length + page.length < 5000,
+        filesLoadingMore: false,
+      }));
+    } catch (e) {
+      set({ filesLoadingMore: false });
+      showToast(`加载更多文件失败: ${errorMessage(e)}`, 'error');
     }
   },
 

@@ -55,6 +55,8 @@ export function KnowledgePage() {
   const loading = useKnowledgeStore((s) => s.loading);
   const entriesHasMore = useKnowledgeStore((s) => s.entriesHasMore);
   const entriesLoadingMore = useKnowledgeStore((s) => s.entriesLoadingMore);
+  const filesHasMore = useKnowledgeStore((s) => s.filesHasMore);
+  const filesLoadingMore = useKnowledgeStore((s) => s.filesLoadingMore);
   const ingestBusy = useKnowledgeStore((s) => s.ingestBusy);
 
   const [dialog, setDialog] = useState<{ open: boolean; baseId: string | null }>({ open: false, baseId: null });
@@ -313,7 +315,16 @@ export function KnowledgePage() {
                 onLoadMore={() => void useKnowledgeStore.getState().loadMoreEntries()}
               />
             )}
-            {activeTab === 'files' && <KnowledgeFileList base={base} files={files} fileAttrs={fileAttrs} />}
+            {activeTab === 'files' && (
+              <KnowledgeFileList
+                base={base}
+                files={files}
+                fileAttrs={fileAttrs}
+                hasMore={filesHasMore}
+                loadingMore={filesLoadingMore}
+                onLoadMore={() => void useKnowledgeStore.getState().loadMoreFiles()}
+              />
+            )}
             {activeTab === 'ingest' && (
               <KnowledgeIngest
                 base={base}

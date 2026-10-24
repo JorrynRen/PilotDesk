@@ -26,6 +26,8 @@ const GRAPH_PAGE = 200;
 const GRAPH_AUTO_MAX = 1000;
 /** 条目列表每批条数（后端上限 200；100 条一屏足够，其余按需追加） */
 const ENTRY_PAGE = 100;
+/** 文件列表（文件 × 条目关联行）每批条数 */
+const FILE_PAGE = 200;
 
 /** 「全部库」聚合视图的伪库 id：只读跨库检索，与后端 `ALL_KB_PARAM` 一致 */
 export const ALL_KB_ID = '__all__';
@@ -51,6 +53,8 @@ interface EnclaveKbState {
   activeEntry: KbEntryView | null;
   /** 「文件」页：去重后的交付物 */
   files: KbFileListView[];
+  filesHasMore: boolean;
+  filesLoadingMore: boolean;
   /** 无引用文件（条目已移除，原件仍在磁盘）：仅用于管理清理 */
   orphans: KbOrphanFile[];
   query: string;
@@ -80,6 +84,8 @@ interface EnclaveKbState {
   /** 图谱：手动再拉一批（200 条），上限与个人库一致（渲染层安全阀） */
   loadMoreGraphEntries: (orgId: string, kbId: string) => Promise<void>;
   loadFiles: (orgId: string, kbId: string) => Promise<void>;
+  /** 文件列表：再拉一批（offset = 已加载行数） */
+  loadMoreFiles: (orgId: string) => Promise<void>;
   /** 解除条目与一份原件的关联（owner / admin）；返回错误文案，成功为 null */
   detachEntryFile: (
     orgId: string,
@@ -176,6 +182,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   entriesLoadingMore: false,
   activeEntry: null,
   files: [],
+  filesHasMore: false,
+  filesLoadingMore: false,
   orphans: [],
   query: '',
   loading: false,
@@ -196,6 +204,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       entriesLoadingMore: false,
       activeEntry: null,
       files: [],
+      filesHasMore: false,
+      filesLoadingMore: false,
       orphans: [],
       query: '',
       loading: false,
@@ -229,6 +239,8 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       activeKbId: kbId,
       activeEntry: null,
       files: [],
+      filesHasMore: false,
+      filesLoadingMore: false,
       orphans: [],
       graphEntries: [],
       graphHasMore: false,
@@ -343,7 +355,14 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   loadFiles: async (orgId, kbId) => {
     set({ loading: true, error: null });
     try {
-      const files = await invoke<KbFileListView[]>('enclave_kb_file_list', { orgId, kbId });
+      // 同一库内刷新（解除关联 / 重试归档后）保留已加载页数，避免跳回第一页
+      const limit = Math.max(FILE_PAGE, get().files.length);
+      const files = await invoke<KbFileListView[]>('enclave_kb_file_list', {
+        orgId,
+        kbId,
+        limit,
+        offset: 0,
+      });
       // 无引用文件是管理信息：拿不到（旧版主机 / 权限不足）不影响文件列表本身
       let orphans: KbOrphanFile[] = [];
       try {
@@ -351,11 +370,32 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       } catch {
         orphans = [];
       }
-      set({ files, orphans, loading: false });
+      set({ files, filesHasMore: files.length === limit, filesLoadingMore: false, orphans, loading: false });
       // 文件页要提示「待整理」的文件投喂（它们还没有条目，但不是无引用冗余）
       void get().loadQueue(orgId, kbId);
     } catch (e) {
       set({ error: errorMessage(e), loading: false });
+    }
+  },
+
+  loadMoreFiles: async (orgId) => {
+    const { activeKbId, files, filesHasMore, filesLoadingMore } = get();
+    if (!activeKbId || !filesHasMore || filesLoadingMore) return;
+    set({ filesLoadingMore: true });
+    try {
+      const page = await invoke<KbFileListView[]>('enclave_kb_file_list', {
+        orgId,
+        kbId: activeKbId,
+        limit: FILE_PAGE,
+        offset: files.length,
+      });
+      set((s) => ({
+        files: [...s.files, ...page],
+        filesHasMore: page.length === FILE_PAGE,
+        filesLoadingMore: false,
+      }));
+    } catch (e) {
+      set({ filesLoadingMore: false, error: errorMessage(e) });
     }
   },
 

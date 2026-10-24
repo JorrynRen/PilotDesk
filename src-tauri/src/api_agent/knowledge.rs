@@ -1960,19 +1960,39 @@ impl KnowledgeStore {
 
     /// 文件列表。`root` 用来把相对路径拼成绝对路径（前端「打开原文」要用），
     /// 由命令层从主库的 app_settings 解析后传入（本模块不碰主库）。
+    ///
+    /// 不分页口径：保留给内部调用方；页面走 [`Self::list_files_page`]。
     pub fn list_files(&self, root: &Path, kb_id: &str) -> Vec<KnowledgeFileView> {
+        self.list_files_page(root, kb_id, None, None)
+    }
+
+    /// 分页版文件列表：`limit` 夹在 `[1, 5000]`，`offset` 供「加载更多」使用。
+    pub fn list_files_page(
+        &self,
+        root: &Path,
+        kb_id: &str,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Vec<KnowledgeFileView> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare(
+        let mut sql = String::from(
             "SELECT f.id, f.name, f.rel_path, f.url, f.mime, f.size, f.extract_status, f.chunk_count, f.created_at,
                     (SELECT group_concat(x.kb_id, ',') FROM kb_file_links x WHERE x.file_id = f.id),
                     f.enriched, f.enrich_error, f.enriched_at
              FROM kb_file_links l JOIN kb_files f ON f.id = l.file_id
              WHERE l.kb_id = ?1 ORDER BY f.created_at DESC",
-        ) {
+        );
+        let mut args: Vec<SqlValue> = vec![SqlValue::Text(kb_id.to_string())];
+        if let Some(l) = limit {
+            sql.push_str(" LIMIT ?2 OFFSET ?3");
+            args.push(SqlValue::Integer(l.clamp(1, 5000)));
+            args.push(SqlValue::Integer(offset.unwrap_or(0).max(0)));
+        }
+        let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        stmt.query_map(params![kb_id], |row| {
+        stmt.query_map(params_from_iter(args), |row| {
             let base_ids: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
             let rel_path: String = row.get(2)?;
             Ok(KnowledgeFileView {

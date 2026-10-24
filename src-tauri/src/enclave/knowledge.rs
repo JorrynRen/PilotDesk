@@ -370,10 +370,23 @@ pub struct KbFileListView {
 }
 
 /// 团队知识库的全部交付物（按条目展开，供前端建目录树）。
+///
+/// 不分页口径：保留给内部调用方（RPC / 测试）；页面走 [`list_files_page`]。
 pub fn list_files(
     conn: &Connection,
     org_id: &str,
     kb_id: &str,
+) -> Result<Vec<KbFileListView>, String> {
+    list_files_page(conn, org_id, kb_id, None, None)
+}
+
+/// 分页版文件列表：`limit` 夹在 `[1, 5000]`，`offset` 供「加载更多」使用。
+pub fn list_files_page(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    limit: Option<i64>,
+    offset: Option<i64>,
 ) -> Result<Vec<KbFileListView>, String> {
     let all = kb_id == ALL_KB_PARAM;
     // 作用域片段：单库时 ?1 = 库 id；「全部库」时 ?1 = 组织 id（走子查询）
@@ -386,24 +399,33 @@ pub fn list_files(
     if !all {
         ensure_kb_owned(conn, org_id, kb_id)?;
     }
+    let mut sql = format!(
+        "SELECT fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash,
+                kbf.memory_id, COALESCE(m.title, ''), COALESCE(m.source_ref, ''), kbf.added_at,
+                COALESCE(t.assignee_id, ''), COALESCE(t.priority, 'normal'),
+                COALESCE(m.metadata, '{{}}'), kbf.knowledge_base_id
+         FROM knowledge_base_files kbf
+         JOIN file_assets fa ON fa.id = kbf.file_id
+         LEFT JOIN knowledge_base_memories m
+           ON m.knowledge_base_id = kbf.knowledge_base_id
+          AND m.memory_id = kbf.memory_id
+         LEFT JOIN org_tasks t ON t.id = m.source_ref
+         WHERE kbf.knowledge_base_id {scope}
+         ORDER BY kbf.added_at DESC, fa.file_name"
+    );
+    let mut args: Vec<rusqlite::types::Value> =
+        vec![rusqlite::types::Value::Text(key.to_string())];
+    if let Some(l) = limit {
+        sql.push_str(" LIMIT ?");
+        args.push(l.clamp(1, 5000).into());
+        sql.push_str(" OFFSET ?");
+        args.push(offset.unwrap_or(0).max(0).into());
+    }
     let mut stmt = conn
-        .prepare(&format!(
-            "SELECT fa.id, fa.file_name, fa.file_type, fa.file_size, fa.file_hash,
-                    kbf.memory_id, COALESCE(m.title, ''), COALESCE(m.source_ref, ''), kbf.added_at,
-                    COALESCE(t.assignee_id, ''), COALESCE(t.priority, 'normal'),
-                    COALESCE(m.metadata, '{{}}'), kbf.knowledge_base_id
-             FROM knowledge_base_files kbf
-             JOIN file_assets fa ON fa.id = kbf.file_id
-             LEFT JOIN knowledge_base_memories m
-               ON m.knowledge_base_id = kbf.knowledge_base_id
-              AND m.memory_id = kbf.memory_id
-             LEFT JOIN org_tasks t ON t.id = m.source_ref
-             WHERE kbf.knowledge_base_id {scope}
-             ORDER BY kbf.added_at DESC, fa.file_name"
-        ))
+        .prepare(&sql)
         .map_err(|e| format!("查询知识库文件失败：{}", e))?;
     let rows = stmt
-        .query_map(params![key], |r| {
+        .query_map(rusqlite::params_from_iter(args), |r| {
             let metadata_raw: String = r.get(11)?;
             Ok(KbFileListView {
                 file_id: r.get(0)?,
@@ -1882,6 +1904,41 @@ mod tests {
         assert!(ENTRY_COLS.contains("memory_id"));
         assert!(ENTRY_COLS.split(", ").count() >= 8);
         assert!(qualified_cols("m").starts_with("m.memory_id"));
+    }
+
+    /// 文件列表分页：按 limit/offset 切片；不传参数时保持整库口径。
+    #[test]
+    fn file_list_page_slices_by_offset() {
+        let conn = seeded();
+        for i in 0..3 {
+            let fid = format!("f{}", i);
+            let mid = format!("task:t{}", i);
+            conn.execute(
+                "INSERT INTO file_assets
+                    (id, file_name, file_path, file_type, file_size, file_hash, created_at, updated_at)
+                 VALUES (?1, ?2, ?2, 'txt', 1, 'h', ?3, ?3)",
+                params![fid, format!("文件{}.txt", i), i],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO knowledge_base_memories
+                    (knowledge_base_id, memory_id, title, added_by, added_at, updated_at)
+                 VALUES ('kb-org-8', ?1, ?1, '1', 0, 0)",
+                params![mid],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO knowledge_base_files (knowledge_base_id, memory_id, file_id, added_at)
+                 VALUES ('kb-org-8', ?1, ?2, ?3)",
+                params![mid, format!("f{}", i), i],
+            )
+            .unwrap();
+        }
+        let page =
+            |offset: i64| list_files_page(&conn, "8", "kb-org-8", Some(2), Some(offset)).unwrap();
+        assert_eq!(page(0).len(), 2);
+        assert_eq!(page(2).len(), 1);
+        assert_eq!(list_files(&conn, "8", "kb-org-8").unwrap().len(), 3);
     }
 
     /// 内存库：本机 owner + 组织 8 的治理快照。

@@ -426,6 +426,8 @@ export function EnclaveKbPage() {
   const loading = useEnclaveKbStore((s) => s.loading);
   const entriesHasMore = useEnclaveKbStore((s) => s.entriesHasMore);
   const entriesLoadingMore = useEnclaveKbStore((s) => s.entriesLoadingMore);
+  const filesHasMore = useEnclaveKbStore((s) => s.filesHasMore);
+  const filesLoadingMore = useEnclaveKbStore((s) => s.filesLoadingMore);
   const error = useEnclaveKbStore((s) => s.error);
 
   const [tab, setTab] = useState<KbTab>('entries');
@@ -2829,8 +2831,8 @@ export function EnclaveKbPage() {
                 />
                 <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
                   {fileKeyword.trim()
-                    ? `匹配 ${matchedFileCount} / ${totalFileCount} 个文件`
-                    : `共 ${totalFileCount} 个文件`}
+                    ? `匹配 ${matchedFileCount} / ${totalFileCount} 个文件${filesHasMore ? '（已加载）' : ''}`
+                    : `共 ${totalFileCount} 个文件${filesHasMore ? '（已加载）' : ''}`}
                 </span>
                 {pendingFileQueue.length > 0 && (
                   <button
@@ -2988,6 +2990,26 @@ export function EnclaveKbPage() {
                     </div>
                   );
                 })}
+                {filesHasMore && (
+                  <div className="px-4 py-2 flex items-center justify-center">
+                    <button
+                      onClick={() => {
+                        if (activeOrgId) void useEnclaveKbStore.getState().loadMoreFiles(activeOrgId);
+                      }}
+                      disabled={filesLoadingMore}
+                      className="text-[11px] px-3 py-1 rounded-lg"
+                      style={{
+                        backgroundColor: 'var(--bg-tertiary)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border)',
+                        opacity: filesLoadingMore ? 0.6 : 1,
+                      }}
+                      title="继续加载更早的文件"
+                    >
+                      {filesLoadingMore ? '加载中…' : `加载更多（已加载 ${files.length} 条文件记录）`}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}
