@@ -1097,8 +1097,26 @@ export function EnclaveKbPage() {
       string,
       { id: string; title: string; files: typeof files; latest: number }
     >();
+    /** 文件搜索口径：文件名 / 来源条目（含任务标题）/ 负责人 / 所属库 / 专属属性值 */
+    const matches = (f: KbFileListView, q: string) => {
+      if (
+        f.fileName.toLowerCase().includes(q) ||
+        f.entryTitle.toLowerCase().includes(q) ||
+        f.sourceRef.toLowerCase().includes(q) ||
+        memberName(f.assigneeId).toLowerCase().includes(q) ||
+        (kbs.find((k) => k.id === f.kbId)?.name ?? '').toLowerCase().includes(q)
+      ) {
+        return true;
+      }
+      return Object.entries(f.metadata ?? {}).some(([k, v]) => {
+        const text = typeof v === 'boolean' ? (v ? '是' : '否') : v === null || v === undefined ? '' : String(v);
+        if (text.toLowerCase().includes(q)) return true;
+        const label = kbFields.find((x) => x.key === k)?.label ?? k;
+        return label.toLowerCase().includes(q);
+      });
+    };
     for (const f of files) {
-      if (q && !f.fileName.toLowerCase().includes(q)) continue;
+      if (q && !matches(f, q)) continue;
       let id: string;
       let title: string;
       if (fileGroupBy.kind === 'field') {
@@ -1181,6 +1199,31 @@ export function EnclaveKbPage() {
   const totalFileCount = isAllKb
     ? kbs.reduce((n, k) => n + k.fileCount, 0)
     : kb?.fileCount ?? new Set(files.map((f) => f.fileId)).size;
+
+  /** 命中原因（属性 / 条目 / 负责人 / 库）：文件名没命中时告诉用户这份文件为什么出现在结果里 */
+  const fileHitHint = (f: KbFileListView): string => {
+    const q = fileKeyword.trim().toLowerCase();
+    if (!q) return '';
+    const kv = Object.entries(f.metadata ?? {}).find(([k, v]) => {
+      const text =
+        typeof v === 'boolean' ? (v ? '是' : '否') : v === null || v === undefined ? '' : String(v);
+      const label = kbFields.find((x) => x.key === k)?.label ?? k;
+      return text.toLowerCase().includes(q) || label.toLowerCase().includes(q);
+    });
+    if (kv) {
+      const [k, v] = kv;
+      const label = kbFields.find((x) => x.key === k)?.label ?? k;
+      const text = typeof v === 'boolean' ? (v ? '是' : '否') : String(v);
+      return `命中属性 ${label}：${text}`;
+    }
+    if (f.entryTitle.toLowerCase().includes(q)) return `命中条目「${f.entryTitle}」`;
+    if (f.assigneeId && memberName(f.assigneeId).toLowerCase().includes(q)) {
+      return `命中负责人 ${memberName(f.assigneeId)}`;
+    }
+    const kbName = kbs.find((k) => k.id === f.kbId)?.name ?? '';
+    if (kbName && kbName.toLowerCase().includes(q)) return `命中库「${kbName}」`;
+    return '';
+  };
 
   const toggleGroup = (id: string) =>
     setCollapsedGroups((prev) =>
@@ -2783,7 +2826,7 @@ export function EnclaveKbPage() {
                   value={fileKeyword}
                   onChange={setFileKeyword}
                   onClear={() => setFileKeyword('')}
-                  placeholder="搜索文件名"
+                  placeholder="搜索文件名 / 条目 / 属性 / 负责人"
                 />
                 <span className="text-[10px] shrink-0" style={{ color: 'var(--text-tertiary)' }}>
                   {fileKeyword.trim()
@@ -2910,6 +2953,9 @@ export function EnclaveKbPage() {
                                 )}
                                 {f.fileSize > 0 && `${formatSize(f.fileSize)} · `}
                                 {formatRelative(f.addedAt)}归档
+                                {fileHitHint(f) && (
+                                  <span style={{ color: 'var(--accent)' }}> · {fileHitHint(f)}</span>
+                                )}
                               </div>
                             </div>
                             <CacheHintIcon visible={myRole !== '' && myRole !== 'owner'} />

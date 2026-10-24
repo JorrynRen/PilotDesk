@@ -66,9 +66,9 @@ export function KnowledgePage() {
     void useKnowledgeStore.getState().loadBases();
   }, []);
 
-  // 图谱按整库画节点：进图谱页时把条目补满到上限（列表页仍由「加载更多」控制节奏）
+  // 图谱按整库画节点；文件页按「条目标题」搜索也需要条目全量 —— 两处都把条目补满到上限
   useEffect(() => {
-    if (activeTab === 'graph' && activeBaseId) {
+    if ((activeTab === 'graph' || activeTab === 'files') && activeBaseId) {
       void useKnowledgeStore.getState().ensureAllEntries();
     }
   }, [activeTab, activeBaseId]);

@@ -30,6 +30,7 @@ import type {
   KnowledgeFileRelation,
   KnowledgeFileRelationKind,
 } from '../../types/knowledge';
+import { entryTitle } from '../../types/knowledge';
 
 const STATUS_META: Record<KnowledgeFile['extractStatus'], { label: string; color: string; icon: typeof FileText }> = {
   pending: { label: '待抽取', color: '#F59E0B', icon: Loader2 },
@@ -299,16 +300,67 @@ export function KnowledgeFileList({
   const linkFiles = useKnowledgeStore((s) => s.linkFiles);
   const unlinkFiles = useKnowledgeStore((s) => s.unlinkFiles);
   const removeFiles = useKnowledgeStore((s) => s.removeFiles);
+  /** 已加载的条目：文件搜索按「条目标题」命中时要用（分页外条目搜不到，与条目页同口径） */
+  const entries = useKnowledgeStore((s) => s.entries);
   /** 展开「关系」面板的文件 id（一次只开一个，面板就在该行下面） */
   const [relPanelId, setRelPanelId] = useState<string | null>(null);
-  /** 文件搜索（本地过滤，不落库）：文件名 / 来源地址。按**内容**检索在「知识」页，那里按条目搜。 */
+  /** 文件搜索（本地过滤）：文件名 / 路径 / 来源地址 / 条目标题 / 专属属性 */
   const [query, setQuery] = useState('');
+
+  /** 文件 → 该文件的条目标题（`sourceRef` 与文件 `relPath` 同口径） */
+  const entryTitlesByFile = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const e of entries) {
+      if (!e.sourceRef) continue;
+      const arr = m.get(e.sourceRef) ?? [];
+      arr.push(entryTitle(e.key));
+      m.set(e.sourceRef, arr);
+    }
+    return m;
+  }, [entries]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return files;
-    return files.filter((f) => f.name.toLowerCase().includes(q) || f.url.toLowerCase().includes(q));
-  }, [files, query]);
+    return files.filter((f) => {
+      if (
+        f.name.toLowerCase().includes(q) ||
+        f.path.toLowerCase().includes(q) ||
+        f.url.toLowerCase().includes(q)
+      ) {
+        return true;
+      }
+      if ((entryTitlesByFile.get(f.path) ?? []).some((t) => t.toLowerCase().includes(q))) {
+        return true;
+      }
+      const attrs = fileAttrs[f.path];
+      if (attrs) {
+        for (const [k, values] of Object.entries(attrs.values)) {
+          const label = base.fields.find((x) => x.key === k)?.label ?? k;
+          if (label.toLowerCase().includes(q)) return true;
+          if (values.some((v) => v.toLowerCase().includes(q))) return true;
+        }
+      }
+      return false;
+    });
+  }, [files, query, entryTitlesByFile, fileAttrs, base.fields]);
+
+  /** 命中原因（条目 / 属性）：搜索命中的不是文件名时，明确告诉用户为什么这份文件会出现 */
+  const hitHint = (f: KnowledgeFile): string => {
+    const q = query.trim().toLowerCase();
+    if (!q) return '';
+    const title = (entryTitlesByFile.get(f.path) ?? []).find((t) => t.toLowerCase().includes(q));
+    if (title) return `命中条目「${title}」`;
+    const attrs = fileAttrs[f.path];
+    if (!attrs) return '';
+    for (const [k, values] of Object.entries(attrs.values)) {
+      const label = base.fields.find((x) => x.key === k)?.label ?? k;
+      const v = values.find((x) => x.toLowerCase().includes(q));
+      if (v) return `命中属性 ${label}：${v}`;
+      if (label.toLowerCase().includes(q)) return `命中属性 ${label}`;
+    }
+    return '';
+  };
 
   // 关系索引 + 展示顺序（正文在前、附件缩进跟在其后）。
   // 传 `filtered` 而不是 `files`：关系两端有一端被筛掉时 `buildFileTree` 会跳过那条关系，
@@ -489,7 +541,7 @@ export function KnowledgeFileList({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索文件名 / 地址"
+            placeholder="搜索文件名 / 条目 / 属性"
             className="flex-1 min-w-0 bg-transparent outline-none text-xs"
             style={{ color: 'var(--text-primary)' }}
           />
@@ -812,6 +864,11 @@ export function KnowledgeFileList({
                 <div className="flex items-center gap-2 mt-1 text-[9px]" style={{ color: 'var(--text-tertiary)' }}>
                   <span>被 {f.baseIds.length} 个库引用</span>
                   <span>· {f.mime || '未知类型'}</span>
+                  {hitHint(f) && (
+                    <span className="truncate" style={{ color: 'var(--accent)' }} title={hitHint(f)}>
+                      · {hitHint(f)}
+                    </span>
+                  )}
                 </div>
               </div>
               <button
