@@ -547,6 +547,16 @@ export interface KbFileListView {
   addedAt: number;
 }
 
+/** 团队库文件之间的关系：attachment（正文→附件）/ supersedes（新版→旧版） */
+export interface KbFileRelationView {
+  kbId: string;
+  fromFileId: string;
+  toFileId: string;
+  kind: 'attachment' | 'supersedes';
+  createdBy: string;
+  createdAt: number;
+}
+
 /** 无引用文件（条目被移除后留下的孤儿原件） */
 export interface KbOrphanFile {
   fileId: string;

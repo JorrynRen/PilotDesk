@@ -260,6 +260,14 @@ pub fn change_topic(command: &str) -> Option<&'static str> {
     if command == "notification.mark_read" {
         return None;
     }
+    // 下划线命名的历史读命令（不以 `.list` 结尾）：读不该触发任何人刷新，
+    // 否则「成员收到事件 → 重拉列表 → 又广播」会互相触发。
+    if matches!(
+        command,
+        "kb.file_list" | "kb.entry_get" | "kb.orphan_files" | "kb.file_relations"
+    ) {
+        return None;
+    }
     if command.starts_with("kb.") {
         return Some("kb");
     }

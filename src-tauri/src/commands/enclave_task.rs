@@ -1035,6 +1035,105 @@ pub async fn enclave_kb_file_list(
     .await
 }
 
+/// 知识库文件之间的关系（正文—附件 / 新版—旧版）：成员可读。
+#[tauri::command]
+pub async fn enclave_kb_file_relations(
+    org_id: String,
+    kb_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<Vec<crate::enclave::knowledge::KbFileRelationView>, String> {
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.file_relations",
+        json!({ "kbId": kb_id.clone() }),
+        |c, _actor| {
+            ensure_kb_view(c, &org_id)?;
+            crate::enclave::knowledge::list_file_relations(c, &org_id, &kb_id)
+        },
+    )
+    .await
+}
+
+/// 建立文件关系（owner / admin）：attachment = 正文→附件，supersedes = 新版→旧版。
+#[tauri::command]
+pub async fn enclave_kb_file_link(
+    org_id: String,
+    kb_id: String,
+    kind: String,
+    from_file_id: String,
+    to_file_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<(), String> {
+    let payload = json!({
+        "kbId": kb_id.clone(),
+        "kind": kind.clone(),
+        "fromFileId": from_file_id.clone(),
+        "toFileId": to_file_id.clone(),
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.file_link",
+        payload,
+        |c, actor| {
+            authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+            crate::enclave::knowledge::link_file_relation(
+                c,
+                &org_id,
+                &kb_id,
+                actor,
+                &kind,
+                &from_file_id,
+                &to_file_id,
+            )
+        },
+    )
+    .await
+}
+
+/// 解除文件关系（owner / admin）；返回是否命中。
+#[tauri::command]
+pub async fn enclave_kb_file_unlink(
+    org_id: String,
+    kb_id: String,
+    kind: String,
+    from_file_id: String,
+    to_file_id: String,
+    db: State<'_, crate::DbState>,
+    state: State<'_, Arc<EnclaveState>>,
+) -> Result<bool, String> {
+    let payload = json!({
+        "kbId": kb_id.clone(),
+        "kind": kind.clone(),
+        "fromFileId": from_file_id.clone(),
+        "toFileId": to_file_id.clone(),
+    });
+    run_command(
+        state.inner(),
+        db.inner(),
+        &org_id,
+        "kb.file_unlink",
+        payload,
+        |c, _actor| {
+            authz::authorize(c, &org_id, authz::Action::KbEdit)?;
+            crate::enclave::knowledge::unlink_file_relation(
+                c,
+                &org_id,
+                &kb_id,
+                &kind,
+                &from_file_id,
+                &to_file_id,
+            )
+        },
+    )
+    .await
+}
+
 // ════════════════════════════════════════════════════════════
 // M4：文件资产
 // ════════════════════════════════════════════════════════════

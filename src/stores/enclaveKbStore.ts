@@ -12,6 +12,7 @@ import type {
   KbCandidateView,
   KbEntryView,
   KbFileListView,
+  KbFileRelationView,
   KbOrphanFile,
   KbView,
   TeamIngestCapability,
@@ -53,6 +54,8 @@ interface EnclaveKbState {
   activeEntry: KbEntryView | null;
   /** 「文件」页：去重后的交付物 */
   files: KbFileListView[];
+  /** 文件之间的标注（正文—附件 / 新版—旧版）：只在当前库内成立 */
+  relations: KbFileRelationView[];
   filesHasMore: boolean;
   filesLoadingMore: boolean;
   /** 无引用文件（条目已移除，原件仍在磁盘）：仅用于管理清理 */
@@ -86,6 +89,22 @@ interface EnclaveKbState {
   loadFiles: (orgId: string, kbId: string) => Promise<void>;
   /** 文件列表：再拉一批（offset = 已加载行数） */
   loadMoreFiles: (orgId: string) => Promise<void>;
+  /** 建立文件关系（owner / admin）；返回错误文案，成功为 null */
+  linkFileRelation: (
+    orgId: string,
+    kbId: string,
+    kind: KbFileRelationView['kind'],
+    from: string,
+    to: string,
+  ) => Promise<string | null>;
+  /** 解除文件关系（owner / admin）；返回错误文案，成功为 null */
+  unlinkFileRelation: (
+    orgId: string,
+    kbId: string,
+    kind: KbFileRelationView['kind'],
+    from: string,
+    to: string,
+  ) => Promise<string | null>;
   /** 解除条目与一份原件的关联（owner / admin）；返回错误文案，成功为 null */
   detachEntryFile: (
     orgId: string,
@@ -182,6 +201,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
   entriesLoadingMore: false,
   activeEntry: null,
   files: [],
+  relations: [],
   filesHasMore: false,
   filesLoadingMore: false,
   orphans: [],
@@ -204,6 +224,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       entriesLoadingMore: false,
       activeEntry: null,
       files: [],
+      relations: [],
       filesHasMore: false,
       filesLoadingMore: false,
       orphans: [],
@@ -239,6 +260,7 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       activeKbId: kbId,
       activeEntry: null,
       files: [],
+      relations: [],
       filesHasMore: false,
       filesLoadingMore: false,
       orphans: [],
@@ -370,7 +392,24 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       } catch {
         orphans = [];
       }
-      set({ files, filesHasMore: files.length === limit, filesLoadingMore: false, orphans, loading: false });
+      // 文件之间的关系同为增强信息：旧版主机没有这条命令时降级为空，不影响列表
+      let relations: KbFileRelationView[] = [];
+      try {
+        relations = await invoke<KbFileRelationView[]>('enclave_kb_file_relations', {
+          orgId,
+          kbId,
+        });
+      } catch {
+        relations = [];
+      }
+      set({
+        files,
+        relations,
+        filesHasMore: files.length === limit,
+        filesLoadingMore: false,
+        orphans,
+        loading: false,
+      });
       // 文件页要提示「待整理」的文件投喂（它们还没有条目，但不是无引用冗余）
       void get().loadQueue(orgId, kbId);
     } catch (e) {
@@ -396,6 +435,42 @@ export const useEnclaveKbStore = create<EnclaveKbState>((set, get) => ({
       }));
     } catch (e) {
       set({ filesLoadingMore: false, error: errorMessage(e) });
+    }
+  },
+
+  /** 建立文件关系（owner / admin）：attachment = 正文→附件，supersedes = 新版→旧版 */
+  linkFileRelation: async (orgId, kbId, kind, from, to) => {
+    try {
+      await invoke('enclave_kb_file_link', { orgId, kbId, kind, fromFileId: from, toFileId: to });
+      const relations = await invoke<KbFileRelationView[]>('enclave_kb_file_relations', {
+        orgId,
+        kbId,
+      });
+      set({ relations });
+      return null;
+    } catch (e) {
+      return errorMessage(e);
+    }
+  },
+
+  /** 解除文件关系（owner / admin） */
+  unlinkFileRelation: async (orgId, kbId, kind, from, to) => {
+    try {
+      await invoke('enclave_kb_file_unlink', {
+        orgId,
+        kbId,
+        kind,
+        fromFileId: from,
+        toFileId: to,
+      });
+      const relations = await invoke<KbFileRelationView[]>('enclave_kb_file_relations', {
+        orgId,
+        kbId,
+      });
+      set({ relations });
+      return null;
+    } catch (e) {
+      return errorMessage(e);
     }
   },
 

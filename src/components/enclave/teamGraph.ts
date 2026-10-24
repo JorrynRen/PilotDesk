@@ -2,7 +2,8 @@
  * 团队知识库图谱：把主机返回的知识条目派生成图谱核心数据（GraphModel）。
  *
  * 与个人库的区别：团队条目没有"文件分块"这一层，节点口径是
- * **知识条目 + 文件（交付物 / 来源文件）**；边有「共标签」「附件」「同专属属性」。
+ * **知识条目 + 文件（交付物 / 来源文件）**；边有「共标签」「附件」「同专属属性」
+ * 以及文件之间的「附件」「版本替代」标注。
  * 渲染层复用个人库的 `KnowledgeGraph`（通过其 `source` 入口传入本文件的结果）。
  */
 
@@ -113,6 +114,8 @@ export function buildTeamGraph(
   entries: KbEntryView[],
   /** 当前库的专属属性键：只有这些键参与「同专属属性」连边 */
   fieldKeys: string[] = [],
+  /** 文件之间的标注（正文—附件 / 新版—旧版）：两端都在本图里才连边 */
+  fileRelations: { fromFileId: string; toFileId: string; kind: string }[] = [],
 ): GraphModel {
   const nodes: KnowledgeGraphNode[] = [];
   /** 文件 → 关联的条目（同一份原件可能被多个条目引用） */
@@ -178,6 +181,13 @@ export function buildTeamGraph(
   for (const [fileId, rec] of files) {
     const fileNode = `${FILE_PREFIX}${fileId}`;
     for (const e of rec.entries) add(`${ENTRY_PREFIX}${e.key}`, fileNode, 'attachment', 1.5);
+  }
+
+  // 文件之间的关系：正文—附件 / 新版—旧版（方向在无向图里不体现，只保留关系类型）。
+  // 两端必须是本次图里的文件节点，否则 `add` 会自行丢掉这些边。
+  for (const r of fileRelations) {
+    if (r.kind !== 'attachment' && r.kind !== 'supersedes') continue;
+    add(`${FILE_PREFIX}${r.fromFileId}`, `${FILE_PREFIX}${r.toFileId}`, r.kind, 1.2);
   }
 
   // 共标签（共享 1 个即连）：团队库通常只有几十条，单个标签的区分度足够；

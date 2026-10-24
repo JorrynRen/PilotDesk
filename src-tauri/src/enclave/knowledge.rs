@@ -341,6 +341,11 @@ pub fn delete_kb(conn: &Connection, org_id: &str, kb_id: &str) -> Result<(), Str
     }
     conn.execute("DELETE FROM knowledge_bases WHERE id = ?1", params![kb_id])
         .map_err(|e| format!("删除知识库失败：{}", e))?;
+    conn.execute(
+        "DELETE FROM knowledge_base_file_relations WHERE knowledge_base_id = ?1",
+        params![kb_id],
+    )
+    .map_err(|e| format!("清理知识库文件关系失败：{}", e))?;
     Ok(())
 }
 
@@ -447,6 +452,213 @@ pub fn list_files_page(
         .map_err(|e| format!("查询知识库文件失败：{}", e))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| format!("读取知识库文件失败：{}", e))
+}
+
+/// 文件关系：正文 → 附件（公文类：正文下面挂附件）。
+pub const REL_ATTACHMENT: &str = "attachment";
+/// 文件关系：新版 → 旧版（制度类：新版替代旧版，旧版仍保留、仍可检索）。
+pub const REL_SUPERSEDES: &str = "supersedes";
+
+/// 库内文件之间的关系（按库隔离；两端都必须还在本库才返回）。
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KbFileRelationView {
+    pub kb_id: String,
+    pub from_file_id: String,
+    pub to_file_id: String,
+    pub kind: String,
+    pub created_by: String,
+    pub created_at: i64,
+}
+
+/// 校验文件当前确实被本库的某个条目引用（关系只在库内成立）。
+fn ensure_file_in_kb(conn: &Connection, kb_id: &str, file_id: &str) -> Result<(), String> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM knowledge_base_files
+              WHERE knowledge_base_id = ?1 AND file_id = ?2",
+            params![kb_id, file_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("校验知识库文件失败：{}", e))?;
+    if n == 0 {
+        return Err("文件不在当前知识库中（可能已被移除），请刷新后重试".to_string());
+    }
+    Ok(())
+}
+
+fn file_name_of(conn: &Connection, file_id: &str) -> String {
+    conn.query_row(
+        "SELECT file_name FROM file_assets WHERE id = ?1",
+        params![file_id],
+        |r| r.get(0),
+    )
+    .unwrap_or_else(|_| file_id.to_string())
+}
+
+/// 列出库内文件关系（「全部库」聚合时跨本组织的所有库）。
+pub fn list_file_relations(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+) -> Result<Vec<KbFileRelationView>, String> {
+    let all = kb_id == ALL_KB_PARAM;
+    let scope = if all {
+        "IN (SELECT id FROM knowledge_bases WHERE owner_type = 'org' AND owner_id = ?1)"
+    } else {
+        "= ?1"
+    };
+    let key = if all { org_id } else { kb_id };
+    if !all {
+        ensure_kb_owned(conn, org_id, kb_id)?;
+    }
+    // 两端都要还在同一个库里：条目被移除后残留的关系行不再下发（可见性以条目引用为准）
+    let sql = format!(
+        "SELECT r.knowledge_base_id, r.from_file_id, r.to_file_id, r.kind,
+                r.created_by, r.created_at
+           FROM knowledge_base_file_relations r
+          WHERE r.knowledge_base_id {scope}
+            AND EXISTS (SELECT 1 FROM knowledge_base_files f
+                         WHERE f.knowledge_base_id = r.knowledge_base_id
+                           AND f.file_id = r.from_file_id)
+            AND EXISTS (SELECT 1 FROM knowledge_base_files f
+                         WHERE f.knowledge_base_id = r.knowledge_base_id
+                           AND f.file_id = r.to_file_id)
+          ORDER BY r.created_at, r.from_file_id, r.to_file_id"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("查询文件关系失败：{}", e))?;
+    let rows = stmt
+        .query_map(params![key], |r| {
+            Ok(KbFileRelationView {
+                kb_id: r.get(0)?,
+                from_file_id: r.get(1)?,
+                to_file_id: r.get(2)?,
+                kind: r.get(3)?,
+                created_by: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })
+        .map_err(|e| format!("查询文件关系失败：{}", e))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("读取文件关系失败：{}", e))
+}
+
+/// 建立文件关系（幂等，仅 owner / admin，授权在命令层）。
+///
+/// 方向：`attachment` = from(正文) → to(附件)；`supersedes` = from(新版) → to(旧版)。
+/// 两类关系的 **to 端都要求唯一**，否则「它的正文是谁」「哪一版才是现行」没有确定答案。
+/// 同时拒绝自指与成环。
+pub fn link_file_relation(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    actor: &str,
+    kind: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    if !matches!(kind, REL_ATTACHMENT | REL_SUPERSEDES) {
+        return Err(format!("未知的文件关系类型：{}", kind));
+    }
+    if from == to {
+        return Err("不能让文件关联到自己".to_string());
+    }
+    ensure_file_in_kb(conn, kb_id, from)?;
+    ensure_file_in_kb(conn, kb_id, to)?;
+
+    // to 端已被别的文件占用：说清占位者是谁，用户才知道先解除哪一条
+    let occupied: Option<String> = conn
+        .query_row(
+            "SELECT from_file_id FROM knowledge_base_file_relations
+              WHERE knowledge_base_id = ?1 AND kind = ?2 AND to_file_id = ?3",
+            params![kb_id, kind, to],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("查询文件关系失败：{}", e))?;
+    if let Some(owner) = occupied.filter(|o| o != from) {
+        return Err(format!(
+            "「{}」已经是{}了，请先解除已有关系",
+            file_name_of(conn, &owner),
+            if kind == REL_ATTACHMENT {
+                "另一个文件的附件"
+            } else {
+                "另一个版本的替代对象"
+            }
+        ));
+    }
+
+    // 成环检查：从 to 沿同类关系往下走，能回到 from 就是环
+    let mut cursor = to.to_string();
+    let mut seen = std::collections::HashSet::new();
+    while seen.insert(cursor.clone()) {
+        let next: Option<String> = conn
+            .query_row(
+                "SELECT to_file_id FROM knowledge_base_file_relations
+                  WHERE knowledge_base_id = ?1 AND kind = ?2 AND from_file_id = ?3",
+                params![kb_id, kind, cursor],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查询文件关系失败：{}", e))?;
+        match next {
+            Some(n) if n == from => {
+                return Err("这会形成循环关系，请先调整已有的关系".to_string())
+            }
+            Some(n) => cursor = n,
+            None => break,
+        }
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO knowledge_base_file_relations
+            (knowledge_base_id, kind, from_file_id, to_file_id, created_by, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![kb_id, kind, from, to, actor, chrono::Utc::now().timestamp()],
+    )
+    .map_err(|e| format!("建立文件关系失败：{}", e))?;
+    Ok(())
+}
+
+/// 解除文件关系；返回是否命中（未命中说明本来就没有这条关系）。
+pub fn unlink_file_relation(
+    conn: &Connection,
+    org_id: &str,
+    kb_id: &str,
+    kind: &str,
+    from: &str,
+    to: &str,
+) -> Result<bool, String> {
+    ensure_kb_owned(conn, org_id, kb_id)?;
+    let n = conn
+        .execute(
+            "DELETE FROM knowledge_base_file_relations
+              WHERE knowledge_base_id = ?1 AND kind = ?2
+                AND from_file_id = ?3 AND to_file_id = ?4",
+            params![kb_id, kind, from, to],
+        )
+        .map_err(|e| format!("解除文件关系失败：{}", e))?;
+    Ok(n > 0)
+}
+
+/// 清理两端已有任一端离开本库的关系行（条目被移除 / 附件被解除后调用）。
+fn prune_file_relations(conn: &Connection, kb_id: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM knowledge_base_file_relations
+          WHERE knowledge_base_id = ?1
+            AND (NOT EXISTS (SELECT 1 FROM knowledge_base_files f
+                              WHERE f.knowledge_base_id = ?1
+                                AND f.file_id = knowledge_base_file_relations.from_file_id)
+              OR NOT EXISTS (SELECT 1 FROM knowledge_base_files f
+                              WHERE f.knowledge_base_id = ?1
+                                AND f.file_id = knowledge_base_file_relations.to_file_id))",
+        params![kb_id],
+    )
+    .map_err(|e| format!("清理文件关系失败：{}", e))?;
+    Ok(())
 }
 
 fn map_entry(r: &rusqlite::Row<'_>) -> rusqlite::Result<KbEntryView> {
@@ -895,6 +1107,8 @@ fn do_sediment(
         params![kb_id, memory_id, now, task_id, report_id],
     )
     .map_err(|e| format!("关联知识库文件失败：{}", e))?;
+    // 交付物集合已重建：被换掉的附件若已不在本库，指向它的关系标注一并清掉
+    prune_file_relations(conn, &kb_id)?;
 
     conn.execute(
         "UPDATE task_reports SET sedimented_at = ?2, sediment_error = NULL WHERE id = ?1",
@@ -1106,6 +1320,8 @@ pub fn remove_entry(
     if removed == 0 {
         return Err("知识条目不存在".to_string());
     }
+    // 附件离开本库后，指向它的文件关系不再成立
+    prune_file_relations(conn, kb_id)?;
     Ok(())
 }
 
@@ -1146,6 +1362,7 @@ pub fn detach_entry_file(
     if removed == 0 {
         return Err("该条目没有关联这份文件".to_string());
     }
+    prune_file_relations(conn, kb_id)?;
     Ok(())
 }
 
@@ -1670,6 +1887,8 @@ pub fn write_ingest_entries(
             .map_err(|e| format!("关联知识条目与源文件失败：{}", e))?;
         }
     }
+    // 重跑后附件集合已重建：两端不在库内的关系标注一并清掉
+    prune_file_relations(conn, kb_id)?;
     Ok(entries.len())
 }
 
@@ -2026,5 +2245,114 @@ mod tests {
         .unwrap();
         let err = delete_kb(&conn, "8", "kb-custom").unwrap_err();
         assert!(err.contains("产出"), "错误应说明任务仍在引用：{}", err);
+    }
+
+    /// 往默认库里放一份文件（挂到指定条目上）：文件关系只在「两端都在本库」时成立。
+    fn seed_kb_file(conn: &Connection, memory_id: &str, file_id: &str, name: &str) {
+        conn.execute(
+            "INSERT INTO file_assets
+                (id, file_name, file_path, file_type, file_size, file_hash, created_at, updated_at)
+             VALUES (?1, ?2, ?2, 'txt', 1, 'h', 0, 0)",
+            params![file_id, name],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO knowledge_base_memories
+                (knowledge_base_id, memory_id, title, added_by, added_at, updated_at)
+             VALUES ('kb-org-8', ?1, ?1, '1', 0, 0)",
+            params![memory_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO knowledge_base_files (knowledge_base_id, memory_id, file_id, added_at)
+             VALUES ('kb-org-8', ?1, ?2, 0)",
+            params![memory_id, file_id],
+        )
+        .unwrap();
+    }
+
+    /// 关系建立/解除：只做标注，两端必须都在本库；解除幂等。
+    #[test]
+    fn link_and_unlink_file_relation() {
+        let conn = seeded();
+        seed_kb_file(&conn, "m1", "f1", "正文.docx");
+        seed_kb_file(&conn, "m1", "f2", "附件.pdf");
+
+        link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f2").unwrap();
+        // 幂等：重复建立不报错、也不产生第二行
+        link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f2").unwrap();
+        let list = list_file_relations(&conn, "8", "kb-org-8").unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].kind, REL_ATTACHMENT);
+        assert_eq!(list[0].from_file_id, "f1");
+        assert_eq!(list[0].to_file_id, "f2");
+
+        assert!(unlink_file_relation(&conn, "8", "kb-org-8", REL_ATTACHMENT, "f1", "f2").unwrap());
+        assert!(list_file_relations(&conn, "8", "kb-org-8").unwrap().is_empty());
+        assert!(!unlink_file_relation(&conn, "8", "kb-org-8", REL_ATTACHMENT, "f1", "f2").unwrap());
+    }
+
+    /// 校验矩阵：未知类型 / 自指 / 文件不在本库 / to 端已被占用。
+    #[test]
+    fn link_file_relation_rejects_invalid() {
+        let conn = seeded();
+        seed_kb_file(&conn, "m1", "f1", "正文.docx");
+        seed_kb_file(&conn, "m1", "f2", "附件.pdf");
+        seed_kb_file(&conn, "m1", "f3", "另一份.pdf");
+        conn.execute(
+            "INSERT INTO file_assets
+                (id, file_name, file_path, file_type, file_size, file_hash, created_at, updated_at)
+             VALUES ('f9', '库外.txt', '库外.txt', 'txt', 1, 'h', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        let unknown =
+            link_file_relation(&conn, "8", "kb-org-8", "1", "contains", "f1", "f2").unwrap_err();
+        assert!(unknown.contains("未知"), "{}", unknown);
+        let own =
+            link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f1").unwrap_err();
+        assert!(own.contains("自己"), "{}", own);
+        let outside =
+            link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f9").unwrap_err();
+        assert!(outside.contains("不在当前知识库"), "{}", outside);
+
+        link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f2").unwrap();
+        let occupied =
+            link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f3", "f2").unwrap_err();
+        assert!(occupied.contains("另一个文件的附件"), "{}", occupied);
+    }
+
+    /// 成环：A 是 B 的附件时，不能再让 B 成为 A 的附件。
+    #[test]
+    fn link_file_relation_rejects_cycle() {
+        let conn = seeded();
+        seed_kb_file(&conn, "m1", "f1", "A.txt");
+        seed_kb_file(&conn, "m1", "f2", "B.txt");
+        link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f2").unwrap();
+        let err =
+            link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f2", "f1").unwrap_err();
+        assert!(err.contains("循环"), "{}", err);
+    }
+
+    /// 条目被移除后，指向它的附件离开本库，关系行随之下线并被清理。
+    #[test]
+    fn removing_entry_prunes_file_relations() {
+        let conn = seeded();
+        seed_kb_file(&conn, "m1", "f1", "正文.docx");
+        seed_kb_file(&conn, "m2", "f2", "附件.pdf");
+        link_file_relation(&conn, "8", "kb-org-8", "1", REL_ATTACHMENT, "f1", "f2").unwrap();
+        assert_eq!(list_file_relations(&conn, "8", "kb-org-8").unwrap().len(), 1);
+
+        remove_entry(&conn, "8", "kb-org-8", "m2").unwrap();
+        assert!(list_file_relations(&conn, "8", "kb-org-8").unwrap().is_empty());
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_base_file_relations WHERE knowledge_base_id = 'kb-org-8'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0, "关系行应被物理清理，而不是只靠读时过滤");
     }
 }

@@ -731,6 +731,12 @@ pub fn delete_asset(conn: &Connection, org_id: &str, file_id: &str) -> Result<()
         params![file_id, org_id],
     )
     .map_err(|e| format!("删除文件资产失败：{}", e))?;
+    // 文件没了，任何指向它的关系标注都失效（正常路径下两端都必须在本库，这里做兜底）
+    conn.execute(
+        "DELETE FROM knowledge_base_file_relations WHERE from_file_id = ?1 OR to_file_id = ?1",
+        params![file_id],
+    )
+    .map_err(|e| format!("清理文件关系失败：{}", e))?;
     if let Ok(dir) = org_dir(conn, org_id) {
         let _ = std::fs::remove_file(dir.join(rel));
     }

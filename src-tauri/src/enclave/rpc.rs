@@ -622,6 +622,32 @@ pub fn dispatch(
             let offset = payload.get("offset").and_then(|v| v.as_i64());
             to_value(knowledge::list_files_page(conn, org_id, &kb_id, limit, offset)?)
         }
+        // 文件之间的关系（正文—附件 / 新版—旧版）：读成员可看，写仅 owner / admin
+        "kb.file_relations" => {
+            let kb_id = req_str(payload, "kbId")?;
+            crate::enclave::authz::role_for_member(conn, org_id, actor)?
+                .ok_or_else(|| "当前账号不是该组织成员".to_string())?;
+            to_value(knowledge::list_file_relations(conn, org_id, &kb_id)?)
+        }
+        "kb.file_link" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let kb_id = req_str(payload, "kbId")?;
+            let kind = req_str(payload, "kind")?;
+            let from = req_str(payload, "fromFileId")?;
+            let to = req_str(payload, "toFileId")?;
+            knowledge::link_file_relation(conn, org_id, &kb_id, actor, &kind, &from, &to)?;
+            Ok(Value::Null)
+        }
+        "kb.file_unlink" => {
+            require_kb_edit(conn, org_id, actor)?;
+            let kb_id = req_str(payload, "kbId")?;
+            let kind = req_str(payload, "kind")?;
+            let from = req_str(payload, "fromFileId")?;
+            let to = req_str(payload, "toFileId")?;
+            to_value(knowledge::unlink_file_relation(
+                conn, org_id, &kb_id, &kind, &from, &to,
+            )?)
+        }
 
         // ── 文件回收（管理角色）──
         "kb.entry_file_detach" => {

@@ -24,6 +24,8 @@ import {
   Scissors,
   Globe,
   Info,
+  CornerDownRight,
+  Link2,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -246,6 +248,135 @@ function fileExt(name: string): string {
   return i > 0 && i < name.length - 1 ? name.slice(i + 1).toLowerCase() : '';
 }
 
+interface TeamFileRelationPanelProps {
+  /** 当前文件 id（关系的端点） */
+  fileId: string;
+  /** 本库已加载的文件（按 fileId 去重；不含自己） */
+  options: { id: string; name: string }[];
+  parentId?: string;
+  versionOf?: string;
+  replaces: string[];
+  onLink: (kind: 'attachment' | 'supersedes', from: string, to: string) => Promise<boolean>;
+  onUnlink: (kind: 'attachment' | 'supersedes', from: string, to: string) => Promise<boolean>;
+  onClose: () => void;
+}
+
+/**
+ * 团队库行内关系面板：设「所属正文」与「替代了哪一版」。
+ *
+ * 与个人库同语义：只写标注，不动文件与条目 —— 旧版仍留在库里、仍参与检索。
+ * 团队侧多一条约束：关系按库隔离，且两端都必须仍被本库条目引用。
+ */
+function TeamFileRelationPanel({
+  fileId,
+  options,
+  parentId,
+  versionOf,
+  replaces,
+  onLink,
+  onUnlink,
+  onClose,
+}: TeamFileRelationPanelProps) {
+  const [addingOld, setAddingOld] = useState('');
+  const nameOf = (id: string) => options.find((f) => f.id === id)?.name ?? '（已不在当前库）';
+
+  /** 改「所属正文」：先解除旧关系再建新的（后端保证一个文件只能有一个正文） */
+  const changeParent = async (next: string) => {
+    if (parentId && !(await onUnlink('attachment', parentId, fileId))) return;
+    if (next) await onLink('attachment', next, fileId);
+  };
+
+  return (
+    <div
+      className="px-4 py-2.5 flex flex-col gap-2 text-[11px]"
+      // 面板底色不能用 --bg-tertiary：`--bg-field` 就是 tertiary（控件底色），
+      // 同值会让面板里的 Select 与面板融成一片，看不出控件边界。
+      style={{ borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-secondary)' }}
+    >
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 w-20" style={{ color: 'var(--text-secondary)' }}>所属正文</span>
+        <Select
+          value={parentId ?? ''}
+          onChange={(v) => void changeParent(v)}
+          options={[
+            { value: '', label: '不属于任何正文' },
+            ...options.map((f) => ({ value: f.id, label: f.name })),
+          ]}
+          size="sm"
+          style={{ minWidth: 240, maxWidth: 340 }}
+          placeholder="不属于任何正文"
+          title="公文类：这份文件是哪个正文的附件（一个文件只能有一个正文）"
+        />
+        <span style={{ color: 'var(--text-tertiary)' }}>设为附件后，它会缩进显示在正文下面</span>
+        <div className="flex-1" />
+        <button onClick={onClose} className="pd-btn p-1 rounded" title="收起关系面板">
+          <X size={11} />
+        </button>
+      </div>
+
+      <div className="flex items-start gap-2 flex-wrap">
+        <span className="shrink-0 w-20 mt-1" style={{ color: 'var(--text-secondary)' }}>版本替代</span>
+        {versionOf ? (
+          <span
+            className="flex items-center gap-1 px-1.5 py-[2px] rounded"
+            style={{ backgroundColor: 'rgba(245,158,11,0.14)', color: '#D97706' }}
+          >
+            已被《{nameOf(versionOf)}》替代（历史版本，仍可检索）
+            <button
+              onClick={() => void onUnlink('supersedes', versionOf, fileId)}
+              className="pd-btn p-0.5"
+              title="解除该标注"
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ) : (
+          <span className="mt-0.5" style={{ color: 'var(--text-tertiary)' }}>当前是现行版本</span>
+        )}
+        {replaces.map((oldId) => (
+          <span
+            key={oldId}
+            className="flex items-center gap-1 px-1.5 py-[2px] rounded"
+            style={{ backgroundColor: 'rgba(139,92,246,0.12)', color: '#8B5CF6' }}
+          >
+            替代了《{nameOf(oldId)}》
+            <button
+              onClick={() => void onUnlink('supersedes', fileId, oldId)}
+              className="pd-btn p-0.5"
+              title="解除该标注"
+            >
+              <X size={10} />
+            </button>
+          </span>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 w-20" style={{ color: 'var(--text-secondary)' }}>新增替代</span>
+        <Select
+          value={addingOld}
+          onChange={(v) => {
+            setAddingOld('');
+            if (v) void onLink('supersedes', fileId, v);
+          }}
+          options={[
+            { value: '', label: '选择本文件替代的旧版…' },
+            ...options.map((f) => ({ value: f.id, label: f.name })),
+          ]}
+          size="sm"
+          style={{ minWidth: 240, maxWidth: 340 }}
+          placeholder="选择本文件替代的旧版…"
+          title="只做标注：旧版不会被删除，也不会被排除在检索之外"
+        />
+      </div>
+
+      <div style={{ color: 'var(--text-tertiary)' }}>
+        关系只用于标注（列表缩进、图谱连线），不会删除或替换任何文件与条目；旧版本仍保留、仍可检索。
+      </div>
+    </div>
+  );
+}
+
 /** 条目上属于当前库专属属性的取值（只取标量，忽略 reportId 这类溯源信息） */
 function pickFields(entry: KbEntryView | null, fields: KnowledgeFieldDef[]): KnowledgeMeta {
   const out: KnowledgeMeta = {};
@@ -373,6 +504,7 @@ export function EnclaveKbPage() {
   const entries = useEnclaveKbStore((s) => s.entries);
   const activeEntry = useEnclaveKbStore((s) => s.activeEntry);
   const files = useEnclaveKbStore((s) => s.files);
+  const relations = useEnclaveKbStore((s) => s.relations);
   const orphans = useEnclaveKbStore((s) => s.orphans);
   /** 图谱专用条目（分页拉取，与列表/搜索互不影响） */
   const graphEntries = useEnclaveKbStore((s) => s.graphEntries);
@@ -393,6 +525,11 @@ export function EnclaveKbPage() {
   const [fileGroupBy, setFileGroupBy] = useState<FileGroupBy>({ kind: 'entry' });
   /** 文件目录树里被折叠的分组 */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
+  /**
+   * 展开「关系」面板的文件（一次只开一个，面板在该行下面）。
+   * 团队文件列表是「文件 × 条目」的行，同一原件可能出现在多行 → 按 fileId 记。
+   */
+  const [relPanelFileId, setRelPanelFileId] = useState<string | null>(null);
   /**
    * 待确认候选的展开编辑草稿（一次只展开一条）。
    *
@@ -746,8 +883,8 @@ export function EnclaveKbPage() {
 
   /* ── 图谱：团队条目 → 个人库图谱组件认识的 GraphModel（复用 3D 渲染） ── */
   const teamGraph = useMemo(
-    () => buildTeamGraph(graphEntries, kbFields.map((f) => f.key)),
-    [graphEntries, kbFields],
+    () => buildTeamGraph(graphEntries, kbFields.map((f) => f.key), relations),
+    [graphEntries, kbFields, relations],
   );
   const graphBase: KnowledgeBase = useMemo(
     () => ({
@@ -1086,6 +1223,56 @@ export function EnclaveKbPage() {
       joinTags(draftTags) !== joinTags(splitTags(activeEntry.tags)) ||
       !sameFields(draftMeta, pickFields(activeEntry, kbFields)));
 
+  /** 文件关系索引（按 fileId）：附件缩进、历史版本标记与关系面板共用 */
+  const fileRel = useMemo(() => {
+    const parentOf = new Map<string, string>();
+    const childrenOf = new Map<string, string[]>();
+    const supersededBy = new Map<string, string>();
+    const superseded = new Map<string, string[]>();
+    for (const r of relations) {
+      if (r.kind === 'attachment') {
+        parentOf.set(r.toFileId, r.fromFileId);
+        childrenOf.set(r.fromFileId, [...(childrenOf.get(r.fromFileId) ?? []), r.toFileId]);
+      } else {
+        supersededBy.set(r.toFileId, r.fromFileId);
+        superseded.set(r.fromFileId, [...(superseded.get(r.fromFileId) ?? []), r.toFileId]);
+      }
+    }
+    return { parentOf, childrenOf, supersededBy, superseded };
+  }, [relations]);
+
+  /** 已加载文件按 fileId 去重：团队行是「文件 × 条目」，选正文 / 被替代版本只需一份 */
+  const fileById = useMemo(() => {
+    const m = new Map<string, KbFileListView>();
+    for (const f of files) if (!m.has(f.fileId)) m.set(f.fileId, f);
+    return m;
+  }, [files]);
+  const fileNameOf = (id: string) => fileById.get(id)?.fileName ?? '（已不在当前库）';
+
+  /** 建立 / 解除文件关系（owner / admin）：失败时把后端原因原样提示 */
+  const linkFile = async (kind: 'attachment' | 'supersedes', from: string, to: string) => {
+    if (!activeOrgId || isAllKb) return false;
+    const err = await useEnclaveKbStore
+      .getState()
+      .linkFileRelation(activeOrgId, activeKbId, kind, from, to);
+    if (err) {
+      showToast(err, 'error');
+      return false;
+    }
+    return true;
+  };
+  const unlinkFile = async (kind: 'attachment' | 'supersedes', from: string, to: string) => {
+    if (!activeOrgId || isAllKb) return false;
+    const err = await useEnclaveKbStore
+      .getState()
+      .unlinkFileRelation(activeOrgId, activeKbId, kind, from, to);
+    if (err) {
+      showToast(err, 'error');
+      return false;
+    }
+    return true;
+  };
+
   /** 文件页目录树：按所选维度分组（系统维度 / 当前库的专属属性） */
   const fileGroups = useMemo(() => {
     const q = fileKeyword.trim().toLowerCase();
@@ -1189,8 +1376,31 @@ export function EnclaveKbPage() {
       }
       return b.latest - a.latest;
     });
+    // 同一目录内：附件紧跟它的正文（团队行已按 fileId 去重；父级在别的目录时保持原位）
+    for (const g of groups) {
+      const ids = new Set(g.files.map((f) => f.fileId));
+      const ordered: typeof g.files = [];
+      const seen = new Set<string>();
+      const walk = (f: KbFileListView) => {
+        if (seen.has(f.fileId)) return;
+        seen.add(f.fileId);
+        ordered.push(f);
+        for (const childId of fileRel.childrenOf.get(f.fileId) ?? []) {
+          if (!ids.has(childId)) continue;
+          const child = g.files.find((x) => x.fileId === childId);
+          if (child) walk(child);
+        }
+      };
+      for (const f of g.files) {
+        const pid = fileRel.parentOf.get(f.fileId);
+        if (pid && ids.has(pid)) continue;
+        walk(f);
+      }
+      for (const f of g.files) walk(f);
+      g.files = ordered;
+    }
     return groups;
-  }, [files, fileKeyword, fileGroupBy, members, kbFields, kbs]);
+  }, [files, fileKeyword, fileGroupBy, members, kbFields, kbs, fileRel]);
 
   const matchedFileCount = useMemo(
     () => new Set(fileGroups.flatMap((g) => g.files.map((f) => f.fileId))).size,
@@ -2924,71 +3134,138 @@ export function EnclaveKbPage() {
                       </button>
 
                       {!collapsed &&
-                        g.files.map((f) => (
-                          <div
-                            key={`${g.id}:${f.fileId}`}
-                            className="py-2 pr-4 flex items-center gap-3"
-                            style={{
-                              borderBottom: '1px solid var(--border)',
-                              marginLeft: 22,
-                              borderLeft: '1px solid var(--border)',
-                              paddingLeft: 16,
-                            }}
-                          >
-                            <FileText size={13} className="shrink-0" style={{ color: 'var(--accent)' }} />
-                            <div className="flex-1 min-w-0">
+                        g.files.map((f) => {
+                          const parentId = fileRel.parentOf.get(f.fileId);
+                          const versionOf = fileRel.supersededBy.get(f.fileId);
+                          const replaces = fileRel.superseded.get(f.fileId) ?? [];
+                          const panelOpen = relPanelFileId === f.fileId;
+                          const relOptions = [...fileById.values()]
+                            .filter((x) => x.fileId !== f.fileId)
+                            .map((x) => ({ id: x.fileId, name: x.fileName }));
+                          return (
+                            <div key={`${g.id}:${f.fileId}`}>
                               <div
-                                className="text-xs truncate"
-                                style={{ color: 'var(--text-primary)' }}
-                                title={f.fileName}
-                              >
-                                {f.fileName}
-                              </div>
-                              <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-tertiary)' }}>
-                                {fileGroupBy.kind !== 'entry' && (
-                                  <>来源「{f.entryTitle || f.sourceRef || '未知'}」 · </>
-                                )}
-                                {isAllKb && fileGroupBy.kind !== 'kb' && (
-                                  <>库「{kbs.find((k) => k.id === f.kbId)?.name ?? '未知'}」 · </>
-                                )}
-                                {f.fileSize > 0 && `${formatSize(f.fileSize)} · `}
-                                {formatRelative(f.addedAt)}归档
-                                {fileHitHint(f) && (
-                                  <span style={{ color: 'var(--accent)' }}> · {fileHitHint(f)}</span>
-                                )}
-                              </div>
-                            </div>
-                            <CacheHintIcon visible={myRole !== '' && myRole !== 'owner'} />
-                            <button
-                              onClick={() => void openFile(f.fileId)}
-                              className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] shrink-0"
-                              style={{
-                                color: 'var(--text-secondary)',
-                                backgroundColor: 'var(--bg-field)',
-                                border: '1px solid var(--border)',
-                              }}
-                              title="打开文件"
-                            >
-                              <FolderOpen size={11} />
-                              打开
-                            </button>
-                            {canEdit && (
-                              <button
-                                onClick={() => void deleteAsset(f)}
-                                className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                                className="py-2 pr-4 flex items-center gap-3"
                                 style={{
-                                  color: 'var(--status-danger)',
-                                  backgroundColor: 'var(--bg-field)',
-                                  border: '1px solid var(--border)',
+                                  borderBottom: '1px solid var(--border)',
+                                  marginLeft: 22,
+                                  borderLeft: '1px solid var(--border)',
+                                  // 附件比正文多缩一级（同一目录内才成立）
+                                  paddingLeft: parentId ? 34 : 16,
                                 }}
-                                title="删除原件（仍有任务 / 条目引用时会被拒绝）"
                               >
-                                <Trash2 size={11} />
-                                删除
-                              </button>
-                            )}
-                          </div>
-                        ))}
+                                {parentId ? (
+                                  <CornerDownRight
+                                    size={11}
+                                    className="shrink-0"
+                                    style={{ color: 'var(--text-tertiary)' }}
+                                  />
+                                ) : (
+                                  <FileText size={13} className="shrink-0" style={{ color: 'var(--accent)' }} />
+                                )}
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span
+                                      className="text-xs truncate"
+                                      style={{ color: 'var(--text-primary)' }}
+                                      title={f.fileName}
+                                    >
+                                      {f.fileName}
+                                    </span>
+                                    {/* 关系标注：附件归属 / 历史版本 —— 只做标注，不改变检索范围 */}
+                                    {parentId && (
+                                      <span
+                                        className="shrink-0 px-1.5 py-[1px] rounded text-[9px]"
+                                        style={{ backgroundColor: 'rgba(59,130,246,0.12)', color: '#3B82F6' }}
+                                        title={`属于正文《${fileNameOf(parentId)}》`}
+                                      >
+                                        附件 · 属于《{fileNameOf(parentId)}》
+                                      </span>
+                                    )}
+                                    {versionOf && (
+                                      <span
+                                        className="shrink-0 px-1.5 py-[1px] rounded text-[9px]"
+                                        style={{ backgroundColor: 'rgba(245,158,11,0.14)', color: '#D97706' }}
+                                        title="不是现行版本；旧版仍完整保留、也仍会被检索命中"
+                                      >
+                                        历史版本 · 已被《{fileNameOf(versionOf)}》替代
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-tertiary)' }}>
+                                    {fileGroupBy.kind !== 'entry' && (
+                                      <>来源「{f.entryTitle || f.sourceRef || '未知'}」 · </>
+                                    )}
+                                    {isAllKb && fileGroupBy.kind !== 'kb' && (
+                                      <>库「{kbs.find((k) => k.id === f.kbId)?.name ?? '未知'}」 · </>
+                                    )}
+                                    {f.fileSize > 0 && `${formatSize(f.fileSize)} · `}
+                                    {formatRelative(f.addedAt)}归档
+                                    {fileHitHint(f) && (
+                                      <span style={{ color: 'var(--accent)' }}> · {fileHitHint(f)}</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <CacheHintIcon visible={myRole !== '' && myRole !== 'owner'} />
+                                {canEdit && !isAllKb && (
+                                  <button
+                                    onClick={() => setRelPanelFileId(panelOpen ? null : f.fileId)}
+                                    className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                                    style={{
+                                      color: 'var(--text-secondary)',
+                                      backgroundColor: panelOpen ? 'var(--bg-secondary)' : 'var(--bg-field)',
+                                      border: '1px solid var(--border)',
+                                    }}
+                                    title="标注正文—附件 / 新版—旧版（只做标注，不删文件、不影响检索）"
+                                  >
+                                    <Link2 size={11} />
+                                    关系
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => void openFile(f.fileId)}
+                                  className="pd-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] shrink-0"
+                                  style={{
+                                    color: 'var(--text-secondary)',
+                                    backgroundColor: 'var(--bg-field)',
+                                    border: '1px solid var(--border)',
+                                  }}
+                                  title="打开文件"
+                                >
+                                  <FolderOpen size={11} />
+                                  打开
+                                </button>
+                                {canEdit && (
+                                  <button
+                                    onClick={() => void deleteAsset(f)}
+                                    className="pd-btn flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] shrink-0"
+                                    style={{
+                                      color: 'var(--status-danger)',
+                                      backgroundColor: 'var(--bg-field)',
+                                      border: '1px solid var(--border)',
+                                    }}
+                                    title="删除原件（仍有任务 / 条目引用时会被拒绝）"
+                                  >
+                                    <Trash2 size={11} />
+                                    删除
+                                  </button>
+                                )}
+                              </div>
+                              {panelOpen && (
+                                <TeamFileRelationPanel
+                                  fileId={f.fileId}
+                                  options={relOptions}
+                                  parentId={parentId}
+                                  versionOf={versionOf}
+                                  replaces={replaces}
+                                  onLink={linkFile}
+                                  onUnlink={unlinkFile}
+                                  onClose={() => setRelPanelFileId(null)}
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
                     </div>
                   );
                 })}

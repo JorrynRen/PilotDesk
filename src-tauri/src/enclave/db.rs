@@ -16,7 +16,7 @@ use rusqlite::Connection;
 ///
 /// 与主库的 `db::init::SCHEMA_VERSION` **互相独立**：两库生命周期不同（主库随个人数据演进，
 /// 本库随团队能力演进），共用版本号会让任一侧的升级牵动另一侧。
-pub const ENCLAVE_SCHEMA_VERSION: i64 = 12;
+pub const ENCLAVE_SCHEMA_VERSION: i64 = 13;
 
 /// 全量建表语句（全部 `IF NOT EXISTS`，可重复执行）。
 ///
@@ -269,6 +269,20 @@ CREATE TABLE IF NOT EXISTS knowledge_base_files (
     added_at          INTEGER NOT NULL,
     PRIMARY KEY (knowledge_base_id, memory_id, file_id)
 );
+
+-- 文件之间的关系（团队库）：正文—附件 / 新版—旧版。
+-- 与个人库 `kb_file_relations` 语义同构，但**按库隔离**：关系只在本库内成立
+-- （同一原件被多个库引用时，A 库的标注不会带进 B 库）。纯标注：不删文件、不影响检索。
+CREATE TABLE IF NOT EXISTS knowledge_base_file_relations (
+    knowledge_base_id TEXT NOT NULL,
+    kind              TEXT NOT NULL,             -- attachment（正文→附件）/ supersedes（新版→旧版）
+    from_file_id      TEXT NOT NULL,
+    to_file_id        TEXT NOT NULL,
+    created_by        TEXT NOT NULL DEFAULT '',
+    created_at        INTEGER NOT NULL,
+    PRIMARY KEY (knowledge_base_id, kind, from_file_id, to_file_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kb_file_rel_to ON knowledge_base_file_relations(to_file_id);
 
 -- 投喂「待整理」队列：内容已收进主机，但当前没有可用模型做结构化整理。
 -- 与个人库同构（kb_ingest_queue）；区别是这里多了 org_id，且只有主机消费。
@@ -527,6 +541,8 @@ impl EnclaveStore {
         if current < 12 {
             Self::ensure_column(conn, "org_tasks", "target_kb_id", "TEXT NOT NULL DEFAULT ''")?;
         }
+        // v12 → v13：知识库文件之间的关系（正文—附件 / 新版—旧版）。
+        // 新表由全量建表语句幂等创建，无存量数据需要回填，这里只留版本语义。
 
         if current != ENCLAVE_SCHEMA_VERSION {
             conn.execute_batch(&format!("PRAGMA user_version = {}", ENCLAVE_SCHEMA_VERSION))
