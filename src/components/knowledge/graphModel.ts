@@ -40,6 +40,22 @@ export const WORLD_R = 100;
  */
 export const MAX_SCENE_NODES = 60_000;
 
+/**
+ * 同一对节点可能同时满足多种关系（例如两条知识既同标签、又同专属属性）。
+ * 合并后的边只画一条线，按这个优先级取"最有信息量"的那一类：
+ * 结构关系（附件 / 版本替代）> 同专属属性 > 共标签。
+ *
+ * 不这样做时，边的类型取决于**生成顺序**（共标签先算、同专属属性后算），
+ * 结果是"同专属属性"永远被显示成"共标签"，图例里的计数也一直是 0。
+ */
+const KIND_PRIORITY: SceneEdge['kind'][] = [
+  'attachment',
+  'supersedes',
+  'same_field',
+  'shared_tag',
+  'contains',
+];
+
 /** 目录簇心的世界半径倍率（簇内小球半径随成员数按体积增长） */
 const LOCAL_R_FACTOR = 0.05;
 const LOCAL_R_MIN = 0.02;
@@ -310,8 +326,12 @@ export function buildScene(args: BuildSceneArgs): GraphScene {
     const b = indexOfId.get(r.to);
     if (a === undefined || b === undefined) continue;
     raw += 1;
-    if (!edgesOn(r.kinds[0])) continue;
-    edges.push({ from: a, to: b, kind: r.kinds[0], weight: r.weight });
+    // 一条边可能带多种类型：只要其中任意一种打开就显示，取优先级最高且已打开的那种
+    const kind = KIND_PRIORITY.find(
+      (k) => (r.kinds as readonly string[]).includes(k) && edgesOn(k),
+    );
+    if (!kind) continue;
+    edges.push({ from: a, to: b, kind, weight: r.weight });
   }
 
   // 分块：各自挂在所属文件旁边的一个小球里
