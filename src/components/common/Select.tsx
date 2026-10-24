@@ -294,8 +294,11 @@ export function Select({
           >
             {searchable && (
               <div className="px-1 pb-1">
+                {/* `pd-field`：聚焦高亮画在**这个容器**上，而不是里面的 input。
+                    全局 `:focus-visible` 会给内层元素画 1px accent 描边，优先级高于
+                    Tailwind 的 `outline-none` —— 不交给容器就会出现「边框在外、焦点圈在内」。 */}
                 <div
-                  className="flex items-center gap-1.5 px-2"
+                  className="pd-field flex items-center gap-1.5 px-2"
                   style={{
                     height: 26,
                     borderRadius: 7,
