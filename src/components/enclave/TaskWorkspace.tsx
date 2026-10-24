@@ -23,6 +23,7 @@ import { errorMessage } from '../../utils/errorMessage';
 import { Select } from '../common/Select';
 import { EnclaveNavBar } from './EnclaveNavBar';
 import { EnclaveToolbarActions, EnclaveFilesRootPanel } from './EnclaveToolbar';
+import { TASK_TEMPLATES, type TaskTemplate } from './taskTemplates';
 import type {
   DepsPreview, KbView, MemberView, TaskCommentView, TaskSplitDraft, TaskStatus, TaskView,
 } from '../../types/enclave';
@@ -145,6 +146,11 @@ export function TaskWorkspace() {
   const [batchAssignee, setBatchAssignee] = useState('');
   const [batchDue, setBatchDue] = useState('');
   const [batchBusy, setBatchBusy] = useState(false);
+  /** 任务模板：一键生成「父任务 + 交付物子任务」 */
+  const [tplOpen, setTplOpen] = useState(false);
+  const [tplId, setTplId] = useState<string>(TASK_TEMPLATES[0]?.id ?? '');
+  const [tplTitle, setTplTitle] = useState('');
+  const [tplBusy, setTplBusy] = useState(false);
 
   /** 产出目标库候选（直接查主机，不走知识库页的 store —— 避免打开任务页就把知识库"打开"） */
   const [kbOptions, setKbOptions] = useState<{ id: string; name: string; isImplicit: boolean }[]>([]);
@@ -204,6 +210,20 @@ export function TaskWorkspace() {
     const m = members.find((x) => x.userId === id);
     return m?.displayName || m?.email || id;
   };
+
+  /** 成员负载：在办任务数（待办 / 进行中 / 待确认），用于负责人下拉与详情提示 */
+  const memberLoad = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const t of tasks) {
+      if (!t.assigneeId) continue;
+      if (t.status === 'pending' || t.status === 'in_progress' || t.status === 'submitted') {
+        m[t.assigneeId] = (m[t.assigneeId] ?? 0) + 1;
+      }
+    }
+    return m;
+  }, [tasks]);
+  const memberOptionLabel = (m: MemberView): string =>
+    `${m.displayName || m.email}${memberLoad[m.userId] ? `（在办 ${memberLoad[m.userId]}）` : ''}`;
 
   /** 任务树筛选：状态 / 负责人 / 是否逾期；默认「活跃」= 不含已归档 */
   const nowSec = Math.floor(Date.now() / 1000);
@@ -337,6 +357,44 @@ export function TaskWorkspace() {
     setLocalError(null);
   };
 
+  /** 按模板创建：父任务 + 一份份可交付的子任务（逐条走既有创建命令，权限与校验一致） */
+  const createFromTemplate = async () => {
+    if (!activeOrgId) return;
+    const tpl = TASK_TEMPLATES.find((t) => t.id === tplId);
+    if (!tpl) return;
+    if (!tplTitle.trim()) {
+      setLocalError('请填写父任务标题');
+      return;
+    }
+    setTplBusy(true);
+    setLocalError(null);
+    const parent = await useEnclaveTaskStore.getState().createTask(activeOrgId, {
+      title: tplTitle.trim(),
+      priority: 'normal',
+    });
+    if (!parent) {
+      setTplBusy(false);
+      return;
+    }
+    let ok = 0;
+    for (const c of tpl.children) {
+      const created = await useEnclaveTaskStore.getState().createTask(activeOrgId, {
+        title: c.title,
+        description: c.description,
+        parentTaskId: parent.id,
+        priority: c.priority ?? 'normal',
+      });
+      if (created) ok += 1;
+    }
+    setTplBusy(false);
+    showToast(`已按模板创建「${parent.title}」及 ${ok} 个子任务`, ok > 0 ? 'success' : 'error');
+    setTplOpen(false);
+    setTplTitle('');
+    setNewOpen(false);
+    await useEnclaveTaskStore.getState().loadTasks(activeOrgId);
+    useEnclaveTaskStore.getState().selectTask(parent.id);
+  };
+
   const [refreshing, setRefreshing] = useState(false);
   /** 手动刷新：重新校验本机身份 → 重拉组织与治理 → 重拉任务与通知。 */
   const refreshAll = async () => {
@@ -429,14 +487,14 @@ export function TaskWorkspace() {
             <Select
               value={newAssignee}
               onChange={setNewAssignee}
-              style={{ width: 150, flexShrink: 0 }}
+              style={{ width: 170, flexShrink: 0 }}
               options={[
                 { value: '', label: '未指派' },
                 ...members
                   .filter((m) => m.seatStatus !== 'removed')
-                  .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+                  .map((m) => ({ value: m.userId, label: memberOptionLabel(m) })),
               ]}
-              title="负责人"
+              title="负责人（括号内为该成员当前在办任务数）"
             />
           </div>
           <div className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
@@ -474,6 +532,28 @@ export function TaskWorkspace() {
               title="汇报确认后，任务产出沉淀到哪个知识库（与任务状态「归档」无关）"
             />
           </div>
+          <button
+            onClick={() => {
+              setTplOpen(true);
+              setLocalError(null);
+            }}
+            disabled={!!newParentId}
+            className="pd-btn text-xs px-3 py-1.5 rounded-lg flex items-center gap-1"
+            style={{
+              color: 'var(--text-secondary)',
+              backgroundColor: 'var(--bg-tertiary)',
+              border: '1px solid var(--border)',
+              opacity: newParentId ? 0.5 : 1,
+            }}
+            title={
+              newParentId
+                ? '模板会创建新的顶层任务：请先把父任务设为「（顶层任务）」'
+                : '按模板一键创建父任务与可交付子任务'
+            }
+          >
+            <ListChecks size={11} />
+            从模板创建
+          </button>
           <button
             onClick={() => void submitCreate()}
             disabled={creating}
@@ -600,9 +680,9 @@ export function TaskWorkspace() {
                     { value: '__none__', label: '未指派' },
                     ...members
                       .filter((m) => m.seatStatus !== 'removed')
-                      .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+                      .map((m) => ({ value: m.userId, label: memberOptionLabel(m) })),
                   ]}
-                  title="把选中的任务改派给该成员"
+                  title="把选中的任务改派给该成员（括号内为在办任务数）"
                 />
                 <div className="flex items-center gap-1">
                   <input
@@ -695,6 +775,7 @@ export function TaskWorkspace() {
               memberLabel={memberLabel}
               kbOptions={kbOptions}
               myRole={detail?.org.myRole ?? ''}
+              memberLoad={memberLoad}
             />
           )}
         </div>
@@ -707,6 +788,121 @@ export function TaskWorkspace() {
       )}
         </div>
       </div>
+
+      {/* 任务模板：选模板 + 填父任务标题 → 一次生成父任务与可交付子任务 */}
+      {tplOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center"
+            style={{ backgroundColor: 'rgba(0,0,0,0.35)' }}
+          >
+            <div
+              className="w-[560px] max-h-[80vh] flex flex-col rounded-xl overflow-hidden"
+              style={{ backgroundColor: 'var(--bg-content)', border: '1px solid var(--border)' }}
+            >
+              <div
+                className="shrink-0 px-4 py-2.5 flex items-center gap-2"
+                style={{ borderBottom: '1px solid var(--border)' }}
+              >
+                <ListChecks size={13} style={{ color: 'var(--accent)' }} />
+                <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                  从模板创建
+                </span>
+                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  模板会生成一个父任务 + 若干可交付子任务
+                </span>
+                <div className="flex-1" />
+                <button
+                  onClick={() => setTplOpen(false)}
+                  className="text-xs"
+                  style={{ color: 'var(--text-tertiary)' }}
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 flex flex-col gap-2">
+                <label className="text-[11px] flex flex-col gap-1" style={{ color: 'var(--text-tertiary)' }}>
+                  父任务标题
+                  <input
+                    autoFocus
+                    className={FIELD_CLASS}
+                    style={FIELD_STYLE}
+                    value={tplTitle}
+                    onChange={(e) => setTplTitle(e.target.value)}
+                    placeholder="例如：2026 年一季度数据报送"
+                  />
+                </label>
+                {TASK_TEMPLATES.map((tpl: TaskTemplate) => {
+                  const on = tpl.id === tplId;
+                  return (
+                    <button
+                      key={tpl.id}
+                      onClick={() => setTplId(tpl.id)}
+                      className="text-left rounded-lg p-2.5 flex flex-col gap-1"
+                      style={{
+                        backgroundColor: on ? 'var(--accent-light)' : 'var(--bg-field)',
+                        border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
+                      }}
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                          {tpl.name}
+                        </span>
+                        <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                          {tpl.children.length} 个子任务
+                        </span>
+                      </span>
+                      <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                        {tpl.description}
+                      </span>
+                      <span className="text-[10px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                        {tpl.children.map((c) => c.title).join(' · ')}
+                      </span>
+                    </button>
+                  );
+                })}
+                {localError && (
+                  <span className="text-[11px]" style={{ color: 'var(--status-danger)' }}>
+                    {localError}
+                  </span>
+                )}
+              </div>
+              <div
+                className="shrink-0 px-4 py-2.5 flex items-center gap-2"
+                style={{ borderTop: '1px solid var(--border)' }}
+              >
+                <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  子任务创建后仍可改标题、指派负责人与截止时间
+                </span>
+                <div className="flex-1" />
+                <button
+                  onClick={() => setTplOpen(false)}
+                  className="text-xs px-2 py-1 rounded"
+                  style={{
+                    backgroundColor: 'var(--bg-tertiary)',
+                    color: 'var(--text-secondary)',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => void createFromTemplate()}
+                  disabled={tplBusy || !tplTitle.trim()}
+                  className="text-xs px-2 py-1 rounded"
+                  style={{
+                    backgroundColor: 'var(--accent)',
+                    color: '#fff',
+                    opacity: tplBusy || !tplTitle.trim() ? 0.5 : 1,
+                  }}
+                >
+                  {tplBusy ? '创建中…' : '创建'}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -858,8 +1054,10 @@ function TaskDetail(props: {
   kbOptions: { id: string; name: string; isImplicit: boolean }[];
   /** 当前登录用户在组织中的角色（仅 owner 可以使用 AI 拆解） */
   myRole: string;
+  /** 成员在办任务数（userId → 数量）：负责人下拉里提示负载 */
+  memberLoad: Record<string, number>;
 }) {
-  const { orgId, task, tasks, members, memberLabel, kbOptions, myRole } = props;
+  const { orgId, task, tasks, members, memberLabel, kbOptions, myRole, memberLoad } = props;
   // 权限按「当前登录身份 + 任务字段」本地复核（同时兼容快照未及时刷新）：
   // 非参与者不出现任何提交表单；创建者 / 负责人才能编辑与流转状态。
   const caps = useEnclaveOrgStore((s) => s.caps);
@@ -1434,8 +1632,15 @@ function TaskDetail(props: {
                   { value: '', label: '未指派' },
                   ...members
                     .filter((m) => m.seatStatus !== 'removed')
-                    .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+                    .map((m) => ({
+                      value: m.userId,
+                      // 负载提示：换人前能直接看到谁手里活多
+                      label: `${m.displayName || m.email}${
+                        memberLoad[m.userId] ? `（在办 ${memberLoad[m.userId]}）` : ''
+                      }`,
+                    })),
                 ]}
+                title="负责人（括号内为该成员当前在办任务数）"
               />
               {!canAssign && <span className="text-[10px]">仅创建者可修改负责人</span>}
             </label>
