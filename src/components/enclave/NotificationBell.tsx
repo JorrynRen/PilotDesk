@@ -107,7 +107,7 @@ export function NotificationBell({
           color: 'var(--text-secondary)',
           border: '1px solid var(--border)',
         }}
-        title="团队通知：任务指派 / 汇报提交、确认、退回 / 新讨论"
+        title="团队通知：任务指派 / 汇报提交、确认、退回 / 新讨论 / 截止提醒"
       >
         <Bell size={12} />
         团队通知
@@ -166,7 +166,7 @@ export function NotificationBell({
               <div className="px-3 py-4 text-[11px] leading-relaxed" style={{ color: 'var(--text-tertiary)' }}>
                 暂无通知。
                 <br />
-                提醒只发给「其他成员」（任务指派、汇报提交 / 确认 / 退回、新讨论）；单人组织不给自己发提醒。
+                提醒只发给「其他成员」（任务指派、汇报提交 / 确认 / 退回、新讨论、截止临近 / 逾期）；单人组织不给自己发提醒。
               </div>
             )}
             {notifications.map((n) => (

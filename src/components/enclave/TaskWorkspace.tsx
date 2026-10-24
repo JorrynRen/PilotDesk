@@ -135,6 +135,16 @@ export function TaskWorkspace() {
   const [localError, setLocalError] = useState<string | null>(null);
   /** 任务列表筛选：默认「活跃」= 不含已归档；也可按单一状态筛选 */
   const [statusFilter, setStatusFilter] = useState<'active' | 'all' | TaskStatus>('active');
+  /** 负责人筛选：all / unassigned / userId */
+  const [assigneeFilter, setAssigneeFilter] = useState('all');
+  /** 只看逾期（有截止时间、已过期且未完成） */
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  /** 批量操作：勾选模式 + 选中集 */
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchAssignee, setBatchAssignee] = useState('');
+  const [batchDue, setBatchDue] = useState('');
+  const [batchBusy, setBatchBusy] = useState(false);
 
   /** 产出目标库候选（直接查主机，不走知识库页的 store —— 避免打开任务页就把知识库"打开"） */
   const [kbOptions, setKbOptions] = useState<{ id: string; name: string; isImplicit: boolean }[]>([]);
@@ -195,14 +205,29 @@ export function TaskWorkspace() {
     return m?.displayName || m?.email || id;
   };
 
-  /** 任务树筛选：默认「活跃」= 不含已归档；也可只看某一状态（含已归档） */
+  /** 任务树筛选：状态 / 负责人 / 是否逾期；默认「活跃」= 不含已归档 */
+  const nowSec = Math.floor(Date.now() / 1000);
   const visibleTasks = useMemo(() => {
-    if (statusFilter === 'active') return tasks.filter((t) => t.status !== 'archived');
-    if (statusFilter === 'all') return tasks;
-    return tasks.filter((t) => t.status === statusFilter);
-  }, [tasks, statusFilter]);
-  const isFlatFilter = statusFilter !== 'active' && statusFilter !== 'all';
-  // 单状态筛选时扁平展示（否则父任务被过滤后会丢掉匹配的子任务）
+    let list = tasks;
+    if (statusFilter === 'active') list = list.filter((t) => t.status !== 'archived');
+    else if (statusFilter !== 'all') list = list.filter((t) => t.status === statusFilter);
+    if (assigneeFilter === 'unassigned') list = list.filter((t) => !t.assigneeId);
+    else if (assigneeFilter !== 'all') list = list.filter((t) => t.assigneeId === assigneeFilter);
+    if (overdueOnly) {
+      list = list.filter(
+        (t) =>
+          !!t.dueDate &&
+          t.dueDate < nowSec &&
+          (t.status === 'pending' || t.status === 'in_progress' || t.status === 'submitted'),
+      );
+    }
+    return list;
+  }, [tasks, statusFilter, assigneeFilter, overdueOnly, nowSec]);
+  // 单状态 / 负责人 / 逾期筛选时扁平展示（否则父任务被过滤后会丢掉匹配的子任务）
+  const isFlatFilter =
+    (statusFilter !== 'active' && statusFilter !== 'all') ||
+    assigneeFilter !== 'all' ||
+    overdueOnly;
   const roots = useMemo(
     () => (isFlatFilter ? visibleTasks : visibleTasks.filter((t) => !t.parentTaskId)),
     [visibleTasks, isFlatFilter],
@@ -210,6 +235,57 @@ export function TaskWorkspace() {
   const childrenOf = (id: string) =>
     isFlatFilter ? [] : visibleTasks.filter((t) => t.parentTaskId === id);
   const task = tasks.find((t) => t.id === activeTaskId) ?? null;
+
+  // 选中集只在当前可见列表里生效（筛选变化后清掉不可见项）
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => visibleTasks.some((t) => t.id === id)));
+  }, [visibleTasks]);
+
+  /** 批量改派（`__none__` = 未指派）：逐个调用既有编辑命令，无权修改的任务计入失败 */
+  const batchAssign = async (picked: string) => {
+    if (!activeOrgId || !picked || selectedIds.length === 0) return;
+    const assigneeId = picked === '__none__' ? null : picked;
+    const total = selectedIds.length;
+    setBatchBusy(true);
+    let ok = 0;
+    for (const id of selectedIds) {
+      const done = await useEnclaveTaskStore
+        .getState()
+        .updateTask(activeOrgId, id, { assigneeId });
+      if (done) ok += 1;
+    }
+    setBatchBusy(false);
+    setBatchAssignee('');
+    const failed = total - ok;
+    showToast(
+      failed > 0
+        ? `已改派 ${ok} 个任务，${failed} 个失败（可能无权修改或任务已归档）`
+        : `已改派 ${ok} 个任务`,
+      failed > 0 ? 'error' : 'success',
+    );
+  };
+
+  /** 批量改期（同一天）；日期按本地日期 00:00 存，和单任务编辑口径一致 */
+  const batchSetDue = async () => {
+    const due = fromDateInput(batchDue);
+    if (!activeOrgId || due === null || selectedIds.length === 0) return;
+    const total = selectedIds.length;
+    setBatchBusy(true);
+    let ok = 0;
+    for (const id of selectedIds) {
+      const done = await useEnclaveTaskStore.getState().updateTask(activeOrgId, id, { dueDate: due });
+      if (done) ok += 1;
+    }
+    setBatchBusy(false);
+    setBatchDue('');
+    const failed = total - ok;
+    showToast(
+      failed > 0
+        ? `已改期 ${ok} 个任务，${failed} 个失败（可能无权修改或任务已归档）`
+        : `已改期 ${ok} 个任务`,
+      failed > 0 ? 'error' : 'success',
+    );
+  };
 
   // 当前选中任务被筛选条件排除时，详情自动让位
   useEffect(() => {
@@ -432,7 +508,10 @@ export function TaskWorkspace() {
           className="w-[280px] shrink-0 flex flex-col overflow-hidden"
           style={{ borderRight: '1px solid var(--border)' }}
         >
-          <div className="shrink-0 px-2 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div
+            className="shrink-0 px-2 py-1.5 flex flex-col gap-1.5"
+            style={{ borderBottom: '1px solid var(--border)' }}
+          >
             <Select
               value={statusFilter}
               onChange={(v) => setStatusFilter(v as 'active' | 'all' | TaskStatus)}
@@ -449,6 +528,108 @@ export function TaskWorkspace() {
               ]}
               title="按任务状态筛选"
             />
+            <div className="flex items-center gap-1">
+              <Select
+                value={assigneeFilter}
+                onChange={setAssigneeFilter}
+                className="flex-1 min-w-0"
+                options={[
+                  { value: 'all', label: '全部负责人' },
+                  { value: 'unassigned', label: '未指派' },
+                  ...members
+                    .filter((m) => m.seatStatus !== 'removed')
+                    .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+                ]}
+                title="按负责人筛选"
+              />
+              <button
+                onClick={() => setOverdueOnly((v) => !v)}
+                className="shrink-0 text-[10px] px-1.5 py-1 rounded"
+                style={{
+                  backgroundColor: overdueOnly ? 'var(--accent)' : 'var(--bg-tertiary)',
+                  color: overdueOnly ? '#fff' : 'var(--text-secondary)',
+                  border: `1px solid ${overdueOnly ? 'var(--accent)' : 'var(--border)'}`,
+                }}
+                title="只看已过截止时间且未完成的任务"
+              >
+                逾期
+              </button>
+              <button
+                onClick={() => {
+                  setBatchMode((v) => !v);
+                  setSelectedIds([]);
+                  setBatchAssignee('');
+                  setBatchDue('');
+                }}
+                className="shrink-0 text-[10px] px-1.5 py-1 rounded"
+                style={{
+                  backgroundColor: batchMode ? 'var(--accent)' : 'var(--bg-tertiary)',
+                  color: batchMode ? '#fff' : 'var(--text-secondary)',
+                  border: `1px solid ${batchMode ? 'var(--accent)' : 'var(--border)'}`,
+                }}
+                title="批量改派 / 改期"
+              >
+                批量
+              </button>
+            </div>
+            {batchMode && (
+              <div className="flex flex-col gap-1 pt-0.5">
+                <div className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-tertiary)' }}>
+                  <span>已选 {selectedIds.length}</span>
+                  <button
+                    onClick={() => setSelectedIds(visibleTasks.map((t) => t.id))}
+                    style={{ color: 'var(--accent)' }}
+                    title="全选当前筛选结果"
+                  >
+                    全选
+                  </button>
+                  <button
+                    onClick={() => setSelectedIds([])}
+                    style={{ color: 'var(--text-tertiary)' }}
+                    disabled={selectedIds.length === 0}
+                  >
+                    清空
+                  </button>
+                </div>
+                <Select
+                  value={batchAssignee}
+                  onChange={(v) => void batchAssign(v)}
+                  className="w-full"
+                  options={[
+                    { value: '', label: batchBusy ? '处理中…' : '批量改派到…' },
+                    { value: '__none__', label: '未指派' },
+                    ...members
+                      .filter((m) => m.seatStatus !== 'removed')
+                      .map((m) => ({ value: m.userId, label: m.displayName || m.email })),
+                  ]}
+                  title="把选中的任务改派给该成员"
+                />
+                <div className="flex items-center gap-1">
+                  <input
+                    type="date"
+                    className={FIELD_CLASS}
+                    style={{ ...FIELD_STYLE, flex: 1, minWidth: 0 }}
+                    value={batchDue}
+                    onChange={(e) => setBatchDue(e.target.value)}
+                    title="批量设置同一截止日期"
+                  />
+                  <button
+                    onClick={() => void batchSetDue()}
+                    disabled={batchBusy || !batchDue || selectedIds.length === 0}
+                    className="shrink-0 text-[10px] px-1.5 py-1 rounded"
+                    style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-secondary)',
+                      border: '1px solid var(--border)',
+                      opacity: batchBusy || !batchDue || selectedIds.length === 0 ? 0.5 : 1,
+                    }}
+                    title="把选中任务的截止日期改成该日期"
+                  >
+                    改期
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex-1 overflow-auto py-1">
             {roots.length === 0 && (
@@ -466,6 +647,13 @@ export function TaskWorkspace() {
                     setNewParentId(root.id);
                     setNewOpen(true);
                   }}
+                  selectable={batchMode}
+                  selected={selectedIds.includes(root.id)}
+                  onToggleSelect={() =>
+                    setSelectedIds((prev) =>
+                      prev.includes(root.id) ? prev.filter((x) => x !== root.id) : [...prev, root.id],
+                    )
+                  }
                 />
                 {childrenOf(root.id).map((child) => (
                   <TaskNode
@@ -474,6 +662,15 @@ export function TaskWorkspace() {
                     child
                     active={child.id === activeTaskId}
                     onClick={() => useEnclaveTaskStore.getState().selectTask(child.id)}
+                    selectable={batchMode}
+                    selected={selectedIds.includes(child.id)}
+                    onToggleSelect={() =>
+                      setSelectedIds((prev) =>
+                        prev.includes(child.id)
+                          ? prev.filter((x) => x !== child.id)
+                          : [...prev, child.id],
+                      )
+                    }
                   />
                 ))}
               </div>
@@ -521,8 +718,12 @@ function TaskNode(props: {
   onClick: () => void;
   /** 顶层任务行悬停时提供「添加子任务」快捷入口（预选父任务） */
   onAddChild?: () => void;
+  /** 批量模式：显示勾选框 */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
-  const { task, active, child, onClick, onAddChild } = props;
+  const { task, active, child, onClick, onAddChild, selectable, selected, onToggleSelect } = props;
   const canAddChild =
     !child && !!onAddChild && task.status !== 'archived' && task.status !== 'cancelled';
   return (
@@ -544,6 +745,17 @@ function TaskNode(props: {
       }}
       title={task.title}
     >
+      {selectable && (
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onClick={(e) => e.stopPropagation()}
+          onChange={() => onToggleSelect?.()}
+          className="shrink-0"
+          style={{ accentColor: 'var(--accent)' }}
+          title={selected ? '取消选择' : '选择该任务'}
+        />
+      )}
       {child ? (
         <ChevronRight size={11} style={{ color: 'var(--text-tertiary)' }} />
       ) : (

@@ -3027,6 +3027,25 @@ pub fn run() {
                 commands::enclave_task::run_enclave_kb_queue_loop(kbq_db, kbq_state).await;
             });
 
+            // 飞地截止提醒：每 10 分钟扫一次「24h 内到期 / 已逾期」的未完成任务，
+            // 给负责人写一条当天唯一的站内提醒（数据在主机，成员端拉取）
+            let reminder_state = enclave_state.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(600));
+                loop {
+                    ticker.tick().await;
+                    let now = chrono::Utc::now().timestamp();
+                    match reminder_state
+                        .store
+                        .with_conn(|c| enclave::notify::sweep_due_reminders(c, now))
+                    {
+                        Ok(n) if n > 0 => log::info!("[Enclave] 已生成 {} 条截止提醒", n),
+                        Ok(_) => {}
+                        Err(e) => log::warn!("[Enclave] 截止提醒扫描失败：{}", e),
+                    }
+                }
+            });
+
             // 飞地实时通道：主机本机写变更 → Tauri 事件；成员端常驻连接主机接收广播。
             // 领域层只拿到一个数据通道，Tauri 事件在这里统一转发（测试二进制不链接 GUI 运行时）。
             let (enclave_ui_tx, mut enclave_ui_rx) =
